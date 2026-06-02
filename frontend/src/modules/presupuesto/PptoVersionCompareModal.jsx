@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useState, Fragment } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
 
+/** Token fresco desde almacenamiento; el prop se congela en el render (ver PptoVersionador). */
+function tokenFresco(fallback) {
+  if (typeof window === 'undefined') return fallback
+  return (
+    window.localStorage?.getItem('cc_token') ||
+    window.sessionStorage?.getItem('cc_token') ||
+    fallback
+  )
+}
+
 function cmpCapitulo(a, b) {
   const key = (c) => {
     const m = String(c ?? '').match(/^(\d+)/)
@@ -76,7 +86,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
     })
     setAiuByVersion(initAiu)
     fetch(`${API}/presupuesto/${contratoId}/maestro-ubicacion-pk`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${tokenFresco(token)}` },
     })
       .then((r) => (r.ok ? r.json() : { tramos: [] }))
       .then((d) => setTramos(Array.isArray(d?.tramos) ? d.tramos : []))
@@ -102,7 +112,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
         versionesOrd.map(async (v) => {
           const res = await fetch(
             `${API}/presupuesto/${contratoId}/versiones/${v.id}/capitulos-lista${qs}`,
-            { headers: { Authorization: `Bearer ${token}` } },
+            { headers: { Authorization: `Bearer ${tokenFresco(token)}` } },
           )
           const caps = res.ok ? await res.json() : []
           return { version: v, caps: Array.isArray(caps) ? caps : [] }
@@ -158,7 +168,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
             if (alcance === 'tramo' && String(tramo).trim()) p.set('tramo', String(tramo).trim())
             const res = await fetch(
               `${API}/presupuesto/${contratoId}/versiones/${v.id}/items-lista?${p.toString()}`,
-              { headers: { Authorization: `Bearer ${token}` } },
+              { headers: { Authorization: `Bearer ${tokenFresco(token)}` } },
             )
             const items = res.ok ? await res.json() : []
             return { version: v, items: Array.isArray(items) ? items : [] }

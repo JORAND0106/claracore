@@ -2354,12 +2354,39 @@ def _fetch_dashboard_resumen_from_vm(contrato_id: int, campo_max: str, niveles_a
         return None
 
 
+# Caché de config de niveles por contrato: es config de admin que cambia muy rara vez,
+# pero se consulta decenas de veces por request (por capa, por armado de query, por KPI).
+# Sin caché, cada llamada es un round-trip a Supabase (remoto) y multiplica la latencia.
+_NIVELES_ACTIVOS_CACHE: Dict[int, Tuple[float, List[int]]] = {}
+_NIVELES_ACTIVOS_TTL_S = 60.0
+
+
+def _invalidar_cache_niveles_contrato(contrato_id: Optional[int] = None) -> None:
+    """Limpia la caché de niveles activos (al cambiar config de validación del contrato)."""
+    try:
+        if contrato_id is None:
+            _NIVELES_ACTIVOS_CACHE.clear()
+        else:
+            _NIVELES_ACTIVOS_CACHE.pop(int(contrato_id), None)
+    except (TypeError, ValueError):
+        _NIVELES_ACTIVOS_CACHE.clear()
+
+
 def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
-    """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3]."""
+    """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3].
+
+    Cachea por contrato con TTL corto: evita repetir el round-trip a Supabase en la
+    misma búsqueda (se invoca muchas veces). Usar _invalidar_cache_niveles_contrato
+    cuando se modifique la config de validación del contrato.
+    """
     try:
         cid = int(contrato_id)
     except (TypeError, ValueError):
         return [1, 2, 3]
+    _now = time.monotonic()
+    _hit = _NIVELES_ACTIVOS_CACHE.get(cid)
+    if _hit is not None and (_now - _hit[0]) < _NIVELES_ACTIVOS_TTL_S:
+        return list(_hit[1])
     try:
         res = (
             supabase.table("contrato_niveles_validacion")
@@ -2387,9 +2414,11 @@ def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
                         continue
                 out = sorted(set(out))
                 if out:
+                    _NIVELES_ACTIVOS_CACHE[cid] = (_now, list(out))
                     return out
     except Exception:
         pass
+    _NIVELES_ACTIVOS_CACHE[cid] = (_now, [1, 2, 3])
     return [1, 2, 3]
 
 
@@ -3608,6 +3637,35 @@ def _sicoe_collect_reporte_ids_misma_linea(
             )
         return merged
 
+    # Sincroniza la grilla con el panel /analisis: el filtro SQL de capas se complementa
+    # con la MISMA normalización de estado por nivel que aplica el panel
+    # (_sicoe_registros_postfiltro_capas_norm, alineada con la matriz/dashboard). Sin esto,
+    # la grilla incluía reportes con líneas que el SQL aceptaba pero el panel descartaba al
+    # normalizar el estado por nivel — la grilla "traía todo" y tardaba el triple.
+    _postfiltrar_capas_norm = bool(
+        capas_ok and capas_v and not _estado_filtro_omite_validacion_por_cargo(estado)
+    )
+    # Solo trae las columnas nivelX_estado que el filtro de validación realmente usa
+    # (no las 6): evita inflar el payload del barrido de líneas en filtros amplios.
+    _capa_flds_postfiltro = sorted(
+        {(c.get("campo") or _capa_campo_validacion(c)) for c in (capas_v or [])} - {None}
+    ) if _postfiltrar_capas_norm else []
+    _select_ids_cols = (
+        "reporte_id," + ",".join(_capa_flds_postfiltro)
+        if _capa_flds_postfiltro
+        else "reporte_id"
+    )
+
+    def _ids_agregar_filas(filas):
+        if not filas:
+            return
+        if _postfiltrar_capas_norm:
+            filas = _sicoe_registros_postfiltro_capas_norm(filas, capas_v, contrato_id)
+        for _f in filas:
+            _rid = _f.get("reporte_id")
+            if _rid:
+                ids.add(_rid)
+
     if registro_ids_etiqueta is not None:
         if not registro_ids_etiqueta:
             return set()
@@ -3622,7 +3680,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     rp = list(rep_chunk)
 
                     def _chunk_page(c=rc, rp_fix=rp):
-                        q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                        q = supabase.table("so_registros").select(_select_ids_cols).eq("contrato_id", contrato_id)
                         q = _sicoe_so_registros_q_linea_filtros_busqueda(
                             q,
                             numero_registro=numero_registro,
@@ -3654,16 +3712,13 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         )
                         return q.limit(5000).execute().data
 
-                    for row in supabase_execute(_chunk_page):
-                        rid = row.get("reporte_id")
-                        if rid:
-                            ids.add(rid)
+                    _ids_agregar_filas(supabase_execute(_chunk_page))
         else:
             for reg_chunk in _sicoe_chunks_int(reg_list, CHUNK_R):
                 rc = list(reg_chunk)
 
                 def _one_page(c=rc):
-                    q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                    q = supabase.table("so_registros").select(_select_ids_cols).eq("contrato_id", contrato_id)
                     q = _sicoe_so_registros_q_linea_filtros_busqueda(
                         q,
                         numero_registro=numero_registro,
@@ -3694,10 +3749,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     )
                     return q.limit(5000).execute().data
 
-                for row in supabase_execute(_one_page):
-                    rid = row.get("reporte_id")
-                    if rid:
-                        ids.add(rid)
+                _ids_agregar_filas(supabase_execute(_one_page))
         return ids
 
     if reporte_ids_restrict is not None:
@@ -3707,7 +3759,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
             chunk = reporte_ids_restrict[i:i + CHUNK]
 
             def _chunk_page(c=chunk):
-                q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                q = supabase.table("so_registros").select(_select_ids_cols).eq("contrato_id", contrato_id)
                 q = _sicoe_so_registros_q_linea_filtros_busqueda(
                     q,
                     numero_registro=numero_registro,
@@ -3740,10 +3792,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 )
                 return q.limit(5000).execute().data
 
-            for row in supabase_execute(_chunk_page):
-                rid = row.get("reporte_id")
-                if rid:
-                    ids.add(rid)
+            _ids_agregar_filas(supabase_execute(_chunk_page))
     else:
         off = 0
         page = 1000
@@ -3751,7 +3800,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
         for _pn in range(max_pages):
 
             def _one_page(o=off):
-                q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                q = supabase.table("so_registros").select(_select_ids_cols).eq("contrato_id", contrato_id)
                 q = _sicoe_so_registros_q_linea_filtros_busqueda(
                     q,
                     numero_registro=numero_registro,
@@ -3781,11 +3830,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 )
                 return q.range(o, o + page - 1).execute().data
 
-            batch = supabase_execute(_one_page)
-            for row in batch:
-                rid = row.get("reporte_id")
-                if rid:
-                    ids.add(rid)
+            batch = supabase_execute(_one_page) or []
+            _ids_agregar_filas(batch)
             if len(batch) < page:
                 break
             off += page
@@ -7379,21 +7425,35 @@ def _presupuesto_version_fetch_export_rows(
     version_id: str,
     current_user,
 ) -> List[dict]:
-    """Filas de snapshot presupuesto_version_items para export Excel."""
+    """Filas para export Excel de una versión.
+
+    Si la versión es la vigente, exporta el presupuesto VIVO (su contenido real);
+    si está congelada, exporta su snapshot en presupuesto_version_items.
+    """
     from presupuesto_versiones_service import assert_version_del_contrato
 
-    assert_version_del_contrato(supabase, contrato_id, version_id)
+    row = assert_version_del_contrato(supabase, contrato_id, version_id)
+    es_vigente = bool(row.get("es_vigente"))
     PAGE = 1000
     all_rows: List[dict] = []
 
     def _q_base():
-        q = (
-            supabase.table("presupuesto_version_items")
-            .select(_PRESUPUESTO_EXPORT_SELECT)
-            .eq("contrato_id", contrato_id)
-            .eq("version_id", version_id)
-            .eq("dado_de_baja", False)
-        )
+        if es_vigente:
+            q = (
+                supabase.table("presupuesto")
+                .select(_PRESUPUESTO_EXPORT_SELECT)
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+            )
+            q = _presupuesto_q_tipo_ejecucion(q, "Presupuesto de Obra")
+        else:
+            q = (
+                supabase.table("presupuesto_version_items")
+                .select(_PRESUPUESTO_EXPORT_SELECT)
+                .eq("contrato_id", contrato_id)
+                .eq("version_id", version_id)
+                .eq("dado_de_baja", False)
+            )
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
         return q.order("capitulo").order("item").order("pk_id")
@@ -17987,6 +18047,7 @@ def sicoe_obra_put_niveles_validacion(
         {"contrato_id": contrato_id, "niveles_activos": norm},
         on_conflict="contrato_id",
     ).execute()
+    _invalidar_cache_niveles_contrato(contrato_id)
     return {"ok": True, "contrato_id": contrato_id, "niveles_activos": norm}
 
 

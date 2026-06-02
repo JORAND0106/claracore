@@ -4230,6 +4230,10 @@ def _merge_pdf_bytes_list(partes: List[bytes]) -> bytes:
             continue
         for page in PdfReader(io.BytesIO(parte)).pages:
             w.add_page(page)
+    try:
+        w.compress_identical_objects()
+    except Exception as exc:
+        _log.debug("compress_identical_objects: %s", exc)
     out = io.BytesIO()
     w.write(out)
     return out.getvalue()
@@ -4323,19 +4327,135 @@ def _usuario_datos_firma_sello(uid: int) -> Dict[str, Any]:
     }
 
 
+# ── Compresión de imágenes para PDF ─────────────────────────────────────────
+# FO-EO-04: cada ítem lleva foto+gráfico; firmas/logos se repiten en TODAS las
+# páginas. Sin presupuesto de bytes, 124 páginas × ~1 MB/imagen ≈ 160–200 MB.
+_FO_EO04_IMG_MAX_PX = int(_os.getenv("FO_EO04_IMG_MAX_PX", "480") or "480")
+_FO_EO04_IMG_JPEG_Q = int(_os.getenv("FO_EO04_IMG_JPEG_Q", "58") or "58")
+_FO_EO04_IMG_MAX_BYTES = int(_os.getenv("FO_EO04_IMG_MAX_BYTES", "70000") or "70000")
+# Firmas/logos (se repiten por página; en pantalla miden ~38–92 px).
+_REPORT_IMG_MAX_PX = int(_os.getenv("REPORT_FIRMA_LOGO_MAX_PX", "320") or "320")
+_REPORT_IMG_JPEG_Q = int(_os.getenv("REPORT_FIRMA_LOGO_JPEG_Q", "72") or "72")
+_REPORT_IMG_MAX_BYTES = int(_os.getenv("REPORT_FIRMA_LOGO_MAX_BYTES", "15000") or "15000")
+
+
+def _comprimir_img_bytes_para_pdf(
+    img_bytes: bytes,
+    *,
+    max_px: int = _REPORT_IMG_MAX_PX,
+    jpeg_q: int = _REPORT_IMG_JPEG_Q,
+    max_bytes: Optional[int] = None,
+    force_jpeg: bool = False,
+    min_px: int = 200,
+    min_q: int = 38,
+) -> Optional[Tuple[bytes, str]]:
+    """Redimensiona + comprime una imagen para embeber en PDF.
+
+    Si max_bytes está definido, reduce calidad y tamaño iterativamente hasta
+    caber en el presupuesto (p. ej. fotos FO-EO-04 ~70 KB). force_jpeg aplana
+    transparencia sobre blanco — útil para fotos de obra en PNG pesados.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(img_bytes))
+        try:
+            img.load()
+        except Exception:
+            pass
+        has_alpha = (not force_jpeg) and (
+            img.mode in ("RGBA", "LA")
+            or (img.mode == "P" and "transparency" in img.info)
+        )
+
+        def _encode(cur_img, cur_px: int, cur_q: int) -> Tuple[bytes, str]:
+            w, h = cur_img.size
+            if max(w, h) > cur_px:
+                scale = cur_px / float(max(w, h))
+                cur_img = cur_img.resize(
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+            buf = io.BytesIO()
+            if has_alpha:
+                cur_img = cur_img.convert("RGBA")
+                cur_img.save(buf, format="PNG", optimize=True)
+                return buf.getvalue(), "image/png"
+            if force_jpeg and cur_img.mode in ("RGBA", "LA", "P"):
+                bg = Image.new("RGB", cur_img.size, (255, 255, 255))
+                if cur_img.mode == "P":
+                    cur_img = cur_img.convert("RGBA")
+                if cur_img.mode in ("RGBA", "LA"):
+                    bg.paste(cur_img, mask=cur_img.split()[-1])
+                else:
+                    bg.paste(cur_img)
+                cur_img = bg
+            else:
+                cur_img = cur_img.convert("RGB")
+            cur_img.save(buf, format="JPEG", quality=cur_q, optimize=True)
+            return buf.getvalue(), "image/jpeg"
+
+        cur_px, cur_q = int(max_px), int(jpeg_q)
+        best: Optional[Tuple[bytes, str]] = None
+        for _ in range(14):
+            out, ct = _encode(img, cur_px, cur_q)
+            best = (out, ct)
+            if max_bytes is None or len(out) <= max_bytes:
+                return best
+            if cur_q > min_q:
+                cur_q = max(min_q, cur_q - 7)
+            elif cur_px > min_px:
+                cur_px = max(min_px, int(cur_px * 0.82))
+                cur_q = int(jpeg_q)
+            else:
+                break
+        return best
+    except Exception as exc:
+        _log.warning("_comprimir_img_bytes_para_pdf: %s", exc)
+        return None
+
+
+def _img_bytes_a_data_uri(raw: bytes, content_type: str) -> str:
+    ct = (content_type or "image/jpeg").split(";")[0].strip()
+    return f"data:{ct};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
 def _fetch_img_data_uri(url: str) -> str:
-    """Convierte una URL de imagen a data-URI. Acepta http(s) o data: (p. ej. logos guardados desde el admin)."""
+    """Convierte una URL de imagen a data-URI (firmas/logos; se repiten por página)."""
     u = (url or "").strip()
     if u.startswith("data:"):
-        return _logo_url_pdf_safe(u)
+        u = _logo_url_pdf_safe(u)
+        try:
+            if u.startswith("data:") and ";base64," in u:
+                raw = base64.b64decode(u.split(",", 1)[1])
+                comp = _comprimir_img_bytes_para_pdf(
+                    raw,
+                    max_px=_REPORT_IMG_MAX_PX,
+                    jpeg_q=_REPORT_IMG_JPEG_Q,
+                    max_bytes=_REPORT_IMG_MAX_BYTES,
+                )
+                if comp:
+                    b, ct = comp
+                    return _img_bytes_a_data_uri(b, ct)
+        except Exception as exc:
+            _log.debug("comprimir data-uri firma/logo: %s", exc)
+        return u
     import requests
     r = requests.get(u, timeout=25)
     r.raise_for_status()
     ct = (r.headers.get("content-type") or "image/png").split(";")[0].strip()
     if not ct.startswith("image/"):
         ct = "image/png"
-    b64 = base64.b64encode(r.content).decode("ascii")
-    return f"data:{ct};base64,{b64}"
+    comp = _comprimir_img_bytes_para_pdf(
+        r.content,
+        max_px=_REPORT_IMG_MAX_PX,
+        jpeg_q=_REPORT_IMG_JPEG_Q,
+        max_bytes=_REPORT_IMG_MAX_BYTES,
+    )
+    if comp:
+        b, ct = comp
+        return _img_bytes_a_data_uri(b, ct)
+    return _img_bytes_a_data_uri(r.content, ct)
 
 
 def _firma_imagen_url_usuario(uid: int) -> Optional[str]:
@@ -6347,46 +6467,42 @@ def _fetch_foto_grafico_item(
         return empty
 
 
-def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
+def _url_a_data_url_pdf(url: Optional[str], *, for_logo: bool = False) -> Optional[str]:
     """
-    Descarga una imagen desde una URL y la convierte a data-URL base64 (PDF-safe).
-    Convierte GIF → PNG automáticamente (xhtml2pdf no renderiza GIF).
-    Devuelve None si falla o si la URL está vacía.
+    Convierte URL http(s) o data: a data-URI comprimida para PDF.
+    for_logo=True aplica presupuesto menor (logo entidad, ~12 KB).
     """
-    if not url or not str(url).strip().startswith("http"):
+    if not url or not str(url).strip():
         return None
+    u = str(url).strip()
+    max_px = 240 if for_logo else _FO_EO04_IMG_MAX_PX
+    max_bytes = 12_000 if for_logo else _FO_EO04_IMG_MAX_BYTES
+    jpeg_q = 70 if for_logo else _FO_EO04_IMG_JPEG_Q
     try:
-        import base64, io
-        resp = requests.get(url.strip(), timeout=_FO_EO04_IMG_FETCH_TIMEOUT_SEC)
-        resp.raise_for_status()
-        ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
-        data = resp.content
-        from PIL import Image
-        img = Image.open(io.BytesIO(data))
-        if ct == "image/gif" or url.lower().endswith(".gif"):
-            img = img.convert("RGBA")
-            ct = "image/png"
-        elif img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-            ct = "image/jpeg"
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
-            ct = "image/jpeg"
-        w, h = img.size
-        if max(w, h) > _FO_EO04_IMG_MAX_PX:
-            scale = _FO_EO04_IMG_MAX_PX / float(max(w, h))
-            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        if ct == "image/png":
-            img.save(buf, format="PNG", optimize=True)
+        if u.startswith("data:") and ";base64," in u:
+            raw = base64.b64decode(u.split(",", 1)[1])
+        elif u.startswith("http"):
+            resp = requests.get(u, timeout=_FO_EO04_IMG_FETCH_TIMEOUT_SEC)
+            resp.raise_for_status()
+            raw = resp.content
         else:
-            img.save(buf, format="JPEG", quality=75, optimize=True)
-            ct = "image/jpeg"
-        data = buf.getvalue()
-        b64 = base64.b64encode(data).decode()
-        return f"data:{ct};base64,{b64}"
+            return None
+        comp = _comprimir_img_bytes_para_pdf(
+            raw,
+            max_px=max_px,
+            jpeg_q=jpeg_q,
+            max_bytes=max_bytes,
+            force_jpeg=not for_logo,
+        )
+        if comp:
+            b, ct = comp
+            return _img_bytes_a_data_uri(b, ct)
+        if u.startswith("data:"):
+            return _logo_url_pdf_safe(u)
+        ct = "image/jpeg"
+        return _img_bytes_a_data_uri(raw, ct)
     except Exception as exc:
-        _log.warning("_url_a_data_url_pdf ERROR url=%s: %s", (url or "")[:80], exc)
+        _log.warning("_url_a_data_url_pdf ERROR url=%s: %s", u[:80], exc)
         return None
 
 
@@ -6576,6 +6692,42 @@ def _fo_eo_04_norm_item_key(item_numero: str, capitulo: str = "") -> tuple:
 
 def _fo_eo_04_item_keys_match(a_item: str, a_cap: str, b_item: str, b_cap: str) -> bool:
     return _fo_eo_04_norm_item_key(a_item, a_cap) == _fo_eo_04_norm_item_key(b_item, b_cap)
+
+
+def _fo_eo_04_item_numeros_filtro_in(items: list) -> List[str]:
+    """Variantes de item_numero para filtros .in_() en Supabase (1.02 vs 1.02.)."""
+    out: set = set()
+    for item in items:
+        num = (item.get("item_numero") or "").strip()
+        if not num:
+            continue
+        out.add(num)
+        core = num.rstrip(".").strip()
+        if core:
+            out.add(core)
+            out.add(core + ".")
+    return sorted(out)
+
+
+def _fo_eo_04_acumular_totales_desde_registros(
+    raw_prev: List[Dict[str, Any]],
+    contrato_id: int,
+    items_set: set,
+    matriz: Tuple[str, List[int]],
+) -> Tuple[dict, int]:
+    """Suma cantidad_total por clave normalizada (ítem+capítulo) desde registros previos."""
+    from collections import defaultdict
+
+    totales: dict = defaultdict(float)
+    n_nivel_max = 0
+    for r in raw_prev:
+        if not _fo_eo_04_registro_aprobado_nivel_max(r, int(contrato_id), matriz=matriz):
+            continue
+        n_nivel_max += 1
+        k = _fo_eo_04_norm_item_key(r.get("item_numero") or "", r.get("capitulo") or "")
+        if k in items_set:
+            totales[k] += float(r.get("cantidad_total") or 0)
+    return dict(totales), n_nivel_max
 
 
 def _fo_eo_04_es_acta_rpo(acta_row: Dict[str, Any]) -> bool:
@@ -6884,6 +7036,48 @@ def _fetch_total_actas_anteriores(
         return 0.0
 
 
+def _fo_eo_04_totales_batch_via_rpc(
+    contrato_id: int,
+    acta_id: int,
+    items_set: set,
+    meta: Dict[str, Any],
+) -> Optional[dict]:
+    """Agregación en Postgres (1 consulta); evita timeout al paginar miles de registros."""
+    try:
+        resp = (
+            _sb.rpc(
+                "fo_eo_04_totales_actas_anteriores_batch",
+                {
+                    "p_contrato_id": int(contrato_id),
+                    "p_acta_id": int(acta_id),
+                },
+            )
+            .execute()
+        )
+        rows = resp.data or []
+        meta["totales_source"] = "rpc"
+        meta["totales_rpc_rows"] = len(rows)
+        totales: dict = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            k = _fo_eo_04_norm_item_key(
+                row.get("item_numero") or "", row.get("capitulo") or ""
+            )
+            if k in items_set:
+                totales[k] = float(row.get("total") or 0)
+        return totales
+    except Exception as exc:
+        _log.warning(
+            "fo_eo_04 totales RPC no disponible (contrato=%s acta=%s): %s",
+            contrato_id,
+            acta_id,
+            exc,
+        )
+        meta["totales_rpc_error"] = str(exc)[:500]
+        return None
+
+
 def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[dict, Dict[str, Any]]:
     """
     Totales de actas anteriores: cantidad_total con nivel máximo del contrato en Aprobado
@@ -6928,33 +7122,55 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
             )
             for item in items
         }
-        totales: dict = defaultdict(float)
+        rpc_totales = _fo_eo_04_totales_batch_via_rpc(
+            int(contrato_id), int(acta_id), items_set, meta
+        )
+        if rpc_totales is not None:
+            meta["items_con_acumulado"] = sum(1 for v in rpc_totales.values() if v)
+            _log.info(
+                "fo_eo_04 totales_batch RPC: acta=%s prev_actas=%s filas_rpc=%s items_con_total=%s",
+                acta_id,
+                len(prev_ids),
+                meta.get("totales_rpc_rows"),
+                meta["items_con_acumulado"],
+            )
+            return {**default_result, **rpc_totales}, meta
 
-        nums_pdf = [
-            (item.get("item_numero") or "").strip()
-            for item in items
-            if (item.get("item_numero") or "").strip()
-        ]
+        nums_filtro = _fo_eo_04_item_numeros_filtro_in(items)
         raw_prev = _fo_eo_04_fetch_registros_actas_ids(
             int(contrato_id),
             prev_ids,
             select_cols=_FO_EO_04_SEL_TOTALES,
-            item_numeros=nums_pdf,
+            item_numeros=nums_filtro or None,
         )
         meta["registros_prev_raw"] = len(raw_prev)
-        n_nivel_max = 0
-        for r in raw_prev:
-            if not _fo_eo_04_registro_aprobado_nivel_max(
-                r, int(contrato_id), matriz=matriz
-            ):
-                continue
-            n_nivel_max += 1
-            k = _fo_eo_04_norm_item_key(
-                r.get("item_numero") or "", r.get("capitulo") or ""
-            )
-            if k in items_set:
-                totales[k] += float(r.get("cantidad_total") or 0)
+        totales, n_nivel_max = _fo_eo_04_acumular_totales_desde_registros(
+            raw_prev, int(contrato_id), items_set, matriz
+        )
         meta["registros_prev_nivel_max"] = n_nivel_max
+
+        # Si hay actas previas pero 0 acumulado, el filtro .in_(item_numero) pudo
+        # excluir variantes (1.02 vs 1.02.) — reintento sin filtro de ítem.
+        if not totales and nums_filtro:
+            _log.warning(
+                "fo_eo_04 totales_batch: 0 acumulado con filtro item; reintento sin filtro "
+                "(acta=%s prev_actas=%s items_filtro=%s)",
+                acta_id,
+                len(prev_ids),
+                len(nums_filtro),
+            )
+            raw_prev2 = _fo_eo_04_fetch_registros_actas_ids(
+                int(contrato_id),
+                prev_ids,
+                select_cols=_FO_EO_04_SEL_TOTALES,
+                item_numeros=None,
+            )
+            meta["registros_prev_raw_reintento"] = len(raw_prev2)
+            totales, n_nivel_max = _fo_eo_04_acumular_totales_desde_registros(
+                raw_prev2, int(contrato_id), items_set, matriz
+            )
+            meta["registros_prev_nivel_max"] = n_nivel_max
+            meta["totales_reintento_sin_filtro_item"] = True
 
         meta["items_con_acumulado"] = sum(1 for v in totales.values() if v)
         _log.info(
@@ -6968,6 +7184,7 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
             meta.get("campo_nivel_maximo"),
         )
         # Combinar: ítems con datos + ítems sin registros anteriores (→ 0.0)
+        meta["totales_source"] = "python_paginado"
         result = {**default_result, **dict(totales)}
         return result, meta
     except Exception as exc:
@@ -6977,7 +7194,9 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
             acta_id,
             exc,
         )
-        return default_result, meta
+        meta["totales_fetch_failed"] = True
+        meta["totales_error"] = str(exc)[:500]
+        return {}, meta
 
 
 def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
@@ -7384,8 +7603,7 @@ _FO_EO04_FIRMA_BOX = "45px"
 _FO_EO04_FIRMA_IMG = "38px"
 # Descarga paralela de foto + gráfico por ítem (alineado con informe gerencia matriz).
 _FO_EO04_ITEM_IMG_WORKERS = 16
-_FO_EO04_IMG_MAX_PX = 720
-_FO_EO04_MAX_DATA_URI_LEN = 400_000
+_FO_EO04_MAX_DATA_URI_LEN = 120_000
 _FO_EO04_PDF_PARALLEL_MIN_PAGES = 2
 _FO_EO04_PDF_PAGES_PER_TASK = max(
     1,
@@ -7443,6 +7661,17 @@ def _fo_eo_04_pdf_use_processes() -> bool:
     if env in ("0", "false", "no"):
         return False
     return True
+
+
+def _fo_eo_04_pdf_single_pass_preferred() -> bool:
+    """Un solo HTML→PDF deduplica firmas/logos idénticos (mucho menos peso que N PDFs fusionados).
+
+    FO_EO04_PDF_SINGLE_PASS=0 vuelve al modo por lotes (más rápido en CPU, PDF más pesado).
+    """
+    env = (_os.environ.get("FO_EO04_PDF_SINGLE_PASS") or "1").strip().lower()
+    return env not in ("0", "false", "no")
+
+
 _FO_EO04_PROCESS_POOL = None
 _FO_EO04_POOL_LOCK = threading.Lock()
 _FO_EO04_POOL_BROKEN = False
@@ -7906,10 +8135,17 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
     _t_anteriores = total_actas_anteriores if total_actas_anteriores is not None else None
     _t_acumulado = (_t_presente + _t_anteriores) if _t_anteriores is not None else None
 
+    _tiene_acum_prev = total_actas_anteriores is not None
     tot_rows = [
         ("TOTAL EJECUTADO PRESENTE ACTA",    total_acta_fmt),
-        ("TOTAL EJECUTADO ACTAS ANTERIORES", _fmt_cant(_t_anteriores) if _t_anteriores is not None else z),
-        ("TOTAL EJECUTADO ACUMULADO",        _fmt_cant(_t_acumulado)  if _t_acumulado  is not None else z),
+        (
+            "TOTAL EJECUTADO ACTAS ANTERIORES",
+            _fmt_cant(_t_anteriores) if _tiene_acum_prev else z,
+        ),
+        (
+            "TOTAL EJECUTADO ACUMULADO",
+            _fmt_cant(_t_acumulado) if _t_acumulado is not None else z,
+        ),
         ("TOTAL POR EJECUTAR",               z),
     ]
     tot_block = "".join(
@@ -8196,7 +8432,7 @@ def _fo_eo_04_prefetch_item_imgs_data_uri(
                     })
                 try:
                     uri = fut.result(timeout=_FO_EO04_IMG_FETCH_TIMEOUT_SEC + 5)
-                    if uri and len(uri) <= _FO_EO04_MAX_DATA_URI_LEN:
+                    if uri:
                         url_to_uri[u] = uri
                     else:
                         url_to_uri[u] = u
@@ -8275,6 +8511,19 @@ def _fo_eo_04_pdf_from_pages(
         if on_progress:
             on_progress({"pct": 88, "msg": "Renderizando PDF…", "current_item": 1, "total_items": 1})
         return _to_pdf(pages_html[0])
+
+    # Modo compacto (default): un solo documento HTML → un PDF. xhtml2pdf reutiliza
+    # imágenes idénticas (firmas, logo) en lugar de duplicarlas 124 veces al fusionar
+    # PDFs por página — principal reducción de peso además de la compresión JPEG.
+    if _fo_eo_04_pdf_single_pass_preferred():
+        if on_progress:
+            on_progress({"pct": 78, "msg": f"Renderizando PDF único ({n} páginas, modo compacto)…", "total_items": n})
+        combined = _combine_html_pages(pages_html)
+        pdf = _to_pdf(combined)
+        if on_progress:
+            on_progress({"pct": 98, "msg": f"PDF listo ({len(pdf) // 1024} KB)", "total_items": n})
+        _log.info("fo_eo_04 PDF single-pass: %s páginas, %s KB", n, len(pdf) // 1024)
+        return pdf
 
     t0 = time.time()
     done_pages = 0
@@ -8434,7 +8683,7 @@ def _build_fo_eo_04_html(
     logo_entidad_html = _html_logo_entidad(None)
     if logo_entidad:
         try:
-            logo_du = _url_a_data_url_pdf(logo_entidad)
+            logo_du = _url_a_data_url_pdf(logo_entidad, for_logo=True)
             logo_entidad_html = _html_logo_entidad(logo_du or logo_entidad)
         except Exception as exc:
             _log.warning("fo_eo_04 logo entidad: %s", exc)
@@ -8572,7 +8821,15 @@ def _build_fo_eo_04_html(
             if on_progress:
                 pct_page = 55 + int(20 * (i + 1) / max(n_items, 1))
                 _prog(pct_page, f"Página {i + 1}/{n_items}: {desc_corta}", current_item=i + 1, total_items=n_items)
-            t_anteriores = totales_batch.get(_fo_eo_04_norm_item_key(item_num, item_cap), 0.0) if acta_id_norm else None
+            k_item = _fo_eo_04_norm_item_key(item_num, item_cap)
+            if not acta_id_norm:
+                t_anteriores = None
+            elif fo_totales_meta.get("totales_fetch_failed"):
+                t_anteriores = None
+            elif k_item in totales_batch:
+                t_anteriores = float(totales_batch[k_item])
+            else:
+                t_anteriores = 0.0
             if preview_ui:
                 foto_src = (item.get("foto_url") or "").strip() or None
                 graf_src = (item.get("grafico_url") or "").strip() or None

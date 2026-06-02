@@ -96,32 +96,46 @@ export default function SicoeFiltroCapasBlock({
       </div>
 
       {capas.length >= 2 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Combinar capas:</span>
-          <button
-            type="button"
-            onClick={() => onCapasOpChange('and')}
-            style={{
-              fontSize: 'var(--cc-caption)', fontWeight: 800, padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
-              border: `1px solid ${capasOp === 'and' ? t.primary : t.border}`,
-              background: capasOp === 'and' ? `${t.primary}18` : t.bg,
-              color: capasOp === 'and' ? t.primary : t.textMuted,
-            }}
-          >
-            Y (todas)
-          </button>
-          <button
-            type="button"
-            onClick={() => onCapasOpChange('or')}
-            style={{
-              fontSize: 'var(--cc-caption)', fontWeight: 800, padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
-              border: `1px solid ${capasOp === 'or' ? t.primary : t.border}`,
-              background: capasOp === 'or' ? `${t.primary}18` : t.bg,
-              color: capasOp === 'or' ? t.primary : t.textMuted,
-            }}
-          >
-            O (cualquiera)
-          </button>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Combinar capas:</span>
+            <button
+              type="button"
+              onClick={() => onCapasOpChange('and')}
+              style={{
+                fontSize: 'var(--cc-caption)', fontWeight: 800, padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${capasOp === 'and' ? t.primary : t.border}`,
+                background: capasOp === 'and' ? `${t.primary}18` : t.bg,
+                color: capasOp === 'and' ? t.primary : t.textMuted,
+              }}
+            >
+              Y (todas)
+            </button>
+            <button
+              type="button"
+              onClick={() => onCapasOpChange('or')}
+              style={{
+                fontSize: 'var(--cc-caption)', fontWeight: 800, padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${capasOp === 'or' ? '#dc2626' : t.border}`,
+                background: capasOp === 'or' ? 'rgba(220,38,38,0.12)' : t.bg,
+                color: capasOp === 'or' ? '#dc2626' : t.textMuted,
+              }}
+            >
+              O (cualquiera)
+            </button>
+          </div>
+
+          {capasOp === 'or' && (
+            <div style={{
+              marginTop: 8, padding: '8px 10px', borderRadius: 8,
+              background: 'rgba(220,38,38,0.10)', border: '1px solid rgba(220,38,38,0.45)',
+              color: '#b91c1c', fontSize: 'var(--cc-caption)', fontWeight: 700, lineHeight: 1.45,
+            }}>
+              ⚠ Con <strong>O (cualquiera)</strong> la búsqueda puede demorarse: trae <strong>todos</strong> los
+              registros que cumplan al menos una de las capas. Use <strong>Y (todas)</strong> para resultados
+              acotados y rápidos.
+            </div>
+          )}
         </div>
       )}
 

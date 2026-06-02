@@ -5,6 +5,20 @@ import PptoVersionCompareModal from './PptoVersionCompareModal'
 
 const PPTO_TIPO = 'Presupuesto de Obra'
 
+/**
+ * Token fresco desde almacenamiento. El prop `token` se captura una sola vez en el
+ * render y queda obsoleto cuando /auth/refresh renueva el JWT en localStorage; usar
+ * siempre el almacenado evita el error "Token inválido" en restaurar/eliminar/crear.
+ */
+function tokenFresco(fallback) {
+  if (typeof window === 'undefined') return fallback
+  return (
+    window.localStorage?.getItem('cc_token') ||
+    window.sessionStorage?.getItem('cc_token') ||
+    fallback
+  )
+}
+
 function fmtFecha(iso) {
   if (!iso) return '—'
   try {
@@ -59,6 +73,8 @@ export default function PptoVersionador({
   onPanelOpenChange,
   onVersionesReload,
 }) {
+  const authToken = useCallback(() => tokenFresco(token), [token])
+
   const esPrimeraVersion = versionesPresupuesto.length === 0
   const siguienteNumero = useMemo(() => {
     const max = versionesPresupuesto.reduce((m, v) => Math.max(m, Number(v.numero_version) || 0), 0)
@@ -115,7 +131,7 @@ export default function PptoVersionador({
     if (!createOpen || !contratoId) return
     setLoadingAiu(true)
     fetch(`${API}/contratos/${contratoId}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${authToken()}` },
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((c) => {
@@ -125,20 +141,20 @@ export default function PptoVersionador({
       })
       .catch(() => setAiuFraccion(0))
       .finally(() => setLoadingAiu(false))
-  }, [createOpen, contratoId, token, API])
+  }, [createOpen, contratoId, authToken, API])
 
   useEffect(() => {
     if (!createOpen || !contratoId) return
     setLoadingCapitulosModal(true)
     const p = new URLSearchParams({ tipo_ejecucion: PPTO_TIPO })
     fetch(`${API}/presupuesto/${contratoId}/capitulos-lista?${p}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${authToken()}` },
     })
       .then((r) => (r.ok ? r.json() : []))
       .then((list) => setCapitulosModal(Array.isArray(list) ? list : []))
       .catch(() => setCapitulosModal([]))
       .finally(() => setLoadingCapitulosModal(false))
-  }, [createOpen, contratoId, token, API])
+  }, [createOpen, contratoId, authToken, API])
 
   const confirmarCrear = useCallback(async () => {
     if (!contratoId || creando) return
@@ -158,7 +174,7 @@ export default function PptoVersionador({
       const res = await fetch(`${API}/presupuesto/${contratoId}/versiones/crear`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${authToken()}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -187,7 +203,7 @@ export default function PptoVersionador({
     justificacion,
     onCreateOpenChange,
     onVersionesReload,
-    token,
+    authToken,
     aiuFraccion,
   ])
 
@@ -214,7 +230,7 @@ export default function PptoVersionador({
       const res = await fetch(`${API}/presupuesto/${contratoId}/exportar-informe`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${authToken()}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -238,7 +254,7 @@ export default function PptoVersionador({
         `presupuesto_version_${slug}_${contratoId}.xlsx`,
       )
     },
-    [API, contratoId, token, usuario?.logo_contratista],
+    [API, contratoId, authToken, usuario?.logo_contratista],
   )
 
   const iniciarEliminar = useCallback(
@@ -253,7 +269,7 @@ export default function PptoVersionador({
         let meta = null
         try {
           const rc = await fetch(`${API}/contratos/${contratoId}`, {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${authToken()}` },
           })
           meta = rc.ok ? await rc.json() : null
         } catch {
@@ -268,7 +284,7 @@ export default function PptoVersionador({
         setDeleteBusy(false)
       }
     },
-    [API, contratoId, exportarVersionExcel, token],
+    [API, contratoId, exportarVersionExcel, authToken],
   )
 
   const confirmarEliminar = useCallback(async () => {
@@ -278,7 +294,7 @@ export default function PptoVersionador({
     try {
       const res = await fetch(
         `${API}/presupuesto/${contratoId}/versiones/${deleteTarget.id}`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+        { method: 'DELETE', headers: { Authorization: `Bearer ${authToken()}` } },
       )
       if (!res.ok) {
         const msg = await res.text().catch(() => '')
@@ -292,7 +308,7 @@ export default function PptoVersionador({
     } finally {
       setDeleteBusy(false)
     }
-  }, [API, contratoId, deleteBusy, deleteTarget, onVersionesReload, token])
+  }, [API, contratoId, deleteBusy, deleteTarget, onVersionesReload, authToken])
 
   const confirmarRestaurar = useCallback(async () => {
     if (!restaurarTarget || restaurarBusy) return
@@ -300,7 +316,7 @@ export default function PptoVersionador({
     try {
       const res = await fetch(
         `${API}/presupuesto/${contratoId}/versiones/${restaurarTarget.id}/restaurar`,
-        { method: 'PUT', headers: { Authorization: `Bearer ${token}` } },
+        { method: 'PUT', headers: { Authorization: `Bearer ${authToken()}` } },
       )
       if (!res.ok) {
         const msg = await res.text().catch(() => '')
@@ -313,7 +329,7 @@ export default function PptoVersionador({
     } finally {
       setRestaurarBusy(false)
     }
-  }, [API, contratoId, onVersionesReload, restaurarBusy, restaurarTarget, token])
+  }, [API, contratoId, onVersionesReload, restaurarBusy, restaurarTarget, authToken])
 
   const tituloCrear = esPrimeraVersion ? 'Crear versión inicial' : 'Nueva versión'
 
@@ -629,19 +645,20 @@ export default function PptoVersionador({
                         <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
                           <button
                             type="button"
-                            onClick={() => setRestaurarTarget(v)}
+                            disabled
+                            title="Disponible próximamente: restaurar reemplazará el presupuesto vivo con esta versión (se guardará un respaldo del estado actual antes)."
                             style={{
-                              background: `${t.primary}18`,
-                              border: `1px solid ${t.primary}`,
+                              background: `${t.primary}0A`,
+                              border: `1px dashed ${t.border}`,
                               borderRadius: 6,
                               padding: '4px 10px',
                               fontSize: 'var(--cc-caption)',
                               fontWeight: 700,
-                              color: t.primary,
-                              cursor: 'pointer',
+                              color: t.textMuted,
+                              cursor: 'not-allowed',
                             }}
                           >
-                            Restaurar
+                            Restaurar (pronto)
                           </button>
                           <button
                             type="button"

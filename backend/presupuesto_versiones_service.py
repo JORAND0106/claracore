@@ -12,10 +12,49 @@ class PresupuestoVersionError(Exception):
     """Error de reglas de negocio del versionador."""
 
 
+PPTO_TIPO_OBRA = "Presupuesto de Obra"
+
+
 def _rpc_result(data: Any) -> dict:
     if isinstance(data, list):
         return data[0] if data else {}
     return data if isinstance(data, dict) else {}
+
+
+def _aggregate_presupuesto_vivo(sb, contrato_id: int) -> Dict[str, Any]:
+    """Conteo y costo directo del presupuesto VIVO (Presupuesto de Obra activo).
+
+    La versión vigente representa el presupuesto de trabajo en curso: su contenido
+    es la tabla `presupuesto` viva, no un snapshot congelado. Paginamos porque
+    PostgREST limita cada respuesta a ~1000 filas.
+    """
+    conteo = 0
+    costo = 0.0
+    PAGE = 1000
+    offset = 0
+    while True:
+        batch = (
+            sb.table("presupuesto")
+            .select("costo_directo")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", PPTO_TIPO_OBRA)
+            .eq("dado_de_baja", False)
+            .order("id")
+            .range(offset, offset + PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for it in batch:
+            conteo += 1
+            try:
+                costo += float(it.get("costo_directo") or 0)
+            except (TypeError, ValueError):
+                pass
+        if len(batch) < PAGE:
+            break
+        offset += PAGE
+    return {"conteo_items": conteo, "costo_directo_total": round(costo, 2)}
 
 
 def listar_versiones(sb, contrato_id: int) -> List[dict]:
@@ -32,23 +71,38 @@ def listar_versiones(sb, contrato_id: int) -> List[dict]:
         return []
 
     version_ids = [r["id"] for r in rows]
-    items = (
-        sb.table("presupuesto_version_items")
-        .select("version_id, costo_directo")
-        .in_("version_id", version_ids)
-        .execute()
-        .data
-        or []
-    )
+    # PostgREST limita cada respuesta a ~1000 filas. Una sola query .in_(version_ids)
+    # truncaba el conteo total (p. ej. 84 + 916 = 1000), subcontando los ítems reales
+    # de cada versión. Paginamos ordenando por PK estable (id) para acumular todo.
     agg: Dict[str, Dict[str, Any]] = {}
-    for it in items:
-        vid = str(it.get("version_id"))
-        bucket = agg.setdefault(vid, {"conteo_items": 0, "costo_directo_total": 0.0})
-        bucket["conteo_items"] += 1
-        try:
-            bucket["costo_directo_total"] += float(it.get("costo_directo") or 0)
-        except (TypeError, ValueError):
-            pass
+    PAGE = 1000
+    offset = 0
+    while True:
+        batch = (
+            sb.table("presupuesto_version_items")
+            .select("version_id, costo_directo")
+            .in_("version_id", version_ids)
+            .order("id")
+            .range(offset, offset + PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for it in batch:
+            vid = str(it.get("version_id"))
+            bucket = agg.setdefault(vid, {"conteo_items": 0, "costo_directo_total": 0.0})
+            bucket["conteo_items"] += 1
+            try:
+                bucket["costo_directo_total"] += float(it.get("costo_directo") or 0)
+            except (TypeError, ValueError):
+                pass
+        if len(batch) < PAGE:
+            break
+        offset += PAGE
+
+    # La versión vigente refleja el presupuesto vivo (no su snapshot congelado).
+    hay_vigente = any(bool(r.get("es_vigente")) for r in rows)
+    vivo = _aggregate_presupuesto_vivo(sb, contrato_id) if hay_vigente else None
 
     out: List[dict] = []
     uids = list({r.get("creada_por") for r in rows if r.get("creada_por")})
@@ -69,7 +123,12 @@ def listar_versiones(sb, contrato_id: int) -> List[dict]:
 
     for row in rows:
         vid = str(row.get("id"))
-        stats = agg.get(vid, {"conteo_items": 0, "costo_directo_total": 0.0})
+        es_vigente = bool(row.get("es_vigente"))
+        # Vigente → presupuesto vivo; congeladas → su snapshot en version_items.
+        if es_vigente and vivo is not None:
+            stats = vivo
+        else:
+            stats = agg.get(vid, {"conteo_items": 0, "costo_directo_total": 0.0})
         creador = row.get("creada_por")
         out.append(
             {
@@ -77,7 +136,7 @@ def listar_versiones(sb, contrato_id: int) -> List[dict]:
                 "contrato_id": row.get("contrato_id"),
                 "numero_version": row.get("numero_version"),
                 "etiqueta": row.get("etiqueta"),
-                "es_vigente": bool(row.get("es_vigente")),
+                "es_vigente": es_vigente,
                 "justificacion_tecnica": row.get("justificacion_tecnica"),
                 "creada_por": creador,
                 "creada_por_nombre": nombres.get(creador) if creador else None,
@@ -117,6 +176,23 @@ def crear_version(
     et = (etiqueta or "").strip()
     if not et:
         raise HTTPException(status_code=400, detail="La etiqueta es obligatoria")
+
+    # Versión vigente SALIENTE (antes de crear la nueva). Al crear una nueva versión
+    # esta saliente debe quedar congelada con el estado VIVO exacto que tenía al
+    # entregar el control; la nueva vigente continúa reflejando el presupuesto vivo.
+    sal = (
+        sb.table("presupuesto_versiones")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("es_vigente", True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    saliente_id = str(sal[0]["id"]) if sal else None
+
+    # La RPC copia el presupuesto vivo a la nueva versión y la marca vigente (atómico).
     res = sb.rpc(
         "presupuesto_version_crear",
         {
@@ -129,36 +205,41 @@ def crear_version(
     data = _rpc_result(res.data)
     if not data.get("ok"):
         raise HTTPException(status_code=500, detail="No se pudo crear la versión de presupuesto")
-    version_id = data.get("version_id")
+    version_id = str(data.get("version_id"))
+    items_copiados = int(data.get("items_copiados", 0) or 0)
+
     if aiu_porcentaje is not None:
         try:
             pct = float(aiu_porcentaje)
             if pct >= 0:
                 sb.table("presupuesto_versiones").update({"aiu_porcentaje": pct}).eq(
-                    "id", str(version_id)
+                    "id", version_id
                 ).execute()
         except (TypeError, ValueError):
             pass
-    version = assert_version_del_contrato(sb, contrato_id, str(version_id))
-    items = (
-        sb.table("presupuesto_version_items")
-        .select("costo_directo")
-        .eq("version_id", str(version_id))
-        .execute()
-        .data
-        or []
-    )
-    total = 0.0
-    for it in items:
-        try:
-            total += float(it.get("costo_directo") or 0)
-        except (TypeError, ValueError):
-            pass
+
+    # Invariante del modelo "vigente = presupuesto vivo":
+    #   - La versión vigente NUNCA conserva snapshot propio (lee lo vivo).
+    #   - Cada versión CONGELADA guarda el snapshot de su estado al ser relevada.
+    # El snapshot recién copiado por la RPC representa el estado vivo actual; lo
+    # trasladamos a la versión saliente para congelarla con ese estado, y dejamos la
+    # nueva vigente sin ítems propios. Si no había saliente (primera versión), la nueva
+    # vigente tampoco conserva snapshot.
+    if saliente_id and saliente_id != version_id:
+        sb.table("presupuesto_version_items").delete().eq("version_id", saliente_id).execute()
+        sb.table("presupuesto_version_items").update({"version_id": saliente_id}).eq(
+            "version_id", version_id
+        ).execute()
+    else:
+        sb.table("presupuesto_version_items").delete().eq("version_id", version_id).execute()
+
+    version = assert_version_del_contrato(sb, contrato_id, version_id)
+    vivo = _aggregate_presupuesto_vivo(sb, contrato_id)
     return {
         **version,
-        "items_copiados": data.get("items_copiados", 0),
-        "conteo_items": data.get("items_copiados", 0),
-        "costo_directo_total": round(total, 2),
+        "items_copiados": items_copiados,
+        "conteo_items": vivo["conteo_items"],
+        "costo_directo_total": vivo["costo_directo_total"],
     }
 
 
@@ -195,17 +276,24 @@ def _fetch_version_items_rows(
     tramo: Optional[str] = None,
     select: str = "capitulo, costo_directo, cant_total",
 ) -> List[dict]:
-    assert_version_del_contrato(sb, contrato_id, version_id)
+    """Filas de una versión. Si es la vigente, lee del presupuesto VIVO (su contenido
+    real); si está congelada, lee de su snapshot en presupuesto_version_items."""
+    row = assert_version_del_contrato(sb, contrato_id, version_id)
+    es_vigente = bool(row.get("es_vigente"))
+    tabla = "presupuesto" if es_vigente else "presupuesto_version_items"
     rows: List[dict] = []
     offset = 0
     while True:
         q = (
-            sb.table("presupuesto_version_items")
+            sb.table(tabla)
             .select(select)
             .eq("contrato_id", contrato_id)
-            .eq("version_id", version_id)
             .eq("dado_de_baja", False)
         )
+        if es_vigente:
+            q = q.eq("tipo_ejecucion", PPTO_TIPO_OBRA)
+        else:
+            q = q.eq("version_id", version_id)
         if capitulo:
             q = q.eq("capitulo", capitulo)
         if tramo and str(tramo).strip():

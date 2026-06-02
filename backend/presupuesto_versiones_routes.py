@@ -78,17 +78,29 @@ def get_presupuesto_version_items(
     offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
 ):
-    """Ítems de una versión con los mismos filtros que GET /presupuesto/{id}."""
+    """Ítems de una versión con los mismos filtros que GET /presupuesto/{id}.
+
+    La versión vigente lee del presupuesto VIVO; las congeladas, de su snapshot.
+    """
     _require_contract_access(current_user, contrato_id)
-    assert_version_del_contrato(supabase, contrato_id, version_id)
+    version_row = assert_version_del_contrato(supabase, contrato_id, version_id)
+    es_vigente = bool(version_row.get("es_vigente"))
 
     def _q_base():
-        q = (
-            supabase.table("presupuesto_version_items")
-            .select("*")
-            .eq("contrato_id", contrato_id)
-            .eq("version_id", version_id)
-        )
+        if es_vigente:
+            q = (
+                supabase.table("presupuesto")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .eq("tipo_ejecucion", "Presupuesto de Obra")
+            )
+        else:
+            q = (
+                supabase.table("presupuesto_version_items")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .eq("version_id", version_id)
+            )
         if papelera:
             q = q.eq("dado_de_baja", True)
         else:

@@ -8108,9 +8108,17 @@ function ModuloSicoeObra({
               Añadirás una capa más al filtro. Elige cómo debe combinarse con las existentes:
             </p>
             <ul style={{ margin: '12px 0 0', paddingLeft: '20px', color: t.text, fontSize: 'var(--cc-sm)', lineHeight: 1.55 }}>
-              <li><strong style={{ color: t.primary }}>Y (todas)</strong>: cada registro debe cumplir <em>todas</em> las capas a la vez.</li>
+              <li><strong style={{ color: t.primary }}>Y (todas)</strong>: cada registro debe cumplir <em>todas</em> las capas a la vez. Recomendado: más rápido y acotado.</li>
               <li><strong style={{ color: t.primary }}>O (cualquiera)</strong>: basta con que cumpla <em>al menos una</em> de las capas.</li>
             </ul>
+            <div style={{
+              marginTop: '12px', padding: '10px 12px', borderRadius: '10px',
+              background: 'rgba(220,38,38,0.10)', border: '1px solid rgba(220,38,38,0.45)',
+              color: '#b91c1c', fontSize: 'var(--cc-sm)', fontWeight: 700, lineHeight: 1.5,
+            }}>
+              ⚠ <strong>O (cualquiera)</strong> puede demorar la carga: trae <strong>todos</strong> los registros que
+              cumplan al menos una capa. Si no lo necesitas, deja <strong>Y (todas)</strong>.
+            </div>
             {sicoeModalCombinaMismoNivel && (
               <div style={{
                 marginTop: '14px', padding: '10px 12px', borderRadius: '10px',

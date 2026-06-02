@@ -2828,11 +2828,12 @@ export default function ModuloInformes({
             foEo04JobPollRef.current = null
             setFoEo04LastJobId(job_id)
             const foMeta = estado.fo_totales_meta
-            const avisoAcum =
-              foMeta &&
-              Number(foMeta.prev_actas_count) > 0 &&
-              Number(foMeta.items_con_acumulado) === 0
-                ? ` El servidor encontró ${foMeta.prev_actas_count} acta(s) anterior(es) y ${foMeta.registros_prev_nivel_max ?? 0} línea(s) con nivel máximo aprobado, pero ningún ítem coincide con acumulado en el PDF (revise ítem/capítulo).`
+            const avisoAcum = foMeta?.totales_fetch_failed
+              ? ' No se pudieron calcular los acumulados (error o timeout al leer actas anteriores). Despliegue el backend actualizado y ejecute la migración fo_eo_04_totales_actas_anteriores_batch en Supabase.'
+              : foMeta &&
+                  Number(foMeta.prev_actas_count) > 0 &&
+                  Number(foMeta.items_con_acumulado) === 0
+                ? ` El servidor encontró ${foMeta.prev_actas_count} acta(s) anterior(es) y ${foMeta.registros_prev_nivel_max ?? 0} línea(s) con nivel máximo aprobado, pero ningún ítem coincide con acumulado en el PDF (revise ítem/capítulo). Fuente: ${foMeta.totales_source || 'desconocida'}.`
                 : foMeta && Number(foMeta.prev_actas_count) === 0
                   ? ' No se detectaron actas RPO anteriores para este acta (revise numero_rpo/consecutivo en producción).'
                   : ''
