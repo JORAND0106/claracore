@@ -18,6 +18,29 @@ def _so_reg_filtro_abs_solape(q, abs_inicio: Optional[float], abs_final: Optiona
     return q
 
 
+def presupuesto_oficial_version_id(sb, contrato_id) -> Optional[str]:
+    """ID de la última versión SELLADA y vigente (es_vigente_aprobada) del contrato.
+
+    Devuelve None si aún no hay versión sellada (o si la columna no existe todavía,
+    p. ej. antes de aplicar la migración): los consumidores hacen fallback al
+    presupuesto vivo, preservando el comportamiento actual sin regresión.
+    """
+    try:
+        rows = (
+            sb.table("presupuesto_versiones")
+            .select("id")
+            .eq("contrato_id", int(contrato_id))
+            .eq("es_vigente_aprobada", True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return None
+    return str(rows[0]["id"]) if rows else None
+
+
 def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
     """Perfiles Interventoría solo ven cantidades ya depuradas por contratista (costos u obra)."""
     rol = (current_user.get("rol_nombre") or "").strip().lower()

@@ -34,6 +34,7 @@ from presupuesto_helpers import (
     _presupuesto_q_estructura,
     _presupuesto_q_filtros_ubicacion,
     _so_reg_filtro_abs_solape,
+    presupuesto_oficial_version_id,
 )
 from presupuesto_panel_validacion import (
     fetch_panel_validacion_interv,
@@ -3231,7 +3232,7 @@ def _sicoe_reporte_ids_coinciden_nodo(
             while True:
                 def _rb(o=off):
                     try:
-                        return supabase.table("so_registros").select("reporte_id, no_inicio, no_final").eq("contrato_id", contrato_id).range(o, o + 999).execute().data
+                        return supabase.table("so_registros").select("reporte_id, no_inicio, no_final").eq("contrato_id", contrato_id).order("id").range(o, o + 999).execute().data
                     except Exception:
                         return []
 
@@ -3306,7 +3307,7 @@ def _sicoe_reporte_ids_abs_solapa_registros(
         while True:
             def _page(o=off):
                 q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
-                return _apply_solape(q).range(o, o + 999).execute().data
+                return _apply_solape(q).order("id").range(o, o + 999).execute().data
 
             batch = supabase_execute(_page)
             for row in batch:
@@ -3828,7 +3829,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     reversion_modo=reversion_modo,
                     **_reg_fu,
                 )
-                return q.range(o, o + page - 1).execute().data
+                return q.order("id").range(o, o + page - 1).execute().data
 
             batch = supabase_execute(_one_page) or []
             _ids_agregar_filas(batch)
@@ -6400,7 +6401,7 @@ def get_listado_precios_cantidades(contrato_id: int, current_user=Depends(get_cu
             .eq("contrato_id", contrato_id)
             .eq("tipo_ejecucion", "Presupuesto de Obra")
             .eq("dado_de_baja", False)
-            .range(offset, offset + 999)
+            .order("id").range(offset, offset + 999)
             .execute()
             .data
         )
@@ -6423,7 +6424,7 @@ def get_listado_precios_cantidades(contrato_id: int, current_user=Depends(get_cu
                 supabase.table("so_registros")
                 .select(f"capitulo, competencia, item_numero, cantidad_total, {SICOE_SELECT_NIVELES_ESTADO}")
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -6494,7 +6495,7 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
                 supabase.table("so_registros")
                 .select(f"capitulo, competencia, item_numero, cantidad_total, costo_directo, {SICOE_SELECT_NIVELES_ESTADO}")
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
             )
             return q.execute().data
 
@@ -6723,13 +6724,13 @@ def get_presupuesto(
 
     if limit is not None:
         q = _q_base()
-        return q.range(offset, offset + limit - 1).execute().data
+        return q.order("id").range(offset, offset + limit - 1).execute().data
 
     PAGE = 1000
     all_rows = []
     off = 0
     while True:
-        batch = _q_base().range(off, off + PAGE - 1).execute().data
+        batch = _q_base().order("id").range(off, off + PAGE - 1).execute().data
         all_rows.extend(batch)
         if len(batch) < PAGE:
             break
@@ -6979,7 +6980,7 @@ def _presupuesto_filtros_opciones_legacy(
     tipos_rows: List[dict] = []
     tipos_off = 0
     while True:
-        tipos_batch = tipos_q.range(tipos_off, tipos_off + 999).execute().data or []
+        tipos_batch = tipos_q.order("id").range(tipos_off, tipos_off + 999).execute().data or []
         tipos_rows.extend(tipos_batch)
         if len(tipos_batch) < 1000:
             break
@@ -7044,7 +7045,7 @@ def _presupuesto_fetch_filtros_source_rows(
             q = q.eq("calzada", calzada)
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-        batch = q.range(offset, offset + 999).execute().data or []
+        batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
             break
@@ -7175,7 +7176,7 @@ def _presupuesto_agregar_por_capitulo(
         q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-        batch = q.range(offset, offset + 999).execute().data or []
+        batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
             break
@@ -7326,7 +7327,7 @@ def get_items_presupuesto(
         q_it = _presupuesto_q_tipo_ejecucion(q_it, tipo_ejecucion)
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q_it = q_it.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-        batch = q_it.range(offset, offset + 999).execute().data
+        batch = q_it.order("id").range(offset, offset + 999).execute().data
         rows.extend(batch)
         if len(batch) < 1000: break 
         offset += 1000
@@ -7412,7 +7413,7 @@ def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoIn
     all_rows: List[dict] = []
     off = 0
     while True:
-        batch = _q_base().range(off, off + PAGE - 1).execute().data or []
+        batch = _q_base().order("id").range(off, off + PAGE - 1).execute().data or []
         all_rows.extend(batch)
         if len(batch) < PAGE:
             break
@@ -7460,7 +7461,7 @@ def _presupuesto_version_fetch_export_rows(
 
     off = 0
     while True:
-        batch = _q_base().range(off, off + PAGE - 1).execute().data or []
+        batch = _q_base().order("id").range(off, off + PAGE - 1).execute().data or []
         all_rows.extend(batch)
         if len(batch) < PAGE:
             break
@@ -10694,7 +10695,7 @@ def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List
     while True:
         batch = supabase.table("so_registros").select(f"id, reporte_id, {SICOE_SELECT_NIVELES_ESTADO},contrato_id")\
             .eq("contrato_id", contrato_id).in_("acta_rpo_id", sources)\
-            .range(off, off + 199).execute().data or []
+            .order("id").range(off, off + 199).execute().data or []
         for reg in batch:
             if _registro_nivel_max_aprobado(reg, contrato_id):
                 continue
@@ -12225,7 +12226,7 @@ def buscar_reportes_obra(
                     _re_page = 1000
                     while True:
                         def _re_fetch(o=_re_off, ids=rc):
-                            return _reg_estados_q_base(ids).range(o, o + _re_page - 1).execute().data
+                            return _reg_estados_q_base(ids).order("id").range(o, o + _re_page - 1).execute().data
 
                         _batch = supabase_execute(_re_fetch)
                         reg_estados.extend(_batch)
@@ -12237,7 +12238,7 @@ def buscar_reportes_obra(
                 _re_page = 1000
                 while True:
                     def _re_fetch(o=_re_off):
-                        return _reg_estados_q_base().range(o, o + _re_page - 1).execute().data
+                        return _reg_estados_q_base().order("id").range(o, o + _re_page - 1).execute().data
 
                     _batch = supabase_execute(_re_fetch)
                     reg_estados.extend(_batch)
@@ -13068,7 +13069,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                             .in_("id", rc)
                         )
                         q = _aplicar_filtros_reg(q)
-                        return q.range(o, o + batch_size).execute().data
+                        return q.order("id").range(o, o + batch_size).execute().data
 
                     batch = supabase_execute(_run_fetch)
                     if not batch:
@@ -13091,7 +13092,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
             o = off
 
             def _run_fetch_plain():
-                return base_q.range(o, o + batch_size).execute().data
+                return base_q.order("id").range(o, o + batch_size).execute().data
 
             batch = supabase_execute(_run_fetch_plain)
             if not batch:
@@ -13113,7 +13114,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                     def _run_fetch_full():
                         q = supabase.table("so_registros").select(",".join(campos_aux)).in_("id", rc)
                         q = _aplicar_filtros_reg(q)
-                        return q.range(o, o + batch_size).execute().data
+                        return q.order("id").range(o, o + batch_size).execute().data
 
                     batch = supabase_execute(_run_fetch_full)
                     if not batch:
@@ -13133,7 +13134,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                 o = off
 
                 def _run_fetch_all():
-                    return base_q.range(o, o + batch_size).execute().data
+                    return base_q.order("id").range(o, o + batch_size).execute().data
 
                 batch = supabase_execute(_run_fetch_all)
                 if not batch:
@@ -13504,7 +13505,7 @@ def exportar_registros_sicoe(
                             .in_("id", rc)
                         )
                         q = _aplicar_filtros_reg(q)
-                        return q.range(o, o + batch_size).execute().data
+                        return q.order("id").range(o, o + batch_size).execute().data
 
                     batch = supabase_execute(_run_fetch)
                     if not batch:
@@ -13526,7 +13527,7 @@ def exportar_registros_sicoe(
             o = off
 
             def _run_fetch_plain():
-                return base_q.range(o, o + batch_size).execute().data
+                return base_q.order("id").range(o, o + batch_size).execute().data
 
             batch = supabase_execute(_run_fetch_plain)
             if not batch:
@@ -13548,7 +13549,7 @@ def exportar_registros_sicoe(
                     def _run_fetch_full():
                         q = supabase.table("so_registros").select(",".join(campos_aux)).in_("id", rc)
                         q = _aplicar_filtros_reg(q)
-                        return q.range(o, o + batch_size).execute().data
+                        return q.order("id").range(o, o + batch_size).execute().data
 
                     batch = supabase_execute(_run_fetch_full)
                     if not batch:
@@ -13565,7 +13566,7 @@ def exportar_registros_sicoe(
                 o = off
 
                 def _run_fetch_all():
-                    return base_q.range(o, o + batch_size).execute().data
+                    return base_q.order("id").range(o, o + batch_size).execute().data
 
                 batch = supabase_execute(_run_fetch_all)
                 if not batch:
@@ -14388,7 +14389,7 @@ def filtros_capitulos_reportes(
                     q = q.eq("semana_id", _semana_id_l)
                 if _sub_id_l is not None:
                     q = q.eq("subcontratista_id", _sub_id_l)
-                return q.range(o, o + 999).execute().data
+                return q.order("id").range(o, o + 999).execute().data
             batch = supabase_execute(_caps)
             cap_todos.extend(batch)
             if len(batch) < 1000:
@@ -14468,7 +14469,7 @@ def filtros_items_registros(
                     qr = qr.eq("subcontratista_id", _sub_l)
                 if _q_l:
                     qr = qr.or_(f"item_numero.ilike.%{_q_l}%,item_descripcion.ilike.%{_q_l}%")
-                return qr.range(o, o + 999).execute().data
+                return qr.order("id").range(o, o + 999).execute().data
             batch = supabase_execute(_items)
             item_todos.extend(batch)
             if len(batch) < 1000:
@@ -15007,7 +15008,7 @@ def _presupuesto_listado_fallback_por_item_pk(
                 .select("capitulo, competencia, item, descripcion, und, vlr_unitario, pk_id")
                 .eq("contrato_id", contrato_id)
                 .eq("dado_de_baja", False)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -19316,7 +19317,7 @@ def _fetch_presupuesto_pk_detalle_rows(
                 q = q.eq("item", item_vars[0])
             else:
                 q = q.in_("item", item_vars)
-        batch = supabase_execute(lambda o=off, qq=q: qq.range(o, o + 999).execute().data) or []
+        batch = supabase_execute(lambda o=off, qq=q: qq.order("id").range(o, o + 999).execute().data) or []
         for r in batch:
             if _dash_norm_item_key_py(r.get("item")) != it_key:
                 continue
@@ -19512,7 +19513,7 @@ def _dashboard_pkid_colores_core(
                     q = q.eq("item_numero", item_vars[0])
                 elif item_vars:
                     q = q.in_("item_numero", item_vars)
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_fetch_sicoe) or []
         pending_ids: set = set()
@@ -19592,6 +19593,7 @@ from dashboard_presupuesto_vista import (
     TIPO_OBRA_EJECUTADA,
     capitulo_variants_heuristic,
     drill_items_capitulo_vista,
+    _ppto_claracore_split,
     filter_sicoe_by_allowed_keys,
     liquidacion_items_vista,
     norm_capitulo_display,
@@ -19647,7 +19649,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
             )
             if pto_iv:
                 q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_q_pres) or []
         for r in batch:
@@ -19684,7 +19686,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
                 supabase.table("so_registros")
                 .select("capitulo, item_numero, cantidad_total, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO)
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -19845,7 +19847,7 @@ def _dashboard_pkid_colores_liquidacion(
             )
             if cap_eq and str(cap_eq).strip():
                 q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, str(cap_eq).strip())
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_qs) or []
         for r in batch:
@@ -19943,7 +19945,7 @@ def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dic
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -20036,7 +20038,7 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                 )
                 if filtered:
                     q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, cap_eq)
-                return q.range(o, o + 999).execute().data
+                return q.order("id").range(o, o + 999).execute().data
 
             batch = supabase_execute(_b) or []
             _ingest_batch(batch)
@@ -20520,6 +20522,8 @@ def _merge_drill_rpc_sicoe_vista_ppto(rpc_items: List[dict], ppto_items: List[di
                 "delta": round(pp_cost - cob, 2),
                 "pct": round(cob / pp_cost * 100, 1) if pp_cost else 0,
                 "cant_ppto": round(float(p.get("cant_ppto") or r.get("cant_ppto") or 0), 3),
+                "cant_ppto_claracore": round(float(p.get("cant_ppto_claracore") or 0), 3),
+                "costo_ppto_claracore": round(float(p.get("costo_ppto_claracore") or 0), 2),
                 "cant_sicoe_aprobado": round(float(r.get("cant_sicoe_aprobado") or 0), 3),
                 "cant_sicoe_no_revisado": round(float(r.get("cant_sicoe_no_revisado") or 0), 3),
             }
@@ -20666,7 +20670,7 @@ def dashboard_resumen_obra(
             def _batch(o=off):
                 return supabase.table("so_registros").select(
                     f"capitulo, costo_directo, acta_rpo_id, {SICOE_SELECT_NIVELES_ESTADO}"
-                ).eq("contrato_id", contrato_id).range(o, o + 999).execute().data
+                ).eq("contrato_id", contrato_id).order("id").range(o, o + 999).execute().data
             batch = supabase_execute(_batch) or []
             for reg in batch:
                 if _matriz_validacion_norm_estado_nivel_final(reg, contrato_id) != "Aprobado":
@@ -20821,7 +20825,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -20854,7 +20858,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
                 .select("capitulo, costo_directo, revisado")
                 .eq("contrato_id", contrato_id)
                 .eq("dado_de_baja", False)
-                .range(o, o + 999)
+                .order("id").range(o, o + 999)
                 .execute()
                 .data
             )
@@ -20946,6 +20950,8 @@ def _ppto_drill_rows_for_vista(
             + float(revsplit.get("Pendiente") or 0)
             + float(revsplit.get("Rechazado") or 0)
         )
+        # Base ClaraCore para informes: Aprobado + No Revisado (excluye Pendiente/Rechazado).
+        cc_cant, cc_cost = _ppto_claracore_split(rows_it)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         rows.append(
             {
@@ -20956,6 +20962,8 @@ def _ppto_drill_rows_for_vista(
                 "presupuesto_aprobado_n3": round(pap, 2),
                 "presupuesto_no_revisado_n3": round(pnr, 2),
                 "cant_ppto": round(p_cant, 3),
+                "cant_ppto_claracore": round(cc_cant, 3),
+                "costo_ppto_claracore": round(cc_cost, 2),
             }
         )
     return rows
@@ -21147,7 +21155,7 @@ def _dashboard_matriz_validacion_por_niveles(
             ).eq("contrato_id", contrato_id)
             if acta_id_filtro is not None:
                 q = q.eq("acta_rpo_id", acta_id_filtro)
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_batch) or []
         for reg in batch:
@@ -21182,7 +21190,7 @@ def _dashboard_matriz_validacion_por_niveles(
                 q = supabase.table("so_registros").select(
                     f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
                 ).eq("contrato_id", contrato_id)
-                return q.range(o, o + 999).execute().data
+                return q.order("id").range(o, o + 999).execute().data
 
             batch = supabase_execute(_bo) or []
             for reg in batch:
@@ -21522,7 +21530,7 @@ def _dashboard_pkid_tabla_obra_core(
                     q = q.eq("item_numero", iv[0])
                 else:
                     q = q.in_("item_numero", iv)
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_regs)
         for reg in batch or []:
@@ -21669,7 +21677,7 @@ def _ppto_rows_capitulo_tipo(
                     q = q.eq("capitulo", caps[0])
                 else:
                     q = q.in_("capitulo", caps)
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_b) or []
         for row in batch:
@@ -21809,6 +21817,27 @@ def _xlsx_apply_print_item(ws, contrato_numero: str) -> None:
     _xlsx_apply_page_footer(ws, contrato_numero)
 
 
+def _apply_export_claracore_basis_rows(rows: List[dict]) -> None:
+    """Rebasa filas PK del export a la base ClaraCore (in-place).
+
+    ClaraCore = Aprobado + No Revisado (excluye Pendiente/Rechazado), por lo que
+    cantidad/costo ClaraCore = total − pendiente − rechazado. El delta pasa a ser
+    ClaraCore − Cobrado. Solo afecta los Excel (ejecutivo/completo); el dashboard
+    web conserva su lógica original.
+    """
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        cc_q = float(r.get("cant_ppto_aprobado_n3") or 0) + float(r.get("cant_ppto_estado_no_revisado") or 0)
+        cc_c = float(r.get("costo_ppto_aprobado_n3") or 0) + float(r.get("costo_ppto_estado_no_revisado") or 0)
+        sic_q = float(r.get("cant_sicoe") or 0)
+        sic_c = float(r.get("costo_sicoe") or 0)
+        r["cant_ppto"] = round(cc_q, 2)
+        r["costo_ppto"] = round(cc_c, 0)
+        r["delta_cant"] = round(cc_q - sic_q, 2)
+        r["delta_costo"] = round(cc_c - sic_c, 0)
+
+
 def _sum_pk_export_rows(rows: List[dict]) -> Dict[str, float]:
     """Totales alineados con dashboard-pkid-tabla (mismos campos por fila PK)."""
     return {
@@ -21863,7 +21892,7 @@ def _fetch_sicoe_regs_capitulo_export(
             ).eq("contrato_id", contrato_id)
             if caps:
                 q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, caps)
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_regs) or []
         for reg in batch:
@@ -22119,7 +22148,7 @@ def _export_sicoe_obra_rows_capitulo(
                     q = q.eq("item_numero", iv[0])
                 else:
                     q = q.in_("item_numero", iv[:400])
-            return q.range(o, o + 999).execute().data
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_fetch) or []
         for r in batch:
@@ -22134,6 +22163,419 @@ def _export_sicoe_obra_rows_capitulo(
             break
         off += 1000
     return rows
+
+
+def _gerencial_ppto_split_por_capitulo(
+    contrato_id: int, vista: str, current_user
+) -> Tuple[Dict[str, Dict[str, Any]], Set[Tuple[str, str]]]:
+    """Costo de presupuesto por capítulo desglosado por estado de revisión.
+
+    Misma fuente que los informes por capítulo (versión oficial sellada para
+    Presupuesto de Obra; tabla viva para Obra Ejecutada) + filtro de interventoría.
+    Devuelve ({cap_key: {display, ap, pe, re, nr}}, allowed_keys) en COP, donde
+    allowed_keys es el conjunto de (capítulo_norm, ítem_norm) presentes en el
+    presupuesto (lo liquidable) — usado para acotar el cobrado a esa misma bolsa.
+    """
+    tipo = ppto_tipo_for_vista(vista)
+    oficial_vid = (
+        presupuesto_oficial_version_id(supabase, contrato_id)
+        if tipo == TIPO_PRESUPUESTO_OBRA
+        else None
+    )
+    filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
+    agg: Dict[str, Dict[str, Any]] = {}
+    allowed: Set[Tuple[str, str]] = set()
+    off = 0
+    while True:
+
+        def _b(o=off):
+            if oficial_vid:
+                q = (
+                    supabase.table("presupuesto_version_items")
+                    .select("capitulo, item, costo_directo, revisado")
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("dado_de_baja", False)
+                    .eq("version_id", oficial_vid)
+                )
+            else:
+                q = (
+                    supabase.table("presupuesto")
+                    .select("capitulo, item, costo_directo, revisado")
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("dado_de_baja", False)
+                    .eq("tipo_ejecucion", tipo)
+                )
+            if filtra_interv:
+                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+            return q.order("id").range(o, o + 999).execute().data
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item"))
+            cost = float(r.get("costo_directo") or 0)
+            rev = _matriz_validacion_norm_estado(r.get("revisado"))
+            d = agg.get(ck)
+            if d is None:
+                d = {"display": _dash_norm_cap(r.get("capitulo")), "ap": 0.0, "pe": 0.0, "re": 0.0, "nr": 0.0}
+                agg[ck] = d
+            if rev == "Aprobado":
+                d["ap"] += cost
+            elif rev == "Pendiente":
+                d["pe"] += cost
+            elif rev == "Rechazado":
+                d["re"] += cost
+            else:
+                d["nr"] += cost
+            if ik:
+                allowed.add((ck, ik))
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return agg, allowed
+
+
+def _gerencial_capitulos_data(
+    contrato_id: int, vista: str, current_user
+) -> List[Dict[str, Any]]:
+    """Filas financieras por capítulo para el informe gerencial.
+
+    ClaraCore = Aprobado + No Revisado (excluye Pendiente/Rechazado);
+    Delta = ClaraCore − Cobrado. Solo financiero (COP).
+
+    En Obra Ejecutada el cobrado se acota a los ítems que existen en el
+    presupuesto liquidado (intersección), de modo que el análisis solo compare
+    lo que es liquidable y no genere "devoluciones" sobre cobros que nunca
+    entran a la liquidación.
+    """
+    ppto, allowed = _gerencial_ppto_split_por_capitulo(contrato_id, vista, current_user)
+    es_obra_ejecutada = parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+    cobrado_by_cap: Dict[str, float] = {}
+    disp_by_cap: Dict[str, str] = {}
+    if es_obra_ejecutada:
+        # Cobrado restringido a la bolsa liquidable: solo (capítulo, ítem) del presupuesto.
+        try:
+            sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
+            for key, vals in (sicoe_by or {}).items():
+                if key not in allowed:
+                    continue
+                ck = key[0]
+                cobrado_by_cap[ck] = cobrado_by_cap.get(ck, 0.0) + float(vals.get("ap_c") or 0)
+        except Exception as e:
+            print(f"gerencial cobrado (liquidable) falló: {type(e).__name__}: {e}", flush=True)
+    else:
+        try:
+            for row in _drill_agg_capitulos(contrato_id, vista, current_user) or []:
+                cap = row.get("capitulo") or row.get("nombre") or ""
+                ck = _dash_norm_capitulo_key_py(cap)
+                cobrado_by_cap[ck] = cobrado_by_cap.get(ck, 0.0) + float(row.get("cobrado") or 0)
+                disp_by_cap.setdefault(ck, _dash_norm_cap(cap))
+        except Exception as e:
+            print(f"gerencial cobrado falló: {type(e).__name__}: {e}", flush=True)
+
+    keys = sorted(set(ppto.keys()) | set(cobrado_by_cap.keys()), key=lambda x: str(x))
+    out: List[Dict[str, Any]] = []
+    for ck in keys:
+        p = ppto.get(ck) or {}
+        ap = float(p.get("ap") or 0)
+        pe = float(p.get("pe") or 0)
+        re_ = float(p.get("re") or 0)
+        nr = float(p.get("nr") or 0)
+        claracore = ap + nr
+        cobrado = float(cobrado_by_cap.get(ck) or 0)
+        display = p.get("display") or disp_by_cap.get(ck) or ck
+        out.append(
+            {
+                "capitulo": display,
+                "claracore": round(claracore, 0),
+                "cobrado": round(cobrado, 0),
+                "delta": round(claracore - cobrado, 0),
+                "aprobado": round(ap, 0),
+                "pendiente": round(pe, 0),
+                "rechazado": round(re_, 0),
+                "no_revisado": round(nr, 0),
+            }
+        )
+    return out
+
+
+def _build_dashboard_gerencial_xlsx(
+    contrato_id: int, vista: str = "presupuesto_obra", current_user=None
+) -> Tuple[bytes, str]:
+    """Informe gerencial: panorama financiero por capítulo (COP, sin cantidades) + torta.
+
+    Columnas: Capítulo | Total ClaraCore | Total Cobrado | Δ | Aprobado | Pendiente |
+    Rechazado | No Revisado. Gráfico de torta con el estado financiero (composición
+    por estado de revisión del presupuesto).
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.chart import PieChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.chart.marker import DataPoint
+
+    rows = _gerencial_capitulos_data(contrato_id, vista, current_user)
+    tipo_label = (
+        "Obra Ejecutada"
+        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+        else "Presupuesto de Obra"
+    )
+
+    contrato_numero = ""
+    contrato_objeto = ""
+    contrato_contratista = ""
+    try:
+        cr = supabase.table("contratos").select("numero, objeto, contratista").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            contrato_numero = (cr[0].get("numero") or "").strip()
+            contrato_objeto = (cr[0].get("objeto") or "").strip()
+            contrato_contratista = (cr[0].get("contratista") or "").strip()
+    except Exception:
+        pass
+    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
+
+    # Paleta del panel/torta.
+    COL_AP = "2E7D32"   # Aprobado (verde)
+    COL_NR = "0077B6"   # No Revisado (azul)
+    COL_PE = "F59E0B"   # Pendiente (ámbar)
+    COL_RE = "DC2626"   # Rechazado (rojo)
+
+    fill_title = PatternFill("solid", fgColor=_CC_XLSX_DARK)
+    fill_hdr = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY)
+    fill_tot = PatternFill("solid", fgColor=_CC_XLSX_DARK)
+    fill_meta = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
+    fill_zebra = PatternFill("solid", fgColor="F4F8FB")
+    fill_white = PatternFill("solid", fgColor="FFFFFF")
+    fill_panel = PatternFill("solid", fgColor="F7FAFC")
+    _side = Side(style="thin", color="FFB4B4B4")
+    _side_panel = Side(style="medium", color=_CC_XLSX_PRIMARY)
+    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+    al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    al_right = Alignment(horizontal="right", vertical="center")
+    al_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Gerencial"
+    ncols = 8
+
+    # ── Encabezado combinado ─────────────────────────────────────────────
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    c1 = ws.cell(row=1, column=1, value="INFORME GERENCIAL  ·  Estado financiero por capítulo")
+    c1.font = Font(bold=True, color="FFFFFF", size=16)
+    c1.fill = fill_title
+    c1.alignment = al_center
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    num_txt = f"Contrato N° {contrato_numero}" if contrato_numero else "Contrato"
+    if contrato_contratista:
+        num_txt += f"   ·   {contrato_contratista}"
+    c2 = ws.cell(row=2, column=1, value=num_txt)
+    c2.font = Font(bold=True, color=_CC_XLSX_DARK, size=12)
+    c2.fill = fill_meta
+    c2.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 20
+
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncols)
+    c3 = ws.cell(row=3, column=1, value=f"Objeto: {contrato_objeto}" if contrato_objeto else "Objeto: —")
+    c3.font = Font(color=_CC_XLSX_DARK, size=10)
+    c3.fill = fill_meta
+    c3.alignment = al_left
+    ws.row_dimensions[3].height = 30
+
+    ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=ncols)
+    c4 = ws.cell(row=4, column=1, value=f"Vista: {tipo_label}     ·     Generado: {gen_ts}")
+    c4.font = Font(italic=True, color=_CC_XLSX_DARK, size=10)
+    c4.fill = fill_meta
+    c4.alignment = Alignment(horizontal="right", vertical="center")
+    ws.row_dimensions[4].height = 18
+
+    # ── Tabla por capítulo ───────────────────────────────────────────────
+    hdr = [
+        "Capítulo",
+        "Total ClaraCore",
+        "Total Cobrado",
+        "Δ  =  ClaraCore − Cobrado",
+        "Aprobado",
+        "Pendiente",
+        "Rechazado",
+        "No Revisado",
+    ]
+    hr = 6
+    for j, h in enumerate(hdr, start=1):
+        cell = ws.cell(row=hr, column=j, value=h)
+        cell.fill = fill_hdr
+        cell.font = Font(bold=True, color="FFFFFF", size=11)
+        cell.alignment = al_center
+        cell.border = border_tbl
+    ws.row_dimensions[hr].height = 30
+
+    # Δ se escribe como FÓRMULA viva (=ClaraCore − Cobrado) para que el usuario
+    # vea en la barra de fórmulas cómo se generó el resultado.
+    val_fields = ("claracore", "cobrado", None, "aprobado", "pendiente", "rechazado", "no_revisado")
+    sum_fields = ("claracore", "cobrado", "delta", "aprobado", "pendiente", "rechazado", "no_revisado")
+    tot = {k: 0.0 for k in sum_fields}
+    ri = hr + 1
+    first_data_row = ri
+    for idx, r in enumerate(rows):
+        cap_cell = ws.cell(row=ri, column=1, value=r["capitulo"])
+        cap_cell.alignment = al_left
+        cap_cell.border = border_tbl
+        for j, f in enumerate(val_fields, start=2):
+            if f is None:  # columna Δ → fórmula
+                cell = ws.cell(row=ri, column=j, value=f"=B{ri}-C{ri}")
+            else:
+                cell = ws.cell(row=ri, column=j, value=float(r[f] or 0))
+                tot[f] += float(r[f] or 0)
+            cell.number_format = _XLSX_FMT_COP
+            cell.alignment = al_right
+            cell.border = border_tbl
+        tot["delta"] += float(r["delta"] or 0)
+        zfill = fill_zebra if idx % 2 else fill_white
+        for j in range(1, ncols + 1):
+            ws.cell(row=ri, column=j).fill = zfill
+        ri += 1
+    last_data_row = ri - 1
+
+    ws.cell(row=ri, column=1, value="TOTAL CONTRATO")
+    for j, f in enumerate(val_fields, start=2):
+        if f is None:  # Δ total como fórmula
+            cell = ws.cell(row=ri, column=j, value=f"=B{ri}-C{ri}")
+        elif last_data_row >= first_data_row:
+            col = get_column_letter(j)
+            cell = ws.cell(row=ri, column=j, value=f"=SUM({col}{first_data_row}:{col}{last_data_row})")
+        else:
+            cell = ws.cell(row=ri, column=j, value=round(tot[f], 0))
+        cell.number_format = _XLSX_FMT_COP
+        cell.alignment = al_right
+    for j in range(1, ncols + 1):
+        cell = ws.cell(row=ri, column=j)
+        cell.fill = fill_tot
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.border = border_tbl
+    total_row = ri
+
+    ws.column_dimensions["A"].width = 46
+    ws.column_dimensions["D"].width = 24
+    for col in (2, 3, 5, 6, 7, 8):
+        ws.column_dimensions[get_column_letter(col)].width = 18
+
+    # ── Panel «Estado financiero del análisis» con torta ────────────────
+    panel_top = total_row + 3
+    cats = (
+        ("Aprobado", tot["aprobado"], COL_AP),
+        ("No Revisado", tot["no_revisado"], COL_NR),
+        ("Pendiente", tot["pendiente"], COL_PE),
+        ("Rechazado", tot["rechazado"], COL_RE),
+    )
+    cats_total = sum(max(0.0, float(v)) for _, v, _ in cats) or 0.0
+
+    # Barra de título del panel.
+    ws.merge_cells(start_row=panel_top, start_column=1, end_row=panel_top, end_column=ncols)
+    pt = ws.cell(row=panel_top, column=1, value="ESTADO FINANCIERO DEL ANÁLISIS")
+    pt.font = Font(bold=True, color="FFFFFF", size=13)
+    pt.fill = fill_title
+    pt.alignment = al_center
+    ws.row_dimensions[panel_top].height = 26
+
+    sub_row = panel_top + 1
+    ws.merge_cells(start_row=sub_row, start_column=1, end_row=sub_row, end_column=ncols)
+    st = ws.cell(row=sub_row, column=1, value="Composición del presupuesto ClaraCore por estado de revisión (COP)")
+    st.font = Font(italic=True, color=_CC_XLSX_DARK, size=10)
+    st.fill = fill_panel
+    st.alignment = al_center
+
+    # Cabecera de la leyenda.
+    leg_hdr = sub_row + 1
+    for j, h in enumerate(("Estado", "Valor (COP)", "Participación"), start=1):
+        cell = ws.cell(row=leg_hdr, column=j, value=h)
+        cell.font = Font(bold=True, color=_CC_XLSX_DARK, size=10)
+        cell.fill = fill_meta
+        cell.alignment = al_center if j > 1 else al_left
+        cell.border = border_tbl
+
+    cat_start = leg_hdr + 1
+    for i, (lbl, val, color) in enumerate(cats):
+        rr = cat_start + i
+        v = round(max(0.0, float(val)), 0)
+        lc = ws.cell(row=rr, column=1, value=lbl)
+        lc.fill = PatternFill("solid", fgColor=color)
+        lc.font = Font(bold=True, color="FFFFFF", size=10)
+        lc.alignment = al_left
+        lc.border = border_tbl
+        vc = ws.cell(row=rr, column=2, value=v)
+        vc.number_format = _XLSX_FMT_COP
+        vc.alignment = al_right
+        vc.border = border_tbl
+        pc = ws.cell(row=rr, column=3, value=(v / cats_total) if cats_total else 0.0)
+        pc.number_format = "0.0%"
+        pc.alignment = al_center
+        pc.border = border_tbl
+    cat_end = cat_start + len(cats) - 1
+
+    leg_tot = cat_end + 1
+    tl = ws.cell(row=leg_tot, column=1, value="Total")
+    tl.font = Font(bold=True, color="FFFFFF")
+    tl.fill = fill_tot
+    tl.border = border_tbl
+    tv = ws.cell(row=leg_tot, column=2, value=round(cats_total, 0))
+    tv.number_format = _XLSX_FMT_COP
+    tv.alignment = al_right
+    tv.font = Font(bold=True, color="FFFFFF")
+    tv.fill = fill_tot
+    tv.border = border_tbl
+    tp = ws.cell(row=leg_tot, column=3, value=1.0 if cats_total else 0.0)
+    tp.number_format = "0.0%"
+    tp.alignment = al_center
+    tp.font = Font(bold=True, color="FFFFFF")
+    tp.fill = fill_tot
+    tp.border = border_tbl
+
+    # Fondo de tarjeta + borde envolvente del panel (filas título→total, cols A:H).
+    for rr in range(sub_row, leg_tot + 1):
+        for cc in range(1, ncols + 1):
+            cell = ws.cell(row=rr, column=cc)
+            if cell.fill is None or cell.fill.fgColor.rgb in (None, "00000000"):
+                cell.fill = fill_panel
+    for cc in range(1, ncols + 1):
+        top_c = ws.cell(row=panel_top, column=cc)
+        top_c.border = Border(left=top_c.border.left, right=top_c.border.right, top=_side_panel, bottom=top_c.border.bottom)
+        bot_c = ws.cell(row=leg_tot, column=cc)
+        bot_c.border = Border(left=bot_c.border.left, right=bot_c.border.right, top=bot_c.border.top, bottom=_side_panel)
+    for rr in range(panel_top, leg_tot + 1):
+        l_c = ws.cell(row=rr, column=1)
+        l_c.border = Border(left=_side_panel, right=l_c.border.right, top=l_c.border.top, bottom=l_c.border.bottom)
+        r_c = ws.cell(row=rr, column=ncols)
+        r_c.border = Border(left=r_c.border.left, right=_side_panel, top=r_c.border.top, bottom=r_c.border.bottom)
+
+    # Torta con colores por estado, anclada a la derecha dentro del panel.
+    pie = PieChart()
+    pie.title = "Distribución financiera"
+    data_ref = Reference(ws, min_col=2, min_row=cat_start, max_row=cat_end)
+    cats_ref = Reference(ws, min_col=1, min_row=cat_start, max_row=cat_end)
+    pie.add_data(data_ref, titles_from_data=False)
+    pie.set_categories(cats_ref)
+    pie.height = 8.4
+    pie.width = 14.5
+    pie.dataLabels = DataLabelList()
+    pie.dataLabels.showPercent = True
+    pie.dataLabels.showCatName = False
+    try:
+        serie = pie.series[0]
+        for i, (_lbl, _val, color) in enumerate(cats):
+            dp = DataPoint(idx=i)
+            dp.graphicalProperties.solidFill = color
+            serie.data_points.append(dp)
+    except Exception:
+        pass
+    ws.add_chart(pie, f"D{leg_hdr}")
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    fn = f"ClaraCore_Gerencial_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
+    return bio.getvalue(), fn
 
 
 def _build_dashboard_capitulo_xlsx(
@@ -22380,6 +22822,10 @@ def _build_dashboard_capitulo_xlsx(
             ppto_all=ppto_all,
             job_id=job_id,
         )
+        # Base ClaraCore (Aprobado + No Revisado) para todas las hojas del Excel.
+        for _it_data in core_by_item.values():
+            if isinstance(_it_data, dict):
+                _apply_export_claracore_basis_rows(_it_data.get("rows") or [])
 
     wb = Workbook()
     ws0 = wb.active
@@ -22444,8 +22890,9 @@ def _build_dashboard_capitulo_xlsx(
                 break
         if cap_only_resumen:
             dr = drill_map.get(_dash_norm_item_key_py(it)) or {}
-            cant_p = float(dr.get("cant_ppto") or 0)
-            cost_p = float(dr.get("presupuesto") or 0)
+            # Base ClaraCore = Aprobado + No Revisado (excluye Pendiente/Rechazado).
+            cant_p = float(dr.get("cant_ppto_claracore") or 0)
+            cost_p = float(dr.get("costo_ppto_claracore") or 0)
             cant_c = float(dr.get("cant_sicoe_aprobado") or 0)
             cost_c = float(dr.get("cobrado") or 0)
             d_cant = cant_p - cant_c
@@ -22720,6 +23167,25 @@ def dashboard_export_capitulo_download_obra(
         buf, fn = _build_dashboard_capitulo_xlsx(
             contrato_id, capitulo, item, vista, current_user, solo_resumen=solo_resumen
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(buf),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-export-gerencial-download")
+def dashboard_export_gerencial_download_obra(
+    contrato_id: int,
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
+):
+    """Informe gerencial (todos los capítulos, solo financiero) con gráfico de torta."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        buf, fn = _build_dashboard_gerencial_xlsx(contrato_id, vista, current_user)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return StreamingResponse(
@@ -24002,7 +24468,7 @@ def reconciliar_acta_rpo_historico(
                 return supabase.table("so_registros").select(
                     f"id, reporte_id, acta_rpo_id, {SICOE_SELECT_NIVELES_ESTADO},"
                     "nivel2_fecha, nivel3_fecha, nivel4_fecha, nivel5_fecha, nivel6_fecha"
-                ).eq("contrato_id", contrato_id).range(o, o + 499).execute().data
+                ).eq("contrato_id", contrato_id).order("id").range(o, o + 499).execute().data
 
             rows = supabase_execute(_batch) or []
             for row in rows:

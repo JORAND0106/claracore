@@ -13672,6 +13672,60 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }
 
+  async function ejecutarExportGerencial() {
+    if (dashExportInFlightRef.current) return
+    dashExportInFlightRef.current = true
+    const tok = getToken()
+    const downloadFilename = `ClaraCore_Gerencial_${new Date().toISOString().slice(0, 10)}.xlsx`
+    const saveBlob = (blob, filename) => {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename || downloadFilename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+    const tickStart = Date.now()
+    const tickIv = setInterval(() => {
+      const seg = Math.round((Date.now() - tickStart) / 1000)
+      setDashExportModal((prev) => (prev ? { ...prev, seg, phase: 'generating' } : prev))
+    }, 1000)
+    setDashExportModal((prev) => ({
+      ...(prev || {}),
+      phase: 'generating',
+      gerencial: true,
+      soloResumen: false,
+      seg: 0,
+      progreso: 'gerencial',
+      error: null,
+    }))
+    const ac = new AbortController()
+    const to = setTimeout(() => ac.abort(), DASH_DRILL_TIMEOUT_MS)
+    try {
+      const url = `${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-gerencial-download?vista=${encodeURIComponent(dashVistaParam)}`
+      const dl = await fetch(url, { headers: { Authorization: `Bearer ${tok}` }, signal: ac.signal })
+      if (!dl.ok) {
+        const errTxt = await dl.text().catch(() => '')
+        throw new Error(errTxt?.slice(0, 280) || `Error al generar Excel (${dl.status})`)
+      }
+      const blob = await dl.blob()
+      if (!blob?.size) throw new Error('El servidor devolvió un archivo vacío.')
+      const cd = dl.headers.get('Content-Disposition') || ''
+      const fnMatch = cd.match(/filename="([^"]+)"/)
+      saveBlob(blob, fnMatch?.[1] || downloadFilename)
+      setDashExportModal(null)
+    } catch (err) {
+      const msg =
+        err?.name === 'AbortError'
+          ? 'La generación del informe gerencial tardó demasiado. Intente de nuevo.'
+          : err?.message || 'Error de conexión al generar Excel.'
+      setDashExportModal((prev) => (prev ? { ...prev, phase: 'error', error: msg } : { phase: 'error', error: msg }))
+    } finally {
+      clearTimeout(to)
+      clearInterval(tickIv)
+      dashExportInFlightRef.current = false
+    }
+  }
+
   function abrirModalExportDashExcel() {
     if (dashExportInFlightRef.current) return
     if (dashDrill[1]?.valor) {
@@ -16917,6 +16971,45 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       Generar archivo completo
                     </button>
                   </div>
+
+                  <div
+                    style={{
+                      border: `2px solid ${t.primary || '#0077B6'}`,
+                      borderRadius: '12px',
+                      padding: '14px 16px',
+                      background: '#eff6ff',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '22px' }} aria-hidden>🏛️</span>
+                      <div>
+                        <div style={{ fontWeight: 800, color: '#0c4a6e', fontSize: 'var(--cc-sm)' }}>Informe gerencial</div>
+                        <div style={{ fontSize: 'var(--cc-caption)', color: '#0369a1', marginTop: '2px' }}>Todos los capítulos · solo financiero</div>
+                      </div>
+                    </div>
+                    <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
+                      <li>Total ClaraCore, Cobrado y Δ por capítulo (en pesos)</li>
+                      <li>Desglose Aprobado · Pendiente · Rechazado · No Revisado</li>
+                      <li>Gráfico de torta con el estado financiero del análisis</li>
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => void ejecutarExportGerencial()}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: t.primary || '#0077B6',
+                        color: '#ffffff',
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-sm)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Generar informe gerencial
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -16924,19 +17017,25 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ padding: exportModalUi.padBody, textAlign: 'center' }}>
                   <div style={{ fontSize: exportModalUi.iconHero, marginBottom: '12px' }} aria-hidden>⏳</div>
                   <div style={{ fontWeight: 800, color: t.text, fontSize: exportModalUi.cc.sm, marginBottom: '6px' }}>
-                    {dashExportModal.soloResumen ? 'Generando resumen ejecutivo…' : 'Generando archivo completo…'}
+                    {dashExportModal.gerencial
+                      ? 'Generando informe gerencial…'
+                      : dashExportModal.soloResumen
+                        ? 'Generando resumen ejecutivo…'
+                        : 'Generando archivo completo…'}
                   </div>
                   <div style={{ fontSize: exportModalUi.cc.body, color: t.text, marginBottom: '8px', fontWeight: 600 }}>
-                    {dashExportModal.progreso && dashExportModal.progreso !== 'iniciando' && dashExportModal.progreso !== 'resumen'
-                      ? dashExportModal.progreso
-                      : dashExportModal.soloResumen
-                        ? 'Preparando hoja resumen…'
-                        : 'Iniciando…'}
+                    {dashExportModal.gerencial
+                      ? 'Consolidando capítulos…'
+                      : dashExportModal.progreso && dashExportModal.progreso !== 'iniciando' && dashExportModal.progreso !== 'resumen'
+                        ? dashExportModal.progreso
+                        : dashExportModal.soloResumen
+                          ? 'Preparando hoja resumen…'
+                          : 'Iniciando…'}
                   </div>
                   <div style={{ fontSize: exportModalUi.cc.caption, color: t.textMuted, marginBottom: '16px' }}>
                     {dashExportModal.seg ?? 0} segundos
                   </div>
-                  {!dashExportModal.soloResumen && (
+                  {!dashExportModal.soloResumen && !dashExportModal.gerencial && (
                     <div style={{ fontSize: exportModalUi.cc.caption, color: t.textMuted, maxWidth: '28em', margin: '0 auto', lineHeight: 1.45 }}>
                       Incluye hojas por ítem, presupuesto y SICOE Obra. El avance se actualiza por etapa.
                     </div>

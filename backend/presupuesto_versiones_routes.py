@@ -13,10 +13,15 @@ from presupuesto_versiones_service import (
     assert_version_del_contrato,
     crear_version,
     eliminar_version,
+    enviar_a_interventoria,
+    estado_revision,
     items_lista_version,
     listar_versiones,
+    rechazar_version,
     resumen_capitulos_version,
+    resumen_ejecutivo,
     restaurar_version,
+    sellar_version,
 )
 
 from presupuesto_helpers import (
@@ -25,11 +30,43 @@ from presupuesto_helpers import (
 )
 
 from main import (
+    _es_admin_o_desarrollador,
+    _es_rol_contratista_ppto,
     _require_contract_access,
     get_current_user,
     registrar_log,
     supabase,
 )
+
+from dashboard_presupuesto_vista import invalidate_scan_presupuesto_cache
+
+
+def _invalidar_cache_dashboard(contrato_id: int) -> None:
+    """El sello/creación/rechazo cambia la fuente oficial → refrescar dashboard."""
+    try:
+        invalidate_scan_presupuesto_cache(contrato_id)
+    except Exception:
+        pass
+
+
+def _assert_rol_contratista(current_user):
+    if _es_admin_o_desarrollador(current_user):
+        return
+    if not _es_rol_contratista_ppto(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el contratista puede enviar la versión a interventoría.",
+        )
+
+
+def _assert_rol_interventoria(current_user):
+    if _es_admin_o_desarrollador(current_user):
+        return
+    if not _presupuesto_aplica_filtro_interventoria(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo la interventoría puede aprobar/sellar o rechazar la versión.",
+        )
 
 router = APIRouter(tags=["presupuesto-versiones"])
 
@@ -45,6 +82,10 @@ class CrearPresupuestoVersionBody(BaseModel):
     etiqueta: str = Field(..., min_length=1)
     justificacion_tecnica: Optional[str] = None
     aiu_porcentaje: Optional[float] = Field(None, ge=0)
+
+
+class ObservacionesVersionBody(BaseModel):
+    observaciones: Optional[str] = None
 
 
 @router.get("/presupuesto/{contrato_id}/versiones")
@@ -193,6 +234,7 @@ def post_presupuesto_version_crear(
         body.justificacion_tecnica,
         body.aiu_porcentaje,
     )
+    _invalidar_cache_dashboard(contrato_id)
     try:
         registrar_log(
             current_user,
@@ -207,6 +249,82 @@ def post_presupuesto_version_crear(
                 "items_copiados": result.get("items_copiados"),
             },
             severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    return result
+
+
+@router.get("/presupuesto/{contrato_id}/versiones/estado-revision")
+def get_presupuesto_versiones_estado_revision(
+    contrato_id: int, current_user=Depends(get_current_user)
+):
+    """Conteo de revisión del presupuesto vivo (para el aviso de 100% aprobado)."""
+    _require_contract_access(current_user, contrato_id)
+    return estado_revision(supabase, contrato_id)
+
+
+@router.get("/presupuesto/{contrato_id}/versiones/{version_id}/resumen-ejecutivo")
+def get_presupuesto_version_resumen_ejecutivo(
+    contrato_id: int, version_id: str, current_user=Depends(get_current_user)
+):
+    """Resumen ejecutivo (capítulos + costo directo + conteo + revisión) de la versión."""
+    _require_contract_access(current_user, contrato_id)
+    return resumen_ejecutivo(supabase, contrato_id, version_id)
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/enviar-interventoria")
+def post_presupuesto_version_enviar_interventoria(
+    contrato_id: int, version_id: str, current_user=Depends(get_current_user)
+):
+    """Llave 1 (contratista): envía la versión borrador a interventoría."""
+    _require_contract_access(current_user, contrato_id)
+    _assert_rol_contratista(current_user)
+    result = enviar_a_interventoria(supabase, contrato_id, version_id, _uid(current_user))
+    try:
+        registrar_log(
+            current_user, "EDITAR", "PRESUPUESTO", "presupuesto_version", str(version_id),
+            {"contrato_id": contrato_id, "accion": "enviar_interventoria"}, severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/aprobar-sellar")
+def post_presupuesto_version_aprobar_sellar(
+    contrato_id: int, version_id: str, body: ObservacionesVersionBody = ObservacionesVersionBody(),
+    current_user=Depends(get_current_user),
+):
+    """Llave 2 (interventoría): aprueba y sella la versión (congela snapshot, vigente aprobada)."""
+    _require_contract_access(current_user, contrato_id)
+    _assert_rol_interventoria(current_user)
+    result = sellar_version(supabase, contrato_id, version_id, _uid(current_user), body.observaciones)
+    _invalidar_cache_dashboard(contrato_id)
+    try:
+        registrar_log(
+            current_user, "EDITAR", "PRESUPUESTO", "presupuesto_version", str(version_id),
+            {"contrato_id": contrato_id, "accion": "aprobar_sellar",
+             "items_sellados": result.get("items_sellados")}, severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/rechazar")
+def post_presupuesto_version_rechazar(
+    contrato_id: int, version_id: str, body: ObservacionesVersionBody = ObservacionesVersionBody(),
+    current_user=Depends(get_current_user),
+):
+    """Interventoría devuelve la versión a borrador editable con observaciones."""
+    _require_contract_access(current_user, contrato_id)
+    _assert_rol_interventoria(current_user)
+    result = rechazar_version(supabase, contrato_id, version_id, _uid(current_user), body.observaciones)
+    try:
+        registrar_log(
+            current_user, "EDITAR", "PRESUPUESTO", "presupuesto_version", str(version_id),
+            {"contrato_id": contrato_id, "accion": "rechazar"}, severidad="AUDIT",
         )
     except Exception:
         pass

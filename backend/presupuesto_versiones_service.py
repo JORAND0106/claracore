@@ -124,7 +124,7 @@ def listar_versiones(sb, contrato_id: int) -> List[dict]:
     for row in rows:
         vid = str(row.get("id"))
         es_vigente = bool(row.get("es_vigente"))
-        # Vigente → presupuesto vivo; congeladas → su snapshot en version_items.
+        # Borrador activo (es_vigente) → presupuesto vivo; selladas → su snapshot.
         if es_vigente and vivo is not None:
             stats = vivo
         else:
@@ -137,6 +137,13 @@ def listar_versiones(sb, contrato_id: int) -> List[dict]:
                 "numero_version": row.get("numero_version"),
                 "etiqueta": row.get("etiqueta"),
                 "es_vigente": es_vigente,
+                # Ciclo de aprobación (doble llave).
+                "estado": row.get("estado") or ("borrador" if es_vigente else "aprobado_sellado"),
+                "sellado": bool(row.get("sellado")),
+                "es_vigente_aprobada": bool(row.get("es_vigente_aprobada")),
+                "observaciones": row.get("observaciones"),
+                "enviado_en": row.get("enviado_en"),
+                "sellado_en": row.get("sellado_en"),
                 "justificacion_tecnica": row.get("justificacion_tecnica"),
                 "creada_por": creador,
                 "creada_por_nombre": nombres.get(creador) if creador else None,
@@ -177,24 +184,12 @@ def crear_version(
     if not et:
         raise HTTPException(status_code=400, detail="La etiqueta es obligatoria")
 
-    # Versión vigente SALIENTE (antes de crear la nueva). Al crear una nueva versión
-    # esta saliente debe quedar congelada con el estado VIVO exacto que tenía al
-    # entregar el control; la nueva vigente continúa reflejando el presupuesto vivo.
-    sal = (
-        sb.table("presupuesto_versiones")
-        .select("id")
-        .eq("contrato_id", contrato_id)
-        .eq("es_vigente", True)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    saliente_id = str(sal[0]["id"]) if sal else None
-
-    # La RPC copia el presupuesto vivo a la nueva versión y la marca vigente (atómico).
+    # Nuevo modelo (doble llave): crear versión = registrar un BORRADOR activo y
+    # des-sellar el presupuesto vivo para que el contratista pueda editar. No se
+    # congela snapshot aquí (eso ocurre al SELLAR). El vivo ya equivale a la última
+    # versión sellada, así que las cantidades aprobadas "llegan" al nuevo borrador.
     res = sb.rpc(
-        "presupuesto_version_crear",
+        "presupuesto_version_crear_borrador",
         {
             "p_contrato_id": int(contrato_id),
             "p_etiqueta": et,
@@ -206,7 +201,6 @@ def crear_version(
     if not data.get("ok"):
         raise HTTPException(status_code=500, detail="No se pudo crear la versión de presupuesto")
     version_id = str(data.get("version_id"))
-    items_copiados = int(data.get("items_copiados", 0) or 0)
 
     if aiu_porcentaje is not None:
         try:
@@ -218,29 +212,127 @@ def crear_version(
         except (TypeError, ValueError):
             pass
 
-    # Invariante del modelo "vigente = presupuesto vivo":
-    #   - La versión vigente NUNCA conserva snapshot propio (lee lo vivo).
-    #   - Cada versión CONGELADA guarda el snapshot de su estado al ser relevada.
-    # El snapshot recién copiado por la RPC representa el estado vivo actual; lo
-    # trasladamos a la versión saliente para congelarla con ese estado, y dejamos la
-    # nueva vigente sin ítems propios. Si no había saliente (primera versión), la nueva
-    # vigente tampoco conserva snapshot.
-    if saliente_id and saliente_id != version_id:
-        sb.table("presupuesto_version_items").delete().eq("version_id", saliente_id).execute()
-        sb.table("presupuesto_version_items").update({"version_id": saliente_id}).eq(
-            "version_id", version_id
-        ).execute()
-    else:
-        sb.table("presupuesto_version_items").delete().eq("version_id", version_id).execute()
-
     version = assert_version_del_contrato(sb, contrato_id, version_id)
     vivo = _aggregate_presupuesto_vivo(sb, contrato_id)
     return {
         **version,
-        "items_copiados": items_copiados,
+        "items_copiados": vivo["conteo_items"],
         "conteo_items": vivo["conteo_items"],
         "costo_directo_total": vivo["costo_directo_total"],
     }
+
+
+def estado_revision(sb, contrato_id: int) -> Dict[str, Any]:
+    """Conteo de revisión del presupuesto vivo (Obra activo) para el aviso de 100%."""
+    total = 0
+    aprobados = 0
+    PAGE = 1000
+    offset = 0
+    while True:
+        batch = (
+            sb.table("presupuesto")
+            .select("revisado")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", PPTO_TIPO_OBRA)
+            .eq("dado_de_baja", False)
+            .order("id")
+            .range(offset, offset + PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for it in batch:
+            total += 1
+            if (str(it.get("revisado") or "No Revisado").strip()) == "Aprobado":
+                aprobados += 1
+        if len(batch) < PAGE:
+            break
+        offset += PAGE
+    pendientes = total - aprobados
+    return {
+        "total": total,
+        "aprobados": aprobados,
+        "pendientes": pendientes,
+        "porcentaje_aprobado": round((aprobados / total) * 100, 2) if total else 0.0,
+        "completo": total > 0 and pendientes == 0,
+    }
+
+
+def resumen_ejecutivo(sb, contrato_id: int, version_id: str) -> Dict[str, Any]:
+    """Resumen ejecutivo (capítulos + costo directo + conteo) de una versión.
+
+    Para el borrador activo se calcula desde el vivo; para selladas, de su snapshot.
+    """
+    capitulos = resumen_capitulos_version(sb, contrato_id, version_id)
+    costo_directo_total = round(sum(float(c.get("costo_total") or 0) for c in capitulos), 2)
+    conteo_items = int(sum(int(c.get("total_registros") or 0) for c in capitulos))
+    rev = estado_revision(sb, contrato_id)
+    return {
+        "version_id": version_id,
+        "capitulos": capitulos,
+        "costo_directo_total": costo_directo_total,
+        "conteo_items": conteo_items,
+        "num_capitulos": len(capitulos),
+        "revision": rev,
+    }
+
+
+def enviar_a_interventoria(sb, contrato_id: int, version_id: str, usuario_id: int) -> dict:
+    """Llave 1 (contratista): marca la versión como enviada a interventoría."""
+    assert_version_del_contrato(sb, contrato_id, version_id)
+    res = sb.rpc(
+        "presupuesto_version_enviar_interventoria",
+        {
+            "p_contrato_id": int(contrato_id),
+            "p_version_id": str(version_id),
+            "p_usuario_id": int(usuario_id),
+        },
+    ).execute()
+    data = _rpc_result(res.data)
+    if not data.get("ok"):
+        raise HTTPException(status_code=500, detail="No se pudo enviar la versión a interventoría")
+    return assert_version_del_contrato(sb, contrato_id, version_id)
+
+
+def rechazar_version(
+    sb, contrato_id: int, version_id: str, usuario_id: int, observaciones: Optional[str] = None
+) -> dict:
+    """Interventoría devuelve la versión a borrador editable con observaciones."""
+    assert_version_del_contrato(sb, contrato_id, version_id)
+    res = sb.rpc(
+        "presupuesto_version_rechazar",
+        {
+            "p_contrato_id": int(contrato_id),
+            "p_version_id": str(version_id),
+            "p_usuario_id": int(usuario_id),
+            "p_observaciones": (observaciones or "").strip() or None,
+        },
+    ).execute()
+    data = _rpc_result(res.data)
+    if not data.get("ok"):
+        raise HTTPException(status_code=500, detail="No se pudo rechazar la versión")
+    return assert_version_del_contrato(sb, contrato_id, version_id)
+
+
+def sellar_version(
+    sb, contrato_id: int, version_id: str, usuario_id: int, observaciones: Optional[str] = None
+) -> dict:
+    """Llave 2 (interventoría): aprueba y sella (congela snapshot + marca vigente aprobada)."""
+    assert_version_del_contrato(sb, contrato_id, version_id)
+    res = sb.rpc(
+        "presupuesto_version_sellar",
+        {
+            "p_contrato_id": int(contrato_id),
+            "p_version_id": str(version_id),
+            "p_usuario_id": int(usuario_id),
+            "p_observaciones": (observaciones or "").strip() or None,
+        },
+    ).execute()
+    data = _rpc_result(res.data)
+    if not data.get("ok"):
+        raise HTTPException(status_code=500, detail="No se pudo sellar la versión")
+    version = assert_version_del_contrato(sb, contrato_id, version_id)
+    return {**version, "items_sellados": int(data.get("items_sellados", 0) or 0)}
 
 
 def restaurar_version(sb, contrato_id: int, version_id: str) -> dict:
@@ -380,12 +472,48 @@ def items_lista_version(
     return _aggregate_items_lista(rows)
 
 
+def _version_inicial_numero(sb, contrato_id: int) -> Optional[int]:
+    """numero_version de la versión inicial (la más antigua) del contrato."""
+    r = (
+        sb.table("presupuesto_versiones")
+        .select("numero_version")
+        .eq("contrato_id", contrato_id)
+        .order("numero_version")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not r:
+        return None
+    try:
+        return int(r[0]["numero_version"])
+    except (TypeError, ValueError):
+        return None
+
+
 def eliminar_version(sb, contrato_id: int, version_id: str) -> dict:
     row = assert_version_del_contrato(sb, contrato_id, version_id)
     if row.get("es_vigente"):
         raise HTTPException(
             status_code=400,
-            detail="No se puede eliminar la versión vigente. Restaure otra versión antes.",
+            detail="No se puede eliminar el borrador activo.",
+        )
+    if row.get("es_vigente_aprobada"):
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede eliminar la versión vigente aprobada (alimenta dashboard y programación).",
+        )
+    # La versión inicial (V0) es el contractual de referencia y NUNCA puede eliminarse.
+    inicial = _version_inicial_numero(sb, contrato_id)
+    try:
+        es_inicial = inicial is not None and int(row.get("numero_version")) == inicial
+    except (TypeError, ValueError):
+        es_inicial = False
+    if es_inicial:
+        raise HTTPException(
+            status_code=400,
+            detail="La versión inicial (contractual) no puede eliminarse bajo ninguna circunstancia.",
         )
     sb.table("presupuesto_version_items").delete().eq("version_id", version_id).execute()
     sb.table("presupuesto_versiones").delete().eq("id", version_id).eq("contrato_id", contrato_id).execute()

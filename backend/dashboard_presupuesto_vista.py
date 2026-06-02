@@ -11,7 +11,10 @@ import threading
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from presupuesto_helpers import _presupuesto_aplica_filtro_interventoria
+from presupuesto_helpers import (
+    _presupuesto_aplica_filtro_interventoria,
+    presupuesto_oficial_version_id,
+)
 
 DASH_VISTA_PRESUPUESTO_OBRA = "presupuesto_obra"
 DASH_VISTA_OBRA_EJECUTADA = "obra_ejecutada"
@@ -97,6 +100,22 @@ def norm_estado_revisado(v: Any) -> str:
     return s
 
 
+def _ppto_claracore_split(rows_it: List[dict]) -> Tuple[float, float]:
+    """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado.
+
+    Excluye Pendiente y Rechazado. Base única para los informes (ejecutivo/completo):
+    cantidad ClaraCore = cantidad total − pendiente − rechazado.
+    """
+    cant = 0.0
+    cost = 0.0
+    for x in rows_it or []:
+        rev = norm_estado_revisado(x.get("revisado"))
+        if rev in ("Aprobado", "No Revisado"):
+            cant += float(x.get("cant_total") or 0)
+            cost += float(x.get("costo_directo") or 0)
+    return cant, cost
+
+
 def norm_item_key(s: Optional[str]) -> str:
     if s is None:
         return ""
@@ -166,7 +185,7 @@ def _build_capitulo_index(sb, contrato_id: int, source: str) -> Dict[str, List[s
             )
             if source != "all":
                 q = q.eq("tipo_ejecucion", source)
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             raw = (r.get("capitulo") or "").strip()
             if not raw:
@@ -386,19 +405,36 @@ def _scan_live_presupuesto(
     ppto_keys: Optional[Set[ItemKey]] = set() if track_keys else None
     cap_db = resolve_capitulo_db(sb, contrato_id, capitulo or "", tipo_ejecucion=tipo_ejecucion) if capitulo else ""
     cols = "capitulo, costo_directo, revisado" if resumen_only else "capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id"
+    # Fuente OFICIAL: si hay una versión sellada vigente (solo aplica a Presupuesto
+    # de Obra), el dashboard lee de su snapshot inmutable, no del borrador vivo.
+    # Sin versión sellada → None → fallback al vivo (comportamiento actual).
+    oficial_vid = (
+        presupuesto_oficial_version_id(sb, contrato_id)
+        if tipo_ejecucion == TIPO_PRESUPUESTO_OBRA
+        else None
+    )
     off = 0
     while True:
-        q = (
-            sb.table("presupuesto")
-            .select(cols)
-            .eq("contrato_id", int(contrato_id))
-            .eq("dado_de_baja", False)
-            .eq("tipo_ejecucion", tipo_ejecucion)
-        )
+        if oficial_vid:
+            q = (
+                sb.table("presupuesto_version_items")
+                .select(cols)
+                .eq("contrato_id", int(contrato_id))
+                .eq("dado_de_baja", False)
+                .eq("version_id", oficial_vid)
+            )
+        else:
+            q = (
+                sb.table("presupuesto")
+                .select(cols)
+                .eq("contrato_id", int(contrato_id))
+                .eq("dado_de_baja", False)
+                .eq("tipo_ejecucion", tipo_ejecucion)
+            )
         q = _apply_interventoria_filter(q, current_user)
         if capitulo:
             q = _apply_capitulo_filter(q, sb, contrato_id, capitulo, tipo_ejecucion=tipo_ejecucion)
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             if capitulo and not _capitulo_keys_match(r.get("capitulo"), capitulo):
                 continue
@@ -455,7 +491,7 @@ def _scan_version_items(sb, contrato_id: int, version_id: str) -> Dict[str, Any]
             .eq("contrato_id", int(contrato_id))
             .eq("dado_de_baja", False)
         )
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             ck = norm_capitulo_key(r.get("capitulo"))
             ik = norm_item_key(r.get("item"))
@@ -543,7 +579,7 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
             .eq("capitulo", cap_raw)
             .eq("dado_de_baja", False)
         )
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             ck = norm_capitulo_key(r.get("capitulo"))
             ik = norm_item_key(r.get("item"))
@@ -643,7 +679,7 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
             .eq("dado_de_baja", False)
         )
         q = _apply_interventoria_filter(q, current_user)
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             cap_disp = norm_capitulo_display(r.get("capitulo"))
             cost = float(r.get("costo_directo") or 0)
@@ -842,6 +878,8 @@ def drill_items_capitulo_vista(
             if norm_estado_revisado(x.get("revisado")) == "Aprobado"
         )
         pnr = p_cost - pap
+        # Base ClaraCore para informes: Aprobado + No Revisado (excluye Pendiente/Rechazado).
+        cc_cant, cc_cost = _ppto_claracore_split(rows_it)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         sg = sicoe_by_item.get(k, {})
         apc = float(sg.get("ap_c") or 0)
@@ -859,6 +897,8 @@ def drill_items_capitulo_vista(
                 "delta": round(pp_show - apc, 2),
                 "pct": round(apc / pp_show * 100, 1) if pp_show else 0,
                 "cant_ppto": round(p_cant, 3),
+                "cant_ppto_claracore": round(cc_cant, 3),
+                "costo_ppto_claracore": round(cc_cost, 2),
                 "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
                 "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
             }
@@ -888,6 +928,7 @@ def liquidacion_items_vista(
             sb.table("so_registros")
             .select("capitulo, item_numero, cantidad_total, costo_directo")
             .eq("contrato_id", int(contrato_id))
+            .order("id")
             .range(off, off + 999)
             .execute()
             .data
@@ -1090,7 +1131,7 @@ def ppto_rows_item_pk_drill(
                 q = q.eq("item", item_vars[0])
             else:
                 q = q.in_("item", item_vars)
-        batch = q.range(off, off + 999).execute().data or []
+        batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
             if norm_item_key(r.get("item")) != it_key:
                 continue

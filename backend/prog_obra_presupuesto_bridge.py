@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
+from presupuesto_helpers import presupuesto_oficial_version_id
 
 ItemKey = Tuple[str, str, str]  # pk_id, capitulo, item
 
@@ -59,15 +60,32 @@ def _fetch_presupuesto_polygon_rows(sb, contrato_id: int) -> List[dict]:
     rows: List[dict] = []
     offset = 0
     page = 1000
+    # Fuente OFICIAL: si hay versión sellada vigente, la programación se basa en su
+    # snapshot inmutable; si no hay (None), fallback al presupuesto vivo (actual).
+    oficial_vid = presupuesto_oficial_version_id(sb, contrato_id)
     while True:
-        chunk = (
-            sb.table("presupuesto")
-            .select(
-                "pk_id,capitulo,item,cant_total,vlr_unitario,und,descripcion,revisado,dado_de_baja,tipo_ejecucion"
+        if oficial_vid:
+            q = (
+                sb.table("presupuesto_version_items")
+                .select(
+                    "pk_id,capitulo,item,cant_total,vlr_unitario,und,descripcion,revisado,dado_de_baja,tipo_ejecucion"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("version_id", oficial_vid)
+                .eq("dado_de_baja", False)
             )
-            .eq("contrato_id", contrato_id)
-            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-            .eq("dado_de_baja", False)
+        else:
+            q = (
+                sb.table("presupuesto")
+                .select(
+                    "pk_id,capitulo,item,cant_total,vlr_unitario,und,descripcion,revisado,dado_de_baja,tipo_ejecucion"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+                .eq("dado_de_baja", False)
+            )
+        chunk = (
+            q
             .range(offset, offset + page - 1)
             .execute()
             .data

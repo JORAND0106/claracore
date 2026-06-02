@@ -2,8 +2,29 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
 import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import PptoVersionCompareModal from './PptoVersionCompareModal'
+import {
+  esDesarrolladorPresupuesto,
+  esRolContratistaDepuracion,
+  esRolInterventoriaValidacion,
+} from './pptoRolesValidacion'
 
 const PPTO_TIPO = 'Presupuesto de Obra'
+
+/** Estado del ciclo de aprobación (doble llave) → etiqueta y colores. */
+function estadoMeta(v) {
+  const e = v?.estado || (v?.es_vigente ? 'borrador' : 'aprobado_sellado')
+  switch (e) {
+    case 'enviado_interventoria':
+      return { key: e, label: 'En revisión (interventoría)', color: '#B45309', bg: '#F59E0B1A' }
+    case 'aprobado_sellado':
+      return { key: e, label: 'Aprobada y sellada', color: '#15803D', bg: '#16A34A1A' }
+    case 'rechazado':
+      return { key: e, label: 'Rechazada (devuelta)', color: '#B91C1C', bg: '#DC262614' }
+    case 'borrador':
+    default:
+      return { key: 'borrador', label: 'Borrador', color: '#2563EB', bg: '#2563EB14' }
+  }
+}
 
 /**
  * Token fresco desde almacenamiento. El prop `token` se captura una sola vez en el
@@ -75,10 +96,28 @@ export default function PptoVersionador({
 }) {
   const authToken = useCallback(() => tokenFresco(token), [token])
 
+  const esDev = useMemo(() => esDesarrolladorPresupuesto(usuario), [usuario])
+  const esInterventoria = useMemo(
+    () => esDev || esRolInterventoriaValidacion(usuario),
+    [esDev, usuario],
+  )
+  const esContratista = useMemo(
+    () => esDev || esRolContratistaDepuracion(usuario),
+    [esDev, usuario],
+  )
+
   const esPrimeraVersion = versionesPresupuesto.length === 0
   const siguienteNumero = useMemo(() => {
     const max = versionesPresupuesto.reduce((m, v) => Math.max(m, Number(v.numero_version) || 0), 0)
     return max + 1
+  }, [versionesPresupuesto])
+  /** numero_version de la versión inicial (la más antigua); nunca eliminable. */
+  const numeroInicial = useMemo(() => {
+    if (!versionesPresupuesto.length) return null
+    return versionesPresupuesto.reduce(
+      (m, v) => Math.min(m, Number(v.numero_version) || Infinity),
+      Infinity,
+    )
   }, [versionesPresupuesto])
 
   const [capitulosModal, setCapitulosModal] = useState([])
@@ -101,8 +140,19 @@ export default function PptoVersionador({
   const [deleteError, setDeleteError] = useState(null)
   const [deleteExportOk, setDeleteExportOk] = useState(false)
 
-  const [restaurarTarget, setRestaurarTarget] = useState(null)
-  const [restaurarBusy, setRestaurarBusy] = useState(false)
+  // Ciclo de aprobación (doble llave).
+  const [enviarBusyId, setEnviarBusyId] = useState(null)
+  const [revisionEstado, setRevisionEstado] = useState(null)
+  const [selloTarget, setSelloTarget] = useState(null)
+  const [selloResumen, setSelloResumen] = useState(null)
+  const [selloLoading, setSelloLoading] = useState(false)
+  const [selloBusy, setSelloBusy] = useState(false)
+  const [selloObs, setSelloObs] = useState('')
+  const [selloError, setSelloError] = useState(null)
+  const [rechazarTarget, setRechazarTarget] = useState(null)
+  const [rechazarObs, setRechazarObs] = useState('')
+  const [rechazarBusy, setRechazarBusy] = useState(false)
+  const [rechazarError, setRechazarError] = useState(null)
 
   const costoDirectoTotal = useMemo(
     () => capitulosModal.reduce((s, c) => s + Math.round(Number(c.costo_total) || 0), 0),
@@ -310,26 +360,131 @@ export default function PptoVersionador({
     }
   }, [API, contratoId, deleteBusy, deleteTarget, onVersionesReload, authToken])
 
-  const confirmarRestaurar = useCallback(async () => {
-    if (!restaurarTarget || restaurarBusy) return
-    setRestaurarBusy(true)
+  // Estado de revisión del presupuesto vivo (para el aviso de 100% aprobado).
+  const recargarRevision = useCallback(async () => {
+    if (!contratoId) return
+    try {
+      const r = await fetch(
+        `${API}/presupuesto/${contratoId}/versiones/estado-revision`,
+        { headers: { Authorization: `Bearer ${authToken()}` } },
+      )
+      setRevisionEstado(r.ok ? await r.json() : null)
+    } catch {
+      setRevisionEstado(null)
+    }
+  }, [API, contratoId, authToken])
+
+  useEffect(() => {
+    if (panelOpen) void recargarRevision()
+  }, [panelOpen, recargarRevision, versionesPresupuesto])
+
+  const enviarInterventoria = useCallback(
+    async (version) => {
+      if (!contratoId || enviarBusyId) return
+      setEnviarBusyId(version.id)
+      try {
+        const res = await fetch(
+          `${API}/presupuesto/${contratoId}/versiones/${version.id}/enviar-interventoria`,
+          { method: 'POST', headers: { Authorization: `Bearer ${authToken()}` } },
+        )
+        if (!res.ok) {
+          const msg = await res.text().catch(() => '')
+          throw new Error(msg || `Error ${res.status}`)
+        }
+        await onVersionesReload?.()
+      } catch (e) {
+        window.alert(e?.message || 'No se pudo enviar a interventoría.')
+      } finally {
+        setEnviarBusyId(null)
+      }
+    },
+    [API, contratoId, enviarBusyId, onVersionesReload, authToken],
+  )
+
+  const abrirSello = useCallback(
+    async (version) => {
+      setSelloTarget(version)
+      setSelloResumen(null)
+      setSelloObs('')
+      setSelloError(null)
+      setSelloLoading(true)
+      try {
+        const res = await fetch(
+          `${API}/presupuesto/${contratoId}/versiones/${version.id}/resumen-ejecutivo`,
+          { headers: { Authorization: `Bearer ${authToken()}` } },
+        )
+        if (!res.ok) {
+          const msg = await res.text().catch(() => '')
+          throw new Error(msg || `Error ${res.status}`)
+        }
+        setSelloResumen(await res.json())
+      } catch (e) {
+        setSelloError(e?.message || 'No se pudo cargar el resumen ejecutivo.')
+      } finally {
+        setSelloLoading(false)
+      }
+    },
+    [API, contratoId, authToken],
+  )
+
+  const confirmarSello = useCallback(async () => {
+    if (!selloTarget || selloBusy) return
+    setSelloBusy(true)
+    setSelloError(null)
     try {
       const res = await fetch(
-        `${API}/presupuesto/${contratoId}/versiones/${restaurarTarget.id}/restaurar`,
-        { method: 'PUT', headers: { Authorization: `Bearer ${authToken()}` } },
+        `${API}/presupuesto/${contratoId}/versiones/${selloTarget.id}/aprobar-sellar`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ observaciones: String(selloObs || '').trim() || null }),
+        },
       )
       if (!res.ok) {
         const msg = await res.text().catch(() => '')
         throw new Error(msg || `Error ${res.status}`)
       }
-      setRestaurarTarget(null)
+      setSelloTarget(null)
+      setSelloResumen(null)
       await onVersionesReload?.()
     } catch (e) {
-      window.alert(e?.message || 'No se pudo restaurar la versión.')
+      setSelloError(e?.message || 'No se pudo aprobar y sellar la versión.')
     } finally {
-      setRestaurarBusy(false)
+      setSelloBusy(false)
     }
-  }, [API, contratoId, onVersionesReload, restaurarBusy, restaurarTarget, authToken])
+  }, [API, contratoId, selloTarget, selloBusy, selloObs, onVersionesReload, authToken])
+
+  const confirmarRechazo = useCallback(async () => {
+    if (!rechazarTarget || rechazarBusy) return
+    const obs = String(rechazarObs || '').trim()
+    if (obs.length < 10) {
+      setRechazarError('Indique el motivo del rechazo (mínimo 10 caracteres).')
+      return
+    }
+    setRechazarBusy(true)
+    setRechazarError(null)
+    try {
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/versiones/${rechazarTarget.id}/rechazar`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ observaciones: obs }),
+        },
+      )
+      if (!res.ok) {
+        const msg = await res.text().catch(() => '')
+        throw new Error(msg || `Error ${res.status}`)
+      }
+      setRechazarTarget(null)
+      setRechazarObs('')
+      await onVersionesReload?.()
+    } catch (e) {
+      setRechazarError(e?.message || 'No se pudo rechazar la versión.')
+    } finally {
+      setRechazarBusy(false)
+    }
+  }, [API, contratoId, rechazarTarget, rechazarBusy, rechazarObs, onVersionesReload, authToken])
 
   const tituloCrear = esPrimeraVersion ? 'Crear versión inicial' : 'Nueva versión'
 
@@ -616,20 +771,39 @@ export default function PptoVersionador({
                           style={{ marginTop: 4 }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <span style={{ fontWeight: 800, color: t.text }}>{v.etiqueta}</span>
-                            {v.es_vigente && (
+                            {(() => {
+                              const meta = estadoMeta(v)
+                              return (
+                                <span
+                                  style={{
+                                    fontSize: 'var(--cc-caption)',
+                                    fontWeight: 700,
+                                    color: meta.color,
+                                    background: meta.bg,
+                                    border: `1px solid ${meta.color}55`,
+                                    borderRadius: 4,
+                                    padding: '2px 8px',
+                                  }}
+                                >
+                                  {meta.label}
+                                </span>
+                              )
+                            })()}
+                            {v.es_vigente_aprobada && (
                               <span
                                 style={{
                                   fontSize: 'var(--cc-caption)',
-                                  fontWeight: 700,
+                                  fontWeight: 800,
                                   color: '#fff',
-                                  background: t.primary,
+                                  background: '#16A34A',
                                   borderRadius: 4,
                                   padding: '2px 8px',
                                 }}
+                                title="Versión vigente: alimenta dashboard y programación."
                               >
-                                Vigente
+                                ★ Vigente (dashboard)
                               </span>
                             )}
                           </div>
@@ -641,44 +815,130 @@ export default function PptoVersionador({
                           </div>
                         </div>
                       </div>
-                      {!v.es_vigente && (
-                        <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            disabled
-                            title="Disponible próximamente: restaurar reemplazará el presupuesto vivo con esta versión (se guardará un respaldo del estado actual antes)."
-                            style={{
-                              background: `${t.primary}0A`,
-                              border: `1px dashed ${t.border}`,
-                              borderRadius: 6,
-                              padding: '4px 10px',
-                              fontSize: 'var(--cc-caption)',
-                              fontWeight: 700,
-                              color: t.textMuted,
-                              cursor: 'not-allowed',
-                            }}
-                          >
-                            Restaurar (pronto)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void iniciarEliminar(v)}
-                            disabled={deleteBusy && deleteTarget?.id === v.id}
-                            style={{
-                              background: '#FEE2E2',
-                              border: '1px solid #DC2626',
-                              borderRadius: 6,
-                              padding: '4px 10px',
-                              fontSize: 'var(--cc-caption)',
-                              fontWeight: 700,
-                              color: '#DC2626',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      )}
+                      {(() => {
+                        const estado = estadoMeta(v).key
+                        const esBorradorActivo = !!v.es_vigente
+                        const rev = revisionEstado
+                        const btnBase = {
+                          borderRadius: 6,
+                          padding: '6px 12px',
+                          fontSize: 'var(--cc-caption)',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }
+                        return (
+                          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {v.observaciones && (
+                              <div
+                                style={{
+                                  fontSize: 'var(--cc-caption)',
+                                  color: t.textMuted,
+                                  background: t.bgCard,
+                                  border: `1px solid ${t.border}`,
+                                  borderRadius: 6,
+                                  padding: '6px 8px',
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                <strong>Observaciones:</strong> {v.observaciones}
+                              </div>
+                            )}
+
+                            {esBorradorActivo && estado === 'borrador' && (
+                              <>
+                                {rev && rev.total > 0 && (
+                                  <div
+                                    style={{
+                                      fontSize: 'var(--cc-caption)',
+                                      fontWeight: 700,
+                                      color: rev.completo ? '#15803D' : '#B45309',
+                                    }}
+                                  >
+                                    Revisión interventoría: {rev.aprobados}/{rev.total} aprobados ({rev.porcentaje_aprobado}%)
+                                  </div>
+                                )}
+                                {esContratista ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void enviarInterventoria(v)}
+                                    disabled={enviarBusyId === v.id}
+                                    style={{ ...btnBase, background: '#0F766E', color: '#fff', border: 'none' }}
+                                  >
+                                    {enviarBusyId === v.id ? '⏳ Enviando…' : '📤 Enviar a interventoría'}
+                                  </button>
+                                ) : (
+                                  <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                                    Borrador en edición por el contratista.
+                                  </span>
+                                )}
+                              </>
+                            )}
+
+                            {esBorradorActivo && estado === 'enviado_interventoria' && (
+                              <>
+                                {rev && rev.total > 0 && (
+                                  <div
+                                    style={{
+                                      fontSize: 'var(--cc-caption)',
+                                      fontWeight: 700,
+                                      color: rev.completo ? '#15803D' : '#B45309',
+                                      background: rev.completo ? '#16A34A14' : '#F59E0B14',
+                                      border: `1px solid ${rev.completo ? '#16A34A55' : '#F59E0B55'}`,
+                                      borderRadius: 6,
+                                      padding: '6px 8px',
+                                    }}
+                                  >
+                                    {rev.completo
+                                      ? '✓ 100% aprobado: puede sellar la versión.'
+                                      : `Faltan ${rev.pendientes} registro(s) por aprobar (${rev.porcentaje_aprobado}%).`}
+                                  </div>
+                                )}
+                                {esInterventoria ? (
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => void abrirSello(v)}
+                                      style={{ ...btnBase, background: '#16A34A', color: '#fff', border: 'none' }}
+                                    >
+                                      ✅ Revisar y aprobar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRechazarTarget(v)
+                                        setRechazarObs('')
+                                        setRechazarError(null)
+                                      }}
+                                      style={{ ...btnBase, background: '#FEE2E2', color: '#DC2626', border: '1px solid #DC2626' }}
+                                    >
+                                      ↩ Rechazar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span style={{ fontSize: 'var(--cc-caption)', color: '#B45309', fontWeight: 700 }}>
+                                    📨 Enviada a interventoría · en revisión.
+                                  </span>
+                                )}
+                              </>
+                            )}
+
+                            {!esBorradorActivo
+                              && Number(v.numero_version) !== numeroInicial
+                              && !v.es_vigente_aprobada && (
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() => void iniciarEliminar(v)}
+                                  disabled={deleteBusy && deleteTarget?.id === v.id}
+                                  style={{ ...btnBase, background: '#FEE2E2', color: '#DC2626', border: '1px solid #DC2626' }}
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
                 })
@@ -697,34 +957,6 @@ export default function PptoVersionador({
         API={API}
         t={t}
       />
-
-      {/* Confirmar restaurar */}
-      {restaurarTarget && (
-        <div style={overlayStyle(10002)} onClick={() => !restaurarBusy && setRestaurarTarget(null)}>
-          <div
-            style={{ maxWidth: 420, width: '100%', background: t.bgCard, borderRadius: 12, padding: 20, border: `1px solid ${t.border}` }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Restaurar versión «{restaurarTarget.etiqueta}»</div>
-            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-              Se marcará como vigente en el historial. El presupuesto operativo en pantalla no se modifica automáticamente.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-              <button type="button" onClick={() => setRestaurarTarget(null)} disabled={restaurarBusy} style={{ padding: '8px 14px', cursor: 'pointer' }}>
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmarRestaurar()}
-                disabled={restaurarBusy}
-                style={{ padding: '8px 14px', background: t.primary, color: '#fff', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}
-              >
-                {restaurarBusy ? '⏳…' : 'Confirmar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Eliminar — respaldo + confirmación */}
       {deleteTarget && (
@@ -765,6 +997,227 @@ export default function PptoVersionador({
                   {deleteBusy ? '⏳…' : 'Confirmar eliminación'}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resumen ejecutivo + aprobar y sellar (LLAVE 2 — interventoría) */}
+      {selloTarget && (
+        <div style={overlayStyle(10003)} onClick={() => !selloBusy && setSelloTarget(null)}>
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 640,
+              maxHeight: '92vh',
+              overflow: 'auto',
+              background: t.bgCard,
+              borderRadius: 14,
+              border: `1px solid ${t.border}`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={headerDark(t)}>
+              <div>
+                <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#fff' }}>
+                  ✅ Aprobar y sellar «{selloTarget.etiqueta}»
+                </div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: '#94A3B8', marginTop: 2 }}>
+                  Resumen ejecutivo · interventoría
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !selloBusy && setSelloTarget(null)}
+                style={{ background: 'transparent', border: 'none', color: '#94A3B8', cursor: 'pointer', fontSize: 'var(--cc-title)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: 20 }}>
+              {selloLoading ? (
+                <div style={{ color: t.textMuted, padding: 16 }}>Cargando resumen ejecutivo…</div>
+              ) : selloError && !selloResumen ? (
+                <div style={{ color: '#DC2626', padding: 12 }}>{selloError}</div>
+              ) : selloResumen ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                      gap: 10,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div style={{ padding: 12, borderRadius: 8, background: t.bg, border: `1px solid ${t.border}` }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Ítems</div>
+                      <div style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: t.text }}>
+                        {(selloResumen.conteo_items ?? 0).toLocaleString('es-CO')}
+                      </div>
+                    </div>
+                    <div style={{ padding: 12, borderRadius: 8, background: t.bg, border: `1px solid ${t.border}` }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Capítulos</div>
+                      <div style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: t.text }}>{selloResumen.num_capitulos ?? 0}</div>
+                    </div>
+                    <div style={{ padding: 12, borderRadius: 8, background: t.bg, border: `1px solid ${t.border}` }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Costo directo</div>
+                      <div style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: t.primary }}>
+                        {formatCOP(selloResumen.costo_directo_total)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'auto', maxHeight: 260 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                      <thead>
+                        <tr style={{ background: `${t.primary}12` }}>
+                          <th style={{ textAlign: 'left', padding: '8px 10px' }}>Capítulo</th>
+                          <th style={{ textAlign: 'right', padding: '8px 10px', whiteSpace: 'nowrap' }}>Costo directo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(selloResumen.capitulos || []).map((c) => (
+                          <tr key={c.capitulo} style={{ borderTop: `1px solid ${t.border}` }}>
+                            <td style={{ padding: '6px 10px' }}>{c.capitulo || 'Sin capítulo'}</td>
+                            <td style={{ padding: '6px 10px', textAlign: 'right' }}>{formatCOP(c.costo_total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {selloResumen.revision && !selloResumen.revision.completo && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: '#F59E0B14',
+                        border: '1px solid #F59E0B55',
+                        color: '#B45309',
+                        fontSize: 'var(--cc-sm)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      ⚠ No se puede sellar: faltan {selloResumen.revision.pendientes} registro(s) por aprobar
+                      ({selloResumen.revision.porcentaje_aprobado}%). Apruebe el 100% en la grilla antes de sellar.
+                    </div>
+                  )}
+
+                  <label style={{ display: 'block', marginTop: 14 }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
+                      Observaciones / consideraciones (opcional)
+                    </div>
+                    <textarea
+                      value={selloObs}
+                      onChange={(e) => setSelloObs(e.target.value)}
+                      rows={3}
+                      placeholder="Consideraciones de la interventoría para esta versión aprobada…"
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        border: `1px solid ${t.border}`,
+                        background: t.inputBg || t.bgCard,
+                        color: t.text,
+                        resize: 'vertical',
+                      }}
+                    />
+                  </label>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      fontSize: 'var(--cc-sm)',
+                      fontWeight: 800,
+                      color: t.text,
+                    }}
+                  >
+                    ¿Es esta la versión final y aprobada por la interventoría?
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2, lineHeight: 1.4 }}>
+                    Al confirmar, la versión queda <strong>sellada</strong> y se vuelve la <strong>vigente</strong>:
+                    actualiza de forma permanente la dashboard y la programación.
+                  </div>
+
+                  {selloError && <div style={{ color: '#DC2626', fontSize: 'var(--cc-sm)', marginTop: 8 }}>{selloError}</div>}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelloTarget(null)}
+                      disabled={selloBusy}
+                      style={{ padding: '8px 16px', border: `1px solid ${t.border}`, borderRadius: 8, background: 'transparent', color: t.textMuted, cursor: 'pointer' }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void confirmarSello()}
+                      disabled={selloBusy || (selloResumen.revision && !selloResumen.revision.completo)}
+                      style={{
+                        padding: '8px 18px',
+                        background: selloBusy || (selloResumen.revision && !selloResumen.revision.completo) ? '#94a3b8' : '#16A34A',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        fontWeight: 800,
+                        cursor: selloBusy ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {selloBusy ? '⏳ Sellando…' : 'Sí, aprobar y sellar'}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rechazar / devolver al contratista */}
+      {rechazarTarget && (
+        <div style={overlayStyle(10003)} onClick={() => !rechazarBusy && setRechazarTarget(null)}>
+          <div
+            style={{ maxWidth: 460, width: '100%', background: t.bgCard, borderRadius: 12, padding: 20, border: `1px solid ${t.border}` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 8, color: '#B91C1C' }}>
+              Rechazar «{rechazarTarget.etiqueta}»
+            </div>
+            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+              La versión vuelve a borrador editable para que el contratista la corrija. Indique el motivo.
+            </p>
+            <textarea
+              value={rechazarObs}
+              onChange={(e) => setRechazarObs(e.target.value)}
+              rows={3}
+              placeholder="Motivo del rechazo (mínimo 10 caracteres)…"
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: 6,
+                border: `1px solid ${t.border}`,
+                background: t.inputBg || t.bgCard,
+                color: t.text,
+                resize: 'vertical',
+                marginTop: 8,
+              }}
+            />
+            {rechazarError && <div style={{ color: '#DC2626', fontSize: 'var(--cc-sm)', marginTop: 8 }}>{rechazarError}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button type="button" onClick={() => setRechazarTarget(null)} disabled={rechazarBusy} style={{ padding: '8px 14px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmarRechazo()}
+                disabled={rechazarBusy}
+                style={{ padding: '8px 14px', background: '#B91C1C', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}
+              >
+                {rechazarBusy ? '⏳…' : 'Rechazar y devolver'}
+              </button>
             </div>
           </div>
         </div>
