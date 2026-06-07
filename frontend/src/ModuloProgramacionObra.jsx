@@ -4,7 +4,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Upload, RefreshCw } from 'lucide-react'
+import { Plus, Upload } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
@@ -19,8 +19,24 @@ import ProgObraDependenciasGlobales from './ProgObraDependenciasGlobales'
 import ProgObraComparacionGlobalModal from './ProgObraComparacionGlobalModal'
 import ProgObraSuspensionWizard from './ProgObraSuspensionWizard'
 import ProgObraCurvaSModal from './ProgObraCurvaSModal'
+import ProgObraAlcanceExportModal from './ProgObraAlcanceExportModal'
 import ProgObraAutoScheduleWizard from './ProgObraAutoScheduleWizard'
-import { clearVersionProgramacion } from './progObraApi'
+import ProgPresupuestoSelector from './ProgPresupuestoSelector'
+import {
+  clearVersionProgramacion,
+  downloadCurvaSPdf,
+  downloadProjectXml,
+  fetchCostosPorVersionPresupuesto,
+  fetchCurvaS,
+  fetchPresupuestoVersiones,
+} from './progObraApi'
+import { exportCurvaSExcel } from './progObraExportExcel'
+import { buildProgObraRibbonItems } from './progObraRibbonItems'
+import {
+  defaultPptoVersionAnalisisId,
+  mergeEstructuraConCostosPpto,
+  pptoVigenteAprobada,
+} from './progObraPptoCostos'
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 import {
@@ -234,8 +250,8 @@ function ProgPanelIconBtn({ title, onClick, disabled, children, t }) {
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 26,
-        height: 26,
+        width: '1.625rem',
+        height: '1.625rem',
         padding: 0,
         borderRadius: 6,
         border: `1px solid ${t.border}`,
@@ -249,6 +265,60 @@ function ProgPanelIconBtn({ title, onClick, disabled, children, t }) {
       {children}
     </button>
   )
+}
+
+function ProgPanelDivider({ t }) {
+  return <hr style={{ border: 'none', borderTop: `1px solid ${t.border}`, margin: '0.35rem 0' }} />
+}
+
+function ProgPanelActionBtn({
+  label,
+  onClick,
+  disabled = false,
+  disabledTitle,
+  t,
+  variant = 'default',
+  busy = false,
+}) {
+  const variants = {
+    default: { border: t.border, bg: t.bg, color: t.text },
+    primary: { border: t.primary, bg: `${t.primary}10`, color: t.primary },
+    danger: { border: '#dc2626', bg: '#fef2f2', color: '#991b1b' },
+  }
+  const off = disabled || busy
+  const v = off
+    ? { border: '#E5E7EB', bg: '#F3F4F6', color: '#9CA3AF' }
+    : variants[variant] || variants.default
+  const btn = (
+    <button
+      type="button"
+      disabled={off}
+      onClick={onClick}
+      style={{
+        width: '100%',
+        padding: '0.5rem 0.65rem',
+        fontSize: 'var(--cc-sm)',
+        fontWeight: 600,
+        borderRadius: 6,
+        border: `1px solid ${v.border}`,
+        background: v.bg,
+        color: v.color,
+        cursor: off ? 'not-allowed' : 'pointer',
+        textAlign: 'left',
+        lineHeight: 1.35,
+      }}
+    >
+      {label}
+    </button>
+  )
+  if (off && disabledTitle) {
+    return (
+      <span title={disabledTitle} style={{ display: 'block', width: '100%' }}>
+        {btn}
+      </span>
+    )
+  }
+  return btn
 }
 
 function ProgPkListado({ rows, selPk, t, onSelectPk }) {
@@ -279,7 +349,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
           textAlign: 'left',
         }}
       >
-        <span style={{ color: t.textMuted, fontSize: 10, lineHeight: 1 }}>{collapsed ? '▸' : '▾'}</span>
+        <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', lineHeight: 1 }}>{collapsed ? '▸' : '▾'}</span>
         <span>PKs del proyecto ({sorted.length})</span>
       </button>
       {!collapsed && (
@@ -315,7 +385,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
                   background: cardBg,
                   cursor: 'pointer',
                   textAlign: 'left',
-                  fontSize: 10,
+                  fontSize: 'var(--cc-caption)',
                   color: t.text,
                   minHeight: 24,
                 }}
@@ -335,7 +405,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
                     gridRow: critico ? '1 / -1' : undefined,
                     alignSelf: 'center',
                     fontFamily: 'ui-monospace, monospace',
-                    fontSize: 9,
+                    fontSize: 'var(--cc-caption)',
                     color: fill,
                     letterSpacing: -0.5,
                     overflow: 'hidden',
@@ -343,7 +413,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
                 >
                   {blocks}
                 </span>
-                <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 10 }}>
+                <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 'var(--cc-caption)' }}>
                   {sinAg > 0 ? <span style={{ color: '#b45309', marginRight: 3 }} title={`${sinAg} ítems sin agrupador`}>⚠</span> : null}
                   {pctLabel}
                 </span>
@@ -796,7 +866,7 @@ function ProgPkEditorModal({
             style={{
               padding: '8px 16px',
               borderTop: `1px solid ${t.border}`,
-              fontSize: 11,
+              fontSize: 'var(--cc-sm)',
               color: t.textMuted,
               background: t.bg,
             }}
@@ -826,6 +896,7 @@ export default function ModuloProgramacionObra({
   puedeEditar = false,
   puedeCrear = false,
   puedeValidar = false,
+  onRibbonChange,
 }) {
   const cid = usuario?.contrato_id
   const uid = usuario?.id
@@ -864,11 +935,17 @@ export default function ModuloProgramacionObra({
   const [crearTipo, setCrearTipo] = useState('reprogramacion')
   const [showComparacionGlobal, setShowComparacionGlobal] = useState(false)
   const [showCurvaS, setShowCurvaS] = useState(false)
+  const [alcanceModal, setAlcanceModal] = useState(null)
+  const [curvaPkIds, setCurvaPkIds] = useState(null)
   const [showSuspensionWizard, setShowSuspensionWizard] = useState(false)
   const [showAutoSchedule, setShowAutoSchedule] = useState(false)
   const [showEliminarProgramacion, setShowEliminarProgramacion] = useState(false)
   const [presupuestoDelta, setPresupuestoDelta] = useState(null)
   const [presupuestoBloqueoValidacion, setPresupuestoBloqueoValidacion] = useState(null)
+  const [pptoVersiones, setPptoVersiones] = useState([])
+  const [pptoVersionAnalisisId, setPptoVersionAnalisisId] = useState(null)
+  const [pptoCostosData, setPptoCostosData] = useState(null)
+  const [loadPptoCostos, setLoadPptoCostos] = useState(false)
   const [validarModal, setValidarModal] = useState(null)
   const [progModalOpen, setProgModalOpen] = useState(false)
   const [modalOpenCompareTab, setModalOpenCompareTab] = useState(false)
@@ -1364,6 +1441,11 @@ export default function ModuloProgramacionObra({
     return m
   }, [progEstructura.capitulos])
 
+  const estructuraPorCapituloConPpto = useMemo(
+    () => mergeEstructuraConCostosPpto(estructuraPorCapitulo, pptoCostosData),
+    [estructuraPorCapitulo, pptoCostosData],
+  )
+
   const agrupadorActItem = useCallback((ag) => {
     const wbs = String(ag?.codigo_wbs || '').trim()
     if (wbs) return wbs
@@ -1482,6 +1564,60 @@ export default function ModuloProgramacionObra({
       cancel = true
     }
   }, [cid, token, pkForData, API])
+
+  useEffect(() => {
+    if (!cid || !token) {
+      setPptoVersiones([])
+      setPptoVersionAnalisisId(null)
+      return
+    }
+    let cancel = false
+    fetchPresupuestoVersiones(API, cid, token)
+      .then((rows) => {
+        if (cancel) return
+        const list = Array.isArray(rows) ? rows : []
+        setPptoVersiones(list)
+        setPptoVersionAnalisisId((prev) => {
+          if (prev && list.some((v) => String(v.id) === String(prev))) return prev
+          return defaultPptoVersionAnalisisId(list)
+        })
+      })
+      .catch(() => {
+        if (!cancel) {
+          setPptoVersiones([])
+          setPptoVersionAnalisisId(null)
+        }
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, API])
+
+  useEffect(() => {
+    if (!cid || !token || !pptoVersionAnalisisId || !versionIdForData) {
+      setPptoCostosData(null)
+      return
+    }
+    let cancel = false
+    setLoadPptoCostos(true)
+    fetchCostosPorVersionPresupuesto(API, cid, token, {
+      versionProgId: String(versionIdForData),
+      versionPptoId: String(pptoVersionAnalisisId),
+      pkId: pkForData || undefined,
+    })
+      .then((d) => {
+        if (!cancel) setPptoCostosData(d)
+      })
+      .catch(() => {
+        if (!cancel) setPptoCostosData(null)
+      })
+      .finally(() => {
+        if (!cancel) setLoadPptoCostos(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, API, pptoVersionAnalisisId, versionIdForData, pkForData])
 
   useEffect(() => {
     if (!cid || !token || !pkForData || !versionIdForData) {
@@ -1613,7 +1749,7 @@ export default function ModuloProgramacionObra({
           display: 'inline-block',
           padding: '2px 8px',
           borderRadius: 6,
-          fontSize: 11,
+          fontSize: 'var(--cc-sm)',
           fontWeight: 700,
           background: c.bg,
           color: c.fg,
@@ -1806,12 +1942,14 @@ export default function ModuloProgramacionObra({
       const actividades = (items || []).map((row) => {
         const def = row.itemDef || {}
         const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
+        const clearing = row.fecha_inicio == null && (row.duracion == null || !Number.isFinite(durInt) || durInt <= 0)
         return {
           capitulo: row.capitulo || def.capitulo,
           item: row.item || def.item,
           segmento: 1,
           fecha_inicio: row.fecha_inicio ?? null,
-          duracion_dias_habiles: Number.isFinite(durInt) ? durInt : null,
+          duracion_dias_habiles: Number.isFinite(durInt) && durInt > 0 ? durInt : null,
+          ...(clearing ? { fecha_fin_calculada: null } : {}),
           cantidad_programada: Number(def.cant_total),
           unidad: def.und || '?',
           costo_unitario: Number(def.vlr_unitario) || 0,
@@ -1923,6 +2061,21 @@ export default function ModuloProgramacionObra({
     if (!puedeEditar || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
+      const selectedPpto = pptoVersiones.find((v) => String(v.id) === String(pptoVersionAnalisisId))
+      const oficialPpto = pptoVigenteAprobada(pptoVersiones)
+      if (selectedPpto && !selectedPpto.es_vigente_aprobada) {
+        const pptoRes = await fetch(`${API}/prog-obra/${cid}/presupuesto-aprobacion-estado`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const pptoEst = pptoRes.ok ? await pptoRes.json() : {}
+        setPresupuestoBloqueoValidacion({
+          motivo: 'selector',
+          selected_numero: selectedPpto.numero_version,
+          oficial_numero: oficialPpto?.numero_version ?? null,
+          items_pendientes: Number(pptoEst?.items_pendientes || 0),
+        })
+        return
+      }
       const pptoRes = await fetch(`${API}/prog-obra/${cid}/presupuesto-aprobacion-estado`, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -1930,7 +2083,7 @@ export default function ModuloProgramacionObra({
       const pptoEst = await pptoRes.json()
       const pend = Number(pptoEst?.items_pendientes || 0)
       if (pend > 0) {
-        setPresupuestoBloqueoValidacion(pptoEst)
+        setPresupuestoBloqueoValidacion({ motivo: 'aprobacion', ...pptoEst })
         return
       }
       const resumen = await buildValidacionResumen()
@@ -1998,6 +2151,123 @@ export default function ModuloProgramacionObra({
       setPanelBusy(false)
     }
   }
+
+  const handleAlcanceConfirm = useCallback(
+    async ({ scope, pkIds, format }) => {
+      const pkParam = scope === 'all' ? undefined : pkIds
+
+      if (alcanceModal === 'curva') {
+        setCurvaPkIds(scope === 'all' ? null : pkIds)
+        setAlcanceModal(null)
+        setShowCurvaS(true)
+        return
+      }
+
+      const vid = versionIdForWork || workingVersionId || compareTargetForGlobal
+      if (!cid || !token || !vid) {
+        showToast('Seleccione una versión de programación con cronograma.', 'err')
+        return
+      }
+
+      setPanelBusy(true)
+      try {
+        if (format === 'xml') {
+          const { blob, filename } = await downloadProjectXml(API, cid, token, {
+            versionId: String(vid),
+            versionPptoId: pptoVersionAnalisisId || undefined,
+            pkIds: pkParam,
+          })
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = filename
+          a.click()
+          URL.revokeObjectURL(a.href)
+          showToast('Cronograma exportado a MS Project XML.')
+        } else if (format === 'pdf') {
+          const blob = await downloadCurvaSPdf(API, cid, token, {
+            baselineId: versionBaselineId,
+            targetId: compareTargetForGlobal,
+            versionPptoId: pptoVersionAnalisisId || undefined,
+            pkIds: pkParam,
+          })
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = `curva-s-${cid}.pdf`
+          a.click()
+          URL.revokeObjectURL(a.href)
+          showToast('Curva S exportada a PDF.')
+        } else if (format === 'excel') {
+          const data = await fetchCurvaS(API, cid, token, {
+            baselineId: versionBaselineId,
+            targetId: compareTargetForGlobal,
+            versionPptoId: pptoVersionAnalisisId || undefined,
+            pkIds: pkParam,
+          })
+          await exportCurvaSExcel({
+            data,
+            contratoNumero: usuario?.contrato_numero || cid,
+            contratista: usuario?.contratista || '',
+            interventoria: usuario?.interventoria || '',
+            filename: `curva-s-${cid}.xlsx`,
+          })
+          showToast('Curva S exportada a Excel.')
+        }
+        setAlcanceModal(null)
+      } catch (e) {
+        showToast(e?.message || 'No se pudo completar la exportación', 'err')
+      } finally {
+        setPanelBusy(false)
+      }
+    },
+    [
+      alcanceModal,
+      cid,
+      token,
+      API,
+      versionIdForWork,
+      workingVersionId,
+      compareTargetForGlobal,
+      pptoVersionAnalisisId,
+      versionBaselineId,
+      usuario?.contrato_numero,
+      usuario?.contratista,
+      usuario?.interventoria,
+      showToast,
+    ],
+  )
+
+  const closeCurvaSModal = useCallback(() => {
+    setShowCurvaS(false)
+    setCurvaPkIds(null)
+  }, [])
+
+  useEffect(() => {
+    if (!onRibbonChange) return
+    onRibbonChange({
+      items: buildProgObraRibbonItems({
+        esBorradorEditable,
+        puedeEditar,
+        workingVersionId,
+        versionIdForWork,
+        versionBaselineId,
+        onAutoSchedule: () => setShowAutoSchedule(true),
+        onCurvaS: () => setAlcanceModal('curva'),
+        onComparacion: () => setShowComparacionGlobal(true),
+        onExport: () => setAlcanceModal('export'),
+        onEliminar: () => setShowEliminarProgramacion(true),
+      }),
+      busy: panelBusy,
+    })
+    return () => onRibbonChange(null)
+  }, [
+    onRibbonChange,
+    panelBusy,
+    esBorradorEditable,
+    puedeEditar,
+    workingVersionId,
+    versionIdForWork,
+    versionBaselineId,
+  ])
 
   const handleGuardarCapitulo = async (capitulo, fechaIso, durInt) => {
     if (!puedeEditar || !cid || !workingVersionId || !pkForData) return
@@ -2383,7 +2653,7 @@ export default function ModuloProgramacionObra({
           })
         }}
         capitulosOrdenados={capitulosOrdenados}
-        estructuraPorCapitulo={estructuraPorCapitulo}
+        estructuraPorCapitulo={estructuraPorCapituloConPpto}
         agrupadorActItem={agrupadorActItem}
         agrupadorRowKey={agrupadorRowKey}
         itemsPorCapitulo={itemsPorCapitulo}
@@ -2398,7 +2668,7 @@ export default function ModuloProgramacionObra({
         onGuardarItem={handleGuardarItem}
         onGuardarBatch={handleGuardarBatch}
         loadAct={loadAct}
-        loadPpto={loadPpto || loadEstructura}
+        loadPpto={loadPpto || loadEstructura || loadPptoCostos}
         cid={cid}
         token={token}
         API={API}
@@ -2444,16 +2714,30 @@ export default function ModuloProgramacionObra({
 
       <ProgObraCurvaSModal
         open={showCurvaS}
-        onClose={() => setShowCurvaS(false)}
+        onClose={closeCurvaSModal}
         t={t}
         API={API}
         cid={cid}
         token={token}
         baselineId={versionBaselineId}
         targetId={compareTargetForGlobal}
+        versionPptoId={pptoVersionAnalisisId}
+        versionProgId={compareTargetForGlobal || workingVersionId}
+        pptoVersiones={pptoVersiones}
         contratoNumero={usuario?.contrato_numero || cid}
         contratista={usuario?.contratista || ''}
         interventoria={usuario?.interventoria || ''}
+        pkIds={curvaPkIds}
+      />
+
+      <ProgObraAlcanceExportModal
+        open={alcanceModal != null}
+        onClose={() => !panelBusy && setAlcanceModal(null)}
+        onConfirm={(payload) => void handleAlcanceConfirm(payload)}
+        pkRows={pkRowsProgramables}
+        t={t}
+        mode={alcanceModal === 'export' ? 'export' : 'curva'}
+        busy={panelBusy}
       />
 
       {showSuspensionWizard && suspensionPreviewVersionId && (
@@ -2505,14 +2789,38 @@ export default function ModuloProgramacionObra({
             <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: '#b45309', marginBottom: 12 }}>
               ⚠ No se puede enviar a validación
             </div>
-            <p style={{ fontSize: 'var(--cc-sm)', color: t.text, margin: '0 0 8px', lineHeight: 1.5 }}>
-              El presupuesto del contrato tiene{' '}
-              <strong>{presupuestoBloqueoValidacion.items_pendientes}</strong> ítems pendientes de aprobación por
-              interventoría.
-            </p>
-            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 16px', lineHeight: 1.5 }}>
-              Aprueba el presupuesto completo antes de enviar la programación a validación.
-            </p>
+            {presupuestoBloqueoValidacion.motivo === 'selector' ? (
+              <>
+                <p style={{ fontSize: 'var(--cc-sm)', color: t.text, margin: '0 0 8px', lineHeight: 1.5 }}>
+                  Estás visualizando el presupuesto v{presupuestoBloqueoValidacion.selected_numero} que no está
+                  aprobado.
+                </p>
+                <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 16px', lineHeight: 1.5 }}>
+                  {presupuestoBloqueoValidacion.oficial_numero != null ? (
+                    <>
+                      El presupuesto v{presupuestoBloqueoValidacion.oficial_numero} (vigente aprobado) tiene{' '}
+                      <strong>{presupuestoBloqueoValidacion.items_pendientes}</strong> ítems pendientes de aprobación
+                      por interventoría.
+                    </>
+                  ) : (
+                    <>
+                      Seleccione el presupuesto vigente aprobado en el panel lateral antes de enviar a validación.
+                    </>
+                  )}
+                </p>
+              </>
+            ) : (
+              <>
+                <p style={{ fontSize: 'var(--cc-sm)', color: t.text, margin: '0 0 8px', lineHeight: 1.5 }}>
+                  El presupuesto del contrato tiene{' '}
+                  <strong>{presupuestoBloqueoValidacion.items_pendientes}</strong> ítems pendientes de aprobación por
+                  interventoría.
+                </p>
+                <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 16px', lineHeight: 1.5 }}>
+                  Aprueba el presupuesto completo antes de enviar la programación a validación.
+                </p>
+              </>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button
                 type="button"
@@ -2664,7 +2972,7 @@ export default function ModuloProgramacionObra({
             background: `${t.bgCard}ee`,
             border: `1px solid ${t.border}`,
             boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
-            fontSize: 11,
+            fontSize: 'var(--cc-sm)',
             color: t.text,
             pointerEvents: 'none',
           }}
@@ -2700,7 +3008,7 @@ export default function ModuloProgramacionObra({
               bottom: 10,
               right: 10,
               zIndex: 3,
-              fontSize: 11,
+              fontSize: 'var(--cc-sm)',
               color: t.textMuted,
               background: `${t.bgCard}cc`,
               padding: '4px 8px',
@@ -2718,14 +3026,22 @@ export default function ModuloProgramacionObra({
           flexShrink: 0,
           borderLeft: `1px solid ${t.border}`,
           background: t.bgCard,
-          padding: '8px 10px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 8,
-          overflowY: 'auto',
+          overflow: 'hidden',
           fontSize: 'var(--cc-sm)',
         }}
       >
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '0.5rem 0.65rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+          }}
+        >
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
           <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2, minWidth: 0 }}>
             Programación de obra
@@ -2754,119 +3070,78 @@ export default function ModuloProgramacionObra({
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div
+        <ProgPanelDivider t={t} />
+        <ProgHistorialVersiones
+          versiones={versiones}
+          versionBaselineId={versionBaselineId}
+          t={t}
+          puedeEditar={puedeEditar}
+          panelBusy={panelBusy}
+          onConsultar={handleHistorialConsultar}
+          onContinuar={handleHistorialContinuar}
+          onComparar={handleHistorialComparar}
+        />
+
+        <ProgPresupuestoSelector
+          versiones={pptoVersiones}
+          value={pptoVersionAnalisisId}
+          onChange={setPptoVersionAnalisisId}
+          t={t}
+          disabled={panelBusy}
+        />
+
+        <ProgPanelDivider t={t} />
+
+        <details open style={{ marginTop: '0.05rem' }}>
+          <summary
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: 4,
-              fontSize: 11,
+              cursor: 'pointer',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 700,
               color: t.textMuted,
-              lineHeight: 1.35,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              userSelect: 'none',
+              listStylePosition: 'inside',
+              lineHeight: 1.4,
             }}
           >
-            <span>
-              Contrato <strong style={{ color: t.text }}>{cid}</strong>
-            </span>
-            {workingVersion && (
-              <>
-                <span>·</span>
-                <span style={{ color: t.text }}>{workingVersion.estado || '—'}</span>
-                {versionVigenteId && String(workingVersion.id) === String(versionVigenteId) && (
-                  <>
-                    <span>·</span>
-                    <span style={{ color: t.primary, fontWeight: 600 }}>vigente</span>
-                  </>
-                )}
-                {borradorProgResumen != null && (
-                  <>
-                    <span>·</span>
-                    <span style={{ color: t.primary, fontWeight: 600 }}>{borradorProgResumen.pct.toFixed(0)}%</span>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-          <ProgHistorialVersiones
-            versiones={versiones}
-            versionBaselineId={versionBaselineId}
-            t={t}
-            puedeEditar={puedeEditar}
-            panelBusy={panelBusy}
-            onConsultar={handleHistorialConsultar}
-            onContinuar={handleHistorialContinuar}
-            onComparar={handleHistorialComparar}
-          />
-          {esBorradorEditable && puedeEditar && workingVersionId && (
-            <button
-              type="button"
-              disabled={panelBusy}
-              onClick={() => setShowEliminarProgramacion(true)}
-              style={{
-                marginTop: 6,
-                width: '100%',
-                padding: '6px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 6,
-                border: '1px solid #dc2626',
-                background: '#fef2f2',
-                color: '#991b1b',
-                cursor: panelBusy ? 'not-allowed' : 'pointer',
-                opacity: panelBusy ? 0.55 : 1,
-              }}
-            >
-              Eliminar programación
-            </button>
-          )}
-        </div>
-
-        {borradorProgResumen != null && esBorradorEditable && (
+            Estado
+          </summary>
+          <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        {borradorProgResumen != null && esBorradorEditable ? (
           <div
             style={{
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              padding: '6px 8px',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              padding: '0.5rem 0.65rem',
               borderRadius: 6,
               background: `${t.primary}12`,
               border: `1px solid ${t.primary}44`,
-              fontSize: 11,
+              fontSize: 'var(--cc-sm)',
               lineHeight: 1.35,
             }}
           >
-            <span style={{ color: t.text, minWidth: 0 }}>
+            <span style={{ color: t.text }}>
               Borrador en progreso —{' '}
               <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}% programado</strong>
             </span>
-            {puedeEditar && workingVersionId && (
-              <button
-                type="button"
-                title="Sincronizar estado de PKs con presupuesto actual"
-                disabled={panelBusy}
-                onClick={() => void handleSincronizarPresupuesto()}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  flexShrink: 0,
-                  padding: '4px 8px',
-                  fontSize: 10,
-                  fontWeight: 600,
-                  borderRadius: 6,
-                  border: `1px solid ${t.primary}`,
-                  background: t.bgCard,
-                  color: t.primary,
-                  cursor: panelBusy ? 'not-allowed' : 'pointer',
-                  opacity: panelBusy ? 0.55 : 1,
-                }}
-              >
-                <RefreshCw size={12} strokeWidth={2.25} />
-                Sincronizar con presupuesto
-              </button>
-            )}
+            <ProgPanelActionBtn
+              t={t}
+              label="🔄 Sincronizar con presupuesto"
+              variant="primary"
+              busy={panelBusy}
+              disabled={!(puedeEditar && workingVersionId)}
+              disabledTitle="Requiere permiso de edición y versión en borrador"
+              onClick={() => void handleSincronizarPresupuesto()}
+            />
+          </div>
+        ) : (
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4, padding: '0.25rem 0' }}>
+            {workingVersion
+              ? `Versión nº${workingVersion.numero_version} · ${workingVersion.estado || '—'}`
+              : 'Sin versión de programación activa.'}
           </div>
         )}
 
@@ -2877,25 +3152,23 @@ export default function ModuloProgramacionObra({
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 8,
-              padding: '6px 8px',
+              padding: '0.5rem 0.65rem',
               borderRadius: 6,
               background: '#FEF3C7',
               border: '1px solid #FCD34D',
-              fontSize: 11,
+              fontSize: 'var(--cc-sm)',
               color: '#92400E',
               lineHeight: 1.35,
             }}
           >
-            <span>
-              ⚠ Desviación vs baseline: {desviacionContrato.label_fechas || '—'}
-            </span>
+            <span>⚠ Desviación vs baseline: {desviacionContrato.label_fechas || '—'}</span>
             <button
               type="button"
               onClick={handleVerDetalleDesviacion}
               style={{
                 flexShrink: 0,
-                padding: '2px 8px',
-                fontSize: 10,
+                padding: '0.15rem 0.5rem',
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 600,
                 borderRadius: 4,
                 border: '1px solid #D97706',
@@ -2908,74 +3181,73 @@ export default function ModuloProgramacionObra({
             </button>
           </div>
         )}
-
-        {versionBaselineId && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button
-              type="button"
-              disabled={panelBusy}
-              onClick={() => setShowComparacionGlobal(true)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 6,
-                border: `1px solid ${t.primary}`,
-                background: `${t.primary}10`,
-                color: t.primary,
-                cursor: panelBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Ver comparación global
-            </button>
-            <button
-              type="button"
-              disabled={panelBusy}
-              onClick={() => setShowCurvaS(true)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 6,
-                border: `1px solid ${t.border}`,
-                background: t.bg,
-                color: t.text,
-                cursor: panelBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Curva S
-            </button>
           </div>
+        </details>
+
+        {(esEnValidacion || esSellada) && (
+          <details
+            open={!selPk}
+            style={{ padding: '0.5rem 0.65rem', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
+          >
+            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
+              Flujo de aprobación
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              {loadVal && <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando…</div>}
+              {!loadVal && validaciones.length === 0 && (
+                <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+                  Sin filas de validación (versión no enviada o datos no disponibles).
+                </div>
+              )}
+              <ul style={{ margin: 0, paddingLeft: '1.125rem', color: t.text, lineHeight: 1.7, fontSize: 'var(--cc-sm)' }}>
+                {validaciones.map((val) => (
+                  <li key={val.id || `${val.nivel}-${val.orden}`}>
+                    <strong>Nivel {val.nivel}</strong> — {badgeEstado(val.estado)}
+                    {val.validado_en && (
+                      <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                        {' '}
+                        · {fmtDateIso(val.validado_en)}
+                      </span>
+                    )}
+                    {puedeValidar && esEnValidacion && val.estado === 'pendiente' && (
+                      <span style={{ marginLeft: 8 }}>
+                        <button
+                          type="button"
+                          style={{ ...btnStyle(true), padding: '2px 8px', fontSize: 'var(--cc-caption)' }}
+                          disabled={panelBusy}
+                          onClick={() => setValidarModal({ nivel: val.nivel, aprobar: true, obs: '' })}
+                        >
+                          Aprobar
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...btnStyle(false), padding: '2px 8px', fontSize: 'var(--cc-caption)', marginLeft: 4 }}
+                          disabled={panelBusy}
+                          onClick={() => setValidarModal({ nivel: val.nivel, aprobar: false, obs: '' })}
+                        >
+                          Rechazar
+                        </button>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {puedeValidar && esEnValidacion && (
+                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 8 }}>
+                  Solo el nivel pendiente correspondiente a su rol puede validarse; el servidor rechaza si no corresponde.
+                </div>
+              )}
+            </div>
+          </details>
         )}
 
-        {esBorradorEditable && puedeEditar && workingVersionId && (
-          <button
-            type="button"
-            disabled={panelBusy}
-            onClick={() => setShowAutoSchedule(true)}
-            style={{
-              width: '100%',
-              padding: '8px 10px',
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 6,
-              border: `1px solid #d97706`,
-              background: '#fffbeb',
-              color: '#92400e',
-              cursor: panelBusy ? 'not-allowed' : 'pointer',
-            }}
-          >
-            Programación automática ⚡
-          </button>
-        )}
+        <ProgPanelDivider t={t} />
 
         {workingVersionId && (
           <details
-            style={{ padding: '6px 8px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
+            style={{ padding: '0.5rem 0.65rem', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
           >
-            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>
+            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
               Dependencias globales (CPM)
             </summary>
             <div style={{ marginTop: 8 }}>
@@ -2992,61 +3264,10 @@ export default function ModuloProgramacionObra({
           </details>
         )}
 
-        {(esEnValidacion || esSellada) && (
-          <details
-            open={!selPk}
-            style={{ padding: '6px 8px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
-          >
-            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>Flujo de aprobación</summary>
-            <div style={{ marginTop: 8 }}>
-            {loadVal && <div style={{ color: t.textMuted }}>Cargando…</div>}
-            {!loadVal && validaciones.length === 0 && (
-              <div style={{ color: t.textMuted, fontSize: 11 }}>Sin filas de validación (versión no enviada o datos no disponibles).</div>
-            )}
-            <ul style={{ margin: 0, paddingLeft: 18, color: t.text, lineHeight: 1.7 }}>
-              {validaciones.map((val) => (
-                <li key={val.id || `${val.nivel}-${val.orden}`}>
-                  <strong>Nivel {val.nivel}</strong> — {badgeEstado(val.estado)}
-                  {val.validado_en && (
-                    <span style={{ color: t.textMuted, fontSize: 11 }}>
-                      {' '}
-                      · {fmtDateIso(val.validado_en)}
-                    </span>
-                  )}
-                  {puedeValidar && esEnValidacion && val.estado === 'pendiente' && (
-                    <span style={{ marginLeft: 8 }}>
-                      <button
-                        type="button"
-                        style={{ ...btnStyle(true), padding: '2px 8px', fontSize: 11 }}
-                        disabled={panelBusy}
-                        onClick={() => setValidarModal({ nivel: val.nivel, aprobar: true, obs: '' })}
-                      >
-                        Aprobar
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...btnStyle(false), padding: '2px 8px', fontSize: 11, marginLeft: 4 }}
-                        disabled={panelBusy}
-                        onClick={() => setValidarModal({ nivel: val.nivel, aprobar: false, obs: '' })}
-                      >
-                        Rechazar
-                      </button>
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {puedeValidar && esEnValidacion && (
-              <div style={{ fontSize: 11, color: t.textMuted, marginTop: 8 }}>
-                Solo el nivel pendiente correspondiente a su rol puede validarse; el servidor rechaza si no corresponde.
-              </div>
-            )}
-            </div>
-          </details>
-        )}
+        <ProgPanelDivider t={t} />
 
         {selPk ? (
-          <div style={{ fontSize: 11, color: t.text, lineHeight: 1.45 }}>
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
             <div style={{ fontWeight: 600 }}>
               PK {selPk}
               {rowSel && (
@@ -3084,7 +3305,7 @@ export default function ModuloProgramacionObra({
             )}
             {sinAgCountSel > 0 && (
               <div
-                style={{ marginTop: 4, fontSize: 10, color: '#b45309', lineHeight: 1.3 }}
+                style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: '#b45309', lineHeight: 1.3 }}
                 title={`${sinAgCountSel} ítem${sinAgCountSel === 1 ? '' : 's'} sin agrupador WBS — ve al Listado de Precios para asignarlos`}
               >
                 ⚠ {sinAgCountSel} ítem{sinAgCountSel === 1 ? '' : 's'} sin agrupador
@@ -3092,10 +3313,11 @@ export default function ModuloProgramacionObra({
             )}
           </div>
         ) : (
-          <div style={{ color: t.textMuted, fontSize: 11 }}>Haz clic en un polígono del plano.</div>
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Haz clic en un polígono del plano.</div>
         )}
 
         <ProgPkListado rows={pkRowsProgramables} selPk={selPk} t={t} onSelectPk={selectPkAndZoom} />
+        </div>
       </div>
     </div>
   )

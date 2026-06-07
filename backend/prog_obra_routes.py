@@ -19,6 +19,7 @@ from prog_obra_service import (
     assert_version_borrador,
     create_version,
     clear_version_programacion,
+    clear_pk_programacion,
     fetch_borrador_activo,
     fetch_estructura_programacion_pk,
     fetch_mapa_rows_for_version,
@@ -33,6 +34,7 @@ from prog_obra_service import (
     make_prog_calendar_loader,
     process_validation_decision,
     propagar_fechas_agrupador_a_hijos,
+    limpiar_fechas_agrupador_hijos,
     recalc_fin_actividad,
     seed_festivos_colombia_globales,
     submit_to_validation,
@@ -64,12 +66,14 @@ from prog_obra_suspension import (
     apply_suspension_to_version,
     validate_suspension_metadata,
 )
-from prog_obra_curva_s import build_curva_s, build_curva_s_pdf_html
+from prog_obra_curva_s import build_curva_s, build_curva_s_escenarios, build_curva_s_pdf_html
 from prog_obra_auto_schedule import (
     check_auto_schedule_prereqs,
     preview_auto_schedule,
     apply_auto_schedule,
 )
+from prog_obra_costos_presupuesto import compute_costos_por_version
+from prog_obra_export_project import build_project_xml, export_filename
 from prog_obra_presupuesto_bridge import (
     build_delta_presupuesto,
     presupuesto_aprobacion_estado,
@@ -428,6 +432,32 @@ def prog_clear_version_programacion(
     return result
 
 
+@router.delete("/{contrato_id}/versiones/{version_id}/pk/{pk_id}/programacion")
+def prog_clear_pk_programacion(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Elimina todas las actividades de un PK en borrador y recalcula prog_pk_estado."""
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        result = clear_pk_programacion(supabase, version_id, contrato_id, pk_id)
+    except HTTPException:
+        raise
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_PK_PROGRAMACION_ELIMINADA",
+        "prog_version",
+        version_id,
+        {"contrato_id": contrato_id, "pk_id": pk_id.strip(), "eliminados": result.get("eliminados")},
+    )
+    return result
+
+
 @router.get("/{contrato_id}/versiones/{version_id}/validaciones")
 def prog_list_validaciones(contrato_id: int, version_id: str, current_user=Depends(get_current_user)):
     require_permiso_programacion_obra(current_user, "ver")
@@ -656,6 +686,7 @@ def prog_actividades_batch(
     uid = _uid(current_user)
     cache = _cache(contrato_id)
     t0 = time.perf_counter()
+    pk_id = body.pk_id.strip()
 
     # Calcular fecha_fin en Python (1 carga de calendario, luego todo en memoria)
     actividades = []
@@ -688,7 +719,6 @@ def prog_actividades_batch(
             row["codigo_wbs"] = it.codigo_wbs.strip()[:50]
         actividades.append(row)
 
-    pk_id = body.pk_id.strip()
     try:
         res = supabase.rpc(
             "prog_batch_upsert_actividades",
@@ -706,36 +736,51 @@ def prog_actividades_batch(
         raise HTTPException(status_code=500, detail=f"Error en batch RPC: {_trace[-600:]}")
 
     propagaciones = 0
+    limpiezas_ag = 0
     if has_agrupadores:
         _, ppto_items_pk = _ppto_items_por_pk(supabase, contrato_id, pk_id)
         seen_ag = set()
+        seen_clear = set()
         for it in body.actividades:
             fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
             du_i = int(it.duracion_dias_habiles) if it.duracion_dias_habiles and int(it.duracion_dias_habiles) > 0 else None
-            if not (it.agrupador_id and fi_d and du_i):
+            if not it.agrupador_id:
                 continue
             ag_key = (it.capitulo.strip(), int(it.agrupador_id))
-            if ag_key in seen_ag:
-                continue
-            seen_ag.add(ag_key)
-            fin_d = add_dias_habiles(contrato_id, fi_d, du_i, cache)
-            propagar_fechas_agrupador_a_hijos(
-                supabase,
-                version_id,
-                contrato_id,
-                pk_id,
-                it.capitulo.strip(),
-                int(it.agrupador_id),
-                (it.codigo_wbs or it.item or "").strip(),
-                fi_d,
-                du_i,
-                fin_d,
-                uid,
-                cache,
-                ppto_items=ppto_items_pk,
-            )
-            propagaciones += 1
-        # Tras heredar fechas a ítems hijo, recalcular prog_pk_estado (color del polígono)
+            if fi_d and du_i:
+                if ag_key in seen_ag:
+                    continue
+                seen_ag.add(ag_key)
+                fin_d = add_dias_habiles(contrato_id, fi_d, du_i, cache)
+                propagar_fechas_agrupador_a_hijos(
+                    supabase,
+                    version_id,
+                    contrato_id,
+                    pk_id,
+                    it.capitulo.strip(),
+                    int(it.agrupador_id),
+                    (it.codigo_wbs or it.item or "").strip(),
+                    fi_d,
+                    du_i,
+                    fin_d,
+                    uid,
+                    cache,
+                    ppto_items=ppto_items_pk,
+                )
+                propagaciones += 1
+            elif ag_key not in seen_clear:
+                seen_clear.add(ag_key)
+                limpiar_fechas_agrupador_hijos(
+                    supabase,
+                    version_id,
+                    contrato_id,
+                    pk_id,
+                    it.capitulo.strip(),
+                    int(it.agrupador_id),
+                    ppto_items=ppto_items_pk,
+                )
+                limpiezas_ag += 1
+        # Tras heredar o limpiar fechas en ítems hijo, recalcular prog_pk_estado (color del polígono)
         upsert_prog_pk_estado(supabase, version_id, contrato_id, pk_id)
 
     # Siempre aplicar lógica Python (WBS-aware) por si la RPC en BD no está actualizada
@@ -844,6 +889,15 @@ def prog_upsert_actividad(contrato_id: int, body: ActividadUpsertBody, current_u
             fin,
             _uid(current_user),
             cache,
+        )
+    elif body.agrupador_id and not (body.fecha_inicio and body.duracion_dias_habiles):
+        limpiar_fechas_agrupador_hijos(
+            supabase,
+            body.version_id,
+            contrato_id,
+            body.pk_id.strip(),
+            body.capitulo.strip(),
+            int(body.agrupador_id),
         )
     elif body.fecha_inicio and body.duracion_dias_habiles:
         sync_capitulo_desde_items(
@@ -1245,19 +1299,66 @@ def prog_suspension_aplicar_version(
     return result
 
 
+@router.get("/{contrato_id}/costos-por-version-presupuesto")
+def prog_costos_por_version_presupuesto(
+    contrato_id: int,
+    version_prog_id: str = Query(...),
+    version_ppto_id: str = Query(...),
+    pk_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return compute_costos_por_version(
+        supabase,
+        contrato_id,
+        version_prog_id.strip(),
+        version_ppto_id.strip(),
+        pk_id=(pk_id or "").strip() or None,
+        solo_programados=False,
+    )
+
+
 @router.get("/{contrato_id}/curva-s")
 def prog_curva_s(
     contrato_id: int,
     baseline_id: Optional[str] = Query(None),
     target_id: Optional[str] = Query(None),
+    version_ppto_id: Optional[str] = Query(None),
+    pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     try:
-        return build_curva_s(supabase, contrato_id, baseline_id=baseline_id, target_id=target_id)
+        return build_curva_s(
+            supabase,
+            contrato_id,
+            baseline_id=baseline_id,
+            target_id=target_id,
+            version_ppto_id=version_ppto_id,
+            pk_ids=pk_ids,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{contrato_id}/curva-s/escenarios")
+def prog_curva_s_escenarios(
+    contrato_id: int,
+    version_prog_id: str = Query(...),
+    version_ppto_ids: str = Query(..., description="UUIDs separados por coma (máx. 5)"),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    ids = [x.strip() for x in (version_ppto_ids or "").split(",") if x.strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="version_ppto_ids requerido")
+    try:
+        return build_curva_s_escenarios(supabase, contrato_id, version_prog_id.strip(), ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{contrato_id}/curva-s/pdf")
@@ -1265,12 +1366,21 @@ def prog_curva_s_pdf(
     contrato_id: int,
     baseline_id: Optional[str] = Query(None),
     target_id: Optional[str] = Query(None),
+    version_ppto_id: Optional[str] = Query(None),
+    pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     try:
-        data = build_curva_s(supabase, contrato_id, baseline_id=baseline_id, target_id=target_id)
+        data = build_curva_s(
+            supabase,
+            contrato_id,
+            baseline_id=baseline_id,
+            target_id=target_id,
+            version_ppto_id=version_ppto_id,
+            pk_ids=pk_ids,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     crows = supabase.table("contratos").select("id,numero,objeto,contratista,interventoria").eq("id", contrato_id).limit(1).execute().data or [{}]
@@ -1284,6 +1394,51 @@ def prog_curva_s_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="curva-s-contrato-{contrato_id}.pdf"'},
+    )
+
+
+@router.get("/{contrato_id}/exportar-project-xml")
+def prog_exportar_project_xml(
+    contrato_id: int,
+    version_id: str = Query(...),
+    version_ppto_id: Optional[str] = Query(None),
+    pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    vid = (version_id or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="version_id requerido")
+    crows = (
+        supabase.table("contratos")
+        .select("id,numero,objeto")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )
+    c = crows[0]
+    pname = f"Contrato {c.get('numero') or contrato_id}"
+    if c.get("objeto"):
+        pname = f"{pname} — {str(c['objeto'])[:80]}"
+    try:
+        xml_bytes = build_project_xml(
+            supabase,
+            contrato_id,
+            vid,
+            version_ppto_id=(version_ppto_id or "").strip() or None,
+            project_name=pname,
+            pk_ids=pk_ids,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    fname = export_filename(contrato_id)
+    return Response(
+        content=xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 

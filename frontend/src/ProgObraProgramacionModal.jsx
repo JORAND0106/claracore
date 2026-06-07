@@ -1494,10 +1494,13 @@ export default function ProgObraProgramacionModal({
   const [noHabilesSet, setNoHabilesSet] = useState(new Set())
   const [finOverrides, setFinOverrides] = useState({})
   const [localSaving, setLocalSaving] = useState(false)
+  const [resettingPk, setResettingPk] = useState(false)
   const [rowDrafts, setRowDrafts] = useState({})
   const [saveGeneration, setSaveGeneration] = useState(0)
   const [ganttActOverlay, setGanttActOverlay] = useState(null)
   const rowDraftRef = useRef({})
+  const preSaveDraftSnapshotRef = useRef(null)
+  const saveFlushInProgressRef = useRef(false)
   const leftScrollRef = useRef(null)
   const rightBodyScrollRef = useRef(null)
   const scrollSyncLock = useRef(false)
@@ -1606,18 +1609,28 @@ export default function ProgObraProgramacionModal({
 
   const registerRowDraft = useCallback((rk, api) => {
     rowDraftRef.current[rk] = api
+    if (saveFlushInProgressRef.current) return
     const v = api.getValues()
     setRowDrafts((prev) => ({ ...prev, [rk]: v }))
   }, [])
 
   const unregisterRowDraft = useCallback((rk) => {
     const api = rowDraftRef.current[rk]
-    if (api) {
+    if (api && !saveFlushInProgressRef.current) {
       const v = api.getValues()
       setRowDrafts((prev) => ({ ...prev, [rk]: v }))
     }
     delete rowDraftRef.current[rk]
   }, [])
+
+  const snapshotDraftsForSave = useCallback(() => {
+    const snap = { ...rowDrafts }
+    for (const [rk, api] of Object.entries(rowDraftRef.current)) {
+      if (api?.getValues) snap[rk] = api.getValues()
+    }
+    preSaveDraftSnapshotRef.current = snap
+    return snap
+  }, [rowDrafts])
 
   const versionTitle = workingVersion
     ? `Versión nº${workingVersion.numero_version} ${workingVersion.tipo || ''} ${workingVersion.estado || ''}`.trim()
@@ -1940,8 +1953,31 @@ export default function ProgObraProgramacionModal({
   ])
 
   const collectDraftItems = useCallback(() => {
+    const draftSource = preSaveDraftSnapshotRef.current || rowDrafts
     const itemsAGuardar = []
     let skipped = 0
+
+    const resolveRowDraft = (rk, live, act) => {
+      const hasSnap = Object.prototype.hasOwnProperty.call(draftSource, rk)
+      const stored = hasSnap ? draftSource[rk] : null
+      const fechaRaw = hasSnap
+        ? (stored?.fecha_inicio ?? '')
+        : live != null
+          ? (live.fecha_inicio ?? '')
+          : (act?.fecha_inicio ?? '')
+      const durRaw = hasSnap
+        ? stored?.duracion
+        : live?.duracion ?? act?.duracion_dias_habiles
+      return {
+        fecha: fmtDateIso(fechaRaw),
+        dur: parseInt(String(durRaw ?? ''), 10),
+      }
+    }
+
+    const actHadSchedule = (act) =>
+      Boolean(fmtDateIso(act?.fecha_inicio)) ||
+      (act?.duracion_dias_habiles != null && parseInt(String(act.duracion_dias_habiles), 10) > 0)
+
     for (const cap of capitulosOrdenados) {
       const eCap = estructuraPorCapitulo?.[cap]
       const agrupadores = eCap?.agrupadores || []
@@ -1972,20 +2008,19 @@ export default function ProgObraProgramacionModal({
         }))
       for (const row of iter) {
         const live = rowDraftRef.current[row.rk]?.getValues?.()
-        const stored = rowDrafts[row.rk]
         const act = actMap[actividadKey(cap, row.actItem, 1)]
-        const liveFecha = live != null ? (live.fecha_inicio ?? '') : null
-        const fecha = fmtDateIso(liveFecha !== null ? liveFecha : (stored?.fecha_inicio ?? act?.fecha_inicio))
-        const durRaw = live?.duracion ?? stored?.duracion ?? act?.duracion_dias_habiles
-        const dur = parseInt(String(durRaw), 10)
-        const hadFecha = Boolean(fmtDateIso(act?.fecha_inicio))
-        if (!fecha || !(dur > 0)) {
-          if (hadFecha) {
+        const { fecha, dur } = resolveRowDraft(row.rk, live, act)
+        const hadSchedule = actHadSchedule(act)
+        const scheduleEmpty = !fecha || !(dur > 0)
+
+        if (scheduleEmpty) {
+          if (hadSchedule) {
             itemsAGuardar.push({
               itemDef: row.itemDef,
               rk: row.rk,
               fecha_inicio: null,
               duracion: null,
+              fecha_fin_calculada: null,
               clearSchedule: true,
             })
           } else {
@@ -1993,7 +2028,12 @@ export default function ProgObraProgramacionModal({
           }
           continue
         }
-        itemsAGuardar.push({ itemDef: row.itemDef, rk: row.rk, fecha_inicio: fecha, duracion: dur })
+        itemsAGuardar.push({
+          itemDef: row.itemDef,
+          rk: row.rk,
+          fecha_inicio: fecha,
+          duracion: dur,
+        })
       }
     }
     return { itemsAGuardar, skipped }
@@ -2025,6 +2065,7 @@ export default function ProgObraProgramacionModal({
         item: row.itemDef.item,
         fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
         duracion: row.clearSchedule ? null : row.duracion,
+        fecha_fin_calculada: row.clearSchedule ? null : undefined,
         override_manual: true,
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
@@ -2055,6 +2096,56 @@ export default function ProgObraProgramacionModal({
     return { saved, errors, skipped }
   }, [editable, collectDraftItems, onGuardarBatch, onGuardarItem, activePk])
 
+  const handleResetearPkProgramacion = async () => {
+    if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
+    if (panelBusy || localSaving || resettingPk) return
+    if (
+      !window.confirm(
+        `¿Resetear toda la programación del PK ${activePk}? Se borrarán todas las fechas y actividades guardadas de este PK.`,
+      )
+    ) {
+      return
+    }
+    setResettingPk(true)
+    try {
+      const res = await fetch(
+        `${API}/prog-obra/${cid}/versiones/${workingVersion.id}/pk/${encodeURIComponent(activePk)}/programacion`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      )
+      if (!res.ok) {
+        let detail = `Error ${res.status}`
+        try {
+          const j = await res.json()
+          detail = j?.detail || detail
+        } catch {
+          /* ignore */
+        }
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+      }
+      setRowDrafts({})
+      preSaveDraftSnapshotRef.current = null
+      setFinOverrides({})
+      setGanttActOverlay(null)
+      setCpmDirty(true)
+      setSaveGeneration((g) => g + 1)
+      showToast?.(`Programación del PK ${activePk} reseteada.`, 'ok')
+      if (onReloadActividades) {
+        await onReloadActividades(activePk)
+      }
+      if (onSaveSuccess) {
+        await onSaveSuccess(activePk)
+      }
+    } catch (e) {
+      console.error('[ProgObra] Resetear programación PK:', e)
+      showToast?.(e?.message || 'Error al resetear programación del PK', 'err')
+    } finally {
+      setResettingPk(false)
+    }
+  }
+
   const handleGuardarClick = async () => {
     if (localSaving) return
     if (panelBusy) {
@@ -2067,7 +2158,9 @@ export default function ProgObraProgramacionModal({
     }
     setLocalSaving(true)
     const prevCollapsed = collapsedCaps
+    saveFlushInProgressRef.current = true
     try {
+      snapshotDraftsForSave()
       flushSync(() => {
         setCollapsedCaps((s) => {
           const next = { ...s }
@@ -2107,6 +2200,8 @@ export default function ProgObraProgramacionModal({
       console.error('[ProgObra] Guardar cambios:', e)
       showToast?.(e?.message || 'Error al guardar cambios', 'err')
     } finally {
+      preSaveDraftSnapshotRef.current = null
+      saveFlushInProgressRef.current = false
       setCollapsedCaps(prevCollapsed)
       setLocalSaving(false)
     }
@@ -2651,30 +2746,52 @@ export default function ProgObraProgramacionModal({
         <div
           style={{
             display: 'flex',
-            justifyContent: 'flex-start',
+            justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 12,
             padding: '12px 16px',
             borderTop: `1px solid ${t.border}`,
             flexShrink: 0,
           }}
         >
-          <button
-            type="button"
-            disabled={panelBusy || localSaving}
-            onClick={() => void handleGuardarClick()}
-            style={{
-              padding: '8px 16px',
-              fontSize: 'var(--cc-sm)',
-              fontWeight: 600,
-              borderRadius: 8,
-              border: `1px solid ${t.border}`,
-              background: t.bg,
-              color: t.text,
-              cursor: panelBusy ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {localSaving ? 'Guardando…' : 'Guardar cambios'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              disabled={panelBusy || localSaving || resettingPk}
+              onClick={() => void handleGuardarClick()}
+              style={{
+                padding: '8px 16px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: t.bg,
+                color: t.text,
+                cursor: panelBusy || resettingPk ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {localSaving ? 'Guardando…' : 'Guardar cambios'}
+            </button>
+            {editable && !historicalReadOnly && (
+              <button
+                type="button"
+                disabled={panelBusy || localSaving || resettingPk}
+                onClick={() => void handleResetearPkProgramacion()}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 600,
+                  borderRadius: 8,
+                  border: '1px solid #fca5a5',
+                  background: '#fef2f2',
+                  color: '#b91c1c',
+                  cursor: panelBusy || localSaving || resettingPk ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {resettingPk ? 'Reseteando…' : 'Resetear programación de este PK'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>,

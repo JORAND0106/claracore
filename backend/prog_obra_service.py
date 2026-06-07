@@ -3,6 +3,7 @@ Logica de negocio Programacion de obra (Fase 1).
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,6 +14,7 @@ from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
 from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles, count_dias_habiles_entre
 
 _FUNC_LOG = "Programacion obra"
+_logger = logging.getLogger(__name__)
 
 
 class BusinessRuleError(Exception):
@@ -413,6 +415,59 @@ def propagar_fechas_agrupador_a_hijos(
             ]
         ).execute()
 
+    return len(hijo_ppto)
+
+
+def limpiar_fechas_agrupador_hijos(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    capitulo: str,
+    agrupador_id: int,
+    ppto_items: Optional[List[Tuple[str, str, Decimal, str, Decimal]]] = None,
+) -> int:
+    """Quita fechas heredadas del agrupador en ítems hijo (override_manual=false)."""
+    cap = capitulo.strip()
+    pk = pk_id.strip()
+    ag_items_list = [
+        (r.get("item_numero") or "").strip()
+        for r in (
+            sb.table("listado_precios")
+            .select("item_numero")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", cap)
+            .eq("agrupador_id", agrupador_id)
+            .execute()
+            .data
+            or []
+        )
+        if (r.get("item_numero") or "").strip()
+    ]
+    if not ag_items_list:
+        return 0
+    ag_items_set = set(ag_items_list)
+    if ppto_items is None:
+        _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    hijo_ppto = [
+        (p_cap, it, cant, und, vlr)
+        for p_cap, it, cant, und, vlr in ppto_items
+        if p_cap == cap and it in ag_items_set
+    ]
+    if not hijo_ppto:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    sb.table("prog_actividades").update(
+        {
+            "fecha_inicio": None,
+            "duracion_dias_habiles": None,
+            "fecha_fin_calculada": None,
+            "heredado_de_capitulo": False,
+            "actualizado_en": now,
+        }
+    ).eq("version_id", version_id).eq("pk_id", pk).eq("capitulo", cap).eq("segmento", 1).eq(
+        "override_manual", False
+    ).in_("item", ag_items_list).execute()
     return len(hijo_ppto)
 
 
@@ -1189,6 +1244,28 @@ def clear_version_programacion(sb, version_id: str, contrato_id: int) -> dict:
     }
 
 
+def clear_pk_programacion(sb, version_id: str, contrato_id: int, pk_id: str) -> dict:
+    """Elimina toda la programación de un PK en una versión borrador y recalcula prog_pk_estado."""
+    v = assert_version_borrador(sb, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no encontrada")
+    pk = (pk_id or "").strip()
+    if not pk:
+        raise HTTPException(status_code=400, detail="pk_id requerido")
+    r = (
+        sb.table("prog_actividades")
+        .select("id", count="exact")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .execute()
+    )
+    eliminados = int(r.count or 0)
+    sb.table("prog_actividades").delete().eq("version_id", version_id).eq("pk_id", pk).execute()
+    upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    mark_cpm_dirty(sb, version_id)
+    return {"ok": True, "version_id": version_id, "pk_id": pk, "eliminados": eliminados}
+
+
 def submit_to_validation(sb, version_id: str, contrato_id: int) -> List[dict]:
     assert_version_editable(sb, version_id)
     from prog_obra_presupuesto_bridge import presupuesto_aprobacion_estado
@@ -1295,6 +1372,45 @@ def seal_version(sb, version_id: str, contrato_id: int, usuario_id: int) -> None
     sb.table("contratos").update(contrato_patch).eq("id", contrato_id).execute()
 
     snapshot_presupuesto_version(sb, str(version_id), contrato_id)
+
+    from presupuesto_helpers import presupuesto_oficial_version_id
+    from prog_obra_costos_presupuesto import assert_ppto_version_contrato, costo_total_programado_version
+
+    ppto_sellado_id = presupuesto_oficial_version_id(sb, contrato_id)
+    if not ppto_sellado_id:
+        from prog_obra_costos_presupuesto import fetch_ppto_borrador_version_id
+
+        ppto_sellado_id = fetch_ppto_borrador_version_id(sb, contrato_id)
+    ppto_meta: dict = {}
+    costo_sellado = 0.0
+    if ppto_sellado_id:
+        try:
+            prow = assert_ppto_version_contrato(sb, contrato_id, str(ppto_sellado_id))
+            ppto_meta = {
+                "version_presupuesto_sellado_id": str(ppto_sellado_id),
+                "version_presupuesto_sellado_numero": int(prow.get("numero_version") or 0),
+            }
+            costo_sellado = costo_total_programado_version(
+                sb, contrato_id, str(version_id), str(ppto_sellado_id)
+            )
+            ppto_meta["costo_total_al_sellar"] = round(costo_sellado, 2)
+        except Exception:
+            pass
+    if ppto_meta:
+        meta_rows = (
+            sb.table("prog_versiones")
+            .select("metadata")
+            .eq("id", version_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        existing = meta_rows[0].get("metadata") if meta_rows else {}
+        merged = {**(existing if isinstance(existing, dict) else {}), **ppto_meta}
+        sb.table("prog_versiones").update({"metadata": merged, "actualizado_en": now}).eq(
+            "id", version_id
+        ).execute()
 
 
 def process_validation_decision(
