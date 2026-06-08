@@ -9,6 +9,12 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from prog_obra_compare import fetch_compare_nodes
+from prog_obra_costos_presupuesto import (
+    apply_ppto_cost_overlay,
+    build_cost_overlay_maps,
+    fetch_ppto_borrador_version_id,
+)
+from prog_obra_pk_filter import filter_nodes_by_pk, parse_pk_ids_param
 from prog_obra_service import fetch_baseline_version_id, fetch_vigente_meta
 
 
@@ -56,8 +62,28 @@ def _linear_monthly_distribution(fi: date, ff: date, costo: float) -> Dict[str, 
     return dict(out)
 
 
-def _aggregate_version_monthly(sb, version_id: str, contrato_id: int) -> Tuple[Dict[str, float], float]:
+def _nodes_with_ppto_costs(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    version_ppto_id: Optional[str],
+) -> Dict[str, dict]:
     nodes = fetch_compare_nodes(sb, version_id, contrato_id)
+    if not version_ppto_id:
+        return nodes
+    ag_costs, item_costs = build_cost_overlay_maps(sb, contrato_id, str(version_ppto_id))
+    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
+
+
+def _aggregate_version_monthly(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[Set[str]] = None,
+) -> Tuple[Dict[str, float], float]:
+    nodes = _nodes_with_ppto_costs(sb, version_id, contrato_id, version_ppto_id)
+    nodes = filter_nodes_by_pk(nodes, pk_ids)
     monthly: Dict[str, float] = defaultdict(float)
     total = 0.0
     for n in nodes.values():
@@ -133,8 +159,15 @@ def _fetch_ejecutado_mensual(sb, contrato_id: int) -> Tuple[Dict[str, float], fl
     return dict(monthly), total
 
 
-def _detalle_pk_mensual(sb, version_id: str, contrato_id: int) -> List[dict]:
-    nodes = fetch_compare_nodes(sb, version_id, contrato_id)
+def _detalle_pk_mensual(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[Set[str]] = None,
+) -> List[dict]:
+    nodes = _nodes_with_ppto_costs(sb, version_id, contrato_id, version_ppto_id)
+    nodes = filter_nodes_by_pk(nodes, pk_ids)
     out: List[dict] = []
     for n in nodes.values():
         costo = float(n.get("costo_programado") or 0)
@@ -156,26 +189,51 @@ def _detalle_pk_mensual(sb, version_id: str, contrato_id: int) -> List[dict]:
     return out
 
 
+def _resolve_version_ppto_id(sb, contrato_id: int, version_ppto_id: Optional[str]) -> Optional[str]:
+    vid = (version_ppto_id or "").strip()
+    if vid:
+        return vid
+    return fetch_ppto_borrador_version_id(sb, contrato_id)
+
+
 def build_curva_s(
     sb,
     contrato_id: int,
     baseline_id: Optional[str] = None,
     target_id: Optional[str] = None,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[str] = None,
 ) -> dict:
-    bid = baseline_id or fetch_baseline_version_id(sb, contrato_id)
-    tid = target_id
+    pk_set = parse_pk_ids_param(pk_ids)
+    bid = (baseline_id or fetch_baseline_version_id(sb, contrato_id) or "").strip() or None
+    tid = (target_id or "").strip()
     if not tid:
         vid, _ = fetch_vigente_meta(sb, contrato_id)
-        tid = vid
-    if not bid:
-        raise ValueError("No hay baseline sellada para la curva S")
+        tid = str(vid) if vid else ""
+    tid = tid.strip() or None
+    if not tid and not bid:
+        raise ValueError("No hay versión de programación para la curva S")
 
-    base_m, base_total = _aggregate_version_monthly(sb, str(bid), contrato_id)
-    tgt_m, tgt_total = ({}, 0.0)
-    if tid and str(tid) != str(bid):
-        tgt_m, tgt_total = _aggregate_version_monthly(sb, str(tid), contrato_id)
+    ppto_id = _resolve_version_ppto_id(sb, contrato_id, version_ppto_id)
+
+    if bid:
+        base_m, base_total = _aggregate_version_monthly(
+            sb, str(bid), contrato_id, ppto_id, pk_ids=pk_set
+        )
     else:
+        base_m, base_total = {}, 0.0
+
+    if tid:
+        tgt_m, tgt_total = _aggregate_version_monthly(
+            sb, str(tid), contrato_id, ppto_id, pk_ids=pk_set
+        )
+        if bid and str(tid) == str(bid):
+            tgt_m, tgt_total = base_m, base_total
+    elif bid:
         tgt_m, tgt_total = base_m, base_total
+        tid = bid
+    else:
+        tgt_m, tgt_total = {}, 0.0
 
     ej_m, ej_total = _fetch_ejecutado_mensual(sb, contrato_id)
 
@@ -214,12 +272,19 @@ def build_curva_s(
     desv = ej_a_fecha - prog_a_fecha
     desv_pct = (desv / prog_a_fecha * 100) if prog_a_fecha > 0 else 0.0
 
-    detalle_baseline = _detalle_pk_mensual(sb, str(bid), contrato_id)
-    detalle_vigente = _detalle_pk_mensual(sb, str(tid), contrato_id) if tid and str(tid) != str(bid) else detalle_baseline
+    detalle_baseline = (
+        _detalle_pk_mensual(sb, str(bid), contrato_id, ppto_id, pk_ids=pk_set) if bid else []
+    )
+    detalle_vigente = (
+        _detalle_pk_mensual(sb, str(tid), contrato_id, ppto_id, pk_ids=pk_set)
+        if tid and (not bid or str(tid) != str(bid))
+        else detalle_baseline
+    )
 
     return {
-        "baseline_id": str(bid),
+        "baseline_id": str(bid) if bid else None,
         "target_id": str(tid) if tid else None,
+        "version_ppto_id": ppto_id,
         "indicadores": {
             "presupuesto_total": round(presupuesto_total, 2),
             "programado_a_fecha": round(prog_a_fecha, 2),
@@ -234,6 +299,64 @@ def build_curva_s(
             "baseline": detalle_baseline,
             "vigente": detalle_vigente,
         },
+    }
+
+
+MAX_ESCENARIOS_CURVA_S = 5
+
+
+def build_curva_s_escenarios(
+    sb,
+    contrato_id: int,
+    version_prog_id: str,
+    version_ppto_ids: List[str],
+) -> dict:
+    """Comparación de flujo de inversión con el mismo cronograma y distintos presupuestos."""
+    if not version_ppto_ids:
+        raise ValueError("version_ppto_ids requerido")
+    if len(version_ppto_ids) > MAX_ESCENARIOS_CURVA_S:
+        raise ValueError(f"Máximo {MAX_ESCENARIOS_CURVA_S} versiones de presupuesto por comparación")
+
+    from prog_obra_costos_presupuesto import assert_ppto_version_contrato
+
+    series: List[dict] = []
+    all_months: set = set()
+    for ppto_id in version_ppto_ids:
+        vrow = assert_ppto_version_contrato(sb, contrato_id, str(ppto_id))
+        monthly, total = _aggregate_version_monthly(
+            sb, str(version_prog_id), contrato_id, str(ppto_id)
+        )
+        all_months.update(monthly.keys())
+        series.append(
+            {
+                "version_ppto_id": str(ppto_id),
+                "numero_version": int(vrow.get("numero_version") or 0),
+                "etiqueta": (vrow.get("etiqueta") or "").strip(),
+                "es_vigente_aprobada": bool(vrow.get("es_vigente_aprobada")),
+                "es_vigente": bool(vrow.get("es_vigente")),
+                "costo_total": round(total, 2),
+                "distribucion_mensual": {k: round(v, 2) for k, v in monthly.items()},
+            }
+        )
+
+    if not all_months:
+        all_months = {_month_key(date.today())}
+
+    meses_sorted = sorted(all_months)
+    acc_by_ppto: Dict[str, float] = {s["version_ppto_id"]: 0.0 for s in series}
+    filas: List[dict] = []
+    for mk in meses_sorted:
+        row: dict = {"mes": mk, "mes_label": _month_label(mk), "series": {}}
+        for s in series:
+            pid = s["version_ppto_id"]
+            acc_by_ppto[pid] += float(s["distribucion_mensual"].get(mk, 0))
+            row["series"][pid] = round(acc_by_ppto[pid], 2)
+        filas.append(row)
+
+    return {
+        "version_prog_id": str(version_prog_id),
+        "escenarios": series,
+        "meses": filas,
     }
 
 
