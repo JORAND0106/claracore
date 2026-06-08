@@ -3055,6 +3055,8 @@ def eliminar_dependencia_global(sb, dep_id: str, version_id: str) -> None:
 
 def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
     """Combina dependencias especificas con globales; agrupadores se replican por PK del tramo."""
+    from prog_obra_cpm import cpm_agrupador_key, cpm_node_key
+
     specific = listar_dependencias(sb, version_id)
     global_deps = listar_dependencias_globales(sb, version_id)
 
@@ -3074,8 +3076,8 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
     for d in specific:
         ag_o_raw = d.get("agrupador_id_origen")
         ag_d_raw = d.get("agrupador_id_destino")
-        ag_o = str(ag_o_raw).strip() if ag_o_raw not in (None, "") else ""
-        ag_d = str(ag_d_raw).strip() if ag_d_raw not in (None, "") else ""
+        ag_o = cpm_agrupador_key(ag_o_raw)
+        ag_d = cpm_agrupador_key(ag_d_raw)
         cap_o_raw = str(d.get("capitulo_origen") or "").strip()
         cap_d_raw = str(d.get("capitulo_destino") or "").strip()
         pk_o = str(d.get("pk_id_origen") or "").strip()
@@ -3091,6 +3093,19 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
                     "CPM dep agrupador alineada caps: %s/%s→%s/%s (orig=%r→%r dest=%r→%r ag=%s→%s tipo=%s lag=%d)",
                     pk_o, cap_o_raw, pk_d, cap_d_raw,
                     cap_o_raw, cap_o, cap_d_raw, cap_d, ag_o, ag_d, tipo, lag,
+                )
+            if pk_o and pk_d and pk_o != pk_d:
+                deps.append(
+                    DependenciaCPM(
+                        pk_id_origen=pk_o,
+                        capitulo_origen=cap_o,
+                        pk_id_destino=pk_d,
+                        capitulo_destino=cap_d,
+                        tipo=tipo,
+                        lag_dias=lag,
+                        agrupador_id_origen=ag_o,
+                        agrupador_id_destino=ag_d,
+                    )
                 )
             ag_edge_sigs.add((cap_o, ag_o, cap_d, ag_d, tipo, lag))
             continue
@@ -3111,8 +3126,8 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
     seen_ag: set = set()
     for cap_o, ag_o, cap_d, ag_d, tipo, lag in sorted(ag_edge_sigs):
         for pk in pks:
-            orig = (pk, cap_o, ag_o)
-            dest = (pk, cap_d, ag_d)
+            orig = cpm_node_key(pk, cap_o, ag_o)
+            dest = cpm_node_key(pk, cap_d, ag_d)
             if orig not in nodos_set or dest not in nodos_set:
                 _logger.warning(
                     "CPM dep agrupador omitida pk=%s %s/%s → %s/%s "
@@ -3147,7 +3162,7 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
         for pk in pks:
             cap_o_pk = resolve_cap(pk, str(g["capitulo_origen"]).strip())
             cap_d_pk = resolve_cap(pk, str(g["capitulo_destino"]).strip())
-            if (pk, cap_o_pk, "") not in nodos_set or (pk, cap_d_pk, "") not in nodos_set:
+            if cpm_node_key(pk, cap_o_pk, "") not in nodos_set or cpm_node_key(pk, cap_d_pk, "") not in nodos_set:
                 continue
             cap_o, cap_d = cap_o_pk, cap_d_pk
             if (pk, cap_o, "", cap_d, "") in specific_intra_pairs:
@@ -3170,7 +3185,7 @@ def _expand_dependencias_agrupador_por_pk(deps: list, nodos: list) -> list:
     Las dependencias de tramo suelen definirse sobre un PK representativo;
     el CPM debe aplicar la misma cadena en todos los PKs del tramo.
     """
-    from prog_obra_cpm import DependenciaCPM
+    from prog_obra_cpm import DependenciaCPM, cpm_agrupador_key, cpm_node_key
 
     if not deps or not nodos:
         return deps
@@ -3179,8 +3194,8 @@ def _expand_dependencias_agrupador_por_pk(deps: list, nodos: list) -> list:
     pks = sorted({n.pk_id for n in nodos})
     ag_edges: dict = {}
     for d in deps:
-        ag_o = str(d.agrupador_id_origen or "").strip()
-        ag_d = str(d.agrupador_id_destino or "").strip()
+        ag_o = cpm_agrupador_key(d.agrupador_id_origen)
+        ag_d = cpm_agrupador_key(d.agrupador_id_destino)
         if not ag_o and not ag_d:
             continue
         cap_o = str(d.capitulo_origen or "").strip()
@@ -3201,8 +3216,8 @@ def _expand_dependencias_agrupador_por_pk(deps: list, nodos: list) -> list:
     seen = {(d.origen, d.destino, d.tipo, d.lag_dias) for d in deps}
     for pk in pks:
         for (cap_o, ag_o, cap_d, ag_d, tipo, lag) in ag_edges:
-            orig = (pk, cap_o, ag_o)
-            dest = (pk, cap_d, ag_d)
+            orig = cpm_node_key(pk, cap_o, ag_o)
+            dest = cpm_node_key(pk, cap_d, ag_d)
             if orig not in nodos_set or dest not in nodos_set:
                 continue
             nd = DependenciaCPM(
@@ -3366,14 +3381,16 @@ def _resolve_duracion_cpm_nodo(
     return 1
 
 
-def _cpm_paso1_limpiar_entrada(sb, version_id: str) -> None:
-    """
-    Paso 1 — Limpiar antes de calcular (inviolable).
-
-    Borra fecha_inicio y fecha_fin_calculada de agrupadores no manuales y elimina
-    resultados CPM previos. Debe ejecutarse antes de que el motor lea prog_actividades.
-    """
+def _cpm_paso0_limpiar_resultados_previos(sb, version_id: str) -> None:
+    """Elimina resultados CPM de ejecuciones anteriores (no toca prog_actividades)."""
     sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).execute()
+
+
+def _cpm_limpiar_actividades_no_manuales(sb, version_id: str) -> None:
+    """
+    Borra fechas de programación/CPM en agrupadores no anclados.
+    Debe ejecutarse tras construir el grafo y antes del forward pass.
+    """
     now = datetime.now(timezone.utc).isoformat()
     sb.table("prog_actividades").update({
         "fecha_inicio": None,
@@ -3384,6 +3401,35 @@ def _cpm_paso1_limpiar_entrada(sb, version_id: str) -> None:
     }).eq("version_id", version_id).eq("override_manual", False).not_.is_(
         "agrupador_id", "null"
     ).execute()
+
+
+def _cpm_limpiar_fechas_nodos_forward(
+    nodos: list,
+    fecha_inicio_ver: Optional[date],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+    add_dh,
+) -> None:
+    """
+    Reset in-memory de nodos no ancla: ES inicial = inicio versión + duración.
+    El forward pass aplicará dependencias sobre estas fechas base.
+    """
+    if not fecha_inicio_ver:
+        return
+    for n in nodos:
+        if n.es_ancla:
+            continue
+        dur = max(1, int(n.duracion or 1))
+        n.fecha_inicio_base = fecha_inicio_ver
+        ff = add_dh(contrato_id, fecha_inicio_ver, dur, cache)
+        if ff:
+            n.fecha_fin_base = ff
+
+
+def _cpm_paso1_limpiar_entrada(sb, version_id: str) -> None:
+    """Compat tests: paso0 + limpieza BD (pipeline completo pre-forward)."""
+    _cpm_paso0_limpiar_resultados_previos(sb, version_id)
+    _cpm_limpiar_actividades_no_manuales(sb, version_id)
 
 
 # Alias usado en tests y código legado
@@ -3711,6 +3757,9 @@ def _completar_nodos_cpm_desde_dependencias(
     if not fecha_inicio_ver:
         return
 
+    from prog_obra_cpm import cpm_agrupador_key, cpm_node_key
+
+    resolve_cap = _build_capitulo_resolver(nodos)
     node_keys = {n.key for n in nodos}
     dur_by_key = dict(dur_lookup or {})
     for n in nodos:
@@ -3722,11 +3771,12 @@ def _completar_nodos_cpm_desde_dependencias(
             (d.get("pk_id_destino"), d.get("capitulo_destino"), d.get("agrupador_id_destino")),
         ):
             pk_s = str(pk or "").strip()
-            cap_s = str(cap or "").strip()
-            ag_s = str(ag_raw or "").strip() if ag_raw not in (None, "") else ""
+            cap_raw = str(cap or "").strip()
+            cap_s = resolve_cap(pk_s, cap_raw) if cap_raw else cap_raw
+            ag_s = cpm_agrupador_key(ag_raw)
             if not pk_s or not cap_s:
                 continue
-            key = (pk_s, cap_s, ag_s)
+            key = cpm_node_key(pk_s, cap_s, ag_s)
             if key in node_keys:
                 continue
             dur = dur_by_key.get(key, 1)
@@ -3752,10 +3802,9 @@ def _completar_nodos_cpm_desde_dependencias(
 def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     """
     Pipeline CPM (orden inviolable en cada ejecución):
-      1. Limpiar fechas no manuales en prog_actividades + resultados CPM previos
-      2. Entradas: fecha inicio versión, duracion_dias_habiles, dependencias
-      3. Anclas: override_manual=true conserva fecha_inicio como restricción fija
-      4. Calcular → prog_cpm_resultados + write-back fecha_*_temprana en prog_actividades
+      A. Construir grafo completo (nodos + dependencias desde prog_dependencias)
+      B. Limpiar fechas previas en nodos no ancla (memoria + prog_actividades)
+      C. Forward/backward pass y write-back (prog_cpm_resultados + fecha_*_temprana)
     """
     from prog_obra_cpm import NodoCPM, ResultadoCPM
     from prog_obra_calendar import add_dias_habiles as _add_dh
@@ -3773,10 +3822,10 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     fecha_inicio_ver = _parse_date_cpm(ver.get("fecha_inicio"))
     fecha_fin_ver = _parse_date_cpm(ver.get("fecha_fin"))
 
-    # ── Paso 1: limpiar antes de leer prog_actividades ───────────────────────
-    _cpm_paso1_limpiar_entrada(sb, version_id)
+    # Solo resultados CPM previos — prog_actividades se lee intacto para armar el grafo
+    _cpm_paso0_limpiar_resultados_previos(sb, version_id)
 
-    # ── Paso 2 y 3: cargar duraciones, anclas manuales y dependencias ────────
+    # ── A: construir nodos y dependencias ────────────────────────────────────
     raw_caps = (
         sb.rpc("prog_get_capitulos_con_fechas", {"p_version_id": version_id})
         .execute()
@@ -3914,10 +3963,30 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
 
     dependencias = _construir_dependencias_cpm(sb, version_id, nodos)
 
+    nodos_set = {n.key for n in nodos}
+    deps_efectivas = [
+        d for d in dependencias
+        if d.origen in nodos_set and d.destino in nodos_set
+    ]
+    _logger.info(
+        "CPM grafo: %d nodos, %d dependencias (%d emparejan nodos del grafo)",
+        len(nodos), len(dependencias), len(deps_efectivas),
+    )
+    if listar_dependencias(sb, version_id) and not deps_efectivas:
+        _logger.warning(
+            "CPM: hay dependencias en BD pero ninguna empareja nodos del grafo; "
+            "revisar capitulo/agrupador_id. Nodos=%s",
+            sorted({(n.pk_id, n.capitulo, n.agrupador_id) for n in nodos})[:20],
+        )
+
     debug_watch, debug_labels = _cpm_debug_watch_keys(nodos, agr_codigo_by_id)
     _log_cpm_grafo_diagnostico(nodos, dependencias, listar_dependencias(sb, version_id), agr_codigo_by_id, debug_watch)
 
-    # ── Paso 4: calcular y escribir resultados ───────────────────────────────
+    # ── B: limpiar fechas previas antes del forward pass ─────────────────────
+    _cpm_limpiar_fechas_nodos_forward(nodos, fecha_inicio_ver, contrato_id, cache, _add_dh)
+    _cpm_limpiar_actividades_no_manuales(sb, version_id)
+
+    # ── C: calcular y escribir resultados ────────────────────────────────────
     resultado = calcular_cpm(
         nodos,
         dependencias,

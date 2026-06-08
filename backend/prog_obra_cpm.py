@@ -43,6 +43,20 @@ NodeKey = Tuple[str, str, str]  # (pk_id, capitulo, agrupador_id or "")
 _INF = 10 ** 9
 
 
+def cpm_agrupador_key(ag: Any) -> str:
+    """Clave canónica de agrupador_id para emparejar nodos y dependencias."""
+    if ag in (None, ""):
+        return ""
+    try:
+        return str(int(ag))
+    except (TypeError, ValueError):
+        return str(ag).strip()
+
+
+def cpm_node_key(pk: str, cap: str, ag: Any = "") -> NodeKey:
+    return (str(pk or "").strip(), str(cap or "").strip(), cpm_agrupador_key(ag))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Estructuras de datos
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +83,7 @@ class NodoCPM:
 
     @property
     def key(self) -> NodeKey:
-        return (self.pk_id, self.capitulo, self.agrupador_id or "")
+        return cpm_node_key(self.pk_id, self.capitulo, self.agrupador_id)
 
 
 @dataclass
@@ -85,11 +99,15 @@ class DependenciaCPM:
 
     @property
     def origen(self) -> NodeKey:
-        return (self.pk_id_origen, self.capitulo_origen, self.agrupador_id_origen or "")
+        return cpm_node_key(
+            self.pk_id_origen, self.capitulo_origen, self.agrupador_id_origen,
+        )
 
     @property
     def destino(self) -> NodeKey:
-        return (self.pk_id_destino, self.capitulo_destino, self.agrupador_id_destino or "")
+        return cpm_node_key(
+            self.pk_id_destino, self.capitulo_destino, self.agrupador_id_destino,
+        )
 
 
 @dataclass

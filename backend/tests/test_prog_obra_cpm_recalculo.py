@@ -122,6 +122,38 @@ def test_reset_cpm_entrada_version_borra_resultados_y_fechas():
     assert payload["fecha_fin_temprana"] is None
 
 
+def test_limpiar_fechas_nodos_forward_luego_deps_fs():
+    """Tras limpiar fechas in-memory, el forward pass aplica dependencias."""
+    from prog_obra_calendar import add_dias_habiles
+    from prog_obra_service import _cpm_limpiar_fechas_nodos_forward
+
+    cache = _cache()
+    ver_ini = date(2026, 6, 9)
+    add_dh = add_dias_habiles
+    nodos = [
+        NodoCPM("PK1", "1. CAP", 5, ver_ini, date(2026, 6, 13), agrupador_id="101"),
+        NodoCPM("PK1", "4. CAP", 10, ver_ini, date(2026, 6, 20), agrupador_id="402"),
+    ]
+    deps = [
+        DependenciaCPM("PK1", "1. CAP", "PK1", "4. CAP", "FS", 0, "101", "402"),
+    ]
+    _cpm_limpiar_fechas_nodos_forward(nodos, ver_ini, 1, cache, add_dh)
+    assert all(n.fecha_inicio_base == ver_ini for n in nodos)
+
+    res = calcular_cpm(nodos, deps, 1, cache, fecha_inicio_proyecto=ver_ini)
+    assert res.ok
+    by_ag = {n.agrupador_id: n for n in res.nodos}
+    assert by_ag["402"].fecha_inicio_temprana > by_ag["101"].fecha_fin_temprana
+
+
+def test_cpm_agrupador_key_normaliza_enteros():
+    from prog_obra_cpm import cpm_agrupador_key, cpm_node_key
+
+    assert cpm_agrupador_key(401) == "401"
+    assert cpm_agrupador_key("401") == "401"
+    assert cpm_node_key("PK1", "4. CAP", 402) == ("PK1", "4. CAP", "402")
+
+
 def test_segundo_calculo_usa_duracion_actual_no_fechas_previas():
     cache = _cache()
     ver_ini = date(2026, 6, 9)
