@@ -5,10 +5,51 @@ async function parseErr(res) {
   throw new Error(err?.detail || `Error ${res.status}`)
 }
 
-export async function fetchCurvaS(API, cid, token, { baselineId, targetId } = {}) {
+export async function fetchTramos(API, cid, token) {
+  const res = await fetch(`${API}/prog-obra/${cid}/tramos`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function fetchEstructuraTramo(API, cid, token, { versionId, tramo, pkIds } = {}) {
+  const q = new URLSearchParams()
+  q.set('tramo', tramo)
+  q.set('version_id', String(versionId))
+  for (const pk of pkIds || []) {
+    if (pk) q.append('pk_ids', String(pk).trim())
+  }
+  const res = await fetch(`${API}/prog-obra/${cid}/estructura-tramo?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds } = {}) {
+  const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/actividades-batch-tramo`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      tramo,
+      actividades,
+      pk_ids: pkIds?.length ? pkIds : undefined,
+    }),
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function fetchCurvaS(API, cid, token, { baselineId, targetId, versionPptoId, pkIds } = {}) {
   const q = new URLSearchParams()
   if (baselineId) q.set('baseline_id', baselineId)
   if (targetId) q.set('target_id', targetId)
+  if (versionPptoId) q.set('version_ppto_id', versionPptoId)
+  if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
   const res = await fetch(`${API}/prog-obra/${cid}/curva-s?${q}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -16,15 +57,71 @@ export async function fetchCurvaS(API, cid, token, { baselineId, targetId } = {}
   return res.json()
 }
 
-export async function downloadCurvaSPdf(API, cid, token, { baselineId, targetId } = {}) {
+export async function fetchCurvaSEscenarios(API, cid, token, { versionProgId, versionPptoIds }) {
+  const q = new URLSearchParams()
+  q.set('version_prog_id', versionProgId)
+  q.set('version_ppto_ids', versionPptoIds.join(','))
+  const res = await fetch(`${API}/prog-obra/${cid}/curva-s/escenarios?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function fetchCostosPorVersionPresupuesto(
+  API,
+  cid,
+  token,
+  { versionProgId, versionPptoId, pkId },
+) {
+  const q = new URLSearchParams()
+  q.set('version_prog_id', versionProgId)
+  q.set('version_ppto_id', versionPptoId)
+  if (pkId) q.set('pk_id', pkId)
+  const res = await fetch(`${API}/prog-obra/${cid}/costos-por-version-presupuesto?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function fetchPresupuestoVersiones(API, cid, token) {
+  const res = await fetch(`${API}/presupuesto/${cid}/versiones`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function downloadCurvaSPdf(API, cid, token, { baselineId, targetId, versionPptoId, pkIds } = {}) {
   const q = new URLSearchParams()
   if (baselineId) q.set('baseline_id', baselineId)
   if (targetId) q.set('target_id', targetId)
+  if (versionPptoId) q.set('version_ppto_id', versionPptoId)
+  if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
   const res = await fetch(`${API}/prog-obra/${cid}/curva-s/pdf?${q}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) await parseErr(res)
   return res.blob()
+}
+
+export async function downloadProjectXml(API, cid, token, { versionId, versionPptoId, pkIds } = {}) {
+  const q = new URLSearchParams()
+  q.set('version_id', versionId)
+  if (versionPptoId) q.set('version_ppto_id', versionPptoId)
+  if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
+  const res = await fetch(`${API}/prog-obra/${cid}/exportar-project-xml?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return { blob: await res.blob(), filename: parseFilename(res) }
+}
+
+function parseFilename(res) {
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = /filename="?([^";\n]+)"?/.exec(cd)
+  return m ? m[1] : 'programacion.xml'
 }
 
 export async function fetchAutoSchedulePrereqs(API, cid, token, versionId) {
