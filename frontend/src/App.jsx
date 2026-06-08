@@ -61,6 +61,7 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
+import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
@@ -401,6 +402,63 @@ function themeIsDarkChrome(activeTheme) {
 
 const THEME_MODE_STORAGE_KEY = 'claracore_theme_mode'
 const THEME_MODES = ['light', 'auto', 'dark', 'rest']
+const THEME_MODE_OPTIONS = [
+  { id: 'light', icon: '☀️', label: 'Claro' },
+  { id: 'auto', icon: '⚡', label: 'Auto' },
+  { id: 'dark', icon: '🌙', label: 'Oscuro' },
+  { id: 'rest', icon: '🌿', label: 'Descansar' },
+]
+
+function ThemeModeSelector({ t, themeMode, onTheme, style = {} }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: '4px',
+        background: t.bg,
+        border: `1px solid ${t.border}`,
+        borderRadius: '20px',
+        padding: '4px',
+        flexShrink: 0,
+        ...style,
+      }}
+      role="group"
+      aria-label="Tema de la interfaz"
+    >
+      {THEME_MODE_OPTIONS.map(({ id, icon, label }) => {
+        const active = themeMode === id
+        return (
+          <button
+            key={id}
+            type="button"
+            title={label}
+            aria-label={label}
+            aria-pressed={active}
+            onClick={() => onTheme(id)}
+            style={{
+              background: active ? t.primary : 'transparent',
+              color: active ? '#fff' : t.textMuted,
+              border: 'none',
+              borderRadius: '14px',
+              padding: '6px 10px',
+              fontSize: '1.25rem',
+              lineHeight: 1,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              minWidth: 36,
+              minHeight: 36,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {icon}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 function loadStoredThemeMode() {
   try {
@@ -829,12 +887,15 @@ function ModalOlvide({ t, onClose }) {
 function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, onOlvide }) {
   return (
     <div style={{ minHeight: '100vh', width: '100%', background: t.landingBg, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', background: themeIsDarkChrome(activeTheme) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px', backdropFilter: 'blur(8px)', maxWidth: 'min(420px, 96vw)' }}>
-        {['light', 'auto', 'dark', 'rest'].map((mode, i) => (
-          <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: 'var(--cc-label)', cursor: 'pointer', transition: 'all 0.2s' }}>
-            {['☀️ Claro', '⚡ Auto', '🌙 Oscuro', '🌿 Descansar'][i]}
-          </button>
-        ))}
+      <div style={{ position: 'absolute', top: '20px', right: '24px', backdropFilter: 'blur(8px)', maxWidth: 'min(420px, 96vw)' }}>
+        <ThemeModeSelector
+          t={t}
+          themeMode={themeMode}
+          onTheme={onTheme}
+          style={{
+            background: themeIsDarkChrome(activeTheme) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)',
+          }}
+        />
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
         <div style={{ marginBottom: '16px', animation: 'fadeDown 0.6s ease' }}>
@@ -12855,6 +12916,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [liqMapaPopupLoad, setLiqMapaPopupLoad] = useState(false)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
+  const [progRibbon, setProgRibbon] = useState(null)
 
   useEffect(() => {
     const onOpenAdmin = () => setShowAdmin(true)
@@ -14417,12 +14479,65 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeEditarProgramacionObra = _progPermiso('editar')
   const puedeCrearProgramacionObra = _progPermiso('crear')
   const puedeValidarProgramacionObra = _progPermiso('validar')
+  const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra
+
+  useEffect(() => {
+    if (!progRibbonEnHeader) setProgRibbon(null)
+  }, [progRibbonEnHeader])
+
+  const handleCambioContratoUsuario = useCallback(
+    async (e) => {
+      const cid = parseInt(e.target.value, 10)
+      const contrato = usuario._contratos.find((c) => c.id === cid)
+      if (!contrato) return
+      if (onCambiarContrato) await onCambiarContrato(contrato)
+      else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+    },
+    [usuario, onCambiarContrato, setUsuario],
+  )
+
+  const selectorContratoHeader = progRibbonEnHeader ? (
+    usuario?._contratos?.length > 1 ? (
+      <select
+        value={usuario.contrato_id || ''}
+        onChange={(e) => void handleCambioContratoUsuario(e)}
+        style={{
+          fontSize: 'var(--cc-sm)',
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          padding: '6px 12px',
+          color: t.primary,
+          fontWeight: 600,
+          cursor: 'pointer',
+          outline: 'none',
+          maxWidth: 'min(320px, 36vw)',
+        }}
+      >
+        {!usuario.contrato_id && <option value="">— Selecciona un contrato —</option>}
+        {usuario._contratos.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.numero}
+          </option>
+        ))}
+      </select>
+    ) : (
+      <span
+        style={{
+          fontSize: 'var(--cc-sm)',
+          color: t.primary,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+      </span>
+    )
+  ) : null
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
     header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
-    themeSelector: { display: 'flex', gap: 'var(--cc-space-2)', background: t.bg, border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px' },
-    themeBtn: (mode) => ({ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: 'var(--cc-sm)', cursor: 'pointer', transition: 'all 0.2s' }),
     body: { padding: 'var(--cc-space-5) var(--cc-space-5)', maxWidth: '1400px', margin: '0 auto' },
     topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--cc-space-5)' },
     btnCrear: { background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: 'var(--cc-body)', fontWeight: '600', cursor: 'pointer' },
@@ -14484,7 +14599,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   return (
     <div style={s.app}>
       <div style={s.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: '1 1 auto' }}>
           <img
             src="/CLARA.CORE.png"
             alt="ClaraCore"
@@ -14497,15 +14612,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           {usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
             <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
+          {progRibbonEnHeader && (
+            <>
+              <div style={{ width: 1, height: 28, background: t.border, flexShrink: 0 }} aria-hidden />
+              {selectorContratoHeader}
+              {progRibbon && <ProgObraHeaderRibbon t={t} {...progRibbon} />}
+            </>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{ ...s.themeSelector, flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: 'min(440px, 96vw)' }}>
-            {['light', 'auto', 'dark', 'rest'].map((mode, i) => (
-              <button key={mode} style={s.themeBtn(mode)} onClick={() => onTheme(mode)}>
-                {['☀️ Claro', '⚡ Auto', '🌙 Oscuro', '🌿 Descansar'][i]}
-              </button>
-            ))}
-          </div>
+          <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} />
           <div style={{ display:'flex', gap:'2px', alignItems:'center', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 6px' }}>
             {[['pequena','A',11],['normal','A',14],['grande','A',17]].map(([key, lbl, sz]) => (
               <button key={key} onClick={() => onFontSize && onFontSize(key)}
@@ -14631,18 +14747,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Contenido principal ── */}
         <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
-        {moduloActivo !== 'dashboard' && (
+        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && (
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
               value={usuario.contrato_id || ''}
-              onChange={async (e) => {
-                const cid = parseInt(e.target.value, 10)
-                const contrato = usuario._contratos.find(c => c.id === cid)
-                if (!contrato) return
-                if (onCambiarContrato) await onCambiarContrato(contrato)
-                else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-              }}
+              onChange={(e) => void handleCambioContratoUsuario(e)}
               style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', width: 'auto', maxWidth: 'min(420px, 100%)' }}
             >
               {!usuario.contrato_id && (
@@ -17497,6 +17607,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               puedeEditar={puedeEditarProgramacionObra}
               puedeCrear={puedeCrearProgramacionObra}
               puedeValidar={puedeValidarProgramacionObra}
+              onRibbonChange={setProgRibbon}
             />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>

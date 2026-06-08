@@ -22,6 +22,9 @@ from prog_obra_service import (
     clear_pk_programacion,
     fetch_borrador_activo,
     fetch_estructura_programacion_pk,
+    fetch_estructura_tramo,
+    fetch_tramos_contrato,
+    apply_actividades_batch_tramo,
     fetch_mapa_rows_for_version,
     fetch_mapa_rows_rpc,
     fetch_pks_con_ruta_critica,
@@ -218,6 +221,23 @@ class ActividadesBatchBody(BaseModel):
     actividades: List[ActividadBatchItemBody] = Field(..., min_length=1)
 
 
+class ActividadBatchTramoItemBody(BaseModel):
+    capitulo: str
+    item: str
+    segmento: int = 1
+    fecha_inicio: Optional[date] = None
+    duracion_dias_habiles: Optional[int] = None
+    agrupador_id: int
+    codigo_wbs: Optional[str] = None
+    tipo_distribucion: str = "lineal"
+
+
+class ActividadesBatchTramoBody(BaseModel):
+    tramo: str
+    actividades: List[ActividadBatchTramoItemBody] = Field(..., min_length=1)
+    pk_ids: Optional[List[str]] = None
+
+
 class ValidarSegmentosBody(BaseModel):
     version_id: str
     pk_id: str
@@ -256,6 +276,44 @@ def prog_programacion_estructura(
     if not pk:
         raise HTTPException(status_code=400, detail="pk_id requerido")
     return fetch_estructura_programacion_pk(supabase, contrato_id, pk)
+
+
+@router.get("/{contrato_id}/tramos")
+def prog_tramos(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return fetch_tramos_contrato(supabase, contrato_id)
+
+
+@router.get("/{contrato_id}/estructura-tramo")
+def prog_estructura_tramo(
+    contrato_id: int,
+    tramo: str = Query(...),
+    version_id: str = Query(...),
+    pk_ids: Optional[List[str]] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    tramo_s = (tramo or "").strip()
+    if not tramo_s:
+        raise HTTPException(status_code=400, detail="tramo requerido")
+    vid = (version_id or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="version_id requerido")
+    v = supabase.table("prog_versiones").select("contrato_id").eq("id", vid).limit(1).execute().data
+    if not v or int(v[0]["contrato_id"]) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no encontrada")
+    try:
+        return fetch_estructura_tramo(
+            supabase,
+            contrato_id,
+            tramo_s,
+            vid,
+            pk_ids_filter=pk_ids,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=404, detail=e.message)
 
 
 @router.get("/{contrato_id}/mapa")
@@ -815,6 +873,79 @@ def prog_actividades_batch(
         payload["ms"] = elapsed_ms
         payload["rpc"] = True
     return payload
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/actividades-batch-tramo")
+def prog_actividades_batch_tramo(
+    contrato_id: int,
+    version_id: str,
+    body: ActividadesBatchTramoBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no pertenece al contrato")
+
+    tramo_s = (body.tramo or "").strip()
+    if not tramo_s:
+        raise HTTPException(status_code=400, detail="tramo requerido")
+
+    uid = _uid(current_user)
+    cache = _cache(contrato_id)
+    t0 = time.perf_counter()
+
+    actividades = []
+    for it in body.actividades:
+        if it.tipo_distribucion not in ("lineal", "manual"):
+            raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
+        actividades.append({
+            "capitulo": it.capitulo.strip(),
+            "item": it.item.strip(),
+            "segmento": int(it.segmento),
+            "fecha_inicio": it.fecha_inicio,
+            "duracion_dias_habiles": it.duracion_dias_habiles,
+            "agrupador_id": int(it.agrupador_id),
+            "codigo_wbs": (it.codigo_wbs or it.item or "").strip(),
+            "tipo_distribucion": it.tipo_distribucion,
+            "override_manual": True,
+            "heredado_de_capitulo": False,
+        })
+
+    try:
+        result = apply_actividades_batch_tramo(
+            supabase,
+            contrato_id,
+            version_id,
+            tramo_s,
+            actividades,
+            uid,
+            cache,
+            pk_ids_filter=body.pk_ids,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception:
+        _trace = _tb.format_exc()
+        _logger.error("ERROR actividades-batch-tramo: %s", _trace)
+        raise HTTPException(status_code=500, detail=f"Error batch tramo: {_trace[-600:]}")
+
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    result["ms"] = elapsed_ms
+    _log_prog(
+        current_user,
+        "PROG_ACTIVIDADES_BATCH_TRAMO",
+        "prog_version",
+        version_id,
+        {
+            "tramo": tramo_s,
+            "count": len(actividades),
+            "pk_ids": result.get("pk_ids"),
+            "ms": elapsed_ms,
+        },
+    )
+    return result
 
 
 @router.post("/{contrato_id}/actividad")

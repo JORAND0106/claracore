@@ -4,6 +4,7 @@ Logica de negocio Programacion de obra (Fase 1).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -100,6 +101,47 @@ def _ppto_items_por_pk(sb, contrato_id: int, pk_id: str) -> Tuple[int, List[Tupl
     for (cap, it), v in sorted(agg.items(), key=lambda x: (x[0][0], x[0][1])):
         items.append((cap, it, v["cant"], v["und"][:20], v["vlr"]))
     return len(items), items
+
+
+def _tramo_sort_key(tramo: str) -> Tuple[int, int, str]:
+    s = (tramo or "").strip().upper()
+    m = re.search(r"(\d+)", s)
+    if m:
+        return (0, int(m.group(1)), s)
+    return (1, 0, s)
+
+
+def group_tramos_from_presupuesto_rows(rows: List[dict]) -> List[dict]:
+    """Agrupa filas presupuesto (pk_id, tramo) en lista ordenada de tramos con pk_ids únicos."""
+    by_tramo: Dict[str, set] = {}
+    for r in rows or []:
+        tramo = (r.get("tramo") or "").strip()
+        if not tramo:
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        if not pk:
+            continue
+        by_tramo.setdefault(tramo, set()).add(pk)
+    out: List[dict] = []
+    for tramo in sorted(by_tramo.keys(), key=_tramo_sort_key):
+        pks = sorted(by_tramo[tramo], key=lambda x: (len(x), x))
+        out.append({"tramo": tramo, "pk_ids": pks})
+    return out
+
+
+def fetch_tramos_contrato(sb, contrato_id: int) -> List[dict]:
+    """Tramos del contrato con PKs distintos (presupuesto poligonal activo)."""
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id, tramo")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    return group_tramos_from_presupuesto_rows(rows)
 
 
 def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, str], Optional[int]], Dict[Tuple[str, str], str]]:
@@ -235,6 +277,526 @@ def fetch_estructura_programacion_pk(sb, contrato_id: int, pk_id: str) -> dict:
         })
     total_sin = sum(len(c.get("sin_agrupador") or []) for c in capitulos)
     return {"capitulos": capitulos, "total_sin_agrupador": total_sin}
+
+
+def _aggregate_ppto_rows_tramo(
+    ppto_rows: List[dict],
+    ag_by_item: Dict[Tuple[str, str], Optional[int]],
+    agr_meta: Dict[int, dict],
+) -> Dict[str, Dict[int, dict]]:
+    """
+    Agrega filas presupuesto multi-PK por (capitulo, agrupador_id).
+    Excluye ítems sin agrupador WBS válido.
+    """
+    cap_map: Dict[str, Dict[int, dict]] = {}
+    for r in ppto_rows or []:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        pk = str(r.get("pk_id") or "").strip()
+        if not cap or not it or not pk:
+            continue
+        ag_id = ag_by_item.get((cap, it))
+        if ag_id is None or int(ag_id) not in agr_meta:
+            continue
+        ag_id_int = int(ag_id)
+        ct = Decimal(str(r.get("cant_total") or 0))
+        cd = Decimal(str(r.get("costo_directo") or 0))
+        vlr = Decimal(str(r.get("vlr_unitario") or 0))
+        line_cd = cd if cd > 0 else ct * vlr
+        und = (r.get("und") or "?")[:20]
+        if cap not in cap_map:
+            cap_map[cap] = {}
+        ag_bucket = cap_map[cap]
+        if ag_id_int not in ag_bucket:
+            meta = agr_meta[ag_id_int]
+            ag_bucket[ag_id_int] = {
+                "agrupador_id": ag_id_int,
+                "agrupador_nombre": (meta.get("nombre") or "").strip(),
+                "codigo_wbs": (meta.get("codigo_wbs") or "").strip(),
+                "orden": int(meta.get("orden") or 0),
+                "cant_total": Decimal(0),
+                "costo_directo": Decimal(0),
+                "und": und,
+                "pk_ids": set(),
+            }
+        ag = ag_bucket[ag_id_int]
+        ag["cant_total"] += ct
+        ag["costo_directo"] += line_cd
+        ag["pk_ids"].add(pk)
+        if und and und != "?" and ag.get("und") in ("?", "", None):
+            ag["und"] = und
+    return cap_map
+
+
+def _schedule_key(act: dict) -> Optional[Tuple[str, Optional[int], Optional[str]]]:
+    fi = act.get("fecha_inicio")
+    if fi is None or str(fi).strip() == "":
+        return None
+    du = act.get("duracion_dias_habiles")
+    du_i = int(du) if du is not None and str(du).strip() != "" else None
+    fin = act.get("fecha_fin_calculada")
+    fin_s = str(fin).strip() if fin is not None and str(fin).strip() else None
+    fi_s = str(fi).strip()[:10]
+    return (fi_s, du_i, fin_s)
+
+
+def _merge_programacion_agrupador(
+    actividades: List[dict],
+    capitulo: str,
+    agrupador_id: int,
+    pk_ids: List[str],
+) -> dict:
+    """Unifica fechas del agrupador entre PKs; consistente=False si hay conflicto o cobertura parcial."""
+    cap = capitulo.strip()
+    ag_id = int(agrupador_id)
+    pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
+    by_pk: Dict[str, dict] = {}
+    for a in actividades or []:
+        if (a.get("capitulo") or "").strip() != cap:
+            continue
+        if a.get("agrupador_id") is None or int(a.get("agrupador_id")) != ag_id:
+            continue
+        pk = str(a.get("pk_id") or "").strip()
+        if not pk or pk not in pk_set:
+            continue
+        sk = _schedule_key(a)
+        if sk is None:
+            continue
+        by_pk[pk] = {
+            "fecha_inicio": sk[0],
+            "duracion_dias_habiles": sk[1],
+            "fecha_fin_calculada": sk[2],
+        }
+
+    empty = {
+        "fecha_inicio": None,
+        "duracion_dias_habiles": None,
+        "fecha_fin_calculada": None,
+        "consistente": True,
+    }
+    if not by_pk:
+        return empty
+
+    if len(by_pk) < len(pk_set):
+        return {**empty, "consistente": False}
+
+    schedules = list(by_pk.values())
+    first = schedules[0]
+    for s in schedules[1:]:
+        if (
+            s.get("fecha_inicio") != first.get("fecha_inicio")
+            or s.get("duracion_dias_habiles") != first.get("duracion_dias_habiles")
+        ):
+            return {**empty, "consistente": False}
+
+    return {
+        "fecha_inicio": first.get("fecha_inicio"),
+        "duracion_dias_habiles": first.get("duracion_dias_habiles"),
+        "fecha_fin_calculada": first.get("fecha_fin_calculada"),
+        "consistente": True,
+    }
+
+
+def build_estructura_tramo_response(
+    tramo: str,
+    pk_ids: List[str],
+    cap_map: Dict[str, Dict[int, dict]],
+    actividades: List[dict],
+) -> dict:
+    """Arma respuesta JSON de estructura consolidada por tramo."""
+    capitulos: List[dict] = []
+    for cap in sorted(cap_map.keys()):
+        ag_bucket = cap_map[cap]
+        agrupadores = []
+        for ag_id in sorted(
+            ag_bucket.keys(),
+            key=lambda aid: (
+                ag_bucket[aid].get("orden") or 0,
+                ag_bucket[aid].get("codigo_wbs") or "",
+                ag_bucket[aid].get("agrupador_nombre") or "",
+            ),
+        ):
+            ag = ag_bucket[ag_id]
+            pk_list = sorted(ag["pk_ids"], key=lambda x: (len(x), x))
+            programacion = _merge_programacion_agrupador(actividades, cap, ag_id, pk_list)
+            agrupadores.append({
+                "agrupador_id": ag_id,
+                "agrupador_nombre": ag.get("agrupador_nombre") or "",
+                "codigo_wbs": ag.get("codigo_wbs") or "",
+                "orden": int(ag.get("orden") or 0),
+                "cant_total": float(ag["cant_total"]),
+                "costo_directo": float(ag["costo_directo"]),
+                "und": ag.get("und") or "?",
+                "pk_ids": pk_list,
+                "programacion": programacion,
+            })
+        if agrupadores:
+            capitulos.append({"capitulo": cap, "agrupadores": agrupadores})
+    return {
+        "tramo": tramo,
+        "pk_ids": list(pk_ids),
+        "capitulos": capitulos,
+    }
+
+
+def fetch_estructura_tramo(
+    sb,
+    contrato_id: int,
+    tramo: str,
+    version_id: str,
+    pk_ids_filter: Optional[List[str]] = None,
+) -> dict:
+    """
+    Estructura consolidada WBS de un tramo: cantidades/costos sumados por agrupador.
+    Incluye programación unificada por agrupador (version_id).
+    """
+    tramo_s = (tramo or "").strip()
+    if not tramo_s:
+        raise BusinessRuleError("tramo requerido")
+    vid = (version_id or "").strip()
+    if not vid:
+        raise BusinessRuleError("version_id requerido")
+
+    tramos = fetch_tramos_contrato(sb, contrato_id)
+    match = next((t for t in tramos if (t.get("tramo") or "").strip() == tramo_s), None)
+    if not match:
+        raise BusinessRuleError(f"Tramo no encontrado: {tramo_s}")
+
+    pk_ids = [str(p).strip() for p in (match.get("pk_ids") or []) if str(p).strip()]
+    if pk_ids_filter:
+        allowed = {str(p).strip() for p in pk_ids_filter if str(p).strip()}
+        pk_ids = [p for p in pk_ids if p in allowed]
+    if not pk_ids:
+        return build_estructura_tramo_response(tramo_s, [], {}, [])
+
+    ppto_rows = (
+        sb.table("presupuesto")
+        .select("pk_id, capitulo, item, cant_total, und, vlr_unitario, costo_directo")
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pk_ids)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    agr_rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,capitulo,codigo_wbs,nombre,orden")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    agr_meta: Dict[int, dict] = {}
+    for a in agr_rows:
+        aid = a.get("id")
+        if aid is not None:
+            agr_meta[int(aid)] = a
+
+    cap_map = _aggregate_ppto_rows_tramo(ppto_rows, ag_by_item, agr_meta)
+
+    actividades = (
+        sb.table("prog_actividades")
+        .select("pk_id,capitulo,item,agrupador_id,fecha_inicio,duracion_dias_habiles,fecha_fin_calculada")
+        .eq("version_id", vid)
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pk_ids)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+
+    return build_estructura_tramo_response(tramo_s, pk_ids, cap_map, actividades)
+
+
+def _build_agrupador_pk_metrics(
+    ppto_rows: List[dict],
+    ag_by_item: Dict[Tuple[str, str], Optional[int]],
+    agr_meta: Dict[int, dict],
+) -> Dict[Tuple[str, int, str], dict]:
+    """Métricas por (capitulo, agrupador_id, pk_id) para guardado batch tramo."""
+    out: Dict[Tuple[str, int, str], dict] = {}
+    for r in ppto_rows or []:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        pk = str(r.get("pk_id") or "").strip()
+        if not cap or not it or not pk:
+            continue
+        ag_id = ag_by_item.get((cap, it))
+        if ag_id is None or int(ag_id) not in agr_meta:
+            continue
+        ag_id_int = int(ag_id)
+        key = (cap, ag_id_int, pk)
+        ct = Decimal(str(r.get("cant_total") or 0))
+        cd = Decimal(str(r.get("costo_directo") or 0))
+        vlr = Decimal(str(r.get("vlr_unitario") or 0))
+        line_cd = cd if cd > 0 else ct * vlr
+        und = (r.get("und") or "?")[:20]
+        if key not in out:
+            out[key] = {
+                "cant_total": Decimal(0),
+                "costo_directo": Decimal(0),
+                "und": und,
+            }
+        cur = out[key]
+        cur["cant_total"] += ct
+        cur["costo_directo"] += line_cd
+        if und and und != "?" and cur.get("und") in ("?", ""):
+            cur["und"] = und
+    for key, v in out.items():
+        cant = v["cant_total"]
+        costo = v["costo_directo"]
+        v["cant_total"] = float(cant)
+        v["costo_directo"] = float(costo)
+        v["vlr_unitario"] = float(costo / cant) if cant > 0 else 0.0
+    return out
+
+
+def expand_tramo_batch_by_pk(
+    actividades: List[dict],
+    cap_map: Dict[str, Dict[int, dict]],
+    metrics: Dict[Tuple[str, int, str], dict],
+) -> Dict[str, List[dict]]:
+    """
+    Expande actividades de tramo a filas RPC por pk_id.
+    actividades: [{capitulo, item, agrupador_id, codigo_wbs, fecha_inicio, duracion_dias_habiles, ...}]
+    """
+    by_pk: Dict[str, List[dict]] = {}
+    for it in actividades or []:
+        cap = (it.get("capitulo") or "").strip()
+        ag_id = it.get("agrupador_id")
+        if not cap or ag_id is None:
+            continue
+        ag_id_int = int(ag_id)
+        ag_bucket = cap_map.get(cap, {})
+        ag = ag_bucket.get(ag_id_int)
+        if not ag:
+            continue
+        pk_ids = sorted(ag.get("pk_ids") or set(), key=lambda x: (len(x), x))
+        fi = it.get("fecha_inicio")
+        fi_d = fi if isinstance(fi, date) else None
+        if fi_d is None and fi is not None and str(fi).strip():
+            try:
+                fi_d = date.fromisoformat(str(fi).strip()[:10])
+            except ValueError:
+                fi_d = None
+        du_raw = it.get("duracion_dias_habiles")
+        du_i = int(du_raw) if du_raw is not None and str(du_raw).strip() and int(du_raw) > 0 else None
+        item_code = (it.get("codigo_wbs") or it.get("item") or "").strip()
+        for pk in pk_ids:
+            m = metrics.get((cap, ag_id_int, pk))
+            if not m:
+                continue
+            cant = float(m.get("cant_total") or 0)
+            if cant <= 0:
+                cant = 1.0
+            row = {
+                "capitulo": cap,
+                "item": item_code or str(ag_id_int),
+                "segmento": int(it.get("segmento") or 1),
+                "fecha_inicio": fi_d.isoformat() if fi_d else None,
+                "duracion_dias_habiles": du_i,
+                "fecha_fin_calculada": None,
+                "cantidad_programada": cant,
+                "unidad": (m.get("und") or "?")[:20],
+                "costo_unitario": float(m.get("vlr_unitario") or 0),
+                "tipo_distribucion": it.get("tipo_distribucion") or "lineal",
+                "override_manual": bool(it.get("override_manual", True)),
+                "heredado_de_capitulo": bool(it.get("heredado_de_capitulo", False)),
+                "agrupador_id": ag_id_int,
+                "codigo_wbs": item_code[:50] if item_code else None,
+                "_propagate": {
+                    "capitulo": cap,
+                    "agrupador_id": ag_id_int,
+                    "codigo_wbs": item_code,
+                    "item": item_code,
+                    "fecha_inicio": fi_d,
+                    "duracion_dias_habiles": du_i,
+                },
+            }
+            by_pk.setdefault(pk, []).append(row)
+    return by_pk
+
+
+def upsert_actividades_batch_pk(
+    sb,
+    contrato_id: int,
+    version_id: str,
+    pk_id: str,
+    actividades: List[dict],
+    uid: int,
+    cache: CalendarioNoHabilesCache,
+) -> dict:
+    """RPC batch + propagación WBS + prog_pk_estado para un PK."""
+    from prog_obra_calendar import add_dias_habiles
+
+    pk = (pk_id or "").strip()
+    rpc_rows = []
+    propagation_items = []
+    for raw in actividades or []:
+        row = dict(raw)
+        prop = row.pop("_propagate", None)
+        fi_s = row.get("fecha_inicio")
+        fi_d = date.fromisoformat(fi_s[:10]) if fi_s else None
+        du_i = row.get("duracion_dias_habiles")
+        du_i = int(du_i) if du_i is not None and int(du_i) > 0 else None
+        fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
+        row["fecha_fin_calculada"] = fin.isoformat() if fin else None
+        rpc_rows.append(row)
+        if prop and prop.get("agrupador_id") is not None:
+            propagation_items.append({**prop, "fecha_inicio": fi_d, "duracion_dias_habiles": du_i})
+
+    if not rpc_rows:
+        return {"ok": True, "actividades": [], "propagaciones": 0}
+
+    res = sb.rpc(
+        "prog_batch_upsert_actividades",
+        {
+            "p_version_id": version_id,
+            "p_contrato_id": contrato_id,
+            "p_pk_id": pk,
+            "p_usuario_id": uid,
+            "p_actividades": rpc_rows,
+        },
+    ).execute()
+
+    propagaciones = 0
+    limpiezas_ag = 0
+    if propagation_items:
+        _, ppto_items_pk = _ppto_items_por_pk(sb, contrato_id, pk)
+        seen_ag = set()
+        seen_clear = set()
+        for prop in propagation_items:
+            fi_d = prop.get("fecha_inicio")
+            du_i = prop.get("duracion_dias_habiles")
+            du_i = int(du_i) if du_i is not None and int(du_i) > 0 else None
+            ag_key = (prop["capitulo"].strip(), int(prop["agrupador_id"]))
+            if fi_d and du_i:
+                if ag_key in seen_ag:
+                    continue
+                seen_ag.add(ag_key)
+                fin_d = add_dias_habiles(contrato_id, fi_d, du_i, cache)
+                propagar_fechas_agrupador_a_hijos(
+                    sb,
+                    version_id,
+                    contrato_id,
+                    pk,
+                    prop["capitulo"].strip(),
+                    int(prop["agrupador_id"]),
+                    (prop.get("codigo_wbs") or prop.get("item") or "").strip(),
+                    fi_d,
+                    du_i,
+                    fin_d,
+                    uid,
+                    cache,
+                    ppto_items=ppto_items_pk,
+                )
+                propagaciones += 1
+            elif ag_key not in seen_clear:
+                seen_clear.add(ag_key)
+                limpiar_fechas_agrupador_hijos(
+                    sb,
+                    version_id,
+                    contrato_id,
+                    pk,
+                    prop["capitulo"].strip(),
+                    int(prop["agrupador_id"]),
+                    ppto_items=ppto_items_pk,
+                )
+                limpiezas_ag += 1
+        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    else:
+        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+
+    payload = res.data or {"ok": True, "actividades": []}
+    if isinstance(payload, dict):
+        payload["propagaciones"] = propagaciones
+        payload["limpiezas_ag"] = limpiezas_ag
+    return payload
+
+
+def apply_actividades_batch_tramo(
+    sb,
+    contrato_id: int,
+    version_id: str,
+    tramo: str,
+    actividades: List[dict],
+    uid: int,
+    cache: CalendarioNoHabilesCache,
+    pk_ids_filter: Optional[List[str]] = None,
+) -> dict:
+    """Guarda fechas de agrupadores en todos los PKs del tramo que los contienen."""
+    tramo_s = (tramo or "").strip()
+    if not tramo_s:
+        raise BusinessRuleError("tramo requerido")
+
+    tramos = fetch_tramos_contrato(sb, contrato_id)
+    match = next((t for t in tramos if (t.get("tramo") or "").strip() == tramo_s), None)
+    if not match:
+        raise BusinessRuleError(f"Tramo no encontrado: {tramo_s}")
+
+    pk_ids = [str(p).strip() for p in (match.get("pk_ids") or []) if str(p).strip()]
+    if pk_ids_filter:
+        allowed = {str(p).strip() for p in pk_ids_filter if str(p).strip()}
+        pk_ids = [p for p in pk_ids if p in allowed]
+    if not pk_ids:
+        raise BusinessRuleError("No hay PKs en el tramo")
+
+    ppto_rows = (
+        sb.table("presupuesto")
+        .select("pk_id, capitulo, item, cant_total, und, vlr_unitario, costo_directo")
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pk_ids)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    agr_rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,capitulo,codigo_wbs,nombre,orden")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    agr_meta: Dict[int, dict] = {}
+    for a in agr_rows:
+        aid = a.get("id")
+        if aid is not None:
+            agr_meta[int(aid)] = a
+
+    cap_map = _aggregate_ppto_rows_tramo(ppto_rows, ag_by_item, agr_meta)
+    metrics = _build_agrupador_pk_metrics(ppto_rows, ag_by_item, agr_meta)
+    by_pk = expand_tramo_batch_by_pk(actividades, cap_map, metrics)
+
+    if not by_pk:
+        raise BusinessRuleError("Ninguna actividad coincide con agrupadores del tramo")
+
+    total_rows = 0
+    total_prop = 0
+    pks_affected = []
+    for pk, rows in sorted(by_pk.items(), key=lambda x: x[0]):
+        batch = [{**r, "_propagate": dict(r["_propagate"])} for r in rows]
+        result = upsert_actividades_batch_pk(sb, contrato_id, version_id, pk, batch, uid, cache)
+        total_rows += len(rows)
+        total_prop += int(result.get("propagaciones") or 0)
+        pks_affected.append(pk)
+
+    mark_cpm_dirty(sb, version_id)
+    return {
+        "ok": True,
+        "tramo": tramo_s,
+        "pk_ids": pks_affected,
+        "actividades_enviadas": total_rows,
+        "propagaciones": total_prop,
+    }
 
 
 def fetch_sin_agrupador_count_by_pk(sb, contrato_id: int) -> Dict[str, int]:

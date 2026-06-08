@@ -22,6 +22,7 @@ import ProgObraCurvaSModal from './ProgObraCurvaSModal'
 import ProgObraAlcanceExportModal from './ProgObraAlcanceExportModal'
 import ProgObraAutoScheduleWizard from './ProgObraAutoScheduleWizard'
 import ProgPresupuestoSelector from './ProgPresupuestoSelector'
+import ProgTramoSelector from './ProgTramoSelector'
 import {
   clearVersionProgramacion,
   downloadCurvaSPdf,
@@ -29,6 +30,9 @@ import {
   fetchCostosPorVersionPresupuesto,
   fetchCurvaS,
   fetchPresupuestoVersiones,
+  fetchTramos,
+  fetchEstructuraTramo,
+  saveActividadesBatchTramo,
 } from './progObraApi'
 import { exportCurvaSExcel } from './progObraExportExcel'
 import { buildProgObraRibbonItems } from './progObraRibbonItems'
@@ -189,7 +193,7 @@ function colorForEstado(estado) {
   }
 }
 
-function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
+function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set(), tramoPkSet = null) {
   if (!planoFc?.features) return { type: 'FeatureCollection', features: [] }
   return {
     ...planoFc,
@@ -200,6 +204,9 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
       const c = colorForEstado(est)
       const critico = Boolean(row.tiene_ruta_critica) || criticalPkIds.has(pkid)
       const desviacion = Boolean(row.tiene_desviacion) && !critico
+      const atenuado = tramoPkSet != null && tramoPkSet.size > 0 && !tramoPkSet.has(pkid)
+      const op = atenuado ? Math.max(c.op * 0.18, 0.08) : c.op
+      const lineOp = atenuado ? 0.25 : 0.9
       return {
         ...f,
         properties: {
@@ -208,7 +215,8 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
           prog_estado: est,
           prog_fill: c.fill,
           prog_line: c.line,
-          prog_op: c.op,
+          prog_op: op,
+          prog_line_op: lineOp,
           prog_critico: critico ? 1 : 0,
           prog_desviacion: desviacion ? 1 : 0,
           prog_desviacion_tipo: row.desviacion_tipo || '',
@@ -321,12 +329,13 @@ function ProgPanelActionBtn({
   return btn
 }
 
-function ProgPkListado({ rows, selPk, t, onSelectPk }) {
+function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
   const [collapsed, setCollapsed] = useState(true)
   const sorted = [...(rows || [])].sort((a, b) =>
     String(a.pk_id || '').localeCompare(String(b.pk_id || ''), undefined, { numeric: true }),
   )
   if (sorted.length === 0) return null
+  const title = listTitle || `PKs del proyecto (${sorted.length})`
 
   return (
     <div style={{ marginTop: 2 }}>
@@ -350,7 +359,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
         }}
       >
         <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', lineHeight: 1 }}>{collapsed ? '▸' : '▾'}</span>
-        <span>PKs del proyecto ({sorted.length})</span>
+        <span>{title}</span>
       </button>
       {!collapsed && (
         <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 6, maxHeight: 200, overflowY: 'auto' }}>
@@ -537,7 +546,7 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
     paint: {
       'line-color': ['coalesce', ['get', 'prog_line'], '#888780'],
       'line-width': 2,
-      'line-opacity': 0.9,
+      'line-opacity': ['coalesce', ['get', 'prog_line_op'], 0.9],
     },
   })
   map.addLayer({
@@ -953,6 +962,12 @@ export default function ModuloProgramacionObra({
   const [activeModalPk, setActiveModalPk] = useState(null)
   const [criticalPkIds, setCriticalPkIds] = useState(new Set())
   const criticalPulseRef = useRef(null)
+  const [tramos, setTramos] = useState([])
+  const [tramoFilter, setTramoFilter] = useState(null)
+  const [modalMode, setModalMode] = useState('pk')
+  const [modalTramoContext, setModalTramoContext] = useState(null)
+  const [tramoEstructuraData, setTramoEstructuraData] = useState(null)
+  const [loadTramoEstructura, setLoadTramoEstructura] = useState(false)
 
   const handleCpmUpdated = useCallback((resultados) => {
     const ids = new Set()
@@ -1075,6 +1090,25 @@ export default function ModuloProgramacionObra({
     }
   }, [cid, token, API, applyVersionesPayload])
 
+  useEffect(() => {
+    if (!cid || !token) {
+      setTramos([])
+      setTramoFilter(null)
+      return
+    }
+    let cancel = false
+    fetchTramos(API, cid, token)
+      .then((d) => {
+        if (!cancel) setTramos(Array.isArray(d) ? d : [])
+      })
+      .catch(() => {
+        if (!cancel) setTramos([])
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, API])
+
   const meta = mapaResp?.meta || {}
   const borradorMeta = meta.borrador
 
@@ -1129,7 +1163,7 @@ export default function ModuloProgramacionObra({
     modalVersion && (modalVersion.estado || '') === 'borrador' && puedeEditar && !modalHistoricalReadOnly,
   )
 
-  const pkForData = progModalOpen && activeModalPk ? activeModalPk : selPk
+  const pkForData = modalMode === 'tramo' ? null : (progModalOpen && activeModalPk ? activeModalPk : selPk)
 
   const pkMeta = useCallback(() => {
     const rows = mapaResp?.pk
@@ -1151,6 +1185,37 @@ export default function ModuloProgramacionObra({
     () => pkRowsProgramables.map((r) => String(r.pk_id || '').trim()).filter(Boolean),
     [pkRowsProgramables],
   )
+
+  const programablePkSet = useMemo(
+    () => new Set(pkIdsProgramables),
+    [pkIdsProgramables],
+  )
+
+  const programableCountByTramo = useMemo(() => {
+    const counts = {}
+    for (const tr of tramos) {
+      counts[tr.tramo] = (tr.pk_ids || []).filter((pk) => programablePkSet.has(String(pk).trim())).length
+    }
+    return counts
+  }, [tramos, programablePkSet])
+
+  const tramoPkSet = useMemo(() => {
+    if (!tramoFilter) return null
+    const tr = tramos.find((x) => x.tramo === tramoFilter)
+    if (!tr) return new Set()
+    return new Set((tr.pk_ids || []).map((pk) => String(pk).trim()).filter(Boolean))
+  }, [tramoFilter, tramos])
+
+  const pkRowsVisibles = useMemo(() => {
+    if (!tramoFilter || !tramoPkSet?.size) return pkRowsProgramables
+    return pkRowsProgramables.filter((r) => tramoPkSet.has(String(r.pk_id || '').trim()))
+  }, [pkRowsProgramables, tramoFilter, tramoPkSet])
+
+  useEffect(() => {
+    if (!tramoFilter) return
+    const ok = tramos.some((tr) => tr.tramo === tramoFilter && (programableCountByTramo[tr.tramo] || 0) > 0)
+    if (!ok) setTramoFilter(null)
+  }, [tramoFilter, tramos, programableCountByTramo])
 
   const pkTieneCantidad = useCallback(
     (pkid) => {
@@ -1192,6 +1257,9 @@ export default function ModuloProgramacionObra({
         if (vb?.id) setWorkingVersionId(String(vb.id))
         else if (borradorMeta?.id) setWorkingVersionId(String(borradorMeta.id))
       }
+      setModalTramoContext(null)
+      setModalMode('pk')
+      setTramoEstructuraData(null)
       setSelPk(pkid)
       setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
       setActiveModalPk(pkid)
@@ -1201,6 +1269,38 @@ export default function ModuloProgramacionObra({
     [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
   )
 
+  const openProgramacionModalTramo = useCallback(() => {
+    if (!tramoFilter) return
+    const pks = pkRowsVisibles
+      .map((r) => String(r.pk_id || '').trim())
+      .filter((pk) => pk && pkTieneCantidad(pk))
+    if (!pks.length) {
+      showToast?.('No hay PKs programables en este tramo.', 'info')
+      return
+    }
+    if (!workingVersionId) {
+      const vb = versiones.find((v) => (v.estado || '') === 'borrador')
+      if (vb?.id) setWorkingVersionId(String(vb.id))
+      else if (borradorMeta?.id) setWorkingVersionId(String(borradorMeta.id))
+    }
+    setModalMode('tramo')
+    setModalTramoContext({ tramo: tramoFilter, pkCount: pks.length, pkIds: pks })
+    setSelPk(pks[0])
+    setModalPkTabs([])
+    setActiveModalPk(null)
+    setTramoEstructuraData(null)
+    setModalOpenCompareTab(false)
+    setProgModalOpen(true)
+  }, [
+    tramoFilter,
+    pkRowsVisibles,
+    pkTieneCantidad,
+    workingVersionId,
+    versiones,
+    borradorMeta?.id,
+    showToast,
+  ])
+
   const pickPkForModal = useCallback(() => {
     const pk = selPk || String(pkRowsProgramables[0]?.pk_id || '').trim()
     return pk || null
@@ -1208,8 +1308,11 @@ export default function ModuloProgramacionObra({
 
   const closeProgModal = useCallback(() => {
     setProgModalOpen(false)
+    setModalMode('pk')
     setModalPkTabs([])
     setActiveModalPk(null)
+    setModalTramoContext(null)
+    setTramoEstructuraData(null)
     setModalOpenCompareTab(false)
     setModalVersionId(null)
     setModalCompareBaselineId(null)
@@ -1342,7 +1445,7 @@ export default function ModuloProgramacionObra({
     )
 
     map.on('load', () => {
-      const enriched = buildEnrichedPlano(plano, pkMeta())
+      const enriched = buildEnrichedPlano(plano, pkMeta(), new Set(), null)
       enrichedGeojsonRef.current = enriched
       applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
@@ -1382,13 +1485,41 @@ export default function ModuloProgramacionObra({
   useEffect(() => {
     const map = mapInst.current
     if (!map || !MAPBOX_TOKEN || !plano?.features?.length || !mapaResp) return
-    const enriched = buildEnrichedPlano(plano, pkMeta(), criticalPkIds)
+    const enriched = buildEnrichedPlano(plano, pkMeta(), criticalPkIds, tramoPkSet)
     enrichedGeojsonRef.current = enriched
     const apply = () =>
       applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
     if (map.isStyleLoaded()) apply()
     else map.once('load', apply)
-  }, [mapaResp, pkMeta, plano, criticalPkIds])
+  }, [mapaResp, pkMeta, plano, criticalPkIds, tramoPkSet])
+
+  useEffect(() => {
+    const map = mapInst.current
+    if (!map || !plano?.features?.length) return
+    const runFit = () => {
+      if (!map.isStyleLoaded()) return
+      let feats = plano.features
+      if (tramoFilter && tramoPkSet?.size) {
+        feats = feats.filter((f) => tramoPkSet.has(featurePkId(f)))
+      }
+      const b = boundsLngLatFromFeatureCollection({ type: 'FeatureCollection', features: feats })
+      if (!b) return
+      try {
+        map.fitBounds(b, {
+          padding: { top: 56, bottom: 132, left: 200, right: 56 },
+          maxZoom: 17,
+          duration: 900,
+          bearing: MAP_INITIAL_BEARING,
+          pitch: 0,
+          essential: true,
+        })
+      } catch {
+        /* ignore */
+      }
+    }
+    if (map.isStyleLoaded()) runFit()
+    else map.once('load', runFit)
+  }, [tramoFilter, tramoPkSet, plano])
 
   useEffect(() => {
     const map = mapInst.current
@@ -1418,18 +1549,16 @@ export default function ModuloProgramacionObra({
   }, [presupuestoRows, pkForData])
 
   const capitulosOrdenados = useMemo(() => {
-    const fromEstructura = (progEstructura.capitulos || []).map((c) => c.capitulo).filter(Boolean)
-    if (fromEstructura.length) {
-      return [...fromEstructura].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    const caps = new Set()
+    for (const c of progEstructura.capitulos || []) {
+      const cap = String(c.capitulo || '').trim()
+      if (cap) caps.add(cap)
     }
-    const caps = new Map()
     for (const r of pptoPorPk) {
-      const c = String(r.capitulo || '').trim()
-      if (!c) continue
-      if (!caps.has(c)) caps.set(c, [])
-      caps.get(c).push(r)
+      const cap = String(r.capitulo || '').trim()
+      if (cap) caps.add(cap)
     }
-    return [...caps.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    return [...caps].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
   }, [progEstructura.capitulos, pptoPorPk])
 
   const estructuraPorCapitulo = useMemo(() => {
@@ -1445,6 +1574,57 @@ export default function ModuloProgramacionObra({
     () => mergeEstructuraConCostosPpto(estructuraPorCapitulo, pptoCostosData),
     [estructuraPorCapitulo, pptoCostosData],
   )
+
+  const tramoCapitulosOrdenados = useMemo(() => {
+    if (modalMode !== 'tramo' || !tramoEstructuraData?.capitulos) return []
+    return tramoEstructuraData.capitulos.map((c) => c.capitulo).filter(Boolean)
+  }, [modalMode, tramoEstructuraData])
+
+  const tramoEstructuraPorCapitulo = useMemo(() => {
+    if (modalMode !== 'tramo' || !tramoEstructuraData?.capitulos) return {}
+    const m = {}
+    for (const c of tramoEstructuraData.capitulos) {
+      const cap = String(c.capitulo || '').trim()
+      if (!cap) continue
+      m[cap] = {
+        capitulo: cap,
+        agrupadores: (c.agrupadores || []).map((ag) => ({
+          ...ag,
+          items: [],
+        })),
+        sin_agrupador: [],
+      }
+    }
+    return m
+  }, [modalMode, tramoEstructuraData])
+
+  const tramoActMap = useMemo(() => {
+    if (modalMode !== 'tramo' || !tramoEstructuraData?.capitulos) return {}
+    const m = {}
+    for (const c of tramoEstructuraData.capitulos) {
+      const cap = String(c.capitulo || '').trim()
+      for (const ag of c.agrupadores || []) {
+        const actItem = String(ag.codigo_wbs || `AG${ag.agrupador_id ?? ''}`).trim()
+        const prog = ag.programacion || {}
+        if (prog.consistente === false || !prog.fecha_inicio) continue
+        const k = `${cap}\u0000${actItem}\u00001`
+        m[k] = {
+          capitulo: cap,
+          item: actItem,
+          segmento: 1,
+          agrupador_id: ag.agrupador_id,
+          codigo_wbs: ag.codigo_wbs,
+          fecha_inicio: prog.fecha_inicio,
+          duracion_dias_habiles: prog.duracion_dias_habiles,
+          fecha_fin_calculada: prog.fecha_fin_calculada,
+        }
+      }
+    }
+    return m
+  }, [modalMode, tramoEstructuraData])
+
+  const modalCapitulosOrdenados = modalMode === 'tramo' ? tramoCapitulosOrdenados : capitulosOrdenados
+  const modalEstructuraPorCapitulo = modalMode === 'tramo' ? tramoEstructuraPorCapitulo : estructuraPorCapituloConPpto
 
   const agrupadorActItem = useCallback((ag) => {
     const wbs = String(ag?.codigo_wbs || '').trim()
@@ -1515,6 +1695,49 @@ export default function ModuloProgramacionObra({
     return m
   }, [actData.capitulos])
 
+  const modalActMap = modalMode === 'tramo' ? tramoActMap : actMap
+  const modalItemsPorCapitulo = useCallback(
+    (cap) => (modalMode === 'tramo' ? [] : itemsPorCapitulo(cap)),
+    [modalMode, itemsPorCapitulo],
+  )
+
+  const reloadTramoEstructura = useCallback(async () => {
+    if (!cid || !token || !modalTramoContext?.tramo || !versionIdForModal) return
+    const d = await fetchEstructuraTramo(API, cid, token, {
+      versionId: versionIdForModal,
+      tramo: modalTramoContext.tramo,
+      pkIds: modalTramoContext.pkIds,
+    })
+    setTramoEstructuraData(d && typeof d === 'object' ? d : null)
+  }, [cid, token, API, modalTramoContext, versionIdForModal])
+
+  useEffect(() => {
+    if (!cid || !token || modalMode !== 'tramo' || !modalTramoContext?.tramo || !versionIdForModal) {
+      if (modalMode !== 'tramo') setTramoEstructuraData(null)
+      return
+    }
+    let cancel = false
+    setLoadTramoEstructura(true)
+    setTramoEstructuraData(null)
+    fetchEstructuraTramo(API, cid, token, {
+      versionId: versionIdForModal,
+      tramo: modalTramoContext.tramo,
+      pkIds: modalTramoContext.pkIds,
+    })
+      .then((d) => {
+        if (!cancel) setTramoEstructuraData(d && typeof d === 'object' ? d : null)
+      })
+      .catch(() => {
+        if (!cancel) setTramoEstructuraData(null)
+      })
+      .finally(() => {
+        if (!cancel) setLoadTramoEstructura(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, API, modalMode, modalTramoContext, versionIdForModal])
+
   useEffect(() => {
     if (!cid || !token || !pkForData) {
       setPresupuestoRows([])
@@ -1522,6 +1745,7 @@ export default function ModuloProgramacionObra({
     }
     let cancel = false
     setLoadPpto(true)
+    setPresupuestoRows([])
     const q = new URLSearchParams()
     q.set('pk_criterio', pkForData)
     q.set('limit', '3000')
@@ -1548,6 +1772,7 @@ export default function ModuloProgramacionObra({
     }
     let cancel = false
     setLoadEstructura(true)
+    setProgEstructura({ capitulos: [] })
     const q = new URLSearchParams({ pk_id: pkForData })
     fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [] }))
@@ -2027,6 +2252,61 @@ export default function ModuloProgramacionObra({
     [puedeEditar, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones],
   )
 
+  const handleGuardarBatchTramo = useCallback(
+    async (items) => {
+      const vid = versionIdForWork
+      const tramo = modalTramoContext?.tramo
+      if (!puedeEditar || !cid || !vid || !tramo) return { ok: false, saved: 0, errors: items?.length || 0 }
+      const actividades = (items || []).map((row) => {
+        const def = row.itemDef || {}
+        const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
+        return {
+          capitulo: row.capitulo || def.capitulo,
+          item: row.item || def.item,
+          segmento: 1,
+          fecha_inicio: row.fecha_inicio ?? null,
+          duracion_dias_habiles: Number.isFinite(durInt) && durInt > 0 ? durInt : null,
+          agrupador_id: def.agrupador_id,
+          codigo_wbs: def.codigo_wbs || def.item,
+          tipo_distribucion: 'lineal',
+        }
+      })
+      try {
+        const batchData = await saveActividadesBatchTramo(API, cid, token, vid, {
+          tramo,
+          actividades,
+          pkIds: modalTramoContext?.pkIds,
+        })
+        if (batchData?.ms > 5000) {
+          showToast(`Guardado tramo en ${Math.round(batchData.ms)} ms`, 'info')
+        }
+        await reloadTramoEstructura()
+        await refreshMapaYVersiones()
+        return {
+          ok: true,
+          saved: actividades.length,
+          errors: 0,
+          pkIds: batchData?.pk_ids,
+        }
+      } catch (e) {
+        console.error('[ProgObra] handleGuardarBatchTramo:', e)
+        showToast(e?.message || 'Error al guardar programación del tramo', 'err')
+        return { ok: false, saved: 0, errors: actividades.length }
+      }
+    },
+    [
+      puedeEditar,
+      cid,
+      token,
+      versionIdForWork,
+      API,
+      modalTramoContext,
+      showToast,
+      reloadTramoEstructura,
+      refreshMapaYVersiones,
+    ],
+  )
+
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
       const m = await refreshMapaYVersiones()
@@ -2037,11 +2317,11 @@ export default function ModuloProgramacionObra({
           const id = String(r.pk_id || '').trim()
           if (id) metaMap[id] = r
         }
-        const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds)
+        const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds, tramoPkSet)
         map.getSource('prog-pol').setData(enriched)
       }
     },
-    [refreshMapaYVersiones, plano, criticalPkIds],
+    [refreshMapaYVersiones, plano, criticalPkIds, tramoPkSet],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -2636,11 +2916,13 @@ export default function ModuloProgramacionObra({
       )}
 
       <ProgObraProgramacionModal
-        open={progModalOpen && modalPkTabs.length > 0}
+        open={progModalOpen && (modalMode === 'tramo' ? !!modalTramoContext : modalPkTabs.length > 0)}
         onClose={closeProgModal}
         t={t}
         workingVersion={modalVersion}
         historicalReadOnly={modalHistoricalReadOnly}
+        modalMode={modalMode}
+        tramoContext={modalTramoContext}
         pkTabs={modalPkTabs}
         activePk={activeModalPk || modalPkTabs[0]}
         onSelectPk={setActiveModalPk}
@@ -2652,13 +2934,13 @@ export default function ModuloProgramacionObra({
             return next
           })
         }}
-        capitulosOrdenados={capitulosOrdenados}
-        estructuraPorCapitulo={estructuraPorCapituloConPpto}
+        capitulosOrdenados={modalCapitulosOrdenados}
+        estructuraPorCapitulo={modalEstructuraPorCapitulo}
         agrupadorActItem={agrupadorActItem}
         agrupadorRowKey={agrupadorRowKey}
-        itemsPorCapitulo={itemsPorCapitulo}
+        itemsPorCapitulo={modalItemsPorCapitulo}
         capProgMap={capProgMap}
-        actMap={actMap}
+        actMap={modalActMap}
         actividadKey={actividadKey}
         itemRowKey={itemRowKey}
         editable={modalEditable}
@@ -2667,15 +2949,16 @@ export default function ModuloProgramacionObra({
         onGuardarCap={handleGuardarCapitulo}
         onGuardarItem={handleGuardarItem}
         onGuardarBatch={handleGuardarBatch}
+        onGuardarBatchTramo={handleGuardarBatchTramo}
         loadAct={loadAct}
-        loadPpto={loadPpto || loadEstructura || loadPptoCostos}
+        loadPpto={modalMode === 'tramo' ? loadTramoEstructura : (loadPpto || loadEstructura || loadPptoCostos)}
         cid={cid}
         token={token}
         API={API}
         panelBusy={panelBusy}
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
-        onReloadActividades={reloadActividadesPk}
+        onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}
         showToast={showToast}
         allPkIds={pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
@@ -3090,6 +3373,25 @@ export default function ModuloProgramacionObra({
           disabled={panelBusy}
         />
 
+        <ProgTramoSelector
+          tramos={tramos}
+          value={tramoFilter}
+          onChange={setTramoFilter}
+          t={t}
+          disabled={panelBusy}
+          programableCountByTramo={programableCountByTramo}
+        />
+        {tramoFilter && pkRowsVisibles.length > 0 && (
+          <ProgPanelActionBtn
+            label={`📋 Programar ${tramoFilter} (${pkRowsVisibles.length} PK${pkRowsVisibles.length === 1 ? '' : 's'})`}
+            onClick={() => openProgramacionModalTramo()}
+            disabled={panelBusy}
+            t={t}
+            variant="primary"
+            busy={panelBusy}
+          />
+        )}
+
         <ProgPanelDivider t={t} />
 
         <details open style={{ marginTop: '0.05rem' }}>
@@ -3316,7 +3618,17 @@ export default function ModuloProgramacionObra({
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Haz clic en un polígono del plano.</div>
         )}
 
-        <ProgPkListado rows={pkRowsProgramables} selPk={selPk} t={t} onSelectPk={selectPkAndZoom} />
+        <ProgPkListado
+          rows={pkRowsVisibles}
+          selPk={selPk}
+          t={t}
+          onSelectPk={selectPkAndZoom}
+          listTitle={
+            tramoFilter
+              ? `PKs del tramo (${pkRowsVisibles.length})`
+              : `PKs del proyecto (${pkRowsVisibles.length})`
+          }
+        />
         </div>
       </div>
     </div>
