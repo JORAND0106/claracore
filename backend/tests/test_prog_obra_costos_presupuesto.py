@@ -86,6 +86,13 @@ def test_apply_ppto_cost_overlay():
             "label": "2.9",
             "costo_programado": 2.0,
         },
+        "c": {
+            "pk_id": "PK1",
+            "capitulo": "02",
+            "agrupador_id": 99,
+            "label": "2.Z",
+            "costo_programado": 5000.0,
+        },
     }
     ag_costs = {("PK1", "02", 10): 7500000.0}
     item_costs = {("PK1", "02", "2.9"): 1000.0}
@@ -93,3 +100,33 @@ def test_apply_ppto_cost_overlay():
     assert out["a"]["costo_programado"] == 7500000.0
     assert out["a"]["fecha_inicio"] == "2026-01-01"
     assert out["b"]["costo_programado"] == 1000.0
+    assert out["c"]["costo_programado"] == 5000.0
+
+
+def test_scale_monthly_to_target():
+    from prog_obra_curva_s import _scale_monthly_to_target
+
+    scaled, total = _scale_monthly_to_target({"2026-06": 100.0, "2026-07": 200.0}, 330.0)
+    assert total == 330.0
+    assert round(sum(scaled.values()), 2) == 330.0
+
+
+def test_lookup_item_cost():
+    from prog_obra_costos_presupuesto import _lookup_item_cost
+
+    costs = {("PK1", "02", "2.1."): 1000.0}
+    assert _lookup_item_cost(costs, "PK1", "02", "2.1") == 1000.0
+    assert _lookup_item_cost(costs, "PK1", "02", "2.1.") == 1000.0
+
+
+def test_apply_ppto_cost_overlay_strict():
+    nodes = {
+        "c": {
+            "pk_id": "PK1",
+            "capitulo": "02",
+            "agrupador_id": 99,
+            "costo_programado": 5000.0,
+        },
+    }
+    out = apply_ppto_cost_overlay(nodes, {}, {}, strict=True)
+    assert out["c"]["costo_programado"] == 0.0

@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 
@@ -168,22 +168,70 @@ def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, s
     return ag_map, desc_map
 
 
-def fetch_estructura_programacion_pk(sb, contrato_id: int, pk_id: str) -> dict:
+def _fetch_ppto_rows_para_estructura(
+    sb,
+    contrato_id: int,
+    *,
+    pk_id: Optional[str] = None,
+    pk_ids: Optional[List[str]] = None,
+    tramo: Optional[str] = None,
+    version_ppto_id: Optional[str] = None,
+) -> List[dict]:
+    """Ítems de presupuesto para armar WBS (vivo o versión seleccionada)."""
+    vid = (version_ppto_id or "").strip()
+    if vid:
+        from prog_obra_costos_presupuesto import fetch_ppto_items_version
+
+        pk_set = None
+        pk_one = (pk_id or "").strip()
+        if pk_one:
+            pk_set = {pk_one}
+        elif pk_ids:
+            pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
+        return fetch_ppto_items_version(
+            sb,
+            contrato_id,
+            vid,
+            tramo=tramo,
+            pk_ids=pk_set,
+        )
+
+    q = (
+        sb.table("presupuesto")
+        .select("pk_id, capitulo, item, cant_total, und, vlr_unitario, costo_directo, descripcion")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+    )
+    pk_one = (pk_id or "").strip()
+    if pk_one:
+        q = q.eq("pk_id", pk_one)
+    elif pk_ids:
+        ids = [str(p).strip() for p in pk_ids if str(p).strip()]
+        if ids:
+            q = q.in_("pk_id", ids)
+    tramo_s = (tramo or "").strip()
+    if tramo_s:
+        q = q.eq("tramo", tramo_s)
+    return q.execute().data or []
+
+
+def fetch_estructura_programacion_pk(
+    sb,
+    contrato_id: int,
+    pk_id: str,
+    version_ppto_id: Optional[str] = None,
+) -> dict:
     """
     items de presupuesto del PK agrupados por capitulo y agrupador WBS.
     JOIN logico con listado_precios -> listado_precios_agrupadores.
     """
     pk = (pk_id or "").strip()
-    ppto_rows = (
-        sb.table("presupuesto")
-        .select("capitulo, item, cant_total, und, vlr_unitario, costo_directo, descripcion")
-        .eq("contrato_id", contrato_id)
-        .eq("pk_id", pk)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    ppto_rows = _fetch_ppto_rows_para_estructura(
+        sb,
+        contrato_id,
+        pk_id=pk,
+        version_ppto_id=version_ppto_id,
     )
     item_agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in ppto_rows:
@@ -348,15 +396,117 @@ def _aggregate_ppto_rows_tramo(
     return cap_map
 
 
-def _schedule_key(act: dict) -> Optional[Tuple[str, Optional[int], Optional[str]]]:
+def _capitulo_cpm_match_key(capitulo: str) -> str:
+    """Clave de comparación para alinear capítulos (p. ej. '4' vs '4. ESTRUCTURA')."""
+    s = str(capitulo or "").strip()
+    m = re.match(r"^(\d+)", s)
+    if m:
+        return m.group(1)
+    return s.casefold()
+
+
+def _stored_duracion_agrupador(
+    actividades: List[dict],
+    capitulo: str,
+    agrupador_id: int,
+    pk_ids: Optional[List[str]] = None,
+) -> Optional[int]:
+    """Duración manual almacenada (máx. entre PKs); independiente de fechas CPM."""
+    cap_key = _capitulo_cpm_match_key(capitulo)
+    ag_id = int(agrupador_id)
+    pk_set = {str(p).strip() for p in (pk_ids or []) if str(p).strip()} if pk_ids else None
+    durs: List[int] = []
+    for a in actividades or []:
+        if _capitulo_cpm_match_key(a.get("capitulo") or "") != cap_key:
+            continue
+        if a.get("agrupador_id") is None or int(a.get("agrupador_id")) != ag_id:
+            continue
+        pk = str(a.get("pk_id") or "").strip()
+        if pk_set is not None and pk not in pk_set:
+            continue
+        raw = a.get("duracion_dias_habiles")
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            parsed = int(raw)
+            if parsed > 0:
+                durs.append(parsed)
+        except (TypeError, ValueError):
+            continue
+    if durs:
+        return max(durs)
+    if pk_set is not None:
+        return _stored_duracion_agrupador(actividades, capitulo, agrupador_id, pk_ids=None)
+    return None
+
+
+def _is_agrupador_header_row(row: dict) -> bool:
+    item = (row.get("item") or "").strip()
+    cw = (row.get("codigo_wbs") or item or "").strip()
+    return bool(cw and item == cw)
+
+
+def _consolidar_fila_agrupador_cpm(rows: List[dict]) -> dict:
+    """Fila representativa: cabecera WBS + duración manual; fechas CPM no pisan duración."""
+    if not rows:
+        return {}
+    header = next((dict(r) for r in rows if _is_agrupador_header_row(r)), None)
+    best_dur = 0
+    best_dur_val = None
+    for r in rows:
+        raw = r.get("duracion_dias_habiles")
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if parsed > best_dur:
+            best_dur = parsed
+            best_dur_val = parsed
+    out = dict(header or rows[0])
+    if best_dur_val is not None:
+        out["duracion_dias_habiles"] = best_dur_val
+    return out
+
+
+def _es_ancla_manual_cpm(row: dict) -> bool:
+    """Ancla explícita del usuario — única fuente de fechas prog_actividades para el motor."""
+    if not bool(row.get("override_manual")):
+        return False
+    return _parse_date_cpm(row.get("fecha_inicio")) is not None
+
+
+def _consolidar_fila_agrupador_cpm_entrada(rows: List[dict]) -> dict:
+    """
+    Fila de entrada al motor CPM: duración consolidada; fechas solo si ancla manual.
+    Fechas de write-back CPM previo nunca alimentan el forward pass.
+    """
+    out = _consolidar_fila_agrupador_cpm(rows)
+    if not _es_ancla_manual_cpm(out):
+        out["fecha_inicio"] = None
+        out["fecha_fin_calculada"] = None
+    return out
+
+
+def _schedule_key(act: dict) -> Optional[Tuple[Optional[str], Optional[int], Optional[str]]]:
     fi = act.get("fecha_inicio")
-    if fi is None or str(fi).strip() == "":
-        return None
+    fi_s: Optional[str] = None
+    if fi is not None and str(fi).strip():
+        fi_s = str(fi).strip()[:10]
     du = act.get("duracion_dias_habiles")
-    du_i = int(du) if du is not None and str(du).strip() != "" else None
+    du_i: Optional[int] = None
+    if du is not None and str(du).strip() != "":
+        try:
+            parsed = int(du)
+            if parsed > 0:
+                du_i = parsed
+        except (TypeError, ValueError):
+            du_i = None
     fin = act.get("fecha_fin_calculada")
     fin_s = str(fin).strip() if fin is not None and str(fin).strip() else None
-    fi_s = str(fi).strip()[:10]
+    if fi_s is None and du_i is None:
+        return None
     return (fi_s, du_i, fin_s)
 
 
@@ -369,12 +519,12 @@ def _merge_programacion_agrupador(
     cache: Optional[CalendarioNoHabilesCache] = None,
 ) -> dict:
     """Unifica fechas del agrupador entre PKs; envolvente si hay conflicto o cobertura parcial."""
-    cap = capitulo.strip()
+    cap_key = _capitulo_cpm_match_key(capitulo)
     ag_id = int(agrupador_id)
     pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
     by_pk: Dict[str, dict] = {}
     for a in actividades or []:
-        if (a.get("capitulo") or "").strip() != cap:
+        if _capitulo_cpm_match_key(a.get("capitulo") or "") != cap_key:
             continue
         if a.get("agrupador_id") is None or int(a.get("agrupador_id")) != ag_id:
             continue
@@ -388,6 +538,7 @@ def _merge_programacion_agrupador(
             "fecha_inicio": sk[0],
             "duracion_dias_habiles": sk[1],
             "fecha_fin_calculada": sk[2],
+            "override_manual": bool(a.get("override_manual")),
         }
 
     empty = {
@@ -395,6 +546,7 @@ def _merge_programacion_agrupador(
         "duracion_dias_habiles": None,
         "fecha_fin_calculada": None,
         "consistente": True,
+        "override_manual": False,
     }
     if not by_pk:
         return empty
@@ -409,11 +561,13 @@ def _merge_programacion_agrupador(
     full_coverage = len(by_pk) >= len(pk_set)
 
     if all_same and full_coverage:
+        dur_same = _stored_duracion_agrupador(actividades, capitulo, ag_id, list(pk_set))
         return {
             "fecha_inicio": first.get("fecha_inicio"),
-            "duracion_dias_habiles": first.get("duracion_dias_habiles"),
+            "duracion_dias_habiles": dur_same if dur_same is not None else first.get("duracion_dias_habiles"),
             "fecha_fin_calculada": first.get("fecha_fin_calculada"),
             "consistente": True,
+            "override_manual": any(s.get("override_manual") for s in by_pk.values()),
         }
 
     min_fi: Optional[str] = None
@@ -426,8 +580,21 @@ def _merge_programacion_agrupador(
         if ff and (max_ff is None or ff > max_ff):
             max_ff = ff
 
-    dur_i: Optional[int] = None
-    if min_fi and max_ff and contrato_id is not None and cache is not None:
+    stored_durs: List[int] = []
+    for s in by_pk.values():
+        du = s.get("duracion_dias_habiles")
+        if du is None or str(du).strip() == "":
+            continue
+        try:
+            stored_durs.append(max(1, int(du)))
+        except (TypeError, ValueError):
+            continue
+    dur_i: Optional[int] = _stored_duracion_agrupador(
+        actividades, capitulo, ag_id, list(pk_set),
+    )
+    if dur_i is None:
+        dur_i = max(stored_durs) if stored_durs else None
+    if dur_i is None and min_fi and max_ff and contrato_id is not None and cache is not None:
         try:
             d0 = date.fromisoformat(min_fi[:10])
             d1 = date.fromisoformat(max_ff[:10])
@@ -440,6 +607,7 @@ def _merge_programacion_agrupador(
         "duracion_dias_habiles": dur_i,
         "fecha_fin_calculada": max_ff,
         "consistente": False,
+        "override_manual": any(s.get("override_manual") for s in by_pk.values()),
     }
 
 
@@ -510,6 +678,7 @@ def fetch_estructura_tramo(
     tramo: str,
     version_id: str,
     pk_ids_filter: Optional[List[str]] = None,
+    version_ppto_id: Optional[str] = None,
 ) -> dict:
     """
     Estructura consolidada WBS de un tramo: cantidades/costos sumados por agrupador.
@@ -536,16 +705,12 @@ def fetch_estructura_tramo(
 
     cache = CalendarioNoHabilesCache(make_prog_calendar_loader(sb))
 
-    ppto_rows = (
-        sb.table("presupuesto")
-        .select("pk_id, capitulo, item, cant_total, und, vlr_unitario, costo_directo, descripcion")
-        .eq("contrato_id", contrato_id)
-        .in_("pk_id", pk_ids)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    ppto_rows = _fetch_ppto_rows_para_estructura(
+        sb,
+        contrato_id,
+        pk_ids=pk_ids,
+        tramo=tramo_s,
+        version_ppto_id=version_ppto_id,
     )
 
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
@@ -567,7 +732,7 @@ def fetch_estructura_tramo(
 
     actividades = (
         sb.table("prog_actividades")
-        .select("pk_id,capitulo,item,agrupador_id,fecha_inicio,duracion_dias_habiles,fecha_fin_calculada")
+        .select("pk_id,capitulo,item,agrupador_id,fecha_inicio,duracion_dias_habiles,fecha_fin_calculada,override_manual")
         .eq("version_id", vid)
         .eq("contrato_id", contrato_id)
         .in_("pk_id", pk_ids)
@@ -631,7 +796,7 @@ def expand_tramo_batch_by_pk(
 ) -> Dict[str, List[dict]]:
     """
     Expande actividades de tramo a filas RPC por pk_id.
-    skip_scheduled: set de (capitulo, agrupador_id, pk_id) con fecha ya programada.
+    skip_scheduled: set de (capitulo, agrupador_id, pk_id) con fecha manual ya programada (override_manual).
     """
     by_pk: Dict[str, List[dict]] = {}
     for it in actividades or []:
@@ -700,6 +865,7 @@ def upsert_actividades_batch_pk(
     actividades: List[dict],
     uid: int,
     cache: CalendarioNoHabilesCache,
+    skip_propagation: bool = False,
 ) -> dict:
     """RPC batch + propagación WBS + prog_pk_estado para un PK."""
     from prog_obra_calendar import add_dias_habiles
@@ -736,7 +902,7 @@ def upsert_actividades_batch_pk(
 
     propagaciones = 0
     limpiezas_ag = 0
-    if propagation_items:
+    if propagation_items and not skip_propagation:
         _, ppto_items_pk = _ppto_items_por_pk(sb, contrato_id, pk)
         seen_ag = set()
         seen_clear = set()
@@ -766,7 +932,7 @@ def upsert_actividades_batch_pk(
                     ppto_items=ppto_items_pk,
                 )
                 propagaciones += 1
-            elif ag_key not in seen_clear:
+            elif fi_d is None and du_i is None and ag_key not in seen_clear:
                 seen_clear.add(ag_key)
                 limpiar_fechas_agrupador_hijos(
                     sb,
@@ -778,8 +944,9 @@ def upsert_actividades_batch_pk(
                     ppto_items=ppto_items_pk,
                 )
                 limpiezas_ag += 1
-        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
-    else:
+        if not skip_propagation:
+            upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    elif not skip_propagation:
         upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
 
     payload = res.data or {"ok": True, "actividades": []}
@@ -798,6 +965,7 @@ def apply_actividades_batch_tramo(
     uid: int,
     cache: CalendarioNoHabilesCache,
     pk_ids_filter: Optional[List[str]] = None,
+    allow_overwrite: bool = False,
 ) -> dict:
     """Guarda fechas de agrupadores en todos los PKs del tramo que los contienen."""
     tramo_s = (tramo or "").strip()
@@ -847,7 +1015,7 @@ def apply_actividades_batch_tramo(
 
     existing = (
         sb.table("prog_actividades")
-        .select("pk_id,capitulo,agrupador_id,fecha_inicio,duracion_dias_habiles,fecha_fin_calculada")
+        .select("pk_id,capitulo,agrupador_id,fecha_inicio,duracion_dias_habiles,fecha_fin_calculada,override_manual")
         .eq("version_id", version_id)
         .eq("contrato_id", contrato_id)
         .in_("pk_id", pk_ids)
@@ -857,14 +1025,18 @@ def apply_actividades_batch_tramo(
         or []
     )
     skip_scheduled: set = set()
-    for a in existing:
-        if _schedule_key(a) is None:
-            continue
-        cap_e = (a.get("capitulo") or "").strip()
-        pk_e = str(a.get("pk_id") or "").strip()
-        ag_e = a.get("agrupador_id")
-        if cap_e and pk_e and ag_e is not None:
-            skip_scheduled.add((cap_e, int(ag_e), pk_e))
+    if not allow_overwrite:
+        for a in existing:
+            fi = a.get("fecha_inicio")
+            if fi is None or str(fi).strip() == "":
+                continue
+            if not a.get("override_manual"):
+                continue
+            cap_e = (a.get("capitulo") or "").strip()
+            pk_e = str(a.get("pk_id") or "").strip()
+            ag_e = a.get("agrupador_id")
+            if cap_e and pk_e and ag_e is not None:
+                skip_scheduled.add((cap_e, int(ag_e), pk_e))
 
     omitidos = 0
     for it in actividades or []:
@@ -893,7 +1065,16 @@ def apply_actividades_batch_tramo(
     pks_affected = []
     for pk, rows in sorted(by_pk.items(), key=lambda x: x[0]):
         batch = [{**r, "_propagate": dict(r["_propagate"])} for r in rows]
-        result = upsert_actividades_batch_pk(sb, contrato_id, version_id, pk, batch, uid, cache)
+        result = upsert_actividades_batch_pk(
+            sb,
+            contrato_id,
+            version_id,
+            pk,
+            batch,
+            uid,
+            cache,
+            skip_propagation=allow_overwrite,
+        )
         total_rows += len(rows)
         total_prop += int(result.get("propagaciones") or 0)
         pks_affected.append(pk)
@@ -1252,6 +1433,67 @@ def _compute_estado_pk(items_total: int, items_con_fecha: int, items_sin_agrupad
     return "en_progreso"
 
 
+def _items_total_por_pks(sb, contrato_id: int, pk_ids: List[str]) -> Dict[str, int]:
+    """Cuenta ítems distintos de presupuesto por PK en una sola consulta."""
+    pks = [str(p).strip() for p in (pk_ids or []) if str(p).strip()]
+    if not pks:
+        return {}
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id,capitulo,item")
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pks)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    seen: Dict[str, set] = {}
+    counts: Dict[str, int] = {}
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not pk or not cap or not it:
+            continue
+        key = (cap, it)
+        bucket = seen.setdefault(pk, set())
+        if key in bucket:
+            continue
+        bucket.add(key)
+        counts[pk] = counts.get(pk, 0) + 1
+    return counts
+
+
+def _reset_prog_pk_estado_tramo(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_ids: List[str],
+) -> None:
+    """Recalcula prog_pk_estado tras borrar programación del tramo (sin escanear actividades)."""
+    totals = _items_total_por_pks(sb, contrato_id, pk_ids)
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for pk in pk_ids:
+        pk_s = str(pk).strip()
+        if not pk_s:
+            continue
+        total = int(totals.get(pk_s, 0))
+        rows.append({
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id": pk_s,
+            "estado_programacion": "sin_iniciar" if total > 0 else "sin_cantidad",
+            "items_total": total,
+            "items_con_fecha": 0,
+            "actualizado_en": now,
+        })
+    if rows:
+        sb.table("prog_pk_estado").upsert(rows, on_conflict="version_id,pk_id").execute()
+
+
 def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> None:
     pk = (pk_id or "").strip()
     items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)   # query 1
@@ -1599,7 +1841,8 @@ def list_versiones_enriched(sb, contrato_id: int) -> dict:
         sb.table("prog_versiones")
         .select(
             "id,numero_version,tipo,estado,creado_en,sellado_en,motivo_reprogramacion,"
-            "version_origen_id,superseded_by_id,metadata,creado_por,sellado_por"
+            "version_origen_id,superseded_by_id,metadata,creado_por,sellado_por,"
+            "fecha_inicio,fecha_fin"
         )
         .eq("contrato_id", contrato_id)
         .order("numero_version", desc=True)
@@ -1976,8 +2219,8 @@ def clear_tramo_programacion(
     )
     eliminados = int(r.count or 0)
     sb.table("prog_actividades").delete().eq("version_id", version_id).in_("pk_id", pks).execute()
-    for pk in pks:
-        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).in_("pk_id", pks).execute()
+    _reset_prog_pk_estado_tramo(sb, version_id, contrato_id, pks)
     mark_cpm_dirty(sb, version_id)
     return {
         "ok": True,
@@ -2712,6 +2955,54 @@ def eliminar_dependencia(sb, dep_id: str, version_id: str) -> None:
     sb.table("prog_dependencias").delete().eq("id", dep_id).execute()
     sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
 
+
+def actualizar_dependencia(
+    sb,
+    dep_id: str,
+    version_id: str,
+    *,
+    tipo: Optional[str] = None,
+    lag_dias: Optional[int] = None,
+) -> dict:
+    """Actualiza tipo y/o lag de una dependencia existente (sin cambiar origen/destino)."""
+    rows = (
+        sb.table("prog_dependencias")
+        .select("*")
+        .eq("id", dep_id)
+        .eq("version_id", version_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise BusinessRuleError("Dependencia no encontrada")
+    current = rows[0]
+    upd: dict = {}
+    if tipo is not None:
+        tipo_s = str(tipo).strip().upper()
+        if tipo_s not in ("FS", "SS", "FF", "SF"):
+            raise BusinessRuleError("Tipo de dependencia inválido")
+        upd["tipo"] = tipo_s
+    if lag_dias is not None:
+        try:
+            upd["lag_dias"] = int(lag_dias)
+        except (TypeError, ValueError):
+            raise BusinessRuleError("Lag de días inválido")
+    if not upd:
+        return current
+    row = (
+        sb.table("prog_dependencias")
+        .update(upd)
+        .eq("id", dep_id)
+        .eq("version_id", version_id)
+        .execute()
+        .data
+        or [current]
+    )[0]
+    sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+    return row
+
 def listar_dependencias_globales(sb, version_id: str) -> list:
     return (
         sb.table("prog_dependencias_globales")
@@ -2763,12 +3054,13 @@ def eliminar_dependencia_global(sb, dep_id: str, version_id: str) -> None:
 
 
 def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
-    """Combina dependencias especificas con globales expandidas por PK."""
+    """Combina dependencias especificas con globales; agrupadores se replican por PK del tramo."""
     specific = listar_dependencias(sb, version_id)
     global_deps = listar_dependencias_globales(sb, version_id)
 
+    resolve_cap = _build_capitulo_resolver(nodos)
     nodos_set = {n.key for n in nodos}
-    pks = {n.pk_id for n in nodos}
+    pks = sorted({n.pk_id for n in nodos})
 
     specific_intra_pairs = {
         (d["pk_id_origen"], d["capitulo_origen"], d.get("agrupador_id_origen") or "", d["capitulo_destino"], d.get("agrupador_id_destino") or "")
@@ -2776,28 +3068,88 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
         if d["pk_id_origen"] == d["pk_id_destino"]
     }
 
-    deps = [
-        DependenciaCPM(
-            pk_id_origen=d["pk_id_origen"],
-            capitulo_origen=d["capitulo_origen"],
-            pk_id_destino=d["pk_id_destino"],
-            capitulo_destino=d["capitulo_destino"],
-            tipo=d["tipo"],
-            lag_dias=int(d.get("lag_dias") or 0),
-            agrupador_id_origen=str(d.get("agrupador_id_origen") or ""),
-            agrupador_id_destino=str(d.get("agrupador_id_destino") or ""),
+    deps: list = []
+    ag_edge_sigs: set = set()
+
+    for d in specific:
+        ag_o_raw = d.get("agrupador_id_origen")
+        ag_d_raw = d.get("agrupador_id_destino")
+        ag_o = str(ag_o_raw).strip() if ag_o_raw not in (None, "") else ""
+        ag_d = str(ag_d_raw).strip() if ag_d_raw not in (None, "") else ""
+        cap_o_raw = str(d.get("capitulo_origen") or "").strip()
+        cap_d_raw = str(d.get("capitulo_destino") or "").strip()
+        pk_o = str(d.get("pk_id_origen") or "").strip()
+        pk_d = str(d.get("pk_id_destino") or "").strip()
+        cap_o = resolve_cap(pk_o, cap_o_raw) if pk_o else cap_o_raw
+        cap_d = resolve_cap(pk_d, cap_d_raw) if pk_d else cap_d_raw
+        tipo = str(d.get("tipo") or "FS").upper()
+        lag = int(d.get("lag_dias") or 0)
+
+        if ag_o and ag_d and cap_o and cap_d:
+            if (cap_o_raw != cap_o) or (cap_d_raw != cap_d):
+                _logger.info(
+                    "CPM dep agrupador alineada caps: %s/%s→%s/%s (orig=%r→%r dest=%r→%r ag=%s→%s tipo=%s lag=%d)",
+                    pk_o, cap_o_raw, pk_d, cap_d_raw,
+                    cap_o_raw, cap_o, cap_d_raw, cap_d, ag_o, ag_d, tipo, lag,
+                )
+            ag_edge_sigs.add((cap_o, ag_o, cap_d, ag_d, tipo, lag))
+            continue
+
+        deps.append(
+            DependenciaCPM(
+                pk_id_origen=d["pk_id_origen"],
+                capitulo_origen=cap_o,
+                pk_id_destino=d["pk_id_destino"],
+                capitulo_destino=cap_d,
+                tipo=tipo,
+                lag_dias=lag,
+                agrupador_id_origen=ag_o,
+                agrupador_id_destino=ag_d,
+            )
         )
-        for d in specific
-    ]
+
+    seen_ag: set = set()
+    for cap_o, ag_o, cap_d, ag_d, tipo, lag in sorted(ag_edge_sigs):
+        for pk in pks:
+            orig = (pk, cap_o, ag_o)
+            dest = (pk, cap_d, ag_d)
+            if orig not in nodos_set or dest not in nodos_set:
+                _logger.warning(
+                    "CPM dep agrupador omitida pk=%s %s/%s → %s/%s "
+                    "(nodo_orig=%s nodo_dest=%s; caps_nodo=%s)",
+                    pk, cap_o, ag_o, cap_d, ag_d,
+                    orig in nodos_set, dest in nodos_set,
+                    sorted({n.capitulo for n in nodos if n.pk_id == pk}),
+                )
+                continue
+            sig = (orig, dest, tipo, lag)
+            if sig in seen_ag:
+                continue
+            seen_ag.add(sig)
+            deps.append(
+                DependenciaCPM(
+                    pk_id_origen=pk,
+                    capitulo_origen=cap_o,
+                    pk_id_destino=pk,
+                    capitulo_destino=cap_d,
+                    tipo=tipo,
+                    lag_dias=lag,
+                    agrupador_id_origen=ag_o,
+                    agrupador_id_destino=ag_d,
+                )
+            )
 
     for g in global_deps:
-        cap_o = str(g["capitulo_origen"]).strip()
-        cap_d = str(g["capitulo_destino"]).strip()
+        cap_o = resolve_cap("", str(g["capitulo_origen"]).strip())
+        cap_d = resolve_cap("", str(g["capitulo_destino"]).strip())
         tipo = g["tipo"]
         lag = int(g.get("lag_dias") or 0)
         for pk in pks:
-            if (pk, cap_o, "") not in nodos_set or (pk, cap_d, "") not in nodos_set:
+            cap_o_pk = resolve_cap(pk, str(g["capitulo_origen"]).strip())
+            cap_d_pk = resolve_cap(pk, str(g["capitulo_destino"]).strip())
+            if (pk, cap_o_pk, "") not in nodos_set or (pk, cap_d_pk, "") not in nodos_set:
                 continue
+            cap_o, cap_d = cap_o_pk, cap_d_pk
             if (pk, cap_o, "", cap_d, "") in specific_intra_pairs:
                 continue
             deps.append(DependenciaCPM(
@@ -2810,6 +3162,65 @@ def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
             ))
 
     return deps
+
+
+def _expand_dependencias_agrupador_por_pk(deps: list, nodos: list) -> list:
+    """
+    Replica dependencias entre agrupadores a cada PK que tenga ambos extremos.
+    Las dependencias de tramo suelen definirse sobre un PK representativo;
+    el CPM debe aplicar la misma cadena en todos los PKs del tramo.
+    """
+    from prog_obra_cpm import DependenciaCPM
+
+    if not deps or not nodos:
+        return deps
+
+    nodos_set = {n.key for n in nodos}
+    pks = sorted({n.pk_id for n in nodos})
+    ag_edges: dict = {}
+    for d in deps:
+        ag_o = str(d.agrupador_id_origen or "").strip()
+        ag_d = str(d.agrupador_id_destino or "").strip()
+        if not ag_o and not ag_d:
+            continue
+        cap_o = str(d.capitulo_origen or "").strip()
+        cap_d = str(d.capitulo_destino or "").strip()
+        if not cap_o or not cap_d:
+            continue
+        edge = (
+            cap_o,
+            ag_o,
+            cap_d,
+            ag_d,
+            str(d.tipo or "FS").upper(),
+            int(d.lag_dias or 0),
+        )
+        ag_edges[edge] = d
+
+    out = list(deps)
+    seen = {(d.origen, d.destino, d.tipo, d.lag_dias) for d in deps}
+    for pk in pks:
+        for (cap_o, ag_o, cap_d, ag_d, tipo, lag) in ag_edges:
+            orig = (pk, cap_o, ag_o)
+            dest = (pk, cap_d, ag_d)
+            if orig not in nodos_set or dest not in nodos_set:
+                continue
+            nd = DependenciaCPM(
+                pk_id_origen=pk,
+                capitulo_origen=cap_o,
+                pk_id_destino=pk,
+                capitulo_destino=cap_d,
+                tipo=tipo,
+                lag_dias=lag,
+                agrupador_id_origen=ag_o,
+                agrupador_id_destino=ag_d,
+            )
+            sig = (nd.origen, nd.destino, nd.tipo, nd.lag_dias)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(nd)
+    return out
 
 
 def _parse_date_cpm(v):
@@ -2825,7 +3236,530 @@ def _parse_date_cpm(v):
         return None
 
 
+def update_version_horizonte(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    fecha_inicio=None,
+    fecha_fin=None,
+) -> dict:
+    """Actualiza fecha inicio/fin del cronograma de una versión borrador."""
+    vrows = (
+        sb.table("prog_versiones")
+        .select("id,estado,contrato_id")
+        .eq("id", version_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not vrows or int(vrows[0].get("contrato_id") or 0) != int(contrato_id):
+        raise BusinessRuleError("Versión no encontrada")
+    if (vrows[0].get("estado") or "") != "borrador":
+        raise BusinessRuleError("Solo versiones en borrador permiten editar el horizonte del cronograma")
+    fi = _parse_date_cpm(fecha_inicio) if fecha_inicio not in (None, "") else None
+    ff = _parse_date_cpm(fecha_fin) if fecha_fin not in (None, "") else None
+    if fi and ff and ff < fi:
+        raise BusinessRuleError("La fecha fin debe ser posterior o igual a la fecha inicio")
+    now = datetime.now(timezone.utc).isoformat()
+    upd: dict = {"actualizado_en": now, "cpm_dirty": True}
+    if fecha_inicio is not None:
+        upd["fecha_inicio"] = fi.isoformat() if fi else None
+    if fecha_fin is not None:
+        upd["fecha_fin"] = ff.isoformat() if ff else None
+    sb.table("prog_versiones").update(upd).eq("id", version_id).execute()
+    row = (
+        sb.table("prog_versiones")
+        .select("id,fecha_inicio,fecha_fin,cpm_dirty")
+        .eq("id", version_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )[0]
+    return row
+
+
+def _duracion_cpm_agrupador(row: dict, default: int = 1) -> int:
+    raw = row.get("duracion_dias_habiles")
+    if raw is None or str(raw).strip() == "":
+        return max(1, default)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return max(1, default)
+
+
+def _build_capitulo_resolver(nodos: list):
+    """Mapea capitulo de dependencia al string canónico del nodo en el mismo PK."""
+    caps_by_pk: Dict[str, Dict[str, str]] = {}
+    for n in nodos:
+        pk = str(n.pk_id).strip()
+        cap = str(n.capitulo).strip()
+        if not pk or not cap:
+            continue
+        caps_by_pk.setdefault(pk, {})[_capitulo_cpm_match_key(cap)] = cap
+
+    def resolve(pk: str, capitulo: str) -> str:
+        cap = str(capitulo or "").strip()
+        pk_s = str(pk or "").strip()
+        if not cap:
+            return cap
+        bucket = caps_by_pk.get(pk_s, {})
+        if cap in bucket.values():
+            return cap
+        mk = _capitulo_cpm_match_key(cap)
+        resolved = bucket.get(mk)
+        if resolved and resolved != cap:
+            _logger.info(
+                "CPM capitulo alineado dep=%r → nodo=%r (pk=%s)",
+                cap, resolved, pk_s,
+            )
+            return resolved
+        return cap
+
+    return resolve
+
+
+def _resolve_duracion_cpm_nodo(
+    row: dict,
+    all_actividades: List[dict],
+    cap: str,
+    ag_id: int,
+    pk: str,
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+    *,
+    for_cpm: bool = False,
+) -> int:
+    """
+    Duración efectiva para CPM — misma prioridad que estructura-tramo:
+    fila consolidada → máx. almacenada (PK / versión) → span fechas hábiles → 1.
+    """
+    raw = row.get("duracion_dias_habiles")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            parsed = int(raw)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
+
+    stored_pk = _stored_duracion_agrupador(all_actividades, cap, ag_id, pk_ids=[pk])
+    if stored_pk is not None:
+        return stored_pk
+
+    stored_all = _stored_duracion_agrupador(all_actividades, cap, ag_id, pk_ids=None)
+    if stored_all is not None:
+        return stored_all
+
+    fi = _parse_date_cpm(row.get("fecha_inicio"))
+    ff = _parse_date_cpm(row.get("fecha_fin_calculada"))
+    if not for_cpm and fi and ff and ff >= fi:
+        try:
+            span = count_dias_habiles_entre(int(contrato_id), fi, ff, cache)
+            if span > 0:
+                return span
+        except (TypeError, ValueError):
+            pass
+
+    return 1
+
+
+def _reset_cpm_entrada_version(sb, version_id: str) -> None:
+    """
+    Elimina resultados CPM previos y fechas de write-back no manuales.
+    Cada ejecución de CPM parte solo de duraciones almacenadas + dependencias + anclas manuales.
+    """
+    sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).execute()
+    now = datetime.now(timezone.utc).isoformat()
+    sb.table("prog_actividades").update({
+        "fecha_inicio": None,
+        "fecha_fin_calculada": None,
+        "actualizado_en": now,
+    }).eq("version_id", version_id).eq("override_manual", False).not_.is_(
+        "agrupador_id", "null"
+    ).execute()
+
+
+def _duraciones_agrupador_para_cpm(raw_ags: List[dict]) -> Dict[tuple, int]:
+    """Duración por (pk, cap, ag_id) solo desde duracion_dias_habiles almacenada (sin fechas CPM)."""
+    if not raw_ags:
+        return {}
+
+    by_ag: Dict[tuple, set] = {}
+    cap_canon: Dict[tuple, str] = {}
+    for r in raw_ags:
+        ag_raw = r.get("agrupador_id")
+        if ag_raw is None:
+            continue
+        try:
+            ag_int = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        if not pk or not cap:
+            continue
+        sig = (_capitulo_cpm_match_key(cap), ag_int)
+        by_ag.setdefault(sig, set()).add(pk)
+        cap_canon.setdefault(sig, cap)
+
+    out: Dict[tuple, int] = {}
+    for sig, pk_set in by_ag.items():
+        _, ag_int = sig
+        cap = cap_canon[sig]
+        pk_list = sorted(pk_set)
+        dur_i = _stored_duracion_agrupador(raw_ags, cap, ag_int, pk_list)
+        if dur_i is None or dur_i <= 0:
+            continue
+        for pk in pk_list:
+            out[(pk, cap, str(ag_int))] = dur_i
+    return out
+
+
+def _cpm_debug_watch_keys(
+    nodos: list,
+    agr_codigo_by_id: Dict[int, str],
+    watch_codigos: Tuple[str, ...] = ("4.D", "1.A"),
+) -> Tuple[Set[tuple], Dict[tuple, str]]:
+    """Nodos CPM a instrumentar en el forward pass (por codigo_wbs)."""
+    watch: Set[tuple] = set()
+    labels: Dict[tuple, str] = {}
+    targets = {c.strip().upper() for c in watch_codigos if c.strip()}
+    for n in nodos:
+        ag_raw = str(n.agrupador_id or "").strip()
+        if not ag_raw:
+            continue
+        try:
+            ag_int = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        cod = str(agr_codigo_by_id.get(ag_int) or "").strip()
+        if not cod:
+            continue
+        cod_u = cod.upper()
+        if cod_u not in targets and not any(cod_u.endswith(f".{t}") or cod_u == t for t in targets):
+            continue
+        watch.add(n.key)
+        labels[n.key] = f"{cod} pk={n.pk_id} cap={n.capitulo} ag_id={ag_int}"
+    return watch, labels
+
+
+def _log_cpm_grafo_diagnostico(
+    nodos: list,
+    deps_built: list,
+    deps_raw: list,
+    agr_codigo_by_id: Dict[int, str],
+    debug_watch: Set[tuple],
+) -> None:
+    """Compara prog_dependencias vs aristas efectivas del grafo para nodos vigilados."""
+    if not debug_watch:
+        return
+
+    nodos_set = {n.key for n in nodos}
+
+    def _codigo(ag_raw) -> str:
+        if ag_raw in (None, ""):
+            return ""
+        try:
+            return str(agr_codigo_by_id.get(int(ag_raw)) or ag_raw)
+        except (TypeError, ValueError):
+            return str(ag_raw)
+
+    for d in deps_raw or []:
+        ag_o = d.get("agrupador_id_origen")
+        ag_d = d.get("agrupador_id_destino")
+        cod_o, cod_d = _codigo(ag_o), _codigo(ag_d)
+        if cod_d.upper() != "4.D" and cod_o.upper() != "1.A":
+            if not (cod_o.upper().endswith(".1.A") or cod_d.upper().endswith(".4.D")):
+                continue
+        _logger.info(
+            "CPM dep BD: %s/%s(%s) → %s/%s(%s) tipo=%s lag=%s caps_raw=(%r,%r) ag_ids=(%s,%s)",
+            d.get("pk_id_origen"), d.get("capitulo_origen"), cod_o,
+            d.get("pk_id_destino"), d.get("capitulo_destino"), cod_d,
+            d.get("tipo"), d.get("lag_dias"),
+            d.get("capitulo_origen"), d.get("capitulo_destino"),
+            ag_o, ag_d,
+        )
+        for pk in sorted({n.pk_id for n in nodos}):
+            ag_o_s = str(ag_o).strip() if ag_o not in (None, "") else ""
+            ag_d_s = str(ag_d).strip() if ag_d not in (None, "") else ""
+            if not ag_o_s or not ag_d_s:
+                continue
+            resolve = _build_capitulo_resolver(nodos)
+            cap_o = resolve(pk, str(d.get("capitulo_origen") or "").strip())
+            cap_d = resolve(pk, str(d.get("capitulo_destino") or "").strip())
+            orig = (pk, cap_o, ag_o_s)
+            dest = (pk, cap_d, ag_d_s)
+            in_graph = orig in nodos_set and dest in nodos_set
+            _logger.info(
+                "CPM dep réplica pk=%s: %s → %s en_grafo=%s (nodos=%s,%s)",
+                pk, orig, dest, in_graph, orig in nodos_set, dest in nodos_set,
+            )
+
+    for key in sorted(debug_watch):
+        label = key
+        incoming = [dep for dep in deps_built if dep.destino == key]
+        _logger.info(
+            "CPM nodo vigilado %s: %d arista(s) entrante(s) en grafo",
+            label, len(incoming),
+        )
+        for dep in incoming:
+            _logger.info(
+                "  ← orig=%s tipo=%s lag=%d (orig_en_grafo=%s)",
+                dep.origen, dep.tipo, dep.lag_dias, dep.origen in nodos_set,
+            )
+
+
+def _sync_duraciones_merge_tramo_antes_cpm(
+    raw_ags: List[dict],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+) -> Dict[tuple, int]:
+    """
+    Duración por (pk, cap, ag_id) usando _merge_programacion_agrupador (misma fuente que UI tramo).
+    """
+    if not raw_ags:
+        return {}
+
+    by_ag: Dict[tuple, set] = {}
+    cap_canon: Dict[tuple, str] = {}
+    for r in raw_ags:
+        ag_raw = r.get("agrupador_id")
+        if ag_raw is None:
+            continue
+        try:
+            ag_int = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        if not pk or not cap:
+            continue
+        sig = (_capitulo_cpm_match_key(cap), ag_int)
+        by_ag.setdefault(sig, set()).add(pk)
+        cap_canon.setdefault(sig, cap)
+
+    out: Dict[tuple, int] = {}
+    for sig, pk_set in by_ag.items():
+        cap_key, ag_int = sig
+        cap = cap_canon[sig]
+        pk_list = sorted(pk_set)
+        merge = _merge_programacion_agrupador(
+            raw_ags, cap, ag_int, pk_list, contrato_id=contrato_id, cache=cache,
+        )
+        raw_dur = merge.get("duracion_dias_habiles")
+        if raw_dur is None:
+            continue
+        try:
+            dur_i = int(raw_dur)
+        except (TypeError, ValueError):
+            continue
+        if dur_i <= 0:
+            continue
+        for pk in pk_list:
+            out[(pk, cap, str(ag_int))] = dur_i
+    return out
+
+
+def _persist_duraciones_agrupador_antes_cpm(
+    sb,
+    version_id: str,
+    raw_ags: List[dict],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+) -> int:
+    """Escribe duracion_dias_habiles faltante en cabecera WBS antes del forward pass."""
+    if not raw_ags:
+        return 0
+
+    merge_dur = _duraciones_agrupador_para_cpm(raw_ags)
+
+    ag_rows_by_key: Dict[tuple, List[dict]] = {}
+    for r in raw_ags:
+        ag_id = str(r.get("agrupador_id") or "").strip()
+        if not ag_id:
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        ag_rows_by_key.setdefault((pk, cap, ag_id), []).append(dict(r))
+
+    now = datetime.now(timezone.utc).isoformat()
+    updates: List[dict] = []
+    for (pk, cap, ag_id), rows in ag_rows_by_key.items():
+        consolidated = _consolidar_fila_agrupador_cpm(rows)
+        try:
+            ag_int = int(ag_id)
+        except (TypeError, ValueError):
+            continue
+        resolved = _resolve_duracion_cpm_nodo(
+            consolidated, raw_ags, cap, ag_int, pk, contrato_id, cache, for_cpm=True,
+        )
+        merge_val = merge_dur.get((pk, cap, ag_id))
+        if merge_val is not None and merge_val > resolved:
+            resolved = merge_val
+        header = next((r for r in rows if _is_agrupador_header_row(r)), None)
+        target = header or consolidated
+        current = target.get("duracion_dias_habiles")
+        current_i: Optional[int] = None
+        if current is not None and str(current).strip() != "":
+            try:
+                current_i = int(current)
+            except (TypeError, ValueError):
+                current_i = None
+        needs_write = current_i is None or (current_i <= 1 and resolved > 1)
+        if not needs_write:
+            for r in rows:
+                if r.get("duracion_dias_habiles") is None or (
+                    int(r.get("duracion_dias_habiles") or 0) <= 1 and resolved > 1
+                ):
+                    r["duracion_dias_habiles"] = resolved
+            continue
+        rid = str(target.get("id") or "").strip()
+        if not rid:
+            for r in rows:
+                r["duracion_dias_habiles"] = resolved
+            continue
+        updates.append({
+            "id": rid,
+            "duracion_dias_habiles": resolved,
+            "actualizado_en": now,
+        })
+        for r in rows:
+            r["duracion_dias_habiles"] = resolved
+
+    if updates:
+        _bulk_patch_prog_actividades_by_id(sb, updates)
+    return len(updates)
+
+
+def _nodo_cpm_desde_agrupador(
+    row: dict,
+    fecha_inicio_ver: Optional[date],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+    add_dh,
+    *,
+    duracion_resuelta: Optional[int] = None,
+) -> Optional["NodoCPM"]:
+    """
+    Nodo CPM de agrupador.
+
+    Regla de entrada (forward pass):
+      - No ancla: solo fecha_inicio de versión + duracion_dias_habiles (fin = inicio + dur).
+      - Ancla manual (override_manual + fecha_inicio): fechas explícitas del usuario.
+      - Nunca usar fechas prog_actividades de un cálculo CPM anterior.
+    """
+    from prog_obra_cpm import NodoCPM
+
+    ag_id = str(row.get("agrupador_id") or "").strip()
+    pk = str(row.get("pk_id") or "").strip()
+    cap = str(row.get("capitulo") or "").strip()
+    if not ag_id or not pk or not cap:
+        return None
+
+    es_ancla = _es_ancla_manual_cpm(row)
+    dur = duracion_resuelta if duracion_resuelta is not None else _duracion_cpm_agrupador(row)
+    dur = max(1, int(dur or 1))
+
+    if es_ancla:
+        fi = _parse_date_cpm(row.get("fecha_inicio"))
+        ff_manual = _parse_date_cpm(row.get("fecha_fin_calculada"))
+        ff = ff_manual if ff_manual else add_dh(contrato_id, fi, dur, cache)
+    else:
+        fi = fecha_inicio_ver
+        ff = add_dh(contrato_id, fi, dur, cache) if fi else None
+
+    if not fi or not ff:
+        return None
+
+    return NodoCPM(
+        pk_id=pk,
+        capitulo=cap,
+        duracion=dur,
+        fecha_inicio_base=fi,
+        fecha_fin_base=ff,
+        agrupador_id=ag_id,
+        es_ancla=es_ancla,
+    )
+
+
+def _completar_nodos_cpm_desde_dependencias(
+    sb,
+    version_id: str,
+    nodos: list,
+    seen_ag: set,
+    caps_con_agrupador: set,
+    fecha_inicio_ver: Optional[date],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+    add_dh,
+    dur_lookup: Optional[dict] = None,
+) -> None:
+    """Añade nodos stub para extremos de dependencias que aún no están en el grafo."""
+    from prog_obra_cpm import NodoCPM
+
+    if not fecha_inicio_ver:
+        return
+
+    node_keys = {n.key for n in nodos}
+    dur_by_key = dict(dur_lookup or {})
+    for n in nodos:
+        dur_by_key[n.key] = max(1, int(n.duracion or 1))
+
+    for d in listar_dependencias(sb, version_id):
+        for pk, cap, ag_raw in (
+            (d.get("pk_id_origen"), d.get("capitulo_origen"), d.get("agrupador_id_origen")),
+            (d.get("pk_id_destino"), d.get("capitulo_destino"), d.get("agrupador_id_destino")),
+        ):
+            pk_s = str(pk or "").strip()
+            cap_s = str(cap or "").strip()
+            ag_s = str(ag_raw or "").strip() if ag_raw not in (None, "") else ""
+            if not pk_s or not cap_s:
+                continue
+            key = (pk_s, cap_s, ag_s)
+            if key in node_keys:
+                continue
+            dur = dur_by_key.get(key, 1)
+            fi = fecha_inicio_ver
+            ff = add_dh(contrato_id, fi, dur, cache)
+            if not ff:
+                continue
+            nodos.append(NodoCPM(
+                pk_id=pk_s,
+                capitulo=cap_s,
+                duracion=dur,
+                fecha_inicio_base=fi,
+                fecha_fin_base=ff,
+                agrupador_id=ag_s,
+                es_ancla=False,
+            ))
+            node_keys.add(key)
+            if ag_s:
+                seen_ag.add(key)
+                caps_con_agrupador.add((pk_s, cap_s))
+
+
 def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
+    from prog_obra_cpm import NodoCPM, ResultadoCPM
+    from prog_obra_calendar import add_dias_habiles as _add_dh
+
+    ver_rows = (
+        sb.table("prog_versiones")
+        .select("fecha_inicio,fecha_fin")
+        .eq("id", version_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )
+    ver = ver_rows[0]
+    fecha_inicio_ver = _parse_date_cpm(ver.get("fecha_inicio"))
+    fecha_fin_ver = _parse_date_cpm(ver.get("fecha_fin"))
+
+    _reset_cpm_entrada_version(sb, version_id)
+
     raw_caps = (
         sb.rpc("prog_get_capitulos_con_fechas", {"p_version_id": version_id})
         .execute()
@@ -2836,14 +3770,42 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     seen_ag = set()
     raw_ags = (
         sb.table("prog_actividades")
-        .select("pk_id,capitulo,agrupador_id,fecha_inicio,fecha_fin_calculada,duracion_dias_habiles")
+        .select(
+            "id,pk_id,capitulo,item,codigo_wbs,agrupador_id,fecha_inicio,fecha_fin_calculada,"
+            "duracion_dias_habiles,override_manual"
+        )
         .eq("version_id", version_id)
         .not_.is_("agrupador_id", "null")
         .execute()
         .data
         or []
     )
+    n_persisted = _persist_duraciones_agrupador_antes_cpm(
+        sb, version_id, raw_ags, contrato_id, cache,
+    )
+    if n_persisted:
+        _logger.info("CPM: persistidas %d duracion(es) en cabecera WBS antes del cálculo", n_persisted)
+
+    merge_dur_by_ag = _duraciones_agrupador_para_cpm(raw_ags)
+
+    agr_codigo_by_id: Dict[int, str] = {}
+    agr_rows_meta = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,codigo_wbs")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    for a in agr_rows_meta:
+        aid = a.get("id")
+        cw = str(a.get("codigo_wbs") or "").strip()
+        if aid is not None and cw:
+            agr_codigo_by_id[int(aid)] = cw
+
     caps_con_agrupador: set[tuple[str, str]] = set()
+    dur_lookup: dict = {}
+    ag_rows_by_key: dict = {}
     for r in raw_ags:
         ag_id = str(r.get("agrupador_id") or "").strip()
         if not ag_id:
@@ -2851,51 +3813,103 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         pk = str(r.get("pk_id") or "").strip()
         cap = str(r.get("capitulo") or "").strip()
         key = (pk, cap, ag_id)
-        if key in seen_ag:
+        ag_rows_by_key.setdefault(key, []).append(dict(r))
+
+    for key, rows in ag_rows_by_key.items():
+        pk, cap, ag_id = key
+        r = _consolidar_fila_agrupador_cpm_entrada(rows)
+        r["pk_id"] = pk
+        r["capitulo"] = cap
+        r["agrupador_id"] = ag_id
+        try:
+            ag_int = int(ag_id)
+        except (TypeError, ValueError):
+            ag_int = 0
+        dur_res = _resolve_duracion_cpm_nodo(
+            r, raw_ags, cap, ag_int, pk, contrato_id, cache, for_cpm=True,
+        )
+        merge_val = merge_dur_by_ag.get((pk, cap, ag_id))
+        if merge_val is not None and merge_val > dur_res:
+            dur_res = merge_val
+        dur_lookup[key] = dur_res
+        nodo = _nodo_cpm_desde_agrupador(
+            r, fecha_inicio_ver, contrato_id, cache, _add_dh, duracion_resuelta=dur_res,
+        )
+        if not nodo:
             continue
-        fi = _parse_date_cpm(r.get("fecha_inicio"))
-        ff = _parse_date_cpm(r.get("fecha_fin_calculada"))
-        dur = int(r.get("duracion_dias_habiles") or 1)
-        if fi and ff:
-            nodos.append(NodoCPM(
-                pk_id=pk,
-                capitulo=cap,
-                duracion=max(1, dur),
-                fecha_inicio_base=fi,
-                fecha_fin_base=ff,
-                agrupador_id=ag_id,
-            ))
-            seen_ag.add(key)
-            caps_con_agrupador.add((pk, cap))
+        nodos.append(nodo)
+        seen_ag.add(key)
+        caps_con_agrupador.add((pk, cap))
+
+    _completar_nodos_cpm_desde_dependencias(
+        sb,
+        version_id,
+        nodos,
+        seen_ag,
+        caps_con_agrupador,
+        fecha_inicio_ver,
+        contrato_id,
+        cache,
+        _add_dh,
+        dur_lookup=dur_lookup,
+    )
+
+    if not nodos and (raw_ags or listar_dependencias(sb, version_id)):
+        if not fecha_inicio_ver:
+            return ResultadoCPM(
+                ok=False,
+                error=(
+                    "Defina la fecha de inicio de la versión en el horizonte del cronograma "
+                    "para calcular CPM sin fechas manuales en los agrupadores."
+                ),
+            )
 
     for r in raw_caps:
         pk = str(r["pk_id"]).strip()
         cap = str(r["capitulo"]).strip()
         if (pk, cap) in caps_con_agrupador:
             continue
-        fi = _parse_date_cpm(r.get("fecha_inicio"))
-        ff = _parse_date_cpm(r.get("fecha_fin"))
-        dur = int(r.get("duracion_dias_hab") or 1)
-        if fi and ff:
-            nodos.append(NodoCPM(
-                pk_id=pk,
-                capitulo=cap,
-                duracion=max(1, dur),
-                fecha_inicio_base=fi,
-                fecha_fin_base=ff,
-            ))
+        dur = max(1, int(r.get("duracion_dias_hab") or 1))
+        fi = fecha_inicio_ver
+        if not fi:
+            continue
+        ff = _add_dh(contrato_id, fi, dur, cache)
+        if not ff:
+            continue
+        nodos.append(NodoCPM(
+            pk_id=pk,
+            capitulo=cap,
+            duracion=dur,
+            fecha_inicio_base=fi,
+            fecha_fin_base=ff,
+        ))
 
     if not nodos:
         return ResultadoCPM(ok=True)
 
-    # Pre-cargar calendario del contrato para todo el horizonte del CPM (evita recargas en cascada).
     d0 = min(n.fecha_inicio_base for n in nodos)
     d1 = max(n.fecha_fin_base for n in nodos)
+    if fecha_inicio_ver and fecha_inicio_ver < d0:
+        d0 = fecha_inicio_ver
+    if fecha_fin_ver and fecha_fin_ver > d1:
+        d1 = fecha_fin_ver
     cache.fechas_extra(contrato_id, d0 - timedelta(days=120), d1 + timedelta(days=120))
 
     dependencias = _construir_dependencias_cpm(sb, version_id, nodos)
 
-    resultado = calcular_cpm(nodos, dependencias, contrato_id, cache)
+    debug_watch, debug_labels = _cpm_debug_watch_keys(nodos, agr_codigo_by_id)
+    _log_cpm_grafo_diagnostico(nodos, dependencias, listar_dependencias(sb, version_id), agr_codigo_by_id, debug_watch)
+
+    resultado = calcular_cpm(
+        nodos,
+        dependencias,
+        contrato_id,
+        cache,
+        fecha_inicio_proyecto=fecha_inicio_ver,
+        fecha_fin_proyecto=fecha_fin_ver,
+        debug_watch=debug_watch,
+        debug_labels=debug_labels,
+    )
     if not resultado.ok:
         return resultado
 
@@ -2926,18 +3940,23 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         "p_resultados": payload,
     }).execute()
 
+    ag_writeback = [n for n in resultado.nodos if n.agrupador_id and not n.es_ancla and n.fecha_inicio_temprana]
+    _apply_cpm_fechas_bulk(sb, version_id, ag_writeback)
+
     for n in resultado.nodos:
         if n.agrupador_id:
             continue
-        if not n.fecha_inicio_temprana or n.fecha_inicio_temprana == n.fecha_inicio_base:
+        if n.es_ancla or not n.fecha_inicio_temprana:
             continue
         sb.table("prog_actividades_capitulo").update({
             "fecha_inicio_sugerida": n.fecha_inicio_temprana.isoformat(),
-            "duracion_dias_habiles": n.duracion,
         }).eq("version_id", version_id).eq("pk_id", n.pk_id).eq("capitulo", n.capitulo).execute()
         _recalc_items_heredados_cpm(sb, version_id, n.pk_id, n.capitulo, n.fecha_inicio_temprana, contrato_id, cache)
 
-    changed = [n.key for n in resultado.nodos if n.fecha_inicio_temprana != n.fecha_inicio_base]
+    changed = [
+        n.key for n in resultado.nodos
+        if not n.es_ancla and n.fecha_inicio_temprana and n.fecha_inicio_temprana != n.fecha_inicio_base
+    ]
     resultado.nodos_afectados_cascada = nodos_afectados_por(changed, dependencias)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -2946,6 +3965,170 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     ).eq("id", version_id).execute()
 
     return resultado
+
+
+def _bulk_patch_prog_actividades_by_id(sb, rows: List[dict]) -> None:
+    """Actualiza filas existentes de prog_actividades por id (nunca inserta)."""
+    if not rows:
+        return
+    grouped: Dict[tuple, List[str]] = {}
+    for row in rows:
+        rid = str(row.get("id") or "").strip()
+        if not rid:
+            continue
+        payload = {k: v for k, v in row.items() if k != "id"}
+        if not payload:
+            continue
+        grouped.setdefault(tuple(sorted(payload.items())), []).append(rid)
+    chunk = 200
+    for key, ids in grouped.items():
+        payload = dict(key)
+        for i in range(0, len(ids), chunk):
+            sb.table("prog_actividades").update(payload).in_("id", ids[i:i + chunk]).execute()
+
+
+def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
+    """Write-back masivo de fechas CPM a filas agrupador (sin tocar duración ni ítems hijo)."""
+    if not nodos:
+        return 0
+
+    pk_ids = sorted({str(n.pk_id).strip() for n in nodos if str(n.pk_id or "").strip()})
+    existing = (
+        sb.table("prog_actividades")
+        .select("id,pk_id,capitulo,agrupador_id,item,codigo_wbs")
+        .eq("version_id", version_id)
+        .in_("pk_id", pk_ids)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    ids_by_key: Dict[tuple, List[str]] = {}
+    rows_by_key: Dict[tuple, List[dict]] = {}
+    for row in existing:
+        pk = str(row.get("pk_id") or "").strip()
+        cap = str(row.get("capitulo") or "").strip()
+        ag_raw = row.get("agrupador_id")
+        if not pk or not cap or ag_raw is None:
+            continue
+        try:
+            ag_id = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        rows_by_key.setdefault((pk, cap, ag_id), []).append(row)
+
+    for sig, rows in rows_by_key.items():
+        header = next((r for r in rows if _is_agrupador_header_row(r)), None)
+        pick = header or (rows[0] if rows else None)
+        rid = str((pick or {}).get("id") or "").strip()
+        if rid:
+            ids_by_key[sig] = [rid]
+
+    now = datetime.now(timezone.utc).isoformat()
+    updates: List[dict] = []
+    seen_keys: set = set()
+    for n in nodos:
+        if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
+            continue
+        try:
+            ag_id = int(str(n.agrupador_id).strip())
+        except (TypeError, ValueError):
+            continue
+        pk = str(n.pk_id).strip()
+        cap = str(n.capitulo).strip()
+        sig = (pk, cap, ag_id)
+        if sig in seen_keys:
+            continue
+        seen_keys.add(sig)
+        fi_iso = n.fecha_inicio_temprana.isoformat()
+        ff_iso = n.fecha_fin_temprana.isoformat()
+        row_ids = ids_by_key.get(sig)
+        if row_ids:
+            for rid in row_ids:
+                updates.append({
+                    "id": rid,
+                    "fecha_inicio": fi_iso,
+                    "fecha_fin_calculada": ff_iso,
+                    "override_manual": False,
+                    "actualizado_en": now,
+                })
+        else:
+            sb.table("prog_actividades").update({
+                "fecha_inicio": fi_iso,
+                "fecha_fin_calculada": ff_iso,
+                "override_manual": False,
+                "actualizado_en": now,
+            }).eq("version_id", version_id).eq("pk_id", pk).eq(
+                "capitulo", cap
+            ).eq("agrupador_id", ag_id).execute()
+
+    _bulk_patch_prog_actividades_by_id(sb, updates)
+    return len(seen_keys)
+
+
+def _apply_cpm_fechas_agrupador(sb, version_id, contrato_id, cache, n: "NodoCPM") -> None:
+    """Propaga fechas tempranas CPM al agrupador; no modifica duracion_dias_habiles."""
+    if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
+        return
+
+    ag_id = int(str(n.agrupador_id).strip())
+    ag_rows = (
+        sb.table("prog_actividades")
+        .select("item,codigo_wbs")
+        .eq("version_id", version_id)
+        .eq("pk_id", n.pk_id)
+        .eq("capitulo", n.capitulo)
+        .eq("agrupador_id", ag_id)
+        .execute()
+        .data
+        or []
+    )
+    ag_row = next(
+        (
+            r for r in ag_rows
+            if (r.get("codigo_wbs") or r.get("item") or "").strip()
+            and (r.get("item") or "").strip() == (r.get("codigo_wbs") or r.get("item") or "").strip()
+        ),
+        ag_rows[0] if ag_rows else None,
+    )
+    fi_iso = n.fecha_inicio_temprana.isoformat()
+    ff_iso = n.fecha_fin_temprana.isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    update_fields = {
+        "fecha_inicio": fi_iso,
+        "fecha_fin_calculada": ff_iso,
+        "override_manual": False,
+        "actualizado_en": now,
+    }
+    sb.table("prog_actividades").update(update_fields).eq("version_id", version_id).eq(
+        "pk_id", n.pk_id
+    ).eq("capitulo", n.capitulo).eq("agrupador_id", ag_id).execute()
+    codigo_wbs = (ag_row.get("codigo_wbs") if ag_row else None) or (ag_row.get("item") if ag_row else None) or ""
+    hijo_items = (
+        sb.table("listado_precios")
+        .select("item_numero")
+        .eq("contrato_id", contrato_id)
+        .eq("capitulo", n.capitulo.strip())
+        .eq("agrupador_id", ag_id)
+        .execute()
+        .data
+        or []
+    )
+    hijo_nums = [(r.get("item_numero") or "").strip() for r in hijo_items if (r.get("item_numero") or "").strip()]
+    if not hijo_nums:
+        return
+    hijo_update = {
+        **update_fields,
+        "heredado_de_capitulo": True,
+        "override_manual": False,
+        "agrupador_id": ag_id,
+        "codigo_wbs": codigo_wbs or None,
+    }
+    sb.table("prog_actividades").update(hijo_update).eq("version_id", version_id).eq(
+        "pk_id", n.pk_id
+    ).eq("capitulo", n.capitulo).eq("segmento", 1).in_(
+        "item", hijo_nums
+    ).execute()
 
 
 def _recalc_items_heredados_cpm(sb, version_id, pk_id, capitulo, nueva_fi, contrato_id, cache):
@@ -2976,7 +4159,108 @@ def _recalc_items_heredados_cpm(sb, version_id, pk_id, capitulo, nueva_fi, contr
             "fecha_fin_calculada": ff.isoformat() if ff else None,
         })
     if updates:
-        sb.table("prog_actividades").upsert(updates, on_conflict="id").execute()
+        _bulk_patch_prog_actividades_by_id(sb, updates)
+
+
+def _cpm_estado_label(row: dict) -> str:
+    if row.get("es_ruta_critica"):
+        return "Ruta crítica"
+    if row.get("es_actividad_final_tramo"):
+        return "Actividad final tramo"
+    holgura = int(row.get("holgura_total") or 0)
+    if holgura <= 0 and not row.get("tiene_sucesores"):
+        return "Actividad final tramo"
+    if holgura <= 0:
+        return "Ruta crítica"
+    return "Con holgura"
+
+
+def _dep_nodo_label(d: dict, side: str, ag_meta: dict) -> str:
+    prefix = "origen" if side == "orig" else "destino"
+    pk = str(d.get(f"pk_id_{prefix}") or "").strip()
+    cap = str(d.get(f"capitulo_{prefix}") or "").strip()
+    ag_raw = d.get(f"agrupador_id_{prefix}")
+    if ag_raw is not None and str(ag_raw).strip() != "":
+        try:
+            meta = ag_meta.get(int(ag_raw)) or {}
+        except (TypeError, ValueError):
+            meta = {}
+        wbs = (meta.get("codigo_wbs") or "").strip()
+        nombre = (meta.get("nombre") or wbs or str(ag_raw)).strip()
+        ag_lbl = f"{wbs} · {nombre}".strip(" ·") if wbs else nombre
+        return f"PK {pk} · Cap {cap} · {ag_lbl}"
+    return f"PK {pk} · Cap {cap}"
+
+
+def build_cpm_export_data(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_ids: Optional[Set[str]] = None,
+) -> dict:
+    """Resultados CPM y dependencias para exportación PDF/Excel."""
+    from prog_obra_costos_presupuesto import _fetch_agrupadores_meta
+
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
+    rows = [
+        r for r in obtener_cpm_resultados(sb, version_id)
+        if r.get("agrupador_id") is not None
+    ]
+    if pk_ids:
+        rows = [r for r in rows if str(r.get("pk_id") or "").strip() in pk_ids]
+
+    resultados: List[dict] = []
+    for r in rows:
+        ag_id = r.get("agrupador_id")
+        try:
+            meta = ag_meta.get(int(ag_id)) or {}
+        except (TypeError, ValueError):
+            meta = {}
+        wbs = (meta.get("codigo_wbs") or "").strip()
+        nombre = (meta.get("nombre") or wbs or str(ag_id)).strip()
+        row = {
+            **r,
+            "agrupador_label": f"{wbs} · {nombre}".strip(" ·") if wbs else nombre,
+            "holgura_total": int(r.get("holgura_total") or 0),
+            "holgura_libre": int(r.get("holgura_libre") or 0),
+            "es_ruta_critica": bool(r.get("es_ruta_critica")),
+            "es_actividad_final_tramo": bool(r.get("es_actividad_final_tramo")),
+            "tiene_sucesores": bool(r.get("tiene_sucesores")),
+        }
+        row["estado_cpm"] = _cpm_estado_label(row)
+        resultados.append(row)
+    resultados.sort(
+        key=lambda x: (
+            str(x.get("pk_id") or ""),
+            str(x.get("capitulo") or ""),
+            str(x.get("agrupador_label") or ""),
+        ),
+    )
+
+    deps = listar_dependencias(sb, version_id)
+    if pk_ids:
+        deps = [
+            d for d in deps
+            if str(d.get("pk_id_origen") or "").strip() in pk_ids
+            or str(d.get("pk_id_destino") or "").strip() in pk_ids
+        ]
+    dependencias = []
+    for d in deps:
+        dependencias.append({
+            **d,
+            "origen_label": _dep_nodo_label(d, "orig", ag_meta),
+            "destino_label": _dep_nodo_label(d, "dest", ag_meta),
+            "tipo": (d.get("tipo") or "FS").strip().upper(),
+            "lag_dias": int(d.get("lag_dias") or 0),
+        })
+    dependencias.sort(
+        key=lambda x: (
+            str(x.get("pk_id_origen") or ""),
+            str(x.get("capitulo_origen") or ""),
+            str(x.get("origen_label") or ""),
+        ),
+    )
+    return {"resultados": resultados, "dependencias": dependencias}
 
 
 def obtener_cpm_resultados(sb, version_id: str) -> list:

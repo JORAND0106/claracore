@@ -7,6 +7,14 @@ import ProgObraDepAyuda, { DepAyudaButton } from './ProgObraDepAyuda'
 
 const TIPOS = ['FS', 'SS', 'FF', 'SF']
 
+/** Preserva tipo de relación al cargar/mostrar dependencias del API. */
+export function normalizeDep(raw) {
+  if (!raw || typeof raw !== 'object') return raw
+  const tipoRaw = String(raw.tipo || raw.tipo_relacion || 'FS').trim().toUpperCase()
+  const tipo = TIPOS.includes(tipoRaw) ? tipoRaw : 'FS'
+  return { ...raw, tipo }
+}
+
 const inputStyle = (t) => ({
   padding: '5px 8px',
   fontSize: 'var(--cc-sm)',
@@ -68,14 +76,13 @@ function depEndpointTooltipLine(dep, side, estructuraMap) {
 function formatDepCellText(dep, estructuraMap) {
   const orig = depEndpointShort(dep, 'orig', estructuraMap)
   const dest = depEndpointShort(dep, 'dest', estructuraMap)
-  const tipo = dep.tipo || 'FS'
-  return `${orig}  →${tipo}→  ${dest}`
+  return `${orig}  →  ${dest}`
 }
 
 function formatDepTooltip(dep, estructuraMap) {
   const orig = depEndpointTooltipLine(dep, 'orig', estructuraMap)
   const dest = depEndpointTooltipLine(dep, 'dest', estructuraMap)
-  const tipo = dep.tipo || 'FS'
+  const tipo = normalizeDep(dep).tipo
   const lag = Number(dep.lag_dias) || 0
   const lagLine = lag !== 0 ? `\nLag: ${lag} día${lag !== 1 ? 's' : ''}` : ''
   return `${orig}\n→${tipo}→\n${dest}${lagLine}`
@@ -119,6 +126,104 @@ function DepPanel({ title, t, children }) {
   )
 }
 
+function DepRow({
+  dep,
+  estructuraMap,
+  t,
+  editable,
+  deletingId,
+  updatingDepId,
+  onEliminar,
+  onUpdateDep,
+}) {
+  const norm = normalizeDep(dep)
+  const [lagLocal, setLagLocal] = useState(String(Number(dep.lag_dias) || 0))
+  const busy = deletingId === dep.id || updatingDepId === dep.id
+
+  useEffect(() => {
+    setLagLocal(String(Number(dep.lag_dias) || 0))
+  }, [dep.lag_dias, dep.tipo, dep.id])
+
+  const commitLag = async () => {
+    const lag = parseInt(lagLocal, 10)
+    const lagVal = Number.isFinite(lag) ? lag : 0
+    if (lagVal === (Number(dep.lag_dias) || 0)) return
+    await onUpdateDep(dep.id, { lag_dias: lagVal })
+  }
+
+  const handleTipoChange = async (e) => {
+    const tipo = e.target.value
+    if (tipo === norm.tipo) return
+    await onUpdateDep(dep.id, { tipo })
+  }
+
+  return (
+    <tr style={{ borderBottom: `1px solid ${t.border}22`, opacity: busy ? 0.65 : 1 }}>
+      <td
+        style={{
+          padding: '6px 8px',
+          color: t.text,
+          maxWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={formatDepTooltip(dep, estructuraMap)}
+      >
+        {formatDepCellText(dep, estructuraMap)}
+      </td>
+      <td style={{ padding: '6px 8px', width: 72 }}>
+        {editable ? (
+          <select
+            value={norm.tipo}
+            disabled={busy}
+            onChange={handleTipoChange}
+            style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 'var(--cc-caption)' }}
+          >
+            {TIPOS.map((x) => (
+              <option key={x} value={x}>{x}</option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ fontWeight: 600 }}>{norm.tipo}</span>
+        )}
+      </td>
+      <td style={{ padding: '6px 8px', width: 72 }}>
+        {editable ? (
+          <input
+            type="number"
+            value={lagLocal}
+            disabled={busy}
+            onChange={(e) => setLagLocal(e.target.value)}
+            onBlur={() => { void commitLag() }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                void commitLag()
+              }
+            }}
+            style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 'var(--cc-caption)', textAlign: 'right' }}
+          />
+        ) : (
+          <span>{Number(dep.lag_dias) || 0}</span>
+        )}
+      </td>
+      <td style={{ padding: '6px 8px', width: 40, textAlign: 'right' }}>
+        {editable && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onEliminar(dep.id)}
+            style={{ border: 'none', background: 'transparent', cursor: busy ? 'not-allowed' : 'pointer', color: '#ef4444' }}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+      </td>
+    </tr>
+  )
+}
+
 export default function ProgObraDependencias({
   cid,
   token,
@@ -132,19 +237,21 @@ export default function ProgObraDependencias({
   editable,
   showToast,
   onCpmCalculated,
+  onBeforeCalcularCpm = null,
   cpmDirty: cpmDirtyProp,
   onCpmDirtyChange,
   tramoMode = false,
   tramoLabel = null,
   tramoPkIds = null,
+  deps,
+  setDeps,
+  depsLoaded,
+  cpmResultados,
+  setCpmResultados,
+  estructuraByPk,
+  setEstructuraByPk,
 }) {
-  const [deps, setDeps] = useState([])
-  const [loaded, setLoaded] = useState(false)
-  const [cpmDirtyLocal, setCpmDirtyLocal] = useState(false)
-  const cpmDirty = cpmDirtyProp ?? cpmDirtyLocal
-  const setCpmDirty = onCpmDirtyChange ?? setCpmDirtyLocal
   const [cpmCalculando, setCpmCalculando] = useState(false)
-  const [cpmResultados, setCpmResultados] = useState([])
 
   const [capOrig, setCapOrig] = useState('')
   const [capDest, setCapDest] = useState('')
@@ -163,8 +270,12 @@ export default function ProgObraDependencias({
   const [formError, setFormError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [updatingDepId, setUpdatingDepId] = useState(null)
   const [ayudaOpen, setAyudaOpen] = useState(false)
-  const [estructuraByPk, setEstructuraByPk] = useState({})
+
+  const cpmDirty = !!cpmDirtyProp
+  const setCpmDirty = onCpmDirtyChange ?? (() => {})
+  const loaded = !!depsLoaded
 
   const onCpmRef = useRef(onCpmCalculated)
   onCpmRef.current = onCpmCalculated
@@ -188,7 +299,7 @@ export default function ProgObraDependencias({
   }, [agCrossPk, agPkDest, activePk, capitulosOrigen, capsDestPk, estructuraPorCapitulo, estructuraDestPk])
 
   const estructuraMap = useMemo(() => {
-    const map = { ...estructuraByPk }
+    const map = { ...(estructuraByPk || {}) }
     if (activePk && estructuraPorCapitulo) {
       map[activePk] = estructuraPorCapitulo
     }
@@ -201,39 +312,7 @@ export default function ProgObraDependencias({
   }, [capitulosOrigen, capOrig, capDest])
 
   useEffect(() => {
-    if (!versionId) {
-      setLoaded(false)
-      setDeps([])
-      return undefined
-    }
-    let cancel = false
-    setLoaded(false)
-    ;(async () => {
-      try {
-        const [resDeps, resCpm] = await Promise.all([
-          fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/dependencias`, { headers: hdrs }),
-          fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/cpm-resultados`, { headers: hdrs }),
-        ])
-        if (cancel) return
-        if (resDeps.ok) setDeps(await resDeps.json())
-        if (resCpm.ok) {
-          const cpmData = await resCpm.json()
-          setCpmDirty(!!cpmData.cpm_dirty)
-          const resultados = cpmData.resultados || []
-          setCpmResultados(resultados)
-          onCpmRef.current?.(resultados)
-        }
-      } catch {
-        // silencioso
-      } finally {
-        if (!cancel) setLoaded(true)
-      }
-    })()
-    return () => { cancel = true }
-  }, [versionId, cid, API, hdrs])
-
-  useEffect(() => {
-    if (!loaded || !cid || !token || !deps.length) return undefined
+    if (!loaded || !cid || !token || !deps?.length || !setEstructuraByPk) return undefined
     let cancel = false
     const pksNeeded = [
       ...new Set(
@@ -253,7 +332,7 @@ export default function ProgObraDependencias({
           )
           if (cancel || !res.ok) continue
           const data = await res.json()
-          setEstructuraByPk((prev) => (prev[pk] ? prev : { ...prev, [pk]: estructuraCapMapFromResponse(data) }))
+          setEstructuraByPk((prev) => (prev?.[pk] ? prev : { ...(prev || {}), [pk]: estructuraCapMapFromResponse(data) }))
         } catch {
           /* ignore */
         }
@@ -262,7 +341,7 @@ export default function ProgObraDependencias({
     return () => {
       cancel = true
     }
-  }, [loaded, deps, cid, token, API, hdrs, activePk, estructuraPorCapitulo])
+  }, [loaded, deps, cid, token, API, hdrs, activePk, estructuraPorCapitulo, setEstructuraByPk])
 
   useEffect(() => {
     if (!agCrossPk || !agPkDest || agPkDest === activePk) {
@@ -329,7 +408,7 @@ export default function ProgObraDependencias({
         tipo: capTipo,
         lag_dias: parseInt(capLag, 10) || 0,
       })
-      setDeps((prev) => [...prev, data])
+      setDeps((prev) => [...prev, normalizeDep(data)])
       setCpmDirty(true)
       showToast?.('Dependencia por capitulo agregada.', 'ok')
     } catch (e) {
@@ -368,7 +447,7 @@ export default function ProgObraDependencias({
         tipo: agTipo,
         lag_dias: parseInt(agLag, 10) || 0,
       })
-      setDeps((prev) => [...prev, data])
+      setDeps((prev) => [...prev, normalizeDep(data)])
       setCpmDirty(true)
       showToast?.('Dependencia por agrupador agregada.', 'ok')
     } catch (e) {
@@ -397,19 +476,55 @@ export default function ProgObraDependencias({
     }
   }
 
+  const handleUpdateDep = async (depId, patch) => {
+    setUpdatingDepId(depId)
+    try {
+      const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/dependencias/${depId}`, {
+        method: 'PATCH',
+        headers: hdrs,
+        body: JSON.stringify(patch),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast?.(data?.detail || 'Error al actualizar dependencia.', 'err')
+        return false
+      }
+      setDeps((prev) => prev.map((d) => (d.id === depId ? normalizeDep({ ...d, ...data }) : d)))
+      setCpmDirty(true)
+      return true
+    } catch {
+      showToast?.('Error de red al actualizar dependencia.', 'err')
+      return false
+    } finally {
+      setUpdatingDepId(null)
+    }
+  }
+
   const recargarCpm = useCallback(async () => {
     const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/cpm-resultados`, { headers: hdrs })
     if (res.ok) {
       const cpmData = await res.json()
+      const resultados = cpmData.resultados || []
       setCpmDirty(!!cpmData.cpm_dirty)
-      setCpmResultados(cpmData.resultados || [])
-      onCpmRef.current?.(cpmData.resultados || [])
+      setCpmResultados?.(resultados)
+      onCpmRef.current?.(resultados)
     }
-  }, [cid, versionId, API, hdrs])
+  }, [cid, versionId, API, hdrs, setCpmResultados, setCpmDirty])
 
   const handleCalcularCpm = async () => {
     setCpmCalculando(true)
     try {
+      if (onBeforeCalcularCpm) {
+        try {
+          const flush = await onBeforeCalcularCpm()
+          if (flush?.saved > 0) {
+            showToast?.(`Duraciones guardadas (${flush.saved}) antes del CPM.`, 'info')
+          }
+        } catch (e) {
+          showToast?.(e?.message || 'No se pudieron guardar las duraciones antes del CPM.', 'err')
+          return
+        }
+      }
       const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/calcular-cpm`, { method: 'POST', headers: hdrs })
       const data = await res.json()
       if (!res.ok) {
@@ -427,13 +542,14 @@ export default function ProgObraDependencias({
   }
 
   const depsDelPk = useMemo(() => {
+    const list = deps || []
     if (tramoMode && tramoPkIds?.length) {
       const pkSet = new Set(tramoPkIds.map((p) => String(p).trim()))
-      return deps.filter(
+      return list.filter(
         (d) => pkSet.has(String(d.pk_id_origen || '').trim()) || pkSet.has(String(d.pk_id_destino || '').trim()),
       )
     }
-    return deps.filter((d) => d.pk_id_origen === activePk || d.pk_id_destino === activePk)
+    return list.filter((d) => d.pk_id_origen === activePk || d.pk_id_destino === activePk)
   }, [deps, activePk, tramoMode, tramoPkIds])
 
   const crossPk = useMemo(() => {
@@ -483,34 +599,24 @@ export default function ProgObraDependencias({
               <thead>
                 <tr style={{ borderBottom: `1px solid ${t.border}` }}>
                   <th style={{ padding: '6px 8px', textAlign: 'left', color: t.textMuted }}>Dependencia</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'left', color: t.textMuted, width: 72 }}>Tipo</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'left', color: t.textMuted, width: 72 }}>Lag (días)</th>
                   <th style={{ padding: '6px 8px', width: 40 }} />
                 </tr>
               </thead>
               <tbody>
                 {depsDelPk.map((dep) => (
-                  <tr key={dep.id} style={{ borderBottom: `1px solid ${t.border}22` }}>
-                    <td
-                      style={{
-                        padding: '6px 8px',
-                        color: t.text,
-                        maxWidth: 0,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={formatDepTooltip(dep, estructuraMap)}
-                    >
-                      {formatDepCellText(dep, estructuraMap)}
-                    </td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                      {editable && (
-                        <button type="button" disabled={deletingId === dep.id} onClick={() => handleEliminar(dep.id)}
-                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ef4444' }}>
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <DepRow
+                    key={dep.id}
+                    dep={dep}
+                    estructuraMap={estructuraMap}
+                    t={t}
+                    editable={editable}
+                    deletingId={deletingId}
+                    updatingDepId={updatingDepId}
+                    onEliminar={handleEliminar}
+                    onUpdateDep={handleUpdateDep}
+                  />
                 ))}
               </tbody>
             </table>
@@ -617,9 +723,9 @@ export default function ProgObraDependencias({
         </>
       )}
 
-      {loaded && cpmResultados.length > 0 && (
+      {loaded && (cpmResultados || []).length > 0 && (
         <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-          Resultados CPM cargados: {cpmResultados.filter((r) => r.pk_id === activePk).length} capitulos en PK {activePk}.
+          Resultados CPM cargados: {(cpmResultados || []).filter((r) => r.pk_id === activePk).length} capitulos en PK {activePk}.
         </div>
       )}
 

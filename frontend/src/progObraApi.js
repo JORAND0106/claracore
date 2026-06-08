@@ -2,7 +2,20 @@
 
 async function parseErr(res) {
   const err = await res.json().catch(() => ({}))
-  throw new Error(err?.detail || `Error ${res.status}`)
+  const detail = err?.detail
+  if (typeof detail === 'string') throw new Error(detail)
+  if (Array.isArray(detail)) {
+    const msg = detail
+      .map((d) => {
+        if (typeof d === 'string') return d
+        const loc = Array.isArray(d?.loc) ? d.loc.join('.') : ''
+        const m = d?.msg || JSON.stringify(d)
+        return loc ? `${loc}: ${m}` : m
+      })
+      .join('; ')
+    throw new Error(msg || `Error ${res.status}`)
+  }
+  throw new Error(detail ? JSON.stringify(detail) : `Error ${res.status}`)
 }
 
 export async function fetchTramos(API, cid, token) {
@@ -13,10 +26,11 @@ export async function fetchTramos(API, cid, token) {
   return res.json()
 }
 
-export async function fetchEstructuraTramo(API, cid, token, { versionId, tramo, pkIds } = {}) {
+export async function fetchEstructuraTramo(API, cid, token, { versionId, tramo, pkIds, versionPptoId } = {}) {
   const q = new URLSearchParams()
   q.set('tramo', tramo)
   q.set('version_id', String(versionId))
+  if (versionPptoId) q.set('version_ppto_id', String(versionPptoId))
   for (const pk of pkIds || []) {
     if (pk) q.append('pk_ids', String(pk).trim())
   }
@@ -44,7 +58,7 @@ export async function clearTramoProgramacion(API, cid, token, versionId, { tramo
   return res.json()
 }
 
-export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds } = {}) {
+export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds, allowOverwrite } = {}) {
   const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/actividades-batch-tramo`, {
     method: 'POST',
     headers: {
@@ -55,18 +69,20 @@ export async function saveActividadesBatchTramo(API, cid, token, versionId, { tr
       tramo,
       actividades,
       pk_ids: pkIds?.length ? pkIds : undefined,
+      allow_overwrite: !!allowOverwrite,
     }),
   })
   if (!res.ok) await parseErr(res)
   return res.json()
 }
 
-export async function fetchCurvaS(API, cid, token, { baselineId, targetId, versionPptoId, pkIds } = {}) {
+export async function fetchCurvaS(API, cid, token, { baselineId, targetId, versionPptoId, pkIds, tramos } = {}) {
   const q = new URLSearchParams()
   if (baselineId) q.set('baseline_id', baselineId)
   if (targetId) q.set('target_id', targetId)
   if (versionPptoId) q.set('version_ppto_id', versionPptoId)
   if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
+  if (tramos?.length) q.set('tramos', tramos.join(','))
   const res = await fetch(`${API}/prog-obra/${cid}/curva-s?${q}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -110,13 +126,28 @@ export async function fetchPresupuestoVersiones(API, cid, token) {
   return res.json()
 }
 
-export async function downloadCurvaSPdf(API, cid, token, { baselineId, targetId, versionPptoId, pkIds } = {}) {
+export async function downloadCurvaSPdf(API, cid, token, { baselineId, targetId, versionPptoId, pkIds, tramos } = {}) {
   const q = new URLSearchParams()
   if (baselineId) q.set('baseline_id', baselineId)
   if (targetId) q.set('target_id', targetId)
   if (versionPptoId) q.set('version_ppto_id', versionPptoId)
   if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
+  if (tramos?.length) q.set('tramos', tramos.join(','))
   const res = await fetch(`${API}/prog-obra/${cid}/curva-s/pdf?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.blob()
+}
+
+export async function downloadCurvaSExcel(API, cid, token, { baselineId, targetId, versionPptoId, pkIds, tramos } = {}) {
+  const q = new URLSearchParams()
+  if (baselineId) q.set('baseline_id', baselineId)
+  if (targetId) q.set('target_id', targetId)
+  if (versionPptoId) q.set('version_ppto_id', versionPptoId)
+  if (pkIds?.length) q.set('pk_ids', pkIds.join(','))
+  if (tramos?.length) q.set('tramos', tramos.join(','))
+  const res = await fetch(`${API}/prog-obra/${cid}/curva-s/excel?${q}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) await parseErr(res)

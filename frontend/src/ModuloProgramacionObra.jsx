@@ -26,6 +26,7 @@ import ProgTramoSelector from './ProgTramoSelector'
 import {
   clearVersionProgramacion,
   downloadCurvaSPdf,
+  downloadCurvaSExcel,
   downloadProjectXml,
   fetchCostosPorVersionPresupuesto,
   fetchCurvaS,
@@ -34,7 +35,6 @@ import {
   fetchEstructuraTramo,
   saveActividadesBatchTramo,
 } from './progObraApi'
-import { exportCurvaSExcel } from './progObraExportExcel'
 import { buildProgObraRibbonItems } from './progObraRibbonItems'
 import {
   defaultPptoVersionAnalisisId,
@@ -946,6 +946,7 @@ export default function ModuloProgramacionObra({
   const [showCurvaS, setShowCurvaS] = useState(false)
   const [alcanceModal, setAlcanceModal] = useState(null)
   const [curvaPkIds, setCurvaPkIds] = useState(null)
+  const [curvaTramoNames, setCurvaTramoNames] = useState(null)
   const [showSuspensionWizard, setShowSuspensionWizard] = useState(false)
   const [showAutoSchedule, setShowAutoSchedule] = useState(false)
   const [showEliminarProgramacion, setShowEliminarProgramacion] = useState(false)
@@ -1613,7 +1614,10 @@ export default function ModuloProgramacionObra({
       for (const ag of c.agrupadores || []) {
         const actItem = String(ag.codigo_wbs || `AG${ag.agrupador_id ?? ''}`).trim()
         const prog = ag.programacion || {}
-        if (!prog.fecha_inicio) continue
+        const hasSchedule =
+          prog.fecha_inicio ||
+          (prog.duracion_dias_habiles != null && parseInt(String(prog.duracion_dias_habiles), 10) > 0)
+        if (!hasSchedule) continue
         const k = `${cap}\u0000${actItem}\u00001`
         m[k] = {
           capitulo: cap,
@@ -1621,9 +1625,10 @@ export default function ModuloProgramacionObra({
           segmento: 1,
           agrupador_id: ag.agrupador_id,
           codigo_wbs: ag.codigo_wbs,
-          fecha_inicio: prog.fecha_inicio,
+          fecha_inicio: prog.fecha_inicio || null,
           duracion_dias_habiles: prog.duracion_dias_habiles,
-          fecha_fin_calculada: prog.fecha_fin_calculada,
+          fecha_fin_calculada: prog.fecha_fin_calculada || null,
+          override_manual: !!prog.override_manual,
         }
       }
     }
@@ -1714,9 +1719,10 @@ export default function ModuloProgramacionObra({
       versionId: versionIdForModal,
       tramo: modalTramoContext.tramo,
       pkIds: modalTramoContext.pkIds,
+      versionPptoId: pptoVersionAnalisisId || undefined,
     })
     setTramoEstructuraData(d && typeof d === 'object' ? d : null)
-  }, [cid, token, API, modalTramoContext, versionIdForModal])
+  }, [cid, token, API, modalTramoContext, versionIdForModal, pptoVersionAnalisisId])
 
   useEffect(() => {
     if (!cid || !token || modalMode !== 'tramo' || !modalTramoContext?.tramo || !versionIdForModal) {
@@ -1730,6 +1736,7 @@ export default function ModuloProgramacionObra({
       versionId: versionIdForModal,
       tramo: modalTramoContext.tramo,
       pkIds: modalTramoContext.pkIds,
+      versionPptoId: pptoVersionAnalisisId || undefined,
     })
       .then((d) => {
         if (!cancel) setTramoEstructuraData(d && typeof d === 'object' ? d : null)
@@ -1743,7 +1750,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, API, modalMode, modalTramoContext, versionIdForModal])
+  }, [cid, token, API, modalMode, modalTramoContext, versionIdForModal, pptoVersionAnalisisId])
 
   useEffect(() => {
     if (!cid || !token || !pkForData) {
@@ -1781,6 +1788,7 @@ export default function ModuloProgramacionObra({
     setLoadEstructura(true)
     setProgEstructura({ capitulos: [] })
     const q = new URLSearchParams({ pk_id: pkForData })
+    if (pptoVersionAnalisisId) q.set('version_ppto_id', String(pptoVersionAnalisisId))
     fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [] }))
       .then((d) => {
@@ -1795,7 +1803,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, pkForData, API])
+  }, [cid, token, pkForData, API, pptoVersionAnalisisId])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -2260,22 +2268,25 @@ export default function ModuloProgramacionObra({
   )
 
   const handleGuardarBatchTramo = useCallback(
-    async (items) => {
+    async (items, options = {}) => {
       const vid = versionIdForWork
       const tramo = modalTramoContext?.tramo
       if (!puedeEditar || !cid || !vid || !tramo) return { ok: false, saved: 0, errors: items?.length || 0 }
       const actividades = (items || []).map((row) => {
         const def = row.itemDef || {}
         const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
+        const fiRaw = row.clearSchedule ? null : (row.fecha_inicio ?? null)
+        const fiStr = fiRaw != null ? String(fiRaw).trim() : ''
         return {
           capitulo: row.capitulo || def.capitulo,
           item: row.item || def.item,
           segmento: 1,
-          fecha_inicio: row.fecha_inicio ?? null,
+          fecha_inicio: fiStr ? fiStr.slice(0, 10) : null,
           duracion_dias_habiles: Number.isFinite(durInt) && durInt > 0 ? durInt : null,
           agrupador_id: def.agrupador_id,
           codigo_wbs: def.codigo_wbs || def.item,
           tipo_distribucion: 'lineal',
+          override_manual: row.override_manual !== false,
         }
       })
       try {
@@ -2283,12 +2294,15 @@ export default function ModuloProgramacionObra({
           tramo,
           actividades,
           pkIds: modalTramoContext?.pkIds,
+          allowOverwrite: !!options.allowOverwrite,
         })
         if (batchData?.ms > 5000) {
           showToast(`Guardado tramo en ${Math.round(batchData.ms)} ms`, 'info')
         }
-        await reloadTramoEstructura()
-        await refreshMapaYVersiones()
+        if (!options.skipReload) {
+          await reloadTramoEstructura()
+          scheduleMapRefresh()
+        }
         const omitidos = Number(batchData?.omitidos_pk_con_fecha) || 0
         if (omitidos > 0) {
           showToast(
@@ -2317,9 +2331,13 @@ export default function ModuloProgramacionObra({
       modalTramoContext,
       showToast,
       reloadTramoEstructura,
-      refreshMapaYVersiones,
+      scheduleMapRefresh,
     ],
   )
+
+  const handleVersionHorizonteSaved = useCallback(async () => {
+    await refreshMapaYVersiones()
+  }, [refreshMapaYVersiones])
 
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
@@ -2447,11 +2465,13 @@ export default function ModuloProgramacionObra({
   }
 
   const handleAlcanceConfirm = useCallback(
-    async ({ scope, pkIds, format }) => {
+    async ({ scope, pkIds, tramoNames, format }) => {
       const pkParam = scope === 'all' ? undefined : pkIds
+      const tramoParam = scope === 'all' ? undefined : tramoNames
 
       if (alcanceModal === 'curva') {
         setCurvaPkIds(scope === 'all' ? null : pkIds)
+        setCurvaTramoNames(scope === 'all' ? null : tramoNames)
         setAlcanceModal(null)
         setShowCurvaS(true)
         return
@@ -2483,6 +2503,7 @@ export default function ModuloProgramacionObra({
             targetId: compareTargetForGlobal,
             versionPptoId: pptoVersionAnalisisId || undefined,
             pkIds: pkParam,
+            tramos: tramoParam,
           })
           const a = document.createElement('a')
           a.href = URL.createObjectURL(blob)
@@ -2491,19 +2512,18 @@ export default function ModuloProgramacionObra({
           URL.revokeObjectURL(a.href)
           showToast('Curva S exportada a PDF.')
         } else if (format === 'excel') {
-          const data = await fetchCurvaS(API, cid, token, {
+          const blob = await downloadCurvaSExcel(API, cid, token, {
             baselineId: versionBaselineId,
             targetId: compareTargetForGlobal,
             versionPptoId: pptoVersionAnalisisId || undefined,
             pkIds: pkParam,
+            tramos: tramoParam,
           })
-          await exportCurvaSExcel({
-            data,
-            contratoNumero: usuario?.contrato_numero || cid,
-            contratista: usuario?.contratista || '',
-            interventoria: usuario?.interventoria || '',
-            filename: `curva-s-${cid}.xlsx`,
-          })
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = `curva-s-${cid}.xlsx`
+          a.click()
+          URL.revokeObjectURL(a.href)
           showToast('Curva S exportada a Excel.')
         }
         setAlcanceModal(null)
@@ -2972,10 +2992,12 @@ export default function ModuloProgramacionObra({
         panelBusy={panelBusy}
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
+        onScheduleRefresh={scheduleMapRefresh}
         onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}
         showToast={showToast}
         allPkIds={modalMode === 'tramo' ? (modalTramoContext?.pkIds || []) : pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
+        onVersionHorizonteSaved={handleVersionHorizonteSaved}
         openCompareTab={modalOpenCompareTab}
         compareBaselineId={modalCompareBaselineId ?? desviacionContrato?.baseline_id ?? versionBaselineId}
         compareTargetId={modalCompareTargetId ?? desviacionContrato?.target_id ?? versionIdForModal}
@@ -3025,6 +3047,7 @@ export default function ModuloProgramacionObra({
         contratista={usuario?.contratista || ''}
         interventoria={usuario?.interventoria || ''}
         pkIds={curvaPkIds}
+        tramoNames={curvaTramoNames}
       />
 
       <ProgObraAlcanceExportModal

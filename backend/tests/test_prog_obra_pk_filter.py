@@ -13,6 +13,14 @@ def test_parse_pk_ids_param_list():
     assert parse_pk_ids_param(" 120114 , 120123 ") == {"120114", "120123"}
 
 
+def test_parse_tramos_param():
+    from prog_obra_pk_filter import parse_tramos_param
+
+    assert parse_tramos_param(None) is None
+    assert parse_tramos_param("TRAMO 7") == ["TRAMO 7"]
+    assert parse_tramos_param("TRAMO 7,TRAMO 8") == ["TRAMO 7", "TRAMO 8"]
+
+
 def test_filter_nodes_by_pk():
     nodes = {
         "a": {"pk_id": "120114", "label": "A"},

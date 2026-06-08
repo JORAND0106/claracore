@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { RefreshCw, RotateCcw, Save } from 'lucide-react'
 import CcConfirmModal from './components/CcConfirmModal'
-import ProgObraDependencias from './ProgObraDependencias'
+import ProgObraDependencias, { normalizeDep } from './ProgObraDependencias'
 import ProgObraComparacionTable from './ProgObraComparacionTable'
 import {
   COMPARE_COLORS,
@@ -14,7 +14,7 @@ import {
   fetchComparar,
   indexCompareNodos,
 } from './progObraCompare'
-import { clasificarNodoCpm, cpmTooltipClasificacion } from './progObraCpmClasificacion'
+import { clasificarNodoCpm, collectDesfaseHorizonte, cpmTooltipClasificacion, normalizeCpmRow, pickBestCpmNode, pickBestCpmNodeTramo } from './progObraCpmClasificacion'
 import ProgSinAgrupadorCapIcon from './ProgSinAgrupadorCapIcon'
 import {
   addCalendarDays,
@@ -165,7 +165,13 @@ function resolveRowSchedule({
     ? (draft.duracion != null && draft.duracion !== '' ? draft.duracion : null)
     : act?.duracion_dias_habiles
   const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
-  if (!fi || !(dur > 0)) return { fi: null, ff: null, dur: 0 }
+  if (!fi) {
+    return { fi: null, ff: null, dur: dur > 0 ? dur : 0 }
+  }
+  if (!(dur > 0)) {
+    const ffStored = fmtDateIso(draft?.fecha_fin ?? finOverrides?.[rk] ?? act?.fecha_fin_calculada)
+    return { fi, ff: ffStored || null, dur: 0 }
+  }
   const ff = fmtDateIso(draft?.fecha_fin ?? finOverrides?.[rk] ?? act?.fecha_fin_calculada) || calcFinLocal?.(fi, dur)
   return { fi, ff: ff || null, dur }
 }
@@ -229,13 +235,105 @@ function cpmNodeKey(pk, cap, agrupadorId) {
   return `${String(pk || '').trim()}\u0000${String(cap || '').trim()}\u0000${ag}`
 }
 
+function cpmLookupKeys(pk, cap, agrupadorId) {
+  const keys = [cpmNodeKey(pk, cap, agrupadorId)]
+  const capStr = String(cap || '').trim()
+  const m = /^0*(\d+)$/.exec(capStr)
+  if (m && m[1] !== capStr) keys.push(cpmNodeKey(pk, m[1], agrupadorId))
+  return keys
+}
+
+function resolveCpmNode({
+  tramoConsolidado,
+  tramoCpmByAgId,
+  tramoCpmByCapAg,
+  tramoPkIds,
+  cpmByNodeKey,
+  pkId,
+  cap,
+  agrupadorId,
+}) {
+  const ag = agrupadorId != null && agrupadorId !== '' ? String(agrupadorId) : ''
+  const capStr = String(cap || '').trim()
+  if (tramoConsolidado && ag) {
+    if (tramoCpmByAgId?.[ag]) return tramoCpmByAgId[ag]
+    const capAgKey = `${capStr}\u0000${ag}`
+    if (tramoCpmByCapAg?.[capAgKey]) return tramoCpmByCapAg[capAgKey]
+    if (tramoPkIds?.length && cpmByNodeKey) {
+      for (const pk of tramoPkIds) {
+        for (const k of cpmLookupKeys(pk, cap, agrupadorId)) {
+          if (cpmByNodeKey[k]) return cpmByNodeKey[k]
+        }
+      }
+    }
+  }
+  if (!cpmByNodeKey || !pkId) return null
+  for (const k of cpmLookupKeys(pkId, cap, agrupadorId)) {
+    if (cpmByNodeKey[k]) return cpmByNodeKey[k]
+  }
+  return null
+}
+
+function overlayCpmSchedule(sched, cpmNode) {
+  if (!cpmNode?.fecha_inicio_temprana) return sched
+  return {
+    ...sched,
+    fi: fmtDateIso(cpmNode.fecha_inicio_temprana) || sched.fi,
+    ff: fmtDateIso(cpmNode.fecha_fin_temprana) || sched.ff,
+  }
+}
+
 function fmtDateShort(iso) {
   const d = parseIsoDate(iso)
   if (!d) return '—'
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
+function ProgDesfaseHorizonteAlert({ items, versionFinIso, t }) {
+  if (!items?.length || !versionFinIso) return null
+  const limLabel = fmtDateHuman(versionFinIso)
+  return (
+    <div
+      role="alert"
+      style={{
+        margin: '0 16px 8px',
+        padding: '10px 14px',
+        borderRadius: 8,
+        border: '1px solid #f97316',
+        background: 'linear-gradient(90deg, #fff7ed 0%, #ffedd5 100%)',
+        color: '#9a3412',
+        fontSize: 'var(--cc-caption)',
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 16 }}>⚠</span>
+        <span>
+          {items.length === 1
+            ? '1 agrupador supera la fecha fin del cronograma'
+            : `${items.length} agrupadores superan la fecha fin del cronograma`}
+          {' '}
+          <span style={{ fontWeight: 600 }}>(fin versión: {limLabel})</span>
+        </span>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {items.map((it) => (
+          <li key={it.key}>
+            <strong>{it.label}</strong>
+            {' — fin CPM '}
+            {fmtDateHuman(it.fechaFin)}
+            {' · '}
+            <span style={{ fontWeight: 700, color: '#c2410c' }}>
+              +{it.dias} día{it.dias === 1 ? '' : 's'} hábil{it.dias === 1 ? '' : 'es'} fuera de plazo
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null, versionFinIso = null, noHabilesSet = null }) {
   const isPopup = variant === 'popup'
   const content = (
     <>
@@ -304,16 +402,20 @@ function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
           </thead>
           <tbody>
             {rows.map((r) => {
-              const clasif = clasificarNodoCpm(r)
+              const clasif = clasificarNodoCpm(r, versionFinIso, noHabilesSet)
               const holgura = Number(r.holgura_total)
-              const holguraLabel = clasif.holguraCero
-                ? '0 días'
-                : `${Number.isFinite(holgura) ? holgura : '—'} día${holgura === 1 ? '' : 's'}`
-              const rowBg = clasif.bgCritico
-                ? 'rgba(254,226,226,0.35)'
-                : clasif.bgFinal
-                  ? 'rgba(219,234,254,0.45)'
-                  : 'transparent'
+              const holguraLabel = clasif.holguraNegativa && Number.isFinite(holgura) && holgura < 0
+                ? `${holgura} días`
+                : clasif.holguraCero
+                  ? '0 días'
+                  : `${Number.isFinite(holgura) ? holgura : '—'} día${holgura === 1 ? '' : 's'}`
+              const rowBg = clasif.bgAlerta
+                ? 'rgba(254,243,199,0.55)'
+                : clasif.bgCritico
+                  ? 'rgba(254,226,226,0.35)'
+                  : clasif.bgFinal
+                    ? 'rgba(219,234,254,0.45)'
+                    : 'transparent'
               return (
                 <tr
                   key={`${r.capitulo}-${r.agrupador_id}`}
@@ -327,6 +429,9 @@ function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
                   <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_fin_temprana)}</td>
                   <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{holguraLabel}</td>
                   <td style={{ padding: '7px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {clasif.tipo === 'holgura_negativa' && (
+                      <span style={{ color: '#c2410c', fontWeight: 600 }}>{clasif.label}</span>
+                    )}
                     {clasif.tipo === 'critica' && (
                       <span style={{ color: '#dc2626', fontWeight: 600 }}>{clasif.label}</span>
                     )}
@@ -374,6 +479,12 @@ function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
 function buildPkGanttLayout({
   capitulosOrdenados,
   layoutScope,
+  layoutPkId,
+  tramoConsolidado = false,
+  tramoCpmByAgId = null,
+  tramoCpmByCapAg = null,
+  tramoPkIds = null,
+  cpmByNodeKey = null,
   collapsedCaps,
   expandedAgs,
   estructuraPorCapitulo,
@@ -387,6 +498,9 @@ function buildPkGanttLayout({
   finOverrides,
   calcFinLocal,
   noHabilesSet,
+  horizonStartIso = null,
+  horizonEndIso = null,
+  cpmResultados = [],
 }) {
   const syncRows = []
   const getDraft = (c, itemCode) => {
@@ -451,6 +565,17 @@ function buildPkGanttLayout({
         const sched = resolveRowSchedule({
           cap, itemKey: actItem, rk, actMap, actividadKey, rowDraftRef, finOverrides, calcFinLocal,
         })
+        const cpmNode = resolveCpmNode({
+          tramoConsolidado,
+          tramoCpmByAgId,
+          tramoCpmByCapAg,
+          tramoPkIds: tramoConsolidado ? tramoPkIds : null,
+          cpmByNodeKey,
+          pkId: layoutPkId,
+          cap,
+          agrupadorId: ag.agrupador_id,
+        })
+        const barSched = overlayCpmSchedule(sched, cpmNode)
         const label = `${ag.codigo_wbs || actItem}${ag.agrupador_nombre ? ` · ${ag.agrupador_nombre}` : ''}`
         syncRows.push({
           key: `ag-${ag.agrupador_id}`,
@@ -460,9 +585,9 @@ function buildPkGanttLayout({
           height: ROW_H.agrupador,
           label: ag.codigo_wbs || actItem,
           labelTitle: label,
-          barStart: sched.fi,
-          barEnd: sched.ff,
-          duracion: sched.dur,
+          barStart: barSched.fi,
+          barEnd: barSched.ff,
+          duracion: sched.dur > 0 ? sched.dur : 0,
           isSummary: false,
         })
         const agExpKey = `${layoutScope}\u0000${cap}\u0000${ag.agrupador_id}`
@@ -502,18 +627,22 @@ function buildPkGanttLayout({
     }
   }
 
-  let timelineDays = computePkTimelineDays(
+  let timelineDays = computeGanttTimelineDays({
     capitulosOrdenados,
     itemsPorCapitulo,
     actMap,
     actividadKey,
-    (c, itemCode) => {
+    getDraftValues: (c, itemCode) => {
       const s = getDraft(c, itemCode)
       return { fecha_inicio: s.fi, fecha_fin: s.ff }
     },
     estructuraPorCapitulo,
     agrupadorActItem,
-  )
+    horizonStartIso,
+    horizonEndIso,
+    cpmResultados,
+    syncRows,
+  })
   if (!timelineDays.length) timelineDays = defaultTimelineDays()
 
   return {
@@ -529,13 +658,17 @@ function ProgPkGanttPanel({
   t,
   cpmByNodeKey,
   activePk,
+  tramoConsolidado = false,
+  tramoCpmByAgId = null,
   tramoCpmByCapAg = null,
+  tramoPkIds = null,
   bodyScrollRef,
   onBodyScroll,
   onRefresh,
   compareByKey,
   ganttCompareMode,
   showCompare,
+  versionFinIso = null,
 }) {
   if (!model?.timelineDays?.length) return null
   const { timelineDays, syncRows, fromT } = model
@@ -566,6 +699,15 @@ function ProgPkGanttPanel({
     const iso = isoFromDate(d)
     return isWeekendDate(d) || noHabilesSet.has(iso)
   }
+
+  const versionFinIdx = useMemo(() => {
+    if (!versionFinIso) return null
+    const vd = parseIsoDate(versionFinIso)
+    if (!vd) return null
+    const idx = Math.round((vd.getTime() - fromT) / 86400000)
+    if (idx < 0 || idx >= timelineDays.length) return null
+    return idx
+  }, [versionFinIso, fromT, timelineDays.length])
 
   const timelineHeader = (
     <div style={{ display: 'flex', width: contentW, minWidth: contentW, position: 'relative' }}>
@@ -692,15 +834,38 @@ function ProgPkGanttPanel({
               />
             ) : null,
           )}
+          {versionFinIdx != null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: (versionFinIdx + 1) * dayPx - 1,
+                top: timelineH,
+                height: bodyH,
+                width: 2,
+                background: '#ea580c',
+                boxShadow: '0 0 0 1px rgba(234,88,12,0.35)',
+                pointerEvents: 'none',
+                zIndex: 4,
+              }}
+              title={`Fin cronograma versión: ${fmtDateHuman(versionFinIso)}`}
+            />
+          )}
           {syncRows.map((row) => {
             const cpmNode = row.kind === 'cap'
-              ? (tramoCpmByCapAg ? null : cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, '')])
+              ? (tramoCpmByAgId ? null : cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, '')])
               : row.kind === 'ag'
-                ? (tramoCpmByCapAg
-                  ? tramoCpmByCapAg[`${row.cap}\u0000${row.agrupadorId}`]
-                  : cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, row.agrupadorId)])
+                ? resolveCpmNode({
+                  tramoConsolidado,
+                  tramoCpmByAgId,
+                  tramoCpmByCapAg,
+                  tramoPkIds,
+                  cpmByNodeKey,
+                  pkId: activePk,
+                  cap: row.cap,
+                  agrupadorId: row.agrupadorId,
+                })
                 : null
-            const cpmClasif = clasificarNodoCpm(cpmNode)
+            const cpmClasif = clasificarNodoCpm(cpmNode, versionFinIso, noHabilesSet)
             if (row.kind === 'spacer') {
               return <div key={row.key} style={{ height: row.height, borderBottom: `1px solid ${t.border}22` }} />
             }
@@ -731,6 +896,7 @@ function ProgPkGanttPanel({
                 compareBarColor={compareBarColor}
                 ganttCompareMode={ganttCompareMode}
                 showCompare={showCompare && !!cmpNode}
+                versionFinIso={versionFinIso}
               />
             )
           })}
@@ -808,10 +974,30 @@ function capColor(idx) {
   return CAP_PALETTE[idx % CAP_PALETTE.length]
 }
 
-/** Rango de días del PK: min/max de fechas de ítems ± margen. */
-function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraftValues, estructuraPorCapitulo, agrupadorActItem) {
-  let minD = null
-  let maxD = null
+/** Rango de días del Gantt: actividades, barras, CPM y horizonte de versión ± margen. */
+function computeGanttTimelineDays({
+  capitulosOrdenados,
+  itemsPorCapitulo,
+  actMap,
+  actividadKey,
+  getDraftValues,
+  estructuraPorCapitulo,
+  agrupadorActItem,
+  horizonStartIso,
+  horizonEndIso,
+  cpmResultados,
+  syncRows,
+}) {
+  let minD = parseIsoDate(fmtDateIso(horizonStartIso))
+  let maxD = parseIsoDate(fmtDateIso(horizonEndIso))
+
+  const bump = (iso) => {
+    const d = parseIsoDate(fmtDateIso(iso))
+    if (!d) return
+    if (!minD || d < minD) minD = d
+    if (!maxD || d > maxD) maxD = d
+  }
+
   for (const cap of capitulosOrdenados) {
     const eCap = estructuraPorCapitulo?.[cap]
     const agrupadores = eCap?.agrupadores || []
@@ -821,16 +1007,46 @@ function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, act
     for (const it of iter) {
       const act = actMap[actividadKey(cap, it.item, 1)]
       const draft = getDraftValues?.(cap, it.item)
-      const fi = parseIsoDate(fmtDateIso(draft?.fecha_inicio ?? act?.fecha_inicio))
-      const ff = parseIsoDate(fmtDateIso(draft?.fecha_fin ?? act?.fecha_fin_calculada))
-      if (fi && (!minD || fi < minD)) minD = fi
-      if (ff && (!maxD || ff > maxD)) maxD = ff
+      bump(draft?.fecha_inicio ?? act?.fecha_inicio)
+      bump(draft?.fecha_fin ?? act?.fecha_fin_calculada)
     }
   }
-  if (!minD || !maxD) return []
+
+  for (const r of cpmResultados || []) {
+    bump(r.fecha_inicio_temprana)
+    bump(r.fecha_fin_temprana)
+    bump(r.fecha_inicio_tardia)
+    bump(r.fecha_fin_tardia)
+  }
+
+  for (const row of syncRows || []) {
+    bump(row.barStart)
+    bump(row.barEnd)
+  }
+
+  if (!minD && !maxD) return []
+  if (!minD) minD = maxD
+  if (!maxD) maxD = minD
   const from = addCalendarDays(minD, -GANTT_RANGE_PAD_DAYS)
   const to = addCalendarDays(maxD, GANTT_RANGE_PAD_DAYS)
   return eachCalendarDay(from, to)
+}
+
+/** @deprecated use computeGanttTimelineDays */
+function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraftValues, estructuraPorCapitulo, agrupadorActItem) {
+  return computeGanttTimelineDays({
+    capitulosOrdenados,
+    itemsPorCapitulo,
+    actMap,
+    actividadKey,
+    getDraftValues,
+    estructuraPorCapitulo,
+    agrupadorActItem,
+    horizonStartIso: null,
+    horizonEndIso: null,
+    cpmResultados: [],
+    syncRows: [],
+  })
 }
 
 function GanttBarGrid({
@@ -853,6 +1069,7 @@ function GanttBarGrid({
   compareBarColor,
   ganttCompareMode = 'overlay',
   showCompare = false,
+  versionFinIso = null,
 }) {
   const calcBar = (start, end) => {
     let left = 0
@@ -865,17 +1082,36 @@ function GanttBarGrid({
       left = startIdx * dayPx
       width = Math.max((endIdx - startIdx + 1) * dayPx, dayPx)
     }
-    return { left, width }
+    return { left, width, ff }
   }
 
-  const { left, width } = calcBar(barStart, barEnd)
+  const { left, width, ff: barFf } = calcBar(barStart, barEnd)
   const baseline = calcBar(baselineBarStart, baselineBarEnd)
+
+  const versionFinD = versionFinIso ? parseIsoDate(versionFinIso) : null
+  let inHorizonLeft = left
+  let inHorizonWidth = width
+  let overflowLeft = 0
+  let overflowWidth = 0
+  if (width > 0 && versionFinD && barFf && barFf > versionFinD) {
+    const horizonEndIdx = Math.min(
+      days.length - 1,
+      Math.max(0, Math.round((versionFinD.getTime() - fromT) / 86400000)),
+    )
+    const horizonEndPx = (horizonEndIdx + 1) * dayPx
+    if (left + width > horizonEndPx) {
+      overflowLeft = Math.max(horizonEndPx, left)
+      overflowWidth = left + width - overflowLeft
+      inHorizonWidth = Math.max(overflowLeft - left, 0)
+    }
+  }
 
   let holguraLeft = 0
   let holguraWidth = 0
-  const ff = parseIsoDate(barEnd)
+  const ff = barFf || parseIsoDate(barEnd)
   const esCriticoReal = cpmClasif?.bgCritico === true
   const esFinalTramo = cpmClasif?.bgFinal === true
+  const esFueraPlazo = cpmClasif?.bgAlerta === true || overflowWidth > 0
   if (holguraEnd && ff && !esCriticoReal && !esFinalTramo) {
     const fh = parseIsoDate(holguraEnd)
     if (fh && fh > ff) {
@@ -896,14 +1132,18 @@ function GanttBarGrid({
   const baselineTransform = dual ? 'translateY(-15%)' : 'translateY(-50%)'
 
   const defaultBg = isSummary
-    ? (esCriticoReal ? '#fee2e2' : esFinalTramo ? '#dbeafe' : GANTT_CAP_BAR)
-    : (esCriticoReal ? '#fecaca' : esFinalTramo ? '#bfdbfe' : GANTT_TEAL)
+    ? (esCriticoReal ? '#fee2e2' : esFueraPlazo ? '#fef3c7' : esFinalTramo ? '#dbeafe' : GANTT_CAP_BAR)
+    : (esCriticoReal ? '#fecaca' : esFueraPlazo ? '#fde68a' : esFinalTramo ? '#bfdbfe' : GANTT_TEAL)
   const barBorder = esCriticoReal
     ? '2px solid #dc2626'
+    : esFueraPlazo
+      ? '2px solid #d97706'
     : esFinalTramo
       ? '2px solid #2563eb'
       : 'none'
   const barBg = compareBarColor && showCompare ? compareBarColor : defaultBg
+  const overflowBg = '#ef4444'
+  const overflowBorder = '2px solid #b91c1c'
 
   return (
     <div
@@ -967,16 +1207,16 @@ function GanttBarGrid({
           title={`Baseline: ${fmtDateHuman(baselineBarStart)} → ${fmtDateHuman(baselineBarEnd)}`}
         />
       )}
-      {width > 0 && (
+      {inHorizonWidth > 0 && (
         <div
           style={{
             position: 'absolute',
-            left,
-            width,
+            left: inHorizonLeft,
+            width: inHorizonWidth,
             height: barH,
             top: '50%',
             transform: targetTransform,
-            borderRadius: 4,
+            borderRadius: overflowWidth > 0 ? '4px 0 0 4px' : 4,
             background: barBg,
             border: barBorder !== 'none' ? barBorder : (showCompare && compareBarColor ? '1px solid rgba(0,0,0,0.12)' : 'none'),
             boxShadow: esCriticoReal && !isSummary ? '0 0 0 1px rgba(239,68,68,0.35)' : 'none',
@@ -984,6 +1224,25 @@ function GanttBarGrid({
             zIndex: 2,
           }}
           title={criticalTooltip || tooltip}
+        />
+      )}
+      {overflowWidth > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            left: overflowLeft,
+            width: overflowWidth,
+            height: barH,
+            top: '50%',
+            transform: targetTransform,
+            borderRadius: '0 4px 4px 0',
+            background: overflowBg,
+            border: overflowBorder,
+            boxSizing: 'border-box',
+            zIndex: 3,
+            backgroundImage: 'repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 6px)',
+          }}
+          title={`Fuera del cronograma (después de ${fmtDateHuman(versionFinIso)}) — ${criticalTooltip || tooltip}`}
         />
       )}
     </div>
@@ -1012,6 +1271,7 @@ function ProgItemRow({
   editable,
   saveStatus,
   onGuardarItem,
+  onGuardarBatchTramo = null,
   stickyBg,
   registerRowDraft,
   unregisterRowDraft,
@@ -1023,8 +1283,15 @@ function ProgItemRow({
   saveGeneration = 0,
   suspendAutoSave = false,
   tramoConsolidado = false,
+  cpmClasif = null,
+  cpmNode = null,
+  cpmAplicado = false,
 }) {
   const ex = act || {}
+  const hasManualFechaAncla = Boolean(ex.override_manual && fmtDateIso(ex.fecha_inicio))
+  const showCpmDates = cpmAplicado && cpmNode?.fecha_inicio_temprana && !hasManualFechaAncla
+  const cpmIni = showCpmDates ? fmtDateIso(cpmNode.fecha_inicio_temprana) : null
+  const cpmFin = showCpmDates ? fmtDateIso(cpmNode.fecha_fin_temprana) : null
   const inherited = rowKind === 'hijo'
   const readOnly = rowKind === 'hijo' || rowKind === 'sin_agrupador'
   const effectiveEditable = editable && !readOnly
@@ -1095,19 +1362,35 @@ function ProgItemRow({
   const trySave = useCallback(async () => {
     if (!effectiveEditable || saveStatus === 'saving' || suspendAutoSave) return false
     const d = parseInt(String(duracion), 10)
+    if (tramoConsolidado && onGuardarBatchTramo && (d > 0)) {
+      const result = await onGuardarBatchTramo([{
+        capitulo: itemDef.capitulo,
+        item: itemDef.item,
+        fecha_inicio: fechaIni || null,
+        duracion: d,
+        itemDef,
+        rk,
+      }], { allowOverwrite: true })
+      if (result?.ok) dirtyRef.current = false
+      return !!result?.ok
+    }
     if (!fechaIni || !(d > 0)) return false
     const ok = await onGuardarItem(itemDef, { fecha_inicio: fechaIni, duracion: String(d), override_manual: true, heredado_de_capitulo: false }, rk)
     if (ok) dirtyRef.current = false
     return ok
-  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, itemDef, fechaIni, duracion, rk])
+  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, onGuardarBatchTramo, tramoConsolidado, itemDef, fechaIni, duracion, rk])
 
   useEffect(() => {
     if (!effectiveEditable || !dirtyRef.current || suspendAutoSave) return undefined
     const d = parseInt(String(debDur), 10)
-    if (!debFecha || !(d > 0)) return undefined
+    if (tramoConsolidado && onGuardarBatchTramo) {
+      if (!(d > 0)) return undefined
+    } else if (!debFecha || !(d > 0)) {
+      return undefined
+    }
     const timer = setTimeout(() => trySave(), 700)
     return () => clearTimeout(timer)
-  }, [debFecha, debDur, editable, trySave, suspendAutoSave])
+  }, [debFecha, debDur, editable, trySave, suspendAutoSave, tramoConsolidado, onGuardarBatchTramo])
 
   const onBlurField = () => {
     if (dirtyRef.current) trySave()
@@ -1142,15 +1425,17 @@ function ProgItemRow({
       inheritedBadge
     ) : null
 
+  const effectiveIni = showCpmDates ? (cpmIni || fechaIni) : fechaIni
+  const effectiveFin = showCpmDates ? (cpmFin || finCalc || ex.fecha_fin_calculada) : (finCalc || ex.fecha_fin_calculada)
   const displayIni = readOnly
-    ? (fmtDateIso(ex.fecha_inicio) || fmtDateIso(parentDates.fecha_inicio) || '—')
-    : fechaIni
+    ? (cpmIni || fmtDateIso(ex.fecha_inicio) || fmtDateIso(parentDates.fecha_inicio) || '—')
+    : effectiveIni
   const displayDur = readOnly
     ? (ex.duracion_dias_habiles ?? parentDates.duracion_dias_habiles ?? '—')
     : duracion
   const displayFin = readOnly
-    ? (fmtDateHuman(finCalc || ex.fecha_fin_calculada || parentDates.fecha_fin_calculada) || '—')
-    : fmtDateHuman(finCalc || ex.fecha_fin_calculada)
+    ? (fmtDateHuman(cpmFin || finCalc || ex.fecha_fin_calculada || parentDates.fecha_fin_calculada) || '—')
+    : fmtDateHuman(effectiveFin)
 
   const agrupadorLabel = `${itemDef.codigo_wbs ? `${itemDef.codigo_wbs} · ` : ''}${itemDef.agrupador_nombre || itemDef.descripcion || itemDef.item}`
 
@@ -1169,9 +1454,15 @@ function ProgItemRow({
   }
 
   if (rowKind === 'agrupador') {
-    const agBg = stickyBg
+    const agBg = cpmClasif?.bgAlerta
+      ? 'rgba(254,243,199,0.55)'
+      : cpmClasif?.bgCritico
+      ? 'rgba(254,226,226,0.35)'
+      : cpmClasif?.bgFinal
+        ? 'rgba(219,234,254,0.45)'
+        : stickyBg
     return (
-      <tr style={{ borderBottom: `1px solid ${t.border}` }}>
+      <tr style={{ borderBottom: `1px solid ${t.border}`, background: cpmClasif?.bgCritico || cpmClasif?.bgFinal || cpmClasif?.bgAlerta ? agBg : undefined }}>
         <td style={{ ...cell, ...stickyItemCell(agBg), fontWeight: 700, paddingLeft: 4 }}>
           {onToggleAgExpand && (
           <button
@@ -1196,7 +1487,18 @@ function ProgItemRow({
           )}
         </td>
         <td style={{ ...cell, ...stickyDescCell(agBg), fontWeight: 700, color: t.text }} title={agrupadorLabel}>
-          <span style={ellipsisTextStyle()}>{agrupadorLabel}</span>
+          <span style={{ ...ellipsisTextStyle(), display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {cpmClasif?.tipo === 'critica' && (
+              <span title="Ruta crítica" style={{ color: '#dc2626', fontWeight: 800, fontSize: 10, flexShrink: 0 }}>⚠</span>
+            )}
+            {cpmClasif?.tipo === 'holgura_negativa' && (
+              <span title="Fuera de plazo" style={{ color: '#b45309', fontWeight: 800, fontSize: 10, flexShrink: 0 }}>⚠</span>
+            )}
+            {cpmClasif?.tipo === 'final_tramo' && (
+              <span title="Actividad final del tramo" style={{ color: '#1d4ed8', fontWeight: 800, fontSize: 10, flexShrink: 0 }}>🏁</span>
+            )}
+            <span style={ellipsisTextStyle()}>{agrupadorLabel}</span>
+          </span>
         </td>
         <td style={{ ...cell, minWidth: SCROLL_COL_W.und, width: SCROLL_COL_W.und }}>{itemDef.und || '—'}</td>
         <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.cant, width: SCROLL_COL_W.cant }}>{fmtCant(itemDef.cant_total)}</td>
@@ -1205,7 +1507,7 @@ function ProgItemRow({
           {effectiveEditable ? (
             <input
               type="date"
-              value={fechaIni}
+              value={effectiveIni}
               onChange={(e) => {
                 dirtyRef.current = true
                 setFechaIni(e.target.value)
@@ -1235,7 +1537,18 @@ function ProgItemRow({
           )}
         </td>
         <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaFin, width: SCROLL_COL_W.fechaFin, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
-        <td style={{ ...cell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save, textAlign: 'center' }}>{saveIcon}</td>
+        <td style={{ ...cell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save, textAlign: 'center' }}>
+          {cpmClasif?.tipo === 'critica' && (
+            <span title="Ruta crítica" style={{ color: '#dc2626', fontWeight: 700, fontSize: 10 }}>RC</span>
+          )}
+          {cpmClasif?.tipo === 'holgura_negativa' && (
+            <span title="Fuera de plazo (holgura negativa)" style={{ color: '#b45309', fontWeight: 700, fontSize: 10 }}>⚠ FP</span>
+          )}
+          {cpmClasif?.tipo === 'final_tramo' && (
+            <span title="Actividad final del tramo" style={{ color: '#1d4ed8', fontWeight: 700, fontSize: 10 }}>FIN</span>
+          )}
+          {!cpmClasif?.tipo || (cpmClasif.tipo !== 'critica' && cpmClasif.tipo !== 'final_tramo') ? saveIcon : null}
+        </td>
       </tr>
     )
   }
@@ -1311,6 +1624,7 @@ function ProgCapituloSection({
   API,
   rowSaveStatus,
   onGuardarItem,
+  onGuardarBatchTramo = null,
   registerRowDraft,
   unregisterRowDraft,
   finOverrides,
@@ -1321,6 +1635,10 @@ function ProgCapituloSection({
   puedeEditarListadoPrecios = false,
   onIrListadoPrecios = null,
   tramoConsolidado = false,
+  resolveCpmForAg = null,
+  cpmAplicado = false,
+  versionFinIso = null,
+  noHabilesSet = null,
 }) {
   const pal = capColor(capIdx)
   const useWbs = Boolean(estructuraCap?.agrupadores?.length || estructuraCap?.sin_agrupador?.length)
@@ -1414,6 +1732,8 @@ function ProgCapituloSection({
         const rk = agrupadorRowKey(cap, ag)
         const agAct = actMap[actividadKey(cap, actItem, 1)]
         const expanded = isAgExpanded(ag.agrupador_id)
+        const cpmNode = resolveCpmForAg?.(cap, ag.agrupador_id)
+        const cpmClasif = clasificarNodoCpm(cpmNode, versionFinIso, noHabilesSet)
         return (
           <Fragment key={`ag-${ag.agrupador_id}`}>
             <ProgItemRow
@@ -1427,6 +1747,7 @@ function ProgCapituloSection({
               editable={editable}
               saveStatus={rowSaveStatus[rk] || 'idle'}
               onGuardarItem={onGuardarItem}
+              onGuardarBatchTramo={onGuardarBatchTramo}
               stickyBg={t.bgCard}
               registerRowDraft={registerRowDraft}
               unregisterRowDraft={unregisterRowDraft}
@@ -1437,6 +1758,9 @@ function ProgCapituloSection({
               agExpanded={expanded}
               onToggleAgExpand={(ag.items || []).length ? () => onToggleAgExpand(ag.agrupador_id) : undefined}
               tramoConsolidado={tramoConsolidado}
+              cpmClasif={cpmClasif}
+              cpmNode={cpmNode}
+              cpmAplicado={cpmAplicado}
             />
             {expanded && (ag.items || []).map((hijo) => (
               <ProgItemRow
@@ -1519,10 +1843,12 @@ export default function ProgObraProgramacionModal({
   panelBusy,
   onGuardarCambios,
   onSaveSuccess,
+  onScheduleRefresh = null,
   onReloadActividades,
   showToast,
   allPkIds,
   onCpmUpdated,
+  onVersionHorizonteSaved = null,
   openCompareTab = false,
   compareBaselineId = null,
   compareTargetId = null,
@@ -1563,6 +1889,15 @@ export default function ProgObraProgramacionModal({
   const [cpmResultados, setCpmResultados] = useState([])
   const [cpmDirty, setCpmDirty] = useState(false)
   const [cpmResumenOpen, setCpmResumenOpen] = useState(false)
+  const [deps, setDeps] = useState([])
+  const [depsLoaded, setDepsLoaded] = useState(false)
+  const [depsEstructuraByPk, setDepsEstructuraByPk] = useState({})
+  const depsVersionLoadedRef = useRef(null)
+  const onCpmUpdatedRef = useRef(onCpmUpdated)
+  onCpmUpdatedRef.current = onCpmUpdated
+  const [versionFi, setVersionFi] = useState('')
+  const [versionFf, setVersionFf] = useState('')
+  const [horizonteSaving, setHorizonteSaving] = useState(false)
 
   const compareEnabled = Boolean(compareBaselineId && compareTargetId && compareBaselineId !== compareTargetId)
 
@@ -1686,6 +2021,36 @@ export default function ProgObraProgramacionModal({
     : ''
 
   useEffect(() => {
+    if (!open || !workingVersion) return
+    setVersionFi(fmtDateIso(workingVersion.fecha_inicio) || '')
+    setVersionFf(fmtDateIso(workingVersion.fecha_fin) || '')
+  }, [open, workingVersion?.id, workingVersion?.fecha_inicio, workingVersion?.fecha_fin])
+
+  const saveVersionHorizonte = useCallback(async (fi, ff) => {
+    if (!editable || historicalReadOnly || !workingVersion?.id || !cid || !token) return
+    setHorizonteSaving(true)
+    try {
+      const res = await fetch(`${API}/prog-obra/${cid}/versiones/${workingVersion.id}/horizonte`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fecha_inicio: fi || null, fecha_fin: ff || null }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast?.(data?.detail || 'Error al guardar horizonte del cronograma.', 'err')
+        return
+      }
+      setCpmDirty(!!data.cpm_dirty)
+      onVersionHorizonteSaved?.(data)
+      showToast?.('Horizonte del cronograma actualizado.', 'ok')
+    } catch {
+      showToast?.('Error de red al guardar horizonte.', 'err')
+    } finally {
+      setHorizonteSaving(false)
+    }
+  }, [editable, historicalReadOnly, workingVersion?.id, cid, token, API, showToast, onVersionHorizonteSaved])
+
+  useEffect(() => {
     if (!open || !cid || !token) return
     const desde = new Date()
     const hasta = addCalendarDays(desde, 400)
@@ -1700,19 +2065,74 @@ export default function ProgObraProgramacionModal({
   }, [open, cid, token, API])
 
   useEffect(() => {
-    if (!open || !workingVersion?.id) { setCpmResultados([]); return }
-    fetch(`${API}/prog-obra/${cid}/versiones/${workingVersion.id}/cpm-resultados`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => (r.ok ? r.json() : { resultados: [] }))
-      .then((d) => {
-        const resultados = d.resultados || []
-        setCpmResultados(resultados)
-        setCpmDirty(!!d.cpm_dirty)
-        onCpmUpdated?.(resultados)
-      })
-      .catch(() => {
+    if (!open || !workingVersion?.id || !cid || !token) {
+      if (!open) {
+        depsVersionLoadedRef.current = null
+        setDeps([])
+        setDepsLoaded(false)
+        setDepsEstructuraByPk({})
         setCpmResultados([])
         setCpmDirty(false)
-      })
+      }
+      return undefined
+    }
+    const vid = String(workingVersion.id)
+    if (depsVersionLoadedRef.current === vid) {
+      return undefined
+    }
+    let cancel = false
+    setDepsLoaded(false)
+    const hdrs = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    ;(async () => {
+      try {
+        const resDeps = await fetch(`${API}/prog-obra/${cid}/versiones/${vid}/dependencias`, { headers: hdrs })
+        if (cancel) return
+        if (resDeps.ok) {
+          const raw = await resDeps.json()
+          setDeps(Array.isArray(raw) ? raw.map(normalizeDep) : [])
+          depsVersionLoadedRef.current = vid
+        } else {
+          setDeps([])
+        }
+      } catch {
+        if (!cancel) setDeps([])
+      } finally {
+        if (!cancel) setDepsLoaded(true)
+      }
+    })()
+    return () => {
+      cancel = true
+    }
+  }, [open, workingVersion?.id, cid, token, API])
+
+  useEffect(() => {
+    if (!open || !workingVersion?.id || !cid || !token) return undefined
+    let cancel = false
+    const hdrs = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    ;(async () => {
+      try {
+        const resCpm = await fetch(`${API}/prog-obra/${cid}/versiones/${workingVersion.id}/cpm-resultados`, { headers: hdrs })
+        if (cancel) return
+        if (resCpm.ok) {
+          const cpmData = await resCpm.json()
+          const resultados = cpmData.resultados || []
+          setCpmResultados(resultados)
+          setCpmDirty(!!cpmData.cpm_dirty)
+          onCpmUpdatedRef.current?.(resultados)
+        } else {
+          setCpmResultados([])
+          setCpmDirty(false)
+        }
+      } catch {
+        if (!cancel) {
+          setCpmResultados([])
+          setCpmDirty(false)
+        }
+      }
+    })()
+    return () => {
+      cancel = true
+    }
   }, [open, workingVersion?.id, cid, token, API])
 
   const toggleCap = (cap) => {
@@ -1733,35 +2153,57 @@ export default function ProgObraProgramacionModal({
 
   const cpmByNodeKey = useMemo(() => {
     const m = {}
-    for (const r of cpmResultados) {
-      m[cpmNodeKey(r.pk_id, r.capitulo, r.agrupador_id)] = r
+    for (const raw of cpmResultados) {
+      const r = normalizeCpmRow(raw)
+      if (!r) continue
+      for (const k of cpmLookupKeys(r.pk_id, r.capitulo, r.agrupador_id)) {
+        m[k] = r
+      }
     }
     return m
   }, [cpmResultados])
 
-  const tramoCpmByCapAg = useMemo(() => {
-    if (!tramoConsolidado || !tramoContext?.pkIds?.length) return null
-    const pkSet = new Set(tramoContext.pkIds.map((p) => String(p).trim()))
+  const { tramoCpmByAgId, tramoCpmByCapAg } = useMemo(() => {
+    if (!tramoConsolidado) return { tramoCpmByAgId: null, tramoCpmByCapAg: null }
+    const pkSet = tramoContext?.pkIds?.length
+      ? new Set(tramoContext.pkIds.map((p) => String(p).trim()))
+      : null
     const buckets = {}
-    for (const r of cpmResultados) {
-      if (!pkSet.has(String(r.pk_id || '').trim())) continue
+    const capBuckets = {}
+    for (const raw of cpmResultados) {
+      const r = normalizeCpmRow(raw)
+      if (!r) continue
+      if (pkSet && !pkSet.has(String(r.pk_id || '').trim())) continue
       if (r.agrupador_id == null || r.agrupador_id === '') continue
-      const k = `${String(r.capitulo || '').trim()}\u0000${r.agrupador_id}`
-      if (!buckets[k]) buckets[k] = []
-      buckets[k].push(r)
+      const agKey = String(r.agrupador_id)
+      if (!buckets[agKey]) buckets[agKey] = []
+      buckets[agKey].push(r)
+      const capAgKey = `${String(r.capitulo || '').trim()}\u0000${agKey}`
+      if (!capBuckets[capAgKey]) capBuckets[capAgKey] = []
+      capBuckets[capAgKey].push(r)
     }
-    const m = {}
+    if (!Object.keys(buckets).length) {
+      for (const raw of cpmResultados) {
+        const r = normalizeCpmRow(raw)
+        if (!r || r.agrupador_id == null || r.agrupador_id === '') continue
+        const agKey = String(r.agrupador_id)
+        if (!buckets[agKey]) buckets[agKey] = []
+        buckets[agKey].push(r)
+        const capAgKey = `${String(r.capitulo || '').trim()}\u0000${agKey}`
+        if (!capBuckets[capAgKey]) capBuckets[capAgKey] = []
+        capBuckets[capAgKey].push(r)
+      }
+    }
+    const pickTramo = pickBestCpmNodeTramo
+    const tramoCpmByAgIdOut = {}
     for (const [k, nodes] of Object.entries(buckets)) {
-      m[k] = nodes.reduce((best, n) => {
-        if (!best) return n
-        const bCrit = best.es_ruta_critica || Number(best.holgura_total) === 0
-        const nCrit = n.es_ruta_critica || Number(n.holgura_total) === 0
-        if (nCrit && !bCrit) return n
-        if (bCrit && !nCrit) return best
-        return (Number(n.holgura_total) ?? 999) < (Number(best.holgura_total) ?? 999) ? n : best
-      }, null)
+      tramoCpmByAgIdOut[k] = pickTramo(nodes)
     }
-    return m
+    const tramoCpmByCapAgOut = {}
+    for (const [k, nodes] of Object.entries(capBuckets)) {
+      tramoCpmByCapAgOut[k] = pickTramo(nodes)
+    }
+    return { tramoCpmByAgId: tramoCpmByAgIdOut, tramoCpmByCapAg: tramoCpmByCapAgOut }
   }, [tramoConsolidado, tramoContext, cpmResultados])
 
   const agrupadorLabelById = useMemo(() => {
@@ -1808,6 +2250,47 @@ export default function ProgObraProgramacionModal({
         return String(a.fecha_inicio_temprana || '').localeCompare(String(b.fecha_inicio_temprana || ''))
       })
   }, [cpmResultados, activePk, agrupadorLabelById, tramoConsolidado, tramoContext])
+
+  const resolveCpmForAg = useCallback(
+    (cap, agrupadorId) => resolveCpmNode({
+      tramoConsolidado,
+      tramoCpmByAgId,
+      tramoCpmByCapAg,
+      tramoPkIds: tramoConsolidado ? (tramoContext?.pkIds || []) : null,
+      cpmByNodeKey,
+      pkId: tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk,
+      cap,
+      agrupadorId,
+    }),
+    [tramoConsolidado, tramoCpmByAgId, tramoCpmByCapAg, cpmByNodeKey, tramoContext, activePk],
+  )
+
+  const cpmAplicado = cpmResultados.length > 0 && !cpmDirty
+
+  const desfaseHorizonteItems = useMemo(() => {
+    if (!versionFf || !cpmResultados.length) return []
+    const pkFiltered = tramoConsolidado && tramoContext?.pkIds?.length
+      ? cpmResultados.filter((r) => {
+        const pkSet = new Set(tramoContext.pkIds.map((p) => String(p).trim()))
+        return pkSet.has(String(r.pk_id || '').trim())
+      })
+      : cpmResultados
+    return collectDesfaseHorizonte(pkFiltered, versionFf, {
+      labelByAgId: agrupadorLabelById,
+      tramoConsolidado,
+      noHabilesSet,
+    })
+  }, [versionFf, cpmResultados, tramoConsolidado, tramoContext, agrupadorLabelById, noHabilesSet])
+
+  const handleCpmCalculated = useCallback(async (resultados) => {
+    setCpmResultados(resultados)
+    setCpmDirty(false)
+    onCpmUpdatedRef.current?.(resultados)
+    if (onReloadActividades) {
+      await onReloadActividades()
+    }
+    setSaveGeneration((g) => g + 1)
+  }, [onReloadActividades])
 
   // Cuando fecha_fin_calculada no está en actMap (datos viejos o sin RPC),
   // la recalcula localmente usando días hábiles y noHabilesSet.
@@ -1869,6 +2352,12 @@ export default function ProgObraProgramacionModal({
     () => buildPkGanttLayout({
       capitulosOrdenados,
       layoutScope: ganttLayoutScope,
+      layoutPkId: tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk,
+      tramoConsolidado,
+      tramoCpmByAgId: tramoConsolidado ? tramoCpmByAgId : null,
+      tramoCpmByCapAg: tramoConsolidado ? tramoCpmByCapAg : null,
+      tramoPkIds: tramoConsolidado ? (tramoContext?.pkIds || []) : null,
+      cpmByNodeKey,
       collapsedCaps,
       expandedAgs,
       estructuraPorCapitulo,
@@ -1882,10 +2371,19 @@ export default function ProgObraProgramacionModal({
       finOverrides,
       calcFinLocal,
       noHabilesSet,
+      horizonStartIso: versionFi || null,
+      horizonEndIso: versionFf || null,
+      cpmResultados,
     }),
     [
       capitulosOrdenados,
       ganttLayoutScope,
+      tramoConsolidado,
+      tramoContext,
+      activePk,
+      tramoCpmByAgId,
+      tramoCpmByCapAg,
+      cpmByNodeKey,
       collapsedCaps,
       expandedAgs,
       estructuraPorCapitulo,
@@ -1900,6 +2398,9 @@ export default function ProgObraProgramacionModal({
       noHabilesSet,
       rowDrafts,
       saveGeneration,
+      versionFi,
+      versionFf,
+      cpmResultados,
     ],
   )
 
@@ -2093,26 +2594,27 @@ export default function ProgObraProgramacionModal({
     const itemsAGuardar = []
     let skipped = 0
 
-    const resolveRowDraft = (rk, live, act) => {
+    const resolveRowDraft = (rk, live, act, prog = null) => {
       const hasSnap = Object.prototype.hasOwnProperty.call(draftSource, rk)
       const stored = hasSnap ? draftSource[rk] : null
       const fechaRaw = hasSnap
         ? (stored?.fecha_inicio ?? '')
         : live != null
           ? (live.fecha_inicio ?? '')
-          : (act?.fecha_inicio ?? '')
+          : (act?.fecha_inicio ?? prog?.fecha_inicio ?? '')
       const durRaw = hasSnap
         ? stored?.duracion
-        : live?.duracion ?? act?.duracion_dias_habiles
+        : live?.duracion ?? act?.duracion_dias_habiles ?? prog?.duracion_dias_habiles
       return {
         fecha: fmtDateIso(fechaRaw),
         dur: parseInt(String(durRaw ?? ''), 10),
       }
     }
 
-    const actHadSchedule = (act) =>
-      Boolean(fmtDateIso(act?.fecha_inicio)) ||
-      (act?.duracion_dias_habiles != null && parseInt(String(act.duracion_dias_habiles), 10) > 0)
+    const actHadSchedule = (act, prog = null) =>
+      Boolean(fmtDateIso(act?.fecha_inicio ?? prog?.fecha_inicio)) ||
+      (act?.duracion_dias_habiles != null && parseInt(String(act.duracion_dias_habiles), 10) > 0) ||
+      (prog?.duracion_dias_habiles != null && parseInt(String(prog.duracion_dias_habiles), 10) > 0)
 
     for (const cap of capitulosOrdenados) {
       const eCap = estructuraPorCapitulo?.[cap]
@@ -2135,19 +2637,22 @@ export default function ProgObraProgramacionModal({
               vlr_unitario: cant > 0 ? costo / cant : costo,
             },
             actItem,
+            prog: ag.programacion || null,
           }
         })
         : itemsPorCapitulo(cap).map((it) => ({
           rk: itemRowKey(cap, it.item),
           itemDef: it,
           actItem: it.item,
+          prog: null,
         }))
       for (const row of iter) {
         const live = rowDraftRef.current[row.rk]?.getValues?.()
         const act = actMap[actividadKey(cap, row.actItem, 1)]
-        const { fecha, dur } = resolveRowDraft(row.rk, live, act)
-        const hadSchedule = actHadSchedule(act)
-        const scheduleEmpty = !fecha || !(dur > 0)
+        const { fecha, dur } = resolveRowDraft(row.rk, live, act, row.prog)
+        const hadSchedule = actHadSchedule(act, row.prog)
+        const hasDraft = (dur > 0) || Boolean(fecha)
+        const scheduleEmpty = !hasDraft
 
         if (scheduleEmpty) {
           if (hadSchedule) {
@@ -2179,7 +2684,7 @@ export default function ProgObraProgramacionModal({
     if (!editable) return { saved: 0, errors: 0, skipped: 0 }
     const { itemsAGuardar, skipped } = collectDraftItems()
     const rowsToSave = itemsAGuardar.filter(
-      (row) => row.clearSchedule || (row.fecha_inicio && row.duracion > 0),
+      (row) => row.clearSchedule || row.duracion > 0 || row.fecha_inicio,
     )
     console.debug('[ProgObra] flushAllDrafts', {
       filasTotal: itemsAGuardar.length,
@@ -2196,19 +2701,23 @@ export default function ProgObraProgramacionModal({
       return { saved: 0, errors: 0, skipped: skipped || itemsAGuardar.length }
     }
     if (onGuardarBatchTramo && tramoConsolidado) {
-      const batchPayload = rowsToSave.map((row) => ({
-        capitulo: row.itemDef.capitulo,
-        item: row.itemDef.item,
-        fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
-        duracion: row.clearSchedule ? null : row.duracion,
-        fecha_fin_calculada: row.clearSchedule ? null : undefined,
-        override_manual: true,
-        heredado_de_capitulo: false,
-        itemDef: row.itemDef,
-        rk: row.rk,
-      }))
+      const batchPayload = rowsToSave.map((row) => {
+        const fiRaw = row.clearSchedule ? null : row.fecha_inicio
+        const fiStr = fiRaw != null ? String(fiRaw).trim() : ''
+        return {
+          capitulo: row.itemDef.capitulo,
+          item: row.itemDef.item,
+          fecha_inicio: fiStr ? fiStr.slice(0, 10) : null,
+          duracion: row.clearSchedule ? null : row.duracion,
+          fecha_fin_calculada: row.clearSchedule ? null : undefined,
+          override_manual: true,
+          heredado_de_capitulo: false,
+          itemDef: row.itemDef,
+          rk: row.rk,
+        }
+      })
       console.debug('[ProgObra] POST actividades-batch-tramo', { count: batchPayload.length, tramo: tramoContext?.tramo })
-      const batchResult = await onGuardarBatchTramo(batchPayload)
+      const batchResult = await onGuardarBatchTramo(batchPayload, { allowOverwrite: true, skipReload: true })
       if (!batchResult?.ok) return { saved: 0, errors: batchResult?.errors || batchPayload.length, skipped }
       return { saved: batchResult.saved, errors: 0, skipped, batchOk: true }
     }
@@ -2248,6 +2757,49 @@ export default function ProgObraProgramacionModal({
     }
     return { saved, errors, skipped }
   }, [editable, collectDraftItems, onGuardarBatch, onGuardarBatchTramo, onGuardarItem, activePk, tramoConsolidado, tramoContext?.tramo])
+
+  const flushDraftsBeforeCpm = useCallback(async () => {
+    if (!editable) return { saved: 0, errors: 0, skipped: 0 }
+    snapshotDraftsForSave()
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const { itemsAGuardar } = collectDraftItems()
+    const pending = itemsAGuardar.filter(
+      (row) => row.clearSchedule || row.duracion > 0 || row.fecha_inicio,
+    )
+    if (pending.length === 0 && !tramoConsolidado) {
+      return { saved: 0, errors: 0, skipped: 0 }
+    }
+    if (tramoConsolidado && onGuardarBatchTramo && pending.length > 0) {
+      const batchPayload = pending.map((row) => ({
+        capitulo: row.itemDef.capitulo,
+        item: row.itemDef.item,
+        fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
+        duracion: row.clearSchedule ? null : (row.duracion > 0 ? row.duracion : null),
+        fecha_fin_calculada: row.clearSchedule ? null : undefined,
+        override_manual: true,
+        heredado_de_capitulo: false,
+        itemDef: row.itemDef,
+        rk: row.rk,
+      }))
+      const batchResult = await onGuardarBatchTramo(batchPayload, { allowOverwrite: true, skipReload: false })
+      if (!batchResult?.ok) {
+        throw new Error(`No se pudieron guardar ${batchResult?.errors || pending.length} duración(es) antes del CPM.`)
+      }
+      if (onReloadActividades) await onReloadActividades()
+      return { saved: batchResult.saved, errors: 0, skipped: 0, batchOk: true }
+    }
+    if (pending.length === 0) {
+      return { saved: 0, errors: 0, skipped: 0, batchOk: true }
+    }
+    const result = await flushAllDrafts()
+    if (result.errors > 0) {
+      throw new Error(`No se pudieron guardar ${result.errors} duración(es) antes del CPM.`)
+    }
+    if (tramoConsolidado && onReloadActividades) {
+      await onReloadActividades()
+    }
+    return result
+  }, [editable, snapshotDraftsForSave, collectDraftItems, flushAllDrafts, tramoConsolidado, onGuardarBatchTramo, onReloadActividades])
 
   const handleResetearPkProgramacion = () => {
     if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
@@ -2317,16 +2869,15 @@ export default function ProgObraProgramacionModal({
       preSaveDraftSnapshotRef.current = null
       setFinOverrides({})
       setGanttActOverlay(null)
+      setCpmResultados([])
+      setCpmResumenOpen(false)
       setCpmDirty(true)
+      onCpmUpdatedRef.current?.([])
       setSaveGeneration((g) => g + 1)
       const n = tramoContext.pkCount || tramoContext.pkIds?.length || 0
       showToast?.(`Programación del ${tramoContext.tramo} reseteada (${n} PK${n === 1 ? '' : 's'}).`, 'ok')
-      if (onReloadActividades) {
-        await onReloadActividades()
-      }
-      if (onSaveSuccess) {
-        await onSaveSuccess()
-      }
+      if (onReloadActividades) await onReloadActividades()
+      onScheduleRefresh?.()
     } catch (e) {
       console.error('[ProgObra] Resetear programación tramo:', e)
       showToast?.(e?.message || 'Error al resetear programación del tramo', 'err')
@@ -2364,7 +2915,7 @@ export default function ProgObraProgramacionModal({
       const { saved, errors, skipped, batchOk, pkId } = await flushAllDrafts()
       const hadRowsToSave = saved > 0 || errors > 0
       if (!hadRowsToSave && skipped > 0) {
-        throw new Error('Ningún ítem tiene fecha y días hábiles válidos. Revise la tabla.')
+        throw new Error('Ningún ítem tiene días hábiles o fecha de inicio válidos. Revise la tabla.')
       }
       if (errors > 0) {
         throw new Error(`No se pudieron guardar ${errors} ítem(s).`)
@@ -2490,6 +3041,57 @@ export default function ProgObraProgramacionModal({
           </button>
         </div>
 
+        {workingVersion?.id && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 12,
+              padding: '8px 16px',
+              borderBottom: `1px solid ${t.border}`,
+              flexShrink: 0,
+              background: t.bg,
+            }}
+          >
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 600, color: t.textMuted }}>Cronograma versión</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-caption)' }}>
+              <span style={{ color: t.textMuted }}>Inicio</span>
+              <input
+                type="date"
+                value={versionFi}
+                disabled={!editable || historicalReadOnly || horizonteSaving}
+                onChange={(e) => setVersionFi(e.target.value)}
+                onBlur={() => void saveVersionHorizonte(versionFi, versionFf)}
+                style={{ padding: '4px 8px', fontSize: 'var(--cc-caption)', border: `1px solid ${t.border}`, borderRadius: 6, background: t.bgCard }}
+              />
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-caption)' }}>
+              <span style={{ color: t.textMuted }}>Fin</span>
+              <input
+                type="date"
+                value={versionFf}
+                disabled={!editable || historicalReadOnly || horizonteSaving}
+                onChange={(e) => setVersionFf(e.target.value)}
+                onBlur={() => void saveVersionHorizonte(versionFi, versionFf)}
+                style={{ padding: '4px 8px', fontSize: 'var(--cc-caption)', border: `1px solid ${t.border}`, borderRadius: 6, background: t.bgCard }}
+              />
+            </label>
+            {horizonteSaving && (
+              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>Guardando…</span>
+            )}
+            {cpmAplicado && (
+              <span style={{ fontSize: 'var(--cc-caption)', color: t.primary, fontWeight: 600 }}>
+                Tabla sincronizada con CPM
+              </span>
+            )}
+          </div>
+        )}
+
+        {cpmAplicado && desfaseHorizonteItems.length > 0 && (
+          <ProgDesfaseHorizonteAlert items={desfaseHorizonteItems} versionFinIso={versionFf} t={t} />
+        )}
+
         {!tramoConsolidado && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, overflowX: 'auto' }}>
           {pkTabs.map((pk) => (
@@ -2566,33 +3168,52 @@ export default function ProgObraProgramacionModal({
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {activeContentTab === 'dependencias' ? (
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
-              <ProgObraDependencias
-                cid={cid}
-                token={token}
-                API={API}
-                t={t}
-                versionId={workingVersion?.id}
-                activePk={tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk}
-                allPkIds={tramoConsolidado ? (tramoContext?.pkIds || allPkIds) : allPkIds}
-                capitulosOrigen={capitulosOrdenados}
-                estructuraPorCapitulo={estructuraPorCapitulo}
-                editable={editable}
-                showToast={showToast}
-                cpmDirty={cpmDirty}
-                onCpmDirtyChange={setCpmDirty}
-                tramoMode={tramoConsolidado}
-                tramoLabel={tramoContext?.tramo ? `${tramoContext.tramo} (${tramoContext.pkCount || tramoContext.pkIds?.length || 0} PKs)` : null}
-                tramoPkIds={tramoContext?.pkIds}
-                onCpmCalculated={(resultados) => {
-                  setCpmResultados(resultados)
-                  setCpmDirty(false)
-                  onCpmUpdated?.(resultados)
-                }}
-              />
-            </div>
-          ) : (
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'auto',
+              padding: '12px 16px',
+              display: activeContentTab === 'dependencias' ? 'block' : 'none',
+            }}
+          >
+            <ProgObraDependencias
+              cid={cid}
+              token={token}
+              API={API}
+              t={t}
+              versionId={workingVersion?.id}
+              activePk={tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk}
+              allPkIds={tramoConsolidado ? (tramoContext?.pkIds || allPkIds) : allPkIds}
+              capitulosOrigen={capitulosOrdenados}
+              estructuraPorCapitulo={estructuraPorCapitulo}
+              editable={editable}
+              showToast={showToast}
+              cpmDirty={cpmDirty}
+              onCpmDirtyChange={setCpmDirty}
+              tramoMode={tramoConsolidado}
+              tramoLabel={tramoContext?.tramo ? `${tramoContext.tramo} (${tramoContext.pkCount || tramoContext.pkIds?.length || 0} PKs)` : null}
+              tramoPkIds={tramoContext?.pkIds}
+              deps={deps}
+              setDeps={setDeps}
+              depsLoaded={depsLoaded}
+              cpmResultados={cpmResultados}
+              setCpmResultados={setCpmResultados}
+              estructuraByPk={depsEstructuraByPk}
+              setEstructuraByPk={setDepsEstructuraByPk}
+              onCpmCalculated={handleCpmCalculated}
+              onBeforeCalcularCpm={flushDraftsBeforeCpm}
+            />
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              display: activeContentTab === 'programacion' ? 'flex' : 'none',
+              flexDirection: 'column',
+            }}
+          >
             <>
           {!tramoConsolidado && compareEnabled && (
             <div
@@ -2825,7 +3446,7 @@ export default function ProgObraProgramacionModal({
                           capIdx={capIdx}
                           estructuraCap={estructuraPorCapitulo?.[cap]}
                           items={items}
-                          actMap={actMap}
+                          actMap={ganttActMap}
                           actividadKey={actividadKey}
                           itemRowKey={itemRowKey}
                           agrupadorActItem={agrupadorActItem}
@@ -2840,6 +3461,7 @@ export default function ProgObraProgramacionModal({
                           API={API}
                           rowSaveStatus={rowSaveStatus}
                           onGuardarItem={onGuardarItem}
+                          onGuardarBatchTramo={onGuardarBatchTramo}
                           registerRowDraft={registerRowDraft}
                           unregisterRowDraft={unregisterRowDraft}
                           finOverrides={finOverrides}
@@ -2850,6 +3472,10 @@ export default function ProgObraProgramacionModal({
                           puedeEditarListadoPrecios={puedeEditarListadoPrecios}
                           onIrListadoPrecios={onIrListadoPrecios}
                           tramoConsolidado={tramoConsolidado}
+                          resolveCpmForAg={resolveCpmForAg}
+                          cpmAplicado={cpmAplicado}
+                          versionFinIso={versionFf || null}
+                          noHabilesSet={noHabilesSet}
                         />
                       )
                     })}
@@ -2911,15 +3537,19 @@ export default function ProgObraProgramacionModal({
                   model={pkGanttModelExtended}
                   noHabilesSet={noHabilesSet}
                   t={t}
-                  activePk={ganttLayoutScope}
+                  activePk={tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk}
+                  tramoConsolidado={tramoConsolidado}
                   cpmByNodeKey={cpmByNodeKey}
+                  tramoCpmByAgId={tramoConsolidado ? tramoCpmByAgId : null}
                   tramoCpmByCapAg={tramoConsolidado ? tramoCpmByCapAg : null}
+                  tramoPkIds={tramoConsolidado ? (tramoContext?.pkIds || []) : null}
                   bodyScrollRef={rightBodyScrollRef}
                   onBodyScroll={handleRightBodyScroll}
                   onRefresh={refreshPkGantt}
                   compareByKey={compareByKey}
                   ganttCompareMode={ganttCompareMode}
                   showCompare={!tramoConsolidado && compareEnabled && !!compareData}
+                  versionFinIso={versionFf || null}
                 />
                 {cpmResumenOpen && (
                 <div
@@ -2954,6 +3584,8 @@ export default function ProgObraProgramacionModal({
                       t={t}
                       variant="popup"
                       onClose={() => setCpmResumenOpen(false)}
+                      versionFinIso={versionFf || null}
+                      noHabilesSet={noHabilesSet}
                     />
                   </div>
                 </div>
@@ -2964,7 +3596,7 @@ export default function ProgObraProgramacionModal({
             </>
           )}
             </>
-          )}
+          </div>
         </div>
 
         <div

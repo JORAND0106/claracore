@@ -3,7 +3,9 @@ Fase 4 — Curva S: inversión acumulada baseline / vigente / ejecutado.
 """
 from __future__ import annotations
 
+import base64
 import html
+import io
 import re
 from calendar import monthrange
 from collections import defaultdict
@@ -13,10 +15,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from prog_obra_compare import fetch_compare_nodes
 from prog_obra_costos_presupuesto import (
     apply_ppto_cost_overlay,
-    build_cost_overlay_maps,
+    build_programmed_item_cost_overlay_maps,
+    fetch_ppto_baseline_version_id,
     fetch_ppto_borrador_version_id,
+    ppto_scope_direct_total,
 )
-from prog_obra_pk_filter import filter_nodes_by_pk, parse_pk_ids_param
+from prog_obra_pk_filter import filter_nodes_by_pk, parse_pk_ids_param, parse_tramos_param
 from prog_obra_service import fetch_baseline_version_id, fetch_vigente_meta
 
 
@@ -64,17 +68,44 @@ def _linear_monthly_distribution(fi: date, ff: date, costo: float) -> Dict[str, 
     return dict(out)
 
 
+def _scale_monthly_to_target(monthly: Dict[str, float], target_total: float) -> Tuple[Dict[str, float], float]:
+    """Escala flujo mensual para alcanzar un total contractual (p. ej. V0 completo por tramo)."""
+    cur = sum(float(v) for v in monthly.values())
+    target = float(target_total)
+    if cur <= 0 or target <= cur + 0.01:
+        return dict(monthly), cur
+    factor = target / cur
+    scaled: Dict[str, float] = {k: round(float(v) * factor, 2) for k, v in monthly.items()}
+    diff = round(target - sum(scaled.values()), 2)
+    if diff and scaled:
+        last = sorted(scaled.keys())[-1]
+        scaled[last] = round(scaled[last] + diff, 2)
+    return scaled, target
+
+
 def _nodes_with_ppto_costs(
     sb,
     version_id: str,
     contrato_id: int,
     version_ppto_id: Optional[str],
+    pk_ids: Optional[Set[str]] = None,
+    tramos: Optional[List[str]] = None,
 ) -> Dict[str, dict]:
     nodes = fetch_compare_nodes(sb, version_id, contrato_id)
+    nodes = filter_nodes_by_pk(nodes, pk_ids)
     if not version_ppto_id:
         return nodes
-    ag_costs, item_costs = build_cost_overlay_maps(sb, contrato_id, str(version_ppto_id))
-    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
+    tramo = tramos[0] if tramos and len(tramos) == 1 else None
+    ag_costs, item_costs = build_programmed_item_cost_overlay_maps(
+        sb,
+        contrato_id,
+        version_id,
+        str(version_ppto_id),
+        tramo=tramo,
+        tramos=tramos,
+        pk_ids=pk_ids,
+    )
+    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs, strict=True)
 
 
 def _aggregate_version_monthly(
@@ -83,9 +114,11 @@ def _aggregate_version_monthly(
     contrato_id: int,
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[Set[str]] = None,
+    tramos: Optional[List[str]] = None,
 ) -> Tuple[Dict[str, float], float]:
-    nodes = _nodes_with_ppto_costs(sb, version_id, contrato_id, version_ppto_id)
-    nodes = filter_nodes_by_pk(nodes, pk_ids)
+    nodes = _nodes_with_ppto_costs(
+        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos
+    )
     monthly: Dict[str, float] = defaultdict(float)
     total = 0.0
     for n in nodes.values():
@@ -167,9 +200,11 @@ def _detalle_pk_mensual(
     contrato_id: int,
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[Set[str]] = None,
+    tramos: Optional[List[str]] = None,
 ) -> List[dict]:
-    nodes = _nodes_with_ppto_costs(sb, version_id, contrato_id, version_ppto_id)
-    nodes = filter_nodes_by_pk(nodes, pk_ids)
+    nodes = _nodes_with_ppto_costs(
+        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos
+    )
     out: List[dict] = []
     for n in nodes.values():
         costo = float(n.get("costo_programado") or 0)
@@ -198,6 +233,38 @@ def _resolve_version_ppto_id(sb, contrato_id: int, version_ppto_id: Optional[str
     return fetch_ppto_borrador_version_id(sb, contrato_id)
 
 
+def _resolve_ppto_vigente_curva_id(sb, contrato_id: int) -> Optional[str]:
+    """Presupuesto vigente en edición (borrador); la línea Vigente de la curva S siempre usa esto."""
+    return fetch_ppto_borrador_version_id(sb, contrato_id)
+
+
+def _apply_ppto_scope_total_scale(
+    sb,
+    contrato_id: int,
+    monthly: Dict[str, float],
+    total: float,
+    version_ppto_id: Optional[str],
+    pk_ids: Optional[Set[str]],
+    tramos_list: Optional[List[str]],
+) -> Tuple[Dict[str, float], float]:
+    """Ajusta flujo mensual al total contractual del alcance (comparación de presupuesto)."""
+    ppto_id = (version_ppto_id or "").strip()
+    if not ppto_id or total <= 0:
+        return monthly, total
+    tramo_one = tramos_list[0] if tramos_list and len(tramos_list) == 1 else None
+    scope_total = ppto_scope_direct_total(
+        sb,
+        contrato_id,
+        ppto_id,
+        tramo=tramo_one,
+        tramos=tramos_list,
+        pk_ids=pk_ids,
+    )
+    if scope_total > total + 0.01:
+        return _scale_monthly_to_target(monthly, scope_total)
+    return monthly, total
+
+
 def build_curva_s(
     sb,
     contrato_id: int,
@@ -205,8 +272,10 @@ def build_curva_s(
     target_id: Optional[str] = None,
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[str] = None,
+    tramos: Optional[str] = None,
 ) -> dict:
     pk_set = parse_pk_ids_param(pk_ids)
+    tramos_list = parse_tramos_param(tramos)
     bid = (baseline_id or fetch_baseline_version_id(sb, contrato_id) or "").strip() or None
     tid = (target_id or "").strip()
     if not tid:
@@ -216,21 +285,53 @@ def build_curva_s(
     if not tid and not bid:
         raise ValueError("No hay versión de programación para la curva S")
 
-    ppto_id = _resolve_version_ppto_id(sb, contrato_id, version_ppto_id)
+    ppto_vigente_id = _resolve_ppto_vigente_curva_id(sb, contrato_id)
+    ppto_baseline_id = fetch_ppto_baseline_version_id(sb, contrato_id) or ppto_vigente_id
+    # Baseline financiero: cronograma vigente (target) + costos V0 (1.ª versión presupuesto).
+    prog_for_baseline = tid or bid
 
-    if bid:
+    if prog_for_baseline:
         base_m, base_total = _aggregate_version_monthly(
-            sb, str(bid), contrato_id, ppto_id, pk_ids=pk_set
+            sb,
+            str(prog_for_baseline),
+            contrato_id,
+            ppto_baseline_id,
+            pk_ids=pk_set,
+            tramos=tramos_list,
         )
     else:
         base_m, base_total = {}, 0.0
 
+    if prog_for_baseline and ppto_baseline_id:
+        base_m, base_total = _apply_ppto_scope_total_scale(
+            sb,
+            contrato_id,
+            base_m,
+            base_total,
+            ppto_baseline_id,
+            pk_set,
+            tramos_list,
+        )
+
     if tid:
         tgt_m, tgt_total = _aggregate_version_monthly(
-            sb, str(tid), contrato_id, ppto_id, pk_ids=pk_set
+            sb,
+            str(tid),
+            contrato_id,
+            ppto_vigente_id,
+            pk_ids=pk_set,
+            tramos=tramos_list,
         )
-        if bid and str(tid) == str(bid):
-            tgt_m, tgt_total = base_m, base_total
+        if ppto_vigente_id:
+            tgt_m, tgt_total = _apply_ppto_scope_total_scale(
+                sb,
+                contrato_id,
+                tgt_m,
+                tgt_total,
+                ppto_vigente_id,
+                pk_set,
+                tramos_list,
+            )
     elif bid:
         tgt_m, tgt_total = base_m, base_total
         tid = bid
@@ -278,18 +379,30 @@ def build_curva_s(
     desv_pct = (desv / prog_a_fecha * 100) if prog_a_fecha > 0 else 0.0
 
     detalle_baseline = (
-        _detalle_pk_mensual(sb, str(bid), contrato_id, ppto_id, pk_ids=pk_set) if bid else []
+        _detalle_pk_mensual(
+            sb,
+            str(prog_for_baseline),
+            contrato_id,
+            ppto_baseline_id,
+            pk_ids=pk_set,
+            tramos=tramos_list,
+        )
+        if prog_for_baseline
+        else []
     )
     detalle_vigente = (
-        _detalle_pk_mensual(sb, str(tid), contrato_id, ppto_id, pk_ids=pk_set)
-        if tid and (not bid or str(tid) != str(bid))
-        else detalle_baseline
+        _detalle_pk_mensual(
+            sb, str(tid), contrato_id, ppto_vigente_id, pk_ids=pk_set, tramos=tramos_list
+        )
+        if tid
+        else []
     )
 
     return {
         "baseline_id": str(bid) if bid else None,
         "target_id": str(tid) if tid else None,
-        "version_ppto_id": ppto_id,
+        "version_ppto_id": ppto_vigente_id,
+        "version_ppto_baseline_id": ppto_baseline_id,
         "indicadores": {
             "presupuesto_total": round(presupuesto_total, 2),
             "programado_a_fecha": round(prog_a_fecha, 2),
@@ -493,6 +606,8 @@ PDF_CLR = {
     "row_pk": "#e2e8f0",
     "row_cap": "#f1f5f9",
     "row_ag": "#e0f2fe",
+    "row_crit": "#fee2e2",
+    "row_final": "#dbeafe",
     "accent": "#2563eb",
     "accent_soft": "#93c5fd",
     "negative": "#b91c1c",
@@ -509,12 +624,64 @@ def _pdf_th_style(extra: str = "") -> str:
     )
 
 
-def _fmt_axis_money(v: float) -> str:
-    if v >= 1e9:
-        return f"${v / 1e9:.1f}B"
-    if v >= 1e6:
-        return f"${v / 1e6:.1f}M"
+def _fmt_chart_money(v: float) -> str:
     return f"${v:,.0f}"
+
+
+def _chart_left_margin(max_y: float, font_size: float = 7.5) -> int:
+    labels = [_fmt_chart_money(max_y * t / 5) for t in range(6)]
+    max_chars = max(len(lb) for lb in labels)
+    return max(58, int(max_chars * font_size * 0.62) + 14)
+
+
+def _monotone_path_d(xs: List[float], ys: List[float]) -> str:
+    """Path SVG con curva monótona (equivalente a Recharts type=\"monotone\")."""
+    n = len(xs)
+    if n == 0:
+        return ""
+    if n == 1:
+        return f"M {xs[0]:.2f},{ys[0]:.2f}"
+    if n == 2:
+        return f"M {xs[0]:.2f},{ys[0]:.2f} L {xs[1]:.2f},{ys[1]:.2f}"
+
+    dx = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    dy = [ys[i + 1] - ys[i] for i in range(n - 1)]
+    slopes = [dy[i] / dx[i] if abs(dx[i]) > 1e-12 else 0.0 for i in range(n - 1)]
+
+    tangents = [0.0] * n
+    tangents[0] = slopes[0]
+    tangents[-1] = slopes[-1]
+    for i in range(1, n - 1):
+        if slopes[i - 1] * slopes[i] <= 0:
+            tangents[i] = 0.0
+        else:
+            tangents[i] = (slopes[i - 1] + slopes[i]) / 2
+
+    for i in range(n - 1):
+        if abs(slopes[i]) < 1e-12:
+            tangents[i] = 0.0
+            tangents[i + 1] = 0.0
+        else:
+            alpha = tangents[i] / slopes[i]
+            beta = tangents[i + 1] / slopes[i]
+            s = alpha * alpha + beta * beta
+            if s > 9:
+                t = 3 / (s**0.5)
+                tangents[i] = t * alpha * slopes[i]
+                tangents[i + 1] = t * beta * slopes[i]
+
+    parts = [f"M {xs[0]:.2f},{ys[0]:.2f}"]
+    for i in range(n - 1):
+        seg_dx = dx[i]
+        c1x = xs[i] + seg_dx / 3
+        c1y = ys[i] + tangents[i] * seg_dx / 3
+        c2x = xs[i + 1] - seg_dx / 3
+        c2y = ys[i + 1] - tangents[i + 1] * seg_dx / 3
+        parts.append(f"C {c1x:.2f},{c1y:.2f} {c2x:.2f},{c2y:.2f} {xs[i + 1]:.2f},{ys[i + 1]:.2f}")
+    return " ".join(parts)
+
+
+CHART_RENDER_DPI = 180
 
 
 def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 240) -> str:
@@ -528,8 +695,6 @@ def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 
         )
 
     ml, mr, mt, mb = 58, 20, 22, 36
-    pw = width - ml - mr
-    ph = height - mt - mb
     series = [
         ("Baseline", "baseline_acum", c["line_baseline"], 2.5),
         ("Vigente", "vigente_acum", c["line_vigente"], 2.0),
@@ -549,6 +714,9 @@ def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 
     max_y *= 1.08
 
     n = len(meses)
+    ml = _chart_left_margin(max_y)
+    pw = width - ml - mr
+    ph = height - mt - mb
 
     def x_at(i: int) -> float:
         if n <= 1:
@@ -592,7 +760,7 @@ def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 
         parts.append(
             f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="7.5" '
             f'fill="{c["muted"]}" font-family="Helvetica,Arial,sans-serif">'
-            f"{_h(_fmt_axis_money(val))}</text>"
+            f"{_h(_fmt_chart_money(val))}</text>"
         )
 
     parts.append(
@@ -610,44 +778,73 @@ def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 
         )
 
     for _, key, color, sw in series:
-        pts: List[str] = []
+        xs: List[float] = []
+        ys: List[float] = []
         for i, r in enumerate(meses):
             try:
                 v = float(r.get(key) or 0)
             except (TypeError, ValueError):
                 v = 0.0
-            pts.append(f"{x_at(i):.1f},{y_at(v):.1f}")
-        if pts:
+            xs.append(x_at(i))
+            ys.append(y_at(v))
+        path_d = _monotone_path_d(xs, ys)
+        if path_d:
             parts.append(
-                f'<polyline fill="none" stroke="{color}" stroke-width="{sw}" '
-                f'stroke-linejoin="round" stroke-linecap="round" '
-                f'points="{" ".join(pts)}"/>'
+                f'<path d="{path_d}" fill="none" stroke="{color}" stroke-width="{sw}" '
+                f'stroke-linejoin="round" stroke-linecap="round"/>'
             )
 
     parts.append("</svg>")
     return "".join(parts)
 
 
+def _svg_to_png_b64(svg: str) -> str:
+    """Rasteriza SVG a PNG base64 para incrustar en PDF (xhtml2pdf no dibuja SVG inline)."""
+    from reportlab.graphics import renderPM
+    from svglib.svglib import svg2rlg
+
+    drawing = svg2rlg(io.BytesIO(svg.encode("utf-8")))
+    if drawing is None:
+        raise ValueError("No se pudo interpretar el SVG del gráfico")
+    png = renderPM.drawToString(drawing, fmt="PNG", dpi=CHART_RENDER_DPI)
+    return base64.b64encode(png).decode("ascii")
+
+
 def _build_curva_s_chart_block(meses: List[dict]) -> str:
-    """Contenedor del gráfico SVG incrustado en página 1 del PDF."""
+    """Contenedor del gráfico en página 1 del PDF."""
     c = PDF_CLR
-    svg = _build_curva_s_chart_svg(meses)
+    width, height = 920, 240
+    if not meses:
+        return (
+            f'<div style="width:{width}px;height:{height}px;margin:4px 0 8px;text-align:center;'
+            f'color:{c["muted"]};font-size:8pt;padding-top:80px;'
+            f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">'
+            "Sin datos para el gráfico"
+            "</div>"
+        )
+    svg = _build_curva_s_chart_svg(meses, width=width, height=height)
+    b64 = _svg_to_png_b64(svg)
     return (
-        f'<div style="width:920px;height:240px;margin:4px 0 8px;overflow:hidden;'
-        f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">{svg}</div>'
+        f'<div style="width:{width}px;height:{height}px;margin:4px 0 8px;overflow:hidden;'
+        f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">'
+        f'<img src="data:image/png;base64,{b64}" width="{width}" height="{height}" '
+        f'style="display:block;" />'
+        f"</div>"
     )
 
 
 def _flatten_cronograma_rows(tree: List[dict]) -> List[dict]:
     flat: List[dict] = []
     for pk_node in tree:
-        flat.append({"kind": "pk", "pk_id": pk_node["pk_id"]})
+        pk = pk_node["pk_id"]
+        flat.append({"kind": "pk", "pk_id": pk})
         for cap_node in pk_node.get("capitulos") or []:
-            flat.append({"kind": "cap", "capitulo": cap_node["capitulo"]})
+            cap = cap_node["capitulo"]
+            flat.append({"kind": "cap", "capitulo": cap, "pk_id": pk})
             for ag in cap_node.get("agrupadores") or []:
-                flat.append({"kind": "ag", **ag})
+                flat.append({"kind": "ag", "pk_id": pk, "capitulo": cap, **ag})
                 for it in ag.get("items") or []:
-                    flat.append({"kind": "item", **it})
+                    flat.append({"kind": "item", "pk_id": pk, "capitulo": cap, **it})
     return flat
 
 
@@ -705,6 +902,280 @@ def _prog_version_label(prog_meta: Optional[dict]) -> str:
     if n is not None:
         return f"v{int(n)}"
     return tipo or "—"
+
+
+def _resolve_export_pk_ids(
+    sb,
+    contrato_id: int,
+    pk_ids: Optional[str],
+    tramos: Optional[str],
+) -> Optional[Set[str]]:
+    pk_set = parse_pk_ids_param(pk_ids)
+    if pk_set:
+        return pk_set
+    tramos_list = parse_tramos_param(tramos)
+    if not tramos_list:
+        return None
+    from prog_obra_service import fetch_tramos_contrato
+
+    names = {t.strip() for t in tramos_list if t.strip()}
+    out: Set[str] = set()
+    for tr in fetch_tramos_contrato(sb, contrato_id):
+        if (tr.get("tramo") or "").strip() not in names:
+            continue
+        for p in tr.get("pk_ids") or []:
+            ps = str(p).strip()
+            if ps:
+                out.add(ps)
+    return out or None
+
+
+def _cpm_pdf_row_bg(estado: str) -> str:
+    c = PDF_CLR
+    if estado == "Ruta crítica":
+        return c["row_crit"]
+    if estado == "Actividad final tramo":
+        return c["row_final"]
+    return "transparent"
+
+
+def _chunk_list(items: List, size: int) -> List[List]:
+    if not items:
+        return [[]]
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _render_cpm_pdf_page(
+    contrato: dict,
+    resultados_chunk: List[dict],
+    dependencias_chunk: List[dict],
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+    *,
+    page_num: int,
+    total_pages: int,
+    section: str,
+) -> str:
+    from informes import _html_logo_contratista
+
+    c = PDF_CLR
+    th = _pdf_th_style
+    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
+    prog_lbl = _prog_version_label(prog_meta)
+    numero = _h(contrato.get("numero") or contrato.get("id") or "")
+    pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
+    title = "Resultados CPM" if section == "cpm" else "Dependencias CPM"
+
+    if section == "cpm":
+        body_rows = ""
+        if not resultados_chunk:
+            body_rows = (
+                f'<tr><td colspan="7" style="padding:12px;text-align:center;color:{c["muted"]};font-size:8pt;">'
+                "Sin resultados CPM calculados para el alcance seleccionado.</td></tr>"
+            )
+        for r in resultados_chunk:
+            bg = _cpm_pdf_row_bg(str(r.get("estado_cpm") or ""))
+            body_rows += (
+                f'<tr style="background:{bg};">'
+                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("pk_id"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("capitulo"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("agrupador_label"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("fecha_inicio_temprana"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("fecha_fin_temprana"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("holgura_total"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;font-weight:600;">{_h(r.get("estado_cpm"))}</td>'
+                f"</tr>"
+            )
+        table_head = (
+            f"<tr>"
+            f'<th style="{th()}">PK</th>'
+            f'<th style="{th()}">Cap.</th>'
+            f'<th style="{th("width:28%;")}">Agrupador</th>'
+            f'<th style="{th("text-align:center;")}">Inicio temprano</th>'
+            f'<th style="{th("text-align:center;")}">Fin temprano</th>'
+            f'<th style="{th("text-align:center;")}">Holgura total</th>'
+            f'<th style="{th("text-align:center;")}">Estado</th>'
+            f"</tr>"
+        )
+    else:
+        body_rows = ""
+        if not dependencias_chunk:
+            body_rows = (
+                f'<tr><td colspan="5" style="padding:12px;text-align:center;color:{c["muted"]};font-size:8pt;">'
+                "Sin dependencias definidas para el alcance seleccionado.</td></tr>"
+            )
+        for d in dependencias_chunk:
+            lag = int(d.get("lag_dias") or 0)
+            lag_lbl = f"{lag} día{'s' if lag != 1 else ''}" if lag else "0 días"
+            body_rows += (
+                f"<tr>"
+                f'<td style="padding:3px 5px;font-size:7pt;">{_h(d.get("origen_label"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;font-weight:700;">{_h(d.get("tipo"))}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(lag_lbl)}</td>'
+                f'<td style="padding:3px 5px;font-size:7pt;">{_h(d.get("destino_label"))}</td>'
+                f"</tr>"
+            )
+        table_head = (
+            f"<tr>"
+            f'<th style="{th("width:38%;")}">Origen</th>'
+            f'<th style="{th("text-align:center;width:8%;")}">Tipo</th>'
+            f'<th style="{th("text-align:center;width:10%;")}">Lag</th>'
+            f'<th style="{th("width:38%;")}">Destino</th>'
+            f"</tr>"
+        )
+
+    return f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+        <tr>
+          <td style="width:14%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:2px;">
+            {logo_html}
+          </td>
+          <td style="width:62%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px 6px;">
+            <div style="font-size:11pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">
+              {title}
+            </div>
+          </td>
+          <td style="width:24%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px;">
+            <div style="font-size:6pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
+            <div style="font-size:9pt;font-weight:bold;color:{c['accent']};margin-top:2px;">{_h(prog_lbl)}</div>
+          </td>
+        </tr>
+      </table>
+      <div style="font-size:7pt;color:{c['text']};margin-bottom:6px;padding:0 2px;line-height:1.35;">
+        <strong>Contrato:</strong> {numero} &nbsp;&nbsp;|&nbsp;&nbsp;
+        <strong>Generado:</strong> {_h(fecha_gen)} &nbsp;&nbsp;|&nbsp;&nbsp; {pag}
+      </div>
+      <table class="data" style="width:100%;border-collapse:collapse;">
+        <thead>{table_head}</thead>
+        <tbody>{body_rows}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+
+
+def _render_cpm_export_pdf_html(
+    contrato: dict,
+    cpm_export: Optional[dict],
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+) -> str:
+    export = cpm_export or {}
+    resultados = export.get("resultados") or []
+    dependencias = export.get("dependencias") or []
+    cpm_chunks = _chunk_list(resultados, 32)
+    dep_chunks = _chunk_list(dependencias, 28) if dependencias else [[]]
+    pages: List[str] = []
+    for chunk in cpm_chunks:
+        pages.append(("cpm", chunk, []))
+    for chunk in dep_chunks:
+        pages.append(("deps", [], chunk))
+    if not pages:
+        pages = [("cpm", [], [])]
+    total = len(pages)
+    out = ""
+    for i, (section, res_chunk, dep_chunk) in enumerate(pages, start=1):
+        out += _render_cpm_pdf_page(
+            contrato,
+            res_chunk,
+            dep_chunk,
+            prog_meta,
+            fecha_gen,
+            page_num=i,
+            total_pages=total,
+            section=section,
+        )
+    return out
+
+
+def _write_cpm_excel_sheet(ws, resultados: List[dict]) -> None:
+    from openpyxl.styles import Alignment, Font
+
+    headers = [
+        "PK",
+        "Capítulo",
+        "Agrupador",
+        "Inicio temprano",
+        "Fin temprano",
+        "Holgura total",
+        "Holgura libre",
+        "Estado CPM",
+    ]
+    for col, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="1E3A8A", size=9)
+        cell.fill = _xl_solid_fill("DBEAFE")
+        cell.border = _xl_thin_border()
+    for ri, r in enumerate(resultados, start=2):
+        vals = [
+            r.get("pk_id"),
+            r.get("capitulo"),
+            r.get("agrupador_label"),
+            r.get("fecha_inicio_temprana"),
+            r.get("fecha_fin_temprana"),
+            r.get("holgura_total"),
+            r.get("holgura_libre"),
+            r.get("estado_cpm"),
+        ]
+        estado = str(r.get("estado_cpm") or "")
+        fill = None
+        if estado == "Ruta crítica":
+            fill = _xl_solid_fill("FEE2E2")
+        elif estado == "Actividad final tramo":
+            fill = _xl_solid_fill("DBEAFE")
+        for col, val in enumerate(vals, start=1):
+            cell = ws.cell(row=ri, column=col, value=val)
+            cell.border = _xl_thin_border()
+            cell.font = Font(size=9)
+            if fill:
+                cell.fill = fill
+            if col >= 6:
+                cell.alignment = Alignment(horizontal="center")
+    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["B"].width = 8
+    ws.column_dimensions["C"].width = 36
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 12
+    ws.column_dimensions["G"].width = 12
+    ws.column_dimensions["H"].width = 22
+    ws.freeze_panes = "A2"
+
+
+def _write_dependencias_excel_sheet(ws, dependencias: List[dict]) -> None:
+    from openpyxl.styles import Alignment, Font
+
+    headers = ["Origen", "Tipo", "Lag (días hábiles)", "Destino"]
+    for col, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="1E3A8A", size=9)
+        cell.fill = _xl_solid_fill("DBEAFE")
+        cell.border = _xl_thin_border()
+    for ri, d in enumerate(dependencias, start=2):
+        vals = [
+            d.get("origen_label"),
+            d.get("tipo"),
+            d.get("lag_dias"),
+            d.get("destino_label"),
+        ]
+        for col, val in enumerate(vals, start=1):
+            cell = ws.cell(row=ri, column=col, value=val)
+            cell.border = _xl_thin_border()
+            cell.font = Font(size=9)
+            if col == 2:
+                cell.alignment = Alignment(horizontal="center")
+                cell.font = Font(size=9, bold=True)
+            if col == 3:
+                cell.alignment = Alignment(horizontal="center")
+    ws.column_dimensions["A"].width = 42
+    ws.column_dimensions["B"].width = 8
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 42
+    ws.freeze_panes = "A2"
 
 
 def _render_cronograma_body_rows(rows: List[dict]) -> str:
@@ -829,6 +1300,7 @@ def build_curva_s_pdf_html(
     cronograma: Optional[List[dict]] = None,
     prog_meta: Optional[dict] = None,
     ppto_meta: Optional[dict] = None,
+    cpm_export: Optional[dict] = None,
     fecha_generacion: Optional[str] = None,
 ) -> str:
     """HTML multipágina: curva S (pág. 1) + cronograma WBS (pág. 2+)."""
@@ -912,6 +1384,8 @@ def build_curva_s_pdf_html(
             total_pages=total_crono,
         )
 
+    cpm_pages_html = _render_cpm_export_pdf_html(contrato, cpm_export, prog_meta, fecha_gen)
+
     th = _pdf_th_style
     return f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8"/>
@@ -963,4 +1437,559 @@ table.data td {{ border-bottom: 1px solid {c['border_light']}; padding: 3px 4px;
   </div>
 </div>
 {crono_pages_html}
+{cpm_pages_html}
 </body></html>"""
+
+
+EXCEL_COP_FMT = '"$"#,##0'
+EXCEL_PCT_FMT = '0.0"%"'
+
+
+def _xl_solid_fill(hex6: str) -> "PatternFill":
+    from openpyxl.styles import PatternFill
+
+    h = (hex6 or "").replace("#", "").upper()
+    return PatternFill("solid", fgColor=h)
+
+
+def _xl_thin_border() -> "Border":
+    from openpyxl.styles import Border, Side
+
+    s = Side(style="thin", color="CBD5E1")
+    return Border(left=s, right=s, top=s, bottom=s)
+
+
+def _chart_png_bytes(meses: List[dict]) -> bytes:
+    svg = _build_curva_s_chart_svg(meses)
+    return base64.b64decode(_svg_to_png_b64(svg))
+
+
+def _cronograma_row_label(r: dict) -> str:
+    kind = r.get("kind")
+    if kind == "pk":
+        return f"PK {r.get('pk_id')}"
+    if kind == "cap":
+        return f"Capítulo {r.get('capitulo')}"
+    if kind == "ag":
+        return f"{r.get('codigo_wbs') or ''} · {r.get('nombre') or ''}".strip(" ·")
+    if kind == "item":
+        desc = (r.get("descripcion") or "").strip()
+        label = str(r.get("item") or "")
+        return f"    {label} · {desc}" if desc else f"    {label}"
+    return ""
+
+
+def _month_starts(d0: date, d1: date) -> List[date]:
+    cur = date(d0.year, d0.month, 1)
+    end = date(d1.year, d1.month, 1)
+    out: List[date] = []
+    while cur <= end:
+        out.append(cur)
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+    return out
+
+
+def _month_end(d: date) -> date:
+    return date(d.year, d.month, monthrange(d.year, d.month)[1])
+
+
+def _gantt_cost_lookup(detalle_vigente: List[dict]) -> Dict[Tuple[str, str, int], float]:
+    out: Dict[Tuple[str, str, int], float] = {}
+    for r in detalle_vigente or []:
+        ag_id = r.get("agrupador_id")
+        if ag_id is None:
+            continue
+        key = (str(r.get("pk_id") or ""), str(r.get("capitulo") or ""), int(ag_id))
+        out[key] = float(r.get("costo_total") or 0)
+    return out
+
+
+def _gantt_month_columns(meses_data: List[dict], span_dates: List[date]) -> List[Tuple[str, date, str]]:
+    seen: Dict[str, Tuple[date, str]] = {}
+    for m in meses_data or []:
+        mk = str(m.get("mes") or "").strip()
+        if not mk or mk in seen:
+            continue
+        y, mo = mk.split("-")
+        seen[mk] = (date(int(y), int(mo), 1), str(m.get("mes_label") or _month_label(mk)))
+    if span_dates:
+        d0, d1 = min(span_dates), max(span_dates)
+        for ms in _month_starts(d0, d1):
+            mk = _month_key(ms)
+            if mk not in seen:
+                seen[mk] = (ms, _month_label(mk))
+    return [(mk, seen[mk][0], seen[mk][1]) for mk in sorted(seen.keys())]
+
+
+def _xl_gantt_month_formula(row: int, col_letter: str, hdr_row: int = 4) -> str:
+    """Distribución lineal por días calendario (misma lógica que _linear_monthly_distribution)."""
+    return (
+        f'=IF($E{row}<>"Agrupador WBS","",'
+        f'IF(OR($B{row}="",$C{row}="",$F{row}=0),0,'
+        f'MAX(0,MIN($C{row},EOMONTH({col_letter}${hdr_row},0))-MAX($B{row},{col_letter}${hdr_row})+1)'
+        f'/($C{row}-$B{row}+1)*$F{row}))'
+    )
+
+
+def _xl_gantt_row_total_formula(row: int, first_month_col: int, last_month_col: int) -> str:
+    from openpyxl.utils import get_column_letter
+
+    fc = get_column_letter(first_month_col)
+    lc = get_column_letter(last_month_col)
+    return f'=IF($E{row}<>"Agrupador WBS","",SUM({fc}{row}:{lc}{row}))'
+
+
+def _write_gantt_sheet(
+    ws_g,
+    *,
+    flat: List[dict],
+    meses_data: List[dict],
+    detalle_vigente: List[dict],
+    numero: str,
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+) -> Optional[dict]:
+    """Escribe pestaña Gantt. Retorna metadatos para enlazar fórmulas en Curva S."""
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    ws_g.merge_cells("A1:F1")
+    ws_g["A1"] = "Cronograma de Programación de Obra"
+    ws_g["A1"].font = Font(bold=True, size=14, color="1E40AF")
+    ws_g.merge_cells("A2:F2")
+    ws_g["A2"] = (
+        f"Contrato {numero} · Versión programación: {_prog_version_label(prog_meta)} · "
+        f"Generado: {fecha_gen}"
+    )
+    ws_g["A2"].font = Font(size=9, color="64748B")
+    ws_g["A3"] = (
+        "Valores mensuales formulados: distribución lineal del costo programado según Inicio, Fin y días calendario."
+    )
+    ws_g["A3"].font = Font(size=8, italic=True, color="64748B")
+
+    g_hdr = 4
+    base_headers = ["Actividad / WBS", "Inicio", "Fin", "Días háb.", "Tipo", "Costo programado"]
+    for col, h in enumerate(base_headers, start=1):
+        cell = ws_g.cell(row=g_hdr, column=col, value=h)
+        cell.font = Font(bold=True, color="1E3A8A", size=9)
+        cell.fill = _xl_solid_fill("DBEAFE")
+        cell.border = _xl_thin_border()
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    span_dates: List[date] = []
+    for row in flat:
+        if row.get("kind") not in ("ag", "item"):
+            continue
+        fi = _parse_d(row.get("fecha_inicio"))
+        ff = _parse_d(row.get("fecha_fin"))
+        if fi:
+            span_dates.append(fi)
+        if ff:
+            span_dates.append(ff)
+
+    month_specs = _gantt_month_columns(meses_data, span_dates)
+    if len(month_specs) > 48:
+        month_specs = month_specs[:48]
+
+    first_month_col = len(base_headers) + 1
+    last_month_col = first_month_col + len(month_specs) - 1 if month_specs else first_month_col - 1
+    total_col = last_month_col + 1 if month_specs else len(base_headers) + 1
+
+    for i, (_mk, ms, lbl) in enumerate(month_specs):
+        col = first_month_col + i
+        c = ws_g.cell(row=g_hdr, column=col, value=ms)
+        c.number_format = "mmm yyyy"
+        c.font = Font(bold=True, color="1E3A8A", size=8)
+        c.fill = _xl_solid_fill("DBEAFE")
+        c.border = _xl_thin_border()
+        c.alignment = Alignment(horizontal="center", text_rotation=90)
+
+    if month_specs:
+        tc = ws_g.cell(row=g_hdr, column=total_col, value="Total distribuido")
+        tc.font = Font(bold=True, color="1E3A8A", size=9)
+        tc.fill = _xl_solid_fill("DBEAFE")
+        tc.border = _xl_thin_border()
+        tc.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    cost_lookup = _gantt_cost_lookup(detalle_vigente)
+    row_fills = {"pk": "E2E8F0", "cap": "F1F5F9", "ag": "E0F2FE", "item": "FFFFFF"}
+    tipo_lbl = {"ag": "Agrupador WBS", "item": "Ítem"}
+
+    gr = g_hdr + 1
+    first_data_row = gr
+    sheet_last_col = max(total_col, 6)
+
+    for row in flat:
+        kind = row.get("kind")
+        if kind in ("pk", "cap"):
+            ws_g.merge_cells(start_row=gr, start_column=1, end_row=gr, end_column=sheet_last_col)
+            cell = ws_g.cell(row=gr, column=1, value=_cronograma_row_label(row))
+            cell.font = Font(bold=True, size=9 if kind == "pk" else 8)
+            cell.fill = _xl_solid_fill(row_fills[kind])
+            gr += 1
+            continue
+        if kind not in ("ag", "item"):
+            continue
+
+        ws_g.cell(row=gr, column=1, value=_cronograma_row_label(row).strip())
+        fi = _parse_d(row.get("fecha_inicio"))
+        ff = _parse_d(row.get("fecha_fin"))
+        ws_g.cell(row=gr, column=2, value=fi)
+        ws_g.cell(row=gr, column=3, value=ff)
+        if fi:
+            ws_g.cell(row=gr, column=2).number_format = "yyyy-mm-dd"
+        if ff:
+            ws_g.cell(row=gr, column=3).number_format = "yyyy-mm-dd"
+        dur = row.get("duracion_dias_habiles")
+        ws_g.cell(row=gr, column=4, value=int(dur) if dur is not None else None)
+        ws_g.cell(row=gr, column=5, value=tipo_lbl.get(kind, ""))
+
+        if kind == "ag":
+            ag_key = (
+                str(row.get("pk_id") or ""),
+                str(row.get("capitulo") or ""),
+                int(row.get("agrupador_id") or 0),
+            )
+            ws_g.cell(row=gr, column=6, value=cost_lookup.get(ag_key, 0.0))
+        ws_g.cell(row=gr, column=6).number_format = EXCEL_COP_FMT
+
+        fill = _xl_solid_fill(row_fills[kind])
+        for col in range(1, sheet_last_col + 1):
+            c = ws_g.cell(row=gr, column=col)
+            c.fill = fill
+            c.border = _xl_thin_border()
+            if col == 4:
+                c.alignment = Alignment(horizontal="center")
+            elif col >= 6:
+                c.alignment = Alignment(horizontal="right")
+
+        if kind == "ag" and month_specs:
+            for i in range(len(month_specs)):
+                col = first_month_col + i
+                letter = get_column_letter(col)
+                c = ws_g.cell(row=gr, column=col)
+                c.value = _xl_gantt_month_formula(gr, letter, hdr_row=g_hdr)
+                c.number_format = EXCEL_COP_FMT
+            ws_g.cell(row=gr, column=total_col, value=_xl_gantt_row_total_formula(gr, first_month_col, last_month_col))
+            ws_g.cell(row=gr, column=total_col).number_format = EXCEL_COP_FMT
+
+        gr += 1
+
+    last_data_row = gr - 1
+    tr: Optional[int] = None
+
+    if not flat:
+        ws_g.merge_cells(start_row=g_hdr + 1, start_column=1, end_row=g_hdr + 1, end_column=sheet_last_col)
+        ws_g.cell(row=g_hdr + 1, column=1, value="Sin actividades programadas en esta versión.").alignment = (
+            Alignment(horizontal="center")
+        )
+    elif month_specs and last_data_row >= first_data_row:
+        tr = gr
+        ws_g.cell(row=tr, column=1, value="TOTAL GENERAL").font = Font(bold=True, color="1E40AF", size=10)
+        ws_g.cell(row=tr, column=1).fill = _xl_solid_fill("DBEAFE")
+        ws_g.cell(row=tr, column=6, value=(
+            f'=SUMIF($E${first_data_row}:$E${last_data_row},"Agrupador WBS",'
+            f'$F${first_data_row}:$F${last_data_row})'
+        ))
+        ws_g.cell(row=tr, column=6).number_format = EXCEL_COP_FMT
+        ws_g.cell(row=tr, column=6).font = Font(bold=True)
+        for i in range(len(month_specs)):
+            col = first_month_col + i
+            letter = get_column_letter(col)
+            c = ws_g.cell(
+                row=tr,
+                column=col,
+                value=(
+                    f'=SUMIF($E${first_data_row}:$E${last_data_row},"Agrupador WBS",'
+                    f'{letter}${first_data_row}:{letter}${last_data_row})'
+                ),
+            )
+            c.number_format = EXCEL_COP_FMT
+            c.font = Font(bold=True)
+            c.fill = _xl_solid_fill("DBEAFE")
+        ws_g.cell(
+            row=tr,
+            column=total_col,
+            value=(
+                f'=SUMIF($E${first_data_row}:$E${last_data_row},"Agrupador WBS",'
+                f'{get_column_letter(total_col)}${first_data_row}:{get_column_letter(total_col)}${last_data_row})'
+            ),
+        )
+        ws_g.cell(row=tr, column=total_col).number_format = EXCEL_COP_FMT
+        ws_g.cell(row=tr, column=total_col).font = Font(bold=True)
+        ws_g.cell(row=tr, column=total_col).fill = _xl_solid_fill("DBEAFE")
+        for col in range(1, sheet_last_col + 1):
+            ws_g.cell(row=tr, column=col).border = _xl_thin_border()
+
+    ws_g.column_dimensions["A"].width = 44
+    ws_g.column_dimensions["B"].width = 12
+    ws_g.column_dimensions["C"].width = 12
+    ws_g.column_dimensions["D"].width = 10
+    ws_g.column_dimensions["E"].width = 14
+    ws_g.column_dimensions["F"].width = 18
+    for i in range(len(month_specs)):
+        ws_g.column_dimensions[get_column_letter(first_month_col + i)].width = 14
+    if month_specs:
+        ws_g.column_dimensions[get_column_letter(total_col)].width = 16
+    ws_g.freeze_panes = f"{get_column_letter(first_month_col)}{g_hdr + 1}"
+
+    month_col_by_key = {mk: first_month_col + i for i, (mk, _ms, _lbl) in enumerate(month_specs)}
+    total_row_num = tr if month_specs and last_data_row >= first_data_row and flat else None
+    if not month_col_by_key:
+        return None
+    return {"total_row": total_row_num, "month_cols": month_col_by_key}
+
+
+def load_curva_s_export_context(
+    sb,
+    contrato_id: int,
+    *,
+    baseline_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[str] = None,
+    tramos: Optional[str] = None,
+) -> dict:
+    """Contrato, curva S, cronograma, CPM y metadatos compartidos por PDF y Excel."""
+    from prog_obra_service import build_cpm_export_data
+
+    data = build_curva_s(
+        sb,
+        contrato_id,
+        baseline_id=baseline_id,
+        target_id=target_id,
+        version_ppto_id=version_ppto_id,
+        pk_ids=pk_ids,
+        tramos=tramos,
+    )
+    crows = (
+        sb.table("contratos")
+        .select("id,numero,objeto,contratista,interventoria,logo_contratista")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )
+    contrato = crows[0]
+    pk_set = _resolve_export_pk_ids(sb, contrato_id, pk_ids, tramos)
+    resolved_target = (data.get("target_id") or "").strip()
+    prog_meta: dict = {}
+    if resolved_target:
+        prows = (
+            sb.table("prog_versiones")
+            .select("numero_version,tipo,estado")
+            .eq("id", resolved_target)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        prog_meta = prows[0] if prows else {}
+    ppto_meta: dict = {}
+    ppto_id = (data.get("version_ppto_id") or "").strip()
+    if ppto_id:
+        from prog_obra_costos_presupuesto import assert_ppto_version_contrato
+
+        ppto_meta = assert_ppto_version_contrato(sb, contrato_id, ppto_id)
+    cronograma = (
+        fetch_cronograma_pdf_tree(sb, resolved_target, contrato_id, pk_ids=pk_set)
+        if resolved_target
+        else []
+    )
+    cpm_export = (
+        build_cpm_export_data(sb, resolved_target, contrato_id, pk_set)
+        if resolved_target
+        else {"resultados": [], "dependencias": []}
+    )
+    return {
+        "contrato": contrato,
+        "data": data,
+        "cronograma": cronograma,
+        "cpm_export": cpm_export,
+        "prog_meta": prog_meta,
+        "ppto_meta": ppto_meta,
+    }
+
+
+def build_curva_s_xlsx_bytes(
+    contrato: dict,
+    data: dict,
+    *,
+    cronograma: Optional[List[dict]] = None,
+    prog_meta: Optional[dict] = None,
+    ppto_meta: Optional[dict] = None,
+    cpm_export: Optional[dict] = None,
+    fecha_generacion: Optional[str] = None,
+) -> bytes:
+    """Excel alineado al PDF: curva S (KPIs, gráfico, tabla) + pestaña Gantt."""
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    ind = data.get("indicadores") or {}
+    meses = data.get("meses") or []
+    numero = contrato.get("numero") or contrato.get("id") or ""
+    objeto = (contrato.get("objeto") or "").strip()
+    contratista = (contrato.get("contratista") or "").strip()
+    interventoria = (contrato.get("interventoria") or "").strip()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Curva S"
+
+    fecha_gen = (fecha_generacion or "").strip()
+    if not fecha_gen:
+        from informes import _fmt_informe_fecha_generacion
+
+        fecha_gen = _fmt_informe_fecha_generacion()
+
+    ws.merge_cells("A1:I1")
+    ws["A1"] = f"Curva S — Contrato {numero}"
+    ws["A1"].font = Font(bold=True, size=14, color="1E40AF")
+    ws.merge_cells("A2:I2")
+    ws["A2"] = f"{objeto} · {contratista} · Interventoría: {interventoria}"
+    ws["A2"].font = Font(size=9, color="64748B")
+    ws["A2"].alignment = Alignment(wrap_text=True)
+
+    kpi_pairs = [
+        ("Presupuesto total", float(ind.get("presupuesto_total") or 0), ""),
+        ("Programado a la fecha", float(ind.get("programado_a_fecha") or 0), f"({ind.get('programado_pct')}%)"),
+        ("Ejecutado a la fecha", float(ind.get("ejecutado_a_fecha") or 0), f"({ind.get('ejecutado_pct')}%)"),
+        ("Desviación", float(ind.get("desviacion_valor") or 0), f"({ind.get('desviacion_pct')}%)"),
+    ]
+    col = 1
+    desv_val = float(ind.get("desviacion_valor") or 0)
+    for label, val, pct in kpi_pairs:
+        c_l = ws.cell(row=4, column=col, value=label)
+        c_l.font = Font(bold=True, size=8, color="64748B")
+        c_l.fill = _xl_solid_fill("EFF6FF")
+        c_v = ws.cell(row=5, column=col, value=val)
+        c_v.number_format = EXCEL_COP_FMT
+        val_color = "B91C1C" if label == "Desviación" and desv_val < 0 else "2563EB"
+        c_v.font = Font(bold=True, size=10, color=val_color)
+        if pct:
+            ws.cell(row=5, column=col + 1, value=pct).font = Font(size=9, color="64748B")
+            col += 2
+        else:
+            col += 1
+
+    if meses:
+        png = _chart_png_bytes(meses)
+        img = XLImage(io.BytesIO(png))
+        img.width = 690
+        img.height = 180
+        ws.add_image(img, "A7")
+        ws.row_dimensions[7].height = 135
+
+    flat = _flatten_cronograma_rows(cronograma or [])
+    detalle_vigente = (data.get("detalle_pk") or {}).get("vigente") or []
+    ws_g = wb.create_sheet("Gantt")
+    gantt_meta = _write_gantt_sheet(
+        ws_g,
+        flat=flat,
+        meses_data=meses,
+        detalle_vigente=detalle_vigente,
+        numero=str(numero),
+        prog_meta=prog_meta,
+        fecha_gen=fecha_gen,
+    )
+
+    export = cpm_export or {}
+    resultados_cpm = export.get("resultados") or []
+    dependencias_cpm = export.get("dependencias") or []
+    if resultados_cpm:
+        ws_cpm = wb.create_sheet("CPM")
+        _write_cpm_excel_sheet(ws_cpm, resultados_cpm)
+    if dependencias_cpm:
+        ws_dep = wb.create_sheet("Dependencias")
+        _write_dependencias_excel_sheet(ws_dep, dependencias_cpm)
+
+    hdr_row = 19
+    headers = [
+        "Mes",
+        "Base. mes",
+        "Base. acum.",
+        "Vig. mes",
+        "Vig. acum.",
+        "Ejec. mes",
+        "Ejec. acum.",
+        "Δ Vig.",
+        "Δ Ejec.",
+    ]
+    for col, h in enumerate(headers, start=1):
+        cell = ws.cell(row=hdr_row, column=col, value=h)
+        cell.font = Font(bold=True, color="1E3A8A", size=9)
+        cell.fill = _xl_solid_fill("DBEAFE")
+        cell.border = _xl_thin_border()
+        cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+
+    money_cols = {2, 3, 4, 5, 6, 7}
+    pct_cols = {8, 9}
+    first_table_row = hdr_row + 1
+    r = first_table_row
+    for m in meses:
+        ws.cell(row=r, column=1, value=m.get("mes_label")).alignment = Alignment(horizontal="left")
+        ws.cell(row=r, column=2, value=float(m.get("baseline_mes") or 0)).number_format = EXCEL_COP_FMT
+        ws.cell(row=r, column=3, value=f"=SUM($B${first_table_row}:B{r})")
+        ws.cell(row=r, column=3).number_format = EXCEL_COP_FMT
+
+        mk = str(m.get("mes") or "").strip()
+        if gantt_meta and gantt_meta.get("total_row") and mk in gantt_meta.get("month_cols", {}):
+            col_l = get_column_letter(gantt_meta["month_cols"][mk])
+            tr = gantt_meta["total_row"]
+            ws.cell(row=r, column=4, value=f"=IFERROR(Gantt!{col_l}{tr},0)")
+        else:
+            ws.cell(row=r, column=4, value=float(m.get("vigente_mes") or 0))
+        ws.cell(row=r, column=4).number_format = EXCEL_COP_FMT
+
+        ws.cell(row=r, column=5, value=f"=SUM($D${first_table_row}:D{r})")
+        ws.cell(row=r, column=5).number_format = EXCEL_COP_FMT
+
+        ws.cell(row=r, column=6, value=float(m.get("ejecutado_mes") or 0)).number_format = EXCEL_COP_FMT
+        ws.cell(row=r, column=7, value=f"=SUM($F${first_table_row}:F{r})")
+        ws.cell(row=r, column=7).number_format = EXCEL_COP_FMT
+
+        ws.cell(row=r, column=8, value=f'=IF(C{r}=0,0,(E{r}-C{r})/C{r})')
+        ws.cell(row=r, column=8).number_format = EXCEL_PCT_FMT
+        ws.cell(row=r, column=9, value=f'=IF(C{r}=0,0,(G{r}-C{r})/C{r})')
+        ws.cell(row=r, column=9).number_format = EXCEL_PCT_FMT
+        for col in range(1, 10):
+            ws.cell(row=r, column=col).border = _xl_thin_border()
+            if col in money_cols:
+                ws.cell(row=r, column=col).alignment = Alignment(horizontal="right")
+            elif col in pct_cols:
+                ws.cell(row=r, column=col).alignment = Alignment(horizontal="right")
+        r += 1
+
+    if meses and gantt_meta:
+        last_r = r - 1
+        ws.cell(row=5, column=3, value=f"=E{last_r}")
+        ws.cell(row=5, column=3).number_format = EXCEL_COP_FMT
+        ws.cell(row=5, column=5, value=f"=G{last_r}")
+        ws.cell(row=5, column=5).number_format = EXCEL_COP_FMT
+        ws.cell(row=5, column=7, value=f"=G{last_r}-E{last_r}")
+        ws.cell(row=5, column=7).number_format = EXCEL_COP_FMT
+
+    foot = r + 1
+    ws.cell(row=foot, column=1, value="Versión presupuesto activa").font = Font(bold=True, size=8, color="64748B")
+    ws.cell(row=foot + 1, column=1, value=_ppto_version_label(ppto_meta))
+    ws.cell(row=foot, column=5, value="Versión programación").font = Font(bold=True, size=8, color="64748B")
+    ws.cell(row=foot + 1, column=5, value=_prog_version_label(prog_meta))
+    ws.cell(row=foot, column=7, value="Generado").font = Font(bold=True, size=8, color="64748B")
+    ws.cell(row=foot + 1, column=7, value=fecha_gen)
+
+    ws.column_dimensions["A"].width = 12
+    for col in range(2, 8):
+        ws.column_dimensions[get_column_letter(col)].width = 18
+    ws.column_dimensions["H"].width = 10
+    ws.column_dimensions["I"].width = 10
+    ws.freeze_panes = "A20"
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()

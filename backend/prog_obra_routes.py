@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles
 from prog_obra_permissions import require_permiso_programacion_obra, tiene_permiso_programacion_obra
@@ -52,9 +52,11 @@ from prog_obra_service import (
     listar_dependencias,
     crear_dependencia,
     eliminar_dependencia,
+    actualizar_dependencia,
     listar_dependencias_globales,
     crear_dependencia_global,
     eliminar_dependencia_global,
+    update_version_horizonte,
     ejecutar_cpm_version,
     obtener_cpm_resultados,
     obtener_ruta_critica,
@@ -74,7 +76,8 @@ from prog_obra_curva_s import (
     build_curva_s,
     build_curva_s_escenarios,
     build_curva_s_pdf_html,
-    fetch_cronograma_pdf_tree,
+    build_curva_s_xlsx_bytes,
+    load_curva_s_export_context,
 )
 from prog_obra_pk_filter import parse_pk_ids_param
 from prog_obra_auto_schedule import (
@@ -143,6 +146,11 @@ class VersionCreateBody(BaseModel):
     version_origen_id: Optional[str] = None
     metadata: Optional[dict] = None
     clonar: bool = True
+
+
+class VersionHorizonteBody(BaseModel):
+    fecha_inicio: Optional[str] = None
+    fecha_fin: Optional[str] = None
 
 
 class SuspensionPreviewBody(BaseModel):
@@ -238,11 +246,21 @@ class ActividadBatchTramoItemBody(BaseModel):
     codigo_wbs: Optional[str] = None
     tipo_distribucion: str = "lineal"
 
+    @field_validator("fecha_inicio", mode="before")
+    @classmethod
+    def _fecha_vacia_es_none(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
 
 class ActividadesBatchTramoBody(BaseModel):
     tramo: str
     actividades: List[ActividadBatchTramoItemBody] = Field(..., min_length=1)
     pk_ids: Optional[List[str]] = None
+    allow_overwrite: bool = False
 
 
 class ValidarSegmentosBody(BaseModel):
@@ -275,6 +293,7 @@ def prog_validar_segmentos(contrato_id: int, body: ValidarSegmentosBody, current
 def prog_programacion_estructura(
     contrato_id: int,
     pk_id: str = Query(...),
+    version_ppto_id: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
@@ -282,7 +301,12 @@ def prog_programacion_estructura(
     pk = pk_id.strip()
     if not pk:
         raise HTTPException(status_code=400, detail="pk_id requerido")
-    return fetch_estructura_programacion_pk(supabase, contrato_id, pk)
+    return fetch_estructura_programacion_pk(
+        supabase,
+        contrato_id,
+        pk,
+        version_ppto_id=(version_ppto_id or "").strip() or None,
+    )
 
 
 @router.get("/{contrato_id}/tramos")
@@ -298,6 +322,7 @@ def prog_estructura_tramo(
     tramo: str = Query(...),
     version_id: str = Query(...),
     pk_ids: Optional[List[str]] = Query(None),
+    version_ppto_id: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
@@ -318,6 +343,7 @@ def prog_estructura_tramo(
             tramo_s,
             vid,
             pk_ids_filter=pk_ids,
+            version_ppto_id=(version_ppto_id or "").strip() or None,
         )
     except BusinessRuleError as e:
         raise HTTPException(status_code=404, detail=e.message)
@@ -458,6 +484,35 @@ def prog_post_version(contrato_id: int, body: VersionCreateBody, current_user=De
     return row
 
 
+@router.patch("/{contrato_id}/versiones/{version_id}/horizonte")
+def prog_patch_version_horizonte(
+    contrato_id: int,
+    version_id: str,
+    body: VersionHorizonteBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        row = update_version_horizonte(
+            supabase,
+            version_id,
+            contrato_id,
+            fecha_inicio=body.fecha_inicio,
+            fecha_fin=body.fecha_fin,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_VERSION_HORIZONTE",
+        "prog_version",
+        version_id,
+        {"contrato_id": contrato_id, "fecha_inicio": body.fecha_inicio, "fecha_fin": body.fecha_fin},
+    )
+    return row
+
+
 @router.delete("/{contrato_id}/versiones/{version_id}")
 def prog_delete_version(contrato_id: int, version_id: str, current_user=Depends(get_current_user)):
     require_permiso_programacion_obra(current_user, "eliminar")
@@ -534,6 +589,7 @@ def prog_clear_tramo_programacion(
     """Elimina actividades de todos los PKs de un tramo en borrador y recalcula prog_pk_estado."""
     require_permiso_programacion_obra(current_user, "editar")
     _require_contract_access(current_user, contrato_id)
+    t0 = time.perf_counter()
     try:
         result = clear_tramo_programacion(
             supabase,
@@ -546,6 +602,7 @@ def prog_clear_tramo_programacion(
         raise
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
+    result["ms"] = round((time.perf_counter() - t0) * 1000, 1)
     _log_prog(
         current_user,
         "PROG_TRAMO_PROGRAMACION_ELIMINADA",
@@ -968,6 +1025,7 @@ def prog_actividades_batch_tramo(
             uid,
             cache,
             pk_ids_filter=body.pk_ids,
+            allow_overwrite=bool(body.allow_overwrite),
         )
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
@@ -1191,6 +1249,11 @@ class DependenciaBody(BaseModel):
     agrupador_id_destino: Optional[str] = None
 
 
+class DependenciaUpdateBody(BaseModel):
+    tipo: Optional[str] = Field(default=None, pattern="^(FS|SS|FF|SF)$")
+    lag_dias: Optional[int] = None
+
+
 class DependenciaGlobalBody(BaseModel):
     capitulo_origen: str
     capitulo_destino: str
@@ -1260,6 +1323,41 @@ def prog_crear_dependencia(
               {"origen": f"{body.pk_id_origen}/{body.capitulo_origen}",
                "destino": f"{body.pk_id_destino}/{body.capitulo_destino}",
                "tipo": body.tipo, "lag": body.lag_dias})
+    return dep
+
+
+@router.patch("/{contrato_id}/versiones/{version_id}/dependencias/{dep_id}")
+def prog_actualizar_dependencia(
+    contrato_id: int,
+    version_id: str,
+    dep_id: str,
+    body: DependenciaUpdateBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Version no pertenece al contrato")
+    if body.tipo is None and body.lag_dias is None:
+        raise HTTPException(status_code=400, detail="Indique tipo o lag_dias a actualizar")
+    try:
+        dep = actualizar_dependencia(
+            supabase,
+            dep_id,
+            version_id,
+            tipo=body.tipo,
+            lag_dias=body.lag_dias,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_DEPENDENCIA_ACTUALIZADA",
+        "prog_version",
+        version_id,
+        {"dep_id": dep_id, "tipo": body.tipo, "lag": body.lag_dias},
+    )
     return dep
 
 
@@ -1502,6 +1600,7 @@ def prog_curva_s(
     target_id: Optional[str] = Query(None),
     version_ppto_id: Optional[str] = Query(None),
     pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
+    tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
@@ -1514,6 +1613,7 @@ def prog_curva_s(
             target_id=target_id,
             version_ppto_id=version_ppto_id,
             pk_ids=pk_ids,
+            tramos=tramos,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1544,6 +1644,7 @@ def prog_curva_s_pdf(
     target_id: Optional[str] = Query(None),
     version_ppto_id: Optional[str] = Query(None),
     pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
+    tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
@@ -1554,6 +1655,29 @@ def prog_curva_s_pdf(
         target_id=target_id,
         version_ppto_id=version_ppto_id,
         pk_ids=pk_ids,
+        tramos=tramos,
+    )
+
+
+@router.get("/{contrato_id}/curva-s/excel")
+def prog_curva_s_excel(
+    contrato_id: int,
+    baseline_id: Optional[str] = Query(None),
+    target_id: Optional[str] = Query(None),
+    version_ppto_id: Optional[str] = Query(None),
+    pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
+    tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return _curva_s_excel_response(
+        contrato_id,
+        baseline_id=baseline_id,
+        target_id=target_id,
+        version_ppto_id=version_ppto_id,
+        pk_ids=pk_ids,
+        tramos=tramos,
     )
 
 
@@ -1564,59 +1688,27 @@ def _curva_s_pdf_response(
     target_id: Optional[str] = None,
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[str] = None,
+    tramos: Optional[str] = None,
 ):
     try:
-        data = build_curva_s(
+        ctx = load_curva_s_export_context(
             supabase,
             contrato_id,
             baseline_id=baseline_id,
             target_id=target_id,
             version_ppto_id=version_ppto_id,
             pk_ids=pk_ids,
+            tramos=tramos,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    crows = (
-        supabase.table("contratos")
-        .select("id,numero,objeto,contratista,interventoria,logo_contratista")
-        .eq("id", contrato_id)
-        .limit(1)
-        .execute()
-        .data
-        or [{}]
-    )
-    contrato = crows[0]
-    pk_set = parse_pk_ids_param(pk_ids)
-    resolved_target = (data.get("target_id") or "").strip()
-    prog_meta: dict = {}
-    if resolved_target:
-        prows = (
-            supabase.table("prog_versiones")
-            .select("numero_version,tipo,estado")
-            .eq("id", resolved_target)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        prog_meta = prows[0] if prows else {}
-    ppto_meta: dict = {}
-    ppto_id = (data.get("version_ppto_id") or "").strip()
-    if ppto_id:
-        from prog_obra_costos_presupuesto import assert_ppto_version_contrato
-
-        ppto_meta = assert_ppto_version_contrato(supabase, contrato_id, ppto_id)
-    cronograma = (
-        fetch_cronograma_pdf_tree(supabase, resolved_target, contrato_id, pk_ids=pk_set)
-        if resolved_target
-        else []
-    )
     html = build_curva_s_pdf_html(
-        contrato,
-        data,
-        cronograma=cronograma,
-        prog_meta=prog_meta,
-        ppto_meta=ppto_meta,
+        ctx["contrato"],
+        ctx["data"],
+        cronograma=ctx["cronograma"],
+        prog_meta=ctx["prog_meta"],
+        ppto_meta=ctx["ppto_meta"],
+        cpm_export=ctx.get("cpm_export"),
     )
     try:
         from topografia_utils import to_pdf_bytes
@@ -1627,6 +1719,45 @@ def _curva_s_pdf_response(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="curva-s-contrato-{contrato_id}.pdf"'},
+    )
+
+
+def _curva_s_excel_response(
+    contrato_id: int,
+    *,
+    baseline_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[str] = None,
+    tramos: Optional[str] = None,
+):
+    try:
+        ctx = load_curva_s_export_context(
+            supabase,
+            contrato_id,
+            baseline_id=baseline_id,
+            target_id=target_id,
+            version_ppto_id=version_ppto_id,
+            pk_ids=pk_ids,
+            tramos=tramos,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        xbytes = build_curva_s_xlsx_bytes(
+            ctx["contrato"],
+            ctx["data"],
+            cronograma=ctx["cronograma"],
+            prog_meta=ctx["prog_meta"],
+            ppto_meta=ctx["ppto_meta"],
+            cpm_export=ctx.get("cpm_export"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo generar Excel: {e}")
+    return Response(
+        content=xbytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="curva-s-contrato-{contrato_id}.xlsx"'},
     )
 
 

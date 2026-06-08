@@ -65,9 +65,9 @@ BEGIN
     FROM jsonb_array_elements(p_actividades) AS a
     ON CONFLICT (version_id, pk_id, capitulo, item, segmento)
     DO UPDATE SET
-        fecha_inicio             = EXCLUDED.fecha_inicio,
-        duracion_dias_habiles    = EXCLUDED.duracion_dias_habiles,
-        fecha_fin_calculada      = EXCLUDED.fecha_fin_calculada,
+        fecha_inicio             = COALESCE(EXCLUDED.fecha_inicio, prog_actividades.fecha_inicio),
+        duracion_dias_habiles    = COALESCE(EXCLUDED.duracion_dias_habiles, prog_actividades.duracion_dias_habiles),
+        fecha_fin_calculada      = COALESCE(EXCLUDED.fecha_fin_calculada, prog_actividades.fecha_fin_calculada),
         cantidad_programada      = EXCLUDED.cantidad_programada,
         unidad                   = EXCLUDED.unidad,
         costo_unitario           = EXCLUDED.costo_unitario,

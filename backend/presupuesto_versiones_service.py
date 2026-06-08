@@ -366,6 +366,7 @@ def _fetch_version_items_rows(
     version_id: str,
     capitulo: Optional[str] = None,
     tramo: Optional[str] = None,
+    tramos: Optional[List[str]] = None,
     select: str = "capitulo, costo_directo, cant_total",
 ) -> List[dict]:
     """Filas de una versión. Si es la vigente, lee del presupuesto VIVO (su contenido
@@ -388,8 +389,13 @@ def _fetch_version_items_rows(
             q = q.eq("version_id", version_id)
         if capitulo:
             q = q.eq("capitulo", capitulo)
-        if tramo and str(tramo).strip():
-            q = q.eq("tramo", str(tramo).strip())
+        tramo_filter = [t.strip() for t in (tramos or []) if t and str(t).strip()]
+        if not tramo_filter and tramo and str(tramo).strip():
+            tramo_filter = [str(tramo).strip()]
+        if len(tramo_filter) == 1:
+            q = q.eq("tramo", tramo_filter[0])
+        elif len(tramo_filter) > 1:
+            q = q.in_("tramo", tramo_filter)
         batch = q.range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:

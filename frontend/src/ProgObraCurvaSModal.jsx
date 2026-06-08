@@ -10,8 +10,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
-import { fetchCurvaS, fetchCurvaSEscenarios, downloadCurvaSPdf, downloadProjectXml } from './progObraApi'
-import { exportCurvaSExcel } from './progObraExportExcel'
+import { fetchCurvaS, fetchCurvaSEscenarios, downloadCurvaSPdf, downloadCurvaSExcel, downloadProjectXml } from './progObraApi'
 import { fmtCOP } from './progObraFormat'
 import { pptoVersionOptionLabel } from './ProgPresupuestoSelector'
 
@@ -47,6 +46,7 @@ export default function ProgObraCurvaSModal({
   contratista,
   interventoria,
   pkIds = null,
+  tramoNames = null,
 }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -65,6 +65,7 @@ export default function ProgObraCurvaSModal({
   }, [open])
 
   const pkIdsKey = pkIds?.length ? pkIds.join(',') : ''
+  const tramosKey = tramoNames?.length ? tramoNames.join(',') : ''
 
   useEffect(() => {
     if (!open || !cid || !token) return
@@ -76,6 +77,7 @@ export default function ProgObraCurvaSModal({
       targetId,
       versionPptoId,
       pkIds: pkIds?.length ? pkIds : undefined,
+      tramos: tramoNames?.length ? tramoNames : undefined,
     })
       .then((d) => {
         if (!cancel) setData(d)
@@ -89,7 +91,7 @@ export default function ProgObraCurvaSModal({
     return () => {
       cancel = true
     }
-  }, [open, cid, token, API, baselineId, targetId, versionPptoId, pkIdsKey])
+  }, [open, cid, token, API, baselineId, targetId, versionPptoId, pkIdsKey, tramosKey])
 
   useEffect(() => {
     if (!open || !modoEscenarios) return
@@ -166,20 +168,31 @@ export default function ProgObraCurvaSModal({
   }, [])
 
   const handleExcel = useCallback(async () => {
-    if (!data) return
+    if (modoEscenarios) {
+      setError('Exporte Excel desde la vista normal de Curva S (no en comparar escenarios).')
+      return
+    }
     setExportBusy(true)
+    setError('')
     try {
-      await exportCurvaSExcel({
-        data,
-        contratoNumero,
-        contratista,
-        interventoria,
-        filename: `curva-s-${cid}.xlsx`,
+      const blob = await downloadCurvaSExcel(API, cid, token, {
+        baselineId,
+        targetId,
+        versionPptoId,
+        pkIds: pkIds?.length ? pkIds : undefined,
+        tramos: tramoNames?.length ? tramoNames : undefined,
       })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `curva-s-${cid}.xlsx`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      setError(e?.message || 'Error al exportar Excel')
     } finally {
       setExportBusy(false)
     }
-  }, [data, cid, contratoNumero, contratista, interventoria])
+  }, [API, cid, token, baselineId, targetId, versionPptoId, pkIdsKey, tramosKey, modoEscenarios])
 
   const handlePdf = useCallback(async () => {
     if (modoEscenarios) {
@@ -194,6 +207,7 @@ export default function ProgObraCurvaSModal({
         targetId,
         versionPptoId,
         pkIds: pkIds?.length ? pkIds : undefined,
+        tramos: tramoNames?.length ? tramoNames : undefined,
       })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
@@ -205,7 +219,7 @@ export default function ProgObraCurvaSModal({
     } finally {
       setExportBusy(false)
     }
-  }, [API, cid, token, baselineId, targetId, versionPptoId, pkIdsKey, modoEscenarios])
+  }, [API, cid, token, baselineId, targetId, versionPptoId, pkIdsKey, tramosKey, modoEscenarios])
 
   const handleProjectXml = useCallback(async () => {
     const vid = versionProgId || targetId
