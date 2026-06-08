@@ -48,8 +48,10 @@ def test_apply_cpm_fechas_bulk_update_sin_duracion():
     assert count == 1
     assert update_payloads
     payload = update_payloads[0]
-    assert payload["fecha_inicio"] == "2026-03-01"
-    assert payload["fecha_fin_calculada"] == "2026-03-19"
-    assert payload["override_manual"] is False
+    assert payload["fecha_inicio_temprana"] == "2026-03-01"
+    assert payload["fecha_fin_temprana"] == "2026-03-19"
+    assert "fecha_inicio" not in payload
+    assert "fecha_fin_calculada" not in payload
+    assert "override_manual" not in payload
     assert "duracion_dias_habiles" not in payload
     table_mock.upsert.assert_not_called()

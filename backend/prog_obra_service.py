@@ -3366,20 +3366,28 @@ def _resolve_duracion_cpm_nodo(
     return 1
 
 
-def _reset_cpm_entrada_version(sb, version_id: str) -> None:
+def _cpm_paso1_limpiar_entrada(sb, version_id: str) -> None:
     """
-    Elimina resultados CPM previos y fechas de write-back no manuales.
-    Cada ejecución de CPM parte solo de duraciones almacenadas + dependencias + anclas manuales.
+    Paso 1 — Limpiar antes de calcular (inviolable).
+
+    Borra fecha_inicio y fecha_fin_calculada de agrupadores no manuales y elimina
+    resultados CPM previos. Debe ejecutarse antes de que el motor lea prog_actividades.
     """
     sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).execute()
     now = datetime.now(timezone.utc).isoformat()
     sb.table("prog_actividades").update({
         "fecha_inicio": None,
         "fecha_fin_calculada": None,
+        "fecha_inicio_temprana": None,
+        "fecha_fin_temprana": None,
         "actualizado_en": now,
     }).eq("version_id", version_id).eq("override_manual", False).not_.is_(
         "agrupador_id", "null"
     ).execute()
+
+
+# Alias usado en tests y código legado
+_reset_cpm_entrada_version = _cpm_paso1_limpiar_entrada
 
 
 def _duraciones_agrupador_para_cpm(raw_ags: List[dict]) -> Dict[tuple, int]:
@@ -3742,6 +3750,13 @@ def _completar_nodos_cpm_desde_dependencias(
 
 
 def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
+    """
+    Pipeline CPM (orden inviolable en cada ejecución):
+      1. Limpiar fechas no manuales en prog_actividades + resultados CPM previos
+      2. Entradas: fecha inicio versión, duracion_dias_habiles, dependencias
+      3. Anclas: override_manual=true conserva fecha_inicio como restricción fija
+      4. Calcular → prog_cpm_resultados + write-back fecha_*_temprana en prog_actividades
+    """
     from prog_obra_cpm import NodoCPM, ResultadoCPM
     from prog_obra_calendar import add_dias_habiles as _add_dh
 
@@ -3758,8 +3773,10 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     fecha_inicio_ver = _parse_date_cpm(ver.get("fecha_inicio"))
     fecha_fin_ver = _parse_date_cpm(ver.get("fecha_fin"))
 
-    _reset_cpm_entrada_version(sb, version_id)
+    # ── Paso 1: limpiar antes de leer prog_actividades ───────────────────────
+    _cpm_paso1_limpiar_entrada(sb, version_id)
 
+    # ── Paso 2 y 3: cargar duraciones, anclas manuales y dependencias ────────
     raw_caps = (
         sb.rpc("prog_get_capitulos_con_fechas", {"p_version_id": version_id})
         .execute()
@@ -3900,6 +3917,7 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     debug_watch, debug_labels = _cpm_debug_watch_keys(nodos, agr_codigo_by_id)
     _log_cpm_grafo_diagnostico(nodos, dependencias, listar_dependencias(sb, version_id), agr_codigo_by_id, debug_watch)
 
+    # ── Paso 4: calcular y escribir resultados ───────────────────────────────
     resultado = calcular_cpm(
         nodos,
         dependencias,
@@ -3988,7 +4006,7 @@ def _bulk_patch_prog_actividades_by_id(sb, rows: List[dict]) -> None:
 
 
 def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
-    """Write-back masivo de fechas CPM a filas agrupador (sin tocar duración ni ítems hijo)."""
+    """Write-back masivo: solo fecha_inicio_temprana / fecha_fin_temprana (nunca fecha_inicio)."""
     if not nodos:
         return 0
 
@@ -4047,16 +4065,14 @@ def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
             for rid in row_ids:
                 updates.append({
                     "id": rid,
-                    "fecha_inicio": fi_iso,
-                    "fecha_fin_calculada": ff_iso,
-                    "override_manual": False,
+                    "fecha_inicio_temprana": fi_iso,
+                    "fecha_fin_temprana": ff_iso,
                     "actualizado_en": now,
                 })
         else:
             sb.table("prog_actividades").update({
-                "fecha_inicio": fi_iso,
-                "fecha_fin_calculada": ff_iso,
-                "override_manual": False,
+                "fecha_inicio_temprana": fi_iso,
+                "fecha_fin_temprana": ff_iso,
                 "actualizado_en": now,
             }).eq("version_id", version_id).eq("pk_id", pk).eq(
                 "capitulo", cap
@@ -4067,7 +4083,7 @@ def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
 
 
 def _apply_cpm_fechas_agrupador(sb, version_id, contrato_id, cache, n: "NodoCPM") -> None:
-    """Propaga fechas tempranas CPM al agrupador; no modifica duracion_dias_habiles."""
+    """Propaga fecha_inicio_temprana / fecha_fin_temprana al agrupador (no fecha_inicio)."""
     if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
         return
 
@@ -4095,9 +4111,8 @@ def _apply_cpm_fechas_agrupador(sb, version_id, contrato_id, cache, n: "NodoCPM"
     ff_iso = n.fecha_fin_temprana.isoformat()
     now = datetime.now(timezone.utc).isoformat()
     update_fields = {
-        "fecha_inicio": fi_iso,
-        "fecha_fin_calculada": ff_iso,
-        "override_manual": False,
+        "fecha_inicio_temprana": fi_iso,
+        "fecha_fin_temprana": ff_iso,
         "actualizado_en": now,
     }
     sb.table("prog_actividades").update(update_fields).eq("version_id", version_id).eq(

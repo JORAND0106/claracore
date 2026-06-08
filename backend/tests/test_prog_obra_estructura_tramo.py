@@ -70,8 +70,8 @@ def test_merge_programacion_inconsistente_fechas_distintas():
     assert prog["duracion_dias_habiles"] == 10
 
 
-def test_merge_programacion_conserva_duracion_usuario_si_fechas_cpm_span_corto():
-    """Tras write-back CPM, la duración manual no se infiere del rango fi–ff."""
+def test_merge_programacion_conserva_duracion_usuario_sin_fechas_manuales():
+    """CPM ya no escribe fecha_inicio; duración almacenada no se infiere de span."""
     acts = [
         {"pk_id": "120367", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10, "fecha_fin_calculada": "2026-03-01"},
         {"pk_id": "120368", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10, "fecha_fin_calculada": "2026-03-01"},

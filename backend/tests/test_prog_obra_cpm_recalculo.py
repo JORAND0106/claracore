@@ -118,6 +118,8 @@ def test_reset_cpm_entrada_version_borra_resultados_y_fechas():
     payload = table_mock.update.call_args[0][0]
     assert payload["fecha_inicio"] is None
     assert payload["fecha_fin_calculada"] is None
+    assert payload["fecha_inicio_temprana"] is None
+    assert payload["fecha_fin_temprana"] is None
 
 
 def test_segundo_calculo_usa_duracion_actual_no_fechas_previas():
