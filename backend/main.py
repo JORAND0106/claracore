@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone, date
 import pytz
 from dotenv import load_dotenv
 import os
-import base64
 import logging
 import traceback
 import time
@@ -39,6 +38,18 @@ from presupuesto_helpers import (
 from presupuesto_panel_validacion import (
     fetch_panel_validacion_interv,
     presupuesto_filtros_a_jsonb,
+)
+from azure_blob_storage import (
+    blob_path_from_url,
+    download_blob_bytes,
+    path_firma,
+    path_guia_bloque,
+    path_inicio_novedad,
+    path_perfil,
+    path_sicoe_foto,
+    path_sicoe_grafico,
+    sicoe_blob_path,
+    upload_blob,
 )
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
@@ -597,54 +608,8 @@ async def exigir_politicas_confidencialidad(request: Request, call_next):
         return await call_next(request)
 
 
-# Cloudinary: claracore/{contrato_id}/fotos | graficos | Fotos de Perfil | Fotos de Firmas
-CLOUDINARY_ROOT = "claracore"
-CLOUDINARY_SUB_FOTOS = "fotos"
-CLOUDINARY_SUB_GRAFICOS = "graficos"
-CLOUDINARY_SUB_PERFIL = "Fotos de Perfil"
-CLOUDINARY_SUB_FIRMAS = "Fotos de Firmas"
-# PNG 1×1 px (marcador para crear carpetas al dar de alta un contrato)
-_CLOUDINARY_SEED_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-)
-
-
-def _cloudinary_config():
-    import cloudinary
-    cloudinary.config(
-        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-        api_key=os.getenv("CLOUDINARY_API_KEY"),
-        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    )
-
-
-def _cloudinary_folder_contrato(contrato_id: int, subcarpeta: str) -> str:
-    return f"{CLOUDINARY_ROOT}/{contrato_id}/{subcarpeta}"
-
-
-def _cloudinary_seed_carpetas_contrato(contrato_id: int) -> None:
-    """Crea en Cloudinary las cuatro carpetas del contrato (un PNG mínimo por carpeta)."""
-    if not os.getenv("CLOUDINARY_CLOUD_NAME"):
-        return
-    import cloudinary.uploader
-    _cloudinary_config()
-    seeds = [
-        (CLOUDINARY_SUB_FOTOS, "_inicial_fotos"),
-        (CLOUDINARY_SUB_GRAFICOS, "_inicial_graficos"),
-        (CLOUDINARY_SUB_PERFIL, "_inicial_perfil"),
-        (CLOUDINARY_SUB_FIRMAS, "_inicial_firmas"),
-    ]
-    for sub, public_id in seeds:
-        try:
-            cloudinary.uploader.upload(
-                _CLOUDINARY_SEED_PNG,
-                folder=_cloudinary_folder_contrato(contrato_id, sub),
-                public_id=public_id,
-                overwrite=True,
-                resource_type="image",
-            )
-        except Exception as e:
-            _log_api.warning("Cloudinary seed %s/%s: %s", contrato_id, sub, e)
+SICOE_SUB_FOTOS = "fotos"
+SICOE_SUB_GRAFICOS = "graficos"
 
 # ─────────────────────────────────────────────
 # MODELOS
@@ -4744,191 +4709,52 @@ def _usuario_imagen_subir(
     content_type: Optional[str],
     contrato_id: Optional[int] = None,
 ) -> str:
-    """
-    Sube foto de perfil o imagen de firma.
-    Cloudinary: claracore/{contrato_id}/Fotos_de_perfil | Fotos_de_firmas (si no hay contrato: sin_contrato/{uid}/...).
-    Supabase: contratos/{id}/perfil|firmas/... o usuarios/{id}/...
-    """
+    """Sube foto de perfil o imagen de firma a Azure Blob (perfiles/{uid}.jpg | firmas/{uid}.jpg)."""
+    del contrato_id  # path unificado por usuario
     ext = _ext_desde_content_type(content_type)
     ct = (content_type or "image/jpeg").split(";")[0].strip()
-
-    if os.getenv("CLOUDINARY_CLOUD_NAME"):
-        import cloudinary.uploader
-        _cloudinary_config()
-        sub = CLOUDINARY_SUB_PERFIL if asset == "avatar" else CLOUDINARY_SUB_FIRMAS
-        public_id = f"usuario_{uid}"
-        if contrato_id:
-            folder = _cloudinary_folder_contrato(int(contrato_id), sub)
-        else:
-            folder = f"{CLOUDINARY_ROOT}/sin_contrato/{uid}/{sub}"
-        result = cloudinary.uploader.upload(
-            contents,
-            folder=folder,
-            public_id=public_id,
-            overwrite=True,
-            resource_type="image",
-        )
-        return result["secure_url"]
-
-    sb = get_supabase()
-    bucket = os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles")
-    if contrato_id:
-        sub = "perfil" if asset == "avatar" else "firmas"
-        path = f"contratos/{contrato_id}/{sub}/u{uid}{ext}"
-    else:
-        path = f"usuarios/{uid}/{asset}{ext}"
-    file_opts = {"content-type": ct, "upsert": "true"}
-
-    def _do_upload():
-        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
-
+    blob_path = path_perfil(uid, ext) if asset == "avatar" else path_firma(uid, ext)
     try:
-        _do_upload()
-    except Exception as e1:
-        msg = str(e1).lower()
-        # Bucket inexistente: intentar crear (requiere service_role) y reintentar una vez
-        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
-            try:
-                sb.storage.create_bucket(
-                    bucket,
-                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
-                )
-            except Exception as e_create:
-                # Ya existe u otro error: seguimos e intentamos subir de nuevo
-                _log_api.warning("create_bucket %s: %s", bucket, e_create)
-            try:
-                _do_upload()
-            except Exception as e2:
-                _log_api.warning("Supabase Storage upload %s: %s", path, e2)
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "No se pudo subir la imagen. Crea el bucket en Supabase Storage "
-                        f"({bucket}, público) o configura Cloudinary (variables CLOUDINARY_*). "
-                        "Puedes usar el script backend/sql/storage_perfil_bucket.sql"
-                    ),
-                )
-        else:
-            _log_api.warning("Supabase Storage upload %s: %s", path, e1)
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "No se pudo subir la imagen a Supabase Storage. "
-                    "Comprueba el bucket y la clave SUPABASE (service role recomendada para Storage)."
-                ),
-            )
-
-    return sb.storage.from_(bucket).get_public_url(path)
+        return upload_blob(blob_path, contents, ct, overwrite=True)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload perfil/firma %s: %s", blob_path, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo subir la imagen a Azure Blob Storage. "
+                "Comprueba AZURE_STORAGE_CONNECTION_STRING y AZURE_STORAGE_CONTAINER."
+            ),
+        ) from exc
 
 
 def _inicio_novedad_subir_imagen(contents: bytes, content_type: Optional[str]) -> str:
-    """Imagen de contexto para novedades de inicio (Cloudinary o Supabase Storage)."""
+    """Imagen de contexto para novedades de inicio (Azure Blob Storage)."""
     if len(contents) > 6 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
     ext = _ext_desde_content_type(content_type)
     ct = (content_type or "image/jpeg").split(";")[0].strip()
-    if os.getenv("CLOUDINARY_CLOUD_NAME"):
-        import cloudinary.uploader
-        _cloudinary_config()
-        uid_part = uuid.uuid4().hex[:16]
-        result = cloudinary.uploader.upload(
-            contents,
-            folder=f"{CLOUDINARY_ROOT}/inicio-novedades",
-            public_id=f"nov_{uid_part}",
-            overwrite=False,
-            resource_type="image",
-        )
-        return result["secure_url"]
-    sb = get_supabase()
-    bucket = os.getenv("SUPABASE_INICIO_BUCKET", os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles"))
-    path = f"inicio-novedades/{uuid.uuid4().hex}{ext}"
-    file_opts = {"content-type": ct, "upsert": "true"}
-
-    def _do_upload():
-        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
-
+    nombre = f"nov_{uuid.uuid4().hex[:16]}{ext}"
+    blob_path = path_inicio_novedad(nombre)
     try:
-        _do_upload()
-    except Exception as e1:
-        msg = str(e1).lower()
-        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
-            try:
-                sb.storage.create_bucket(
-                    bucket,
-                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
-                )
-            except Exception as e_create:
-                _log_api.warning("create_bucket inicio novedades %s: %s", bucket, e_create)
-            try:
-                _do_upload()
-            except Exception as e2:
-                _log_api.warning("Supabase Storage upload inicio %s: %s", path, e2)
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "No se pudo subir la imagen. Configura Cloudinary (CLOUDINARY_*) "
-                        f"o el bucket público {bucket} en Supabase Storage."
-                    ),
-                )
-        else:
-            _log_api.warning("Supabase Storage upload inicio %s: %s", path, e1)
-            raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Supabase Storage.")
-    return sb.storage.from_(bucket).get_public_url(path)
+        return upload_blob(blob_path, contents, ct, overwrite=False)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload inicio novedad %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Azure Blob Storage.") from exc
 
 
 def _guia_bloque_subir_imagen(contents: bytes, content_type: Optional[str]) -> str:
-    """Imagen embebida en bloques de guías (Cloudinary o Supabase Storage). Solo vía API autorizada."""
+    """Imagen embebida en bloques de guías (Azure Blob Storage). Solo vía API autorizada."""
     if len(contents) > 6 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
     ext = _ext_desde_content_type(content_type)
     ct = (content_type or "image/jpeg").split(";")[0].strip()
-    if os.getenv("CLOUDINARY_CLOUD_NAME"):
-        import cloudinary.uploader
-        _cloudinary_config()
-        uid_part = uuid.uuid4().hex[:16]
-        result = cloudinary.uploader.upload(
-            contents,
-            folder=f"{CLOUDINARY_ROOT}/guias-bloques",
-            public_id=f"guia_{uid_part}",
-            overwrite=False,
-            resource_type="image",
-        )
-        return result["secure_url"]
-    sb = get_supabase()
-    bucket = os.getenv("SUPABASE_GUIAS_BUCKET", os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles"))
-    path = f"guias-bloques/{uuid.uuid4().hex}{ext}"
-    file_opts = {"content-type": ct, "upsert": "true"}
-
-    def _do_upload():
-        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
-
+    nombre = f"guia_{uuid.uuid4().hex[:16]}{ext}"
+    blob_path = path_guia_bloque(nombre)
     try:
-        _do_upload()
-    except Exception as e1:
-        msg = str(e1).lower()
-        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
-            try:
-                sb.storage.create_bucket(
-                    bucket,
-                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
-                )
-            except Exception as e_create:
-                _log_api.warning("create_bucket guias bloques %s: %s", bucket, e_create)
-            try:
-                _do_upload()
-            except Exception as e2:
-                _log_api.warning("Supabase Storage upload guia bloque %s: %s", path, e2)
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "No se pudo subir la imagen. Configura Cloudinary (CLOUDINARY_*) "
-                        f"o el bucket público {bucket} en Supabase Storage."
-                    ),
-                )
-        else:
-            _log_api.warning("Supabase Storage upload guia bloque %s: %s", path, e1)
-            raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Supabase Storage.")
-    return sb.storage.from_(bucket).get_public_url(path)
+        return upload_blob(blob_path, contents, ct, overwrite=False)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload guia bloque %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Azure Blob Storage.") from exc
 
 
 def _detalle_guardar_url_perfil(exc: Exception, campo: str) -> str:
@@ -5165,42 +4991,7 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "costos_adicionales_lista": norm,
     }).execute()
     nuevo = result.data[0]
-    try:
-        _cloudinary_seed_carpetas_contrato(int(nuevo["id"]))
-    except Exception as e:
-        _log_api.warning("Tras crear contrato, seed Cloudinary: %s", e)
     return nuevo
-
-
-@app.post("/contratos/{contrato_id}/cloudinary-sembrar-carpetas")
-def contrato_sembrar_carpetas_cloudinary(contrato_id: int, current_user=Depends(get_current_user)):
-    """
-    Contratos ya existentes (antes de la semilla automática): crea en Cloudinary las cuatro carpetas
-    (`fotos`, `graficos`, `Fotos de Perfil`, `Fotos de Firmas`) con un PNG mínimo por carpeta.
-    Si no usas Cloudinary en el backend, esta ruta responde 400 explicando que las imágenes van a Supabase.
-    """
-    if not os.getenv("CLOUDINARY_CLOUD_NAME"):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Cloudinary no está configurado (variables CLOUDINARY_* en el servidor). "
-                "Las fotos de perfil y firma se suben entonces a Supabase Storage: no aparecerán en Cloudinary "
-                "y no hace falta crear carpetas allí."
-            ),
-        )
-    ex = supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute()
-    if not ex.data:
-        raise HTTPException(status_code=404, detail="Contrato no encontrado")
-    caller_contrato, cargo = _caller_contract_scope(current_user)
-    priv = (cargo or "") in ("desarrollador", "administrador")
-    if not priv and caller_contrato and int(caller_contrato) != int(contrato_id):
-        raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
-    _cloudinary_seed_carpetas_contrato(contrato_id)
-    return {
-        "ok": True,
-        "contrato_id": contrato_id,
-        "mensaje": f"Carpetas iniciales en Cloudinary: {CLOUDINARY_ROOT}/{contrato_id}/(fotos|graficos|…)",
-    }
 
 
 @app.put("/contratos/{contrato_id}")
@@ -9715,7 +9506,7 @@ def _inicio_ubicacion_desde_reporte(rep: dict, reg: dict) -> str:
 
 
 def _inicio_fotos_desde_registros_rows(rows: list, limit: int) -> List[dict]:
-    """Arma lista del carrusel: URLs Cloudinary ya guardadas en so_registros.foto_url."""
+    """Arma lista del carrusel: URLs guardadas en so_registros.foto_url."""
     rows = [r for r in (rows or []) if (r.get("foto_url") or "").strip()][:limit]
     reporte_ids = list({int(r["reporte_id"]) for r in rows if r.get("reporte_id") is not None})
     reportes_map: dict = {}
@@ -9792,7 +9583,7 @@ def inicio_fotos_acta_vigente(
 ):
     """
     Fotos de registros SICOE del acta RPO vigente (para slider en página de inicio).
-    Las imágenes viven en Cloudinary; aquí se devuelven las URLs guardadas en so_registros.foto_url.
+    Las URLs de imagen se leen desde so_registros.foto_url (Azure Blob Storage).
     Si el acta no tiene registros enlazados, se usan las últimas fotos del contrato.
     """
     _require_contract_access(current_user, contrato_id)
@@ -16134,31 +15925,27 @@ def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user
 
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
 async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
-    import cloudinary.uploader
-    _cloudinary_config()
     contents = await file.read()
-    result = cloudinary.uploader.upload(
-        contents,
-        folder=_cloudinary_folder_contrato(contrato_id, CLOUDINARY_SUB_FOTOS),
-        public_id=f"foto_{numero}",
-        overwrite=True,
-        resource_type="image",
-    )
-    return {"url": result["secure_url"], "numero": numero}
+    ext = _ext_desde_content_type(file.content_type)
+    blob_path = path_sicoe_foto(contrato_id, numero, ext)
+    try:
+        url = upload_blob(blob_path, contents, file.content_type, overwrite=True)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload foto %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo subir la foto a Azure Blob Storage.") from exc
+    return {"url": url, "numero": numero}
 
 @app.post("/sicoe-obra/{contrato_id}/upload-grafico")
 async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
-    import cloudinary.uploader
-    _cloudinary_config()
     contents = await file.read()
-    result = cloudinary.uploader.upload(
-        contents,
-        folder=_cloudinary_folder_contrato(contrato_id, CLOUDINARY_SUB_GRAFICOS),
-        public_id=f"grafico_{numero}",
-        overwrite=True,
-        resource_type="image",
-    )
-    return {"url": result["secure_url"], "numero": numero}
+    ext = _ext_desde_content_type(file.content_type)
+    blob_path = path_sicoe_grafico(contrato_id, numero, ext)
+    try:
+        url = upload_blob(blob_path, contents, file.content_type, overwrite=True)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload grafico %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo subir el gráfico a Azure Blob Storage.") from exc
+    return {"url": url, "numero": numero}
 
 
 class RotarImagenSicoeBody(BaseModel):
@@ -16173,6 +15960,9 @@ def _sicoe_url_con_version(url: str) -> str:
 
 
 def _sicoe_descargar_imagen_bytes(url: str, timeout: float = 60.0) -> bytes:
+    blob_path = blob_path_from_url(url)
+    if blob_path:
+        return download_blob_bytes(blob_path)
     r = httpx.get(url, timeout=timeout, follow_redirects=True)
     r.raise_for_status()
     return r.content
@@ -16211,19 +16001,11 @@ def _sicoe_subir_imagen_rotada(
     subcarpeta: str,
     public_id: str,
     body: bytes,
+    content_type: str = "image/jpeg",
 ) -> str:
-    import cloudinary.uploader
-
-    _cloudinary_config()
-    result = cloudinary.uploader.upload(
-        body,
-        folder=_cloudinary_folder_contrato(int(contrato_id), subcarpeta),
-        public_id=public_id,
-        overwrite=True,
-        invalidate=True,
-        resource_type="image",
-    )
-    url = str(result.get("secure_url") or result.get("url") or "")
+    ext = _ext_desde_content_type(content_type)
+    blob_path = sicoe_blob_path(contrato_id, subcarpeta, public_id, ext)
+    url = upload_blob(blob_path, body, content_type, overwrite=True)
     return _sicoe_url_con_version(url)
 
 
@@ -16237,6 +16019,18 @@ def _sicoe_rotar_imagen_guardada(
 ) -> str:
     raw = _sicoe_descargar_imagen_bytes(source_url)
     rotated = _sicoe_rotar_imagen_bytes(raw, angle)
+    blob_path = blob_path_from_url(source_url)
+    if blob_path:
+        ext = blob_path.rsplit(".", 1)[-1].lower() if "." in blob_path else "jpg"
+        ct = {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp",
+            "gif": "image/gif",
+        }.get(ext, "image/jpeg")
+        url = upload_blob(blob_path, rotated, ct, overwrite=True)
+        return _sicoe_url_con_version(url)
     return _sicoe_subir_imagen_rotada(
         contrato_id,
         subcarpeta=subcarpeta,
@@ -16280,7 +16074,7 @@ def sicoe_rotar_foto(
     try:
         new_url = _sicoe_rotar_imagen_guardada(
             contrato_id,
-            subcarpeta=CLOUDINARY_SUB_FOTOS,
+            subcarpeta=SICOE_SUB_FOTOS,
             public_id=f"foto_{num}",
             source_url=src,
             angle=angle,
@@ -16338,7 +16132,7 @@ def sicoe_rotar_grafico(
     try:
         new_url = _sicoe_rotar_imagen_guardada(
             contrato_id,
-            subcarpeta=CLOUDINARY_SUB_GRAFICOS,
+            subcarpeta=SICOE_SUB_GRAFICOS,
             public_id=f"grafico_{num}",
             source_url=src,
             angle=angle,

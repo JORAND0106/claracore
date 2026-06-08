@@ -9,7 +9,7 @@ python-dotenv
 pydantic
 openpyxl
 requests
-cloudinary
+azure-storage-blob>=12.19.0
 python-multipart
 xhtml2pdf
 pypdf>=4.0
