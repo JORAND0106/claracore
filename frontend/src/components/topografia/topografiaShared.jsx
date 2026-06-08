@@ -1,5 +1,163 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+
+/** Estilos del módulo Topografía alineados con tema global (claro | auto | oscuro | descansar). */
+export function topoStyles(t) {
+  const primary = t?.primary || '#2563eb'
+  const border = t?.border || '#e2e8f0'
+  const text = t?.text || '#0f172a'
+  const textMuted = t?.textMuted || '#64748b'
+  const bgCard = t?.bgCard || '#ffffff'
+  const inputBg = t?.inputBg || '#f8fafc'
+
+  return {
+    t: t || {},
+    text,
+    textMuted,
+    accent: primary,
+    accentSoft: `${primary}22`,
+    overlay: t?.overlay || 'rgba(15, 23, 42, 0.48)',
+    card: {
+      background: bgCard,
+      border: `1px solid ${border}`,
+      borderRadius: 10,
+      padding: 16,
+      color: text,
+    },
+    inputStyle: {
+      width: '100%',
+      padding: '8px 10px',
+      borderRadius: 6,
+      border: `1px solid ${t?.inputBorder || border}`,
+      background: inputBg,
+      color: text,
+      boxSizing: 'border-box',
+    },
+    btnPrimary: {
+      padding: '8px 14px',
+      borderRadius: 6,
+      border: 'none',
+      background: primary,
+      color: '#fff',
+      cursor: 'pointer',
+    },
+    btnSecondary: {
+      padding: '8px 14px',
+      borderRadius: 6,
+      border: `1px solid ${border}`,
+      background: bgCard,
+      color: text,
+      cursor: 'pointer',
+    },
+    th: {
+      textAlign: 'left',
+      padding: '6px 6px',
+      borderBottom: `2px solid ${border}`,
+      fontSize: 'var(--cc-xs)',
+      whiteSpace: 'nowrap',
+      color: text,
+      background: inputBg,
+    },
+    td: {
+      padding: '5px 6px',
+      fontSize: 'var(--cc-xs)',
+      borderBottom: `1px solid ${border}`,
+      whiteSpace: 'nowrap',
+      color: text,
+    },
+    rowHighlight: `${primary}18`,
+    tabBar: {
+      display: 'flex',
+      alignItems: 'stretch',
+      gap: 4,
+      overflowX: 'auto',
+      paddingBottom: 2,
+      marginBottom: 12,
+      borderBottom: `2px solid ${border}`,
+      flexWrap: 'nowrap',
+    },
+    tabBtn: (active) => ({
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '8px 12px',
+      border: `1px solid ${border}`,
+      borderBottom: active ? `2px solid ${primary}` : `1px solid ${border}`,
+      marginBottom: active ? -2 : 0,
+      borderRadius: '8px 8px 0 0',
+      background: active ? `${primary}18` : bgCard,
+      color: active ? primary : text,
+      fontSize: 'var(--cc-sm)',
+      fontWeight: active ? 600 : 400,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      flexShrink: 0,
+    }),
+    cierre: {
+      box: {
+        border: `1px solid ${border}`,
+        borderRadius: 8,
+        overflow: 'hidden',
+        background: bgCard,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+      },
+      head: {
+        padding: '5px 10px',
+        background: primary,
+        color: '#fff',
+        fontWeight: 700,
+        fontSize: 'var(--cc-xs)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
+      },
+      rowL: {
+        padding: '3px 8px',
+        fontSize: 'var(--cc-xs)',
+        color: textMuted,
+        background: inputBg,
+        fontWeight: 600,
+        borderTop: `1px solid ${border}`,
+        width: '42%',
+        verticalAlign: 'middle',
+      },
+      rowV: {
+        padding: '3px 8px',
+        fontSize: 'var(--cc-xs)',
+        color: text,
+        textAlign: 'right',
+        borderTop: `1px solid ${border}`,
+        fontWeight: 600,
+        verticalAlign: 'middle',
+      },
+    },
+    grafico: {
+      border: `1px solid ${border}`,
+      background: inputBg,
+      labelFill: textMuted,
+      pointLabel: text,
+    },
+    badgeEstacion: { background: `${primary}22`, color: primary },
+    badgeAux: { background: inputBg, color: textMuted },
+    link: primary,
+    success: '#047857',
+    warn: '#b45309',
+  }
+}
+
+const TopoThemeContext = createContext(topoStyles(null))
+
+export function TopoThemeProvider({ t, children }) {
+  const styles = useMemo(() => topoStyles(t), [t])
+  return <TopoThemeContext.Provider value={styles}>{children}</TopoThemeContext.Provider>
+}
+
+export function useTopoTheme() {
+  return useContext(TopoThemeContext)
+}
 
 const DRAFT_KEY = (contratoId, modulo) => `claracore_topo_draft_${contratoId}_${modulo}`
 
@@ -87,6 +245,9 @@ export function useTopografiaApi(contratoId, token) {
 
   const downloadPdf = useCallback(async (path, filename) => {
     const blob = await api(path, { method: 'GET', headers: { Accept: 'application/pdf' } })
+    if (!(blob instanceof Blob) || blob.size < 80) {
+      throw new Error('El servidor no devolvió un PDF válido. Reinicie el backend e intente de nuevo.')
+    }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -98,36 +259,14 @@ export function useTopografiaApi(contratoId, token) {
   return { api, online, saveDraft, loadDraft, clearDraft, syncDraft, downloadPdf }
 }
 
-export const card = {
-  background: '#fff',
-  border: '1px solid #e2e8f0',
-  borderRadius: 10,
-  padding: 16,
-}
-
-export const inputStyle = {
-  width: '100%',
-  padding: '8px 10px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-}
-
-export const btnPrimary = {
-  padding: '8px 14px',
-  borderRadius: 6,
-  border: 'none',
-  background: '#2563eb',
-  color: '#fff',
-  cursor: 'pointer',
-}
-
-export const btnSecondary = {
-  padding: '8px 14px',
-  borderRadius: 6,
-  border: '1px solid #cbd5e1',
-  background: '#fff',
-  cursor: 'pointer',
-}
+/** @deprecated Use useTopoTheme() inside Topografía (requiere TopoThemeProvider). */
+export const card = topoStyles(null).card
+/** @deprecated Use useTopoTheme(). */
+export const inputStyle = topoStyles(null).inputStyle
+/** @deprecated Use useTopoTheme(). */
+export const btnPrimary = topoStyles(null).btnPrimary
+/** @deprecated Use useTopoTheme(). */
+export const btnSecondary = topoStyles(null).btnSecondary
 
 export const defaultPermisos = {
   crear: false,

@@ -14,8 +14,8 @@ const ESTADO_STYLE = {
 
 function btnGhost(t, disabled) {
   return {
-    padding: '3px 8px',
-    fontSize: 10,
+    padding: '0.2rem 0.5rem',
+    fontSize: 'var(--cc-caption)',
     fontWeight: 600,
     borderRadius: 5,
     border: `1px solid ${t.border}`,
@@ -51,11 +51,11 @@ export default function ProgHistorialVersiones({
   const baselineId = versionBaselineId ? String(versionBaselineId) : null
 
   return (
-    <details style={{ marginTop: 2 }}>
+    <details style={{ marginTop: '0.15rem' }}>
       <summary
         style={{
           cursor: 'pointer',
-          fontSize: 11,
+          fontSize: 'var(--cc-sm)',
           fontWeight: 700,
           color: t.textMuted,
           userSelect: 'none',
@@ -88,10 +88,10 @@ export default function ProgHistorialVersiones({
               style={{
                 border: `1px solid ${vigente ? t.primary : t.border}`,
                 borderRadius: 8,
-                padding: '8px 10px',
+                padding: '0.5rem 0.65rem',
                 background: vigente ? `${t.primary}0c` : t.bg,
                 opacity: archivada ? 0.62 : 1,
-                fontSize: 11,
+                fontSize: 'var(--cc-sm)',
                 lineHeight: 1.4,
               }}
             >
@@ -113,9 +113,9 @@ export default function ProgHistorialVersiones({
                 <span
                   style={{
                     display: 'inline-block',
-                    padding: '1px 6px',
+                    padding: '0.05rem 0.35rem',
                     borderRadius: 4,
-                    fontSize: 10,
+                    fontSize: 'var(--cc-caption)',
                     fontWeight: 700,
                     background: estStyle.bg,
                     color: estStyle.fg,
@@ -126,10 +126,7 @@ export default function ProgHistorialVersiones({
                 {fecha && (
                   <>
                     <span style={{ color: t.textMuted }}>·</span>
-                    <span
-                      style={{ color: t.textMuted }}
-                      title={selladoTip || undefined}
-                    >
+                    <span style={{ color: t.textMuted }} title={selladoTip || undefined}>
                       {fecha}
                     </span>
                   </>
@@ -138,7 +135,7 @@ export default function ProgHistorialVersiones({
                   <span
                     style={{
                       marginLeft: 'auto',
-                      fontSize: 10,
+                      fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
                       color: t.primary,
                       whiteSpace: 'nowrap',
@@ -153,7 +150,7 @@ export default function ProgHistorialVersiones({
                   color: archivada ? t.textMuted : t.text,
                   fontStyle: motivo !== '—' ? 'italic' : 'normal',
                   marginBottom: 6,
-                  fontSize: 10,
+                  fontSize: 'var(--cc-caption)',
                 }}
               >
                 &ldquo;{motivo}&rdquo;

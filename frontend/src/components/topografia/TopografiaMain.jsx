@@ -9,7 +9,7 @@ import TuberiaRegistroDiario from './TuberiaRegistroDiario'
 import AreasForm from './AreasForm'
 import InterseccionForm from './InterseccionForm'
 import EquiposForm from './EquiposForm'
-import { OfflineBadge, card, defaultPermisos, useTopografiaApi } from './topografiaShared'
+import { OfflineBadge, defaultPermisos, topoStyles, TopoThemeProvider, useTopoTheme, useTopografiaApi } from './topografiaShared'
 
 const SUBMODULOS = [
   { id: 'topo_biblioteca', label: 'Biblioteca de Puntos' },
@@ -22,35 +22,14 @@ const SUBMODULOS = [
   { id: 'topo_equipos', label: 'Equipos' },
 ]
 
-export default function TopografiaMain({ t, usuario, token, permisos = defaultPermisos }) {
+function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuberiaSel, setTuberiaSel }) {
+  const ui = useTopoTheme()
   const contratoId = usuario?.contrato_id
   const [submodulo, setSubmodulo] = useState('topo_biblioteca')
-  const [alertas, setAlertas] = useState(0)
-  const [tuberiaSel, setTuberiaSel] = useState(null)
   const { api, online } = useTopografiaApi(contratoId, token)
 
-  const cargarAlertas = useCallback(async () => {
-    if (!contratoId) return
-    try {
-      const al = await api('/equipos/alertas')
-      setAlertas(al?.total_alertas || 0)
-    } catch { /* ignore */ }
-  }, [api, contratoId])
-
-  useEffect(() => {
-    cargarAlertas()
-  }, [cargarAlertas])
-
-  if (!contratoId) {
-    return (
-      <div style={{ ...card, maxWidth: 560, margin: '0 auto', textAlign: 'center' }}>
-        Seleccione un contrato para usar el modulo de Topografia.
-      </div>
-    )
-  }
-
   const renderSubmodulo = () => {
-    const props = { contratoId, token, t, permisos }
+    const props = { contratoId, token, permisos }
     switch (submodulo) {
       case 'topo_biblioteca':
         return <BibliiotecaPuntos {...props} />
@@ -84,10 +63,10 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
   }
 
   return (
-    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      <aside style={{ width: 260, flexShrink: 0, ...card, padding: 12 }}>
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', color: ui.text }}>
+      <aside style={{ width: 260, flexShrink: 0, ...ui.card, padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)' }}>Topografia</h2>
+          <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>Topografia</h2>
           {alertas > 0 && (
             <span title="Alertas de equipos" style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
               {alertas}
@@ -96,11 +75,11 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
         </div>
         <OfflineBadge online={online} />
         <nav style={{ marginTop: 12 }}>
-          {SUBMODULOS.map((s) => (
+          {SUBMODULOS.map((mod) => (
             <button
-              key={s.id}
+              key={mod.id}
               type="button"
-              onClick={() => setSubmodulo(s.id)}
+              onClick={() => setSubmodulo(mod.id)}
               style={{
                 display: 'block',
                 width: '100%',
@@ -110,13 +89,13 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
                 border: 'none',
                 borderRadius: 8,
                 cursor: 'pointer',
-                background: submodulo === s.id ? (t?.accentSoft || '#eff6ff') : 'transparent',
-                color: submodulo === s.id ? (t?.accent || '#2563eb') : (t?.text || '#1e293b'),
-                fontWeight: submodulo === s.id ? 600 : 400,
+                background: submodulo === mod.id ? ui.accentSoft : 'transparent',
+                color: submodulo === mod.id ? ui.accent : ui.text,
+                fontWeight: submodulo === mod.id ? 600 : 400,
               }}
             >
-              {s.label}
-              {s.id === 'topo_equipos' && alertas > 0 && (
+              {mod.label}
+              {mod.id === 'topo_equipos' && alertas > 0 && (
                 <span style={{ marginLeft: 6, color: '#dc2626' }}>({alertas})</span>
               )}
             </button>
@@ -127,5 +106,49 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
         {renderSubmodulo()}
       </main>
     </div>
+  )
+}
+
+export default function TopografiaMain({ t, usuario, token, permisos = defaultPermisos }) {
+  const contratoId = usuario?.contrato_id
+  const [alertas, setAlertas] = useState(0)
+  const [tuberiaSel, setTuberiaSel] = useState(null)
+  const { api } = useTopografiaApi(contratoId, token)
+
+  const cargarAlertas = useCallback(async () => {
+    if (!contratoId) return
+    try {
+      const al = await api('/equipos/alertas')
+      setAlertas(al?.total_alertas || 0)
+    } catch { /* ignore */ }
+  }, [api, contratoId])
+
+  useEffect(() => {
+    cargarAlertas()
+  }, [cargarAlertas])
+
+  if (!contratoId) {
+    const s = topoStyles(t)
+    return (
+      <TopoThemeProvider t={t}>
+        <div style={{ ...s.card, maxWidth: 560, margin: '0 auto', textAlign: 'center' }}>
+          Seleccione un contrato para usar el modulo de Topografia.
+        </div>
+      </TopoThemeProvider>
+    )
+  }
+
+  return (
+    <TopoThemeProvider t={t}>
+      <TopografiaLayout
+        usuario={usuario}
+        token={token}
+        permisos={permisos}
+        alertas={alertas}
+        setAlertas={setAlertas}
+        tuberiaSel={tuberiaSel}
+        setTuberiaSel={setTuberiaSel}
+      />
+    </TopoThemeProvider>
   )
 }

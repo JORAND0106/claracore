@@ -20,16 +20,22 @@ def _agr_meta():
 
 def test_aggregate_suma_cantidades_y_costos_multi_pk():
     rows = [
-        {"pk_id": "120367", "capitulo": "1. CAP", "item": "1.1", "cant_total": 100, "costo_directo": 1000, "und": "M2", "vlr_unitario": 10},
+        {"pk_id": "120367", "capitulo": "1. CAP", "item": "1.1", "cant_total": 100, "costo_directo": 1000, "und": "M2", "vlr_unitario": 10, "descripcion": "Item A"},
         {"pk_id": "120368", "capitulo": "1. CAP", "item": "1.1", "cant_total": 200, "costo_directo": 2000, "und": "M2", "vlr_unitario": 10},
-        {"pk_id": "120367", "capitulo": "2. CAP", "item": "2.1", "cant_total": 50, "costo_directo": 500, "und": "M3", "vlr_unitario": 10},
+        {"pk_id": "120367", "capitulo": "2. CAP", "item": "2.1", "cant_total": 50, "costo_directo": 500, "und": "M3", "vlr_unitario": 10, "descripcion": "Item B"},
+        {"pk_id": "120368", "capitulo": "1. CAP", "item": "1.2", "cant_total": 30, "costo_directo": 300, "und": "M2", "vlr_unitario": 10, "descripcion": "Item C"},
     ]
-    ag_by_item = {("1. CAP", "1.1"): 10, ("2. CAP", "2.1"): 20}
+    ag_by_item = {("1. CAP", "1.1"): 10, ("1. CAP", "1.2"): 10, ("2. CAP", "2.1"): 20}
     cap_map = _aggregate_ppto_rows_tramo(rows, ag_by_item, _agr_meta())
-    assert float(cap_map["1. CAP"][10]["cant_total"]) == 300
-    assert float(cap_map["1. CAP"][10]["costo_directo"]) == 3000
+    assert float(cap_map["1. CAP"][10]["cant_total"]) == 330
+    assert float(cap_map["1. CAP"][10]["costo_directo"]) == 3300
     assert cap_map["1. CAP"][10]["pk_ids"] == {"120367", "120368"}
     assert cap_map["2. CAP"][20]["pk_ids"] == {"120367"}
+    items = cap_map["1. CAP"][10]["items"]
+    assert float(items["1.1"]["cant_total"]) == 300
+    assert float(items["1.1"]["costo_directo"]) == 3000
+    assert items["1.1"]["descripcion"] == "Item A"
+    assert float(items["1.2"]["cant_total"]) == 30
 
 
 def test_aggregate_excluye_sin_agrupador():
@@ -54,20 +60,23 @@ def test_merge_programacion_consistente():
 
 def test_merge_programacion_inconsistente_fechas_distintas():
     acts = [
-        {"pk_id": "120367", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10},
-        {"pk_id": "120368", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-04-01", "duracion_dias_habiles": 10},
+        {"pk_id": "120367", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10, "fecha_fin_calculada": "2026-03-14"},
+        {"pk_id": "120368", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-04-01", "duracion_dias_habiles": 10, "fecha_fin_calculada": "2026-04-15"},
     ]
     prog = _merge_programacion_agrupador(acts, "1. CAP", 10, ["120367", "120368"])
     assert prog["consistente"] is False
-    assert prog["fecha_inicio"] is None
+    assert prog["fecha_inicio"] == "2026-03-01"
+    assert prog["fecha_fin_calculada"] == "2026-04-15"
 
 
 def test_merge_programacion_parcial():
     acts = [
-        {"pk_id": "120367", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10},
+        {"pk_id": "120367", "capitulo": "1. CAP", "agrupador_id": 10, "fecha_inicio": "2026-03-01", "duracion_dias_habiles": 10, "fecha_fin_calculada": "2026-03-14"},
     ]
     prog = _merge_programacion_agrupador(acts, "1. CAP", 10, ["120367", "120368"])
     assert prog["consistente"] is False
+    assert prog["fecha_inicio"] == "2026-03-01"
+    assert prog["fecha_fin_calculada"] == "2026-03-14"
 
 
 def test_build_response_orden_capitulos_y_agrupadores():
@@ -94,12 +103,25 @@ def test_build_response_orden_capitulos_y_agrupadores():
                 "costo_directo": Decimal("3000"),
                 "und": "M2",
                 "pk_ids": {"120367"},
+                "items": {
+                    "1.1": {
+                        "item": "1.1",
+                        "descripcion": "Preliminares item",
+                        "cant_total": Decimal("300"),
+                        "costo_directo": Decimal("3000"),
+                        "und": "M2",
+                        "vlr_unitario": Decimal("10"),
+                    },
+                },
             }
         },
     }
     out = build_estructura_tramo_response("TRAMO 7", ["120367", "120368"], cap_map, [])
     assert out["tramo"] == "TRAMO 7"
     assert [c["capitulo"] for c in out["capitulos"]] == ["1. CAP", "2. CAP"]
+    ag1 = out["capitulos"][0]["agrupadores"][0]
+    assert ag1["items"][0]["item"] == "1.1"
+    assert ag1["items"][0]["cant_total"] == 300
     ag2 = out["capitulos"][1]["agrupadores"][0]
     assert ag2["codigo_wbs"] == "2.A"
     assert ag2["pk_ids"] == ["120367", "120368"]

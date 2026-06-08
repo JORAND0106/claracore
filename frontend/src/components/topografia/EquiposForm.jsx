@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
 import FirmaDigital from './FirmaDigital'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, Semaforo, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 function estadoEquipo(item) {
   if (item.motivo === 'Sin verificacion') return 'rojo'
@@ -16,6 +16,7 @@ function estadoEquipo(item) {
 const colorMap = { rojo: '#dc2626', amarillo: '#ca8a04', verde: '#16a34a' }
 
 export default function EquiposForm({ contratoId, token, onAlertasChange, permisos }) {
+  const ui = useTopoTheme()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [equipos, setEquipos] = useState([])
   const [alertas, setAlertas] = useState(null)
@@ -101,7 +102,7 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
       {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
 
       {alertaItems.length > 0 && (
-        <div style={{ ...card, marginBottom: 16, borderColor: '#fbbf24' }}>
+        <div style={{ ...ui.card, marginBottom: 16, borderColor: '#fbbf24' }}>
           <h4 style={{ marginTop: 0 }}>Alertas de verificacion</h4>
           {alertaItems.map((a) => (
             <div key={a.id} style={{ color: colorMap[estadoEquipo(a)], marginBottom: 4 }}>
@@ -112,26 +113,26 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
       )}
 
       <PermisoAviso permisos={permisos} accion="crear">
-      <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ ...ui.card, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Registrar equipo</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <input placeholder="Nombre" value={formEq.nombre} onChange={(e) => setFormEq({ ...formEq, nombre: e.target.value })} style={inputStyle} />
-          <select value={formEq.tipo} onChange={(e) => setFormEq({ ...formEq, tipo: e.target.value })} style={inputStyle}>
+          <input placeholder="Nombre" value={formEq.nombre} onChange={(e) => setFormEq({ ...formEq, nombre: e.target.value })} style={ui.inputStyle} />
+          <select value={formEq.tipo} onChange={(e) => setFormEq({ ...formEq, tipo: e.target.value })} style={ui.inputStyle}>
             <option value="nivel">Nivel</option>
             <option value="estacion_total">Estacion total</option>
             <option value="gps">GPS</option>
             <option value="otro">Otro</option>
           </select>
-          <input placeholder="Marca" value={formEq.marca} onChange={(e) => setFormEq({ ...formEq, marca: e.target.value })} style={inputStyle} />
-          <input placeholder="Modelo" value={formEq.modelo} onChange={(e) => setFormEq({ ...formEq, modelo: e.target.value })} style={inputStyle} />
-          <input placeholder="Serie" value={formEq.serie} onChange={(e) => setFormEq({ ...formEq, serie: e.target.value })} style={inputStyle} />
+          <input placeholder="Marca" value={formEq.marca} onChange={(e) => setFormEq({ ...formEq, marca: e.target.value })} style={ui.inputStyle} />
+          <input placeholder="Modelo" value={formEq.modelo} onChange={(e) => setFormEq({ ...formEq, modelo: e.target.value })} style={ui.inputStyle} />
+          <input placeholder="Serie" value={formEq.serie} onChange={(e) => setFormEq({ ...formEq, serie: e.target.value })} style={ui.inputStyle} />
         </div>
         <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearEquipo}>Agregar equipo</button>
       </div>
       </PermisoAviso>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
-        <div style={card}>
+        <div style={ui.card}>
           <h4 style={{ marginTop: 0 }}>Equipos</h4>
           {equipos.map((e) => {
             const alertItem = alertaItems.find((a) => a.id === e.id)
@@ -147,7 +148,7 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
         {sel && (
           <div>
             <PermisoAviso permisos={permisos} accion="crear">
-            <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ ...ui.card, marginBottom: 16 }}>
               <h4>Nueva verificacion</h4>
               <input type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }} />
               {equipos.find((e) => e.id === sel)?.tipo === 'estacion_total' ? (
@@ -160,17 +161,17 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
               ) : (
                 <>
                   <input placeholder="Distancia estacas (m)" value={formVer.distancia_estacas} onChange={(e) => setFormVer({ ...formVer, distancia_estacas: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }} />
-                  <input placeholder="Lectura A pos1" value={formVer.lectura_a_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos1: e.target.value })} style={inputStyle} />
-                  <input placeholder="Lectura B pos1" value={formVer.lectura_b_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos1: e.target.value })} style={inputStyle} />
-                  <input placeholder="Lectura A pos2" value={formVer.lectura_a_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos2: e.target.value })} style={inputStyle} />
-                  <input placeholder="Lectura B pos2" value={formVer.lectura_b_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos2: e.target.value })} style={inputStyle} />
+                  <input placeholder="Lectura A pos1" value={formVer.lectura_a_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos1: e.target.value })} style={ui.inputStyle} />
+                  <input placeholder="Lectura B pos1" value={formVer.lectura_b_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos1: e.target.value })} style={ui.inputStyle} />
+                  <input placeholder="Lectura A pos2" value={formVer.lectura_a_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos2: e.target.value })} style={ui.inputStyle} />
+                  <input placeholder="Lectura B pos2" value={formVer.lectura_b_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos2: e.target.value })} style={ui.inputStyle} />
                 </>
               )}
               <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearVerificacion}>Registrar verificacion</button>
             </div>
             </PermisoAviso>
 
-            <div style={card}>
+            <div style={ui.card}>
               <h4>Historial</h4>
               {verificaciones.map((v) => (
                 <div key={v.id} style={{ padding: '8px 0', borderBottom: '1px solid #e2e8f0' }}>

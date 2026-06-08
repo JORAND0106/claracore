@@ -1,6 +1,7 @@
 """Rutas HTTP Topografia — montadas en main con prefijo `/topografia`."""
 from __future__ import annotations
 
+import base64
 import html
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -13,17 +14,20 @@ from main import _require_contract_access, get_current_user, supabase, supabase_
 from topografia_permissions import require_permiso_topografia, tiene_permiso_topografia
 from topografia_utils import (
     area_por_coordenadas,
+    azimut_desde_deltas,
     calcular_verificacion_estacion_total,
     calcular_verificacion_nivel,
+    decimal_a_gms_numero,
     decimal_to_gms,
+    ajustar_poligonal_armadas,
     enriquecer_estaciones_poligonal,
+    fusionar_estaciones_vista,
     gms_to_decimal,
-    html_encabezado_pdf,
-    html_firmas_pdf,
-    html_pie_pdf,
+    html_documento_poligonal_pdf,
+    calcular_cierre_poligonal,
     interseccion_dos_puntos,
-    matplotlib_poligono_base64,
     perimetro_por_coordenadas,
+    radiar_armadas,
     svg_interseccion,
     svg_poligono,
     to_pdf_bytes,
@@ -51,8 +55,9 @@ def _sanitize_uuid_optional(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def _dump_model(body: BaseModel, uuid_fields: tuple[str, ...] = ()) -> dict:
-    data = body.model_dump()
+def _dump_model(body: BaseModel, uuid_fields: tuple[str, ...] = (), exclude: Optional[set] = None) -> dict:
+    # mode="json" convierte date/datetime a string ISO para que Supabase/JSON no falle.
+    data = body.model_dump(mode="json", exclude=exclude or set())
     for field in uuid_fields:
         if field in data:
             data[field] = _sanitize_uuid_optional(data[field])
@@ -68,7 +73,11 @@ def _row(table: str, select: str = "*", **eq) -> Optional[dict]:
 
 
 def _require_contrato_row(contrato_id: int) -> dict:
-    row = _row("contratos", "id, numero, objeto, contratista, nit, interventoria, logo_contratista, municipio, departamento", id=contrato_id)
+    row = _row(
+        "contratos",
+        "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_contratista, logo_interventoria",
+        id=contrato_id,
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
     return row
@@ -145,6 +154,67 @@ def _resolver_amarres_poligonal(contrato_id: int, body: PoligonalBody, payload: 
     elif body.amarre_final:
         payload["punto_final_id"] = _crear_punto_amarre(contrato_id, body.amarre_final)
 
+    # Punto de visado (referencia para el azimut de partida).
+    if payload.get("punto_visado_id"):
+        _punto_verificado(payload["punto_visado_id"], contrato_id)
+    elif body.amarre_visado:
+        payload["punto_visado_id"] = _crear_punto_amarre(contrato_id, body.amarre_visado)
+
+
+def _calcular_base_visado(punto_estacion: Optional[dict], punto_visado: Optional[dict]) -> Optional[dict]:
+    """Azimut y distancia de la base estacion -> visado a partir de sus coordenadas."""
+    if not punto_estacion or not punto_visado:
+        return None
+    ne, ee = punto_estacion.get("norte"), punto_estacion.get("este")
+    nv, ev = punto_visado.get("norte"), punto_visado.get("este")
+    if ne is None or ee is None or nv is None or ev is None:
+        return None
+    dn = float(nv) - float(ne)
+    de = float(ev) - float(ee)
+    distancia = (dn ** 2 + de ** 2) ** 0.5
+    azimut = azimut_desde_deltas(dn, de)
+    return {
+        "estacion": punto_estacion.get("nombre"),
+        "visado": punto_visado.get("nombre"),
+        "delta_norte": round(dn, 3),
+        "delta_este": round(de, 3),
+        "distancia": round(distancia, 3),
+        "azimut_decimal": round(azimut, 6),
+        "azimut_gms": decimal_a_gms_numero(azimut),
+        "azimut_texto": decimal_to_gms(azimut),
+    }
+
+
+def _firma_imagen_a_data_uri(src: str) -> str:
+    """URL o data URI de firma → data:image/...;base64,... (evita cuelgues en PDF)."""
+    if not src:
+        return ""
+    if str(src).startswith("data:image"):
+        return str(src)
+    try:
+        import httpx
+
+        with httpx.Client(timeout=12.0, follow_redirects=True) as client:
+            r = client.get(str(src))
+            r.raise_for_status()
+            ct = (r.headers.get("content-type") or "image/png").split(";")[0].strip()
+            if not ct.startswith("image/"):
+                ct = "image/png"
+            b64 = base64.b64encode(r.content).decode("ascii")
+            return f"data:{ct};base64,{b64}"
+    except Exception:
+        return ""
+
+
+def _firmas_para_pdf(firmas: List[dict]) -> List[dict]:
+    out = []
+    for f in firmas or []:
+        img = f.get("firma_base64") or ""
+        if img.startswith("http://") or img.startswith("https://"):
+            img = _firma_imagen_a_data_uri(img)
+        out.append({**f, "firma_base64": img})
+    return out
+
 
 def _guardar_firma(modulo: str, referencia_id: str, body: "FirmaBody", uid: int) -> dict:
     row = (
@@ -197,29 +267,59 @@ class AmarreBody(BaseModel):
 class PoligonalBody(BaseModel):
     nombre: str
     tipo: Literal["abierta", "cerrada"] = "cerrada"
-    sentido: Optional[str] = None
+    sentido: Literal["horario", "antihorario"] = "antihorario"
     punto_inicial_id: Optional[str] = None
     punto_final_id: Optional[str] = None
+    punto_visado_id: Optional[str] = None
     amarre_inicial: Optional[AmarreBody] = None
     amarre_final: Optional[AmarreBody] = None
+    amarre_visado: Optional[AmarreBody] = None
     tolerancia_relativa: int = 3000
     tolerancia_cota_mm_km: float = 12
+    precision_angular_seg: float = 10.0
+    longitud_max_delta_m: float = 300.0
     metodo: Literal["trigonometrica"] = "trigonometrica"
     observaciones: Optional[str] = None
     operador: Optional[str] = None
     equipo: Optional[str] = None
+    equipo_marca: Optional[str] = None
+    equipo_referencia: Optional[str] = None
+    equipo_serial: Optional[str] = None
     fecha_campo: Optional[date] = None
 
 
 class EstacionBody(BaseModel):
-    orden: int
+    orden: Optional[int] = None
+    armada_id: Optional[str] = None
+    tipo_punto: Literal["estacion", "auxiliar"] = "auxiliar"
     nombre_punto: str
     angulo_gms: float
-    distancia: float
-    altura_instrumento: float
-    angulo_vertical_gms: float
+    distancia: Optional[float] = None  # opcional: en armadas de cierre puede no medirse
+    altura_instrumento: Optional[float] = None  # se hereda de la armada si no viene
+    angulo_vertical_gms: Optional[float] = None  # opcional: solo para nivelacion trigonométrica
     altura_objetivo: Optional[float] = 0
     lectura_mira: Optional[float] = None
+
+
+class EstacionEditBody(BaseModel):
+    tipo_punto: Optional[Literal["estacion", "auxiliar"]] = None
+    nombre_punto: Optional[str] = None
+    angulo_gms: Optional[float] = None
+    angulo_vertical_gms: Optional[float] = None
+    distancia: Optional[float] = None
+    altura_objetivo: Optional[float] = None
+
+
+class ArmadaBody(BaseModel):
+    estacion_nombre: str
+    visado_nombre: str
+    altura_instrumento: Optional[float] = None
+
+
+class ArmadaUpdateBody(BaseModel):
+    estacion_nombre: Optional[str] = None
+    visado_nombre: Optional[str] = None
+    altura_instrumento: Optional[float] = None
 
 
 class NivelacionBody(BaseModel):
@@ -391,6 +491,72 @@ def listar_puntos_verificados(contrato_id: int, current_user=Depends(get_current
     )
 
 
+@router.get("/{contrato_id}/operadores")
+def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
+    """Usuarios activos del contrato cuyo cargo esta relacionado con topografia.
+
+    Coincide por nombre de cargo: 'topograf...' (Topografo, Coordinador de Topografia,
+    Auxiliar de Topografia) o 'cadenero'.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    cargos = {
+        c["id"]: (c.get("nombre") or "")
+        for c in (supabase.table("cargos").select("id, nombre").execute().data or [])
+    }
+
+    def es_topo(cargo_id) -> bool:
+        n = (cargos.get(cargo_id) or "").lower()
+        return "topograf" in n or "cadenero" in n or "desarrollador" in n
+
+    by_id: Dict[Any, dict] = {}
+    directos = (
+        supabase.table("usuarios")
+        .select("id, nombre, apellidos, cargo_id")
+        .eq("activo", True)
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    for r in directos:
+        by_id[r["id"]] = r
+
+    vinculos = (
+        supabase.table("usuario_contratos")
+        .select("usuario_id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    extra_ids = list({v["usuario_id"] for v in vinculos if v.get("usuario_id") is not None} - set(by_id.keys()))
+    for i in range(0, len(extra_ids), 120):
+        part = extra_ids[i : i + 120]
+        if not part:
+            continue
+        extra = (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos, cargo_id")
+            .eq("activo", True)
+            .in_("id", part)
+            .execute()
+            .data
+            or []
+        )
+        for r in extra:
+            by_id[r["id"]] = r
+
+    out = []
+    for r in by_id.values():
+        if not es_topo(r.get("cargo_id")):
+            continue
+        nombre = f"{r.get('nombre', '') or ''} {r.get('apellidos', '') or ''}".strip()
+        out.append({"id": r["id"], "nombre": nombre, "cargo": cargos.get(r.get("cargo_id"), "")})
+    out.sort(key=lambda x: (x.get("nombre") or "").lower())
+    return out
+
+
 @router.post("/{contrato_id}/puntos")
 def crear_punto(contrato_id: int, body: PuntoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -481,8 +647,8 @@ def listar_poligonales(contrato_id: int, current_user=Depends(get_current_user))
 def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "crear")
-    payload = body.model_dump(exclude={"amarre_inicial", "amarre_final"})
-    for field in ("punto_inicial_id", "punto_final_id"):
+    payload = body.model_dump(mode="json", exclude={"amarre_inicial", "amarre_final", "amarre_visado"})
+    for field in ("punto_inicial_id", "punto_final_id", "punto_visado_id"):
         payload[field] = _sanitize_uuid_optional(payload.get(field))
     if not (payload.get("nombre") or "").strip():
         raise HTTPException(status_code=422, detail="Indique un nombre para la poligonal.")
@@ -493,7 +659,28 @@ def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(
         .execute()
         .data
     )
-    return row[0] if row else {}
+    if not row:
+        return {}
+    pol = row[0]
+    # Armada 1 automatica: estacion = amarre inicial, visado = punto de visado
+    est_nombre = None
+    vis_nombre = None
+    if pol.get("punto_inicial_id"):
+        pi = _row("topo_puntos", id=pol["punto_inicial_id"])
+        est_nombre = pi.get("nombre") if pi else None
+    if pol.get("punto_visado_id"):
+        pv = _row("topo_puntos", id=pol["punto_visado_id"])
+        vis_nombre = pv.get("nombre") if pv else None
+    supabase.table("topo_poligonal_armadas").insert(
+        {
+            "poligonal_id": pol["id"],
+            "orden": 1,
+            "estacion_nombre": est_nombre,
+            "visado_nombre": vis_nombre,
+            "altura_instrumento": None,
+        }
+    ).execute()
+    return pol
 
 
 @router.get("/{contrato_id}/poligonales/{poligonal_id}")
@@ -512,11 +699,61 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         .data
         or []
     )
+    punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
+    punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
+    punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
+
+    armadas = (
+        supabase.table("topo_poligonal_armadas")
+        .select("*")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    amarres = {}
+    for p in (punto_inicial, punto_visado):
+        if p and p.get("nombre"):
+            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+    armadas_enr, known, estaciones_flat = radiar_armadas(armadas, estaciones, amarres)
+
+    # Puntos disponibles para el selector de cambio de armada
+    estacion_names = set()
+    if punto_inicial and punto_inicial.get("nombre"):
+        estacion_names.add(punto_inicial["nombre"])
+    for e in estaciones:
+        if (e.get("tipo_punto") or "auxiliar") == "estacion" and e.get("nombre_punto"):
+            estacion_names.add(e["nombre_punto"])
+    puntos_estacion_disponibles = [
+        {"nombre": nom, **known[nom]} for nom in known if nom in estacion_names
+    ]
+    puntos_visado_disponibles = [{"nombre": nom, **coords} for nom, coords in known.items()]
+
+    cierre = calcular_cierre_poligonal(
+        armadas_enr,
+        punto_inicial,
+        sentido=pol.get("sentido") or "antihorario",
+        tol_relativa=pol.get("tolerancia_relativa") or 25000,
+        tol_cota_mm_km=pol.get("tolerancia_cota_mm_km") or 12,
+        precision_angular_seg=pol.get("precision_angular_seg") or 10.0,
+        longitud_max_delta_m=pol.get("longitud_max_delta_m"),
+    )
+
+    estaciones_vista = fusionar_estaciones_vista(estaciones, estaciones_flat)
+
     return {
         "poligonal": pol,
-        "estaciones": enriquecer_estaciones_poligonal(estaciones),
-        "punto_inicial": _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None,
-        "punto_final": _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None,
+        "estaciones": estaciones_vista,
+        "estaciones_radiadas": estaciones_flat,
+        "armadas": armadas_enr,
+        "punto_inicial": punto_inicial,
+        "punto_final": punto_final,
+        "punto_visado": punto_visado,
+        "base": _calcular_base_visado(punto_inicial, punto_visado),
+        "puntos_estacion_disponibles": puntos_estacion_disponibles,
+        "puntos_visado_disponibles": puntos_visado_disponibles,
+        "cierre": cierre,
     }
 
 
@@ -530,12 +767,31 @@ def actualizar_poligonal(contrato_id: int, poligonal_id: str, body: PoligonalBod
     _assert_editable(pol.get("nivel_validacion", 0))
     row = (
         supabase.table("topo_poligonales")
-        .update(_dump_model(body, ("punto_inicial_id", "punto_final_id")))
+        .update(_dump_model(
+            body,
+            ("punto_inicial_id", "punto_final_id", "punto_visado_id"),
+            exclude={"amarre_inicial", "amarre_final", "amarre_visado"},
+        ))
         .eq("id", poligonal_id)
         .execute()
         .data
     )
     return row[0] if row else pol
+
+
+@router.delete("/{contrato_id}/poligonales/{poligonal_id}")
+def eliminar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "eliminar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    # estaciones y armadas se eliminan en cascada (FK ON DELETE CASCADE).
+    # Los puntos de biblioteca generados por el circuito se conservan; solo se
+    # desvincula la referencia al circuito eliminado.
+    supabase.table("topo_puntos").update({"circuito_id": None}).eq("circuito_id", poligonal_id).execute()
+    supabase.table("topo_poligonales").delete().eq("id", poligonal_id).eq("contrato_id", contrato_id).execute()
+    return {"ok": True}
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/estaciones")
@@ -548,21 +804,54 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
     _assert_editable(pol.get("nivel_validacion", 0))
     if not (body.nombre_punto or "").strip():
         raise HTTPException(status_code=422, detail="Indique el nombre del punto observado.")
-    if body.distancia <= 0:
-        raise HTTPException(status_code=422, detail="La distancia debe ser mayor que cero.")
-    if body.altura_instrumento is None or body.altura_instrumento < 0:
-        raise HTTPException(status_code=422, detail="Indique la altura del instrumento (HI) en metros.")
+    if body.distancia is not None and body.distancia < 0:
+        raise HTTPException(status_code=422, detail="La distancia no puede ser negativa.")
+    # Armada destino: la indicada o la ultima de la poligonal
+    armada = None
+    if body.armada_id:
+        armada = _row("topo_poligonal_armadas", id=body.armada_id, poligonal_id=poligonal_id)
+    if not armada:
+        ultimas = (
+            supabase.table("topo_poligonal_armadas")
+            .select("*")
+            .eq("poligonal_id", poligonal_id)
+            .order("orden", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        armada = ultimas[0] if ultimas else None
+    if not armada:
+        raise HTTPException(status_code=422, detail="No hay armada activa. Defina la armada (estacion y visado) antes de radiar puntos.")
+    # HI: el de la armada (o el enviado para inicializarlo)
+    hi = armada.get("altura_instrumento")
+    if hi is None:
+        hi = body.altura_instrumento
+        if hi is not None:
+            supabase.table("topo_poligonal_armadas").update({"altura_instrumento": hi}).eq("id", armada["id"]).execute()
+    ultima = (
+        supabase.table("topo_poligonal_estaciones")
+        .select("orden")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    next_orden = (ultima[0]["orden"] + 1) if ultima else 1
     row = (
         supabase.table("topo_poligonal_estaciones")
         .insert(
             {
                 "poligonal_id": poligonal_id,
-                "orden": body.orden,
+                "armada_id": armada["id"],
+                "tipo_punto": body.tipo_punto,
+                "orden": next_orden,
                 "nombre_punto": body.nombre_punto.strip(),
                 "angulo_medido": gms_to_decimal(body.angulo_gms),
                 "distancia": body.distancia,
-                "altura_instrumento": body.altura_instrumento,
-                "angulo_vertical": gms_to_decimal(body.angulo_vertical_gms),
+                "altura_instrumento": hi,
+                "angulo_vertical": gms_to_decimal(body.angulo_vertical_gms) if body.angulo_vertical_gms is not None else None,
                 "altura_objetivo": body.altura_objetivo or 0,
                 "lectura_mira": body.lectura_mira,
             }
@@ -573,19 +862,273 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
     return row[0] if row else {}
 
 
-@router.post("/{contrato_id}/poligonales/{poligonal_id}/calcular")
-def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+@router.put("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}")
+def editar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, body: EstacionEditBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    est = _row("topo_poligonal_estaciones", id=estacion_id, poligonal_id=poligonal_id)
+    if not est:
+        raise HTTPException(status_code=404, detail="Punto no encontrado")
+    # exclude_unset permite distinguir "no enviado" de "enviado vacio" (limpiar a null).
+    enviados = body.model_dump(exclude_unset=True)
+    cambios = {}
+    if "tipo_punto" in enviados and enviados["tipo_punto"]:
+        cambios["tipo_punto"] = enviados["tipo_punto"]
+    if "nombre_punto" in enviados:
+        if not (enviados["nombre_punto"] or "").strip():
+            raise HTTPException(status_code=422, detail="El nombre del punto no puede quedar vacio.")
+        cambios["nombre_punto"] = enviados["nombre_punto"].strip()
+    if "angulo_gms" in enviados:
+        ag = enviados["angulo_gms"]
+        cambios["angulo_medido"] = gms_to_decimal(ag) if ag is not None else None
+    # Angulo vertical y distancia se pueden limpiar (set a null) en armadas de cierre.
+    if "angulo_vertical_gms" in enviados:
+        av = enviados["angulo_vertical_gms"]
+        cambios["angulo_vertical"] = gms_to_decimal(av) if av is not None else None
+    if "angulo_gms" in enviados or "distancia" in enviados:
+        cambios["azimut"] = None
+        cambios["norte"] = None
+        cambios["este"] = None
+        cambios["cota"] = None
+    if "distancia" in enviados:
+        dist = enviados["distancia"]
+        if dist is not None and dist < 0:
+            raise HTTPException(status_code=422, detail="La distancia no puede ser negativa.")
+        cambios["distancia"] = dist
+    if "altura_objetivo" in enviados and enviados["altura_objetivo"] is not None:
+        cambios["altura_objetivo"] = enviados["altura_objetivo"]
+    if not cambios:
+        return est
+    row = (
+        supabase.table("topo_poligonal_estaciones")
+        .update(cambios)
+        .eq("id", estacion_id)
+        .eq("poligonal_id", poligonal_id)
+        .execute()
+        .data
+    )
+    if not row:
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo actualizar el punto (verifique permisos o que la poligonal siga editable).",
+        )
+    return row[0]
 
-    def _rpc():
-        return supabase.rpc("topo_calcular_poligonal", {"p_poligonal_id": poligonal_id}).execute()
 
-    res = supabase_execute(_rpc)
-    return res.data if res else {}
+@router.get("/{contrato_id}/poligonales/{poligonal_id}/armadas")
+def listar_armadas(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    return (
+        supabase.table("topo_poligonal_armadas")
+        .select("*")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+
+
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/armadas")
+def crear_armada(contrato_id: int, poligonal_id: str, body: ArmadaBody, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    if not (body.estacion_nombre or "").strip() or not (body.visado_nombre or "").strip():
+        raise HTTPException(status_code=422, detail="Indique la estacion y el visado de la nueva armada.")
+    ultimas = (
+        supabase.table("topo_poligonal_armadas")
+        .select("orden")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    next_orden = (ultimas[0]["orden"] + 1) if ultimas else 1
+    row = (
+        supabase.table("topo_poligonal_armadas")
+        .insert(
+            {
+                "poligonal_id": poligonal_id,
+                "orden": next_orden,
+                "estacion_nombre": body.estacion_nombre.strip(),
+                "visado_nombre": body.visado_nombre.strip(),
+                "altura_instrumento": body.altura_instrumento,
+            }
+        )
+        .execute()
+        .data
+    )
+    return row[0] if row else {}
+
+
+@router.put("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}")
+def actualizar_armada(contrato_id: int, poligonal_id: str, armada_id: str, body: ArmadaUpdateBody, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    cambios = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not cambios:
+        return _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id) or {}
+    # Si cambia el HI de la armada, propagarlo a sus puntos radiados
+    if "altura_instrumento" in cambios:
+        supabase.table("topo_poligonal_estaciones").update(
+            {"altura_instrumento": cambios["altura_instrumento"]}
+        ).eq("armada_id", armada_id).execute()
+    row = (
+        supabase.table("topo_poligonal_armadas")
+        .update(cambios)
+        .eq("id", armada_id)
+        .eq("poligonal_id", poligonal_id)
+        .execute()
+        .data
+    )
+    return row[0] if row else {}
+
+
+@router.delete("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}")
+def eliminar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    armadas = (
+        supabase.table("topo_poligonal_armadas")
+        .select("id, orden")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    if len(armadas) <= 1:
+        raise HTTPException(status_code=422, detail="No se puede eliminar la armada inicial.")
+    supabase.table("topo_poligonal_armadas").delete().eq("id", armada_id).eq("poligonal_id", poligonal_id).execute()
+    return {"ok": True}
+
+
+class SentidoBody(BaseModel):
+    sentido: Literal["horario", "antihorario"]
+
+
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/sentido")
+def set_sentido_poligonal(contrato_id: int, poligonal_id: str, body: SentidoBody, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    row = (
+        supabase.table("topo_poligonales")
+        .update({"sentido": body.sentido})
+        .eq("id", poligonal_id)
+        .execute()
+        .data
+    )
+    return row[0] if row else pol
+
+
+@router.delete("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}")
+def eliminar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+    supabase.table("topo_poligonal_estaciones").delete().eq("id", estacion_id).eq("poligonal_id", poligonal_id).execute()
+    # Reordena los puntos restantes para mantener la secuencia 1..n
+    restantes = (
+        supabase.table("topo_poligonal_estaciones")
+        .select("id")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    for idx, est in enumerate(restantes, start=1):
+        supabase.table("topo_poligonal_estaciones").update({"orden": idx}).eq("id", est["id"]).execute()
+    return {"ok": True}
+
+
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/calcular")
+def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Corregir y ajustar: distribuye error angular y aplica Bowditch (azimuts por armadas)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_editable(pol.get("nivel_validacion", 0))
+
+    estaciones = (
+        supabase.table("topo_poligonal_estaciones")
+        .select("*")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    armadas = (
+        supabase.table("topo_poligonal_armadas")
+        .select("*")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
+    amarres = {}
+    for p in (
+        punto_inicial,
+        _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None,
+    ):
+        if p and p.get("nombre"):
+            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+
+    resultado = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, punto_inicial)
+    resumen = resultado["resumen"]
+    cierre = resultado["cierre"]
+
+    for upd in resultado["updates"]:
+        eid = upd.pop("id")
+        supabase.table("topo_poligonal_estaciones").update(upd).eq("id", eid).execute()
+
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("topo_poligonales").update(
+        {
+            "error_cierre_dn": resumen["error_dn"],
+            "error_cierre_de": resumen["error_de"],
+            "error_cierre_dz": resumen["error_dz"],
+            "error_lineal": resumen["error_lineal"],
+            "precision_relativa": resumen["precision"],
+            "suma_angular_obs": cierre.get("suma_observada"),
+            "suma_angular_teorica": cierre.get("suma_teorica"),
+            "error_angular_seg": cierre.get("error_angular_seg"),
+            "num_vertices": cierre.get("num_vertices"),
+            "ajustada_at": now,
+        }
+    ).eq("id", poligonal_id).execute()
+
+    return {"ok": True, "ajustada_at": now, "resumen": resumen, "cierre": cierre}
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/cerrar")
@@ -597,10 +1140,8 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     _assert_editable(pol.get("nivel_validacion", 0))
 
-    calc = calcular_poligonal(contrato_id, poligonal_id, current_user)
-    if not calc.get("admisible"):
-        raise HTTPException(status_code=422, detail="Error de cierre fuera de tolerancia")
-
+    # Radiacion por armadas (ceros atras). Los puntos pasan a la biblioteca solo si la
+    # poligonal cierra (cierre lineal admisible).
     estaciones = (
         supabase.table("topo_poligonal_estaciones")
         .select("*")
@@ -610,6 +1151,38 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
         .data
         or []
     )
+    armadas = (
+        supabase.table("topo_poligonal_armadas")
+        .select("*")
+        .eq("poligonal_id", poligonal_id)
+        .order("orden")
+        .execute()
+        .data
+        or []
+    )
+    punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
+    punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
+    amarres = {}
+    for p in (punto_inicial, punto_visado):
+        if p and p.get("nombre"):
+            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+    armadas_enr, _, estaciones_flat = radiar_armadas(armadas, estaciones, amarres)
+
+    cierre = calcular_cierre_poligonal(
+        armadas_enr,
+        punto_inicial,
+        sentido=pol.get("sentido") or "antihorario",
+        tol_relativa=pol.get("tolerancia_relativa") or 25000,
+        tol_cota_mm_km=pol.get("tolerancia_cota_mm_km") or 12,
+        precision_angular_seg=pol.get("precision_angular_seg") or 10.0,
+        longitud_max_delta_m=pol.get("longitud_max_delta_m"),
+    )
+    if not cierre.get("cerrado"):
+        raise HTTPException(status_code=422, detail="La poligonal aun no cierra: falta la observacion que regresa al punto inicial. Solo se envia a la biblioteca cuando la poligonal ha cerrado.")
+    if not cierre.get("admisible_lineal"):
+        prec = cierre.get("precision")
+        raise HTTPException(status_code=422, detail=f"El cierre lineal es inadmisible (precision 1:{int(prec) if prec else 0}, tolerancia 1:{int(cierre.get('tolerancia_relativa') or 0)}). Revise angulos y distancias antes de enviar a la biblioteca.")
+
     now = datetime.now(timezone.utc).isoformat()
 
     if pol.get("punto_inicial_id"):
@@ -624,29 +1197,34 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
                 }
             ).eq("id", pi["id"]).execute()
 
-    for est in estaciones:
-        if not est.get("norte_ajustado"):
+    for est in estaciones_flat:
+        if est.get("norte") is None or est.get("este") is None:
             continue
+        tipo = "estacion" if (est.get("tipo_punto") == "estacion") else "auxiliar"
         existing = _row("topo_puntos", contrato_id=contrato_id, nombre=est.get("nombre_punto"))
         payload = {
             "contrato_id": contrato_id,
             "nombre": est.get("nombre_punto"),
-            "norte": est.get("norte_ajustado"),
-            "este": est.get("este_ajustado"),
-            "cota": est.get("cota_ajustada"),
-            "tipo": "estacion",
+            "norte": est.get("norte"),
+            "este": est.get("este"),
+            "cota": est.get("cota"),
+            "tipo": tipo,
             "verificado": True,
             "modulo_origen": "poligonal",
             "circuito_id": poligonal_id,
             "fecha_verificacion": now,
         }
+        # Persistir coordenadas radiadas en la estacion
+        supabase.table("topo_poligonal_estaciones").update(
+            {"azimut": est.get("azimut"), "norte": est.get("norte"), "este": est.get("este"), "cota": est.get("cota")}
+        ).eq("id", est["id"]).execute()
         if existing:
             supabase.table("topo_puntos").update(payload).eq("id", existing["id"]).execute()
         else:
             supabase.table("topo_puntos").insert(payload).execute()
 
     supabase.table("topo_poligonales").update({"estado": "cerrado"}).eq("id", poligonal_id).execute()
-    return {"ok": True, "resultado": calc}
+    return {"ok": True, "cierre": cierre}
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/validar")
@@ -656,6 +1234,11 @@ def validar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    if not pol.get("ajustada_at"):
+        raise HTTPException(
+            status_code=422,
+            detail="Debe ejecutar «Corregir y ajustar» antes de validar. La validación usa coordenadas ajustadas.",
+        )
     nuevo = min(int(pol.get("nivel_validacion") or 0) + 1, NIVEL_MAX)
     supabase.table("topo_poligonales").update({"nivel_validacion": nuevo}).eq("id", poligonal_id).execute()
     return {"nivel_validacion": nuevo}
@@ -670,35 +1253,57 @@ def firma_poligonal(contrato_id: int, poligonal_id: str, body: FirmaBody, curren
     return _guardar_firma("poligonal", poligonal_id, body, _uid(current_user))
 
 
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/firma-perfil")
+def firma_poligonal_desde_perfil(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Registra la firma digital del usuario (imagen en perfil) en la poligonal."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    if not _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id):
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    uid = _uid(current_user)
+    u = _row("usuarios", select="id, nombre, cargo, firma_imagen_url", id=uid)
+    if not u or not u.get("firma_imagen_url"):
+        raise HTTPException(
+            status_code=422,
+            detail="No tiene imagen de firma en su perfil. Suba la firma en Configuración de usuario.",
+        )
+    firma_src = _firma_imagen_a_data_uri(u["firma_imagen_url"])
+    body = FirmaBody(
+        tipo_firmante="topografo",
+        nombre_firmante=u.get("nombre") or "Topógrafo",
+        cargo_firmante=u.get("cargo"),
+        firma_base64=firma_src,
+    )
+    return _guardar_firma("poligonal", poligonal_id, body, uid)
+
+
 @router.get("/{contrato_id}/poligonales/{poligonal_id}/pdf")
 def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "exportar")
-    data = obtener_poligonal(contrato_id, poligonal_id, current_user)
-    contrato = _require_contrato_row(contrato_id)
-    pol = data["poligonal"]
-    estaciones = data["estaciones"]
-    puntos = [{"nombre": e.get("nombre_punto"), "norte": e.get("norte_ajustado") or 0, "este": e.get("este_ajustado") or 0} for e in estaciones if e.get("norte_ajustado")]
-    img = matplotlib_poligono_base64(puntos, titulo=pol.get("nombre", "Poligonal"))
-    img_html = f'<img src="data:image/png;base64,{img}" style="max-width:100%;" />' if img else ""
-    rows = ""
-    for e in estaciones:
-        rows += (
-            f"<tr><td>{html.escape(str(e.get('nombre_punto')))}</td>"
-            f"<td>{decimal_to_gms(e.get('angulo_medido') or 0)}</td>"
-            f"<td>{decimal_to_gms(e.get('angulo_vertical') or 0)}</td>"
-            f"<td>{e.get('distancia')}</td>"
-            f"<td>{e.get('norte_ajustado')}</td>"
-            f"<td>{e.get('este_ajustado')}</td>"
-            f"<td>{e.get('cota_ajustada')}</td></tr>"
+    try:
+        data = obtener_poligonal(contrato_id, poligonal_id, current_user)
+        contrato = _require_contrato_row(contrato_id)
+        pol = data["poligonal"]
+        estaciones = data["estaciones"]
+        cierre = data.get("cierre")
+        firmas = _firmas_para_pdf(_firmas_referencia(poligonal_id))
+        html_doc = html_documento_poligonal_pdf(
+            contrato,
+            pol,
+            estaciones,
+            cierre,
+            firmas,
+            data.get("punto_inicial"),
         )
-    firmas = _firmas_referencia(poligonal_id)
-    html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body style="font-family:Arial;font-size:9pt;">
-    {html_encabezado_pdf(contrato, f"Poligonal — {pol.get('nombre')}")}<table width="100%" border="1" cellspacing="0" cellpadding="4">
-    <tr style="background:#e2e8f0;"><th>Punto</th><th>Ang. hor.</th><th>Ang. vert.</th><th>Dist</th><th>Norte</th><th>Este</th><th>Cota</th></tr>{rows}</table>
-    <p>Precision: 1:{int(pol.get('precision_relativa') or 0)} | Error lineal: {pol.get('error_lineal')} m | Error cota: {pol.get('error_cierre_dz')} m</p>{img_html}{html_firmas_pdf(firmas)}{html_pie_pdf(contrato)}</body></html>"""
-    pdf = to_pdf_bytes(html_doc)
-    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="poligonal_{poligonal_id[:8]}.pdf"'})
+        pdf = to_pdf_bytes(html_doc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="poligonal_{poligonal_id[:8]}.pdf"'},
+    )
 
 
 # ── NIVELACION ────────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ export default function TopoErrorModal({
         position: 'fixed',
         inset: 0,
         zIndex: 100030,
-        background: 'rgba(15, 23, 42, 0.48)',
+        background: t.overlay || 'rgba(15, 23, 42, 0.48)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

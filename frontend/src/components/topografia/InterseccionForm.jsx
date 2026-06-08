@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, Semaforo, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function InterseccionForm({ contratoId, token, permisos }) {
+  const ui = useTopoTheme()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [puntos, setPuntos] = useState([])
   const [paso, setPaso] = useState(1)
@@ -57,15 +58,15 @@ export default function InterseccionForm({ contratoId, token, permisos }) {
       </div>
 
       {paso === 1 && (
-        <div style={card}>
+        <div style={ui.card}>
           <h3 style={{ marginTop: 0 }}>Nombre del punto nuevo</h3>
-          <input placeholder="Ej: XXX" value={form.nombre_punto_nuevo} onChange={(e) => setForm({ ...form, nombre_punto_nuevo: e.target.value })} style={inputStyle} />
+          <input placeholder="Ej: XXX" value={form.nombre_punto_nuevo} onChange={(e) => setForm({ ...form, nombre_punto_nuevo: e.target.value })} style={ui.inputStyle} />
           <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={() => setPaso(2)} disabled={!form.nombre_punto_nuevo}>Continuar</button>
         </div>
       )}
 
       {paso === 2 && (
-        <div style={card}>
+        <div style={ui.card}>
           <h3 style={{ marginTop: 0 }}>Punto 1 conocido</h3>
           <select value={form.punto1_id} onChange={(e) => setForm({ ...form, punto1_id: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }}>
             <option value="">Seleccionar</option>
@@ -74,14 +75,14 @@ export default function InterseccionForm({ contratoId, token, permisos }) {
           <TopoAngularInput label="Azimut desde XXX hacia P1 (GG.MMSS)" value={form.azimut1_gms} onChange={(_, v) => setForm({ ...form, azimut1_gms: v })} />
           <input placeholder="Distancia (m)" value={form.distancia1} onChange={(e) => setForm({ ...form, distancia1: e.target.value })} style={{ ...inputStyle, marginTop: 8 }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" style={btnSecondary} onClick={() => setPaso(1)}>Atras</button>
-            <button type="button" style={btnPrimary} onClick={() => setPaso(3)} disabled={!form.punto1_id}>Continuar</button>
+            <button type="button" style={ui.btnSecondary} onClick={() => setPaso(1)}>Atras</button>
+            <button type="button" style={ui.btnPrimary} onClick={() => setPaso(3)} disabled={!form.punto1_id}>Continuar</button>
           </div>
         </div>
       )}
 
       {paso === 3 && (
-        <div style={card}>
+        <div style={ui.card}>
           <h3 style={{ marginTop: 0 }}>Punto 2 conocido</h3>
           <select value={form.punto2_id} onChange={(e) => setForm({ ...form, punto2_id: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }}>
             <option value="">Seleccionar</option>
@@ -90,23 +91,23 @@ export default function InterseccionForm({ contratoId, token, permisos }) {
           <TopoAngularInput label="Azimut desde XXX hacia P2 (GG.MMSS)" value={form.azimut2_gms} onChange={(_, v) => setForm({ ...form, azimut2_gms: v })} />
           <input placeholder="Distancia (m)" value={form.distancia2} onChange={(e) => setForm({ ...form, distancia2: e.target.value })} style={{ ...inputStyle, marginTop: 8 }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button type="button" style={btnSecondary} onClick={() => setPaso(2)}>Atras</button>
-            {puede(permisos, 'crear') && <button type="button" style={btnPrimary} onClick={calcular} disabled={!form.punto2_id}>Calcular</button>}
+            <button type="button" style={ui.btnSecondary} onClick={() => setPaso(2)}>Atras</button>
+            {puede(permisos, 'crear') && <button type="button" style={ui.btnPrimary} onClick={calcular} disabled={!form.punto2_id}>Calcular</button>}
           </div>
         </div>
       )}
 
       {paso === 4 && resultado && (
-        <div style={card}>
+        <div style={ui.card}>
           <h3 style={{ marginTop: 0 }}>Resultado — {form.nombre_punto_nuevo}</h3>
           <Semaforo ok={resultado.admisible} />
           <p style={{ marginTop: 12 }}>Norte: <strong>{resultado.norte_resultado}</strong> | Este: <strong>{resultado.este_resultado}</strong></p>
           <p>Error lineal: {resultado.error_lineal} m | Error angular: {resultado.error_angular_segundos} seg</p>
           {resultado.svg && <div dangerouslySetInnerHTML={{ __html: resultado.svg }} style={{ marginTop: 12 }} />}
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            {resultado.admisible && puede(permisos, 'editar') && <button type="button" style={btnPrimary} onClick={agregarBiblioteca}>Agregar a biblioteca</button>}
-            {puede(permisos, 'exportar') && <button type="button" style={btnSecondary} onClick={() => downloadPdf(`/intersecciones/${resultado.id}/pdf`, 'interseccion.pdf')}>Generar PDF</button>}
-            <button type="button" style={btnSecondary} onClick={() => { setPaso(1); setResultado(null) }}>Nuevo calculo</button>
+            {resultado.admisible && puede(permisos, 'editar') && <button type="button" style={ui.btnPrimary} onClick={agregarBiblioteca}>Agregar a biblioteca</button>}
+            {puede(permisos, 'exportar') && <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/intersecciones/${resultado.id}/pdf`, 'interseccion.pdf')}>Generar PDF</button>}
+            <button type="button" style={ui.btnSecondary} onClick={() => { setPaso(1); setResultado(null) }}>Nuevo calculo</button>
           </div>
         </div>
       )}

@@ -8,6 +8,7 @@ export default function CcConfirmModal({
   tipo = 'warn',
   confirmar = 'Confirmar',
   cancelar = 'Cancelar',
+  zIndex = 100020,
   onConfirm,
   onCancel,
 }) {
@@ -23,7 +24,7 @@ export default function CcConfirmModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100020,
+        zIndex,
         background: 'rgba(15, 23, 42, 0.48)',
         display: 'flex',
         alignItems: 'center',

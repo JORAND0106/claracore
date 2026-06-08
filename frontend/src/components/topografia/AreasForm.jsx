@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 function svgFromPuntos(puntos, ancho = 480, alto = 320) {
   if (!puntos || puntos.length < 2) return null
@@ -18,6 +18,7 @@ function svgFromPuntos(puntos, ancho = 480, alto = 320) {
 }
 
 export default function AreasForm({ contratoId, token, permisos }) {
+  const ui = useTopoTheme()
   const { api, downloadPdf, online, saveDraft, loadDraft, syncDraft } = useTopografiaApi(contratoId, token)
   const [nombre, setNombre] = useState('')
   const [vertices, setVertices] = useState([{ nombre: 'P1', norte: '', este: '' }])
@@ -66,37 +67,37 @@ export default function AreasForm({ contratoId, token, permisos }) {
   return (
     <div>
       {error && <div style={{ color: '#92400e', marginBottom: 8 }}>{error}</div>}
-      <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ ...ui.card, marginBottom: 16 }}>
         <input placeholder="Nombre del area" value={nombre} onChange={(e) => setNombre(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: '#f1f5f9' }}><th>Vertice</th><th>Norte</th><th>Este</th><th></th></tr></thead>
           <tbody>
             {vertices.map((v, i) => (
               <tr key={i}>
-                <td><input value={v.nombre} onChange={(e) => update(i, 'nombre', e.target.value)} style={inputStyle} /></td>
-                <td><input value={v.norte} onChange={(e) => update(i, 'norte', e.target.value)} style={inputStyle} /></td>
-                <td><input value={v.este} onChange={(e) => update(i, 'este', e.target.value)} style={inputStyle} /></td>
-                <td><button type="button" style={btnSecondary} onClick={() => quitarFila(i)}>X</button></td>
+                <td><input value={v.nombre} onChange={(e) => update(i, 'nombre', e.target.value)} style={ui.inputStyle} /></td>
+                <td><input value={v.norte} onChange={(e) => update(i, 'norte', e.target.value)} style={ui.inputStyle} /></td>
+                <td><input value={v.este} onChange={(e) => update(i, 'este', e.target.value)} style={ui.inputStyle} /></td>
+                <td><button type="button" style={ui.btnSecondary} onClick={() => quitarFila(i)}>X</button></td>
               </tr>
             ))}
           </tbody>
         </table>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          {puede(permisos, 'editar') && <button type="button" style={btnSecondary} onClick={agregarFila}>+ Vertice</button>}
-          {(puede(permisos, 'crear') || puede(permisos, 'editar')) && <button type="button" style={btnPrimary} onClick={calcular}>Calcular</button>}
+          {puede(permisos, 'editar') && <button type="button" style={ui.btnSecondary} onClick={agregarFila}>+ Vertice</button>}
+          {(puede(permisos, 'crear') || puede(permisos, 'editar')) && <button type="button" style={ui.btnPrimary} onClick={calcular}>Calcular</button>}
         </div>
       </div>
 
       {resultado && (
-        <div style={{ ...card, marginBottom: 16 }}>
+        <div style={{ ...ui.card, marginBottom: 16 }}>
           <p><strong>Area:</strong> {Number(resultado.area_m2).toFixed(4)} m² | {Number(resultado.area_ha).toFixed(6)} ha</p>
           <p><strong>Perimetro:</strong> {Number(resultado.perimetro).toFixed(3)} m</p>
-          {resultado.id && puede(permisos, 'exportar') && <button type="button" style={btnSecondary} onClick={() => downloadPdf(`/areas/${resultado.id}/pdf`, 'area.pdf')}>Generar PDF</button>}
+          {resultado.id && puede(permisos, 'exportar') && <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/areas/${resultado.id}/pdf`, 'area.pdf')}>Generar PDF</button>}
         </div>
       )}
 
       {svg && (
-        <div style={card}>
+        <div style={ui.card}>
           <svg width="100%" viewBox={`0 0 ${svg.ancho} ${svg.alto}`} style={{ background: '#f8fafc', borderRadius: 8 }}>
             <polygon points={svg.coords} fill="rgba(37,99,235,0.12)" stroke="#2563eb" strokeWidth="2" />
             {svg.valid.map((p, i) => (
@@ -110,12 +111,12 @@ export default function AreasForm({ contratoId, token, permisos }) {
       )}
 
       {lista.length > 0 && (
-        <div style={{ ...card, marginTop: 16 }}>
+        <div style={{ ...ui.card, marginTop: 16 }}>
           <h4>Areas guardadas</h4>
           {lista.map((a) => (
             <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #e2e8f0' }}>
               <span>{a.nombre} — {Number(a.area_m2).toFixed(2)} m²</span>
-              {puede(permisos, 'exportar') && <button type="button" style={btnSecondary} onClick={() => downloadPdf(`/areas/${a.id}/pdf`, `${a.nombre}.pdf`)}>PDF</button>}
+              {puede(permisos, 'exportar') && <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/areas/${a.id}/pdf`, `${a.nombre}.pdf`)}>PDF</button>}
             </div>
           ))}
         </div>

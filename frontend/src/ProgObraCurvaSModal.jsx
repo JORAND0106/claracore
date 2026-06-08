@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { X, Download, FileText } from 'lucide-react'
+import { X, Download, FileText, GitCompare, FileCode } from 'lucide-react'
 import {
   LineChart,
   Line,
@@ -10,14 +10,25 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
-import { fetchCurvaS, downloadCurvaSPdf } from './progObraApi'
+import { fetchCurvaS, fetchCurvaSEscenarios, downloadCurvaSPdf, downloadProjectXml } from './progObraApi'
 import { exportCurvaSExcel } from './progObraExportExcel'
 import { fmtCOP } from './progObraFormat'
+import { pptoVersionOptionLabel } from './ProgPresupuestoSelector'
+
+const ESCENARIO_COLORS = ['#1e3a8a', '#38bdf8', '#16a34a', '#f59e0b', '#9333ea']
 
 function fmtPct(n) {
   const v = Number(n)
   if (!Number.isFinite(v)) return '—'
   return `${v > 0 ? '+' : ''}${v.toFixed(1)}%`
+}
+
+function fmtMillions(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '—'
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`
+  return fmtCOP(v)
 }
 
 export default function ProgObraCurvaSModal({
@@ -29,21 +40,43 @@ export default function ProgObraCurvaSModal({
   token,
   baselineId,
   targetId,
+  versionPptoId,
+  versionProgId,
+  pptoVersiones = [],
   contratoNumero,
   contratista,
   interventoria,
+  pkIds = null,
 }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [data, setData] = useState(null)
   const [exportBusy, setExportBusy] = useState(false)
+  const [modoEscenarios, setModoEscenarios] = useState(false)
+  const [escenariosSel, setEscenariosSel] = useState(() => new Set())
+  const [escenariosData, setEscenariosData] = useState(null)
+  const [loadingEscenarios, setLoadingEscenarios] = useState(false)
+
+  useEffect(() => {
+    if (!open) {
+      setModoEscenarios(false)
+      setEscenariosData(null)
+    }
+  }, [open])
+
+  const pkIdsKey = pkIds?.length ? pkIds.join(',') : ''
 
   useEffect(() => {
     if (!open || !cid || !token) return
     let cancel = false
     setLoading(true)
     setError('')
-    fetchCurvaS(API, cid, token, { baselineId, targetId })
+    fetchCurvaS(API, cid, token, {
+      baselineId,
+      targetId,
+      versionPptoId,
+      pkIds: pkIds?.length ? pkIds : undefined,
+    })
       .then((d) => {
         if (!cancel) setData(d)
       })
@@ -56,7 +89,43 @@ export default function ProgObraCurvaSModal({
     return () => {
       cancel = true
     }
-  }, [open, cid, token, API, baselineId, targetId])
+  }, [open, cid, token, API, baselineId, targetId, versionPptoId, pkIdsKey])
+
+  useEffect(() => {
+    if (!open || !modoEscenarios) return
+    const initial = new Set()
+    if (versionPptoId) initial.add(String(versionPptoId))
+    else if (pptoVersiones[0]?.id) initial.add(String(pptoVersiones[0].id))
+    setEscenariosSel(initial)
+  }, [open, modoEscenarios, versionPptoId, pptoVersiones])
+
+  const escenariosKey = useMemo(() => [...escenariosSel].sort().join(','), [escenariosSel])
+
+  useEffect(() => {
+    if (!open || !modoEscenarios || !cid || !token || !versionProgId || !escenariosKey) {
+      setEscenariosData(null)
+      return
+    }
+    let cancel = false
+    setLoadingEscenarios(true)
+    setError('')
+    fetchCurvaSEscenarios(API, cid, token, {
+      versionProgId: String(versionProgId),
+      versionPptoIds: escenariosKey.split(',').filter(Boolean),
+    })
+      .then((d) => {
+        if (!cancel) setEscenariosData(d)
+      })
+      .catch((e) => {
+        if (!cancel) setError(e?.message || 'Error al cargar escenarios')
+      })
+      .finally(() => {
+        if (!cancel) setLoadingEscenarios(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [open, modoEscenarios, cid, token, API, versionProgId, escenariosKey])
 
   const chartData = useMemo(
     () =>
@@ -69,7 +138,32 @@ export default function ProgObraCurvaSModal({
     [data],
   )
 
+  const escenariosChartData = useMemo(() => {
+    if (!escenariosData?.meses?.length) return []
+    const ids = (escenariosData.escenarios || []).map((s) => s.version_ppto_id)
+    return escenariosData.meses.map((row) => {
+      const point = { mes: row.mes_label }
+      for (const id of ids) {
+        point[id] = row.series?.[id]
+      }
+      return point
+    })
+  }, [escenariosData])
+
   const ind = data?.indicadores || {}
+
+  const toggleEscenario = useCallback((id) => {
+    setEscenariosSel((prev) => {
+      const next = new Set(prev)
+      const sid = String(id)
+      if (next.has(sid)) {
+        if (next.size > 1) next.delete(sid)
+      } else if (next.size < 5) {
+        next.add(sid)
+      }
+      return next
+    })
+  }, [])
 
   const handleExcel = useCallback(async () => {
     if (!data) return
@@ -88,9 +182,19 @@ export default function ProgObraCurvaSModal({
   }, [data, cid, contratoNumero, contratista, interventoria])
 
   const handlePdf = useCallback(async () => {
+    if (modoEscenarios) {
+      setError('Exporte PDF desde la vista normal de Curva S (no en comparar escenarios).')
+      return
+    }
     setExportBusy(true)
+    setError('')
     try {
-      const blob = await downloadCurvaSPdf(API, cid, token, { baselineId, targetId })
+      const blob = await downloadCurvaSPdf(API, cid, token, {
+        baselineId,
+        targetId,
+        versionPptoId,
+        pkIds: pkIds?.length ? pkIds : undefined,
+      })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       a.download = `curva-s-${cid}.pdf`
@@ -101,11 +205,66 @@ export default function ProgObraCurvaSModal({
     } finally {
       setExportBusy(false)
     }
-  }, [API, cid, token, baselineId, targetId])
+  }, [API, cid, token, baselineId, targetId, versionPptoId, pkIdsKey, modoEscenarios])
+
+  const handleProjectXml = useCallback(async () => {
+    const vid = versionProgId || targetId
+    if (!vid) {
+      setError('No hay versión de programación para exportar.')
+      return
+    }
+    setExportBusy(true)
+    setError('')
+    try {
+      const { blob, filename } = await downloadProjectXml(API, cid, token, {
+        versionId: String(vid),
+        versionPptoId,
+        pkIds: pkIds?.length ? pkIds : undefined,
+      })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      setError(e?.message || 'Error al exportar MS Project XML')
+    } finally {
+      setExportBusy(false)
+    }
+  }, [API, cid, token, versionProgId, targetId, versionPptoId, pkIdsKey])
+
+  const exportBtn = (primary, disabled, onClick, icon, label) => (
+    <button
+      type="button"
+      disabled={disabled}
+      title={label}
+      onClick={() => void onClick()}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '6px 11px',
+        fontSize: 11,
+        fontWeight: 600,
+        borderRadius: 6,
+        border: `1px solid ${primary ? t.primary : t.border}`,
+        background: primary ? `${t.primary}10` : t.bgCard,
+        color: primary ? t.primary : t.text,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      }}
+    >
+      {icon}
+      {label}
+    </button>
+  )
 
   if (!open) return null
 
   const cell = { padding: '5px 8px', fontSize: 11, borderBottom: `1px solid ${t.border}44` }
+  const busy = loading || loadingEscenarios
 
   return (
     <div
@@ -135,35 +294,96 @@ export default function ProgObraCurvaSModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${t.border}` }}>
-          <div style={{ fontWeight: 700, fontSize: 15, color: t.primary }}>Curva S — Inversión acumulada</div>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '12px 16px',
+            borderBottom: `1px solid ${t.border}`,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 15, color: t.primary, minWidth: 0, flex: '1 1 200px' }}>
+            Curva S — Inversión acumulada
+            {modoEscenarios && ' · Comparar escenarios'}
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flex: '0 1 auto',
+              marginLeft: 'auto',
+            }}
+          >
             <button
               type="button"
-              disabled={!data || exportBusy}
-              onClick={() => void handleExcel()}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: `1px solid ${t.primary}`, background: t.bgCard, color: t.primary, cursor: 'pointer' }}
+              onClick={() => setModoEscenarios((m) => !m)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '6px 11px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: `1px solid ${modoEscenarios ? t.primary : t.border}`,
+                background: modoEscenarios ? `${t.primary}18` : t.bgCard,
+                color: modoEscenarios ? t.primary : t.text,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
             >
-              <Download size={13} /> Excel
+              <GitCompare size={13} /> {modoEscenarios ? 'Vista normal' : 'Comparar escenarios'}
             </button>
+            {exportBtn(
+              true,
+              !data || exportBusy,
+              handleExcel,
+              <Download size={13} />,
+              'Excel',
+            )}
+            {exportBtn(
+              false,
+              exportBusy || loading,
+              handlePdf,
+              <FileText size={13} />,
+              'PDF',
+            )}
+            {exportBtn(
+              false,
+              exportBusy || !(versionProgId || targetId),
+              handleProjectXml,
+              <FileCode size={13} />,
+              'MS Project',
+            )}
             <button
               type="button"
-              disabled={exportBusy}
-              onClick={() => void handlePdf()}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg, color: t.text, cursor: 'pointer' }}
+              onClick={onClose}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: t.textMuted,
+                padding: 4,
+                flexShrink: 0,
+              }}
+              aria-label="Cerrar"
             >
-              <FileText size={13} /> PDF
-            </button>
-            <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: t.textMuted }}>
               <X size={20} />
             </button>
           </div>
         </div>
 
-        {loading && <div style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>Cargando curva S…</div>}
+        {busy && <div style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>Cargando curva S…</div>}
         {error && <div style={{ padding: 16, color: '#dc2626' }}>{error}</div>}
 
-        {!loading && data && (
+        {!busy && !modoEscenarios && data && (
           <>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 24px', padding: '10px 16px', fontSize: 11, borderBottom: `1px solid ${t.border}`, background: `${t.primary}08` }}>
               <span>Presupuesto total: <strong>{fmtCOP(ind.presupuesto_total)}</strong></span>
@@ -172,7 +392,7 @@ export default function ProgObraCurvaSModal({
               <span>Desviación: <strong style={{ color: Number(ind.desviacion_valor) < 0 ? '#dc2626' : '#16a34a' }}>{fmtCOP(ind.desviacion_valor)} ({fmtPct(ind.desviacion_pct)})</strong></span>
             </div>
 
-            <div style={{ flex: 1, minHeight: 280, padding: '8px 12px' }}>
+            <div style={{ flex: 1, minHeight: 280, height: 280, padding: '8px 12px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
@@ -180,9 +400,9 @@ export default function ProgObraCurvaSModal({
                   <YAxis tickFormatter={(v) => `$${(v / 1e9).toFixed(1)}B`} tick={{ fontSize: 10, fill: t.textMuted }} width={72} />
                   <Tooltip formatter={(v) => fmtCOP(v)} labelStyle={{ fontSize: 11 }} />
                   <Legend />
-                  <Line type="monotone" dataKey="baseline" name="Baseline" stroke="#1e3a8a" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey="vigente" name="Vigente" stroke="#38bdf8" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="ejecutado" name="Ejecutado" stroke="#16a34a" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="baseline" name="Baseline" stroke="#1e3a8a" strokeWidth={2.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="vigente" name="Vigente" stroke="#38bdf8" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="ejecutado" name="Ejecutado" stroke="#16a34a" strokeWidth={2} dot={false} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -209,6 +429,78 @@ export default function ProgObraCurvaSModal({
                   ))}
                 </tbody>
               </table>
+            </div>
+          </>
+        )}
+
+        {!busy && modoEscenarios && escenariosData && (
+          <>
+            <div style={{ padding: '10px 16px', borderBottom: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 4 }}>
+                Mismo cronograma · distintos presupuestos (máx. 5)
+              </div>
+              {pptoVersiones.map((v, idx) => {
+                const sid = String(v.id)
+                const checked = escenariosSel.has(sid)
+                const esc = (escenariosData.escenarios || []).find((s) => s.version_ppto_id === sid)
+                const color = ESCENARIO_COLORS[idx % ESCENARIO_COLORS.length]
+                return (
+                  <label
+                    key={v.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      color: t.text,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleEscenario(v.id)}
+                    />
+                    <span style={{ flex: 1, minWidth: 0 }}>{pptoVersionOptionLabel(v)}</span>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 48,
+                        height: 8,
+                        borderRadius: 2,
+                        background: color,
+                        opacity: checked ? 1 : 0.25,
+                      }}
+                    />
+                    <span style={{ fontWeight: 600, minWidth: 72, textAlign: 'right' }}>
+                      {fmtMillions(esc?.costo_total)}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+
+            <div style={{ flex: 1, minHeight: 280, padding: '8px 12px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={escenariosChartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
+                  <XAxis dataKey="mes" tick={{ fontSize: 10, fill: t.textMuted }} />
+                  <YAxis tickFormatter={(v) => `$${(v / 1e9).toFixed(1)}B`} tick={{ fontSize: 10, fill: t.textMuted }} width={72} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} labelStyle={{ fontSize: 11 }} />
+                  <Legend />
+                  {(escenariosData.escenarios || []).map((s, idx) => (
+                    <Line
+                      key={s.version_ppto_id}
+                      type="monotone"
+                      dataKey={s.version_ppto_id}
+                      name={`v${s.numero_version}${s.etiqueta ? ` · ${s.etiqueta}` : ''}`}
+                      stroke={ESCENARIO_COLORS[idx % ESCENARIO_COLORS.length]}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </>
         )}

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import FirmaDigital from './FirmaDigital'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function ViasRegistroForm({ contratoId, token, permisos }) {
+  const ui = useTopoTheme()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [proyectos, setProyectos] = useState([])
   const [puntos, setPuntos] = useState([])
@@ -47,19 +48,19 @@ export default function ViasRegistroForm({ contratoId, token, permisos }) {
     <div>
       {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
       <PermisoAviso permisos={permisos} accion="crear">
-      <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ ...ui.card, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Registro de campo</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <select value={form.proyecto_id} onChange={(e) => setForm({ ...form, proyecto_id: e.target.value })} style={inputStyle}>
+          <select value={form.proyecto_id} onChange={(e) => setForm({ ...form, proyecto_id: e.target.value })} style={ui.inputStyle}>
             <option value="">Proyecto</option>
             {proyectos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <select value={form.bm_referencia_id} onChange={(e) => setForm({ ...form, bm_referencia_id: e.target.value })} style={inputStyle}>
+          <select value={form.bm_referencia_id} onChange={(e) => setForm({ ...form, bm_referencia_id: e.target.value })} style={ui.inputStyle}>
             <option value="">BM referencia</option>
             {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <input placeholder="Capa" value={form.capa_recibir} onChange={(e) => setForm({ ...form, capa_recibir: e.target.value })} style={inputStyle} />
-          <input placeholder="Operador" value={form.operador} onChange={(e) => setForm({ ...form, operador: e.target.value })} style={inputStyle} />
+          <input placeholder="Capa" value={form.capa_recibir} onChange={(e) => setForm({ ...form, capa_recibir: e.target.value })} style={ui.inputStyle} />
+          <input placeholder="Operador" value={form.operador} onChange={(e) => setForm({ ...form, operador: e.target.value })} style={ui.inputStyle} />
         </div>
         <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearRegistro}>Crear registro</button>
       </div>
@@ -68,13 +69,13 @@ export default function ViasRegistroForm({ contratoId, token, permisos }) {
       {detalle && (
         <div>
           <PermisoAviso permisos={permisos} accion="editar">
-          <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ ...ui.card, marginBottom: 16 }}>
             <h4>Agregar lectura por abscisa</h4>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 8 }}>
-              <input placeholder="Abscisa" value={lect.abscisa} onChange={(e) => setLect({ ...lect, abscisa: e.target.value })} style={inputStyle} />
-              <input placeholder="HI" value={lect.altura_instrumento} onChange={(e) => setLect({ ...lect, altura_instrumento: e.target.value })} style={inputStyle} />
-              <input placeholder="Lectura mira" value={lect.lectura_mira} onChange={(e) => setLect({ ...lect, lectura_mira: e.target.value })} style={inputStyle} />
-              <input placeholder="Cota diseno" value={lect.cota_diseno} onChange={(e) => setLect({ ...lect, cota_diseno: e.target.value })} style={inputStyle} />
+              <input placeholder="Abscisa" value={lect.abscisa} onChange={(e) => setLect({ ...lect, abscisa: e.target.value })} style={ui.inputStyle} />
+              <input placeholder="HI" value={lect.altura_instrumento} onChange={(e) => setLect({ ...lect, altura_instrumento: e.target.value })} style={ui.inputStyle} />
+              <input placeholder="Lectura mira" value={lect.lectura_mira} onChange={(e) => setLect({ ...lect, lectura_mira: e.target.value })} style={ui.inputStyle} />
+              <input placeholder="Cota diseno" value={lect.cota_diseno} onChange={(e) => setLect({ ...lect, cota_diseno: e.target.value })} style={ui.inputStyle} />
             </div>
             <button type="button" style={{ ...btnPrimary, marginTop: 8 }} onClick={agregarLectura}>Agregar</button>
           </div>
@@ -90,9 +91,9 @@ export default function ViasRegistroForm({ contratoId, token, permisos }) {
             </table>
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            {puede(permisos, 'editar') && <button type="button" style={btnSecondary} onClick={() => api(`/vias/registros/${sel}/calcular`, { method: 'POST' })}>Calcular</button>}
-            {puede(permisos, 'validar') && <button type="button" style={btnSecondary} onClick={() => api(`/vias/registros/${sel}/validar`, { method: 'POST' })}>Validar</button>}
-            {puede(permisos, 'exportar') && <button type="button" style={btnSecondary} onClick={() => downloadPdf(`/vias/registros/${sel}/pdf`, 'vias.pdf')}>PDF</button>}
+            {puede(permisos, 'editar') && <button type="button" style={ui.btnSecondary} onClick={() => api(`/vias/registros/${sel}/calcular`, { method: 'POST' })}>Calcular</button>}
+            {puede(permisos, 'validar') && <button type="button" style={ui.btnSecondary} onClick={() => api(`/vias/registros/${sel}/validar`, { method: 'POST' })}>Validar</button>}
+            {puede(permisos, 'exportar') && <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/vias/registros/${sel}/pdf`, 'vias.pdf')}>PDF</button>}
           </div>
           <PermisoAviso permisos={permisos} accion="editar">
           <div style={{ marginTop: 16 }}>

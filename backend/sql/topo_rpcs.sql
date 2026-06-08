@@ -1,8 +1,21 @@
--- RPC: Calculo de poligonal trigonométrica (Bowditch plan + cierre vertical)
+-- RPC: Calculo de poligonal trigonométrica
+-- Propaga azimuts desde la base (estacion -> visado), aplica cierre angular
+-- segun sentido (horario=exteriores, antihorario=interiores), proyecciones,
+-- correccion de Bowditch y nivelacion trigonométrica.
 CREATE OR REPLACE FUNCTION topo_calcular_poligonal(p_poligonal_id UUID)
 RETURNS JSONB AS $$
 DECLARE
-  v_estaciones RECORD;
+  v_pol RECORD;
+  v_est RECORD;
+  v_n INTEGER := 0;
+  v_sigma_obs DOUBLE PRECISION := 0;
+  v_sigma_teo DOUBLE PRECISION;
+  v_error_ang DOUBLE PRECISION;
+  v_corr_ang DOUBLE PRECISION := 0;
+  v_base_az DOUBLE PRECISION := 0;
+  v_az DOUBLE PRECISION;
+  v_prev_az DOUBLE PRECISION;
+  v_first BOOLEAN := TRUE;
   v_longitud_total DOUBLE PRECISION := 0;
   v_suma_dn DOUBLE PRECISION := 0;
   v_suma_de DOUBLE PRECISION := 0;
@@ -14,33 +27,90 @@ DECLARE
   v_precision DOUBLE PRECISION;
   v_tol_cota_m DOUBLE PRECISION;
   v_admisible_cota BOOLEAN;
-  v_pol RECORD;
+  v_es_horario BOOLEAN;
 BEGIN
   SELECT p.*,
          pi.norte AS ni, pi.este AS ei, pi.cota AS ci,
-         pf.norte AS nf, pf.este AS ef, pf.cota AS cf
+         pf.norte AS nf, pf.este AS ef, pf.cota AS cf,
+         pv.norte AS nv, pv.este AS ev
   INTO v_pol
   FROM topo_poligonales p
   LEFT JOIN topo_puntos pi ON p.punto_inicial_id = pi.id
   LEFT JOIN topo_puntos pf ON p.punto_final_id = pf.id
+  LEFT JOIN topo_puntos pv ON p.punto_visado_id = pv.id
   WHERE p.id = p_poligonal_id;
 
   IF v_pol IS NULL THEN
     RETURN jsonb_build_object('error', 'Poligonal no encontrada');
   END IF;
 
-  FOR v_estaciones IN
+  -- Azimut de la base estacion -> visado a partir de coordenadas
+  IF v_pol.nv IS NOT NULL AND v_pol.ev IS NOT NULL AND v_pol.ni IS NOT NULL AND v_pol.ei IS NOT NULL THEN
+    v_base_az := degrees(atan2(v_pol.ev - v_pol.ei, v_pol.nv - v_pol.ni));
+    IF v_base_az < 0 THEN v_base_az := v_base_az + 360; END IF;
+  END IF;
+
+  SELECT COUNT(*), COALESCE(SUM(angulo_medido), 0)
+  INTO v_n, v_sigma_obs
+  FROM topo_poligonal_estaciones WHERE poligonal_id = p_poligonal_id;
+
+  -- Cierre angular (solo poligonal cerrada)
+  v_es_horario := lower(COALESCE(v_pol.sentido, 'antihorario')) = 'horario';
+  IF v_pol.tipo = 'cerrada' AND v_n > 0 THEN
+    IF v_es_horario THEN
+      v_sigma_teo := (v_n + 2) * 180.0;   -- angulos exteriores
+    ELSE
+      v_sigma_teo := (v_n - 2) * 180.0;   -- angulos interiores
+    END IF;
+    v_error_ang := v_sigma_obs - v_sigma_teo;
+    v_corr_ang := -v_error_ang / v_n;
+  ELSE
+    v_sigma_teo := NULL;
+    v_error_ang := NULL;
+    v_corr_ang := 0;
+  END IF;
+
+  -- Pasada 1: propagacion de azimut y proyecciones
+  v_prev_az := v_base_az;
+  v_first := TRUE;
+  FOR v_est IN
     SELECT * FROM topo_poligonal_estaciones
     WHERE poligonal_id = p_poligonal_id ORDER BY orden
   LOOP
-    v_longitud_total := v_longitud_total + COALESCE(v_estaciones.distancia, 0);
-    v_suma_dn := v_suma_dn + (COALESCE(v_estaciones.distancia, 0) * cos(radians(COALESCE(v_estaciones.angulo_medido, 0))));
-    v_suma_de := v_suma_de + (COALESCE(v_estaciones.distancia, 0) * sin(radians(COALESCE(v_estaciones.angulo_medido, 0))));
-    v_suma_dz := v_suma_dz + (
-      COALESCE(v_estaciones.altura_instrumento, 0)
-      + COALESCE(v_estaciones.distancia, 0) * tan(radians(COALESCE(v_estaciones.angulo_vertical, 0)))
-      - COALESCE(v_estaciones.altura_objetivo, 0)
-    );
+    DECLARE
+      v_ang_corr DOUBLE PRECISION := COALESCE(v_est.angulo_medido, 0) + v_corr_ang;
+      v_dn DOUBLE PRECISION;
+      v_de DOUBLE PRECISION;
+      v_dz DOUBLE PRECISION;
+    BEGIN
+      IF v_first THEN
+        v_az := v_prev_az + v_ang_corr;
+        v_first := FALSE;
+      ELSE
+        v_az := v_prev_az + 180 + v_ang_corr;
+      END IF;
+      v_az := v_az - floor(v_az / 360.0) * 360.0;  -- normaliza a [0,360)
+      v_prev_az := v_az;
+
+      v_dn := COALESCE(v_est.distancia, 0) * cos(radians(v_az));
+      v_de := COALESCE(v_est.distancia, 0) * sin(radians(v_az));
+      v_dz := COALESCE(v_est.altura_instrumento, 0)
+            + COALESCE(v_est.distancia, 0) * tan(radians(COALESCE(v_est.angulo_vertical, 0)))
+            - COALESCE(v_est.altura_objetivo, 0);
+
+      v_longitud_total := v_longitud_total + COALESCE(v_est.distancia, 0);
+      v_suma_dn := v_suma_dn + v_dn;
+      v_suma_de := v_suma_de + v_de;
+      v_suma_dz := v_suma_dz + v_dz;
+
+      UPDATE topo_poligonal_estaciones SET
+        angulo_corregido = v_ang_corr,
+        azimut           = v_az,
+        delta_norte      = v_dn,
+        delta_este       = v_de,
+        delta_cota       = v_dz
+      WHERE id = v_est.id;
+    END;
   END LOOP;
 
   IF v_pol.tipo = 'cerrada' THEN
@@ -65,69 +135,70 @@ BEGIN
   ELSE
     v_tol_cota_m := 0;
   END IF;
-  v_admisible_cota := abs(v_error_dz) <= v_tol_cota_m OR v_longitud_total = 0;
+  v_admisible_cota := abs(COALESCE(v_error_dz, 0)) <= v_tol_cota_m OR v_longitud_total = 0;
 
+  -- Pasada 2: correccion de Bowditch y coordenadas ajustadas
   IF v_longitud_total > 0 THEN
     DECLARE
       v_norte_acum DOUBLE PRECISION := COALESCE(v_pol.ni, 0);
       v_este_acum DOUBLE PRECISION := COALESCE(v_pol.ei, 0);
       v_cota_acum DOUBLE PRECISION := COALESCE(v_pol.ci, 0);
-      v_dn DOUBLE PRECISION;
-      v_de DOUBLE PRECISION;
-      v_dz DOUBLE PRECISION;
       v_corr_n DOUBLE PRECISION;
       v_corr_e DOUBLE PRECISION;
       v_corr_z DOUBLE PRECISION;
     BEGIN
-      FOR v_estaciones IN
+      FOR v_est IN
         SELECT * FROM topo_poligonal_estaciones
         WHERE poligonal_id = p_poligonal_id ORDER BY orden
       LOOP
-        v_dn := COALESCE(v_estaciones.distancia, 0) * cos(radians(COALESCE(v_estaciones.angulo_medido, 0)));
-        v_de := COALESCE(v_estaciones.distancia, 0) * sin(radians(COALESCE(v_estaciones.angulo_medido, 0)));
-        v_dz := COALESCE(v_estaciones.altura_instrumento, 0)
-              + COALESCE(v_estaciones.distancia, 0) * tan(radians(COALESCE(v_estaciones.angulo_vertical, 0)))
-              - COALESCE(v_estaciones.altura_objetivo, 0);
-        v_corr_n := -(v_error_dn * COALESCE(v_estaciones.distancia, 0) / v_longitud_total);
-        v_corr_e := -(v_error_de * COALESCE(v_estaciones.distancia, 0) / v_longitud_total);
-        v_corr_z := -(v_error_dz * COALESCE(v_estaciones.distancia, 0) / v_longitud_total);
-        v_norte_acum := v_norte_acum + v_dn + v_corr_n;
-        v_este_acum  := v_este_acum  + v_de + v_corr_e;
-        v_cota_acum  := v_cota_acum  + v_dz + v_corr_z;
+        v_corr_n := -(v_error_dn * COALESCE(v_est.distancia, 0) / v_longitud_total);
+        v_corr_e := -(v_error_de * COALESCE(v_est.distancia, 0) / v_longitud_total);
+        v_corr_z := -(v_error_dz * COALESCE(v_est.distancia, 0) / v_longitud_total);
+        v_norte_acum := v_norte_acum + COALESCE(v_est.delta_norte, 0) + v_corr_n;
+        v_este_acum  := v_este_acum  + COALESCE(v_est.delta_este, 0) + v_corr_e;
+        v_cota_acum  := v_cota_acum  + COALESCE(v_est.delta_cota, 0) + v_corr_z;
 
         UPDATE topo_poligonal_estaciones SET
-          delta_norte      = v_dn,
-          delta_este       = v_de,
-          delta_cota       = v_dz,
           correccion_norte = v_corr_n,
           correccion_este  = v_corr_e,
           correccion_cota  = v_corr_z,
           norte_ajustado   = v_norte_acum,
           este_ajustado    = v_este_acum,
           cota_ajustada    = v_cota_acum
-        WHERE id = v_estaciones.id;
+        WHERE id = v_est.id;
       END LOOP;
     END;
   END IF;
 
   UPDATE topo_poligonales SET
-    error_cierre_dn    = v_error_dn,
-    error_cierre_de    = v_error_de,
-    error_cierre_dz    = v_error_dz,
-    error_lineal       = v_error_lineal,
-    precision_relativa = v_precision
+    error_cierre_dn      = v_error_dn,
+    error_cierre_de      = v_error_de,
+    error_cierre_dz      = v_error_dz,
+    error_lineal         = v_error_lineal,
+    precision_relativa   = v_precision,
+    suma_angular_obs     = v_sigma_obs,
+    suma_angular_teorica = v_sigma_teo,
+    error_angular_seg    = CASE WHEN v_error_ang IS NULL THEN NULL ELSE v_error_ang * 3600 END,
+    num_vertices         = v_n
   WHERE id = p_poligonal_id;
 
   RETURN jsonb_build_object(
-    'error_dn',         round(v_error_dn::numeric, 4),
-    'error_de',         round(v_error_de::numeric, 4),
-    'error_dz',         round(v_error_dz::numeric, 4),
-    'error_lineal',     round(v_error_lineal::numeric, 4),
-    'precision',        round(v_precision::numeric, 0),
-    'longitud_total',   round(v_longitud_total::numeric, 3),
-    'tolerancia_cota_m', round(v_tol_cota_m::numeric, 4),
-    'admisible_cota',   v_admisible_cota,
-    'admisible',        v_precision >= COALESCE(v_pol.tolerancia_relativa, 3000) AND v_admisible_cota
+    'base_azimut',         round(v_base_az::numeric, 6),
+    'sentido',             COALESCE(v_pol.sentido, 'antihorario'),
+    'num_angulos',         v_n,
+    'num_vertices',        v_n,
+    'suma_angular_obs',    round(v_sigma_obs::numeric, 6),
+    'suma_angular_teorica', CASE WHEN v_sigma_teo IS NULL THEN NULL ELSE round(v_sigma_teo::numeric, 6) END,
+    'error_angular_seg',   CASE WHEN v_error_ang IS NULL THEN NULL ELSE round((v_error_ang * 3600)::numeric, 1) END,
+    'error_dn',            round(v_error_dn::numeric, 4),
+    'error_de',            round(v_error_de::numeric, 4),
+    'error_dz',            round(v_error_dz::numeric, 4),
+    'error_lineal',        round(v_error_lineal::numeric, 4),
+    'precision',           round(v_precision::numeric, 0),
+    'longitud_total',      round(v_longitud_total::numeric, 3),
+    'tolerancia_cota_m',   round(v_tol_cota_m::numeric, 4),
+    'admisible_cota',      v_admisible_cota,
+    'admisible',           v_precision >= COALESCE(v_pol.tolerancia_relativa, 3000) AND v_admisible_cota
   );
 END;
 $$ LANGUAGE plpgsql;

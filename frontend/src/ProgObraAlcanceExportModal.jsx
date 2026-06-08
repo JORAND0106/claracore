@@ -6,63 +6,78 @@ const EXPORT_FORMATS = [
   { id: 'pdf', label: 'PDF (Curva S)' },
 ]
 
-function pkPctLabel(row) {
-  const est = row?.estado_programacion || 'sin_iniciar'
-  if (est === 'sin_cantidad') return '—'
-  const pct = Number(row?.porcentaje_programado)
-  if (!Number.isFinite(pct)) return '—'
-  return `${Math.round(pct)}% programado`
+function expandTramosToPkIds(tramoNames, tramos, programablePkSet) {
+  const out = new Set()
+  for (const name of tramoNames) {
+    const tr = (tramos || []).find((t) => t.tramo === name)
+    for (const pk of tr?.pk_ids || []) {
+      const id = String(pk || '').trim()
+      if (id && programablePkSet.has(id)) out.add(id)
+    }
+  }
+  return [...out].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 }
 
 export default function ProgObraAlcanceExportModal({
   open,
   onClose,
   onConfirm,
-  pkRows = [],
+  tramos = [],
+  programableCountByTramo = {},
+  programablePkSet = null,
   t,
   mode = 'curva',
   busy = false,
 }) {
   const [scopeMode, setScopeMode] = useState('all')
-  const [selectedPks, setSelectedPks] = useState(() => new Set())
+  const [selectedTramos, setSelectedTramos] = useState(() => new Set())
   const [exportFormat, setExportFormat] = useState('xml')
 
-  const sortedRows = useMemo(
+  const pkSet = useMemo(
+    () => (programablePkSet instanceof Set ? programablePkSet : new Set(programablePkSet || [])),
+    [programablePkSet],
+  )
+
+  const tramosOptions = useMemo(
     () =>
-      [...(pkRows || [])].sort((a, b) =>
-        String(a.pk_id || '').localeCompare(String(b.pk_id || ''), undefined, { numeric: true }),
-      ),
-    [pkRows],
+      [...(tramos || [])]
+        .filter((tr) => (programableCountByTramo[tr.tramo] || 0) > 0)
+        .sort((a, b) => String(a.tramo || '').localeCompare(String(b.tramo || ''), undefined, { numeric: true })),
+    [tramos, programableCountByTramo],
   )
 
   useEffect(() => {
     if (!open) return
     setScopeMode('all')
-    setSelectedPks(new Set())
+    setSelectedTramos(new Set())
     setExportFormat('xml')
   }, [open])
 
-  const togglePk = useCallback((pk) => {
-    const id = String(pk || '').trim()
-    if (!id) return
-    setSelectedPks((prev) => {
+  const toggleTramo = useCallback((tramoName) => {
+    const name = String(tramoName || '').trim()
+    if (!name) return
+    setSelectedTramos((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
       return next
     })
     setScopeMode('specific')
   }, [])
 
   const canConfirm =
-    scopeMode === 'all' || (scopeMode === 'specific' && selectedPks.size > 0)
+    scopeMode === 'all' || (scopeMode === 'specific' && selectedTramos.size > 0)
 
   const handleConfirm = () => {
     if (!canConfirm || busy) return
     const pkIds =
-      scopeMode === 'all' ? null : [...selectedPks].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      scopeMode === 'all'
+        ? null
+        : expandTramosToPkIds([...selectedTramos], tramos, pkSet)
+    if (scopeMode === 'specific' && !pkIds?.length) return
     onConfirm({
       scope: scopeMode,
+      tramoNames: scopeMode === 'all' ? null : [...selectedTramos],
       pkIds,
       format: mode === 'export' ? exportFormat : null,
     })
@@ -170,16 +185,17 @@ export default function ProgObraAlcanceExportModal({
             gap: 4,
           }}
         >
-          {sortedRows.length === 0 ? (
+          {tramosOptions.length === 0 ? (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>No hay tramos programables.</div>
           ) : (
-            sortedRows.map((row) => {
-              const pk = String(row.pk_id || '').trim()
-              if (!pk) return null
-              const checked = selectedPks.has(pk)
+            tramosOptions.map((tr) => {
+              const name = String(tr.tramo || '').trim()
+              if (!name) return null
+              const checked = selectedTramos.has(name)
+              const nPk = programableCountByTramo[name] || 0
               return (
                 <label
-                  key={pk}
+                  key={name}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -194,10 +210,14 @@ export default function ProgObraAlcanceExportModal({
                     type="checkbox"
                     checked={checked}
                     disabled={busy}
-                    onChange={() => togglePk(pk)}
+                    onChange={() => toggleTramo(name)}
                   />
                   <span>
-                    PK {pk} · {pkPctLabel(row)}
+                    {name}
+                    <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                      {' '}
+                      · {nPk} PK{nPk === 1 ? '' : 's'}
+                    </span>
                   </span>
                 </label>
               )

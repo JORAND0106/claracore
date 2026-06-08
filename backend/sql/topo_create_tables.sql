@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS topo_poligonales (
     sentido              VARCHAR(15),
     punto_inicial_id     UUID REFERENCES topo_puntos(id),
     punto_final_id       UUID REFERENCES topo_puntos(id),
+    punto_visado_id      UUID REFERENCES topo_puntos(id),
     tolerancia_relativa  INTEGER DEFAULT 3000,
     error_cierre_dn      DOUBLE PRECISION,
     error_cierre_de      DOUBLE PRECISION,
@@ -37,24 +38,52 @@ CREATE TABLE IF NOT EXISTS topo_poligonales (
     precision_relativa   DOUBLE PRECISION,
     metodo               VARCHAR(20) DEFAULT 'trigonometrica',
     tolerancia_cota_mm_km DOUBLE PRECISION DEFAULT 12,
+    precision_angular_seg  DOUBLE PRECISION DEFAULT 10,
+    longitud_max_delta_m DOUBLE PRECISION DEFAULT 300,
     error_cierre_dz      DOUBLE PRECISION,
+    suma_angular_obs     DOUBLE PRECISION,
+    suma_angular_teorica DOUBLE PRECISION,
+    error_angular_seg    DOUBLE PRECISION,
+    num_vertices         INTEGER,
     estado               VARCHAR(20) DEFAULT 'borrador',
     nivel_validacion     INTEGER DEFAULT 0,
     observaciones        TEXT,
     operador             VARCHAR(100),
     equipo               VARCHAR(100),
+    equipo_marca         VARCHAR(100),
+    equipo_referencia    VARCHAR(100),
+    equipo_serial        VARCHAR(100),
+    ajustada_at          TIMESTAMPTZ,
     fecha_campo          DATE,
     creado_por           UUID,
     created_at           TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Estaciones de la poligonal
+-- Armadas (setups) de la poligonal: cada una con estacion, visado y HI
+CREATE TABLE IF NOT EXISTS topo_poligonal_armadas (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    poligonal_id       UUID REFERENCES topo_poligonales(id) ON DELETE CASCADE,
+    orden              INTEGER NOT NULL,
+    estacion_nombre    VARCHAR(50),
+    visado_nombre      VARCHAR(50),
+    altura_instrumento DOUBLE PRECISION,
+    created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Estaciones / puntos radiados de la poligonal
 CREATE TABLE IF NOT EXISTS topo_poligonal_estaciones (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     poligonal_id      UUID REFERENCES topo_poligonales(id) ON DELETE CASCADE,
+    armada_id         UUID REFERENCES topo_poligonal_armadas(id) ON DELETE CASCADE,
+    tipo_punto        VARCHAR(20) DEFAULT 'auxiliar',
     orden             INTEGER NOT NULL,
     nombre_punto      VARCHAR(50),
     angulo_medido     DOUBLE PRECISION,
+    angulo_corregido  DOUBLE PRECISION,
+    azimut            DOUBLE PRECISION,
+    norte             DOUBLE PRECISION,
+    este              DOUBLE PRECISION,
+    cota              DOUBLE PRECISION,
     distancia         DOUBLE PRECISION,
     altura_instrumento DOUBLE PRECISION,
     angulo_vertical   DOUBLE PRECISION,
@@ -309,5 +338,6 @@ CREATE TABLE IF NOT EXISTS topo_firmas (
 
 CREATE INDEX IF NOT EXISTS idx_topo_puntos_contrato ON topo_puntos(contrato_id);
 CREATE INDEX IF NOT EXISTS idx_topo_poligonales_contrato ON topo_poligonales(contrato_id);
+CREATE INDEX IF NOT EXISTS idx_topo_armadas_poligonal ON topo_poligonal_armadas(poligonal_id);
 CREATE INDEX IF NOT EXISTS idx_topo_nivelaciones_contrato ON topo_nivelaciones(contrato_id);
 CREATE INDEX IF NOT EXISTS idx_topo_equipos_contrato ON topo_equipos(contrato_id);

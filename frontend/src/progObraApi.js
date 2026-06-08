@@ -27,6 +27,23 @@ export async function fetchEstructuraTramo(API, cid, token, { versionId, tramo, 
   return res.json()
 }
 
+export async function clearTramoProgramacion(API, cid, token, versionId, { tramo, pkIds } = {}) {
+  const q = new URLSearchParams()
+  q.set('tramo', tramo)
+  for (const pk of pkIds || []) {
+    if (pk) q.append('pk_ids', String(pk).trim())
+  }
+  const res = await fetch(
+    `${API}/prog-obra/${cid}/versiones/${versionId}/programacion-tramo?${q}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
 export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds } = {}) {
   const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/actividades-batch-tramo`, {
     method: 'POST',

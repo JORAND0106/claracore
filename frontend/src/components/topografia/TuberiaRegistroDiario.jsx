@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import FirmaDigital from './FirmaDigital'
-import { btnPrimary, card, inputStyle, PermisoAviso, puede, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function TuberiaRegistroDiario({ contratoId, token, tuberia, permisos }) {
+  const ui = useTopoTheme()
   const { api } = useTopografiaApi(contratoId, token)
   const [puntos, setPuntos] = useState([])
   const [registro, setRegistro] = useState(null)
@@ -16,7 +17,7 @@ export default function TuberiaRegistroDiario({ contratoId, token, tuberia, perm
   }, [api])
 
   if (!tuberia?.id) {
-    return <div style={card}>Seleccione un tramo de tuberia.</div>
+    return <div style={ui.card}>Seleccione un tramo de tuberia.</div>
   }
 
   const crearRegistro = async () => {
@@ -49,32 +50,32 @@ export default function TuberiaRegistroDiario({ contratoId, token, tuberia, perm
     <div>
       {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
       <PermisoAviso permisos={permisos} accion="crear">
-      <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ ...ui.card, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Registro diario — {tuberia.nombre}</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <input type="date" value={formReg.fecha} onChange={(e) => setFormReg({ ...formReg, fecha: e.target.value })} style={inputStyle} />
-          <select value={formReg.bm_referencia_id} onChange={(e) => setFormReg({ ...formReg, bm_referencia_id: e.target.value })} style={inputStyle}>
+          <input type="date" value={formReg.fecha} onChange={(e) => setFormReg({ ...formReg, fecha: e.target.value })} style={ui.inputStyle} />
+          <select value={formReg.bm_referencia_id} onChange={(e) => setFormReg({ ...formReg, bm_referencia_id: e.target.value })} style={ui.inputStyle}>
             <option value="">BM referencia</option>
             {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <input placeholder="Altura instrumento" value={formReg.altura_instrumento} onChange={(e) => setFormReg({ ...formReg, altura_instrumento: e.target.value })} style={inputStyle} />
-          <input placeholder="Operador" value={formReg.operador} onChange={(e) => setFormReg({ ...formReg, operador: e.target.value })} style={inputStyle} />
+          <input placeholder="Altura instrumento" value={formReg.altura_instrumento} onChange={(e) => setFormReg({ ...formReg, altura_instrumento: e.target.value })} style={ui.inputStyle} />
+          <input placeholder="Operador" value={formReg.operador} onChange={(e) => setFormReg({ ...formReg, operador: e.target.value })} style={ui.inputStyle} />
         </div>
         <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearRegistro}>Iniciar registro del dia</button>
       </div>
       </PermisoAviso>
 
       {registro && (
-        <div style={card}>
+        <div style={ui.card}>
           <h4>Instalar tubo</h4>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 8 }}>
-            <input placeholder="# Tubo" value={formTubo.numero_tubo} onChange={(e) => setFormTubo({ ...formTubo, numero_tubo: e.target.value })} style={inputStyle} />
-            <input placeholder="Abscisa ini" value={formTubo.abscisa_inicio} onChange={(e) => setFormTubo({ ...formTubo, abscisa_inicio: e.target.value })} style={inputStyle} />
-            <input placeholder="Abscisa fin" value={formTubo.abscisa_fin} onChange={(e) => setFormTubo({ ...formTubo, abscisa_fin: e.target.value })} style={inputStyle} />
-            <input placeholder="Lectura ini" value={formTubo.lectura_mira_inicio} onChange={(e) => setFormTubo({ ...formTubo, lectura_mira_inicio: e.target.value })} style={inputStyle} />
-            <input placeholder="Lectura fin" value={formTubo.lectura_mira_fin} onChange={(e) => setFormTubo({ ...formTubo, lectura_mira_fin: e.target.value })} style={inputStyle} />
-            <input placeholder="Cota diseno ini" value={formTubo.cota_diseno_inicio} onChange={(e) => setFormTubo({ ...formTubo, cota_diseno_inicio: e.target.value })} style={inputStyle} />
-            <input placeholder="Cota diseno fin" value={formTubo.cota_diseno_fin} onChange={(e) => setFormTubo({ ...formTubo, cota_diseno_fin: e.target.value })} style={inputStyle} />
+            <input placeholder="# Tubo" value={formTubo.numero_tubo} onChange={(e) => setFormTubo({ ...formTubo, numero_tubo: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Abscisa ini" value={formTubo.abscisa_inicio} onChange={(e) => setFormTubo({ ...formTubo, abscisa_inicio: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Abscisa fin" value={formTubo.abscisa_fin} onChange={(e) => setFormTubo({ ...formTubo, abscisa_fin: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Lectura ini" value={formTubo.lectura_mira_inicio} onChange={(e) => setFormTubo({ ...formTubo, lectura_mira_inicio: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Lectura fin" value={formTubo.lectura_mira_fin} onChange={(e) => setFormTubo({ ...formTubo, lectura_mira_fin: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Cota diseno ini" value={formTubo.cota_diseno_inicio} onChange={(e) => setFormTubo({ ...formTubo, cota_diseno_inicio: e.target.value })} style={ui.inputStyle} />
+            <input placeholder="Cota diseno fin" value={formTubo.cota_diseno_fin} onChange={(e) => setFormTubo({ ...formTubo, cota_diseno_fin: e.target.value })} style={ui.inputStyle} />
           </div>
           <PermisoAviso permisos={permisos} accion="editar">
           <button type="button" style={{ ...btnPrimary, marginTop: 8 }} onClick={agregarTubo}>Registrar tubo</button>

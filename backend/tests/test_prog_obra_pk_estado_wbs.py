@@ -72,3 +72,15 @@ def test_items_sin_agrupador_impiden_estado_completa():
 def test_sin_agrupador_bloquea_completa_si_conteos_coinciden():
     """Si items_total omitió ítems sin agrupador, igual no debe marcar completa."""
     assert _compute_estado_pk(2, 2, items_sin_agrupador=1) == "en_progreso"
+
+
+def test_sin_fechas_en_actividades_estado_sin_iniciar():
+    ppto_keys = {("01", "1.1"), ("01", "1.2")}
+    ag_by_item = {("01", "1.1"): 10, ("01", "1.2"): 10}
+    actividades = [
+        {"capitulo": "01", "item": "2.A", "fecha_inicio": None, "agrupador_id": 10},
+    ]
+    n = _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades)
+    assert n == 0
+    assert _compute_estado_pk(2, n) == "sin_iniciar"
+

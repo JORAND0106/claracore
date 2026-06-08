@@ -134,6 +134,9 @@ export default function ProgObraDependencias({
   onCpmCalculated,
   cpmDirty: cpmDirtyProp,
   onCpmDirtyChange,
+  tramoMode = false,
+  tramoLabel = null,
+  tramoPkIds = null,
 }) {
   const [deps, setDeps] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -423,8 +426,20 @@ export default function ProgObraDependencias({
     }
   }
 
-  const depsDelPk = deps.filter((d) => d.pk_id_origen === activePk || d.pk_id_destino === activePk)
-  const crossPk = (allPkIds || []).filter((pk) => pk !== activePk)
+  const depsDelPk = useMemo(() => {
+    if (tramoMode && tramoPkIds?.length) {
+      const pkSet = new Set(tramoPkIds.map((p) => String(p).trim()))
+      return deps.filter(
+        (d) => pkSet.has(String(d.pk_id_origen || '').trim()) || pkSet.has(String(d.pk_id_destino || '').trim()),
+      )
+    }
+    return deps.filter((d) => d.pk_id_origen === activePk || d.pk_id_destino === activePk)
+  }, [deps, activePk, tramoMode, tramoPkIds])
+
+  const crossPk = useMemo(() => {
+    const pool = tramoMode && tramoPkIds?.length ? tramoPkIds : (allPkIds || [])
+    return pool.filter((pk) => pk !== activePk)
+  }, [allPkIds, activePk, tramoMode, tramoPkIds])
 
   const gridRow = {
     display: 'grid',
@@ -438,7 +453,11 @@ export default function ProgObraDependencias({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <GitFork size={16} color={t.primary} />
-          <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>Dependencias CPM — PK {activePk}</span>
+          <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
+            {tramoMode && tramoLabel
+              ? `Dependencias CPM — ${tramoLabel}`
+              : `Dependencias CPM — PK ${activePk}`}
+          </span>
           <DepAyudaButton t={t} onClick={() => setAyudaOpen(true)} />
           {cpmDirty && (
             <span style={{ fontSize: 'var(--cc-caption)', background: '#FEF3C7', color: '#92400E', borderRadius: 4, padding: '2px 6px' }}>CPM desactualizado</span>
@@ -455,7 +474,9 @@ export default function ProgObraDependencias({
         {!loaded ? (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>Cargando…</div>
         ) : depsDelPk.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', fontStyle: 'italic' }}>Sin dependencias para este PK.</div>
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', fontStyle: 'italic' }}>
+            {tramoMode ? 'Sin dependencias para los PKs de este tramo.' : 'Sin dependencias para este PK.'}
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 'var(--cc-caption)' }}>

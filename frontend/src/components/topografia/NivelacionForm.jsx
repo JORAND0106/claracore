@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import FirmaDigital from './FirmaDigital'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, Semaforo, useTopografiaApi } from './topografiaShared'
+import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function NivelacionForm({ contratoId, token, permisos }) {
+  const ui = useTopoTheme()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [lista, setLista] = useState([])
   const [sel, setSel] = useState(null)
@@ -70,15 +71,15 @@ export default function NivelacionForm({ contratoId, token, permisos }) {
     <div>
       {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
       <PermisoAviso permisos={permisos} accion="crear">
-      <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ ...ui.card, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Nueva nivelacion</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8 }}>
-          <input placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={inputStyle} />
-          <select value={form.bm_inicial_id} onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })} style={inputStyle}>
+          <input placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.inputStyle} />
+          <select value={form.bm_inicial_id} onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })} style={ui.inputStyle}>
             <option value="">BM inicial</option>
             {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <select value={form.bm_final_id} onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })} style={inputStyle}>
+          <select value={form.bm_final_id} onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })} style={ui.inputStyle}>
             <option value="">BM final</option>
             {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
@@ -88,7 +89,7 @@ export default function NivelacionForm({ contratoId, token, permisos }) {
       </PermisoAviso>
 
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 16 }}>
-        <div style={card}>
+        <div style={ui.card}>
           {lista.map((n) => (
             <button key={n.id} type="button" onClick={() => cargarDetalle(n.id)} style={{ ...btnSecondary, display: 'block', width: '100%', marginBottom: 6, textAlign: 'left' }}>
               {n.nombre}
@@ -97,25 +98,25 @@ export default function NivelacionForm({ contratoId, token, permisos }) {
         </div>
         {detalle && (
           <div>
-            <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ ...ui.card, marginBottom: 16 }}>
               <h3>{detalle.nivelacion?.nombre}</h3>
               <p>Error cierre: {detalle.nivelacion?.error_cierre ?? '—'} | Tolerancia: {detalle.nivelacion?.tolerancia_calculada ?? '—'}</p>
               {resultado && <Semaforo ok={resultado.admisible} />}
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                {puede(permisos, 'editar') && <button type="button" style={btnPrimary} onClick={calcular}>Calcular</button>}
-                {puede(permisos, 'editar') && <button type="button" style={btnSecondary} onClick={cerrar}>Cerrar</button>}
-                {puede(permisos, 'validar') && <button type="button" style={btnSecondary} onClick={() => api(`/nivelaciones/${sel}/validar`, { method: 'POST' }).then(() => cargarDetalle(sel))}>Validar</button>}
-                {puede(permisos, 'exportar') && <button type="button" style={btnSecondary} onClick={() => downloadPdf(`/nivelaciones/${sel}/pdf`, 'nivelacion.pdf')}>PDF</button>}
+                {puede(permisos, 'editar') && <button type="button" style={ui.btnPrimary} onClick={calcular}>Calcular</button>}
+                {puede(permisos, 'editar') && <button type="button" style={ui.btnSecondary} onClick={cerrar}>Cerrar</button>}
+                {puede(permisos, 'validar') && <button type="button" style={ui.btnSecondary} onClick={() => api(`/nivelaciones/${sel}/validar`, { method: 'POST' }).then(() => cargarDetalle(sel))}>Validar</button>}
+                {puede(permisos, 'exportar') && <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/nivelaciones/${sel}/pdf`, 'nivelacion.pdf')}>PDF</button>}
               </div>
             </div>
             <PermisoAviso permisos={permisos} accion="editar">
-            <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ ...ui.card, marginBottom: 16 }}>
               <h4>Agregar lectura</h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 8 }}>
-                <input type="number" placeholder="Orden" value={lect.orden} onChange={(e) => setLect({ ...lect, orden: e.target.value })} style={inputStyle} />
-                <input placeholder="Punto" value={lect.nombre_punto} onChange={(e) => setLect({ ...lect, nombre_punto: e.target.value })} style={inputStyle} />
-                <input placeholder="Atras" value={lect.lectura_atras} onChange={(e) => setLect({ ...lect, lectura_atras: e.target.value })} style={inputStyle} />
-                <input placeholder="Adelante" value={lect.lectura_adelante} onChange={(e) => setLect({ ...lect, lectura_adelante: e.target.value })} style={inputStyle} />
+                <input type="number" placeholder="Orden" value={lect.orden} onChange={(e) => setLect({ ...lect, orden: e.target.value })} style={ui.inputStyle} />
+                <input placeholder="Punto" value={lect.nombre_punto} onChange={(e) => setLect({ ...lect, nombre_punto: e.target.value })} style={ui.inputStyle} />
+                <input placeholder="Atras" value={lect.lectura_atras} onChange={(e) => setLect({ ...lect, lectura_atras: e.target.value })} style={ui.inputStyle} />
+                <input placeholder="Adelante" value={lect.lectura_adelante} onChange={(e) => setLect({ ...lect, lectura_adelante: e.target.value })} style={ui.inputStyle} />
               </div>
               <button type="button" style={{ ...btnPrimary, marginTop: 8 }} onClick={agregarLectura}>Agregar</button>
             </div>

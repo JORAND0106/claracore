@@ -4361,7 +4361,18 @@ async function restaurar(id) {
                   )}
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
                     <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
-                      <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
+                      <Row>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>ID_POL</div>
+                          <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px',wordBreak:'break-word',overflowWrap:'anywhere' }}>
+                            {r.id_pol || r.pk_id || '—'}
+                          </div>
+                          <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px',marginTop:'4px' }}>REG. ID</div>
+                          <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px' }}>{r.id ?? '—'}</div>
+                        </div>
+                        <F label="CAPÍTULO" val={r.capitulo}/>
+                        <F label="ÍTEM" val={r.item} flex={0.5}/>
+                      </Row>
                       <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
                       <BigF label="OBSERVACIÓN" val={textoObservacionRegistro(r)}/>
                       <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO EJECUCIÓN" val={r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT}/></Row>
@@ -4398,6 +4409,10 @@ async function restaurar(id) {
                         </div>
                       </div>
                       <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
+                      <BigF
+                        label="OBSERVACIÓN"
+                        val={r.observacion != null && String(r.observacion).trim() ? String(r.observacion).trim() : null}
+                      />
                     </div>
                   </div>
                   {/* Acciones desde buzón */}

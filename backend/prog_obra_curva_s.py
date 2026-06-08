@@ -3,10 +3,12 @@ Fase 4 — Curva S: inversión acumulada baseline / vigente / ejecutado.
 """
 from __future__ import annotations
 
+import html
+import re
 from calendar import monthrange
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from prog_obra_compare import fetch_compare_nodes
 from prog_obra_costos_presupuesto import (
@@ -256,6 +258,9 @@ def build_curva_s(
             {
                 "mes": mk,
                 "mes_label": _month_label(mk),
+                "baseline_mes": round(float(base_m.get(mk, 0)), 2),
+                "vigente_mes": round(float(tgt_m.get(mk, 0)), 2),
+                "ejecutado_mes": round(float(ej_m.get(mk, 0)), 2),
                 "baseline_acum": round(acc_b, 2),
                 "vigente_acum": round(acc_t, 2),
                 "ejecutado_acum": round(acc_e, 2),
@@ -360,53 +365,602 @@ def build_curva_s_escenarios(
     }
 
 
-def build_curva_s_pdf_html(contrato: dict, data: dict) -> str:
-    """HTML para PDF horizontal de curva S."""
+def _cap_sort_key(c: str) -> tuple:
+    s = (c or "").strip()
+    m = re.match(r"^(\d+)", s)
+    if m:
+        return (0, int(m.group(1)), s)
+    return (1, 0, s)
+
+
+def _h(val: Any) -> str:
+    return html.escape(str(val if val is not None else ""))
+
+
+def _fmt_duracion(val: Any) -> str:
+    if val is None or val == "":
+        return "—"
+    try:
+        return str(int(val))
+    except (TypeError, ValueError):
+        return "—"
+
+
+def fetch_cronograma_pdf_tree(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_ids: Optional[Set[str]] = None,
+) -> List[dict]:
+    """Árbol PK → capítulo → agrupador WBS → ítems para PDF cronograma."""
+    from prog_obra_costos_presupuesto import _fetch_agrupadores_meta
+    from prog_obra_service import _listado_agrupador_por_item
+
+    vid = (version_id or "").strip()
+    if not vid:
+        return []
+
+    act_rows = (
+        sb.table("prog_actividades")
+        .select(
+            "pk_id,capitulo,item,fecha_inicio,fecha_fin_calculada,duracion_dias_habiles,"
+            "agrupador_id,codigo_wbs"
+        )
+        .eq("version_id", vid)
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
+    _, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
+
+    headers: Dict[Tuple[str, str, int], dict] = {}
+    items_map: Dict[Tuple[str, str, int], List[dict]] = defaultdict(list)
+
+    for r in act_rows:
+        pk = str(r.get("pk_id") or "").strip()
+        if pk_ids and pk not in pk_ids:
+            continue
+        cap = str(r.get("capitulo") or "").strip()
+        ag_raw = r.get("agrupador_id")
+        if not pk or not cap or ag_raw is None:
+            continue
+        fi = r.get("fecha_inicio")
+        if not fi:
+            continue
+        ag_id = int(ag_raw)
+        key = (pk, cap, ag_id)
+        meta = ag_meta.get(ag_id) or {}
+        wbs = str(r.get("codigo_wbs") or meta.get("codigo_wbs") or f"AG{ag_id}").strip()
+        item = str(r.get("item") or "").strip()
+        row_base = {
+            "item": item,
+            "descripcion": (desc_lp.get((cap, item)) or "").strip(),
+            "fecha_inicio": str(fi)[:10],
+            "fecha_fin": str(r.get("fecha_fin_calculada") or "")[:10] or "—",
+            "duracion_dias_habiles": r.get("duracion_dias_habiles"),
+        }
+        if item == wbs or item.replace(" ", "") == wbs.replace(" ", ""):
+            headers[key] = {
+                **row_base,
+                "codigo_wbs": wbs,
+                "nombre": (meta.get("nombre") or wbs).strip(),
+                "agrupador_id": ag_id,
+                "orden": meta.get("orden") or 0,
+            }
+        else:
+            items_map[key].append(row_base)
+
+    if not headers:
+        return []
+
+    by_pk: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
+    for (pk, cap, ag_id), hdr in headers.items():
+        hijos = sorted(
+            items_map.get((pk, cap, ag_id), []),
+            key=lambda x: (_cap_sort_key(x["item"]), x["item"]),
+        )
+        by_pk[pk][cap].append({**hdr, "items": hijos})
+
+    tree: List[dict] = []
+    for pk in sorted(by_pk.keys(), key=lambda x: (len(x), x)):
+        cap_list = []
+        for cap in sorted(by_pk[pk].keys(), key=_cap_sort_key):
+            ags = sorted(
+                by_pk[pk][cap],
+                key=lambda a: (a.get("orden") or 0, a.get("codigo_wbs") or ""),
+            )
+            cap_list.append({"capitulo": cap, "agrupadores": ags})
+        tree.append({"pk_id": pk, "capitulos": cap_list})
+    return tree
+
+
+CRONO_ROWS_PER_PAGE = 30
+
+# Paleta PDF alineada al sistema (grises, azules y celestes pastel)
+PDF_CLR = {
+    "title": "#1e40af",
+    "text": "#334155",
+    "muted": "#64748b",
+    "border": "#cbd5e1",
+    "border_light": "#e2e8f0",
+    "bg_page": "#f8fafc",
+    "bg_kpi": "#eff6ff",
+    "bg_header": "#dbeafe",
+    "header_text": "#1e3a8a",
+    "row_pk": "#e2e8f0",
+    "row_cap": "#f1f5f9",
+    "row_ag": "#e0f2fe",
+    "accent": "#2563eb",
+    "accent_soft": "#93c5fd",
+    "negative": "#b91c1c",
+    "line_baseline": "#1e40af",
+    "line_vigente": "#38bdf8",
+    "line_ejecutado": "#64748b",
+}
+
+
+def _pdf_th_style(extra: str = "") -> str:
+    return (
+        f"background:{PDF_CLR['bg_header']};color:{PDF_CLR['header_text']};"
+        f"padding:4px 5px;font-size:6.5pt;font-weight:bold;border-bottom:1px solid {PDF_CLR['border']};{extra}"
+    )
+
+
+def _fmt_axis_money(v: float) -> str:
+    if v >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.1f}M"
+    return f"${v:,.0f}"
+
+
+def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 240) -> str:
+    """Curva S en SVG generado en código a partir de meses (baseline/vigente/ejecutado acum.)."""
+    c = PDF_CLR
+    if not meses:
+        return (
+            f'<div style="height:100px;text-align:center;color:{c["muted"]};font-size:8pt;padding-top:40px;">'
+            "Sin datos para el gráfico"
+            "</div>"
+        )
+
+    ml, mr, mt, mb = 58, 20, 22, 36
+    pw = width - ml - mr
+    ph = height - mt - mb
+    series = [
+        ("Baseline", "baseline_acum", c["line_baseline"], 2.5),
+        ("Vigente", "vigente_acum", c["line_vigente"], 2.0),
+        ("Ejecutado", "ejecutado_acum", c["line_ejecutado"], 2.0),
+    ]
+
+    vals: List[float] = []
+    for r in meses:
+        for _, key, _, _ in series:
+            try:
+                vals.append(float(r.get(key) or 0))
+            except (TypeError, ValueError):
+                vals.append(0.0)
+    max_y = max(vals) if vals else 1.0
+    if max_y <= 0:
+        max_y = 1.0
+    max_y *= 1.08
+
+    n = len(meses)
+
+    def x_at(i: int) -> float:
+        if n <= 1:
+            return ml + pw / 2
+        return ml + (i / (n - 1)) * pw
+
+    def y_at(v: float) -> float:
+        return mt + ph - (float(v) / max_y) * ph
+
+    parts: List[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">'
+    ]
+
+    # Leyenda
+    lx = ml
+    for label, _, color, _ in series:
+        parts.append(f'<line x1="{lx}" y1="10" x2="{lx + 16}" y2="10" stroke="{color}" stroke-width="2.5"/>')
+        parts.append(
+            f'<text x="{lx + 20}" y="13" font-size="8" fill="{c["text"]}" font-family="Helvetica,Arial,sans-serif">'
+            f"{_h(label)}</text>"
+        )
+        lx += 110
+
+    # Cuadrícula Y y eje
+    parts.append(
+        f'<line x1="{ml}" y1="{mt}" x2="{ml}" y2="{mt + ph:.1f}" stroke="{c["border"]}" stroke-width="0.8"/>'
+    )
+    parts.append(
+        f'<line x1="{ml}" y1="{mt + ph:.1f}" x2="{ml + pw:.1f}" y2="{mt + ph:.1f}" '
+        f'stroke="{c["border"]}" stroke-width="0.8"/>'
+    )
+
+    for t in range(6):
+        y = mt + ph - (t / 5) * ph
+        val = max_y * t / 5
+        parts.append(
+            f'<line x1="{ml}" y1="{y:.1f}" x2="{ml + pw:.1f}" y2="{y:.1f}" '
+            f'stroke="{c["border_light"]}" stroke-width="0.8" stroke-dasharray="4,3"/>'
+        )
+        parts.append(
+            f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="7.5" '
+            f'fill="{c["muted"]}" font-family="Helvetica,Arial,sans-serif">'
+            f"{_h(_fmt_axis_money(val))}</text>"
+        )
+
+    parts.append(
+        f'<rect x="{ml}" y="{mt}" width="{pw:.1f}" height="{ph:.1f}" fill="{c["bg_page"]}" '
+        f'stroke="none"/>'
+    )
+
+    for i, r in enumerate(meses):
+        x = x_at(i)
+        lbl = str(r.get("mes_label") or "")[:10]
+        parts.append(
+            f'<text x="{x:.1f}" y="{height - 8}" text-anchor="middle" font-size="7.5" '
+            f'fill="{c["muted"]}" font-family="Helvetica,Arial,sans-serif">'
+            f"{_h(lbl)}</text>"
+        )
+
+    for _, key, color, sw in series:
+        pts: List[str] = []
+        for i, r in enumerate(meses):
+            try:
+                v = float(r.get(key) or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+            pts.append(f"{x_at(i):.1f},{y_at(v):.1f}")
+        if pts:
+            parts.append(
+                f'<polyline fill="none" stroke="{color}" stroke-width="{sw}" '
+                f'stroke-linejoin="round" stroke-linecap="round" '
+                f'points="{" ".join(pts)}"/>'
+            )
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _build_curva_s_chart_block(meses: List[dict]) -> str:
+    """Contenedor del gráfico SVG incrustado en página 1 del PDF."""
+    c = PDF_CLR
+    svg = _build_curva_s_chart_svg(meses)
+    return (
+        f'<div style="width:920px;height:240px;margin:4px 0 8px;overflow:hidden;'
+        f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">{svg}</div>'
+    )
+
+
+def _flatten_cronograma_rows(tree: List[dict]) -> List[dict]:
+    flat: List[dict] = []
+    for pk_node in tree:
+        flat.append({"kind": "pk", "pk_id": pk_node["pk_id"]})
+        for cap_node in pk_node.get("capitulos") or []:
+            flat.append({"kind": "cap", "capitulo": cap_node["capitulo"]})
+            for ag in cap_node.get("agrupadores") or []:
+                flat.append({"kind": "ag", **ag})
+                for it in ag.get("items") or []:
+                    flat.append({"kind": "item", **it})
+    return flat
+
+
+def _chunk_cronograma_rows(flat: List[dict], per_page: int = CRONO_ROWS_PER_PAGE) -> List[List[dict]]:
+    """Pagina cronograma: cada PK inicia en página nueva; el overflow del mismo PK continúa."""
+    if not flat:
+        return [[]]
+
+    chunks: List[List[dict]] = []
+    i = 0
+    while i < len(flat):
+        if flat[i].get("kind") != "pk":
+            i += 1
+            continue
+        pk_block: List[dict] = []
+        while i < len(flat):
+            pk_block.append(flat[i])
+            i += 1
+            if i < len(flat) and flat[i].get("kind") == "pk":
+                break
+        start = 0
+        while start < len(pk_block):
+            chunks.append(pk_block[start : start + per_page])
+            start += per_page
+    return chunks if chunks else [[]]
+
+
+def _html_footer_logo_contratista(contrato: dict) -> str:
+    from informes import _html_logo_contratista
+
+    return _html_logo_contratista(contrato, compact=True, compact_box_height="0.48cm")
+
+
+def _ppto_version_label(ppto_meta: Optional[dict]) -> str:
+    if not ppto_meta:
+        return "—"
+    n = ppto_meta.get("numero_version")
+    et = (ppto_meta.get("etiqueta") or "").strip()
+    if n is not None and et:
+        return f"v{int(n)} · {et}"
+    if et:
+        return et
+    if n is not None:
+        return f"Versión {int(n)}"
+    return "—"
+
+
+def _prog_version_label(prog_meta: Optional[dict]) -> str:
+    if not prog_meta:
+        return "—"
+    n = prog_meta.get("numero_version")
+    tipo = (prog_meta.get("tipo") or "").strip()
+    if n is not None and tipo:
+        return f"v{int(n)} ({tipo})"
+    if n is not None:
+        return f"v{int(n)}"
+    return tipo or "—"
+
+
+def _render_cronograma_body_rows(rows: List[dict]) -> str:
+    if not rows:
+        return (
+            '<tr><td colspan="5" style="padding:12px;text-align:center;color:#64748b;font-size:8pt;">'
+            "Sin actividades programadas en esta versión."
+            "</td></tr>"
+        )
+    out: List[str] = []
+    c = PDF_CLR
+    for r in rows:
+        kind = r.get("kind")
+        if kind == "pk":
+            out.append(
+                f'<tr style="background:{c["row_pk"]};">'
+                f'<td colspan="5" style="padding:4px 6px;font-size:8pt;font-weight:bold;color:{c["text"]};">'
+                f"PK {_h(r.get('pk_id'))}</td></tr>"
+            )
+        elif kind == "cap":
+            out.append(
+                f'<tr style="background:{c["row_cap"]};">'
+                f'<td colspan="5" style="padding:3px 6px;font-size:7.5pt;font-weight:bold;color:{c["text"]};">'
+                f"Capítulo {_h(r.get('capitulo'))}</td></tr>"
+            )
+        elif kind == "ag":
+            nombre = f"{r.get('codigo_wbs') or ''} · {r.get('nombre') or ''}".strip(" ·")
+            out.append(
+                f"<tr style=\"background:{c['row_ag']};\">"
+                f"<td style=\"padding:3px 6px;font-size:7.5pt;font-weight:bold;color:{c['text']};\">{_h(nombre)}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7.5pt;\">{_h(r.get('fecha_inicio'))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7.5pt;\">{_h(r.get('fecha_fin'))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7.5pt;text-align:center;\">{_h(_fmt_duracion(r.get('duracion_dias_habiles')))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7pt;color:{c['muted']};\">Agrupador WBS</td>"
+                f"</tr>"
+            )
+        elif kind == "item":
+            desc = (r.get("descripcion") or "").strip()
+            label = f"{r.get('item') or ''}"
+            if desc:
+                label = f"{label} · {desc}"
+            out.append(
+                f"<tr>"
+                f"<td style=\"padding:3px 6px 3px 18px;font-size:7pt;\">{_h(label)}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7pt;\">{_h(r.get('fecha_inicio'))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7pt;\">{_h(r.get('fecha_fin'))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7pt;text-align:center;\">{_h(_fmt_duracion(r.get('duracion_dias_habiles')))}</td>"
+                f"<td style=\"padding:3px 6px;font-size:7pt;color:#94a3b8;\">Ítem</td>"
+                f"</tr>"
+            )
+    return "".join(out)
+
+
+def _render_cronograma_page(
+    contrato: dict,
+    body_rows: List[dict],
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+    *,
+    page_num: int,
+    total_pages: int,
+) -> str:
+    from informes import _html_logo_contratista
+
+    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
+    prog_lbl = _prog_version_label(prog_meta)
+    numero = _h(contrato.get("numero") or contrato.get("id") or "")
+    objeto = _h(contrato.get("objeto") or "—")
+    tbody = _render_cronograma_body_rows(body_rows)
+    pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
+    c = PDF_CLR
+    th = _pdf_th_style
+
+    return f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+        <tr>
+          <td style="width:14%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:2px;">
+            {logo_html}
+          </td>
+          <td style="width:62%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px 6px;">
+            <div style="font-size:11pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">
+              Cronograma de Programación de Obra
+            </div>
+          </td>
+          <td style="width:24%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px;">
+            <div style="font-size:6pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
+            <div style="font-size:9pt;font-weight:bold;color:{c['accent']};margin-top:2px;">{_h(prog_lbl)}</div>
+          </td>
+        </tr>
+      </table>
+      <div style="font-size:7pt;color:{c['text']};margin-bottom:6px;padding:0 2px;line-height:1.35;">
+        <strong>Contrato:</strong> {numero} · <strong>Objeto:</strong> {objeto}
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <strong>Generado:</strong> {_h(fecha_gen)}
+        {f'&nbsp;&nbsp;|&nbsp;&nbsp;<span style="color:{c["muted"]};">{_h(pag)}</span>' if pag else ''}
+      </div>
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="{th('text-align:left;width:46%;')}">Actividad / WBS</th>
+            <th style="{th('text-align:left;width:14%;')}">Inicio</th>
+            <th style="{th('text-align:left;width:14%;')}">Fin</th>
+            <th style="{th('text-align:center;width:12%;')}">Días háb.</th>
+            <th style="{th('text-align:left;width:14%;')}">Tipo</th>
+          </tr>
+        </thead>
+        <tbody>{tbody}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+
+
+def build_curva_s_pdf_html(
+    contrato: dict,
+    data: dict,
+    *,
+    cronograma: Optional[List[dict]] = None,
+    prog_meta: Optional[dict] = None,
+    ppto_meta: Optional[dict] = None,
+    fecha_generacion: Optional[str] = None,
+) -> str:
+    """HTML multipágina: curva S (pág. 1) + cronograma WBS (pág. 2+)."""
+    from informes import _fmt_informe_fecha_generacion
+
     ind = data.get("indicadores") or {}
     meses = data.get("meses") or []
-    titulo = f"Curva S — Contrato {contrato.get('numero') or contrato.get('id') or ''}"
+    fecha_gen = (fecha_generacion or "").strip() or _fmt_informe_fecha_generacion()
+    titulo = f"Curva S — Contrato {_h(contrato.get('numero') or contrato.get('id') or '')}"
+    contratista = _h(contrato.get("contratista") or "—")
+    interventoria = _h(contrato.get("interventoria") or "—")
+    numero_cto = _h(contrato.get("numero") or contrato.get("id") or "—")
+    objeto_cto = _h(contrato.get("objeto") or "—")
+    ppto_lbl = _h(_ppto_version_label(ppto_meta))
+
     rows_html = ""
     for r in meses:
         rows_html += (
             f"<tr>"
-            f"<td>{r.get('mes_label')}</td>"
-            f"<td>${float(r.get('baseline_acum') or 0):,.0f}</td>"
-            f"<td>${float(r.get('vigente_acum') or 0):,.0f}</td>"
-            f"<td>${float(r.get('ejecutado_acum') or 0):,.0f}</td>"
-            f"<td>{r.get('delta_vigente_pct')}%</td>"
-            f"<td>{r.get('delta_ejecutado_pct')}%</td>"
+            f"<td>{_h(r.get('mes_label'))}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('baseline_mes') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('baseline_acum') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('vigente_mes') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('vigente_acum') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('ejecutado_mes') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">${float(r.get('ejecutado_acum') or 0):,.0f}</td>"
+            f"<td style=\"text-align:right;\">{_h(r.get('delta_vigente_pct'))}%</td>"
+            f"<td style=\"text-align:right;\">{_h(r.get('delta_ejecutado_pct'))}%</td>"
             f"</tr>"
         )
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-@page {{ size: A4 landscape; margin: 1.2cm; }}
-body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #1e293b; }}
-h1 {{ color: #0f766e; font-size: 16pt; margin: 0 0 4px; }}
-.sub {{ color: #64748b; font-size: 9pt; margin-bottom: 12px; }}
-.kpi {{ display: inline-block; margin-right: 24px; margin-bottom: 8px; }}
-.kpi strong {{ display: block; font-size: 11pt; color: #0f766e; }}
-table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
-th {{ background: #0f766e; color: #fff; padding: 6px 8px; text-align: left; font-size: 8pt; }}
-td {{ border-bottom: 1px solid #e2e8f0; padding: 5px 8px; font-size: 8pt; }}
-.footer {{ margin-top: 16px; font-size: 7pt; color: #94a3b8; text-align: center; }}
-.legend span {{ margin-right: 16px; }}
-.legend .b {{ color: #1e3a8a; font-weight: bold; }}
-.legend .v {{ color: #38bdf8; font-weight: bold; }}
-.legend .e {{ color: #16a34a; font-weight: bold; }}
-</style></head><body>
-<h1>{titulo}</h1>
-<div class="sub">{contrato.get('objeto') or ''} · {contrato.get('contratista') or ''} · Interventoría: {contrato.get('interventoria') or '—'}</div>
-<div class="legend"><span class="b">■ Baseline</span><span class="v">■ Vigente</span><span class="e">■ Ejecutado</span></div>
-<div style="margin-top:10px">
-  <div class="kpi"><span>Presupuesto total</span><strong>${float(ind.get('presupuesto_total') or 0):,.0f}</strong></div>
-  <div class="kpi"><span>Programado a la fecha</span><strong>${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong></div>
-  <div class="kpi"><span>Ejecutado a la fecha</span><strong>${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong></div>
-  <div class="kpi"><span>Desviación</span><strong>${float(ind.get('desviacion_valor') or 0):,.0f} ({ind.get('desviacion_pct')}%)</strong></div>
-</div>
-<table>
-<thead><tr><th>Mes</th><th>Baseline acum.</th><th>Vigente acum.</th><th>Ejecutado acum.</th><th>Δ Vigente</th><th>Δ Ejecutado</th></tr></thead>
-<tbody>{rows_html}</tbody>
+
+    desv_val = float(ind.get("desviacion_valor") or 0)
+    desv_color = PDF_CLR["negative"] if desv_val < 0 else PDF_CLR["accent"]
+    chart_block = _build_curva_s_chart_block(meses)
+
+    c = PDF_CLR
+    lbl = f"font-size:5.5pt;font-weight:bold;color:{c['muted']};text-transform:uppercase;letter-spacing:0.2px;"
+    val = f"font-size:7pt;color:{c['text']};margin-top:1px;line-height:1.15;"
+    logo_contratista = _html_footer_logo_contratista(contrato)
+
+    footer_html = f"""
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-top:8px;border-top:1px solid {c['border']};">
+  <tr>
+    <td style="width:18%;vertical-align:middle;padding:3px 4px 2px 0;border-right:1px solid {c['border_light']};">
+      <div style="{lbl}">Logo contratista</div>
+      <div style="{val}">{logo_contratista}</div>
+    </td>
+    <td style="width:32%;vertical-align:top;padding:3px 4px 2px 6px;border-right:1px solid {c['border_light']};">
+      <div style="{lbl}">Contratista · Interventoría</div>
+      <div style="{val}"><strong>{contratista}</strong><br/>Interventoría: {interventoria}</div>
+    </td>
+    <td style="width:50%;vertical-align:top;padding:3px 0 2px 6px;">
+      <div style="{lbl}">Contrato · Objeto</div>
+      <div style="{val}"><strong>Nº {numero_cto}</strong> · {objeto_cto}</div>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" style="vertical-align:top;padding:3px 4px 2px 0;border-right:1px solid {c['border_light']};border-top:1px solid {c['border_light']};">
+      <div style="{lbl}">Versión presupuesto activa</div>
+      <div style="{val}">{ppto_lbl}</div>
+    </td>
+    <td style="vertical-align:top;padding:3px 0 2px 6px;border-top:1px solid {c['border_light']};">
+      <div style="{lbl}">Fecha y hora de generación</div>
+      <div style="{val}">{_h(fecha_gen)}</div>
+    </td>
+  </tr>
 </table>
-<div class="footer">ClaraCore · Documento confidencial · Generado automáticamente</div>
+"""
+
+    flat_crono = _flatten_cronograma_rows(cronograma or [])
+    crono_chunks = _chunk_cronograma_rows(flat_crono)
+    crono_pages_html = ""
+    total_crono = len(crono_chunks)
+    for idx, chunk in enumerate(crono_chunks, start=1):
+        crono_pages_html += _render_cronograma_page(
+            contrato,
+            chunk,
+            prog_meta,
+            fecha_gen,
+            page_num=idx,
+            total_pages=total_crono,
+        )
+
+    th = _pdf_th_style
+    return f"""<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8"/>
+<style>
+@page {{ size: A4 landscape; margin: 0.9cm; }}
+body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: {c['text']}; margin: 0; padding: 0; }}
+.page-curva {{ page-break-after: always; }}
+.page-cronograma {{ page-break-after: always; }}
+.page-cronograma:last-child {{ page-break-after: auto; }}
+.frame-thin {{ border: 1px solid #000; padding: 10px 12px; box-sizing: border-box; }}
+.frame-double-outer {{ border: 2px solid #000; padding: 3px; min-height: 17.5cm; box-sizing: border-box; }}
+.frame-double-inner {{ border: 1px solid #000; padding: 8px 10px; min-height: calc(17.5cm - 12px); box-sizing: border-box; }}
+.title {{ color: {c['title']}; font-size: 14pt; font-weight: bold; margin: 0 0 2px; }}
+.sub {{ color: {c['muted']}; font-size: 8pt; margin-bottom: 8px; }}
+table.data {{ width: 100%; border-collapse: collapse; margin-top: 6px; table-layout: fixed; }}
+table.data th {{ {_pdf_th_style('text-align:left;font-size:6pt;')} }}
+table.data td {{ border-bottom: 1px solid {c['border_light']}; padding: 3px 4px; font-size: 6.5pt; }}
+</style></head><body>
+<div class="page-curva">
+  <div class="frame-thin">
+    <div class="title">{titulo}</div>
+    <div class="sub">{objeto_cto} · {contratista} · Interventoría: {interventoria}</div>
+    <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;background:{c['bg_kpi']};margin-bottom:8px;border:1px solid {c['border_light']};">
+      <tr>
+        <td style="padding:5px 8px;font-size:8pt;white-space:nowrap;color:{c['text']};">
+          Presupuesto total: <strong style="color:{c['accent']};">${float(ind.get('presupuesto_total') or 0):,.0f}</strong>
+          &nbsp;&nbsp;&nbsp;Programado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong>
+          &nbsp;&nbsp;&nbsp;Ejecutado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong>
+          &nbsp;&nbsp;&nbsp;Desviación: <strong style="color:{desv_color};">${desv_val:,.0f} ({ind.get('desviacion_pct')}%)</strong>
+        </td>
+      </tr>
+    </table>
+    {chart_block}
+    <table class="data">
+      <thead><tr>
+        <th style="{th('width:8%;')}">Mes</th>
+        <th style="{th('text-align:right;width:10%;')}">Base. mes</th>
+        <th style="{th('text-align:right;width:10%;')}">Base. acum.</th>
+        <th style="{th('text-align:right;width:10%;')}">Vig. mes</th>
+        <th style="{th('text-align:right;width:10%;')}">Vig. acum.</th>
+        <th style="{th('text-align:right;width:10%;')}">Ejec. mes</th>
+        <th style="{th('text-align:right;width:10%;')}">Ejec. acum.</th>
+        <th style="{th('text-align:right;width:8%;')}">Δ Vig.</th>
+        <th style="{th('text-align:right;width:8%;')}">Δ Ejec.</th>
+      </tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+    {footer_html}
+  </div>
+</div>
+{crono_pages_html}
 </body></html>"""

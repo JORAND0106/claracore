@@ -28,6 +28,7 @@ import {
   parseIsoDate,
   countDiasHabilesEnRango,
 } from './progObraFormat'
+import { clearTramoProgramacion, fetchEstructuraTramo } from './progObraApi'
 
 const PROG_Z = 200000
 
@@ -369,10 +370,10 @@ function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
   )
 }
 
-/** Filas alineadas tabla ↔ Gantt + timeline del PK. */
+/** Filas alineadas tabla ↔ Gantt + timeline del PK o tramo consolidado. */
 function buildPkGanttLayout({
   capitulosOrdenados,
-  activePk,
+  layoutScope,
   collapsedCaps,
   expandedAgs,
   estructuraPorCapitulo,
@@ -406,7 +407,7 @@ function buildPkGanttLayout({
 
   for (let capIdx = 0; capIdx < capitulosOrdenados.length; capIdx++) {
     const cap = capitulosOrdenados[capIdx]
-    const capKey = `${activePk}\u0000${cap}`
+    const capKey = `${layoutScope}\u0000${cap}`
     const collapsed = !!collapsedCaps[capKey]
     const estructuraCap = estructuraPorCapitulo?.[cap]
     const items = itemsPorCapitulo(cap)
@@ -464,7 +465,7 @@ function buildPkGanttLayout({
           duracion: sched.dur,
           isSummary: false,
         })
-        const agExpKey = `${activePk}\u0000${cap}\u0000${ag.agrupador_id}`
+        const agExpKey = `${layoutScope}\u0000${cap}\u0000${ag.agrupador_id}`
         if (expandedAgs[agExpKey]) {
           for (const hijo of ag.items || []) {
             syncRows.push({
@@ -528,6 +529,7 @@ function ProgPkGanttPanel({
   t,
   cpmByNodeKey,
   activePk,
+  tramoCpmByCapAg = null,
   bodyScrollRef,
   onBodyScroll,
   onRefresh,
@@ -692,9 +694,11 @@ function ProgPkGanttPanel({
           )}
           {syncRows.map((row) => {
             const cpmNode = row.kind === 'cap'
-              ? cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, '')]
+              ? (tramoCpmByCapAg ? null : cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, '')])
               : row.kind === 'ag'
-                ? cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, row.agrupadorId)]
+                ? (tramoCpmByCapAg
+                  ? tramoCpmByCapAg[`${row.cap}\u0000${row.agrupadorId}`]
+                  : cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, row.agrupadorId)])
                 : null
             const cpmClasif = clasificarNodoCpm(cpmNode)
             if (row.kind === 'spacer') {
@@ -1169,7 +1173,7 @@ function ProgItemRow({
     return (
       <tr style={{ borderBottom: `1px solid ${t.border}` }}>
         <td style={{ ...cell, ...stickyItemCell(agBg), fontWeight: 700, paddingLeft: 4 }}>
-          {!tramoConsolidado && (
+          {onToggleAgExpand && (
           <button
             type="button"
             onClick={(e) => {
@@ -1431,10 +1435,10 @@ function ProgCapituloSection({
               saveGeneration={saveGeneration}
               suspendAutoSave={suspendAutoSave}
               agExpanded={expanded}
-              onToggleAgExpand={tramoConsolidado ? undefined : () => onToggleAgExpand(ag.agrupador_id)}
+              onToggleAgExpand={(ag.items || []).length ? () => onToggleAgExpand(ag.agrupador_id) : undefined}
               tramoConsolidado={tramoConsolidado}
             />
-            {!tramoConsolidado && expanded && (ag.items || []).map((hijo) => (
+            {expanded && (ag.items || []).map((hijo) => (
               <ProgItemRow
                 key={itemRowKey(cap, hijo.item)}
                 itemDef={{ ...hijo, capitulo: cap }}
@@ -1450,6 +1454,7 @@ function ProgCapituloSection({
                 stickyBg={t.bgCard}
                 rowKind="hijo"
                 parentAct={agAct}
+                tramoConsolidado={tramoConsolidado}
               />
             ))}
           </Fragment>
@@ -1528,6 +1533,7 @@ export default function ProgObraProgramacionModal({
   modalMode = 'pk',
 }) {
   const tramoConsolidado = modalMode === 'tramo'
+  const ganttLayoutScope = tramoConsolidado ? 'tramo' : (activePk || '')
   const [collapsedCaps, setCollapsedCaps] = useState({})
   const [expandedAgs, setExpandedAgs] = useState({})
   const [noHabilesSet, setNoHabilesSet] = useState(new Set())
@@ -1718,7 +1724,7 @@ export default function ProgObraProgramacionModal({
   const agExpandKey = (cap, agId) => `${tramoConsolidado ? 'tramo' : activePk}\u0000${cap}\u0000${agId}`
   const isAgExpanded = useCallback(
     (cap, agId) => !!expandedAgs[agExpandKey(cap, agId)],
-    [expandedAgs, activePk],
+    [expandedAgs, ganttLayoutScope],
   )
   const toggleAgExpand = (cap, agId) => {
     const k = agExpandKey(cap, agId)
@@ -1732,6 +1738,31 @@ export default function ProgObraProgramacionModal({
     }
     return m
   }, [cpmResultados])
+
+  const tramoCpmByCapAg = useMemo(() => {
+    if (!tramoConsolidado || !tramoContext?.pkIds?.length) return null
+    const pkSet = new Set(tramoContext.pkIds.map((p) => String(p).trim()))
+    const buckets = {}
+    for (const r of cpmResultados) {
+      if (!pkSet.has(String(r.pk_id || '').trim())) continue
+      if (r.agrupador_id == null || r.agrupador_id === '') continue
+      const k = `${String(r.capitulo || '').trim()}\u0000${r.agrupador_id}`
+      if (!buckets[k]) buckets[k] = []
+      buckets[k].push(r)
+    }
+    const m = {}
+    for (const [k, nodes] of Object.entries(buckets)) {
+      m[k] = nodes.reduce((best, n) => {
+        if (!best) return n
+        const bCrit = best.es_ruta_critica || Number(best.holgura_total) === 0
+        const nCrit = n.es_ruta_critica || Number(n.holgura_total) === 0
+        if (nCrit && !bCrit) return n
+        if (bCrit && !nCrit) return best
+        return (Number(n.holgura_total) ?? 999) < (Number(best.holgura_total) ?? 999) ? n : best
+      }, null)
+    }
+    return m
+  }, [tramoConsolidado, tramoContext, cpmResultados])
 
   const agrupadorLabelById = useMemo(() => {
     const m = {}
@@ -1747,6 +1778,20 @@ export default function ProgObraProgramacionModal({
   }, [capitulosOrdenados, estructuraPorCapitulo])
 
   const cpmResumenRows = useMemo(() => {
+    if (tramoConsolidado && tramoContext?.pkIds?.length) {
+      const pkSet = new Set(tramoContext.pkIds.map((p) => String(p).trim()))
+      return cpmResultados
+        .filter((r) => pkSet.has(String(r.pk_id || '').trim()) && r.agrupador_id != null)
+        .map((r) => ({
+          ...r,
+          label: `${String(r.pk_id || '').trim()} · ${agrupadorLabelById[String(r.agrupador_id)] || r.agrupador_id}`,
+        }))
+        .sort((a, b) => {
+          const byPk = String(a.pk_id || '').localeCompare(String(b.pk_id || ''), undefined, { numeric: true })
+          if (byPk !== 0) return byPk
+          return String(a.fecha_inicio_temprana || '').localeCompare(String(b.fecha_inicio_temprana || ''))
+        })
+    }
     const pk = String(activePk || '').trim()
     if (!pk) return []
     return cpmResultados
@@ -1762,7 +1807,7 @@ export default function ProgObraProgramacionModal({
         if (byCode !== 0) return byCode
         return String(a.fecha_inicio_temprana || '').localeCompare(String(b.fecha_inicio_temprana || ''))
       })
-  }, [cpmResultados, activePk, agrupadorLabelById])
+  }, [cpmResultados, activePk, agrupadorLabelById, tramoConsolidado, tramoContext])
 
   // Cuando fecha_fin_calculada no está en actMap (datos viejos o sin RPC),
   // la recalcula localmente usando días hábiles y noHabilesSet.
@@ -1823,7 +1868,7 @@ export default function ProgObraProgramacionModal({
   const pkGanttModel = useMemo(
     () => buildPkGanttLayout({
       capitulosOrdenados,
-      activePk,
+      layoutScope: ganttLayoutScope,
       collapsedCaps,
       expandedAgs,
       estructuraPorCapitulo,
@@ -1840,7 +1885,7 @@ export default function ProgObraProgramacionModal({
     }),
     [
       capitulosOrdenados,
-      activePk,
+      ganttLayoutScope,
       collapsedCaps,
       expandedAgs,
       estructuraPorCapitulo,
@@ -1992,6 +2037,53 @@ export default function ProgObraProgramacionModal({
     agrupadorActItem,
     itemsPorCapitulo,
     itemRowKey,
+    actividadKey,
+    calcFinLocal,
+  ])
+
+  const syncGanttAfterTramoSave = useCallback(async () => {
+    if (!workingVersion?.id || !cid || !token || !tramoContext?.tramo) return
+    const d = await fetchEstructuraTramo(API, cid, token, {
+      versionId: workingVersion.id,
+      tramo: tramoContext.tramo,
+      pkIds: tramoContext.pkIds,
+    })
+    const freshMap = {}
+    const next = {}
+    for (const c of d?.capitulos || []) {
+      const cap = String(c.capitulo || '').trim()
+      for (const ag of c.agrupadores || []) {
+        const actItem = agrupadorActItem(ag)
+        const prog = ag.programacion || {}
+        if (!prog.fecha_inicio) continue
+        freshMap[actividadKey(cap, actItem, 1)] = {
+          capitulo: cap,
+          item: actItem,
+          segmento: 1,
+          agrupador_id: ag.agrupador_id,
+          codigo_wbs: ag.codigo_wbs,
+          fecha_inicio: prog.fecha_inicio,
+          duracion_dias_habiles: prog.duracion_dias_habiles,
+          fecha_fin_calculada: prog.fecha_fin_calculada,
+        }
+        const rk = agrupadorRowKey(cap, ag)
+        const fi = fmtDateIso(prog.fecha_inicio)
+        const dur = prog.duracion_dias_habiles != null ? parseInt(String(prog.duracion_dias_habiles), 10) : NaN
+        if (!fi || !(dur > 0)) continue
+        const ff = fmtDateIso(prog.fecha_fin_calculada) || calcFinLocal(fi, dur)
+        if (ff) next[rk] = ff
+      }
+    }
+    setGanttActOverlay(freshMap)
+    setFinOverrides(next)
+  }, [
+    workingVersion?.id,
+    cid,
+    token,
+    API,
+    tramoContext,
+    agrupadorActItem,
+    agrupadorRowKey,
     actividadKey,
     calcFinLocal,
   ])
@@ -2163,6 +2255,12 @@ export default function ProgObraProgramacionModal({
     setResetConfirmOpen(true)
   }
 
+  const handleResetearTramoProgramacion = () => {
+    if (!editable || historicalReadOnly || !workingVersion?.id || !tramoContext?.tramo) return
+    if (panelBusy || localSaving || resettingPk) return
+    setResetConfirmOpen(true)
+  }
+
   const ejecutarResetearPkProgramacion = async () => {
     if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
     setResetConfirmOpen(false)
@@ -2206,6 +2304,37 @@ export default function ProgObraProgramacionModal({
     }
   }
 
+  const ejecutarResetearTramoProgramacion = async () => {
+    if (!editable || historicalReadOnly || !workingVersion?.id || !tramoContext?.tramo) return
+    setResetConfirmOpen(false)
+    setResettingPk(true)
+    try {
+      await clearTramoProgramacion(API, cid, token, workingVersion.id, {
+        tramo: tramoContext.tramo,
+        pkIds: tramoContext.pkIds,
+      })
+      setRowDrafts({})
+      preSaveDraftSnapshotRef.current = null
+      setFinOverrides({})
+      setGanttActOverlay(null)
+      setCpmDirty(true)
+      setSaveGeneration((g) => g + 1)
+      const n = tramoContext.pkCount || tramoContext.pkIds?.length || 0
+      showToast?.(`Programación del ${tramoContext.tramo} reseteada (${n} PK${n === 1 ? '' : 's'}).`, 'ok')
+      if (onReloadActividades) {
+        await onReloadActividades()
+      }
+      if (onSaveSuccess) {
+        await onSaveSuccess()
+      }
+    } catch (e) {
+      console.error('[ProgObra] Resetear programación tramo:', e)
+      showToast?.(e?.message || 'Error al resetear programación del tramo', 'err')
+    } finally {
+      setResettingPk(false)
+    }
+  }
+
   const handleGuardarClick = async () => {
     if (localSaving) return
     if (panelBusy) {
@@ -2225,7 +2354,7 @@ export default function ProgObraProgramacionModal({
         setCollapsedCaps((s) => {
           const next = { ...s }
           for (const cap of capitulosOrdenados) {
-            next[`${activePk}\u0000${cap}`] = false
+            next[`${ganttLayoutScope}\u0000${cap}`] = false
           }
           return next
         })
@@ -2252,7 +2381,11 @@ export default function ProgObraProgramacionModal({
         if (onReloadActividades) {
           await onReloadActividades(pkId || activePk)
         }
-        await syncGanttAfterSave(pkId || activePk)
+        if (tramoConsolidado) {
+          await syncGanttAfterTramoSave()
+        } else {
+          await syncGanttAfterSave(pkId || activePk)
+        }
         setSaveGeneration((g) => g + 1)
         setCpmDirty(true)
       }
@@ -2398,7 +2531,6 @@ export default function ProgObraProgramacionModal({
         )}
 
         {/* Content tabs: Programación | Dependencias */}
-        {!tramoConsolidado && (
         <div style={{ display: 'flex', gap: 0, padding: '0 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, background: t.bg }}>
           {['programacion', 'dependencias'].map((tab) => (
             <button
@@ -2432,10 +2564,9 @@ export default function ProgObraProgramacionModal({
             </button>
           ))}
         </div>
-        )}
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {!tramoConsolidado && activeContentTab === 'dependencias' ? (
+          {activeContentTab === 'dependencias' ? (
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
               <ProgObraDependencias
                 cid={cid}
@@ -2443,14 +2574,17 @@ export default function ProgObraProgramacionModal({
                 API={API}
                 t={t}
                 versionId={workingVersion?.id}
-                activePk={activePk}
-                allPkIds={allPkIds}
+                activePk={tramoConsolidado ? (tramoContext?.pkIds?.[0] || activePk) : activePk}
+                allPkIds={tramoConsolidado ? (tramoContext?.pkIds || allPkIds) : allPkIds}
                 capitulosOrigen={capitulosOrdenados}
                 estructuraPorCapitulo={estructuraPorCapitulo}
                 editable={editable}
                 showToast={showToast}
                 cpmDirty={cpmDirty}
                 onCpmDirtyChange={setCpmDirty}
+                tramoMode={tramoConsolidado}
+                tramoLabel={tramoContext?.tramo ? `${tramoContext.tramo} (${tramoContext.pkCount || tramoContext.pkIds?.length || 0} PKs)` : null}
+                tramoPkIds={tramoContext?.pkIds}
                 onCpmCalculated={(resultados) => {
                   setCpmResultados(resultados)
                   setCpmDirty(false)
@@ -2546,7 +2680,7 @@ export default function ProgObraProgramacionModal({
             </div>
           )}
 
-          {!compareEnabled && !tramoConsolidado && progSubTab === 'schedule' && capitulosOrdenados.length > 0 && (
+          {!compareEnabled && progSubTab === 'schedule' && capitulosOrdenados.length > 0 && (
             <div
               style={{
                 display: 'flex',
@@ -2622,7 +2756,7 @@ export default function ProgObraProgramacionModal({
             >
               <div
                 style={{
-                  width: tramoConsolidado ? '100%' : `${panelSplitPct}%`,
+                  width: `${panelSplitPct}%`,
                   flexShrink: 0,
                   display: 'flex',
                   flexDirection: 'column',
@@ -2723,8 +2857,6 @@ export default function ProgObraProgramacionModal({
                 </table>
                 </div>
               </div>
-              {!tramoConsolidado && (
-              <>
               <div
                 role="separator"
                 aria-orientation="vertical"
@@ -2779,14 +2911,15 @@ export default function ProgObraProgramacionModal({
                   model={pkGanttModelExtended}
                   noHabilesSet={noHabilesSet}
                   t={t}
-                  activePk={activePk}
+                  activePk={ganttLayoutScope}
                   cpmByNodeKey={cpmByNodeKey}
+                  tramoCpmByCapAg={tramoConsolidado ? tramoCpmByCapAg : null}
                   bodyScrollRef={rightBodyScrollRef}
                   onBodyScroll={handleRightBodyScroll}
                   onRefresh={refreshPkGantt}
                   compareByKey={compareByKey}
                   ganttCompareMode={ganttCompareMode}
-                  showCompare={compareEnabled && !!compareData}
+                  showCompare={!tramoConsolidado && compareEnabled && !!compareData}
                 />
                 {cpmResumenOpen && (
                 <div
@@ -2826,8 +2959,6 @@ export default function ProgObraProgramacionModal({
                 </div>
                 )}
               </div>
-              </>
-              )}
             </div>
           )}
             </>
@@ -2868,6 +2999,17 @@ export default function ProgObraProgramacionModal({
                 <RotateCcw size={20} aria-hidden />
               </ProgModalIconBtn>
             )}
+            {editable && !historicalReadOnly && tramoConsolidado && (
+              <ProgModalIconBtn
+                title={resettingPk ? 'Reseteando…' : 'Resetear programación del tramo'}
+                disabled={panelBusy || localSaving || resettingPk}
+                onClick={handleResetearTramoProgramacion}
+                color="#b91c1c"
+                borderColor="#fca5a5"
+              >
+                <RotateCcw size={20} aria-hidden />
+              </ProgModalIconBtn>
+            )}
           </div>
         </div>
       </div>
@@ -2875,17 +3017,30 @@ export default function ProgObraProgramacionModal({
         <CcConfirmModal
           theme={t}
           zIndex={PROG_Z + 10}
-          titulo="Resetear programación"
+          titulo={tramoConsolidado ? 'Resetear programación del tramo' : 'Resetear programación'}
           tipo="danger"
-          confirmar="Resetear PK"
+          confirmar={tramoConsolidado ? 'Resetear tramo' : 'Resetear PK'}
           cancelar="Cancelar"
           onCancel={() => setResetConfirmOpen(false)}
-          onConfirm={() => void ejecutarResetearPkProgramacion()}
+          onConfirm={() =>
+            void (tramoConsolidado ? ejecutarResetearTramoProgramacion() : ejecutarResetearPkProgramacion())
+          }
         >
-          <p style={{ margin: 0 }}>
-            Se borrarán todas las fechas y actividades guardadas del PK{' '}
-            <strong>{activePk}</strong>. Esta acción no se puede deshacer.
-          </p>
+          {tramoConsolidado ? (
+            <p style={{ margin: 0 }}>
+              Se borrarán todas las fechas y actividades de los{' '}
+              <strong>
+                {tramoContext?.pkCount || tramoContext?.pkIds?.length || 0} PK
+                {(tramoContext?.pkCount || tramoContext?.pkIds?.length || 0) === 1 ? '' : 's'}
+              </strong>{' '}
+              del <strong>{tramoContext?.tramo}</strong>. Esta acción no se puede deshacer.
+            </p>
+          ) : (
+            <p style={{ margin: 0 }}>
+              Se borrarán todas las fechas y actividades guardadas del PK{' '}
+              <strong>{activePk}</strong>. Esta acción no se puede deshacer.
+            </p>
+          )}
         </CcConfirmModal>
       )}
     </div>,

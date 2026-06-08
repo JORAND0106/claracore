@@ -20,6 +20,7 @@ from prog_obra_service import (
     create_version,
     clear_version_programacion,
     clear_pk_programacion,
+    clear_tramo_programacion,
     fetch_borrador_activo,
     fetch_estructura_programacion_pk,
     fetch_estructura_tramo,
@@ -69,7 +70,13 @@ from prog_obra_suspension import (
     apply_suspension_to_version,
     validate_suspension_metadata,
 )
-from prog_obra_curva_s import build_curva_s, build_curva_s_escenarios, build_curva_s_pdf_html
+from prog_obra_curva_s import (
+    build_curva_s,
+    build_curva_s_escenarios,
+    build_curva_s_pdf_html,
+    fetch_cronograma_pdf_tree,
+)
+from prog_obra_pk_filter import parse_pk_ids_param
 from prog_obra_auto_schedule import (
     check_auto_schedule_prereqs,
     preview_auto_schedule,
@@ -512,6 +519,44 @@ def prog_clear_pk_programacion(
         "prog_version",
         version_id,
         {"contrato_id": contrato_id, "pk_id": pk_id.strip(), "eliminados": result.get("eliminados")},
+    )
+    return result
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/programacion-tramo")
+def prog_clear_tramo_programacion(
+    contrato_id: int,
+    version_id: str,
+    tramo: str = Query(..., min_length=1),
+    pk_ids: Optional[List[str]] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Elimina actividades de todos los PKs de un tramo en borrador y recalcula prog_pk_estado."""
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        result = clear_tramo_programacion(
+            supabase,
+            version_id,
+            contrato_id,
+            tramo,
+            pk_ids=pk_ids,
+        )
+    except HTTPException:
+        raise
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_TRAMO_PROGRAMACION_ELIMINADA",
+        "prog_version",
+        version_id,
+        {
+            "contrato_id": contrato_id,
+            "tramo": (tramo or "").strip(),
+            "pk_count": result.get("pk_count"),
+            "eliminados": result.get("eliminados"),
+        },
     )
     return result
 
@@ -1503,6 +1548,23 @@ def prog_curva_s_pdf(
 ):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
+    return _curva_s_pdf_response(
+        contrato_id,
+        baseline_id=baseline_id,
+        target_id=target_id,
+        version_ppto_id=version_ppto_id,
+        pk_ids=pk_ids,
+    )
+
+
+def _curva_s_pdf_response(
+    contrato_id: int,
+    *,
+    baseline_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[str] = None,
+):
     try:
         data = build_curva_s(
             supabase,
@@ -1514,8 +1576,48 @@ def prog_curva_s_pdf(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    crows = supabase.table("contratos").select("id,numero,objeto,contratista,interventoria").eq("id", contrato_id).limit(1).execute().data or [{}]
-    html = build_curva_s_pdf_html(crows[0], data)
+    crows = (
+        supabase.table("contratos")
+        .select("id,numero,objeto,contratista,interventoria,logo_contratista")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )
+    contrato = crows[0]
+    pk_set = parse_pk_ids_param(pk_ids)
+    resolved_target = (data.get("target_id") or "").strip()
+    prog_meta: dict = {}
+    if resolved_target:
+        prows = (
+            supabase.table("prog_versiones")
+            .select("numero_version,tipo,estado")
+            .eq("id", resolved_target)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        prog_meta = prows[0] if prows else {}
+    ppto_meta: dict = {}
+    ppto_id = (data.get("version_ppto_id") or "").strip()
+    if ppto_id:
+        from prog_obra_costos_presupuesto import assert_ppto_version_contrato
+
+        ppto_meta = assert_ppto_version_contrato(supabase, contrato_id, ppto_id)
+    cronograma = (
+        fetch_cronograma_pdf_tree(supabase, resolved_target, contrato_id, pk_ids=pk_set)
+        if resolved_target
+        else []
+    )
+    html = build_curva_s_pdf_html(
+        contrato,
+        data,
+        cronograma=cronograma,
+        prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
+    )
     try:
         from topografia_utils import to_pdf_bytes
         pdf = to_pdf_bytes(html)

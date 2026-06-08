@@ -1590,7 +1590,14 @@ export default function ModuloProgramacionObra({
         capitulo: cap,
         agrupadores: (c.agrupadores || []).map((ag) => ({
           ...ag,
-          items: [],
+          items: (ag.items || []).map((it) => ({
+            item: it.item,
+            descripcion: it.descripcion || '',
+            cant_total: it.cant_total,
+            costo_directo: it.costo_directo,
+            und: it.und || '?',
+            vlr_unitario: it.vlr_unitario,
+          })),
         })),
         sin_agrupador: [],
       }
@@ -1606,7 +1613,7 @@ export default function ModuloProgramacionObra({
       for (const ag of c.agrupadores || []) {
         const actItem = String(ag.codigo_wbs || `AG${ag.agrupador_id ?? ''}`).trim()
         const prog = ag.programacion || {}
-        if (prog.consistente === false || !prog.fecha_inicio) continue
+        if (!prog.fecha_inicio) continue
         const k = `${cap}\u0000${actItem}\u00001`
         m[k] = {
           capitulo: cap,
@@ -2282,6 +2289,13 @@ export default function ModuloProgramacionObra({
         }
         await reloadTramoEstructura()
         await refreshMapaYVersiones()
+        const omitidos = Number(batchData?.omitidos_pk_con_fecha) || 0
+        if (omitidos > 0) {
+          showToast(
+            `Programados PKs sin fecha; ${omitidos} PK(s) con programación previa se conservaron.`,
+            'info',
+          )
+        }
         return {
           ok: true,
           saved: actividades.length,
@@ -2924,7 +2938,7 @@ export default function ModuloProgramacionObra({
         modalMode={modalMode}
         tramoContext={modalTramoContext}
         pkTabs={modalPkTabs}
-        activePk={activeModalPk || modalPkTabs[0]}
+        activePk={modalMode === 'tramo' ? (modalTramoContext?.pkIds?.[0] || '') : (activeModalPk || modalPkTabs[0])}
         onSelectPk={setActiveModalPk}
         onRemovePk={(pk) => {
           setModalPkTabs((tabs) => {
@@ -2960,7 +2974,7 @@ export default function ModuloProgramacionObra({
         onSaveSuccess={handleProgSaveSuccess}
         onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}
         showToast={showToast}
-        allPkIds={pkIdsProgramables}
+        allPkIds={modalMode === 'tramo' ? (modalTramoContext?.pkIds || []) : pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
         openCompareTab={modalOpenCompareTab}
         compareBaselineId={modalCompareBaselineId ?? desviacionContrato?.baseline_id ?? versionBaselineId}
@@ -3017,7 +3031,9 @@ export default function ModuloProgramacionObra({
         open={alcanceModal != null}
         onClose={() => !panelBusy && setAlcanceModal(null)}
         onConfirm={(payload) => void handleAlcanceConfirm(payload)}
-        pkRows={pkRowsProgramables}
+        tramos={tramos}
+        programableCountByTramo={programableCountByTramo}
+        programablePkSet={programablePkSet}
         t={t}
         mode={alcanceModal === 'export' ? 'export' : 'curva'}
         busy={panelBusy}
