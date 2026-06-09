@@ -19,26 +19,41 @@ export function normalizeCpmRow(r) {
   }
 }
 
+/** Nodo CPM degenerado: inicio >= fin (p. ej. stub con duración 1 mal resuelta). */
+export function isDegenerateCpmNode(raw) {
+  const n = normalizeCpmRow(raw)
+  if (!n?.fecha_inicio_temprana || !n?.fecha_fin_temprana) return true
+  const fi = String(n.fecha_inicio_temprana).slice(0, 10)
+  const ff = String(n.fecha_fin_temprana).slice(0, 10)
+  return fi >= ff
+}
+
 export function pickBestCpmNodeTramo(nodes) {
   if (!nodes?.length) return null
   const normalized = nodes.map((raw) => normalizeCpmRow(raw)).filter(Boolean)
   if (!normalized.length) return null
-  const withDates = normalized.filter((n) => n.fecha_inicio_temprana)
-  const pool = withDates.length ? withDates : normalized
+  const nonDegenerate = normalized.filter((n) => !isDegenerateCpmNode(n))
+  const pool = nonDegenerate.length ? nonDegenerate : normalized
+
+  const spanRank = (n) => {
+    const fi = String(n.fecha_inicio_temprana || '').slice(0, 10)
+    const ff = String(n.fecha_fin_temprana || '').slice(0, 10)
+    if (!fi || !ff || ff <= fi) return 0
+    return ff.localeCompare(fi)
+  }
+
+  // Tramo consolidado: nodo con mayor envolvente temporal (alineado con tabla/Gantt).
   return pool.reduce((best, n) => {
     if (!best) return n
-    const bh = Number(best.holgura_total)
-    const nh = Number(n.holgura_total)
-    if (Number.isFinite(nh) && Number.isFinite(bh)) {
-      if (nh < bh) return n
-      if (nh > bh) return best
-    } else if (Number.isFinite(nh) && nh < 0) return n
-    else if (Number.isFinite(bh) && bh < 0) return best
-    const bf = String(best.fecha_fin_temprana || '')
-    const nf = String(n.fecha_fin_temprana || '')
-    if (nf > bf) return n
-    if (nf < bf) return best
-    return pickBestCpmNode([best, n])
+    const spanN = spanRank(n)
+    const spanB = spanRank(best)
+    if (spanN > spanB) return n
+    if (spanN < spanB) return best
+    const bCrit = best.es_ruta_critica || (Number.isFinite(best.holgura_total) && best.holgura_total <= 0)
+    const nCrit = n.es_ruta_critica || (Number.isFinite(n.holgura_total) && n.holgura_total <= 0)
+    if (nCrit && !bCrit) return n
+    if (bCrit && !nCrit) return best
+    return (Number(n.holgura_total) ?? 999) < (Number(best.holgura_total) ?? 999) ? n : best
   }, null)
 }
 
@@ -65,6 +80,7 @@ export function collectDesfaseHorizonte(cpmRows, versionFinIso, { labelByAgId, t
   for (const raw of cpmRows) {
     const n = normalizeCpmRow(raw)
     if (!n?.fecha_fin_temprana || n.agrupador_id == null || n.agrupador_id === '') continue
+    if (isDegenerateCpmNode(n)) continue
     const dias = diasDesfaseHorizonte(n, versionFinIso, noHabilesSet || new Set())
     if (dias <= 0) continue
     const agKey = String(n.agrupador_id)

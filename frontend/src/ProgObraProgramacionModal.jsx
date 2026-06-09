@@ -68,7 +68,7 @@ const GANTT_NON_HABIL_BG = 'rgba(229, 231, 235, 0.6)'
 const GANTT_TEAL = '#1D9E75'
 const GANTT_TEAL_DARK = '#157a5c'
 const GANTT_CAP_BAR = 'rgba(59, 130, 246, 0.3)'
-const GANTT_RANGE_PAD_DAYS = 7
+const GANTT_RANGE_PAD_DAYS = 3
 const STICKY_W = { item: 88, desc: 280 }
 const SCROLL_COL_W = { und: 48, cant: 88, costo: 120, fechaIni: 148, dias: 72, fechaFin: 120, save: 28 }
 
@@ -276,10 +276,16 @@ function resolveCpmNode({
 
 function overlayCpmSchedule(sched, cpmNode) {
   if (!cpmNode?.fecha_inicio_temprana) return sched
+  const fi = fmtDateIso(cpmNode.fecha_inicio_temprana) || sched.fi
+  const ff = fmtDateIso(cpmNode.fecha_fin_temprana) || sched.ff
+  // CPM degenerado (mismo día): conservar fechas de programación visibles.
+  if (fi && ff && fi >= ff && sched.fi && sched.ff && sched.ff > sched.fi) {
+    return sched
+  }
   return {
     ...sched,
-    fi: fmtDateIso(cpmNode.fecha_inicio_temprana) || sched.fi,
-    ff: fmtDateIso(cpmNode.fecha_fin_temprana) || sched.ff,
+    fi,
+    ff,
   }
 }
 
@@ -498,9 +504,7 @@ function buildPkGanttLayout({
   finOverrides,
   calcFinLocal,
   noHabilesSet,
-  horizonStartIso = null,
   horizonEndIso = null,
-  cpmResultados = [],
 }) {
   const syncRows = []
   const getDraft = (c, itemCode) => {
@@ -638,9 +642,7 @@ function buildPkGanttLayout({
     },
     estructuraPorCapitulo,
     agrupadorActItem,
-    horizonStartIso,
     horizonEndIso,
-    cpmResultados,
     syncRows,
   })
   if (!timelineDays.length) timelineDays = defaultTimelineDays()
@@ -974,7 +976,7 @@ function capColor(idx) {
   return CAP_PALETTE[idx % CAP_PALETTE.length]
 }
 
-/** Rango de días del Gantt: actividades, barras, CPM y horizonte de versión ± margen. */
+/** Rango de días del Gantt: programación visible ± margen (no fechas tardías CPM). */
 function computeGanttTimelineDays({
   capitulosOrdenados,
   itemsPorCapitulo,
@@ -983,13 +985,11 @@ function computeGanttTimelineDays({
   getDraftValues,
   estructuraPorCapitulo,
   agrupadorActItem,
-  horizonStartIso,
   horizonEndIso,
-  cpmResultados,
   syncRows,
 }) {
-  let minD = parseIsoDate(fmtDateIso(horizonStartIso))
-  let maxD = parseIsoDate(fmtDateIso(horizonEndIso))
+  let minD = null
+  let maxD = null
 
   const bump = (iso) => {
     const d = parseIsoDate(fmtDateIso(iso))
@@ -1012,17 +1012,12 @@ function computeGanttTimelineDays({
     }
   }
 
-  for (const r of cpmResultados || []) {
-    bump(r.fecha_inicio_temprana)
-    bump(r.fecha_fin_temprana)
-    bump(r.fecha_inicio_tardia)
-    bump(r.fecha_fin_tardia)
-  }
-
   for (const row of syncRows || []) {
     bump(row.barStart)
     bump(row.barEnd)
   }
+
+  bump(horizonEndIso)
 
   if (!minD && !maxD) return []
   if (!minD) minD = maxD
@@ -1042,9 +1037,7 @@ function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, act
     getDraftValues,
     estructuraPorCapitulo,
     agrupadorActItem,
-    horizonStartIso: null,
     horizonEndIso: null,
-    cpmResultados: [],
     syncRows: [],
   })
 }
@@ -1289,7 +1282,7 @@ function ProgItemRow({
 }) {
   const ex = act || {}
   const hasManualFechaAncla = Boolean(ex.override_manual && fmtDateIso(ex.fecha_inicio))
-  const showCpmDates = cpmAplicado && cpmNode?.fecha_inicio_temprana && !hasManualFechaAncla
+  const showCpmDates = cpmAplicado && Boolean(cpmNode?.fecha_inicio_temprana)
   const cpmIni = showCpmDates ? fmtDateIso(cpmNode.fecha_inicio_temprana) : null
   const cpmFin = showCpmDates ? fmtDateIso(cpmNode.fecha_fin_temprana) : null
   const inherited = rowKind === 'hijo'
@@ -1361,38 +1354,24 @@ function ProgItemRow({
 
   const trySave = useCallback(async () => {
     if (!effectiveEditable || saveStatus === 'saving' || suspendAutoSave) return false
+    if (tramoConsolidado) return false
     const d = parseInt(String(duracion), 10)
-    if (tramoConsolidado && onGuardarBatchTramo && (d > 0)) {
-      const result = await onGuardarBatchTramo([{
-        capitulo: itemDef.capitulo,
-        item: itemDef.item,
-        fecha_inicio: fechaIni || null,
-        duracion: d,
-        itemDef,
-        rk,
-      }], { allowOverwrite: true })
-      if (result?.ok) dirtyRef.current = false
-      return !!result?.ok
-    }
     if (!fechaIni || !(d > 0)) return false
     const ok = await onGuardarItem(itemDef, { fecha_inicio: fechaIni, duracion: String(d), override_manual: true, heredado_de_capitulo: false }, rk)
     if (ok) dirtyRef.current = false
     return ok
-  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, onGuardarBatchTramo, tramoConsolidado, itemDef, fechaIni, duracion, rk])
+  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, tramoConsolidado, itemDef, fechaIni, duracion, rk])
 
   useEffect(() => {
-    if (!effectiveEditable || !dirtyRef.current || suspendAutoSave) return undefined
+    if (!effectiveEditable || !dirtyRef.current || suspendAutoSave || tramoConsolidado) return undefined
     const d = parseInt(String(debDur), 10)
-    if (tramoConsolidado && onGuardarBatchTramo) {
-      if (!(d > 0)) return undefined
-    } else if (!debFecha || !(d > 0)) {
-      return undefined
-    }
+    if (!debFecha || !(d > 0)) return undefined
     const timer = setTimeout(() => trySave(), 700)
     return () => clearTimeout(timer)
-  }, [debFecha, debDur, editable, trySave, suspendAutoSave, tramoConsolidado, onGuardarBatchTramo])
+  }, [debFecha, debDur, editable, trySave, suspendAutoSave, tramoConsolidado])
 
   const onBlurField = () => {
+    if (tramoConsolidado) return
     if (dirtyRef.current) trySave()
   }
 
@@ -1844,6 +1823,7 @@ export default function ProgObraProgramacionModal({
   onGuardarCambios,
   onSaveSuccess,
   onScheduleRefresh = null,
+  onTramoScheduleCleared = null,
   onReloadActividades,
   showToast,
   allPkIds,
@@ -1954,6 +1934,19 @@ export default function ProgObraProgramacionModal({
       setProgSubTab('schedule')
       setCompareData(null)
       setCpmResumenOpen(false)
+      setRowDrafts({})
+      setFinOverrides({})
+      setGanttActOverlay(null)
+      preSaveDraftSnapshotRef.current = null
+      rowDraftRef.current = {}
+      setCollapsedCaps({})
+      setExpandedAgs({})
+      depsVersionLoadedRef.current = null
+      setDeps([])
+      setDepsLoaded(false)
+      setDepsEstructuraByPk({})
+      setCpmResultados([])
+      setCpmDirty(false)
       return
     }
     if (openCompareTab && compareEnabled) setProgSubTab('compare')
@@ -2066,20 +2059,9 @@ export default function ProgObraProgramacionModal({
 
   useEffect(() => {
     if (!open || !workingVersion?.id || !cid || !token) {
-      if (!open) {
-        depsVersionLoadedRef.current = null
-        setDeps([])
-        setDepsLoaded(false)
-        setDepsEstructuraByPk({})
-        setCpmResultados([])
-        setCpmDirty(false)
-      }
       return undefined
     }
     const vid = String(workingVersion.id)
-    if (depsVersionLoadedRef.current === vid) {
-      return undefined
-    }
     let cancel = false
     setDepsLoaded(false)
     const hdrs = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
@@ -2163,6 +2145,30 @@ export default function ProgObraProgramacionModal({
     return m
   }, [cpmResultados])
 
+  const agrupadorProgrammedPks = useMemo(() => {
+    const m = {}
+    for (const cap of capitulosOrdenados) {
+      for (const ag of estructuraPorCapitulo?.[cap]?.agrupadores || []) {
+        const id = String(ag.agrupador_id ?? '')
+        if (!id) continue
+        const prog = ag.programacion || {}
+        const fromProg = (prog.pk_ids_programados || []).map((p) => String(p).trim()).filter(Boolean)
+        const pks = fromProg.length
+          ? fromProg
+          : (ag.pk_ids || []).map((p) => String(p).trim()).filter(Boolean)
+        m[id] = new Set(pks)
+      }
+    }
+    return m
+  }, [capitulosOrdenados, estructuraPorCapitulo])
+
+  const cpmRowInTramoProgramacion = useCallback((r) => {
+    if (!tramoConsolidado || r.agrupador_id == null || r.agrupador_id === '') return true
+    const allowed = agrupadorProgrammedPks[String(r.agrupador_id)]
+    if (!allowed?.size) return true
+    return allowed.has(String(r.pk_id || '').trim())
+  }, [tramoConsolidado, agrupadorProgrammedPks])
+
   const { tramoCpmByAgId, tramoCpmByCapAg } = useMemo(() => {
     if (!tramoConsolidado) return { tramoCpmByAgId: null, tramoCpmByCapAg: null }
     const pkSet = tramoContext?.pkIds?.length
@@ -2204,7 +2210,7 @@ export default function ProgObraProgramacionModal({
       tramoCpmByCapAgOut[k] = pickTramo(nodes)
     }
     return { tramoCpmByAgId: tramoCpmByAgIdOut, tramoCpmByCapAg: tramoCpmByCapAgOut }
-  }, [tramoConsolidado, tramoContext, cpmResultados])
+  }, [tramoConsolidado, tramoContext, cpmResultados, agrupadorProgrammedPks])
 
   const agrupadorLabelById = useMemo(() => {
     const m = {}
@@ -2272,7 +2278,7 @@ export default function ProgObraProgramacionModal({
     const pkFiltered = tramoConsolidado && tramoContext?.pkIds?.length
       ? cpmResultados.filter((r) => {
         const pkSet = new Set(tramoContext.pkIds.map((p) => String(p).trim()))
-        return pkSet.has(String(r.pk_id || '').trim())
+        return pkSet.has(String(r.pk_id || '').trim()) && cpmRowInTramoProgramacion(r)
       })
       : cpmResultados
     return collectDesfaseHorizonte(pkFiltered, versionFf, {
@@ -2280,7 +2286,7 @@ export default function ProgObraProgramacionModal({
       tramoConsolidado,
       noHabilesSet,
     })
-  }, [versionFf, cpmResultados, tramoConsolidado, tramoContext, agrupadorLabelById, noHabilesSet])
+  }, [versionFf, cpmResultados, tramoConsolidado, tramoContext, agrupadorLabelById, noHabilesSet, cpmRowInTramoProgramacion])
 
   const handleCpmCalculated = useCallback(async (resultados) => {
     setCpmResultados(resultados)
@@ -2289,8 +2295,9 @@ export default function ProgObraProgramacionModal({
     if (onReloadActividades) {
       await onReloadActividades()
     }
+    onScheduleRefresh?.()
     setSaveGeneration((g) => g + 1)
-  }, [onReloadActividades])
+  }, [onReloadActividades, onScheduleRefresh])
 
   // Cuando fecha_fin_calculada no está en actMap (datos viejos o sin RPC),
   // la recalcula localmente usando días hábiles y noHabilesSet.
@@ -2371,9 +2378,7 @@ export default function ProgObraProgramacionModal({
       finOverrides,
       calcFinLocal,
       noHabilesSet,
-      horizonStartIso: versionFi || null,
       horizonEndIso: versionFf || null,
-      cpmResultados,
     }),
     [
       capitulosOrdenados,
@@ -2398,9 +2403,7 @@ export default function ProgObraProgramacionModal({
       noHabilesSet,
       rowDrafts,
       saveGeneration,
-      versionFi,
       versionFf,
-      cpmResultados,
     ],
   )
 
@@ -2651,22 +2654,34 @@ export default function ProgObraProgramacionModal({
         const act = actMap[actividadKey(cap, row.actItem, 1)]
         const { fecha, dur } = resolveRowDraft(row.rk, live, act, row.prog)
         const hadSchedule = actHadSchedule(act, row.prog)
-        const hasDraft = (dur > 0) || Boolean(fecha)
-        const scheduleEmpty = !hasDraft
+        const durValid = Number.isFinite(dur) && dur > 0
+        const wantsClear = !fecha && !durValid && hadSchedule
+        const duracionOnly = !fecha && durValid
+        const hasDraft = Boolean(fecha) && durValid
 
-        if (scheduleEmpty) {
-          if (hadSchedule) {
-            itemsAGuardar.push({
-              itemDef: row.itemDef,
-              rk: row.rk,
-              fecha_inicio: null,
-              duracion: null,
-              fecha_fin_calculada: null,
-              clearSchedule: true,
-            })
-          } else {
-            skipped += 1
-          }
+        if (wantsClear) {
+          itemsAGuardar.push({
+            itemDef: row.itemDef,
+            rk: row.rk,
+            fecha_inicio: null,
+            duracion: null,
+            fecha_fin_calculada: null,
+            clearSchedule: true,
+          })
+          continue
+        }
+        if (duracionOnly) {
+          itemsAGuardar.push({
+            itemDef: row.itemDef,
+            rk: row.rk,
+            fecha_inicio: null,
+            duracion: dur,
+            duracionOnly: true,
+          })
+          continue
+        }
+        if (!hasDraft) {
+          skipped += 1
           continue
         }
         itemsAGuardar.push({
@@ -2680,11 +2695,11 @@ export default function ProgObraProgramacionModal({
     return { itemsAGuardar, skipped }
   }, [capitulosOrdenados, estructuraPorCapitulo, agrupadorActItem, agrupadorRowKey, itemsPorCapitulo, actMap, actividadKey, itemRowKey, rowDrafts])
 
-  const flushAllDrafts = useCallback(async () => {
+  const flushAllDrafts = useCallback(async (options = {}) => {
     if (!editable) return { saved: 0, errors: 0, skipped: 0 }
     const { itemsAGuardar, skipped } = collectDraftItems()
     const rowsToSave = itemsAGuardar.filter(
-      (row) => row.clearSchedule || row.duracion > 0 || row.fecha_inicio,
+      (row) => row.clearSchedule || row.duracionOnly || row.duracion > 0 || row.fecha_inicio,
     )
     console.debug('[ProgObra] flushAllDrafts', {
       filasTotal: itemsAGuardar.length,
@@ -2701,25 +2716,36 @@ export default function ProgObraProgramacionModal({
       return { saved: 0, errors: 0, skipped: skipped || itemsAGuardar.length }
     }
     if (onGuardarBatchTramo && tramoConsolidado) {
-      const batchPayload = rowsToSave.map((row) => {
-        const fiRaw = row.clearSchedule ? null : row.fecha_inicio
-        const fiStr = fiRaw != null ? String(fiRaw).trim() : ''
-        return {
-          capitulo: row.itemDef.capitulo,
-          item: row.itemDef.item,
-          fecha_inicio: fiStr ? fiStr.slice(0, 10) : null,
-          duracion: row.clearSchedule ? null : row.duracion,
-          fecha_fin_calculada: row.clearSchedule ? null : undefined,
-          override_manual: true,
-          heredado_de_capitulo: false,
-          itemDef: row.itemDef,
-          rk: row.rk,
-        }
+      const allClears = rowsToSave.length > 0 && rowsToSave.every((r) => r.clearSchedule)
+      const batchPayload = rowsToSave.map((row) => ({
+        capitulo: row.itemDef.capitulo,
+        item: row.itemDef.item,
+        clearSchedule: !!row.clearSchedule,
+        duracionOnly: !!row.duracionOnly,
+        fecha_inicio: row.clearSchedule || row.duracionOnly ? null : row.fecha_inicio,
+        duracion: row.clearSchedule ? null : row.duracion,
+        fecha_fin_calculada: row.clearSchedule ? null : undefined,
+        override_manual: false,
+        heredado_de_capitulo: false,
+        itemDef: row.itemDef,
+        rk: row.rk,
+      }))
+      console.debug('[ProgObra] POST actividades-batch-tramo', { count: batchPayload.length, tramo: tramoContext?.tramo, allClears })
+      const batchResult = await onGuardarBatchTramo(batchPayload, {
+        allowOverwrite: true,
+        skipReload: true,
+        preserveCpmSync: !!options.preserveCpmSync,
       })
-      console.debug('[ProgObra] POST actividades-batch-tramo', { count: batchPayload.length, tramo: tramoContext?.tramo })
-      const batchResult = await onGuardarBatchTramo(batchPayload, { allowOverwrite: true, skipReload: true })
       if (!batchResult?.ok) return { saved: 0, errors: batchResult?.errors || batchPayload.length, skipped }
-      return { saved: batchResult.saved, errors: 0, skipped, batchOk: true }
+      return {
+        saved: batchResult.saved,
+        errors: 0,
+        skipped,
+        batchOk: true,
+        allClears,
+        batchMs: batchResult.batchMs,
+        cpmDirty: batchResult.cpmDirty,
+      }
     }
     if (onGuardarBatch) {
       const batchPayload = rowsToSave.map((row) => ({
@@ -2746,7 +2772,7 @@ export default function ProgObraProgramacionModal({
         {
           fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
           duracion: row.clearSchedule ? '' : String(row.duracion),
-          override_manual: true,
+          override_manual: row.clearSchedule ? false : true,
           heredado_de_capitulo: false,
         },
         row.rk,
@@ -2760,11 +2786,22 @@ export default function ProgObraProgramacionModal({
 
   const flushDraftsBeforeCpm = useCallback(async () => {
     if (!editable) return { saved: 0, errors: 0, skipped: 0 }
+    flushSync(() => {
+      setCollapsedCaps((s) => {
+        const next = { ...s }
+        for (const cap of capitulosOrdenados) {
+          next[`${ganttLayoutScope}\u0000${cap}`] = false
+        }
+        return next
+      })
+    })
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    await new Promise((r) => setTimeout(r, 80))
     snapshotDraftsForSave()
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
     const { itemsAGuardar } = collectDraftItems()
     const pending = itemsAGuardar.filter(
-      (row) => row.clearSchedule || row.duracion > 0 || row.fecha_inicio,
+      (row) => row.clearSchedule || row.duracionOnly || row.duracion > 0 || row.fecha_inicio,
     )
     if (pending.length === 0 && !tramoConsolidado) {
       return { saved: 0, errors: 0, skipped: 0 }
@@ -2773,10 +2810,12 @@ export default function ProgObraProgramacionModal({
       const batchPayload = pending.map((row) => ({
         capitulo: row.itemDef.capitulo,
         item: row.itemDef.item,
-        fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
+        clearSchedule: !!row.clearSchedule,
+        duracionOnly: !!row.duracionOnly,
+        fecha_inicio: row.clearSchedule || row.duracionOnly ? null : row.fecha_inicio,
         duracion: row.clearSchedule ? null : (row.duracion > 0 ? row.duracion : null),
         fecha_fin_calculada: row.clearSchedule ? null : undefined,
-        override_manual: true,
+        override_manual: false,
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
         rk: row.rk,
@@ -2799,7 +2838,7 @@ export default function ProgObraProgramacionModal({
       await onReloadActividades()
     }
     return result
-  }, [editable, snapshotDraftsForSave, collectDraftItems, flushAllDrafts, tramoConsolidado, onGuardarBatchTramo, onReloadActividades])
+  }, [editable, snapshotDraftsForSave, collectDraftItems, flushAllDrafts, tramoConsolidado, onGuardarBatchTramo, onReloadActividades, capitulosOrdenados, ganttLayoutScope])
 
   const handleResetearPkProgramacion = () => {
     if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
@@ -2887,16 +2926,14 @@ export default function ProgObraProgramacionModal({
   }
 
   const handleGuardarClick = async () => {
+    if (!editable) return
     if (localSaving) return
     if (panelBusy) {
       showToast?.('Espere a que termine la operación en curso.', 'err')
       return
     }
-    if (!editable) {
-      showToast?.('Seleccione una versión en borrador con permiso de edición.', 'err')
-      return
-    }
     setLocalSaving(true)
+    const cpmSyncedBeforeSave = cpmResultados.length > 0 && !cpmDirty
     const prevCollapsed = collapsedCaps
     saveFlushInProgressRef.current = true
     try {
@@ -2911,34 +2948,58 @@ export default function ProgObraProgramacionModal({
         })
       })
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-      await new Promise((r) => setTimeout(r, 80))
-      const { saved, errors, skipped, batchOk, pkId } = await flushAllDrafts()
+      await new Promise((r) => setTimeout(r, tramoConsolidado ? 80 : 80))
+      const t0 = performance.now()
+      const {
+        saved,
+        errors,
+        skipped,
+        batchOk,
+        pkId,
+        cpmDirty: cpmDirtyFromSave,
+        allClears,
+        batchMs,
+      } = await flushAllDrafts({ preserveCpmSync: cpmSyncedBeforeSave })
+      const flushMs = Math.round(performance.now() - t0)
       const hadRowsToSave = saved > 0 || errors > 0
       if (!hadRowsToSave && skipped > 0) {
         throw new Error('Ningún ítem tiene días hábiles o fecha de inicio válidos. Revise la tabla.')
+      }
+      if (!hadRowsToSave && skipped === 0) {
+        showToast?.('No hay cambios pendientes para guardar.', 'info')
+        return
       }
       if (errors > 0) {
         throw new Error(`No se pudieron guardar ${errors} ítem(s).`)
       }
       if (saved > 0) {
-        showToast?.(`Guardados ${saved} ítem(s).`, 'ok')
+        const msLabel = batchMs != null ? ` (${Math.round(batchMs)} ms API)` : flushMs > 500 ? ` (${flushMs} ms)` : ''
+        showToast?.(`Guardados ${saved} ítem(s).${msLabel}`, 'ok')
       }
-      if (batchOk && onSaveSuccess) {
+      if (batchOk && !tramoConsolidado && onSaveSuccess) {
         await onSaveSuccess(pkId || activePk)
-      } else if (saved > 0) {
+      } else if (saved > 0 && !tramoConsolidado) {
         await onGuardarCambios?.()
       }
       if (saved > 0 || batchOk) {
-        if (onReloadActividades) {
-          await onReloadActividades(pkId || activePk)
+        setGanttActOverlay(null)
+        setSaveGeneration((g) => g + 1)
+        if (cpmSyncedBeforeSave) {
+          setCpmDirty(cpmDirtyFromSave ?? false)
+        } else {
+          setCpmDirty(true)
         }
         if (tramoConsolidado) {
-          await syncGanttAfterTramoSave()
+          if (allClears) {
+            onTramoScheduleCleared?.()
+          } else {
+            void onReloadActividades?.(pkId || activePk, { silent: true })
+          }
+          onScheduleRefresh?.()
         } else {
-          await syncGanttAfterSave(pkId || activePk)
+          void syncGanttAfterSave(pkId || activePk)
+          void onReloadActividades?.(pkId || activePk)
         }
-        setSaveGeneration((g) => g + 1)
-        setCpmDirty(true)
       }
     } catch (e) {
       console.error('[ProgObra] Guardar cambios:', e)
@@ -3611,6 +3672,7 @@ export default function ProgObraProgramacionModal({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {editable && (
             <ProgModalIconBtn
               title={localSaving ? 'Guardando…' : 'Guardar cambios'}
               disabled={panelBusy || localSaving || resettingPk}
@@ -3620,6 +3682,7 @@ export default function ProgObraProgramacionModal({
             >
               <Save size={20} aria-hidden />
             </ProgModalIconBtn>
+            )}
             {editable && !historicalReadOnly && !tramoConsolidado && (
               <ProgModalIconBtn
                 title={resettingPk ? 'Reseteando…' : 'Resetear programación de este PK'}

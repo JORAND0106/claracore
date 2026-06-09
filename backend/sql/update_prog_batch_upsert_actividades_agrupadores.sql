@@ -65,9 +65,66 @@ BEGIN
     FROM jsonb_array_elements(p_actividades) AS a
     ON CONFLICT (version_id, pk_id, capitulo, item, segmento)
     DO UPDATE SET
-        fecha_inicio             = COALESCE(EXCLUDED.fecha_inicio, prog_actividades.fecha_inicio),
-        duracion_dias_habiles    = COALESCE(EXCLUDED.duracion_dias_habiles, prog_actividades.duracion_dias_habiles),
-        fecha_fin_calculada      = COALESCE(EXCLUDED.fecha_fin_calculada, prog_actividades.fecha_fin_calculada),
+        fecha_inicio             = CASE
+            WHEN COALESCE(
+                (SELECT (elem->>'clear_schedule')::boolean
+                 FROM jsonb_array_elements(p_actividades) AS elem
+                 WHERE trim(elem->>'capitulo') = prog_actividades.capitulo
+                   AND trim(elem->>'item') = prog_actividades.item
+                   AND COALESCE((elem->>'segmento')::int, 1) = prog_actividades.segmento
+                 LIMIT 1),
+                false
+            ) THEN NULL
+            ELSE COALESCE(EXCLUDED.fecha_inicio, prog_actividades.fecha_inicio)
+        END,
+        duracion_dias_habiles    = CASE
+            WHEN COALESCE(
+                (SELECT (elem->>'clear_schedule')::boolean
+                 FROM jsonb_array_elements(p_actividades) AS elem
+                 WHERE trim(elem->>'capitulo') = prog_actividades.capitulo
+                   AND trim(elem->>'item') = prog_actividades.item
+                   AND COALESCE((elem->>'segmento')::int, 1) = prog_actividades.segmento
+                 LIMIT 1),
+                false
+            ) THEN NULL
+            ELSE COALESCE(EXCLUDED.duracion_dias_habiles, prog_actividades.duracion_dias_habiles)
+        END,
+        fecha_fin_calculada      = CASE
+            WHEN COALESCE(
+                (SELECT (elem->>'clear_schedule')::boolean
+                 FROM jsonb_array_elements(p_actividades) AS elem
+                 WHERE trim(elem->>'capitulo') = prog_actividades.capitulo
+                   AND trim(elem->>'item') = prog_actividades.item
+                   AND COALESCE((elem->>'segmento')::int, 1) = prog_actividades.segmento
+                 LIMIT 1),
+                false
+            ) THEN NULL
+            ELSE COALESCE(EXCLUDED.fecha_fin_calculada, prog_actividades.fecha_fin_calculada)
+        END,
+        fecha_inicio_temprana    = CASE
+            WHEN COALESCE(
+                (SELECT (elem->>'clear_schedule')::boolean
+                 FROM jsonb_array_elements(p_actividades) AS elem
+                 WHERE trim(elem->>'capitulo') = prog_actividades.capitulo
+                   AND trim(elem->>'item') = prog_actividades.item
+                   AND COALESCE((elem->>'segmento')::int, 1) = prog_actividades.segmento
+                 LIMIT 1),
+                false
+            ) THEN NULL
+            ELSE prog_actividades.fecha_inicio_temprana
+        END,
+        fecha_fin_temprana       = CASE
+            WHEN COALESCE(
+                (SELECT (elem->>'clear_schedule')::boolean
+                 FROM jsonb_array_elements(p_actividades) AS elem
+                 WHERE trim(elem->>'capitulo') = prog_actividades.capitulo
+                   AND trim(elem->>'item') = prog_actividades.item
+                   AND COALESCE((elem->>'segmento')::int, 1) = prog_actividades.segmento
+                 LIMIT 1),
+                false
+            ) THEN NULL
+            ELSE prog_actividades.fecha_fin_temprana
+        END,
         cantidad_programada      = EXCLUDED.cantidad_programada,
         unidad                   = EXCLUDED.unidad,
         costo_unitario           = EXCLUDED.costo_unitario,

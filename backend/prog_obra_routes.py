@@ -245,6 +245,9 @@ class ActividadBatchTramoItemBody(BaseModel):
     agrupador_id: int
     codigo_wbs: Optional[str] = None
     tipo_distribucion: str = "lineal"
+    clear_schedule: bool = False
+    duracion_only: bool = False
+    override_manual: bool = False
 
     @field_validator("fecha_inicio", mode="before")
     @classmethod
@@ -261,6 +264,7 @@ class ActividadesBatchTramoBody(BaseModel):
     actividades: List[ActividadBatchTramoItemBody] = Field(..., min_length=1)
     pk_ids: Optional[List[str]] = None
     allow_overwrite: bool = False
+    preserve_cpm_sync: bool = False
 
 
 class ValidarSegmentosBody(BaseModel):
@@ -1002,16 +1006,26 @@ def prog_actividades_batch_tramo(
     for it in body.actividades:
         if it.tipo_distribucion not in ("lineal", "manual"):
             raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
+        du_raw = it.duracion_dias_habiles
+        du_i = int(du_raw) if du_raw is not None and int(du_raw) > 0 else None
+        solo_duracion = bool(it.duracion_only) or (
+            not it.clear_schedule and it.fecha_inicio is None and du_i is not None
+        )
+        clearing = bool(it.clear_schedule) or (
+            it.fecha_inicio is None and du_i is None and not solo_duracion
+        )
         actividades.append({
             "capitulo": it.capitulo.strip(),
             "item": it.item.strip(),
             "segmento": int(it.segmento),
             "fecha_inicio": it.fecha_inicio,
-            "duracion_dias_habiles": it.duracion_dias_habiles,
+            "duracion_dias_habiles": du_i,
+            "clear_schedule": clearing,
+            "solo_duracion": solo_duracion,
             "agrupador_id": int(it.agrupador_id),
             "codigo_wbs": (it.codigo_wbs or it.item or "").strip(),
             "tipo_distribucion": it.tipo_distribucion,
-            "override_manual": True,
+            "override_manual": False if clearing else bool(it.override_manual),
             "heredado_de_capitulo": False,
         })
 
@@ -1026,6 +1040,7 @@ def prog_actividades_batch_tramo(
             cache,
             pk_ids_filter=body.pk_ids,
             allow_overwrite=bool(body.allow_overwrite),
+            preserve_cpm_sync=bool(body.preserve_cpm_sync),
         )
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
@@ -1647,7 +1662,7 @@ def prog_curva_s_pdf(
     tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_programacion_obra(current_user, "ver")
+    require_permiso_programacion_obra(current_user, "exportar")
     _require_contract_access(current_user, contrato_id)
     return _curva_s_pdf_response(
         contrato_id,
@@ -1669,7 +1684,7 @@ def prog_curva_s_excel(
     tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_programacion_obra(current_user, "ver")
+    require_permiso_programacion_obra(current_user, "exportar")
     _require_contract_access(current_user, contrato_id)
     return _curva_s_excel_response(
         contrato_id,
@@ -1709,6 +1724,7 @@ def _curva_s_pdf_response(
         prog_meta=ctx["prog_meta"],
         ppto_meta=ctx["ppto_meta"],
         cpm_export=ctx.get("cpm_export"),
+        resumen_ejecutivo=ctx.get("resumen_ejecutivo"),
     )
     try:
         from topografia_utils import to_pdf_bytes
@@ -1751,6 +1767,7 @@ def _curva_s_excel_response(
             prog_meta=ctx["prog_meta"],
             ppto_meta=ctx["ppto_meta"],
             cpm_export=ctx.get("cpm_export"),
+            resumen_ejecutivo=ctx.get("resumen_ejecutivo"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo generar Excel: {e}")
@@ -1769,7 +1786,7 @@ def prog_exportar_project_xml(
     pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_programacion_obra(current_user, "ver")
+    require_permiso_programacion_obra(current_user, "exportar")
     _require_contract_access(current_user, contrato_id)
     vid = (version_id or "").strip()
     if not vid:

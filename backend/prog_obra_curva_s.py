@@ -12,16 +12,17 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from prog_obra_compare import fetch_compare_nodes
+from prog_obra_compare import fetch_compare_nodes, supplement_nodes_missing_presupuesto
 from prog_obra_costos_presupuesto import (
     apply_ppto_cost_overlay,
-    build_programmed_item_cost_overlay_maps,
+    build_cost_overlay_maps,
     fetch_ppto_baseline_version_id,
     fetch_ppto_borrador_version_id,
     ppto_scope_direct_total,
+    _fetch_agrupadores_meta,
 )
 from prog_obra_pk_filter import filter_nodes_by_pk, parse_pk_ids_param, parse_tramos_param
-from prog_obra_service import fetch_baseline_version_id, fetch_vigente_meta
+from prog_obra_service import fetch_baseline_version_id, fetch_borrador_activo, fetch_vigente_meta
 
 
 def _parse_d(val: Any) -> Optional[date]:
@@ -72,7 +73,9 @@ def _scale_monthly_to_target(monthly: Dict[str, float], target_total: float) -> 
     """Escala flujo mensual para alcanzar un total contractual (p. ej. V0 completo por tramo)."""
     cur = sum(float(v) for v in monthly.values())
     target = float(target_total)
-    if cur <= 0 or target <= cur + 0.01:
+    if cur <= 0 or target <= 0:
+        return dict(monthly), cur
+    if abs(target - cur) <= 0.01:
         return dict(monthly), cur
     factor = target / cur
     scaled: Dict[str, float] = {k: round(float(v) * factor, 2) for k, v in monthly.items()}
@@ -90,22 +93,26 @@ def _nodes_with_ppto_costs(
     version_ppto_id: Optional[str],
     pk_ids: Optional[Set[str]] = None,
     tramos: Optional[List[str]] = None,
+    *,
+    schedule_mode: str = "cpm",
 ) -> Dict[str, dict]:
-    nodes = fetch_compare_nodes(sb, version_id, contrato_id)
+    nodes = fetch_compare_nodes(sb, version_id, contrato_id, schedule_mode=schedule_mode)
     nodes = filter_nodes_by_pk(nodes, pk_ids)
     if not version_ppto_id:
         return nodes
     tramo = tramos[0] if tramos and len(tramos) == 1 else None
-    ag_costs, item_costs = build_programmed_item_cost_overlay_maps(
+    ag_costs, item_costs = build_cost_overlay_maps(
         sb,
         contrato_id,
-        version_id,
         str(version_ppto_id),
         tramo=tramo,
         tramos=tramos,
         pk_ids=pk_ids,
     )
-    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs, strict=True)
+    if schedule_mode == "programada":
+        ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
+        nodes = supplement_nodes_missing_presupuesto(nodes, ag_costs, ag_meta)
+    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
 
 
 def _aggregate_version_monthly(
@@ -115,9 +122,12 @@ def _aggregate_version_monthly(
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[Set[str]] = None,
     tramos: Optional[List[str]] = None,
+    *,
+    schedule_mode: str = "cpm",
 ) -> Tuple[Dict[str, float], float]:
     nodes = _nodes_with_ppto_costs(
-        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos
+        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos,
+        schedule_mode=schedule_mode,
     )
     monthly: Dict[str, float] = defaultdict(float)
     total = 0.0
@@ -201,10 +211,16 @@ def _detalle_pk_mensual(
     version_ppto_id: Optional[str] = None,
     pk_ids: Optional[Set[str]] = None,
     tramos: Optional[List[str]] = None,
+    *,
+    schedule_mode: str = "cpm",
 ) -> List[dict]:
+    from prog_obra_costos_presupuesto import _fetch_agrupadores_meta
+
     nodes = _nodes_with_ppto_costs(
-        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos
+        sb, version_id, contrato_id, version_ppto_id, pk_ids=pk_ids, tramos=tramos,
+        schedule_mode=schedule_mode,
     )
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
     out: List[dict] = []
     for n in nodes.values():
         costo = float(n.get("costo_programado") or 0)
@@ -212,6 +228,15 @@ def _detalle_pk_mensual(
         ff = n.get("fecha_fin")
         if costo <= 0 or not fi or not ff:
             continue
+        ag_raw = n.get("agrupador_id")
+        meta = {}
+        if ag_raw is not None:
+            try:
+                meta = ag_meta.get(int(ag_raw)) or {}
+            except (TypeError, ValueError):
+                meta = {}
+        wbs = str(n.get("codigo_wbs") or meta.get("codigo_wbs") or n.get("label") or "").strip()
+        nombre = str(meta.get("nombre") or wbs or "").strip()
         dist = _linear_monthly_distribution(fi, ff, costo)
         out.append(
             {
@@ -219,6 +244,10 @@ def _detalle_pk_mensual(
                 "capitulo": n.get("capitulo"),
                 "agrupador_id": n.get("agrupador_id"),
                 "label": n.get("label"),
+                "codigo_wbs": wbs,
+                "agrupador_nombre": nombre,
+                "fecha_inicio": fi,
+                "fecha_fin": ff,
                 "costo_total": round(costo, 2),
                 "distribucion_mensual": {k: round(v, 2) for k, v in dist.items()},
             }
@@ -260,7 +289,7 @@ def _apply_ppto_scope_total_scale(
         tramos=tramos_list,
         pk_ids=pk_ids,
     )
-    if scope_total > total + 0.01:
+    if scope_total > 0 and abs(scope_total - total) > 0.01:
         return _scale_monthly_to_target(monthly, scope_total)
     return monthly, total
 
@@ -279,59 +308,35 @@ def build_curva_s(
     bid = (baseline_id or fetch_baseline_version_id(sb, contrato_id) or "").strip() or None
     tid = (target_id or "").strip()
     if not tid:
-        vid, _ = fetch_vigente_meta(sb, contrato_id)
-        tid = str(vid) if vid else ""
+        borrador = fetch_borrador_activo(sb, contrato_id)
+        if borrador and borrador.get("id"):
+            tid = str(borrador["id"])
+        else:
+            vid, _ = fetch_vigente_meta(sb, contrato_id)
+            tid = str(vid) if vid else ""
     tid = tid.strip() or None
     if not tid and not bid:
         raise ValueError("No hay versión de programación para la curva S")
 
-    ppto_vigente_id = _resolve_ppto_vigente_curva_id(sb, contrato_id)
+    ppto_vigente_id = _resolve_version_ppto_id(sb, contrato_id, version_ppto_id)
     ppto_baseline_id = fetch_ppto_baseline_version_id(sb, contrato_id) or ppto_vigente_id
-    # Baseline financiero: cronograma vigente (target) + costos V0 (1.ª versión presupuesto).
-    prog_for_baseline = tid or bid
 
-    if prog_for_baseline:
+    if bid:
         base_m, base_total = _aggregate_version_monthly(
-            sb,
-            str(prog_for_baseline),
-            contrato_id,
-            ppto_baseline_id,
-            pk_ids=pk_set,
-            tramos=tramos_list,
+            sb, str(bid), contrato_id, ppto_baseline_id, pk_ids=pk_set, tramos=tramos_list,
+            schedule_mode="programada",
+        )
+        base_m, base_total = _apply_ppto_scope_total_scale(
+            sb, contrato_id, base_m, base_total, ppto_baseline_id, pk_set, tramos_list,
         )
     else:
         base_m, base_total = {}, 0.0
 
-    if prog_for_baseline and ppto_baseline_id:
-        base_m, base_total = _apply_ppto_scope_total_scale(
-            sb,
-            contrato_id,
-            base_m,
-            base_total,
-            ppto_baseline_id,
-            pk_set,
-            tramos_list,
-        )
-
     if tid:
         tgt_m, tgt_total = _aggregate_version_monthly(
-            sb,
-            str(tid),
-            contrato_id,
-            ppto_vigente_id,
-            pk_ids=pk_set,
-            tramos=tramos_list,
+            sb, str(tid), contrato_id, ppto_vigente_id, pk_ids=pk_set, tramos=tramos_list,
+            schedule_mode="cpm",
         )
-        if ppto_vigente_id:
-            tgt_m, tgt_total = _apply_ppto_scope_total_scale(
-                sb,
-                contrato_id,
-                tgt_m,
-                tgt_total,
-                ppto_vigente_id,
-                pk_set,
-                tramos_list,
-            )
     elif bid:
         tgt_m, tgt_total = base_m, base_total
         tid = bid
@@ -380,19 +385,16 @@ def build_curva_s(
 
     detalle_baseline = (
         _detalle_pk_mensual(
-            sb,
-            str(prog_for_baseline),
-            contrato_id,
-            ppto_baseline_id,
-            pk_ids=pk_set,
-            tramos=tramos_list,
+            sb, str(bid), contrato_id, ppto_baseline_id, pk_ids=pk_set, tramos=tramos_list,
+            schedule_mode="programada",
         )
-        if prog_for_baseline
+        if bid
         else []
     )
     detalle_vigente = (
         _detalle_pk_mensual(
-            sb, str(tid), contrato_id, ppto_vigente_id, pk_ids=pk_set, tramos=tramos_list
+            sb, str(tid), contrato_id, ppto_vigente_id, pk_ids=pk_set, tramos=tramos_list,
+            schedule_mode="cpm",
         )
         if tid
         else []
@@ -590,7 +592,10 @@ def fetch_cronograma_pdf_tree(
     return tree
 
 
-CRONO_ROWS_PER_PAGE = 30
+CRONO_ROWS_PER_PAGE = 45
+MESES_ROWS_PER_PDF_PAGE = 40
+DETALLE_PK_MONTH_COLS = 14
+CPM_ROWS_PER_PK_PAGE = 40
 
 # Paleta PDF alineada al sistema (grises, azules y celestes pastel)
 PDF_CLR = {
@@ -620,8 +625,72 @@ PDF_CLR = {
 def _pdf_th_style(extra: str = "") -> str:
     return (
         f"background:{PDF_CLR['bg_header']};color:{PDF_CLR['header_text']};"
-        f"padding:4px 5px;font-size:6.5pt;font-weight:bold;border-bottom:1px solid {PDF_CLR['border']};{extra}"
+        f"padding:2px 4px;font-size:6pt;font-weight:bold;"
+        f"border-bottom:0.25px solid {PDF_CLR['border']};{extra}"
     )
+
+
+def _pdf_td(extra: str = "") -> str:
+    return (
+        f"padding:1px 3px;font-size:6pt;line-height:1.15;"
+        f"border:0.25px solid {PDF_CLR['border']};{extra}"
+    )
+
+
+def _pdf_page_header_html(
+    contrato: dict,
+    title: str,
+    *,
+    subtitle: str = "",
+    prog_meta: Optional[dict] = None,
+    fecha_gen: str = "",
+    pag: str = "",
+) -> str:
+    from informes import _html_logo_contratista
+
+    c = PDF_CLR
+    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
+    prog_lbl = _prog_version_label(prog_meta)
+    pag_html = f' &nbsp;|&nbsp; <span style="color:{c["muted"]};">{_h(pag)}</span>' if pag else ""
+    sub_html = (
+        f'<div style="font-size:7pt;color:{c["muted"]};margin-top:2px;">{_h(subtitle)}</div>'
+        if subtitle
+        else ""
+    )
+    return f"""
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:4px;">
+  <tr>
+    <td style="width:14%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:1px;">{logo_html}</td>
+    <td style="width:62%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px 5px;">
+      <div style="font-size:10pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">{_h(title)}</div>
+      {sub_html}
+    </td>
+    <td style="width:24%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px;">
+      <div style="font-size:5.5pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
+      <div style="font-size:8pt;font-weight:bold;color:{c['accent']};margin-top:1px;">{_h(prog_lbl)}</div>
+    </td>
+  </tr>
+</table>
+<div style="font-size:6.5pt;color:{c['text']};margin-bottom:4px;padding:0 2px;">
+  <strong>Generado:</strong> {_h(fecha_gen)}{pag_html}
+</div>
+"""
+
+
+def _cpm_holgura_by_agrupador(cpm_export: Optional[dict]) -> Dict[Tuple[str, str, int], int]:
+    out: Dict[Tuple[str, str, int], int] = {}
+    for r in (cpm_export or {}).get("resultados") or []:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        ag_raw = r.get("agrupador_id")
+        if not pk or not cap or ag_raw is None:
+            continue
+        try:
+            ag_id = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        out[(pk, cap, ag_id)] = int(r.get("holgura_total") or 0)
+    return out
 
 
 def _fmt_chart_money(v: float) -> str:
@@ -825,10 +894,10 @@ def _build_curva_s_chart_block(meses: List[dict]) -> str:
     svg = _build_curva_s_chart_svg(meses, width=width, height=height)
     b64 = _svg_to_png_b64(svg)
     return (
-        f'<div style="width:{width}px;height:{height}px;margin:4px 0 8px;overflow:hidden;'
+        f'<div style="width:100%;max-width:{width}px;height:{height}px;margin:4px 0 8px;overflow:hidden;'
         f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">'
-        f'<img src="data:image/png;base64,{b64}" width="{width}" height="{height}" '
-        f'style="display:block;" />'
+        f'<img src="data:image/png;base64,{b64}" width="100%" height="{height}" '
+        f'style="display:block;max-width:100%;" />'
         f"</div>"
     )
 
@@ -945,117 +1014,169 @@ def _chunk_list(items: List, size: int) -> List[List]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-def _render_cpm_pdf_page(
+def _group_cpm_resultados_by_pk(resultados: List[dict]) -> Dict[str, List[dict]]:
+    by_pk: Dict[str, List[dict]] = defaultdict(list)
+    for r in resultados or []:
+        pk = str(r.get("pk_id") or "").strip() or "—"
+        by_pk[pk].append(r)
+    for pk in by_pk:
+        by_pk[pk].sort(
+            key=lambda x: (
+                _cap_sort_key(str(x.get("capitulo") or "")),
+                str(x.get("agrupador_label") or ""),
+            )
+        )
+    return by_pk
+
+
+def _pk_cronograma_resumen(pk_node: dict) -> dict:
+    fechas_ini: List[str] = []
+    fechas_fin: List[str] = []
+    n_ag = 0
+    for cap_node in pk_node.get("capitulos") or []:
+        for ag in cap_node.get("agrupadores") or []:
+            n_ag += 1
+            fi = str(ag.get("fecha_inicio") or "").strip()[:10]
+            ff = str(ag.get("fecha_fin") or "").strip()[:10]
+            if fi and fi != "—":
+                fechas_ini.append(fi)
+            if ff and ff != "—":
+                fechas_fin.append(ff)
+    return {
+        "agrupadores": n_ag,
+        "fecha_inicio": min(fechas_ini) if fechas_ini else "—",
+        "fecha_fin": max(fechas_fin) if fechas_fin else "—",
+    }
+
+
+def _render_cpm_pk_pdf_page(
     contrato: dict,
+    pk_id: str,
     resultados_chunk: List[dict],
-    dependencias_chunk: List[dict],
     prog_meta: Optional[dict],
     fecha_gen: str,
     *,
     page_num: int,
     total_pages: int,
-    section: str,
+    pk_page_idx: int,
+    pk_page_total: int,
 ) -> str:
-    from informes import _html_logo_contratista
-
     c = PDF_CLR
     th = _pdf_th_style
-    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
-    prog_lbl = _prog_version_label(prog_meta)
-    numero = _h(contrato.get("numero") or contrato.get("id") or "")
+    td = _pdf_td
     pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
-    title = "Resultados CPM" if section == "cpm" else "Dependencias CPM"
-
-    if section == "cpm":
-        body_rows = ""
-        if not resultados_chunk:
-            body_rows = (
-                f'<tr><td colspan="7" style="padding:12px;text-align:center;color:{c["muted"]};font-size:8pt;">'
-                "Sin resultados CPM calculados para el alcance seleccionado.</td></tr>"
-            )
-        for r in resultados_chunk:
-            bg = _cpm_pdf_row_bg(str(r.get("estado_cpm") or ""))
-            body_rows += (
-                f'<tr style="background:{bg};">'
-                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("pk_id"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("capitulo"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;">{_h(r.get("agrupador_label"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("fecha_inicio_temprana"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("fecha_fin_temprana"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(r.get("holgura_total"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;font-weight:600;">{_h(r.get("estado_cpm"))}</td>'
-                f"</tr>"
-            )
-        table_head = (
-            f"<tr>"
-            f'<th style="{th()}">PK</th>'
-            f'<th style="{th()}">Cap.</th>'
-            f'<th style="{th("width:28%;")}">Agrupador</th>'
-            f'<th style="{th("text-align:center;")}">Inicio temprano</th>'
-            f'<th style="{th("text-align:center;")}">Fin temprano</th>'
-            f'<th style="{th("text-align:center;")}">Holgura total</th>'
-            f'<th style="{th("text-align:center;")}">Estado</th>'
+    pk_pag = f" · hoja {pk_page_idx} de {pk_page_total}" if pk_page_total > 1 else ""
+    body_rows = ""
+    if not resultados_chunk:
+        body_rows = (
+            f'<tr><td colspan="6" style="{td("text-align:center;color:" + c["muted"] + ";")}">'
+            "Sin resultados CPM para este PK.</td></tr>"
+        )
+    for r in resultados_chunk:
+        bg = _cpm_pdf_row_bg(str(r.get("estado_cpm") or ""))
+        wbs = str(r.get("agrupador_label") or "").strip()
+        body_rows += (
+            f'<tr style="background:{bg};">'
+            f'<td style="{td()}">{_h(r.get("capitulo"))}</td>'
+            f'<td style="{td()}">{_h(wbs)}</td>'
+            f'<td style="{td("text-align:center;")}">{_h(r.get("fecha_inicio_temprana"))}</td>'
+            f'<td style="{td("text-align:center;")}">{_h(r.get("fecha_fin_temprana"))}</td>'
+            f'<td style="{td("text-align:center;")}">{_h(r.get("holgura_total"))}</td>'
+            f'<td style="{td("font-weight:600;")}">{_h(r.get("estado_cpm"))}</td>'
             f"</tr>"
         )
-    else:
-        body_rows = ""
-        if not dependencias_chunk:
-            body_rows = (
-                f'<tr><td colspan="5" style="padding:12px;text-align:center;color:{c["muted"]};font-size:8pt;">'
-                "Sin dependencias definidas para el alcance seleccionado.</td></tr>"
-            )
-        for d in dependencias_chunk:
-            lag = int(d.get("lag_dias") or 0)
-            lag_lbl = f"{lag} día{'s' if lag != 1 else ''}" if lag else "0 días"
-            body_rows += (
-                f"<tr>"
-                f'<td style="padding:3px 5px;font-size:7pt;">{_h(d.get("origen_label"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;font-weight:700;">{_h(d.get("tipo"))}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;text-align:center;">{_h(lag_lbl)}</td>'
-                f'<td style="padding:3px 5px;font-size:7pt;">{_h(d.get("destino_label"))}</td>'
-                f"</tr>"
-            )
-        table_head = (
-            f"<tr>"
-            f'<th style="{th("width:38%;")}">Origen</th>'
-            f'<th style="{th("text-align:center;width:8%;")}">Tipo</th>'
-            f'<th style="{th("text-align:center;width:10%;")}">Lag</th>'
-            f'<th style="{th("width:38%;")}">Destino</th>'
-            f"</tr>"
-        )
-
+    header = _pdf_page_header_html(
+        contrato,
+        "Resultados CPM",
+        subtitle=f"PK {_h(pk_id)}{pk_pag}",
+        prog_meta=prog_meta,
+        fecha_gen=fecha_gen,
+        pag=pag,
+    )
     return f"""
 <div class="page-cronograma">
   <div class="frame-double-outer">
     <div class="frame-double-inner">
-      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:6px;">
-        <tr>
-          <td style="width:14%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:2px;">
-            {logo_html}
-          </td>
-          <td style="width:62%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px 6px;">
-            <div style="font-size:11pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">
-              {title}
-            </div>
-          </td>
-          <td style="width:24%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px;">
-            <div style="font-size:6pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
-            <div style="font-size:9pt;font-weight:bold;color:{c['accent']};margin-top:2px;">{_h(prog_lbl)}</div>
-          </td>
-        </tr>
-      </table>
-      <div style="font-size:7pt;color:{c['text']};margin-bottom:6px;padding:0 2px;line-height:1.35;">
-        <strong>Contrato:</strong> {numero} &nbsp;&nbsp;|&nbsp;&nbsp;
-        <strong>Generado:</strong> {_h(fecha_gen)} &nbsp;&nbsp;|&nbsp;&nbsp; {pag}
-      </div>
-      <table class="data" style="width:100%;border-collapse:collapse;">
-        <thead>{table_head}</thead>
+      {header}
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="{th('text-align:left;width:8%;')}">Cap.</th>
+          <th style="{th('text-align:left;width:34%;')}">Actividad WBS</th>
+          <th style="{th('text-align:center;width:14%;')}">Inicio</th>
+          <th style="{th('text-align:center;width:14%;')}">Fin</th>
+          <th style="{th('text-align:center;width:10%;')}">Holgura</th>
+          <th style="{th('text-align:center;width:20%;')}">Estado</th>
+        </tr></thead>
         <tbody>{body_rows}</tbody>
       </table>
     </div>
   </div>
 </div>
 """
+
+
+def _render_dependencias_pdf_pages(
+    contrato: dict,
+    dependencias: List[dict],
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+    *,
+    start_page: int,
+) -> Tuple[str, int]:
+    dep_chunks = _chunk_list(dependencias, 35) if dependencias else [[]]
+    if not dep_chunks:
+        dep_chunks = [[]]
+    out = ""
+    total = len(dep_chunks)
+    for i, chunk in enumerate(dep_chunks, start=1):
+        page_num = start_page + i - 1
+        pag = f"Página {page_num}" if total > 1 else ""
+        th = _pdf_th_style
+        td = _pdf_td
+        body_rows = ""
+        if not chunk:
+            body_rows = (
+                f'<tr><td colspan="4" style="{td("text-align:center;color:" + PDF_CLR["muted"] + ";")}">'
+                "Sin dependencias definidas.</td></tr>"
+            )
+        for d in chunk:
+            lag = int(d.get("lag_dias") or 0)
+            lag_lbl = f"{lag} día{'s' if lag != 1 else ''}" if lag else "0 días"
+            body_rows += (
+                f"<tr>"
+                f'<td style="{td()}">{_h(d.get("origen_label"))}</td>'
+                f'<td style="{td("text-align:center;font-weight:700;")}">{_h(d.get("tipo"))}</td>'
+                f'<td style="{td("text-align:center;")}">{_h(lag_lbl)}</td>'
+                f'<td style="{td()}">{_h(d.get("destino_label"))}</td>'
+                f"</tr>"
+            )
+        header = _pdf_page_header_html(
+            contrato,
+            "Dependencias CPM",
+            subtitle="Listado general",
+            prog_meta=prog_meta,
+            fecha_gen=fecha_gen,
+            pag=f"{pag} ({i} de {total})" if total > 1 else pag,
+        )
+        out += f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      {header}
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="{th('text-align:left;width:38%;')}">Origen</th>
+          <th style="{th('text-align:center;width:8%;')}">Tipo</th>
+          <th style="{th('text-align:center;width:10%;')}">Lag</th>
+          <th style="{th('text-align:left;width:38%;')}">Destino</th>
+        </tr></thead>
+        <tbody>{body_rows}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+    return out, start_page + total - 1
 
 
 def _render_cpm_export_pdf_html(
@@ -1066,30 +1187,43 @@ def _render_cpm_export_pdf_html(
 ) -> str:
     export = cpm_export or {}
     resultados = export.get("resultados") or []
-    dependencias = export.get("dependencias") or []
-    cpm_chunks = _chunk_list(resultados, 32)
-    dep_chunks = _chunk_list(dependencias, 28) if dependencias else [[]]
-    pages: List[str] = []
-    for chunk in cpm_chunks:
-        pages.append(("cpm", chunk, []))
-    for chunk in dep_chunks:
-        pages.append(("deps", [], chunk))
-    if not pages:
-        pages = [("cpm", [], [])]
-    total = len(pages)
+    dependencias = export.get("dependencias_generales") or export.get("dependencias") or []
+    by_pk = _group_cpm_resultados_by_pk(resultados)
+    pk_ids = sorted(by_pk.keys(), key=lambda x: (len(x), x))
+
+    cpm_page_specs: List[Tuple[str, List[dict], int, int]] = []
+    for pk in pk_ids:
+        pk_rows = by_pk.get(pk) or []
+        chunks = _chunk_list(pk_rows, CPM_ROWS_PER_PK_PAGE) or [[]]
+        for idx, chunk in enumerate(chunks, start=1):
+            cpm_page_specs.append((pk, chunk, idx, len(chunks)))
+
+    dep_page_count = len(_chunk_list(dependencias, 35)) if dependencias else 1
+    if not cpm_page_specs:
+        cpm_page_specs = [("—", [], 1, 1)]
+    grand_total = len(cpm_page_specs) + dep_page_count
+
     out = ""
-    for i, (section, res_chunk, dep_chunk) in enumerate(pages, start=1):
-        out += _render_cpm_pdf_page(
+    for page_num, (pk, chunk, pk_idx, pk_total) in enumerate(cpm_page_specs, start=1):
+        out += _render_cpm_pk_pdf_page(
             contrato,
-            res_chunk,
-            dep_chunk,
+            pk,
+            chunk,
             prog_meta,
             fecha_gen,
-            page_num=i,
-            total_pages=total,
-            section=section,
+            page_num=page_num,
+            total_pages=grand_total,
+            pk_page_idx=pk_idx,
+            pk_page_total=pk_total,
         )
-    return out
+    deps_html, _ = _render_dependencias_pdf_pages(
+        contrato,
+        dependencias,
+        prog_meta,
+        fecha_gen,
+        start_page=len(cpm_page_specs) + 1,
+    )
+    return out + deps_html
 
 
 def _write_cpm_excel_sheet(ws, resultados: List[dict]) -> None:
@@ -1229,120 +1363,451 @@ def _render_cronograma_body_rows(rows: List[dict]) -> str:
     return "".join(out)
 
 
-def _render_cronograma_page(
+def _prog_estado_display(estado: Any) -> str:
+    key = (estado or "").strip()
+    labels = {
+        "borrador": "Borrador",
+        "en_validacion": "En validación",
+        "sellada": "Sellada",
+    }
+    return labels.get(key, key or "—")
+
+
+def _aggregate_cronograma_por_capitulo(cronograma: List[dict]) -> Dict[str, dict]:
+    """Agrupa agrupadores WBS del cronograma PDF por capítulo (todos los PK)."""
+    by_cap: Dict[str, dict] = {}
+    for pk_node in cronograma or []:
+        for cap_node in pk_node.get("capitulos") or []:
+            cap = str(cap_node.get("capitulo") or "").strip()
+            if not cap:
+                continue
+            rec = by_cap.setdefault(
+                cap,
+                {"agrupadores": 0, "fechas_ini": [], "fechas_fin": []},
+            )
+            for ag in cap_node.get("agrupadores") or []:
+                rec["agrupadores"] += 1
+                fi = str(ag.get("fecha_inicio") or "").strip()[:10]
+                ff = str(ag.get("fecha_fin") or "").strip()[:10]
+                if fi and fi != "—":
+                    rec["fechas_ini"].append(fi)
+                if ff and ff != "—":
+                    rec["fechas_fin"].append(ff)
+    return by_cap
+
+
+def _dias_exceso_tras_horizonte(
+    fin_act: date,
+    fin_version: date,
+    contrato_id: int,
+    cache,
+) -> int:
+    if fin_act <= fin_version:
+        return 0
+    from prog_obra_calendar import count_dias_habiles_entre
+
+    d_start = fin_version + timedelta(days=1)
+    return count_dias_habiles_entre(contrato_id, d_start, fin_act, cache)
+
+
+def _fetch_distinct_capitulos_presupuesto(
+    sb,
+    contrato_id: int,
+    version_ppto_id: Optional[str],
+    pk_ids: Optional[Set[str]],
+    cronograma: List[dict],
+) -> List[str]:
+    caps: Set[str] = set()
+    ppto_id = (version_ppto_id or "").strip()
+    if ppto_id:
+        from prog_obra_costos_presupuesto import fetch_ppto_items_version
+
+        for r in fetch_ppto_items_version(sb, contrato_id, ppto_id, pk_ids=pk_ids):
+            cap = str(r.get("capitulo") or "").strip()
+            if cap:
+                caps.add(cap)
+    if not caps:
+        for pk_node in cronograma or []:
+            for cap_node in pk_node.get("capitulos") or []:
+                cap = str(cap_node.get("capitulo") or "").strip()
+                if cap:
+                    caps.add(cap)
+    return sorted(caps, key=_cap_sort_key)
+
+
+def build_resumen_ejecutivo_data(
+    sb,
+    contrato_id: int,
+    *,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[Set[str]] = None,
+    cronograma: Optional[List[dict]] = None,
+    cpm_export: Optional[dict] = None,
+    prog_meta: Optional[dict] = None,
+) -> dict:
+    """Datos para la página de resumen ejecutivo del PDF de programación."""
+    from prog_obra_calendar import CalendarioNoHabilesCache
+    from prog_obra_service import make_prog_calendar_loader
+
+    crono = cronograma or []
+    meta = prog_meta or {}
+    export = cpm_export or {}
+    resultados = export.get("resultados") or []
+    tiene_cpm = len(resultados) > 0
+
+    cache = CalendarioNoHabilesCache(make_prog_calendar_loader(sb))
+    caps = _fetch_distinct_capitulos_presupuesto(
+        sb, contrato_id, version_ppto_id, pk_ids, crono
+    )
+    agg = _aggregate_cronograma_por_capitulo(crono)
+
+    capitulos_rows: List[dict] = []
+    for cap in caps:
+        rec = agg.get(cap) or {}
+        n_ag = int(rec.get("agrupadores") or 0)
+        if n_ag <= 0:
+            capitulos_rows.append(
+                {
+                    "capitulo": cap,
+                    "num_agrupadores": 0,
+                    "fecha_inicio": None,
+                    "fecha_fin": None,
+                    "dias_habiles": None,
+                    "sin_programar": True,
+                }
+            )
+            continue
+        fi = min(rec["fechas_ini"]) if rec.get("fechas_ini") else None
+        ff = max(rec["fechas_fin"]) if rec.get("fechas_fin") else None
+        d_hab = None
+        d0, d1 = _parse_d(fi), _parse_d(ff)
+        if d0 and d1:
+            from prog_obra_calendar import count_dias_habiles_entre
+
+            d_hab = count_dias_habiles_entre(contrato_id, d0, d1, cache)
+        capitulos_rows.append(
+            {
+                "capitulo": cap,
+                "num_agrupadores": n_ag,
+                "fecha_inicio": fi,
+                "fecha_fin": ff,
+                "dias_habiles": d_hab,
+                "sin_programar": False,
+            }
+        )
+
+    criticos: List[dict] = []
+    desfases: List[dict] = []
+    if tiene_cpm:
+        for r in resultados:
+            if not r.get("es_ruta_critica"):
+                continue
+            criticos.append(
+                {
+                    "nombre": r.get("agrupador_label") or "—",
+                    "fecha_inicio": str(r.get("fecha_inicio_temprana") or "")[:10] or "—",
+                    "fecha_fin": str(r.get("fecha_fin_temprana") or "")[:10] or "—",
+                    "holgura": int(r.get("holgura_total") or 0),
+                }
+            )
+        fin_ver = _parse_d(meta.get("fecha_fin"))
+        if fin_ver:
+            for r in resultados:
+                ft = _parse_d(r.get("fecha_fin_temprana"))
+                if not ft or ft <= fin_ver:
+                    continue
+                dias = _dias_exceso_tras_horizonte(ft, fin_ver, contrato_id, cache)
+                if dias <= 0:
+                    continue
+                desfases.append(
+                    {
+                        "nombre": r.get("agrupador_label") or "—",
+                        "fecha_fin": str(r.get("fecha_fin_temprana") or "")[:10] or "—",
+                        "dias_exceso": dias,
+                    }
+                )
+        desfases.sort(key=lambda x: (-x["dias_exceso"], x.get("nombre") or ""))
+
+    cpm_estado = None
+    if tiene_cpm:
+        cpm_estado = "Desactualizado" if meta.get("cpm_dirty") else "Vigente"
+
+    return {
+        "capitulos": capitulos_rows,
+        "tiene_cpm": tiene_cpm,
+        "criticos": criticos,
+        "desfases": desfases,
+        "version": {
+            "tiene_version": bool(meta),
+            "nombre": _prog_version_label(meta) if meta else "—",
+            "estado": _prog_estado_display(meta.get("estado")) if meta else "—",
+            "fecha_inicio": str(meta.get("fecha_inicio") or "")[:10] or "—",
+            "fecha_fin": str(meta.get("fecha_fin") or "")[:10] or "—",
+            "cpm_estado": cpm_estado,
+        },
+    }
+
+
+def _render_resumen_ejecutivo_pdf_html(
     contrato: dict,
-    body_rows: List[dict],
+    resumen: dict,
     prog_meta: Optional[dict],
     fecha_gen: str,
-    *,
-    page_num: int,
-    total_pages: int,
 ) -> str:
-    from informes import _html_logo_contratista
-
-    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
-    prog_lbl = _prog_version_label(prog_meta)
-    numero = _h(contrato.get("numero") or contrato.get("id") or "")
-    objeto = _h(contrato.get("objeto") or "—")
-    tbody = _render_cronograma_body_rows(body_rows)
-    pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
     c = PDF_CLR
-    th = _pdf_th_style
+    td = _pdf_td
+    note = f"font-size:6.5pt;color:{c['muted']};font-style:italic;padding:2px 0;"
+    sec = (
+        f"font-size:7.5pt;font-weight:bold;color:{c['text']};"
+        f"margin:6px 0 3px;text-transform:uppercase;"
+    )
+    tiene_cpm = bool(resumen.get("tiene_cpm"))
+    ver = resumen.get("version") or {}
 
+    if not tiene_cpm:
+        ver_block = f"""
+<div style="{note}">No hay resultados CPM calculados para esta versión.</div>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-top:2px;">
+  <tbody>
+    <tr>
+      <td style="{td('width:22%;font-weight:bold;')}">Versión</td>
+      <td style="{td()}">{_h(ver.get("nombre"))}</td>
+      <td style="{td('width:18%;font-weight:bold;')}">Estado</td>
+      <td style="{td()}">{_h(ver.get("estado"))}</td>
+    </tr>
+    <tr>
+      <td style="{td('font-weight:bold;')}">Inicio cronograma</td>
+      <td style="{td()}">{_h(ver.get("fecha_inicio"))}</td>
+      <td style="{td('font-weight:bold;')}">Fin cronograma</td>
+      <td style="{td()}">{_h(ver.get("fecha_fin"))}</td>
+    </tr>
+    <tr>
+      <td style="{td('font-weight:bold;')}">Estado CPM</td>
+      <td colspan="3" style="{td('color:' + c['muted'] + ';')}">Sin calcular</td>
+    </tr>
+  </tbody>
+</table>
+"""
+    else:
+        cpm_lbl = ver.get("cpm_estado") or "—"
+        cpm_color = c["negative"] if cpm_lbl == "Desactualizado" else c["accent"]
+        ver_block = f"""
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+  <tbody>
+    <tr>
+      <td style="{td('width:22%;font-weight:bold;')}">Versión</td>
+      <td style="{td()}">{_h(ver.get("nombre"))}</td>
+      <td style="{td('width:18%;font-weight:bold;')}">Estado</td>
+      <td style="{td()}">{_h(ver.get("estado"))}</td>
+    </tr>
+    <tr>
+      <td style="{td('font-weight:bold;')}">Inicio cronograma</td>
+      <td style="{td()}">{_h(ver.get("fecha_inicio"))}</td>
+      <td style="{td('font-weight:bold;')}">Fin cronograma</td>
+      <td style="{td()}">{_h(ver.get("fecha_fin"))}</td>
+    </tr>
+    <tr>
+      <td style="{td('font-weight:bold;')}">Estado CPM</td>
+      <td colspan="3" style="{td('font-weight:bold;color:' + cpm_color + ';')}">{_h(cpm_lbl)}</td>
+    </tr>
+  </tbody>
+</table>
+"""
+
+    header = _pdf_page_header_html(
+        contrato,
+        "Estado de la versión",
+        subtitle="Programación de obra",
+        prog_meta=prog_meta,
+        fecha_gen=fecha_gen,
+    )
     return f"""
 <div class="page-cronograma">
   <div class="frame-double-outer">
     <div class="frame-double-inner">
-      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:6px;">
-        <tr>
-          <td style="width:14%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:2px;">
-            {logo_html}
-          </td>
-          <td style="width:62%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px 6px;">
-            <div style="font-size:11pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">
-              Cronograma de Programación de Obra
-            </div>
-          </td>
-          <td style="width:24%;vertical-align:middle;text-align:center;border:0.5px solid {c['border']};padding:4px;">
-            <div style="font-size:6pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
-            <div style="font-size:9pt;font-weight:bold;color:{c['accent']};margin-top:2px;">{_h(prog_lbl)}</div>
-          </td>
-        </tr>
-      </table>
-      <div style="font-size:7pt;color:{c['text']};margin-bottom:6px;padding:0 2px;line-height:1.35;">
-        <strong>Contrato:</strong> {numero} · <strong>Objeto:</strong> {objeto}
-        &nbsp;&nbsp;|&nbsp;&nbsp;
-        <strong>Generado:</strong> {_h(fecha_gen)}
-        {f'&nbsp;&nbsp;|&nbsp;&nbsp;<span style="color:{c["muted"]};">{_h(pag)}</span>' if pag else ''}
-      </div>
-      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
-        <thead>
-          <tr>
-            <th style="{th('text-align:left;width:46%;')}">Actividad / WBS</th>
-            <th style="{th('text-align:left;width:14%;')}">Inicio</th>
-            <th style="{th('text-align:left;width:14%;')}">Fin</th>
-            <th style="{th('text-align:center;width:12%;')}">Días háb.</th>
-            <th style="{th('text-align:left;width:14%;')}">Tipo</th>
-          </tr>
-        </thead>
-        <tbody>{tbody}</tbody>
-      </table>
+      {header}
+      <div style="{sec}">Versión activa</div>
+      {ver_block}
     </div>
   </div>
 </div>
 """
 
 
-def build_curva_s_pdf_html(
+def _render_cronograma_pk_pdf_pages(
     contrato: dict,
-    data: dict,
-    *,
-    cronograma: Optional[List[dict]] = None,
-    prog_meta: Optional[dict] = None,
-    ppto_meta: Optional[dict] = None,
-    cpm_export: Optional[dict] = None,
-    fecha_generacion: Optional[str] = None,
+    cronograma: List[dict],
+    cpm_export: Optional[dict],
+    prog_meta: Optional[dict],
+    fecha_gen: str,
 ) -> str:
-    """HTML multipágina: curva S (pág. 1) + cronograma WBS (pág. 2+)."""
-    from informes import _fmt_informe_fecha_generacion
+    holgura_map = _cpm_holgura_by_agrupador(cpm_export)
+    page_specs: List[Tuple[dict, List[dict], int, int]] = []
+    for pk_node in cronograma or []:
+        pk = str(pk_node.get("pk_id") or "").strip()
+        ag_rows: List[dict] = []
+        for cap_node in pk_node.get("capitulos") or []:
+            cap = str(cap_node.get("capitulo") or "").strip()
+            for ag in cap_node.get("agrupadores") or []:
+                ag_rows.append({"capitulo": cap, **ag})
+        chunks = _chunk_list(ag_rows, CRONO_ROWS_PER_PAGE) or [[]]
+        for idx, chunk in enumerate(chunks, start=1):
+            page_specs.append((pk_node, chunk, idx, len(chunks)))
 
-    ind = data.get("indicadores") or {}
-    meses = data.get("meses") or []
-    fecha_gen = (fecha_generacion or "").strip() or _fmt_informe_fecha_generacion()
+    if not page_specs:
+        page_specs = [({"pk_id": "—", "capitulos": []}, [], 1, 1)]
+
+    total = len(page_specs)
+    out = ""
+    c = PDF_CLR
+    th = _pdf_th_style
+    td = _pdf_td
+    for page_num, (pk_node, ag_chunk, pk_idx, pk_total) in enumerate(page_specs, start=1):
+        pk = str(pk_node.get("pk_id") or "—")
+        resumen = _pk_cronograma_resumen(pk_node)
+        pag = f"Página {page_num} de {total}" if total > 1 else ""
+        pk_pag = f" · hoja {pk_idx} de {pk_total}" if pk_total > 1 else ""
+        header = _pdf_page_header_html(
+            contrato,
+            "Cronograma de programación",
+            subtitle=f"PK {_h(pk)}{pk_pag}",
+            prog_meta=prog_meta,
+            fecha_gen=fecha_gen,
+            pag=pag,
+        )
+        if pk_idx == 1:
+            resumen_html = f"""
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:4px;background:{c['bg_kpi']};">
+  <tr>
+    <td style="{td('border:0.25px solid ' + c['border_light'] + ';font-weight:bold;width:20%;')}">Resumen PK</td>
+    <td style="{td('border:0.25px solid ' + c['border_light'] + ';')}">Agrupadores: <strong>{resumen['agrupadores']}</strong></td>
+    <td style="{td('border:0.25px solid ' + c['border_light'] + ';')}">Inicio: <strong>{_h(resumen['fecha_inicio'])}</strong></td>
+    <td style="{td('border:0.25px solid ' + c['border_light'] + ';')}">Fin: <strong>{_h(resumen['fecha_fin'])}</strong></td>
+  </tr>
+</table>
+"""
+        else:
+            resumen_html = ""
+
+        if ag_chunk:
+            body = ""
+            for ag in ag_chunk:
+                cap = str(ag.get("capitulo") or "").strip()
+                ag_id = ag.get("agrupador_id")
+                wbs = str(ag.get("codigo_wbs") or "").strip()
+                nombre = str(ag.get("nombre") or wbs).strip()
+                act_lbl = f"{wbs} · {nombre}".strip(" ·") if wbs else nombre
+                try:
+                    hol = holgura_map.get((pk, cap, int(ag_id)), "—")
+                except (TypeError, ValueError):
+                    hol = "—"
+                body += (
+                    f"<tr style=\"background:{c['row_ag']};\">"
+                    f"<td style=\"{td('font-weight:bold;')}\">"
+                    f"<div>{_h(cap)}</div>"
+                    f"<div style=\"font-size:5.5pt;color:{c['muted']};font-weight:normal;\">{_h(act_lbl)}</div>"
+                    f"</td>"
+                    f"<td style=\"{td('text-align:center;')}\">{_h(ag.get('fecha_inicio'))}</td>"
+                    f"<td style=\"{td('text-align:center;')}\">{_h(ag.get('fecha_fin'))}</td>"
+                    f"<td style=\"{td('text-align:center;')}\">{_h(_fmt_duracion(ag.get('duracion_dias_habiles')))}</td>"
+                    f"<td style=\"{td('text-align:center;')}\">{_h(hol)}</td>"
+                    f"</tr>"
+                )
+        else:
+            body = (
+                f'<tr><td colspan="5" style="{td("text-align:center;color:" + c["muted"] + ";")}">'
+                "Sin actividades programadas en este PK.</td></tr>"
+            )
+
+        out += f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      {header}
+      {resumen_html}
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="{th('text-align:left;width:40%;')}">Capítulo / Actividad WBS</th>
+          <th style="{th('text-align:center;width:15%;')}">Inicio</th>
+          <th style="{th('text-align:center;width:15%;')}">Fin</th>
+          <th style="{th('text-align:center;width:15%;')}">Días háb.</th>
+          <th style="{th('text-align:center;width:15%;')}">Holgura</th>
+        </tr></thead>
+        <tbody>{body}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+    return out
+
+
+def _meses_table_rows_html(meses_chunk: List[dict]) -> str:
+    td = _pdf_td
+    rows_html = ""
+    for r in meses_chunk:
+        rows_html += (
+            f"<tr>"
+            f"<td style=\"{td()}\">{_h(r.get('mes_label'))}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('baseline_mes') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('baseline_acum') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('vigente_mes') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('vigente_acum') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('ejecutado_mes') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(r.get('ejecutado_acum') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">{_h(r.get('delta_vigente_pct'))}%</td>"
+            f"<td style=\"{td('text-align:right;')}\">{_h(r.get('delta_ejecutado_pct'))}%</td>"
+            f"</tr>"
+        )
+    return rows_html
+
+
+def _render_curva_s_pdf_header_block(
+    contrato: dict,
+    ind: dict,
+    *,
+    fecha_gen: str,
+    ppto_meta: Optional[dict],
+    prog_meta: Optional[dict],
+    data: dict,
+) -> str:
+    c = PDF_CLR
     titulo = f"Curva S — Contrato {_h(contrato.get('numero') or contrato.get('id') or '')}"
     contratista = _h(contrato.get("contratista") or "—")
     interventoria = _h(contrato.get("interventoria") or "—")
-    numero_cto = _h(contrato.get("numero") or contrato.get("id") or "—")
     objeto_cto = _h(contrato.get("objeto") or "—")
     ppto_lbl = _h(_ppto_version_label(ppto_meta))
-
-    rows_html = ""
-    for r in meses:
-        rows_html += (
-            f"<tr>"
-            f"<td>{_h(r.get('mes_label'))}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('baseline_mes') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('baseline_acum') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('vigente_mes') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('vigente_acum') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('ejecutado_mes') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">${float(r.get('ejecutado_acum') or 0):,.0f}</td>"
-            f"<td style=\"text-align:right;\">{_h(r.get('delta_vigente_pct'))}%</td>"
-            f"<td style=\"text-align:right;\">{_h(r.get('delta_ejecutado_pct'))}%</td>"
-            f"</tr>"
-        )
-
+    prog_lbl = _h(_prog_version_label(prog_meta))
+    bid = _h(data.get("baseline_id") or "—")
+    tid = _h(data.get("target_id") or "—")
     desv_val = float(ind.get("desviacion_valor") or 0)
-    desv_color = PDF_CLR["negative"] if desv_val < 0 else PDF_CLR["accent"]
-    chart_block = _build_curva_s_chart_block(meses)
-
-    c = PDF_CLR
-    lbl = f"font-size:5.5pt;font-weight:bold;color:{c['muted']};text-transform:uppercase;letter-spacing:0.2px;"
+    desv_color = c["negative"] if desv_val < 0 else c["accent"]
+    lbl = (
+        f"font-size:5.5pt;font-weight:bold;color:{c['muted']};"
+        f"text-transform:uppercase;letter-spacing:0.2px;"
+    )
     val = f"font-size:7pt;color:{c['text']};margin-top:1px;line-height:1.15;"
     logo_contratista = _html_footer_logo_contratista(contrato)
-
-    footer_html = f"""
-<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-top:8px;border-top:1px solid {c['border']};">
+    return f"""
+<div class="title">{titulo}</div>
+<div class="sub">{objeto_cto} · {contratista} · Interventoría: {interventoria}</div>
+<div style="font-size:7pt;color:{c['text']};margin-bottom:6px;line-height:1.35;">
+  <strong>Contrato:</strong> {_h(contrato.get('numero') or contrato.get('id') or '')}
+  · <strong>Contratista:</strong> {contratista}
+  · <strong>Interventoría:</strong> {interventoria}
+  · <strong>Generado:</strong> {_h(fecha_gen)}
+</div>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;background:{c['bg_kpi']};margin-bottom:8px;border:1px solid {c['border_light']};">
+  <tr>
+    <td style="padding:5px 8px;font-size:8pt;white-space:nowrap;color:{c['text']};">
+      Presupuesto total: <strong style="color:{c['accent']};">${float(ind.get('presupuesto_total') or 0):,.0f}</strong>
+      &nbsp;&nbsp;&nbsp;Programado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong>
+      &nbsp;&nbsp;&nbsp;Ejecutado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong>
+      &nbsp;&nbsp;&nbsp;Desviación: <strong style="color:{desv_color};">${desv_val:,.0f} ({ind.get('desviacion_pct')}%)</strong>
+    </td>
+  </tr>
+</table>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:8px;border-top:1px solid {c['border_light']};">
   <tr>
     <td style="width:18%;vertical-align:middle;padding:3px 4px 2px 0;border-right:1px solid {c['border_light']};">
       <div style="{lbl}">Logo contratista</div>
@@ -1353,8 +1818,8 @@ def build_curva_s_pdf_html(
       <div style="{val}"><strong>{contratista}</strong><br/>Interventoría: {interventoria}</div>
     </td>
     <td style="width:50%;vertical-align:top;padding:3px 0 2px 6px;">
-      <div style="{lbl}">Contrato · Objeto</div>
-      <div style="{val}"><strong>Nº {numero_cto}</strong> · {objeto_cto}</div>
+      <div style="{lbl}">Versiones programación</div>
+      <div style="{val}"><strong>Baseline:</strong> {bid}<br/><strong>Vigente:</strong> {tid} · {prog_lbl}</div>
     </td>
   </tr>
   <tr>
@@ -1370,72 +1835,284 @@ def build_curva_s_pdf_html(
 </table>
 """
 
-    flat_crono = _flatten_cronograma_rows(cronograma or [])
-    crono_chunks = _chunk_cronograma_rows(flat_crono)
-    crono_pages_html = ""
-    total_crono = len(crono_chunks)
-    for idx, chunk in enumerate(crono_chunks, start=1):
-        crono_pages_html += _render_cronograma_page(
+
+def _render_curva_s_meses_pdf_page(
+    contrato: dict,
+    meses_chunk: List[dict],
+    *,
+    page_num: int,
+    total_pages: int,
+    fecha_gen: str,
+    prog_meta: Optional[dict],
+) -> str:
+    c = PDF_CLR
+    th = _pdf_th_style
+    td = _pdf_td
+    pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
+    tbody = _meses_table_rows_html(meses_chunk)
+    if not tbody:
+        tbody = (
+            f'<tr><td colspan="9" style="{td("text-align:center;color:" + c["muted"] + ";")}">'
+            "Sin meses con datos de inversión programada.</td></tr>"
+        )
+    header = _pdf_page_header_html(
+        contrato,
+        "Curva S — Distribución mensual de inversión",
+        prog_meta=prog_meta,
+        fecha_gen=fecha_gen,
+        pag=pag,
+    )
+    return f"""
+<div class="page-cronograma">
+  <div class="frame-meses-outer">
+    <div class="frame-meses-inner">
+      {header}
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="{th('text-align:left;width:8%;')}">Mes</th>
+          <th style="{th('text-align:right;width:10%;')}">Base. mes</th>
+          <th style="{th('text-align:right;width:10%;')}">Base. acum.</th>
+          <th style="{th('text-align:right;width:10%;')}">Vig. mes</th>
+          <th style="{th('text-align:right;width:10%;')}">Vig. acum.</th>
+          <th style="{th('text-align:right;width:10%;')}">Ejec. mes</th>
+          <th style="{th('text-align:right;width:10%;')}">Ejec. acum.</th>
+          <th style="{th('text-align:right;width:8%;')}">Δ Vig.</th>
+          <th style="{th('text-align:right;width:8%;')}">Δ Ejec.</th>
+        </tr></thead>
+        <tbody>{tbody}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+
+
+def _group_detalle_by_pk(detalle: List[dict]) -> Dict[str, List[dict]]:
+    by_pk: Dict[str, List[dict]] = defaultdict(list)
+    for row in detalle or []:
+        pk = str(row.get("pk_id") or "").strip() or "—"
+        by_pk[pk].append(row)
+    for pk in by_pk:
+        by_pk[pk].sort(
+            key=lambda r: (
+                _cap_sort_key(str(r.get("capitulo") or "")),
+                str(r.get("label") or ""),
+            )
+        )
+    return by_pk
+
+
+def _render_detalle_pk_pdf_pages(
+    contrato: dict,
+    data: dict,
+    meses: List[dict],
+    *,
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+) -> str:
+    det = data.get("detalle_pk") or {}
+    baseline_rows = det.get("baseline") or []
+    vigente_rows = det.get("vigente") or []
+    month_keys = [str(m.get("mes") or "") for m in meses if m.get("mes")]
+    if not month_keys:
+        month_keys = sorted(
+            {
+                mk
+                for row in (baseline_rows + vigente_rows)
+                for mk in (row.get("distribucion_mensual") or {}).keys()
+            }
+        )
+    month_labels = {str(m.get("mes") or ""): str(m.get("mes_label") or "") for m in meses}
+    same_version = str(data.get("baseline_id") or "") == str(data.get("target_id") or "")
+    sections: List[Tuple[str, List[dict]]] = []
+    if baseline_rows:
+        sections.append(("Baseline", baseline_rows))
+    if vigente_rows and not same_version:
+        sections.append(("Vigente", vigente_rows))
+    elif vigente_rows and not baseline_rows:
+        sections.append(("Vigente", vigente_rows))
+
+    c = PDF_CLR
+    th = _pdf_th_style
+    td = _pdf_td
+
+    if not sections:
+        header = _pdf_page_header_html(
+            contrato,
+            "Detalle por PK",
+            subtitle="Distribución mensual",
+            prog_meta=prog_meta,
+            fecha_gen=fecha_gen,
+        )
+        return f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer"><div class="frame-double-inner">
+    {header}
+    <div style="font-size:7pt;color:{c['muted']};">Sin actividades programadas con costo en el alcance seleccionado.</div>
+  </div></div>
+</div>
+"""
+
+    out = ""
+    for sec_label, rows in sections:
+        by_pk = _group_detalle_by_pk(rows)
+        month_slices = _chunk_list(month_keys, DETALLE_PK_MONTH_COLS) or [[]]
+        for pk in sorted(by_pk.keys(), key=lambda x: (len(x), x)):
+            pk_rows = by_pk[pk]
+            for m_idx, mslice in enumerate(month_slices, start=1):
+                head = "".join(
+                    f'<th style="{th("text-align:right;font-size:5.5pt;")}">{_h(month_labels.get(mk, mk))}</th>'
+                    for mk in mslice
+                )
+                body = ""
+                for row in pk_rows:
+                    dist = row.get("distribucion_mensual") or {}
+                    ag_nombre = str(row.get("agrupador_nombre") or row.get("label") or "").strip()
+                    wbs = str(row.get("codigo_wbs") or row.get("label") or "").strip()
+                    cells = "".join(
+                        f'<td style="{td("text-align:right;")}">${float(dist.get(mk, 0)):,.0f}</td>'
+                        for mk in mslice
+                    )
+                    body += (
+                        f"<tr>"
+                        f'<td style="{td()}">{_h(ag_nombre)}</td>'
+                        f'<td style="{td()}">'
+                        f'<div>{_h(row.get("capitulo"))}</div>'
+                        f'<div style="font-size:5.5pt;color:{c["muted"]};">{_h(wbs)}</div>'
+                        f"</td>"
+                        f'<td style="{td("text-align:right;font-weight:bold;")}">'
+                        f'${float(row.get("costo_total") or 0):,.0f}</td>'
+                        f"{cells}</tr>"
+                    )
+                m_cont = f" · meses {m_idx}/{len(month_slices)}" if len(month_slices) > 1 else ""
+                header = _pdf_page_header_html(
+                    contrato,
+                    f"Detalle por PK — {_h(sec_label)}",
+                    subtitle=f"PK {_h(pk)}{m_cont}",
+                    prog_meta=prog_meta,
+                    fecha_gen=fecha_gen,
+                )
+                out += f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      {header}
+      <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="{th('text-align:left;width:18%;')}">Agrupador</th>
+          <th style="{th('text-align:left;width:10%;')}">Capítulo / WBS</th>
+          <th style="{th('text-align:right;width:8%;')}">Costo total</th>
+          {head}
+        </tr></thead>
+        <tbody>{body}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+    return out
+
+
+def _render_curva_s_intro_pdf_page(
+    contrato: dict,
+    chart_block: str,
+    *,
+    fecha_gen: str,
+    prog_meta: Optional[dict],
+    page_num: int,
+    total_pages: int,
+) -> str:
+    pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
+    header = _pdf_page_header_html(
+        contrato,
+        "Curva S — Inversión acumulada",
+        prog_meta=prog_meta,
+        fecha_gen=fecha_gen,
+        pag=pag,
+    )
+    return f"""
+<div class="page-cronograma">
+  <div class="frame-double-outer">
+    <div class="frame-double-inner">
+      {header}
+      {chart_block}
+    </div>
+  </div>
+</div>
+"""
+
+
+def build_curva_s_pdf_html(
+    contrato: dict,
+    data: dict,
+    *,
+    cronograma: Optional[List[dict]] = None,
+    prog_meta: Optional[dict] = None,
+    ppto_meta: Optional[dict] = None,
+    cpm_export: Optional[dict] = None,
+    resumen_ejecutivo: Optional[dict] = None,
+    fecha_generacion: Optional[str] = None,
+) -> str:
+    """HTML multipágina: curva S + detalle PK + resumen ejecutivo + cronograma + CPM."""
+    from informes import _fmt_informe_fecha_generacion
+
+    meses = data.get("meses") or []
+    fecha_gen = (fecha_generacion or "").strip() or _fmt_informe_fecha_generacion()
+    c = PDF_CLR
+
+    chart_block = _build_curva_s_chart_block(meses)
+
+    meses_chunks = _chunk_list(meses, MESES_ROWS_PER_PDF_PAGE) or [[]]
+    total_curva_pages = 1 + len(meses_chunks)
+    curva_pages_html = _render_curva_s_intro_pdf_page(
+        contrato,
+        chart_block,
+        fecha_gen=fecha_gen,
+        prog_meta=prog_meta,
+        page_num=1,
+        total_pages=total_curva_pages,
+    )
+    for idx, chunk in enumerate(meses_chunks, start=2):
+        curva_pages_html += _render_curva_s_meses_pdf_page(
             contrato,
             chunk,
-            prog_meta,
-            fecha_gen,
             page_num=idx,
-            total_pages=total_crono,
+            total_pages=total_curva_pages,
+            fecha_gen=fecha_gen,
+            prog_meta=prog_meta,
         )
+
+    detalle_pk_html = _render_detalle_pk_pdf_pages(
+        contrato, data, meses, prog_meta=prog_meta, fecha_gen=fecha_gen
+    )
+
+    crono_pages_html = _render_cronograma_pk_pdf_pages(
+        contrato, cronograma or [], cpm_export, prog_meta, fecha_gen
+    )
 
     cpm_pages_html = _render_cpm_export_pdf_html(contrato, cpm_export, prog_meta, fecha_gen)
 
-    th = _pdf_th_style
+    resumen_html = ""
+    if resumen_ejecutivo is not None:
+        resumen_html = _render_resumen_ejecutivo_pdf_html(
+            contrato, resumen_ejecutivo, prog_meta, fecha_gen
+        )
+
     return f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8"/>
 <style>
 @page {{ size: A4 landscape; margin: 0.9cm; }}
 body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: {c['text']}; margin: 0; padding: 0; }}
-.page-curva {{ page-break-after: always; }}
 .page-cronograma {{ page-break-after: always; }}
 .page-cronograma:last-child {{ page-break-after: auto; }}
-.frame-thin {{ border: 1px solid #000; padding: 10px 12px; box-sizing: border-box; }}
-.frame-double-outer {{ border: 2px solid #000; padding: 3px; min-height: 17.5cm; box-sizing: border-box; }}
-.frame-double-inner {{ border: 1px solid #000; padding: 8px 10px; min-height: calc(17.5cm - 12px); box-sizing: border-box; }}
-.title {{ color: {c['title']}; font-size: 14pt; font-weight: bold; margin: 0 0 2px; }}
-.sub {{ color: {c['muted']}; font-size: 8pt; margin-bottom: 8px; }}
-table.data {{ width: 100%; border-collapse: collapse; margin-top: 6px; table-layout: fixed; }}
-table.data th {{ {_pdf_th_style('text-align:left;font-size:6pt;')} }}
-table.data td {{ border-bottom: 1px solid {c['border_light']}; padding: 3px 4px; font-size: 6.5pt; }}
+.frame-double-outer {{ border: 1px solid #000; padding: 2px; min-height: 17.5cm; box-sizing: border-box; }}
+.frame-double-inner {{ border: 0.5px solid #000; padding: 6px 8px; min-height: calc(17.5cm - 8px); box-sizing: border-box; }}
+.frame-meses-outer {{ border: 0.5px solid #000; padding: 2px; min-height: 17.5cm; box-sizing: border-box; }}
+.frame-meses-inner {{ border: 0.25px solid #000; padding: 5px 7px; min-height: calc(17.5cm - 6px); box-sizing: border-box; }}
 </style></head><body>
-<div class="page-curva">
-  <div class="frame-thin">
-    <div class="title">{titulo}</div>
-    <div class="sub">{objeto_cto} · {contratista} · Interventoría: {interventoria}</div>
-    <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;background:{c['bg_kpi']};margin-bottom:8px;border:1px solid {c['border_light']};">
-      <tr>
-        <td style="padding:5px 8px;font-size:8pt;white-space:nowrap;color:{c['text']};">
-          Presupuesto total: <strong style="color:{c['accent']};">${float(ind.get('presupuesto_total') or 0):,.0f}</strong>
-          &nbsp;&nbsp;&nbsp;Programado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong>
-          &nbsp;&nbsp;&nbsp;Ejecutado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong>
-          &nbsp;&nbsp;&nbsp;Desviación: <strong style="color:{desv_color};">${desv_val:,.0f} ({ind.get('desviacion_pct')}%)</strong>
-        </td>
-      </tr>
-    </table>
-    {chart_block}
-    <table class="data">
-      <thead><tr>
-        <th style="{th('width:8%;')}">Mes</th>
-        <th style="{th('text-align:right;width:10%;')}">Base. mes</th>
-        <th style="{th('text-align:right;width:10%;')}">Base. acum.</th>
-        <th style="{th('text-align:right;width:10%;')}">Vig. mes</th>
-        <th style="{th('text-align:right;width:10%;')}">Vig. acum.</th>
-        <th style="{th('text-align:right;width:10%;')}">Ejec. mes</th>
-        <th style="{th('text-align:right;width:10%;')}">Ejec. acum.</th>
-        <th style="{th('text-align:right;width:8%;')}">Δ Vig.</th>
-        <th style="{th('text-align:right;width:8%;')}">Δ Ejec.</th>
-      </tr></thead>
-      <tbody>{rows_html}</tbody>
-    </table>
-    {footer_html}
-  </div>
-</div>
+{curva_pages_html}
+{detalle_pk_html}
+{resumen_html}
 {crono_pages_html}
 {cpm_pages_html}
 </body></html>"""
@@ -1524,14 +2201,67 @@ def _gantt_month_columns(meses_data: List[dict], span_dates: List[date]) -> List
     return [(mk, seen[mk][0], seen[mk][1]) for mk in sorted(seen.keys())]
 
 
-def _xl_gantt_month_formula(row: int, col_letter: str, hdr_row: int = 4) -> str:
+def _month_key_to_date(mk: str) -> Optional[date]:
+    mk = (mk or "").strip()
+    if not mk or "-" not in mk:
+        return None
+    try:
+        y, mo = mk.split("-", 1)
+        return date(int(y), int(mo), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _xl_linear_month_formula(
+    row: int,
+    col_letter: str,
+    hdr_row: int,
+    *,
+    fi_col: str,
+    ff_col: str,
+    cost_col: str,
+) -> str:
     """Distribución lineal por días calendario (misma lógica que _linear_monthly_distribution)."""
     return (
-        f'=IF($E{row}<>"Agrupador WBS","",'
-        f'IF(OR($B{row}="",$C{row}="",$F{row}=0),0,'
-        f'MAX(0,MIN($C{row},EOMONTH({col_letter}${hdr_row},0))-MAX($B{row},{col_letter}${hdr_row})+1)'
-        f'/($C{row}-$B{row}+1)*$F{row}))'
+        f'=IF(OR(${fi_col}{row}="",${ff_col}{row}="",${cost_col}{row}=0),0,'
+        f'MAX(0,MIN(${ff_col}{row},EOMONTH({col_letter}${hdr_row},0))'
+        f'-MAX(${fi_col}{row},{col_letter}${hdr_row})+1)'
+        f'/(${ff_col}{row}-${fi_col}{row}+1)*${cost_col}{row})'
     )
+
+
+def _xl_gantt_month_formula(row: int, col_letter: str, hdr_row: int = 4) -> str:
+    inner = _xl_linear_month_formula(
+        row, col_letter, hdr_row, fi_col="B", ff_col="C", cost_col="F",
+    )[1:]
+    return f'=IF($E{row}<>"Agrupador WBS","",{inner})'
+
+
+def _xl_detalle_pk_month_formula(row: int, col_letter: str, hdr_row: int = 4) -> str:
+    return _xl_linear_month_formula(
+        row, col_letter, hdr_row, fi_col="F", ff_col="G", cost_col="E",
+    )
+
+
+def _xl_curva_s_sumif_detalle(
+    sheet: str,
+    section: str,
+    col_letter: str,
+    first_row: int,
+    last_row: int,
+) -> str:
+    return (
+        f"=SUMIF('{sheet}'!$A${first_row}:$A${last_row},\"{section}\","
+        f"'{sheet}'!{col_letter}${first_row}:{col_letter}${last_row})"
+    )
+
+
+def _xl_curva_s_running_sum(col_letter: str, row: int, first_row: int) -> str:
+    return f"=SUM(${col_letter}${first_row}:{col_letter}{row})"
+
+
+def _xl_curva_s_delta_pct(acum_col: str, base_col: str, row: int) -> str:
+    return f"=IF({base_col}{row}=0,0,({acum_col}{row}-{base_col}{row})/{base_col}{row})"
 
 
 def _xl_gantt_row_total_formula(row: int, first_month_col: int, last_month_col: int) -> str:
@@ -1781,7 +2511,9 @@ def load_curva_s_export_context(
     if resolved_target:
         prows = (
             sb.table("prog_versiones")
-            .select("numero_version,tipo,estado")
+            .select(
+                "numero_version,tipo,estado,fecha_inicio,fecha_fin,cpm_dirty,cpm_calculado_en"
+            )
             .eq("id", resolved_target)
             .limit(1)
             .execute()
@@ -1805,6 +2537,42 @@ def load_curva_s_export_context(
         if resolved_target
         else {"resultados": [], "dependencias": []}
     )
+    if resolved_target:
+        from prog_obra_costos_presupuesto import _fetch_agrupadores_meta
+        from prog_obra_service import _dep_nodo_label, listar_dependencias
+
+        ag_meta_all = _fetch_agrupadores_meta(sb, contrato_id)
+        deps_all = listar_dependencias(sb, resolved_target)
+        cpm_export["dependencias_generales"] = [
+            {
+                **d,
+                "origen_label": _dep_nodo_label(d, "orig", ag_meta_all),
+                "destino_label": _dep_nodo_label(d, "dest", ag_meta_all),
+                "tipo": (d.get("tipo") or "FS").strip().upper(),
+                "lag_dias": int(d.get("lag_dias") or 0),
+            }
+            for d in deps_all
+        ]
+        cpm_export["dependencias_generales"].sort(
+            key=lambda x: (
+                str(x.get("pk_id_origen") or ""),
+                str(x.get("capitulo_origen") or ""),
+                str(x.get("origen_label") or ""),
+            )
+        )
+    resumen_ejecutivo = (
+        build_resumen_ejecutivo_data(
+            sb,
+            contrato_id,
+            version_ppto_id=ppto_id or None,
+            pk_ids=pk_set,
+            cronograma=cronograma,
+            cpm_export=cpm_export,
+            prog_meta=prog_meta,
+        )
+        if resolved_target
+        else None
+    )
     return {
         "contrato": contrato,
         "data": data,
@@ -1812,7 +2580,410 @@ def load_curva_s_export_context(
         "cpm_export": cpm_export,
         "prog_meta": prog_meta,
         "ppto_meta": ppto_meta,
+        "resumen_ejecutivo": resumen_ejecutivo,
     }
+
+
+def _write_detalle_pk_excel_sheet(
+    ws,
+    data: dict,
+    meses: List[dict],
+    *,
+    numero: str,
+    prog_meta: Optional[dict],
+    fecha_gen: str,
+) -> Optional[dict]:
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    det = data.get("detalle_pk") or {}
+    baseline_rows = det.get("baseline") or []
+    vigente_rows = det.get("vigente") or []
+    month_keys = [str(m.get("mes") or "") for m in meses if m.get("mes")]
+    if not month_keys:
+        month_keys = sorted(
+            {
+                mk
+                for row in (baseline_rows + vigente_rows)
+                for mk in (row.get("distribucion_mensual") or {}).keys()
+            }
+        )
+    month_labels = {str(m.get("mes") or ""): str(m.get("mes_label") or "") for m in meses}
+    same_version = str(data.get("baseline_id") or "") == str(data.get("target_id") or "")
+    sections: List[Tuple[str, List[dict]]] = []
+    if baseline_rows:
+        sections.append(("Baseline", baseline_rows))
+    if vigente_rows and not same_version:
+        sections.append(("Vigente", vigente_rows))
+    elif vigente_rows and not baseline_rows:
+        sections.append(("Vigente", vigente_rows))
+
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "Detalle por PK — Distribución mensual"
+    ws["A1"].font = Font(bold=True, size=14, color="1E40AF")
+    ws.merge_cells("A2:H2")
+    ws["A2"] = (
+        f"Contrato {numero} · Versión programación: {_prog_version_label(prog_meta)} · "
+        f"Baseline: {data.get('baseline_id') or '—'} · Vigente: {data.get('target_id') or '—'} · "
+        f"Generado: {fecha_gen}"
+    )
+    ws["A2"].font = Font(size=9, color="64748B")
+    ws["A2"].alignment = Alignment(wrap_text=True)
+    ws["A3"] = (
+        "Valores mensuales formulados: distribución lineal del costo total según Inicio, Fin y días calendario."
+    )
+    ws["A3"].font = Font(size=8, italic=True, color="64748B")
+
+    hdr_row = 4
+    base_headers = [
+        "Línea",
+        "PK",
+        "Capítulo",
+        "Agrupador / actividad",
+        "Costo total",
+        "Inicio",
+        "Fin",
+    ]
+    first_month_col = len(base_headers) + 1
+
+    if not sections:
+        ws.cell(row=hdr_row + 1, column=1, value="Sin actividades programadas con costo en el alcance.")
+        return None
+
+    for i, mk in enumerate(month_keys):
+        col = first_month_col + i
+        ms = _month_key_to_date(mk)
+        c = ws.cell(row=hdr_row, column=col, value=ms if ms else month_labels.get(mk, mk))
+        if ms:
+            c.number_format = "mmm yyyy"
+        c.font = Font(bold=True, color="1E3A8A", size=8)
+        c.fill = _xl_solid_fill("DBEAFE")
+        c.border = _xl_thin_border()
+        c.alignment = Alignment(horizontal="center", text_rotation=90)
+
+    for col, h in enumerate(base_headers, start=1):
+        c = ws.cell(row=hdr_row, column=col, value=h)
+        c.font = Font(bold=True, color="1E3A8A", size=9)
+        c.fill = _xl_solid_fill("DBEAFE")
+        c.border = _xl_thin_border()
+
+    row = hdr_row + 1
+    first_data_row = row
+    has_baseline = False
+    has_vigente = False
+    for sec_label, sec_rows in sections:
+        if sec_label == "Baseline":
+            has_baseline = True
+        if sec_label == "Vigente":
+            has_vigente = True
+        for pk, pk_rows in sorted(_group_detalle_by_pk(sec_rows).items(), key=lambda x: (len(x[0]), x[0])):
+            for item in pk_rows:
+                ag_lbl = str(item.get("agrupador_nombre") or item.get("label") or "").strip()
+                ws.cell(row=row, column=1, value=sec_label)
+                ws.cell(row=row, column=2, value=pk)
+                ws.cell(row=row, column=3, value=item.get("capitulo"))
+                ws.cell(row=row, column=4, value=ag_lbl)
+                ws.cell(row=row, column=5, value=float(item.get("costo_total") or 0)).number_format = EXCEL_COP_FMT
+                fi = _parse_d(item.get("fecha_inicio"))
+                ff = _parse_d(item.get("fecha_fin"))
+                if fi:
+                    ws.cell(row=row, column=6, value=fi).number_format = "yyyy-mm-dd"
+                if ff:
+                    ws.cell(row=row, column=7, value=ff).number_format = "yyyy-mm-dd"
+                for i, mk in enumerate(month_keys):
+                    col = first_month_col + i
+                    letter = get_column_letter(col)
+                    cell = ws.cell(row=row, column=col)
+                    cell.value = _xl_detalle_pk_month_formula(row, letter, hdr_row=hdr_row)
+                    cell.number_format = EXCEL_COP_FMT
+                for col in range(1, first_month_col + len(month_keys)):
+                    ws.cell(row=row, column=col).border = _xl_thin_border()
+                row += 1
+
+    last_data_row = row - 1
+    month_col_by_key = {
+        mk: first_month_col + i for i, mk in enumerate(month_keys)
+    }
+
+    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["B"].width = 10
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 36
+    ws.column_dimensions["E"].width = 16
+    ws.column_dimensions["F"].width = 12
+    ws.column_dimensions["G"].width = 12
+    for i in range(len(month_keys)):
+        ws.column_dimensions[get_column_letter(first_month_col + i)].width = 12
+    ws.freeze_panes = f"A{hdr_row + 1}"
+
+    return {
+        "sheet": ws.title,
+        "hdr_row": hdr_row,
+        "first_data_row": first_data_row,
+        "last_data_row": last_data_row,
+        "month_cols": month_col_by_key,
+        "has_baseline": has_baseline,
+        "has_vigente": has_vigente,
+        "vigente_section": "Vigente" if has_vigente else ("Baseline" if has_baseline else ""),
+        "baseline_section": "Baseline" if has_baseline else "",
+    }
+
+
+def _apply_curva_s_table_formulas(
+    ws,
+    meses: List[dict],
+    detalle_meta: Optional[dict],
+    *,
+    hdr_row: int,
+    first_table_row: int,
+) -> int:
+    from openpyxl.styles import Alignment
+    from openpyxl.utils import get_column_letter
+
+    money_cols = {2, 3, 4, 5, 6, 7}
+    pct_cols = {8, 9}
+    r = first_table_row
+
+    if not meses:
+        return r - 1
+
+    sheet = (detalle_meta or {}).get("sheet", "Detalle PK")
+    d_first = (detalle_meta or {}).get("first_data_row")
+    d_last = (detalle_meta or {}).get("last_data_row")
+    month_cols = (detalle_meta or {}).get("month_cols") or {}
+    baseline_sec = (detalle_meta or {}).get("baseline_section") or "Baseline"
+    vigente_sec = (detalle_meta or {}).get("vigente_section") or "Vigente"
+    use_formulas = bool(detalle_meta and d_first and d_last and d_last >= d_first)
+
+    for m in meses:
+        mk = str(m.get("mes") or "")
+        ws.cell(row=r, column=1, value=m.get("mes_label")).alignment = Alignment(horizontal="left")
+
+        if use_formulas and mk in month_cols:
+            letter = get_column_letter(month_cols[mk])
+            if baseline_sec:
+                ws.cell(row=r, column=2).value = _xl_curva_s_sumif_detalle(
+                    sheet, baseline_sec, letter, d_first, d_last,
+                )
+            else:
+                ws.cell(row=r, column=2, value=0)
+            if vigente_sec:
+                ws.cell(row=r, column=4).value = _xl_curva_s_sumif_detalle(
+                    sheet, vigente_sec, letter, d_first, d_last,
+                )
+            else:
+                ws.cell(row=r, column=4, value=0)
+        else:
+            ws.cell(row=r, column=2, value=float(m.get("baseline_mes") or 0))
+            ws.cell(row=r, column=4, value=float(m.get("vigente_mes") or 0))
+
+        if r == first_table_row:
+            ws.cell(row=r, column=3).value = f"=B{r}"
+            ws.cell(row=r, column=5).value = f"=D{r}"
+            ws.cell(row=r, column=7).value = f"=F{r}"
+        else:
+            ws.cell(row=r, column=3).value = _xl_curva_s_running_sum("B", r, first_table_row)
+            ws.cell(row=r, column=5).value = _xl_curva_s_running_sum("D", r, first_table_row)
+            ws.cell(row=r, column=7).value = _xl_curva_s_running_sum("F", r, first_table_row)
+
+        ws.cell(row=r, column=6, value=float(m.get("ejecutado_mes") or 0))
+        ws.cell(row=r, column=8).value = _xl_curva_s_delta_pct("E", "C", r)
+        ws.cell(row=r, column=9).value = _xl_curva_s_delta_pct("G", "C", r)
+
+        for col in range(1, 10):
+            cell = ws.cell(row=r, column=col)
+            cell.border = _xl_thin_border()
+            if col in money_cols:
+                cell.number_format = EXCEL_COP_FMT
+                cell.alignment = Alignment(horizontal="right")
+            elif col in pct_cols:
+                cell.number_format = EXCEL_PCT_FMT
+                cell.alignment = Alignment(horizontal="right")
+        r += 1
+
+    return r - 1
+
+
+def _apply_curva_s_kpi_formulas(
+    ws,
+    detalle_meta: Optional[dict],
+    *,
+    last_table_row: int,
+    first_table_row: int,
+    presupuesto_fallback: float,
+) -> None:
+    from openpyxl.styles import Font
+
+    if last_table_row < first_table_row:
+        ws.cell(row=6, column=1, value=presupuesto_fallback).number_format = EXCEL_COP_FMT
+        return
+
+    sheet = (detalle_meta or {}).get("sheet", "Detalle PK")
+    d_first = (detalle_meta or {}).get("first_data_row")
+    d_last = (detalle_meta or {}).get("last_data_row")
+    vigente_sec = (detalle_meta or {}).get("vigente_section") or "Vigente"
+    use_formulas = bool(detalle_meta and d_first and d_last and d_last >= d_first)
+
+    if use_formulas and vigente_sec:
+        ws.cell(row=6, column=1).value = (
+            f"=SUMIF('{sheet}'!$A${d_first}:$A${d_last},\"{vigente_sec}\","
+            f"'{sheet}'!$E${d_first}:$E${d_last})"
+        )
+    else:
+        ws.cell(row=6, column=1, value=presupuesto_fallback)
+    ws.cell(row=6, column=1).number_format = EXCEL_COP_FMT
+
+    ws.cell(row=6, column=2).value = f"=E{last_table_row}"
+    ws.cell(row=6, column=2).number_format = EXCEL_COP_FMT
+    ws.cell(row=6, column=3).value = f'=IF($A$6=0,"",TEXT(E{last_table_row}/$A$6,"0.0%"))'
+    ws.cell(row=6, column=3).font = Font(size=9, color="64748B")
+
+    ws.cell(row=6, column=4).value = f"=G{last_table_row}"
+    ws.cell(row=6, column=4).number_format = EXCEL_COP_FMT
+    ws.cell(row=6, column=5).value = f'=IF($A$6=0,"",TEXT(G{last_table_row}/$A$6,"0.0%"))'
+    ws.cell(row=6, column=5).font = Font(size=9, color="64748B")
+
+    ws.cell(row=6, column=6).value = f"=G{last_table_row}-E{last_table_row}"
+    ws.cell(row=6, column=6).number_format = EXCEL_COP_FMT
+    ws.cell(row=6, column=7).value = f'=IF(E{last_table_row}=0,"",TEXT(G{last_table_row}/E{last_table_row}-1,"0.0%"))'
+    ws.cell(row=6, column=7).font = Font(size=9, color="64748B")
+
+
+def _write_resumen_ejecutivo_excel_sheet(
+    ws,
+    resumen: Optional[dict],
+    *,
+    contrato: dict,
+    data: dict,
+    prog_meta: Optional[dict],
+    ppto_meta: Optional[dict],
+    fecha_gen: str,
+) -> None:
+    from openpyxl.styles import Alignment, Font
+
+    ind = data.get("indicadores") or {}
+    numero = contrato.get("numero") or contrato.get("id") or ""
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"Resumen ejecutivo — Contrato {numero}"
+    ws["A1"].font = Font(bold=True, size=14, color="1E40AF")
+    ws.merge_cells("A2:F2")
+    ws["A2"] = (
+        f"{(contrato.get('objeto') or '').strip()} · "
+        f"{(contrato.get('contratista') or '').strip()} · "
+        f"Interventoría: {(contrato.get('interventoria') or '').strip()} · Generado: {fecha_gen}"
+    )
+    ws["A2"].font = Font(size=9, color="64748B")
+    ws["A2"].alignment = Alignment(wrap_text=True)
+
+    row = 4
+    ws.cell(row=row, column=1, value="Indicadores Curva S").font = Font(bold=True, size=10)
+    row += 1
+    for label, key in [
+        ("Presupuesto total", "presupuesto_total"),
+        ("Programado a la fecha", "programado_a_fecha"),
+        ("Ejecutado a la fecha", "ejecutado_a_fecha"),
+        ("Desviación", "desviacion_valor"),
+    ]:
+        ws.cell(row=row, column=1, value=label).font = Font(bold=True, size=9)
+        cell = ws.cell(row=row, column=2, value=float(ind.get(key) or 0))
+        cell.number_format = EXCEL_COP_FMT
+        row += 1
+
+    row += 1
+    ws.cell(row=row, column=1, value="Resumen por capítulo").font = Font(bold=True, size=10)
+    row += 1
+    headers = ["Capítulo", "Agrupadores WBS", "Inicio", "Fin", "Días hábiles"]
+    for col, h in enumerate(headers, start=1):
+        c = ws.cell(row=row, column=col, value=h)
+        c.font = Font(bold=True, color="1E3A8A", size=9)
+        c.fill = _xl_solid_fill("DBEAFE")
+        c.border = _xl_thin_border()
+    row += 1
+    res = resumen or {}
+    caps = res.get("capitulos") or []
+    if not caps:
+        ws.cell(row=row, column=1, value="Sin capítulos en el alcance.")
+        row += 1
+    for cap in caps:
+        if cap.get("sin_programar"):
+            vals = [cap.get("capitulo"), 0, "Sin programar", "", ""]
+        else:
+            vals = [
+                cap.get("capitulo"),
+                cap.get("num_agrupadores"),
+                cap.get("fecha_inicio"),
+                cap.get("fecha_fin"),
+                cap.get("dias_habiles"),
+            ]
+        for col, val in enumerate(vals, start=1):
+            ws.cell(row=row, column=col, value=val).border = _xl_thin_border()
+        row += 1
+
+    row += 1
+    ws.cell(row=row, column=1, value="Ruta crítica").font = Font(bold=True, size=10)
+    row += 1
+    if not res.get("tiene_cpm"):
+        ws.cell(row=row, column=1, value="No hay resultados CPM calculados para esta versión.")
+        row += 2
+    else:
+        rc_headers = ["Agrupador WBS", "Inicio", "Fin", "Holgura"]
+        for col, h in enumerate(rc_headers, start=1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.font = Font(bold=True, color="1E3A8A", size=9)
+            c.fill = _xl_solid_fill("DBEAFE")
+        row += 1
+        criticos = res.get("criticos") or []
+        if not criticos:
+            ws.cell(row=row, column=1, value="Ningún agrupador en ruta crítica.")
+            row += 1
+        for cr in criticos:
+            ws.cell(row=row, column=1, value=cr.get("nombre"))
+            ws.cell(row=row, column=2, value=cr.get("fecha_inicio"))
+            ws.cell(row=row, column=3, value=cr.get("fecha_fin"))
+            ws.cell(row=row, column=4, value=cr.get("holgura"))
+            row += 1
+        row += 1
+        ws.cell(row=row, column=1, value="Alertas de desfase").font = Font(bold=True, size=10)
+        row += 1
+        desf_headers = ["Agrupador WBS", "Fin calculada", "Días exceso"]
+        for col, h in enumerate(desf_headers, start=1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.font = Font(bold=True, color="1E3A8A", size=9)
+            c.fill = _xl_solid_fill("DBEAFE")
+        row += 1
+        desfases = res.get("desfases") or []
+        if not desfases:
+            ws.cell(row=row, column=1, value="Ningún agrupador supera la fecha fin de la versión.")
+            row += 1
+        for d in desfases:
+            ws.cell(row=row, column=1, value=d.get("nombre"))
+            ws.cell(row=row, column=2, value=d.get("fecha_fin"))
+            ws.cell(row=row, column=3, value=d.get("dias_exceso"))
+            row += 1
+
+    row += 1
+    ws.cell(row=row, column=1, value="Estado de la versión activa").font = Font(bold=True, size=10)
+    row += 1
+    ver = res.get("version") or {}
+    for label, val in [
+        ("Versión", ver.get("nombre") or _prog_version_label(prog_meta)),
+        ("Estado", ver.get("estado")),
+        ("Inicio cronograma", ver.get("fecha_inicio")),
+        ("Fin cronograma", ver.get("fecha_fin")),
+        ("Estado CPM", ver.get("cpm_estado") if res.get("tiene_cpm") else "Sin calcular"),
+        ("Versión presupuesto", _ppto_version_label(ppto_meta)),
+        ("Baseline programación", data.get("baseline_id")),
+        ("Vigente programación", data.get("target_id")),
+    ]:
+        ws.cell(row=row, column=1, value=label).font = Font(bold=True, size=9)
+        ws.cell(row=row, column=2, value=val if val is not None else "—")
+        row += 1
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 14
 
 
 def build_curva_s_xlsx_bytes(
@@ -1823,9 +2994,10 @@ def build_curva_s_xlsx_bytes(
     prog_meta: Optional[dict] = None,
     ppto_meta: Optional[dict] = None,
     cpm_export: Optional[dict] = None,
+    resumen_ejecutivo: Optional[dict] = None,
     fecha_generacion: Optional[str] = None,
 ) -> bytes:
-    """Excel alineado al PDF: curva S (KPIs, gráfico, tabla) + pestaña Gantt."""
+    """Excel: Curva S + detalle PK + resumen ejecutivo (+ Gantt/CPM opcionales)."""
     from openpyxl import Workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font
@@ -1855,61 +3027,30 @@ def build_curva_s_xlsx_bytes(
     ws["A2"] = f"{objeto} · {contratista} · Interventoría: {interventoria}"
     ws["A2"].font = Font(size=9, color="64748B")
     ws["A2"].alignment = Alignment(wrap_text=True)
+    ws["A3"] = (
+        f"Baseline: {data.get('baseline_id') or '—'} · "
+        f"Vigente: {data.get('target_id') or '—'} · Generado: {fecha_gen}"
+    )
+    ws["A3"].font = Font(size=8, color="64748B")
 
-    kpi_pairs = [
-        ("Presupuesto total", float(ind.get("presupuesto_total") or 0), ""),
-        ("Programado a la fecha", float(ind.get("programado_a_fecha") or 0), f"({ind.get('programado_pct')}%)"),
-        ("Ejecutado a la fecha", float(ind.get("ejecutado_a_fecha") or 0), f"({ind.get('ejecutado_pct')}%)"),
-        ("Desviación", float(ind.get("desviacion_valor") or 0), f"({ind.get('desviacion_pct')}%)"),
+    kpi_labels = [
+        (1, "Presupuesto total"),
+        (2, "Programado a la fecha"),
+        (4, "Ejecutado a la fecha"),
+        (6, "Desviación"),
     ]
-    col = 1
-    desv_val = float(ind.get("desviacion_valor") or 0)
-    for label, val, pct in kpi_pairs:
-        c_l = ws.cell(row=4, column=col, value=label)
+    for col, label in kpi_labels:
+        c_l = ws.cell(row=5, column=col, value=label)
         c_l.font = Font(bold=True, size=8, color="64748B")
         c_l.fill = _xl_solid_fill("EFF6FF")
-        c_v = ws.cell(row=5, column=col, value=val)
-        c_v.number_format = EXCEL_COP_FMT
-        val_color = "B91C1C" if label == "Desviación" and desv_val < 0 else "2563EB"
-        c_v.font = Font(bold=True, size=10, color=val_color)
-        if pct:
-            ws.cell(row=5, column=col + 1, value=pct).font = Font(size=9, color="64748B")
-            col += 2
-        else:
-            col += 1
 
-    if meses:
-        png = _chart_png_bytes(meses)
-        img = XLImage(io.BytesIO(png))
-        img.width = 690
-        img.height = 180
-        ws.add_image(img, "A7")
-        ws.row_dimensions[7].height = 135
-
-    flat = _flatten_cronograma_rows(cronograma or [])
-    detalle_vigente = (data.get("detalle_pk") or {}).get("vigente") or []
-    ws_g = wb.create_sheet("Gantt")
-    gantt_meta = _write_gantt_sheet(
-        ws_g,
-        flat=flat,
-        meses_data=meses,
-        detalle_vigente=detalle_vigente,
-        numero=str(numero),
-        prog_meta=prog_meta,
-        fecha_gen=fecha_gen,
+    ws_det = wb.create_sheet("Detalle PK")
+    detalle_meta = _write_detalle_pk_excel_sheet(
+        ws_det, data, meses, numero=str(numero), prog_meta=prog_meta, fecha_gen=fecha_gen
     )
 
-    export = cpm_export or {}
-    resultados_cpm = export.get("resultados") or []
-    dependencias_cpm = export.get("dependencias") or []
-    if resultados_cpm:
-        ws_cpm = wb.create_sheet("CPM")
-        _write_cpm_excel_sheet(ws_cpm, resultados_cpm)
-    if dependencias_cpm:
-        ws_dep = wb.create_sheet("Dependencias")
-        _write_dependencias_excel_sheet(ws_dep, dependencias_cpm)
-
-    hdr_row = 19
+    hdr_row = 20
+    first_table_row = hdr_row + 1
     headers = [
         "Mes",
         "Base. mes",
@@ -1928,54 +3069,46 @@ def build_curva_s_xlsx_bytes(
         cell.border = _xl_thin_border()
         cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
 
-    money_cols = {2, 3, 4, 5, 6, 7}
-    pct_cols = {8, 9}
-    first_table_row = hdr_row + 1
-    r = first_table_row
-    for m in meses:
-        ws.cell(row=r, column=1, value=m.get("mes_label")).alignment = Alignment(horizontal="left")
-        ws.cell(row=r, column=2, value=float(m.get("baseline_mes") or 0)).number_format = EXCEL_COP_FMT
-        ws.cell(row=r, column=3, value=f"=SUM($B${first_table_row}:B{r})")
-        ws.cell(row=r, column=3).number_format = EXCEL_COP_FMT
+    last_table_row = _apply_curva_s_table_formulas(
+        ws,
+        meses,
+        detalle_meta,
+        hdr_row=hdr_row,
+        first_table_row=first_table_row,
+    )
+    _apply_curva_s_kpi_formulas(
+        ws,
+        detalle_meta,
+        last_table_row=last_table_row,
+        first_table_row=first_table_row,
+        presupuesto_fallback=float(ind.get("presupuesto_total") or 0),
+    )
+    for col in (1, 2, 4, 6):
+        ws.cell(row=6, column=col).font = Font(bold=True, size=10, color="2563EB")
 
-        mk = str(m.get("mes") or "").strip()
-        if gantt_meta and gantt_meta.get("total_row") and mk in gantt_meta.get("month_cols", {}):
-            col_l = get_column_letter(gantt_meta["month_cols"][mk])
-            tr = gantt_meta["total_row"]
-            ws.cell(row=r, column=4, value=f"=IFERROR(Gantt!{col_l}{tr},0)")
-        else:
-            ws.cell(row=r, column=4, value=float(m.get("vigente_mes") or 0))
-        ws.cell(row=r, column=4).number_format = EXCEL_COP_FMT
+    if meses:
+        try:
+            png = _chart_png_bytes(meses)
+            img = XLImage(io.BytesIO(png))
+            img.width = 690
+            img.height = 180
+            ws.add_image(img, "A8")
+            ws.row_dimensions[8].height = 135
+        except Exception:
+            ws["A8"] = "Gráfico no disponible"
 
-        ws.cell(row=r, column=5, value=f"=SUM($D${first_table_row}:D{r})")
-        ws.cell(row=r, column=5).number_format = EXCEL_COP_FMT
+    ws_res = wb.create_sheet("Resumen ejecutivo")
+    _write_resumen_ejecutivo_excel_sheet(
+        ws_res,
+        resumen_ejecutivo,
+        contrato=contrato,
+        data=data,
+        prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
+        fecha_gen=fecha_gen,
+    )
 
-        ws.cell(row=r, column=6, value=float(m.get("ejecutado_mes") or 0)).number_format = EXCEL_COP_FMT
-        ws.cell(row=r, column=7, value=f"=SUM($F${first_table_row}:F{r})")
-        ws.cell(row=r, column=7).number_format = EXCEL_COP_FMT
-
-        ws.cell(row=r, column=8, value=f'=IF(C{r}=0,0,(E{r}-C{r})/C{r})')
-        ws.cell(row=r, column=8).number_format = EXCEL_PCT_FMT
-        ws.cell(row=r, column=9, value=f'=IF(C{r}=0,0,(G{r}-C{r})/C{r})')
-        ws.cell(row=r, column=9).number_format = EXCEL_PCT_FMT
-        for col in range(1, 10):
-            ws.cell(row=r, column=col).border = _xl_thin_border()
-            if col in money_cols:
-                ws.cell(row=r, column=col).alignment = Alignment(horizontal="right")
-            elif col in pct_cols:
-                ws.cell(row=r, column=col).alignment = Alignment(horizontal="right")
-        r += 1
-
-    if meses and gantt_meta:
-        last_r = r - 1
-        ws.cell(row=5, column=3, value=f"=E{last_r}")
-        ws.cell(row=5, column=3).number_format = EXCEL_COP_FMT
-        ws.cell(row=5, column=5, value=f"=G{last_r}")
-        ws.cell(row=5, column=5).number_format = EXCEL_COP_FMT
-        ws.cell(row=5, column=7, value=f"=G{last_r}-E{last_r}")
-        ws.cell(row=5, column=7).number_format = EXCEL_COP_FMT
-
-    foot = r + 1
+    foot = last_table_row + 2 if last_table_row >= first_table_row else 22
     ws.cell(row=foot, column=1, value="Versión presupuesto activa").font = Font(bold=True, size=8, color="64748B")
     ws.cell(row=foot + 1, column=1, value=_ppto_version_label(ppto_meta))
     ws.cell(row=foot, column=5, value="Versión programación").font = Font(bold=True, size=8, color="64748B")
@@ -1988,7 +3121,31 @@ def build_curva_s_xlsx_bytes(
         ws.column_dimensions[get_column_letter(col)].width = 18
     ws.column_dimensions["H"].width = 10
     ws.column_dimensions["I"].width = 10
-    ws.freeze_panes = "A20"
+    ws.freeze_panes = "A21"
+
+    flat = _flatten_cronograma_rows(cronograma or [])
+    detalle_vigente = (data.get("detalle_pk") or {}).get("vigente") or []
+    if flat:
+        ws_g = wb.create_sheet("Gantt")
+        _write_gantt_sheet(
+            ws_g,
+            flat=flat,
+            meses_data=meses,
+            detalle_vigente=detalle_vigente,
+            numero=str(numero),
+            prog_meta=prog_meta,
+            fecha_gen=fecha_gen,
+        )
+
+    export = cpm_export or {}
+    resultados_cpm = export.get("resultados") or []
+    dependencias_cpm = export.get("dependencias") or []
+    if resultados_cpm:
+        ws_cpm = wb.create_sheet("CPM")
+        _write_cpm_excel_sheet(ws_cpm, resultados_cpm)
+    if dependencias_cpm:
+        ws_dep = wb.create_sheet("Dependencias")
+        _write_dependencias_excel_sheet(ws_dep, dependencias_cpm)
 
     out = io.BytesIO()
     wb.save(out)

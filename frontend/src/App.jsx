@@ -61,6 +61,7 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
+import { permisosProgramacionObra } from './progObraPermisos'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import EmojiPicker from './EmojiPicker'
@@ -14456,7 +14457,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const tieneModuloSst = _permisoVerFuncion('sst documental')
   const tieneModuloEnsayos = _permisoVerFuncion('ensayos pip')
   const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
-  const tienePermisoProgramacionObra = _permisoVerFuncion('programación de obra')
+  const progPermisos = permisosProgramacionObra(usuario, usuario?.contrato_id)
+  const tienePermisoProgramacionObra = progPermisos.ver
+  const puedeEditarProgramacionObra = progPermisos.editar
+  const puedeCrearProgramacionObra = progPermisos.crear
+  const puedeValidarProgramacionObra = progPermisos.validar
+  const puedeExportarProgramacionObra = progPermisos.exportar
   const tienePermisoTopografia = _permisoVerFuncion('topografía')
   const _topoPermiso = (flag) =>
     esDeveloper ||
@@ -14471,14 +14477,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeValidarTopografia = _topoPermiso('validar')
   const puedeEliminarTopografia = _topoPermiso('eliminar')
   const puedeExportarTopografia = _topoPermiso('exportar')
-  const _progPermiso = (flag) =>
-    esDeveloper ||
-    (usuario?.permisos || []).some(
-      (p) => (p.funcion_nombre || '').toLowerCase() === 'programación de obra' && p[flag],
-    )
-  const puedeEditarProgramacionObra = _progPermiso('editar')
-  const puedeCrearProgramacionObra = _progPermiso('crear')
-  const puedeValidarProgramacionObra = _progPermiso('validar')
   const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra
 
   useEffect(() => {
@@ -17607,6 +17605,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               puedeEditar={puedeEditarProgramacionObra}
               puedeCrear={puedeCrearProgramacionObra}
               puedeValidar={puedeValidarProgramacionObra}
+              puedeExportar={puedeExportarProgramacionObra}
               onRibbonChange={setProgRibbon}
             />
           ) : (

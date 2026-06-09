@@ -8,7 +8,8 @@ def _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades):
     agrupadores_con_fecha = set()
     for r in actividades:
         fi = r.get("fecha_inicio")
-        if fi is None or str(fi).strip() == "":
+        fi_t = r.get("fecha_inicio_temprana")
+        if (fi is None or str(fi).strip() == "") and (fi_t is None or str(fi_t).strip() == ""):
             continue
         cap = (r.get("capitulo") or "").strip()
         it = (r.get("item") or "").strip()
@@ -83,4 +84,22 @@ def test_sin_fechas_en_actividades_estado_sin_iniciar():
     n = _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades)
     assert n == 0
     assert _compute_estado_pk(2, n) == "sin_iniciar"
+
+
+def test_agrupador_con_fecha_temprana_cpm_cuenta_hijos():
+    """Write-back CPM (fecha_inicio_temprana) debe contar ítems vía herencia WBS."""
+    ppto_keys = {("01", "1.1"), ("01", "1.2")}
+    ag_by_item = {("01", "1.1"): 10, ("01", "1.2"): 10}
+    actividades = [
+        {
+            "capitulo": "01",
+            "item": "2.A",
+            "fecha_inicio": None,
+            "fecha_inicio_temprana": "2026-06-01",
+            "agrupador_id": 10,
+        },
+    ]
+    n = _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades)
+    assert n == 2
+    assert _compute_estado_pk(2, n) == "completa"
 

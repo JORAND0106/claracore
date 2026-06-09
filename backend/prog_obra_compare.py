@@ -125,7 +125,123 @@ def resolve_compare_versions(
     return bid, tid, meta_b, meta_t
 
 
-def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict]:
+def _effective_schedule_programada(row: dict) -> Tuple[Optional[date], Optional[date]]:
+    """Plan original (sin CPM): solo fecha_inicio / fecha_fin_calculada."""
+    fi = _parse_date(row.get("fecha_inicio"))
+    ff = _parse_date(row.get("fecha_fin_calculada"))
+    return fi, ff
+
+
+def _effective_schedule_cpm(row: dict) -> Tuple[Optional[date], Optional[date]]:
+    """
+    Programación vigente post-CPM (como el Gantt con CPM aplicado).
+    Si hay par temprano completo, gana sobre fechas programadas antiguas.
+    """
+    fi_t = _parse_date(row.get("fecha_inicio_temprana"))
+    ff_t = _parse_date(row.get("fecha_fin_temprana"))
+    if fi_t and ff_t:
+        return fi_t, ff_t
+    fi = _parse_date(row.get("fecha_inicio"))
+    ff = _parse_date(row.get("fecha_fin_calculada"))
+    if fi and ff:
+        return fi, ff
+    return fi or fi_t, ff or ff_t
+
+
+def _effective_schedule(row: dict, *, schedule_mode: str = "cpm") -> Tuple[Optional[date], Optional[date]]:
+    if schedule_mode == "programada":
+        return _effective_schedule_programada(row)
+    return _effective_schedule_cpm(row)
+
+
+def _effective_fecha_inicio(row: dict, *, schedule_mode: str = "cpm") -> Optional[date]:
+    return _effective_schedule(row, schedule_mode=schedule_mode)[0]
+
+
+def _effective_fecha_fin(row: dict, *, schedule_mode: str = "cpm") -> Optional[date]:
+    return _effective_schedule(row, schedule_mode=schedule_mode)[1]
+
+
+def _capitulo_date_envelope(nodes: Dict[str, dict]) -> Dict[str, Tuple[date, date]]:
+    """Envolvente min/max por capítulo a partir de nodos con fechas."""
+    cap_env: Dict[str, Tuple[date, date]] = {}
+    for n in nodes.values():
+        cap = str(n.get("capitulo") or "").strip()
+        fi = n.get("fecha_inicio")
+        ff = n.get("fecha_fin")
+        if not cap or not fi or not ff:
+            continue
+        if not isinstance(fi, date):
+            fi = _parse_date(fi)
+        if not isinstance(ff, date):
+            ff = _parse_date(ff)
+        if not fi or not ff:
+            continue
+        prev = cap_env.get(cap)
+        if prev is None:
+            cap_env[cap] = (fi, ff)
+        else:
+            cap_env[cap] = (min(prev[0], fi), max(prev[1], ff))
+    return cap_env
+
+
+def supplement_nodes_missing_presupuesto(
+    nodes: Dict[str, dict],
+    ag_costs: Dict[Tuple[str, str, int], float],
+    ag_meta: Optional[Dict[int, dict]] = None,
+) -> Dict[str, dict]:
+    """
+    Agrupadores del presupuesto baseline (p. ej. 2.E en V0) sin fila en prog_actividades.
+    Usa la envolvente de fechas del capítulo para distribuir costo en la Curva S.
+    """
+    if not ag_costs:
+        return nodes
+
+    existing = {
+        (str(n.get("pk_id") or "").strip(), str(n.get("capitulo") or "").strip(), int(n["agrupador_id"]))
+        for n in nodes.values()
+        if n.get("agrupador_id") is not None
+    }
+    cap_env = _capitulo_date_envelope(nodes)
+    meta = ag_meta or {}
+    out = dict(nodes)
+
+    for (pk, cap, ag_id), cost in ag_costs.items():
+        if float(cost or 0) <= 0:
+            continue
+        sig = (str(pk).strip(), str(cap).strip(), int(ag_id))
+        if sig in existing:
+            continue
+        env = cap_env.get(sig[1])
+        if not env:
+            continue
+        fi, ff = env
+        m = meta.get(int(ag_id)) or {}
+        wbs = str(m.get("codigo_wbs") or f"AG{ag_id}").strip()
+        nk = _node_key(sig[0], sig[1], agrupador_id=int(ag_id))
+        if nk in out:
+            continue
+        out[nk] = {
+            "pk_id": sig[0],
+            "capitulo": sig[1],
+            "agrupador_id": int(ag_id),
+            "codigo_wbs": wbs,
+            "label": wbs,
+            "fecha_inicio": fi,
+            "fecha_fin": ff,
+            "duracion_dias_habiles": None,
+            "costo_programado": round(float(cost), 2),
+        }
+    return out
+
+
+def fetch_compare_nodes(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    *,
+    schedule_mode: str = "cpm",
+) -> Dict[str, dict]:
     """
     Nodos comparables indexados por node_key.
     Prioridad WBS: agrupadores; fallback ítems sueltos y capítulo.
@@ -136,6 +252,7 @@ def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict
         sb.table("prog_actividades")
         .select(
             "pk_id,capitulo,item,fecha_inicio,fecha_fin_calculada,duracion_dias_habiles,"
+            "fecha_inicio_temprana,fecha_fin_temprana,"
             "cantidad_programada,costo_unitario,agrupador_id,codigo_wbs,override_manual"
         )
         .eq("version_id", version_id)
@@ -154,7 +271,7 @@ def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict
             continue
         ag_id = int(ag_raw)
         key_tuple = (pk, cap, ag_id)
-        fi = _parse_date(r.get("fecha_inicio"))
+        fi = _effective_fecha_inicio(r, schedule_mode=schedule_mode)
         if not fi:
             continue
         item = str(r.get("item") or "").strip()
@@ -170,8 +287,8 @@ def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict
             ag_candidates[key_tuple] = r
 
     for (pk, cap, ag_id), r in ag_candidates.items():
-        fi = _parse_date(r.get("fecha_inicio"))
-        ff = _parse_date(r.get("fecha_fin_calculada"))
+        fi = _effective_fecha_inicio(r, schedule_mode=schedule_mode)
+        ff = _effective_fecha_fin(r, schedule_mode=schedule_mode)
         dur = r.get("duracion_dias_habiles")
         dur_i = int(dur) if dur is not None else None
         wbs = str(r.get("codigo_wbs") or r.get("item") or f"AG{ag_id}").strip()
@@ -197,7 +314,7 @@ def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict
             continue
         if (pk, cap) in caps_con_ag:
             continue
-        fi = _parse_date(r.get("fecha_inicio"))
+        fi = _effective_fecha_inicio(r, schedule_mode=schedule_mode)
         if not fi:
             continue
         item = str(r.get("item") or "").strip()
@@ -206,7 +323,7 @@ def fetch_compare_nodes(sb, version_id: str, contrato_id: int) -> Dict[str, dict
         nk = _node_key(pk, cap, item=item)
         if nk in nodes:
             continue
-        ff = _parse_date(r.get("fecha_fin_calculada"))
+        ff = _effective_fecha_fin(r, schedule_mode=schedule_mode)
         dur = r.get("duracion_dias_habiles")
         nodes[nk] = {
             "pk_id": pk,

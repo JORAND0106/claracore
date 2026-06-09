@@ -547,9 +547,12 @@ def _merge_programacion_agrupador(
         "fecha_fin_calculada": None,
         "consistente": True,
         "override_manual": False,
+        "pk_ids_programados": [],
     }
     if not by_pk:
         return empty
+
+    pk_programados = sorted(by_pk.keys())
 
     schedules = list(by_pk.values())
     first = schedules[0]
@@ -568,6 +571,7 @@ def _merge_programacion_agrupador(
             "fecha_fin_calculada": first.get("fecha_fin_calculada"),
             "consistente": True,
             "override_manual": any(s.get("override_manual") for s in by_pk.values()),
+            "pk_ids_programados": pk_programados,
         }
 
     min_fi: Optional[str] = None
@@ -608,6 +612,7 @@ def _merge_programacion_agrupador(
         "fecha_fin_calculada": max_ff,
         "consistente": False,
         "override_manual": any(s.get("override_manual") for s in by_pk.values()),
+        "pk_ids_programados": pk_programados,
     }
 
 
@@ -836,11 +841,15 @@ def expand_tramo_batch_by_pk(
                 "fecha_inicio": fi_d.isoformat() if fi_d else None,
                 "duracion_dias_habiles": du_i,
                 "fecha_fin_calculada": None,
+                "clear_schedule": fi_d is None and du_i is None,
                 "cantidad_programada": cant,
                 "unidad": (m.get("und") or "?")[:20],
                 "costo_unitario": float(m.get("vlr_unitario") or 0),
                 "tipo_distribucion": it.get("tipo_distribucion") or "lineal",
-                "override_manual": bool(it.get("override_manual", True)),
+                "override_manual": (
+            False if (fi_d is None and du_i is None)
+            else bool(it.get("override_manual", False))
+        ),
                 "heredado_de_capitulo": bool(it.get("heredado_de_capitulo", False)),
                 "agrupador_id": ag_id_int,
                 "codigo_wbs": item_code[:50] if item_code else None,
@@ -873,36 +882,58 @@ def upsert_actividades_batch_pk(
     pk = (pk_id or "").strip()
     rpc_rows = []
     propagation_items = []
+    explicit_clears = []
     for raw in actividades or []:
         row = dict(raw)
         prop = row.pop("_propagate", None)
+        clearing = bool(row.pop("clear_schedule", False))
         fi_s = row.get("fecha_inicio")
         fi_d = date.fromisoformat(fi_s[:10]) if fi_s else None
         du_i = row.get("duracion_dias_habiles")
         du_i = int(du_i) if du_i is not None and int(du_i) > 0 else None
+        if not clearing and fi_d is None and du_i is None:
+            clearing = True
+        if clearing:
+            row["clear_schedule"] = True
+            cap = (row.get("capitulo") or "").strip()
+            ag_raw = row.get("agrupador_id")
+            item_code = (row.get("item") or "").strip()
+            if ag_raw is not None:
+                explicit_clears.append((cap, int(ag_raw), item_code))
+            elif cap and item_code:
+                explicit_clears.append((cap, None, item_code))
         fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
         row["fecha_fin_calculada"] = fin.isoformat() if fin else None
         rpc_rows.append(row)
         if prop and prop.get("agrupador_id") is not None:
             propagation_items.append({**prop, "fecha_inicio": fi_d, "duracion_dias_habiles": du_i})
 
-    if not rpc_rows:
+    if not rpc_rows and not explicit_clears:
         return {"ok": True, "actividades": [], "propagaciones": 0}
 
-    res = sb.rpc(
-        "prog_batch_upsert_actividades",
-        {
-            "p_version_id": version_id,
-            "p_contrato_id": contrato_id,
-            "p_pk_id": pk,
-            "p_usuario_id": uid,
-            "p_actividades": rpc_rows,
-        },
-    ).execute()
+    payload = {"ok": True, "actividades": []}
+    if rpc_rows:
+        res = sb.rpc(
+            "prog_batch_upsert_actividades",
+            {
+                "p_version_id": version_id,
+                "p_contrato_id": contrato_id,
+                "p_pk_id": pk,
+                "p_usuario_id": uid,
+                "p_actividades": rpc_rows,
+            },
+        ).execute()
+        payload = res.data or {"ok": True, "actividades": []}
+
+    for cap, ag_id, item_code in explicit_clears:
+        if ag_id is not None:
+            _clear_prog_agrupador_fechas(sb, version_id, pk, cap, ag_id)
+        elif cap and item_code:
+            _clear_prog_item_fechas(sb, version_id, pk, cap, item_code)
 
     propagaciones = 0
     limpiezas_ag = 0
-    if propagation_items and not skip_propagation:
+    if propagation_items:
         _, ppto_items_pk = _ppto_items_por_pk(sb, contrato_id, pk)
         seen_ag = set()
         seen_clear = set()
@@ -912,7 +943,7 @@ def upsert_actividades_batch_pk(
             du_i = int(du_i) if du_i is not None and int(du_i) > 0 else None
             ag_key = (prop["capitulo"].strip(), int(prop["agrupador_id"]))
             if fi_d and du_i:
-                if ag_key in seen_ag:
+                if skip_propagation or ag_key in seen_ag:
                     continue
                 seen_ag.add(ag_key)
                 fin_d = add_dias_habiles(contrato_id, fi_d, du_i, cache)
@@ -934,6 +965,9 @@ def upsert_actividades_batch_pk(
                 propagaciones += 1
             elif fi_d is None and du_i is None and ag_key not in seen_clear:
                 seen_clear.add(ag_key)
+                _clear_prog_agrupador_fechas(
+                    sb, version_id, pk, prop["capitulo"].strip(), int(prop["agrupador_id"]),
+                )
                 limpiar_fechas_agrupador_hijos(
                     sb,
                     version_id,
@@ -946,17 +980,50 @@ def upsert_actividades_batch_pk(
                 limpiezas_ag += 1
         if not skip_propagation:
             upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
-    elif not skip_propagation:
+    elif explicit_clears and not skip_propagation:
         upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
 
-    payload = res.data or {"ok": True, "actividades": []}
     if isinstance(payload, dict):
         payload["propagaciones"] = propagaciones
         payload["limpiezas_ag"] = limpiezas_ag
     return payload
 
 
-def apply_actividades_batch_tramo(
+def _actividad_batch_es_borrado(it: dict) -> bool:
+    """Borrado explícito o fila vacía (sin fecha ni duración)."""
+    if it.get("clear_schedule"):
+        return True
+    if it.get("solo_duracion") or it.get("duracion_only"):
+        return False
+    fi = it.get("fecha_inicio")
+    fi_empty = fi is None or str(fi).strip() == ""
+    du_raw = it.get("duracion_dias_habiles")
+    try:
+        du_i = int(du_raw) if du_raw is not None and str(du_raw).strip() else None
+    except (TypeError, ValueError):
+        du_i = None
+    if fi_empty and du_i is not None and du_i > 0:
+        return False
+    return fi_empty
+
+
+def _actividad_batch_es_solo_duracion(it: dict) -> bool:
+    """Persistir duración WBS sin tocar fechas (p. ej. antes de CPM)."""
+    if _actividad_batch_es_borrado(it):
+        return False
+    if it.get("solo_duracion") or it.get("duracion_only"):
+        return True
+    fi = it.get("fecha_inicio")
+    fi_empty = fi is None or str(fi).strip() == ""
+    du_raw = it.get("duracion_dias_habiles")
+    try:
+        du_i = int(du_raw) if du_raw is not None and str(du_raw).strip() else None
+    except (TypeError, ValueError):
+        du_i = None
+    return fi_empty and du_i is not None and du_i > 0
+
+
+def apply_tramo_duraciones_bulk(
     sb,
     contrato_id: int,
     version_id: str,
@@ -965,9 +1032,8 @@ def apply_actividades_batch_tramo(
     uid: int,
     cache: CalendarioNoHabilesCache,
     pk_ids_filter: Optional[List[str]] = None,
-    allow_overwrite: bool = False,
 ) -> dict:
-    """Guarda fechas de agrupadores en todos los PKs del tramo que los contienen."""
+    """Persiste duracion_dias_habiles en agrupadores WBS (insert/update, sin fechas)."""
     tramo_s = (tramo or "").strip()
     if not tramo_s:
         raise BusinessRuleError("tramo requerido")
@@ -983,6 +1049,299 @@ def apply_actividades_batch_tramo(
         pk_ids = [p for p in pk_ids if p in allowed]
     if not pk_ids:
         raise BusinessRuleError("No hay PKs en el tramo")
+
+    ppto_rows = (
+        sb.table("presupuesto")
+        .select("pk_id, capitulo, item, cant_total, und, vlr_unitario, costo_directo")
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pk_ids)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    agr_rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,capitulo,codigo_wbs,nombre,orden")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    agr_meta: Dict[int, dict] = {}
+    for a in agr_rows:
+        aid = a.get("id")
+        if aid is not None:
+            agr_meta[int(aid)] = a
+
+    cap_map = _aggregate_ppto_rows_tramo(ppto_rows, ag_by_item, agr_meta)
+    metrics = _build_agrupador_pk_metrics(ppto_rows, ag_by_item, agr_meta)
+    by_pk = expand_tramo_batch_by_pk(actividades, cap_map, metrics)
+    if not by_pk:
+        return {"ok": True, "pk_ids": pk_ids, "agrupadores": 0, "filas": 0}
+
+    total_rows = 0
+    ag_count = len({
+        ((it.get("capitulo") or "").strip(), int(it.get("agrupador_id")))
+        for it in (actividades or [])
+        if (it.get("capitulo") or "").strip() and it.get("agrupador_id") is not None
+    })
+    for pk, rows in sorted(by_pk.items(), key=lambda x: x[0]):
+        batch = [{**r, "_propagate": dict(r["_propagate"])} for r in rows]
+        upsert_actividades_batch_pk(
+            sb,
+            contrato_id,
+            version_id,
+            pk,
+            batch,
+            uid,
+            cache,
+            skip_propagation=True,
+        )
+        total_rows += len(rows)
+
+    return {"ok": True, "pk_ids": pk_ids, "agrupadores": ag_count, "filas": total_rows}
+
+
+def apply_tramo_clear_schedule_bulk(
+    sb,
+    contrato_id: int,
+    version_id: str,
+    tramo: str,
+    actividades: List[dict],
+    uid: int,
+    pk_ids_filter: Optional[List[str]] = None,
+    skip_scheduled: Optional[set] = None,
+) -> dict:
+    """Borra fechas de agrupadores WBS en todos los PKs del tramo con pocas queries."""
+    tramo_s = (tramo or "").strip()
+    if not tramo_s:
+        raise BusinessRuleError("tramo requerido")
+
+    tramos = fetch_tramos_contrato(sb, contrato_id)
+    match = next((t for t in tramos if (t.get("tramo") or "").strip() == tramo_s), None)
+    if not match:
+        raise BusinessRuleError(f"Tramo no encontrado: {tramo_s}")
+
+    pk_ids = [str(p).strip() for p in (match.get("pk_ids") or []) if str(p).strip()]
+    if pk_ids_filter:
+        allowed = {str(p).strip() for p in pk_ids_filter if str(p).strip()}
+        pk_ids = [p for p in pk_ids if p in allowed]
+    if not pk_ids:
+        raise BusinessRuleError("No hay PKs en el tramo")
+
+    ag_keys: set = set()
+    for it in actividades or []:
+        cap = (it.get("capitulo") or "").strip()
+        ag = it.get("agrupador_id")
+        if cap and ag is not None:
+            ag_keys.add((cap, int(ag)))
+    if not ag_keys:
+        return {"ok": True, "pk_ids": [], "agrupadores": 0}
+
+    ag_ids = sorted({k[1] for k in ag_keys})
+    skip = skip_scheduled if skip_scheduled is not None else set()
+    now = datetime.now(timezone.utc).isoformat()
+    clear_payload = {
+        "fecha_inicio": None,
+        "duracion_dias_habiles": None,
+        "fecha_fin_calculada": None,
+        "fecha_inicio_temprana": None,
+        "fecha_fin_temprana": None,
+        "heredado_de_capitulo": False,
+        "override_manual": False,
+        "actualizado_en": now,
+    }
+
+    for cap, ag_id in ag_keys:
+        pks_hit = [p for p in pk_ids if (cap, ag_id, p) not in skip]
+        if not pks_hit:
+            continue
+        (
+            sb.table("prog_actividades")
+            .update(clear_payload)
+            .eq("version_id", version_id)
+            .eq("contrato_id", contrato_id)
+            .in_("pk_id", pks_hit)
+            .eq("capitulo", cap)
+            .eq("agrupador_id", ag_id)
+            .execute()
+        )
+    lp_rows = (
+        sb.table("listado_precios")
+        .select("capitulo,item_numero,agrupador_id")
+        .eq("contrato_id", contrato_id)
+        .in_("agrupador_id", ag_ids)
+        .execute()
+        .data
+        or []
+    )
+    items_by_cap: Dict[str, set] = {}
+    for r in lp_rows:
+        cap = (r.get("capitulo") or "").strip()
+        ag_raw = r.get("agrupador_id")
+        if ag_raw is None:
+            continue
+        if (cap, int(ag_raw)) not in ag_keys:
+            continue
+        it = (r.get("item_numero") or "").strip()
+        if cap and it:
+            items_by_cap.setdefault(cap, set()).add(it)
+    hijo_payload = {
+        "fecha_inicio": None,
+        "duracion_dias_habiles": None,
+        "fecha_fin_calculada": None,
+        "heredado_de_capitulo": False,
+        "actualizado_en": now,
+    }
+    for cap, items in items_by_cap.items():
+        pks_hit = sorted({
+            p for p in pk_ids
+            for ag_id in ag_ids
+            if (cap, ag_id) in ag_keys and (cap, ag_id, p) not in skip
+        })
+        if not pks_hit or not items:
+            continue
+        (
+            sb.table("prog_actividades")
+            .update(hijo_payload)
+            .eq("version_id", version_id)
+            .in_("pk_id", pks_hit)
+            .eq("capitulo", cap)
+            .eq("segmento", 1)
+            .eq("override_manual", False)
+            .in_("item", list(items))
+            .execute()
+        )
+
+    (
+        sb.table("prog_actividades_capitulo")
+        .delete()
+        .eq("version_id", version_id)
+        .in_("pk_id", pk_ids)
+        .execute()
+    )
+    _reset_prog_pk_estado_tramo(sb, version_id, contrato_id, pk_ids)
+
+    return {"ok": True, "pk_ids": pk_ids, "agrupadores": len(ag_keys)}
+
+
+def apply_actividades_batch_tramo(
+    sb,
+    contrato_id: int,
+    version_id: str,
+    tramo: str,
+    actividades: List[dict],
+    uid: int,
+    cache: CalendarioNoHabilesCache,
+    pk_ids_filter: Optional[List[str]] = None,
+    allow_overwrite: bool = False,
+    preserve_cpm_sync: bool = False,
+) -> dict:
+    """Guarda fechas de agrupadores en todos los PKs del tramo que los contienen."""
+    tramo_s = (tramo or "").strip()
+    if not tramo_s:
+        raise BusinessRuleError("tramo requerido")
+
+    clear_items = [it for it in (actividades or []) if _actividad_batch_es_borrado(it)]
+    dur_only_items = [it for it in (actividades or []) if _actividad_batch_es_solo_duracion(it)]
+    set_items = [
+        it for it in (actividades or [])
+        if not _actividad_batch_es_borrado(it) and not _actividad_batch_es_solo_duracion(it)
+    ]
+
+    tramos = fetch_tramos_contrato(sb, contrato_id)
+    match = next((t for t in tramos if (t.get("tramo") or "").strip() == tramo_s), None)
+    if not match:
+        raise BusinessRuleError(f"Tramo no encontrado: {tramo_s}")
+
+    pk_ids = [str(p).strip() for p in (match.get("pk_ids") or []) if str(p).strip()]
+    if pk_ids_filter:
+        allowed = {str(p).strip() for p in pk_ids_filter if str(p).strip()}
+        pk_ids = [p for p in pk_ids if p in allowed]
+    if not pk_ids:
+        raise BusinessRuleError("No hay PKs en el tramo")
+
+    if not clear_items and not set_items and not dur_only_items:
+        raise BusinessRuleError("Sin actividades para guardar")
+
+    if dur_only_items and not clear_items and not set_items:
+        dr = apply_tramo_duraciones_bulk(
+            sb, contrato_id, version_id, tramo_s, dur_only_items, uid, cache,
+            pk_ids_filter=pk_ids_filter,
+        )
+        if preserve_cpm_sync:
+            mark_cpm_synced(sb, version_id)
+        else:
+            mark_cpm_dirty(sb, version_id)
+        return {
+            "ok": True,
+            "tramo": tramo_s,
+            "pk_ids": list(dr.get("pk_ids") or []),
+            "actividades_enviadas": len(dur_only_items),
+            "propagaciones": 0,
+            "omitidos_pk_con_fecha": 0,
+            "cpm_dirty": not preserve_cpm_sync,
+            "bulk_duraciones": int(dr.get("agrupadores") or 0),
+        }
+
+    if dur_only_items:
+        apply_tramo_duraciones_bulk(
+            sb, contrato_id, version_id, tramo_s, dur_only_items, uid, cache,
+            pk_ids_filter=pk_ids_filter,
+        )
+
+    if not set_items and clear_items:
+        skip_scheduled_only: set = set()
+        if not allow_overwrite:
+            existing_clear = (
+                sb.table("prog_actividades")
+                .select("pk_id,capitulo,agrupador_id,fecha_inicio,override_manual")
+                .eq("version_id", version_id)
+                .eq("contrato_id", contrato_id)
+                .in_("pk_id", pk_ids)
+                .not_.is_("agrupador_id", "null")
+                .execute()
+                .data
+                or []
+            )
+            for a in existing_clear:
+                fi = a.get("fecha_inicio")
+                if fi is None or str(fi).strip() == "":
+                    continue
+                if not a.get("override_manual"):
+                    continue
+                cap_e = (a.get("capitulo") or "").strip()
+                pk_e = str(a.get("pk_id") or "").strip()
+                ag_e = a.get("agrupador_id")
+                if cap_e and pk_e and ag_e is not None:
+                    skip_scheduled_only.add((cap_e, int(ag_e), pk_e))
+        cr = apply_tramo_clear_schedule_bulk(
+            sb,
+            contrato_id,
+            version_id,
+            tramo_s,
+            clear_items,
+            uid,
+            pk_ids_filter=pk_ids_filter,
+            skip_scheduled=skip_scheduled_only if not allow_overwrite else None,
+        )
+        if preserve_cpm_sync:
+            mark_cpm_synced(sb, version_id)
+        else:
+            mark_cpm_dirty(sb, version_id)
+        return {
+            "ok": True,
+            "tramo": tramo_s,
+            "pk_ids": list(cr.get("pk_ids") or []),
+            "actividades_enviadas": 0,
+            "propagaciones": 0,
+            "omitidos_pk_con_fecha": 0,
+            "cpm_dirty": not preserve_cpm_sync,
+            "bulk_cleared": int(cr.get("agrupadores") or 0),
+        }
 
     ppto_rows = (
         sb.table("presupuesto")
@@ -1038,8 +1397,24 @@ def apply_actividades_batch_tramo(
             if cap_e and pk_e and ag_e is not None:
                 skip_scheduled.add((cap_e, int(ag_e), pk_e))
 
+    bulk_cleared = 0
+    pks_from_clear: List[str] = []
+    if clear_items:
+        cr = apply_tramo_clear_schedule_bulk(
+            sb,
+            contrato_id,
+            version_id,
+            tramo_s,
+            clear_items,
+            uid,
+            pk_ids_filter=pk_ids_filter,
+            skip_scheduled=skip_scheduled if not allow_overwrite else None,
+        )
+        bulk_cleared = int(cr.get("agrupadores") or 0)
+        pks_from_clear = list(cr.get("pk_ids") or [])
+
     omitidos = 0
-    for it in actividades or []:
+    for it in set_items or []:
         cap_it = (it.get("capitulo") or "").strip()
         ag_it = it.get("agrupador_id")
         if not cap_it or ag_it is None:
@@ -1052,9 +1427,9 @@ def apply_actividades_batch_tramo(
             if (cap_it, ag_id_it, str(pk).strip()) in skip_scheduled:
                 omitidos += 1
 
-    by_pk = expand_tramo_batch_by_pk(actividades, cap_map, metrics, skip_scheduled=skip_scheduled)
+    by_pk = expand_tramo_batch_by_pk(set_items, cap_map, metrics, skip_scheduled=skip_scheduled)
 
-    if not by_pk:
+    if not by_pk and not clear_items:
         raise BusinessRuleError(
             "Ningún PK pendiente de programación para los agrupadores indicados "
             "(los PKs que ya tenían fecha se conservan sin cambios)."
@@ -1062,24 +1437,29 @@ def apply_actividades_batch_tramo(
 
     total_rows = 0
     total_prop = 0
-    pks_affected = []
-    for pk, rows in sorted(by_pk.items(), key=lambda x: x[0]):
-        batch = [{**r, "_propagate": dict(r["_propagate"])} for r in rows]
-        result = upsert_actividades_batch_pk(
-            sb,
-            contrato_id,
-            version_id,
-            pk,
-            batch,
-            uid,
-            cache,
-            skip_propagation=allow_overwrite,
-        )
-        total_rows += len(rows)
-        total_prop += int(result.get("propagaciones") or 0)
-        pks_affected.append(pk)
+    pks_affected = list(pks_from_clear)
+    if by_pk:
+        for pk, rows in sorted(by_pk.items(), key=lambda x: x[0]):
+            batch = [{**r, "_propagate": dict(r["_propagate"])} for r in rows]
+            result = upsert_actividades_batch_pk(
+                sb,
+                contrato_id,
+                version_id,
+                pk,
+                batch,
+                uid,
+                cache,
+                skip_propagation=allow_overwrite,
+            )
+            total_rows += len(rows)
+            total_prop += int(result.get("propagaciones") or 0)
+            if pk not in pks_affected:
+                pks_affected.append(pk)
 
-    mark_cpm_dirty(sb, version_id)
+    if preserve_cpm_sync:
+        mark_cpm_synced(sb, version_id)
+    else:
+        mark_cpm_dirty(sb, version_id)
     return {
         "ok": True,
         "tramo": tramo_s,
@@ -1087,6 +1467,8 @@ def apply_actividades_batch_tramo(
         "actividades_enviadas": total_rows,
         "propagaciones": total_prop,
         "omitidos_pk_con_fecha": omitidos,
+        "cpm_dirty": not preserve_cpm_sync,
+        "bulk_cleared": bulk_cleared,
     }
 
 
@@ -1174,36 +1556,49 @@ def propagar_fechas_agrupador_a_hijos(
     usuario_id: int,
     cache: CalendarioNoHabilesCache,
     ppto_items: Optional[List[Tuple[str, str, Decimal, str, Decimal]]] = None,
+    ag_by_item: Optional[Dict[Tuple[str, str], Optional[int]]] = None,
+    insert_missing: bool = True,
 ) -> int:
-    """Replica fechas del agrupador a ítems hijo: 1 UPDATE masivo + 1 INSERT masivo (si faltan filas)."""
+    """Replica fechas del agrupador a ítems hijo: UPDATE masivo; INSERT opcional si faltan filas."""
     cap = capitulo.strip()
     pk = pk_id.strip()
-    ag_items_list = [
-        (r.get("item_numero") or "").strip()
-        for r in (
-            sb.table("listado_precios")
-            .select("item_numero")
-            .eq("contrato_id", contrato_id)
-            .eq("capitulo", cap)
-            .eq("agrupador_id", agrupador_id)
-            .execute()
-            .data
-            or []
-        )
-        if (r.get("item_numero") or "").strip()
-    ]
-    if not ag_items_list:
-        return 0
-    ag_items_set = set(ag_items_list)
     if ppto_items is None:
         _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    if ag_by_item is None:
+        ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+
     hijo_ppto = [
         (p_cap, it, cant, und, vlr)
         for p_cap, it, cant, und, vlr in ppto_items
-        if p_cap == cap and it in ag_items_set
+        if p_cap == cap and ag_by_item.get((p_cap, it)) == agrupador_id
     ]
     if not hijo_ppto:
-        return 0
+        ag_items_list = [
+            (r.get("item_numero") or "").strip()
+            for r in (
+                sb.table("listado_precios")
+                .select("item_numero")
+                .eq("contrato_id", contrato_id)
+                .eq("capitulo", cap)
+                .eq("agrupador_id", agrupador_id)
+                .execute()
+                .data
+                or []
+            )
+            if (r.get("item_numero") or "").strip()
+        ]
+        if not ag_items_list:
+            return 0
+        ag_items_set = set(ag_items_list)
+        hijo_ppto = [
+            (p_cap, it, cant, und, vlr)
+            for p_cap, it, cant, und, vlr in ppto_items
+            if p_cap == cap and it in ag_items_set
+        ]
+        if not hijo_ppto:
+            return 0
+
+    ag_items_list = [it for _, it, _, _, _ in hijo_ppto]
 
     fin_iso = fecha_fin_calculada.isoformat() if fecha_fin_calculada else None
     fi_iso = fecha_inicio.isoformat()
@@ -1232,40 +1627,50 @@ def propagar_fechas_agrupador_a_hijos(
         or []
     )
     existing_items = {(r.get("item") or "").strip() for r in existing_rows if (r.get("item") or "").strip()}
+    items_to_update = sorted(i for i in ag_items_list if i.strip() in existing_items)
+    if items_to_update:
+        sb.table("prog_actividades").update(update_fields).eq("version_id", version_id).eq(
+            "pk_id", pk
+        ).eq("capitulo", cap).eq("segmento", 1).eq("override_manual", False).in_(
+            "item", items_to_update
+        ).execute()
 
-    sb.table("prog_actividades").update(update_fields).eq("version_id", version_id).eq(
-        "pk_id", pk
-    ).eq("capitulo", cap).eq("segmento", 1).eq("override_manual", False).in_(
-        "item", ag_items_list
-    ).execute()
+    if not insert_missing:
+        return len(items_to_update)
 
-    missing = [(p_cap, it, cant, und, vlr) for p_cap, it, cant, und, vlr in hijo_ppto if it not in existing_items]
+    missing = [
+        (p_cap, it, cant, und, vlr)
+        for p_cap, it, cant, und, vlr in hijo_ppto
+        if (it or "").strip() not in existing_items
+    ]
     if missing:
-        sb.table("prog_actividades").insert(
-            [
-                {
-                    "version_id": version_id,
-                    "contrato_id": contrato_id,
-                    "pk_id": pk,
-                    "capitulo": p_cap,
-                    "item": it,
-                    "segmento": 1,
-                    "fecha_inicio": fi_iso,
-                    "duracion_dias_habiles": int(duracion_dias_habiles),
-                    "fecha_fin_calculada": fin_iso,
-                    "cantidad_programada": float(cant),
-                    "unidad": und or "?",
-                    "costo_unitario": float(vlr),
-                    "tipo_distribucion": "lineal",
-                    "heredado_de_capitulo": True,
-                    "override_manual": False,
-                    "agrupador_id": agrupador_id,
-                    "codigo_wbs": codigo_wbs or None,
-                    "creado_por": usuario_id,
-                    "actualizado_en": now,
-                }
-                for p_cap, it, cant, und, vlr in missing
-            ]
+        upsert_rows = [
+            {
+                "version_id": version_id,
+                "contrato_id": contrato_id,
+                "pk_id": pk,
+                "capitulo": p_cap,
+                "item": it,
+                "segmento": 1,
+                "fecha_inicio": fi_iso,
+                "duracion_dias_habiles": int(duracion_dias_habiles),
+                "fecha_fin_calculada": fin_iso,
+                "cantidad_programada": float(cant),
+                "unidad": und or "?",
+                "costo_unitario": float(vlr),
+                "tipo_distribucion": "lineal",
+                "heredado_de_capitulo": True,
+                "override_manual": False,
+                "agrupador_id": agrupador_id,
+                "codigo_wbs": codigo_wbs or None,
+                "creado_por": usuario_id,
+                "actualizado_en": now,
+            }
+            for p_cap, it, cant, und, vlr in missing
+        ]
+        sb.table("prog_actividades").upsert(
+            upsert_rows,
+            on_conflict="version_id,pk_id,capitulo,item,segmento",
         ).execute()
 
     return len(hijo_ppto)
@@ -1324,6 +1729,78 @@ def limpiar_fechas_agrupador_hijos(
     return len(hijo_ppto)
 
 
+def _clear_prog_agrupador_fechas(
+    sb,
+    version_id: str,
+    pk_id: str,
+    capitulo: str,
+    agrupador_id: int,
+) -> None:
+    """Borra fechas manual y CPM write-back de todas las filas WBS del agrupador en un PK."""
+    cap = capitulo.strip()
+    pk = pk_id.strip()
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "fecha_inicio": None,
+        "duracion_dias_habiles": None,
+        "fecha_fin_calculada": None,
+        "fecha_inicio_temprana": None,
+        "fecha_fin_temprana": None,
+        "heredado_de_capitulo": False,
+        "override_manual": False,
+        "actualizado_en": now,
+    }
+    (
+        sb.table("prog_actividades")
+        .update(payload)
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .eq("capitulo", cap)
+        .eq("agrupador_id", int(agrupador_id))
+        .execute()
+    )
+
+
+def _clear_prog_item_fechas(
+    sb,
+    version_id: str,
+    pk_id: str,
+    capitulo: str,
+    item: str,
+    segmento: int = 1,
+) -> None:
+    """Borra fechas de un ítem suelto (sin agrupador WBS)."""
+    now = datetime.now(timezone.utc).isoformat()
+    (
+        sb.table("prog_actividades")
+        .update({
+            "fecha_inicio": None,
+            "duracion_dias_habiles": None,
+            "fecha_fin_calculada": None,
+            "fecha_inicio_temprana": None,
+            "fecha_fin_temprana": None,
+            "heredado_de_capitulo": False,
+            "override_manual": False,
+            "actualizado_en": now,
+        })
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id.strip())
+        .eq("capitulo", capitulo.strip())
+        .eq("item", item.strip())
+        .eq("segmento", int(segmento or 1))
+        .execute()
+    )
+
+
+def _actividad_tiene_fecha_programacion(row: dict) -> bool:
+    """Fecha efectiva para color de polígono: manual (fecha_inicio) o write-back CPM (temprana)."""
+    for key in ("fecha_inicio", "fecha_inicio_temprana"):
+        val = row.get(key)
+        if val is not None and str(val).strip() != "":
+            return True
+    return False
+
+
 def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) -> int:
     """
     Ítems de presupuesto del PK con programación efectiva.
@@ -1337,10 +1814,9 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
     ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
     rows = (
         sb.table("prog_actividades")
-        .select("capitulo,item,fecha_inicio,agrupador_id")
+        .select("capitulo,item,fecha_inicio,fecha_inicio_temprana,agrupador_id")
         .eq("version_id", version_id)
         .eq("pk_id", pk)
-        .not_.is_("fecha_inicio", "null")
         .execute()
         .data
         or []
@@ -1348,8 +1824,7 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
     direct_with_fecha: set = set()
     agrupadores_con_fecha: set = set()
     for r in rows:
-        fi = r.get("fecha_inicio")
-        if fi is None or str(fi).strip() == "":
+        if not _actividad_tiene_fecha_programacion(r):
             continue
         cap = (r.get("capitulo") or "").strip()
         it = (r.get("item") or "").strip()
@@ -1375,6 +1850,159 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
             except (TypeError, ValueError):
                 pass
     return len(seen)
+
+
+def _count_ppto_items_fecha_inicio_directo(
+    sb, version_id: str, contrato_id: int, pk_id: str
+) -> int:
+    """Ítems de presupuesto del PK con fecha_inicio explícita en prog_actividades (sin herencia WBS)."""
+    pk = (pk_id or "").strip()
+    _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    ppto_keys = {(cap, it) for cap, it, _, _, _ in ppto_items}
+    if not ppto_keys:
+        return 0
+    rows = (
+        sb.table("prog_actividades")
+        .select("capitulo,item,fecha_inicio")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .execute()
+        .data
+        or []
+    )
+    direct: set = set()
+    for r in rows:
+        fi = r.get("fecha_inicio")
+        if fi is None or str(fi).strip() == "":
+            continue
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if cap and it and (cap, it) in ppto_keys:
+            direct.add((cap, it))
+    return len(direct)
+
+
+def _snapshot_cpm_writeback_fechas_pk(
+    sb, version_id: str, contrato_id: int, pk_id: str
+) -> dict:
+    """Conteos de fechas por PK para diagnóstico post-CPM."""
+    pk = (pk_id or "").strip()
+    items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)
+    return {
+        "items_total": items_total,
+        "fecha_inicio_directo": _count_ppto_items_fecha_inicio_directo(sb, version_id, contrato_id, pk),
+        "conteo_efectivo": _count_items_con_fecha(sb, version_id, pk, contrato_id),
+        "sin_agrupador": _count_items_sin_agrupador(sb, contrato_id, pk),
+    }
+
+
+def _log_cpm_writeback_fechas_pks(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_ids: List[str],
+    before: Dict[str, dict],
+    after: Dict[str, dict],
+) -> None:
+    for pk in sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()}):
+        b = before.get(pk) or {}
+        a = after.get(pk) or {}
+        _logger.info(
+            "CPM write-back visible PK=%s: fecha_inicio directo %d→%d, conteo efectivo %d→%d "
+            "(items_total=%d, sin_agrupador=%d→%d)",
+            pk,
+            int(b.get("fecha_inicio_directo") or 0),
+            int(a.get("fecha_inicio_directo") or 0),
+            int(b.get("conteo_efectivo") or 0),
+            int(a.get("conteo_efectivo") or 0),
+            int(a.get("items_total") or b.get("items_total") or 0),
+            int(b.get("sin_agrupador") or 0),
+            int(a.get("sin_agrupador") or 0),
+        )
+        if int(a.get("fecha_inicio_directo") or 0) < int(a.get("items_total") or 0):
+            faltantes = _ppto_items_sin_fecha_inicio_directo(sb, version_id, contrato_id, pk, limit=5)
+            if faltantes:
+                _logger.warning(
+                    "CPM write-back visible PK=%s: %d ítems ppto aún sin fecha_inicio. Ej: %s",
+                    pk,
+                    int(a.get("items_total") or 0) - int(a.get("fecha_inicio_directo") or 0),
+                    ", ".join(faltantes),
+                )
+
+
+def _ppto_items_sin_fecha_inicio_directo(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    limit: int = 5,
+) -> List[str]:
+    pk = (pk_id or "").strip()
+    _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    if not ppto_items:
+        return []
+    rows = (
+        sb.table("prog_actividades")
+        .select("capitulo,item,fecha_inicio")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .execute()
+        .data
+        or []
+    )
+    with_fi = {
+        ((r.get("capitulo") or "").strip(), (r.get("item") or "").strip())
+        for r in rows
+        if r.get("fecha_inicio") is not None and str(r.get("fecha_inicio")).strip() != ""
+    }
+    out: List[str] = []
+    for cap, it, _, _, _ in ppto_items:
+        if (cap, it) in with_fi:
+            continue
+        out.append(f"{cap}/{it}")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _prog_actividades_agrupador_index(
+    sb, version_id: str, pk_ids: List[str]
+) -> Tuple[Dict[tuple, List[str]], Dict[tuple, List[dict]]]:
+    """Índice (pk, cap, ag_id) → ids de cabecera WBS y filas del agrupador."""
+    ids_by_key: Dict[tuple, List[str]] = {}
+    rows_by_key: Dict[tuple, List[dict]] = {}
+    pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
+    if not pks:
+        return ids_by_key, rows_by_key
+    existing = (
+        sb.table("prog_actividades")
+        .select("id,pk_id,capitulo,agrupador_id,item,codigo_wbs")
+        .eq("version_id", version_id)
+        .in_("pk_id", pks)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    for row in existing:
+        pk = str(row.get("pk_id") or "").strip()
+        cap = str(row.get("capitulo") or "").strip()
+        ag_raw = row.get("agrupador_id")
+        if not pk or not cap or ag_raw is None:
+            continue
+        try:
+            ag_id = int(ag_raw)
+        except (TypeError, ValueError):
+            continue
+        sig = (pk, cap, ag_id)
+        rows_by_key.setdefault(sig, []).append(row)
+    for sig, rows in rows_by_key.items():
+        header = next((r for r in rows if _is_agrupador_header_row(r)), None)
+        pick = header or (rows[0] if rows else None)
+        rid = str((pick or {}).get("id") or "").strip()
+        if rid:
+            ids_by_key[sig] = [rid]
+    return ids_by_key, rows_by_key
 
 
 def _agrupadores_validos_por_contrato(sb, contrato_id: int) -> set:
@@ -1488,6 +2116,130 @@ def _reset_prog_pk_estado_tramo(
             "estado_programacion": "sin_iniciar" if total > 0 else "sin_cantidad",
             "items_total": total,
             "items_con_fecha": 0,
+            "actualizado_en": now,
+        })
+    if rows:
+        sb.table("prog_pk_estado").upsert(rows, on_conflict="version_id,pk_id").execute()
+
+
+def _ppto_keys_por_pks(sb, contrato_id: int, pk_ids: List[str]) -> Dict[str, set]:
+    """Claves (capitulo, item) de presupuesto por PK en una consulta."""
+    pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
+    if not pks:
+        return {}
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id,capitulo,item")
+        .eq("contrato_id", contrato_id)
+        .in_("pk_id", pks)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[str, set] = {}
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if pk and cap and it:
+            out.setdefault(pk, set()).add((cap, it))
+    return out
+
+
+def _count_items_con_fecha_bulk(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_ids: List[str],
+    ppto_keys_by_pk: Optional[Dict[str, set]] = None,
+    ag_by_item: Optional[Dict[Tuple[str, str], Optional[int]]] = None,
+) -> Dict[str, int]:
+    """Ítems con programación efectiva por PK (2 consultas + memoria)."""
+    pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
+    if not pks:
+        return {}
+    if ppto_keys_by_pk is None:
+        ppto_keys_by_pk = _ppto_keys_por_pks(sb, contrato_id, pks)
+    if ag_by_item is None:
+        ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+
+    rows = (
+        sb.table("prog_actividades")
+        .select("pk_id,capitulo,item,fecha_inicio,fecha_inicio_temprana,agrupador_id")
+        .eq("version_id", version_id)
+        .in_("pk_id", pks)
+        .execute()
+        .data
+        or []
+    )
+    direct_by_pk: Dict[str, set] = {pk: set() for pk in pks}
+    agr_fecha_by_pk: Dict[str, set] = {pk: set() for pk in pks}
+    for r in rows:
+        if not _actividad_tiene_fecha_programacion(r):
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        if pk not in direct_by_pk:
+            continue
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        ag_id = r.get("agrupador_id")
+        if ag_id is not None:
+            try:
+                agr_fecha_by_pk[pk].add((cap, int(ag_id)))
+            except (TypeError, ValueError):
+                pass
+        ppto_keys = ppto_keys_by_pk.get(pk) or set()
+        if cap and it and (cap, it) in ppto_keys:
+            direct_by_pk[pk].add((cap, it))
+
+    counts: Dict[str, int] = {}
+    for pk in pks:
+        ppto_keys = ppto_keys_by_pk.get(pk) or set()
+        seen: set = set()
+        for cap, it in ppto_keys:
+            if (cap, it) in direct_by_pk.get(pk, set()):
+                seen.add((cap, it))
+                continue
+            ag_id = ag_by_item.get((cap, it))
+            if ag_id is not None:
+                try:
+                    if (cap, int(ag_id)) in agr_fecha_by_pk.get(pk, set()):
+                        seen.add((cap, it))
+                except (TypeError, ValueError):
+                    pass
+        counts[pk] = len(seen)
+    return counts
+
+
+def upsert_prog_pk_estado_bulk(
+    sb, version_id: str, contrato_id: int, pk_ids: List[str]
+) -> None:
+    """Actualiza prog_pk_estado para N PKs en pocas consultas."""
+    pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
+    if not pks:
+        return
+    totals = _items_total_por_pks(sb, contrato_id, pks)
+    ppto_keys_by_pk = _ppto_keys_por_pks(sb, contrato_id, pks)
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    cf_by_pk = _count_items_con_fecha_bulk(
+        sb, version_id, contrato_id, pks, ppto_keys_by_pk, ag_by_item,
+    )
+    sin_ag_all = fetch_sin_agrupador_count_by_pk(sb, contrato_id)
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for pk in pks:
+        total = int(totals.get(pk, 0))
+        cf = int(cf_by_pk.get(pk, 0))
+        sin_ag = int(sin_ag_all.get(pk, 0))
+        rows.append({
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id": pk,
+            "estado_programacion": _compute_estado_pk(total, cf, sin_ag),
+            "items_total": total,
+            "items_con_fecha": min(cf, total) if total > 0 else 0,
             "actualizado_en": now,
         })
     if rows:
@@ -1785,6 +2537,14 @@ def mark_cpm_dirty(sb, version_id: str) -> None:
     sb.table("prog_versiones").update({"cpm_dirty": True, "actualizado_en": now}).eq("id", version_id).execute()
 
 
+def mark_cpm_synced(sb, version_id: str) -> None:
+    """Marca la versión alineada con la tabla tras guardar fechas del CPM."""
+    now = datetime.now(timezone.utc).isoformat()
+    sb.table("prog_versiones").update(
+        {"cpm_dirty": False, "cpm_calculado_en": now, "actualizado_en": now}
+    ).eq("id", version_id).execute()
+
+
 def fetch_borrador_activo(sb, contrato_id: int) -> Optional[dict]:
     rows = (
         sb.table("prog_versiones")
@@ -1928,7 +2688,21 @@ def fetch_baseline_version_id(sb, contrato_id: int) -> Optional[str]:
         .data
         or []
     )
-    return str(rows[0]["id"]) if rows else None
+    if rows:
+        return str(rows[0]["id"])
+    # Baseline contractual aún en borrador (V0 / nº1) — Curva S y comparación la usan igual.
+    open_bl = (
+        sb.table("prog_versiones")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo", "baseline")
+        .order("numero_version")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return str(open_bl[0]["id"]) if open_bl else None
 
 
 def _assert_no_version_abierta(sb, contrato_id: int) -> None:
@@ -3053,11 +3827,13 @@ def eliminar_dependencia_global(sb, dep_id: str, version_id: str) -> None:
     sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
 
 
-def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
+def _construir_dependencias_cpm(
+    sb, version_id: str, nodos: list, deps_specific: Optional[List[dict]] = None
+) -> list:
     """Combina dependencias especificas con globales; agrupadores se replican por PK del tramo."""
     from prog_obra_cpm import cpm_agrupador_key, cpm_node_key
 
-    specific = listar_dependencias(sb, version_id)
+    specific = deps_specific if deps_specific is not None else listar_dependencias(sb, version_id)
     global_deps = listar_dependencias_globales(sb, version_id)
 
     resolve_cap = _build_capitulo_resolver(nodos)
@@ -3384,6 +4160,32 @@ def _resolve_duracion_cpm_nodo(
 def _cpm_paso0_limpiar_resultados_previos(sb, version_id: str) -> None:
     """Elimina resultados CPM de ejecuciones anteriores (no toca prog_actividades)."""
     sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).execute()
+
+
+def _fetch_prog_actividades_agrupador_cpm(sb, version_id: str) -> list:
+    """Lee prog_actividades con agrupador para armar el grafo CPM (estado actual en BD)."""
+    return (
+        sb.table("prog_actividades")
+        .select(
+            "id,pk_id,capitulo,item,codigo_wbs,agrupador_id,fecha_inicio,fecha_fin_calculada,"
+            "duracion_dias_habiles,override_manual"
+        )
+        .eq("version_id", version_id)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+
+
+def _cpm_liberar_agrupadores_para_calculo(sb, version_id: str) -> None:
+    """
+    Agrupadores WBS: el CPM calcula fechas vía dependencias + días hábiles.
+    Quita anclas de guardado batch previo (override_manual) que bloqueaban el forward pass.
+    """
+    sb.table("prog_actividades").update({
+        "override_manual": False,
+    }).eq("version_id", version_id).not_.is_("agrupador_id", "null").execute()
 
 
 def _cpm_limpiar_actividades_no_manuales(sb, version_id: str) -> None:
@@ -3739,6 +4541,44 @@ def _nodo_cpm_desde_agrupador(
     )
 
 
+def _resolve_duracion_stub_cpm_nodo(
+    pk: str,
+    cap: str,
+    ag_s: str,
+    dur_by_key: dict,
+    merge_dur_by_ag: Dict[tuple, int],
+    raw_ags: List[dict],
+) -> int:
+    """
+    Duración para nodos stub creados desde dependencias cuando el PK no tiene fila WBS.
+    Hereda la duración almacenada de otros PKs del mismo capítulo/agrupador (tramo).
+    """
+    from prog_obra_cpm import cpm_node_key
+
+    key = cpm_node_key(pk, cap, ag_s)
+    if key in dur_by_key:
+        return max(1, int(dur_by_key[key]))
+
+    cap_key = _capitulo_cpm_match_key(cap)
+    cross = [
+        int(v)
+        for (p, c, ag), v in (merge_dur_by_ag or {}).items()
+        if str(ag) == str(ag_s) and _capitulo_cpm_match_key(c) == cap_key and int(v) > 0
+    ]
+    if cross:
+        return max(cross)
+
+    try:
+        ag_int = int(ag_s)
+    except (TypeError, ValueError):
+        ag_int = 0
+    stored = _stored_duracion_agrupador(raw_ags, cap, ag_int, pk_ids=None)
+    if stored is not None and stored > 0:
+        return stored
+
+    return 1
+
+
 def _completar_nodos_cpm_desde_dependencias(
     sb,
     version_id: str,
@@ -3750,6 +4590,9 @@ def _completar_nodos_cpm_desde_dependencias(
     cache: CalendarioNoHabilesCache,
     add_dh,
     dur_lookup: Optional[dict] = None,
+    merge_dur_by_ag: Optional[Dict[tuple, int]] = None,
+    raw_ags: Optional[List[dict]] = None,
+    deps: Optional[List[dict]] = None,
 ) -> None:
     """Añade nodos stub para extremos de dependencias que aún no están en el grafo."""
     from prog_obra_cpm import NodoCPM
@@ -3762,10 +4605,12 @@ def _completar_nodos_cpm_desde_dependencias(
     resolve_cap = _build_capitulo_resolver(nodos)
     node_keys = {n.key for n in nodos}
     dur_by_key = dict(dur_lookup or {})
+    merge_map = dict(merge_dur_by_ag or {})
+    acts = list(raw_ags or [])
     for n in nodos:
         dur_by_key[n.key] = max(1, int(n.duracion or 1))
 
-    for d in listar_dependencias(sb, version_id):
+    for d in (deps if deps is not None else listar_dependencias(sb, version_id)):
         for pk, cap, ag_raw in (
             (d.get("pk_id_origen"), d.get("capitulo_origen"), d.get("agrupador_id_origen")),
             (d.get("pk_id_destino"), d.get("capitulo_destino"), d.get("agrupador_id_destino")),
@@ -3774,12 +4619,13 @@ def _completar_nodos_cpm_desde_dependencias(
             cap_raw = str(cap or "").strip()
             cap_s = resolve_cap(pk_s, cap_raw) if cap_raw else cap_raw
             ag_s = cpm_agrupador_key(ag_raw)
-            if not pk_s or not cap_s:
+            if not pk_s or not cap_s or not ag_s:
                 continue
             key = cpm_node_key(pk_s, cap_s, ag_s)
             if key in node_keys:
                 continue
-            dur = dur_by_key.get(key, 1)
+            dur = _resolve_duracion_stub_cpm_nodo(pk_s, cap_s, ag_s, dur_by_key, merge_map, acts)
+            dur_by_key[key] = dur
             fi = fecha_inicio_ver
             ff = add_dh(contrato_id, fi, dur, cache)
             if not ff:
@@ -3799,10 +4645,79 @@ def _completar_nodos_cpm_desde_dependencias(
                 caps_con_agrupador.add((pk_s, cap_s))
 
 
+def _cpm_expand_stub_nodos_todos_pks(
+    nodos: list,
+    deps: Optional[List[dict]],
+    raw_ags: Optional[List[dict]],
+    fecha_inicio_ver: Optional[date],
+    contrato_id: int,
+    cache: CalendarioNoHabilesCache,
+    add_dh,
+    dur_lookup: Optional[dict] = None,
+    merge_dur_by_ag: Optional[Dict[tuple, int]] = None,
+) -> None:
+    """
+    Réplica nodos stub de dependencias a todos los PK con actividades en la versión.
+    Sin esto, solo el PK de la dependencia (p. ej. 120367) recibe la cadena CPM completa.
+    """
+    from prog_obra_cpm import NodoCPM, cpm_agrupador_key, cpm_node_key
+
+    if not fecha_inicio_ver or not deps:
+        return
+
+    resolve_cap = _build_capitulo_resolver(nodos)
+    all_pks = sorted(
+        {str(n.pk_id).strip() for n in nodos if str(n.pk_id or "").strip()}
+        | {str(r.get("pk_id") or "").strip() for r in (raw_ags or []) if r.get("pk_id")}
+    )
+    ag_points: set[tuple[str, str]] = set()
+    for d in deps:
+        for cap_key, ag_key in (
+            (d.get("capitulo_origen"), d.get("agrupador_id_origen")),
+            (d.get("capitulo_destino"), d.get("agrupador_id_destino")),
+        ):
+            cap_raw = str(cap_key or "").strip()
+            ag_s = cpm_agrupador_key(ag_key)
+            if cap_raw and ag_s:
+                ag_points.add((cap_raw, ag_s))
+    for n in nodos:
+        if n.agrupador_id:
+            ag_points.add((str(n.capitulo).strip(), str(n.agrupador_id).strip()))
+
+    node_keys = {n.key for n in nodos}
+    dur_by_key = dict(dur_lookup or {})
+    acts = list(raw_ags or [])
+    for n in nodos:
+        dur_by_key[n.key] = max(1, int(n.duracion or 1))
+
+    for pk_s in all_pks:
+        for cap_raw, ag_s in sorted(ag_points):
+            cap_s = resolve_cap(pk_s, cap_raw)
+            key = cpm_node_key(pk_s, cap_s, ag_s)
+            if key in node_keys:
+                continue
+            dur = _resolve_duracion_stub_cpm_nodo(pk_s, cap_s, ag_s, dur_by_key, merge_dur_by_ag or {}, acts)
+            dur_by_key[key] = dur
+            ff = add_dh(contrato_id, fecha_inicio_ver, dur, cache)
+            if not ff:
+                continue
+            nodos.append(NodoCPM(
+                pk_id=pk_s,
+                capitulo=cap_s,
+                duracion=dur,
+                fecha_inicio_base=fecha_inicio_ver,
+                fecha_fin_base=ff,
+                agrupador_id=ag_s,
+                es_ancla=False,
+            ))
+            node_keys.add(key)
+
+
 def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     """
     Pipeline CPM (orden inviolable en cada ejecución):
-      A. Construir grafo completo (nodos + dependencias desde prog_dependencias)
+      0. Limpiar prog_cpm_resultados de la versión
+      A. Reconstruir grafo (nodos + dependencias) desde prog_actividades actual
       B. Limpiar fechas previas en nodos no ancla (memoria + prog_actividades)
       C. Forward/backward pass y write-back (prog_cpm_resultados + fecha_*_temprana)
     """
@@ -3822,10 +4737,12 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     fecha_inicio_ver = _parse_date_cpm(ver.get("fecha_inicio"))
     fecha_fin_ver = _parse_date_cpm(ver.get("fecha_fin"))
 
-    # Solo resultados CPM previos — prog_actividades se lee intacto para armar el grafo
+    # ── 0: borrar resultados previos antes de leer actividades o armar el grafo ──
     _cpm_paso0_limpiar_resultados_previos(sb, version_id)
+    _cpm_liberar_agrupadores_para_calculo(sb, version_id)
+    deps_raw = listar_dependencias(sb, version_id)
 
-    # ── A: construir nodos y dependencias ────────────────────────────────────
+    # ── A: construir nodos y dependencias desde prog_actividades actual ─────────
     raw_caps = (
         sb.rpc("prog_get_capitulos_con_fechas", {"p_version_id": version_id})
         .execute()
@@ -3834,23 +4751,13 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     )
     nodos = []
     seen_ag = set()
-    raw_ags = (
-        sb.table("prog_actividades")
-        .select(
-            "id,pk_id,capitulo,item,codigo_wbs,agrupador_id,fecha_inicio,fecha_fin_calculada,"
-            "duracion_dias_habiles,override_manual"
-        )
-        .eq("version_id", version_id)
-        .not_.is_("agrupador_id", "null")
-        .execute()
-        .data
-        or []
-    )
+    raw_ags = _fetch_prog_actividades_agrupador_cpm(sb, version_id)
     n_persisted = _persist_duraciones_agrupador_antes_cpm(
         sb, version_id, raw_ags, contrato_id, cache,
     )
     if n_persisted:
         _logger.info("CPM: persistidas %d duracion(es) en cabecera WBS antes del cálculo", n_persisted)
+        raw_ags = _fetch_prog_actividades_agrupador_cpm(sb, version_id)
 
     merge_dur_by_ag = _duraciones_agrupador_para_cpm(raw_ags)
 
@@ -3918,9 +4825,23 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         cache,
         _add_dh,
         dur_lookup=dur_lookup,
+        merge_dur_by_ag=merge_dur_by_ag,
+        raw_ags=raw_ags,
+        deps=deps_raw,
+    )
+    _cpm_expand_stub_nodos_todos_pks(
+        nodos,
+        deps_raw,
+        raw_ags,
+        fecha_inicio_ver,
+        contrato_id,
+        cache,
+        _add_dh,
+        dur_lookup=dur_lookup,
+        merge_dur_by_ag=merge_dur_by_ag,
     )
 
-    if not nodos and (raw_ags or listar_dependencias(sb, version_id)):
+    if not nodos and (raw_ags or deps_raw):
         if not fecha_inicio_ver:
             return ResultadoCPM(
                 ok=False,
@@ -3961,7 +4882,7 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         d1 = fecha_fin_ver
     cache.fechas_extra(contrato_id, d0 - timedelta(days=120), d1 + timedelta(days=120))
 
-    dependencias = _construir_dependencias_cpm(sb, version_id, nodos)
+    dependencias = _construir_dependencias_cpm(sb, version_id, nodos, deps_specific=deps_raw)
 
     nodos_set = {n.key for n in nodos}
     deps_efectivas = [
@@ -3972,7 +4893,7 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         "CPM grafo: %d nodos, %d dependencias (%d emparejan nodos del grafo)",
         len(nodos), len(dependencias), len(deps_efectivas),
     )
-    if listar_dependencias(sb, version_id) and not deps_efectivas:
+    if deps_raw and not deps_efectivas:
         _logger.warning(
             "CPM: hay dependencias en BD pero ninguna empareja nodos del grafo; "
             "revisar capitulo/agrupador_id. Nodos=%s",
@@ -3980,7 +4901,7 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         )
 
     debug_watch, debug_labels = _cpm_debug_watch_keys(nodos, agr_codigo_by_id)
-    _log_cpm_grafo_diagnostico(nodos, dependencias, listar_dependencias(sb, version_id), agr_codigo_by_id, debug_watch)
+    _log_cpm_grafo_diagnostico(nodos, dependencias, deps_raw, agr_codigo_by_id, debug_watch)
 
     # ── B: limpiar fechas previas antes del forward pass ─────────────────────
     _cpm_limpiar_fechas_nodos_forward(nodos, fecha_inicio_ver, contrato_id, cache, _add_dh)
@@ -4028,8 +4949,10 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     }).execute()
 
     ag_writeback = [n for n in resultado.nodos if n.agrupador_id and not n.es_ancla and n.fecha_inicio_temprana]
-    _apply_cpm_fechas_bulk(sb, version_id, ag_writeback)
+    pks_touched = sorted({str(n.pk_id).strip() for n in resultado.nodos if str(n.pk_id or "").strip()})
+    _apply_cpm_writeback_unified(sb, version_id, contrato_id, ag_writeback)
 
+    cap_heredado_updates: List[dict] = []
     for n in resultado.nodos:
         if n.agrupador_id:
             continue
@@ -4038,7 +4961,12 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         sb.table("prog_actividades_capitulo").update({
             "fecha_inicio_sugerida": n.fecha_inicio_temprana.isoformat(),
         }).eq("version_id", version_id).eq("pk_id", n.pk_id).eq("capitulo", n.capitulo).execute()
-        _recalc_items_heredados_cpm(sb, version_id, n.pk_id, n.capitulo, n.fecha_inicio_temprana, contrato_id, cache)
+        cap_heredado_updates.append(n)
+
+    for n in cap_heredado_updates:
+        _recalc_items_heredados_cpm(
+            sb, version_id, n.pk_id, n.capitulo, n.fecha_inicio_temprana, contrato_id, cache,
+        )
 
     changed = [
         n.key for n in resultado.nodos
@@ -4046,10 +4974,9 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
     ]
     resultado.nodos_afectados_cascada = nodos_afectados_por(changed, dependencias)
 
-    now = datetime.now(timezone.utc).isoformat()
-    sb.table("prog_versiones").update(
-        {"cpm_dirty": False, "cpm_calculado_en": now, "actualizado_en": now}
-    ).eq("id", version_id).execute()
+    upsert_prog_pk_estado_bulk(sb, version_id, contrato_id, pks_touched)
+
+    mark_cpm_synced(sb, version_id)
 
     return resultado
 
@@ -4074,42 +5001,171 @@ def _bulk_patch_prog_actividades_by_id(sb, rows: List[dict]) -> None:
             sb.table("prog_actividades").update(payload).in_("id", ids[i:i + chunk]).execute()
 
 
+def _listado_items_por_agrupador(sb, contrato_id: int) -> Dict[Tuple[str, int], set]:
+    """Ítems de listado_precios agrupados por (capitulo, agrupador_id)."""
+    rows = (
+        sb.table("listado_precios")
+        .select("capitulo,agrupador_id,item_numero")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[Tuple[str, int], set] = {}
+    for r in rows:
+        cap = (r.get("capitulo") or "").strip()
+        ag_raw = r.get("agrupador_id")
+        it = (r.get("item_numero") or "").strip()
+        if not cap or ag_raw is None or not it:
+            continue
+        try:
+            out.setdefault((cap, int(ag_raw)), set()).add(it)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _hijos_ppto_agrupador_en_memoria(
+    pk: str,
+    cap: str,
+    ag_id: int,
+    ppto_keys: set,
+    ag_by_item: Dict[Tuple[str, str], Optional[int]],
+    listado_items: Dict[Tuple[str, int], set],
+) -> List[Tuple[str, str]]:
+    """Ítems hijo del agrupador sin consultas extra."""
+    out: List[Tuple[str, str]] = []
+    for p_cap, it in ppto_keys:
+        if p_cap != cap:
+            continue
+        if ag_by_item.get((p_cap, it)) == ag_id:
+            out.append((p_cap, it))
+    if out:
+        return out
+    for it in listado_items.get((cap, ag_id), set()):
+        if (cap, it) in ppto_keys:
+            out.append((cap, it))
+    return out
+
+
+def _apply_cpm_writeback_unified(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    nodos: list,
+) -> int:
+    """Write-back CPM: tempranas + programación visible en un solo batch por id."""
+    if not nodos:
+        return 0
+
+    pk_ids = sorted({str(n.pk_id).strip() for n in nodos if str(n.pk_id or "").strip()})
+    ids_by_key, rows_by_key = _prog_actividades_agrupador_index(sb, version_id, pk_ids)
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    ppto_keys_by_pk = _ppto_keys_por_pks(sb, contrato_id, pk_ids)
+    listado_items = _listado_items_por_agrupador(sb, contrato_id)
+    items_index = _fetch_prog_actividades_items_index(sb, version_id, pk_ids)
+
+    now = datetime.now(timezone.utc).isoformat()
+    patch_by_id: Dict[str, dict] = {}
+    header_fallback_sigs: List[tuple] = []
+    seen_sig: set = set()
+
+    for n in nodos:
+        if not n.agrupador_id or n.es_ancla:
+            continue
+        if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
+            continue
+        pk = str(n.pk_id).strip()
+        cap = str(n.capitulo).strip()
+        try:
+            ag_id = int(str(n.agrupador_id).strip())
+        except (TypeError, ValueError):
+            continue
+        sig = (pk, cap, ag_id)
+        if sig in seen_sig:
+            continue
+        seen_sig.add(sig)
+
+        dur = max(1, int(n.duracion or 1))
+        fi_iso = n.fecha_inicio_temprana.isoformat()
+        ff_iso = n.fecha_fin_temprana.isoformat()
+        header_patch = {
+            "fecha_inicio_temprana": fi_iso,
+            "fecha_fin_temprana": ff_iso,
+            "fecha_inicio": fi_iso,
+            "fecha_fin_calculada": ff_iso,
+            "duracion_dias_habiles": dur,
+            "override_manual": False,
+            "actualizado_en": now,
+        }
+
+        row_ids = ids_by_key.get(sig) or []
+        if row_ids:
+            for rid in row_ids:
+                patch_by_id[rid] = {**header_patch, "id": rid}
+        else:
+            header_fallback_sigs.append((pk, cap, ag_id, fi_iso, ff_iso, dur))
+
+        ag_rows = rows_by_key.get(sig) or []
+        codigo_wbs = ""
+        for r in ag_rows:
+            if _is_agrupador_header_row(r):
+                codigo_wbs = str(r.get("codigo_wbs") or r.get("item") or "").strip()
+                break
+        if not codigo_wbs:
+            for r in ag_rows:
+                cw = str(r.get("codigo_wbs") or r.get("item") or "").strip()
+                if cw:
+                    codigo_wbs = cw
+                    break
+
+        ppto_keys = ppto_keys_by_pk.get(pk) or set()
+        for p_cap, it in _hijos_ppto_agrupador_en_memoria(
+            pk, cap, ag_id, ppto_keys, ag_by_item, listado_items,
+        ):
+            row = items_index.get((pk, p_cap, it))
+            if not row or row.get("override_manual"):
+                continue
+            rid = str(row["id"])
+            patch_by_id[rid] = {
+                "id": rid,
+                "fecha_inicio_temprana": fi_iso,
+                "fecha_fin_temprana": ff_iso,
+                "fecha_inicio": fi_iso,
+                "fecha_fin_calculada": ff_iso,
+                "duracion_dias_habiles": dur,
+                "heredado_de_capitulo": True,
+                "override_manual": False,
+                "agrupador_id": ag_id,
+                "codigo_wbs": codigo_wbs or None,
+                "actualizado_en": now,
+            }
+
+    _bulk_patch_prog_actividades_by_id(sb, list(patch_by_id.values()))
+
+    for pk, cap, ag_id, fi_iso, ff_iso, dur in header_fallback_sigs:
+        sb.table("prog_actividades").update({
+            "fecha_inicio_temprana": fi_iso,
+            "fecha_fin_temprana": ff_iso,
+            "fecha_inicio": fi_iso,
+            "fecha_fin_calculada": ff_iso,
+            "duracion_dias_habiles": dur,
+            "override_manual": False,
+            "actualizado_en": now,
+        }).eq("version_id", version_id).eq("pk_id", pk).eq("capitulo", cap).eq(
+            "agrupador_id", ag_id
+        ).execute()
+
+    return len(seen_sig)
+
+
 def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
     """Write-back masivo: solo fecha_inicio_temprana / fecha_fin_temprana (nunca fecha_inicio)."""
     if not nodos:
         return 0
 
     pk_ids = sorted({str(n.pk_id).strip() for n in nodos if str(n.pk_id or "").strip()})
-    existing = (
-        sb.table("prog_actividades")
-        .select("id,pk_id,capitulo,agrupador_id,item,codigo_wbs")
-        .eq("version_id", version_id)
-        .in_("pk_id", pk_ids)
-        .not_.is_("agrupador_id", "null")
-        .execute()
-        .data
-        or []
-    )
-    ids_by_key: Dict[tuple, List[str]] = {}
-    rows_by_key: Dict[tuple, List[dict]] = {}
-    for row in existing:
-        pk = str(row.get("pk_id") or "").strip()
-        cap = str(row.get("capitulo") or "").strip()
-        ag_raw = row.get("agrupador_id")
-        if not pk or not cap or ag_raw is None:
-            continue
-        try:
-            ag_id = int(ag_raw)
-        except (TypeError, ValueError):
-            continue
-        rows_by_key.setdefault((pk, cap, ag_id), []).append(row)
-
-    for sig, rows in rows_by_key.items():
-        header = next((r for r in rows if _is_agrupador_header_row(r)), None)
-        pick = header or (rows[0] if rows else None)
-        rid = str((pick or {}).get("id") or "").strip()
-        if rid:
-            ids_by_key[sig] = [rid]
+    ids_by_key, rows_by_key = _prog_actividades_agrupador_index(sb, version_id, pk_ids)
 
     now = datetime.now(timezone.utc).isoformat()
     updates: List[dict] = []
@@ -4149,6 +5205,184 @@ def _apply_cpm_fechas_bulk(sb, version_id: str, nodos: list) -> int:
 
     _bulk_patch_prog_actividades_by_id(sb, updates)
     return len(seen_keys)
+
+
+def _hijo_ppto_for_agrupador(
+    sb,
+    contrato_id: int,
+    pk_id: str,
+    capitulo: str,
+    agrupador_id: int,
+    ppto_items: List[Tuple[str, str, Decimal, str, Decimal]],
+    ag_by_item: Dict[Tuple[str, str], Optional[int]],
+) -> List[Tuple[str, str, Decimal, str, Decimal]]:
+    """Ítems de presupuesto del PK asignados al agrupador WBS."""
+    cap = capitulo.strip()
+    hijo_ppto = [
+        (p_cap, it, cant, und, vlr)
+        for p_cap, it, cant, und, vlr in ppto_items
+        if p_cap == cap and ag_by_item.get((p_cap, it)) == agrupador_id
+    ]
+    if hijo_ppto:
+        return hijo_ppto
+    ag_items_list = [
+        (r.get("item_numero") or "").strip()
+        for r in (
+            sb.table("listado_precios")
+            .select("item_numero")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", cap)
+            .eq("agrupador_id", agrupador_id)
+            .execute()
+            .data
+            or []
+        )
+        if (r.get("item_numero") or "").strip()
+    ]
+    if not ag_items_list:
+        return []
+    ag_items_set = set(ag_items_list)
+    return [
+        (p_cap, it, cant, und, vlr)
+        for p_cap, it, cant, und, vlr in ppto_items
+        if p_cap == cap and it in ag_items_set
+    ]
+
+
+def _fetch_prog_actividades_items_index(
+    sb, version_id: str, pk_ids: List[str]
+) -> Dict[Tuple[str, str, str], dict]:
+    """Mapa (pk, capitulo, item) → fila prog_actividades segmento 1."""
+    pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
+    if not pks:
+        return {}
+    rows = (
+        sb.table("prog_actividades")
+        .select("id,pk_id,capitulo,item,override_manual")
+        .eq("version_id", version_id)
+        .in_("pk_id", pks)
+        .eq("segmento", 1)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[Tuple[str, str, str], dict] = {}
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if pk and cap and it:
+            out[(pk, cap, it)] = r
+    return out
+
+
+def _apply_cpm_programacion_visible(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    cache,
+    nodos: list,
+    usuario_id: int = 0,
+) -> int:
+    """
+    Propaga fechas tempranas CPM a fecha_inicio/fecha_fin_calculada en cabeceras WBS e ítems hijo.
+    Un solo batch UPDATE por id (sin INSERT; el CPM solo actualiza filas existentes).
+    """
+    if not nodos:
+        return 0
+
+    pk_ids = sorted({str(n.pk_id).strip() for n in nodos if str(n.pk_id or "").strip()})
+    ids_by_key, rows_by_key = _prog_actividades_agrupador_index(sb, version_id, pk_ids)
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    ppto_cache: Dict[str, List[Tuple[str, str, Decimal, str, Decimal]]] = {}
+    items_index = _fetch_prog_actividades_items_index(sb, version_id, pk_ids)
+
+    now = datetime.now(timezone.utc).isoformat()
+    patch_rows: List[dict] = []
+    header_fallback_sigs: List[tuple] = []
+    seen_sig: set = set()
+    for n in nodos:
+        if not n.agrupador_id or n.es_ancla:
+            continue
+        if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
+            continue
+        pk = str(n.pk_id).strip()
+        cap = str(n.capitulo).strip()
+        try:
+            ag_id = int(str(n.agrupador_id).strip())
+        except (TypeError, ValueError):
+            continue
+        sig = (pk, cap, ag_id)
+        if sig in seen_sig:
+            continue
+        seen_sig.add(sig)
+
+        dur = max(1, int(n.duracion or 1))
+        fi = n.fecha_inicio_temprana
+        ff = n.fecha_fin_temprana
+        fi_iso = fi.isoformat()
+        ff_iso = ff.isoformat()
+
+        row_ids = ids_by_key.get(sig) or []
+        if row_ids:
+            for rid in row_ids:
+                patch_rows.append({
+                    "id": rid,
+                    "fecha_inicio": fi_iso,
+                    "fecha_fin_calculada": ff_iso,
+                    "duracion_dias_habiles": dur,
+                    "actualizado_en": now,
+                })
+        else:
+            header_fallback_sigs.append((pk, cap, ag_id, fi_iso, ff_iso, dur))
+
+        ag_rows = rows_by_key.get(sig) or []
+        codigo_wbs = ""
+        for r in ag_rows:
+            if _is_agrupador_header_row(r):
+                codigo_wbs = str(r.get("codigo_wbs") or r.get("item") or "").strip()
+                break
+        if not codigo_wbs:
+            for r in ag_rows:
+                cw = str(r.get("codigo_wbs") or r.get("item") or "").strip()
+                if cw:
+                    codigo_wbs = cw
+                    break
+
+        if pk not in ppto_cache:
+            _, ppto_cache[pk] = _ppto_items_por_pk(sb, contrato_id, pk)
+
+        for p_cap, it, _, _, _ in _hijo_ppto_for_agrupador(
+            sb, contrato_id, pk, cap, ag_id, ppto_cache[pk], ag_by_item
+        ):
+            row = items_index.get((pk, p_cap, it))
+            if not row or row.get("override_manual"):
+                continue
+            patch_rows.append({
+                "id": str(row["id"]),
+                "fecha_inicio": fi_iso,
+                "fecha_fin_calculada": ff_iso,
+                "duracion_dias_habiles": dur,
+                "heredado_de_capitulo": True,
+                "override_manual": False,
+                "agrupador_id": ag_id,
+                "codigo_wbs": codigo_wbs or None,
+                "actualizado_en": now,
+            })
+
+    _bulk_patch_prog_actividades_by_id(sb, patch_rows)
+
+    for pk, cap, ag_id, fi_iso, ff_iso, dur in header_fallback_sigs:
+        sb.table("prog_actividades").update({
+            "fecha_inicio": fi_iso,
+            "fecha_fin_calculada": ff_iso,
+            "duracion_dias_habiles": dur,
+            "actualizado_en": now,
+        }).eq("version_id", version_id).eq("pk_id", pk).eq("capitulo", cap).eq(
+            "agrupador_id", ag_id
+        ).execute()
+
+    return len(patch_rows)
 
 
 def _apply_cpm_fechas_agrupador(sb, version_id, contrato_id, cache, n: "NodoCPM") -> None:

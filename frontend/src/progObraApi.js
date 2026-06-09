@@ -58,7 +58,7 @@ export async function clearTramoProgramacion(API, cid, token, versionId, { tramo
   return res.json()
 }
 
-export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds, allowOverwrite } = {}) {
+export async function saveActividadesBatchTramo(API, cid, token, versionId, { tramo, actividades, pkIds, allowOverwrite, preserveCpmSync } = {}) {
   const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/actividades-batch-tramo`, {
     method: 'POST',
     headers: {
@@ -70,6 +70,7 @@ export async function saveActividadesBatchTramo(API, cid, token, versionId, { tr
       actividades,
       pk_ids: pkIds?.length ? pkIds : undefined,
       allow_overwrite: !!allowOverwrite,
+      preserve_cpm_sync: !!preserveCpmSync,
     }),
   })
   if (!res.ok) await parseErr(res)

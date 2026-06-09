@@ -870,19 +870,6 @@ function ProgPkEditorModal({
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px 16px' }}>{children}</div>
-        {!editable && (
-          <div
-            style={{
-              padding: '8px 16px',
-              borderTop: `1px solid ${t.border}`,
-              fontSize: 'var(--cc-sm)',
-              color: t.textMuted,
-              background: t.bg,
-            }}
-          >
-            Solo lectura: seleccione una versión en borrador con permiso de edición.
-          </div>
-        )}
       </div>
     </div>,
     document.body,
@@ -905,8 +892,10 @@ export default function ModuloProgramacionObra({
   puedeEditar = false,
   puedeCrear = false,
   puedeValidar = false,
+  puedeExportar = false,
   onRibbonChange,
 }) {
+  const puedeEscribir = puedeEditar || puedeCrear
   const cid = usuario?.contrato_id
   const uid = usuario?.id
   const API = API_BASE
@@ -969,6 +958,7 @@ export default function ModuloProgramacionObra({
   const [modalTramoContext, setModalTramoContext] = useState(null)
   const [tramoEstructuraData, setTramoEstructuraData] = useState(null)
   const [loadTramoEstructura, setLoadTramoEstructura] = useState(false)
+  const [modalSessionId, setModalSessionId] = useState(0)
 
   const handleCpmUpdated = useCallback((resultados) => {
     const ids = new Set()
@@ -1161,7 +1151,7 @@ export default function ModuloProgramacionObra({
   }, [progModalOpen, modalVersion, modalVersionId, versionIdForWork])
 
   const modalEditable = Boolean(
-    modalVersion && (modalVersion.estado || '') === 'borrador' && puedeEditar && !modalHistoricalReadOnly,
+    modalVersion && (modalVersion.estado || '') === 'borrador' && puedeEscribir && !modalHistoricalReadOnly,
   )
 
   const pkForData = modalMode === 'tramo' ? null : (progModalOpen && activeModalPk ? activeModalPk : selPk)
@@ -1265,6 +1255,7 @@ export default function ModuloProgramacionObra({
       setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
       setActiveModalPk(pkid)
       setModalOpenCompareTab(!!options.compare)
+      setModalSessionId((n) => n + 1)
       setProgModalOpen(true)
     },
     [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
@@ -1291,6 +1282,7 @@ export default function ModuloProgramacionObra({
     setActiveModalPk(null)
     setTramoEstructuraData(null)
     setModalOpenCompareTab(false)
+    setModalSessionId((n) => n + 1)
     setProgModalOpen(true)
   }, [
     tramoFilter,
@@ -1314,6 +1306,7 @@ export default function ModuloProgramacionObra({
     setActiveModalPk(null)
     setModalTramoContext(null)
     setTramoEstructuraData(null)
+    setLoadTramoEstructura(false)
     setModalOpenCompareTab(false)
     setModalVersionId(null)
     setModalCompareBaselineId(null)
@@ -1713,29 +1706,54 @@ export default function ModuloProgramacionObra({
     [modalMode, itemsPorCapitulo],
   )
 
-  const reloadTramoEstructura = useCallback(async () => {
-    if (!cid || !token || !modalTramoContext?.tramo || !versionIdForModal) return
-    const d = await fetchEstructuraTramo(API, cid, token, {
-      versionId: versionIdForModal,
-      tramo: modalTramoContext.tramo,
-      pkIds: modalTramoContext.pkIds,
-      versionPptoId: pptoVersionAnalisisId || undefined,
-    })
-    setTramoEstructuraData(d && typeof d === 'object' ? d : null)
-  }, [cid, token, API, modalTramoContext, versionIdForModal, pptoVersionAnalisisId])
+  const tramoModalTramo = modalTramoContext?.tramo ?? null
+  const tramoModalPkIdsKey = useMemo(() => {
+    const ids = modalTramoContext?.pkIds
+    if (!Array.isArray(ids) || !ids.length) return ''
+    return [...new Set(ids.map((p) => String(p).trim()).filter(Boolean))].sort().join(',')
+  }, [modalTramoContext?.pkIds])
+
+  const tramoEstructuraFetchKey = useMemo(() => {
+    if (modalMode !== 'tramo' || !tramoModalTramo || !versionIdForModal) return null
+    return `${versionIdForModal}\0${tramoModalTramo}\0${tramoModalPkIdsKey}\0${pptoVersionAnalisisId ?? ''}\0${modalSessionId}`
+  }, [modalMode, tramoModalTramo, tramoModalPkIdsKey, versionIdForModal, pptoVersionAnalisisId, modalSessionId])
+
+  const modalTramoContextRef = useRef(modalTramoContext)
+  modalTramoContextRef.current = modalTramoContext
+
+  const reloadTramoEstructura = useCallback(async (opts = {}) => {
+    const ctx = modalTramoContextRef.current
+    if (!cid || !token || !ctx?.tramo || !versionIdForModal) return
+    const silent = opts?.silent === true
+    if (!silent) setLoadTramoEstructura(true)
+    try {
+      const d = await fetchEstructuraTramo(API, cid, token, {
+        versionId: versionIdForModal,
+        tramo: ctx.tramo,
+        pkIds: ctx.pkIds,
+        versionPptoId: pptoVersionAnalisisId || undefined,
+      })
+      setTramoEstructuraData(d && typeof d === 'object' ? d : null)
+    } catch {
+      if (!opts?.keepPrevious) setTramoEstructuraData(null)
+    } finally {
+      if (!silent) setLoadTramoEstructura(false)
+    }
+  }, [cid, token, API, versionIdForModal, pptoVersionAnalisisId])
 
   useEffect(() => {
-    if (!cid || !token || modalMode !== 'tramo' || !modalTramoContext?.tramo || !versionIdForModal) {
+    if (!cid || !token || !tramoEstructuraFetchKey) {
       if (modalMode !== 'tramo') setTramoEstructuraData(null)
-      return
+      return undefined
     }
+    const ctx = modalTramoContextRef.current
+    if (!ctx?.tramo) return undefined
     let cancel = false
     setLoadTramoEstructura(true)
-    setTramoEstructuraData(null)
     fetchEstructuraTramo(API, cid, token, {
       versionId: versionIdForModal,
-      tramo: modalTramoContext.tramo,
-      pkIds: modalTramoContext.pkIds,
+      tramo: ctx.tramo,
+      pkIds: ctx.pkIds,
       versionPptoId: pptoVersionAnalisisId || undefined,
     })
       .then((d) => {
@@ -1745,12 +1763,12 @@ export default function ModuloProgramacionObra({
         if (!cancel) setTramoEstructuraData(null)
       })
       .finally(() => {
-        if (!cancel) setLoadTramoEstructura(false)
+        setLoadTramoEstructura(false)
       })
     return () => {
       cancel = true
     }
-  }, [cid, token, API, modalMode, modalTramoContext, versionIdForModal, pptoVersionAnalisisId])
+  }, [cid, token, API, tramoEstructuraFetchKey, versionIdForModal, pptoVersionAnalisisId])
 
   useEffect(() => {
     if (!cid || !token || !pkForData) {
@@ -1881,7 +1899,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, pkForData, versionIdForData, API])
+  }, [cid, token, pkForData, versionIdForData, API, modalSessionId])
 
   useEffect(() => {
     if (!cid || !token || !workingVersionId) {
@@ -2036,10 +2054,7 @@ export default function ModuloProgramacionObra({
   }
 
   const handleClickNuevaVersion = async () => {
-    if (!puedeCrear || !cid) {
-      showToast('No tiene permiso para crear versiones de programación.', 'err')
-      return
-    }
+    if (!puedeCrear || !cid) return
     if (!token) {
       showToast('Sesión no válida. Vuelva a iniciar sesión.', 'err')
       return
@@ -2089,7 +2104,7 @@ export default function ModuloProgramacionObra({
   }, [refreshMapaYVersiones, showToast])
 
   const handleEliminarProgramacion = useCallback(async () => {
-    if (!puedeEditar || !cid || !workingVersionId || !token) return
+    if (!puedeEscribir || !cid || !workingVersionId || !token) return
     setPanelBusy(true)
     try {
       await clearVersionProgramacion(API, cid, token, String(workingVersionId))
@@ -2101,7 +2116,7 @@ export default function ModuloProgramacionObra({
     } finally {
       setPanelBusy(false)
     }
-  }, [puedeEditar, cid, workingVersionId, token, API, refreshMapaYVersiones, showToast])
+  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaYVersiones, showToast])
 
   const progTipoLabel = (tipo) => {
     const t0 = (tipo || '').toLowerCase()
@@ -2178,7 +2193,7 @@ export default function ModuloProgramacionObra({
   const handleGuardarBatch = useCallback(
     async (items, pkId) => {
       const vid = versionIdForWork
-      if (!puedeEditar || !cid || !vid || !pkId) return { ok: false, saved: 0, errors: items?.length || 0 }
+      if (!puedeEscribir || !cid || !vid || !pkId) return { ok: false, saved: 0, errors: items?.length || 0 }
       const actividades = (items || []).map((row) => {
         const def = row.itemDef || {}
         const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
@@ -2264,29 +2279,38 @@ export default function ModuloProgramacionObra({
         return { ok: false, saved: 0, errors: actividades.length }
       }
     },
-    [puedeEditar, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones],
+    [puedeEscribir, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones],
   )
 
   const handleGuardarBatchTramo = useCallback(
     async (items, options = {}) => {
       const vid = versionIdForWork
       const tramo = modalTramoContext?.tramo
-      if (!puedeEditar || !cid || !vid || !tramo) return { ok: false, saved: 0, errors: items?.length || 0 }
+      if (!puedeEscribir || !cid || !vid || !tramo) return { ok: false, saved: 0, errors: items?.length || 0 }
       const actividades = (items || []).map((row) => {
         const def = row.itemDef || {}
         const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
-        const fiRaw = row.clearSchedule ? null : (row.fecha_inicio ?? null)
+        const durValid = Number.isFinite(durInt) && durInt > 0
+        const soloDuracion = !!row.duracionOnly || (
+          !row.clearSchedule && (row.fecha_inicio == null || String(row.fecha_inicio).trim() === '') && durValid
+        )
+        const clearing = !!row.clearSchedule || (
+          !soloDuracion && (row.fecha_inicio == null || String(row.fecha_inicio).trim() === '') && !durValid
+        )
+        const fiRaw = clearing || soloDuracion ? null : (row.fecha_inicio ?? null)
         const fiStr = fiRaw != null ? String(fiRaw).trim() : ''
         return {
           capitulo: row.capitulo || def.capitulo,
           item: row.item || def.item,
           segmento: 1,
           fecha_inicio: fiStr ? fiStr.slice(0, 10) : null,
-          duracion_dias_habiles: Number.isFinite(durInt) && durInt > 0 ? durInt : null,
+          duracion_dias_habiles: clearing ? null : (durValid ? durInt : null),
+          clear_schedule: clearing,
+          duracion_only: soloDuracion,
           agrupador_id: def.agrupador_id,
           codigo_wbs: def.codigo_wbs || def.item,
           tipo_distribucion: 'lineal',
-          override_manual: row.override_manual !== false,
+          override_manual: false,
         }
       })
       try {
@@ -2295,6 +2319,7 @@ export default function ModuloProgramacionObra({
           actividades,
           pkIds: modalTramoContext?.pkIds,
           allowOverwrite: !!options.allowOverwrite,
+          preserveCpmSync: !!options.preserveCpmSync,
         })
         if (batchData?.ms > 5000) {
           showToast(`Guardado tramo en ${Math.round(batchData.ms)} ms`, 'info')
@@ -2315,6 +2340,8 @@ export default function ModuloProgramacionObra({
           saved: actividades.length,
           errors: 0,
           pkIds: batchData?.pk_ids,
+          cpmDirty: batchData?.cpm_dirty,
+          batchMs: batchData?.ms,
         }
       } catch (e) {
         console.error('[ProgObra] handleGuardarBatchTramo:', e)
@@ -2323,7 +2350,7 @@ export default function ModuloProgramacionObra({
       }
     },
     [
-      puedeEditar,
+      puedeEscribir,
       cid,
       token,
       versionIdForWork,
@@ -2338,6 +2365,22 @@ export default function ModuloProgramacionObra({
   const handleVersionHorizonteSaved = useCallback(async () => {
     await refreshMapaYVersiones()
   }, [refreshMapaYVersiones])
+
+  const handleTramoScheduleCleared = useCallback(() => {
+    setTramoEstructuraData((prev) => {
+      if (!prev?.capitulos) return prev
+      return {
+        ...prev,
+        capitulos: prev.capitulos.map((c) => ({
+          ...c,
+          agrupadores: (c.agrupadores || []).map((ag) => ({
+            ...ag,
+            programacion: null,
+          })),
+        })),
+      }
+    })
+  }, [])
 
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
@@ -2370,7 +2413,7 @@ export default function ModuloProgramacionObra({
   }, [presupuestoContratoAll, fetchActividadesByPk])
 
   const handleIniciarEnviarValidacion = async () => {
-    if (!puedeEditar || !cid || !workingVersionId) return
+    if (!puedeEscribir || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
       const selectedPpto = pptoVersiones.find((v) => String(v.id) === String(pptoVersionAnalisisId))
@@ -2422,10 +2465,7 @@ export default function ModuloProgramacionObra({
   }, [cid, versionIdForWork, token, hdrs, API, refreshMapaYVersiones, reloadActividadesPk])
 
   const handleSincronizarPresupuesto = useCallback(async () => {
-    if (!puedeEditar || !cid || !versionIdForWork) {
-      showToast('Seleccione una versión en borrador con permiso de edición.', 'err')
-      return
-    }
+    if (!puedeEscribir || !cid || !versionIdForWork) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionIdForWork}/sincronizar-estados-pk`, {
@@ -2443,10 +2483,10 @@ export default function ModuloProgramacionObra({
     } finally {
       setPanelBusy(false)
     }
-  }, [puedeEditar, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones])
+  }, [puedeEscribir, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones])
 
   const handleConfirmEnviarValidacion = async () => {
-    if (!puedeEditar || !cid || !workingVersionId) return
+    if (!puedeEscribir || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/versiones/${workingVersionId}/enviar-validacion`, {
@@ -2476,6 +2516,8 @@ export default function ModuloProgramacionObra({
         setShowCurvaS(true)
         return
       }
+
+      if (alcanceModal === 'export' && !puedeExportar) return
 
       const vid = versionIdForWork || workingVersionId || compareTargetForGlobal
       if (!cid || !token || !vid) {
@@ -2547,6 +2589,7 @@ export default function ModuloProgramacionObra({
       usuario?.contratista,
       usuario?.interventoria,
       showToast,
+      puedeExportar,
     ],
   )
 
@@ -2560,7 +2603,8 @@ export default function ModuloProgramacionObra({
     onRibbonChange({
       items: buildProgObraRibbonItems({
         esBorradorEditable,
-        puedeEditar,
+        puedeEditar: puedeEscribir,
+        puedeExportar,
         workingVersionId,
         versionIdForWork,
         versionBaselineId,
@@ -2577,14 +2621,15 @@ export default function ModuloProgramacionObra({
     onRibbonChange,
     panelBusy,
     esBorradorEditable,
-    puedeEditar,
+    puedeEscribir,
+    puedeExportar,
     workingVersionId,
     versionIdForWork,
     versionBaselineId,
   ])
 
   const handleGuardarCapitulo = async (capitulo, fechaIso, durInt) => {
-    if (!puedeEditar || !cid || !workingVersionId || !pkForData) return
+    if (!puedeEscribir || !cid || !workingVersionId || !pkForData) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/capitulo`, {
@@ -2613,7 +2658,7 @@ export default function ModuloProgramacionObra({
   }
 
   const handleHerencia = async (capitulo) => {
-    if (!puedeEditar || !cid || !workingVersionId || !pkForData) return
+    if (!puedeEscribir || !cid || !workingVersionId || !pkForData) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/herencia`, {
@@ -2638,7 +2683,7 @@ export default function ModuloProgramacionObra({
 
   const handleGuardarItem = async (itemDef, form, rowKey, options = {}) => {
     const { deferReload = false } = options
-    if (!puedeEditar || !cid || !versionIdForWork || !pkForData) return false
+    if (!puedeEscribir || !cid || !versionIdForWork || !pkForData) return false
     const cant = Number(itemDef.cant_total)
     if (!(cant > 0)) {
       showToast('Este ítem no tiene cantidad en presupuesto; no se programa.', 'err')
@@ -2950,6 +2995,7 @@ export default function ModuloProgramacionObra({
       )}
 
       <ProgObraProgramacionModal
+        key={modalSessionId}
         open={progModalOpen && (modalMode === 'tramo' ? !!modalTramoContext : modalPkTabs.length > 0)}
         onClose={closeProgModal}
         t={t}
@@ -2993,6 +3039,7 @@ export default function ModuloProgramacionObra({
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
         onScheduleRefresh={scheduleMapRefresh}
+        onTramoScheduleCleared={handleTramoScheduleCleared}
         onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}
         showToast={showToast}
         allPkIds={modalMode === 'tramo' ? (modalTramoContext?.pkIds || []) : pkIdsProgramables}
@@ -3369,7 +3416,7 @@ export default function ModuloProgramacionObra({
             Programación de obra
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            {esBorradorEditable && puedeEditar && workingVersionId && (
+            {esBorradorEditable && puedeEscribir && workingVersionId && (
               <ProgPanelIconBtn
                 t={t}
                 title="Enviar a validación"
@@ -3397,7 +3444,7 @@ export default function ModuloProgramacionObra({
           versiones={versiones}
           versionBaselineId={versionBaselineId}
           t={t}
-          puedeEditar={puedeEditar}
+          puedeEditar={puedeEscribir}
           panelBusy={panelBusy}
           onConsultar={handleHistorialConsultar}
           onContinuar={handleHistorialContinuar}
@@ -3468,15 +3515,16 @@ export default function ModuloProgramacionObra({
               Borrador en progreso —{' '}
               <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}% programado</strong>
             </span>
+            {puedeEscribir && (
             <ProgPanelActionBtn
               t={t}
               label="🔄 Sincronizar con presupuesto"
               variant="primary"
               busy={panelBusy}
-              disabled={!(puedeEditar && workingVersionId)}
-              disabledTitle="Requiere permiso de edición y versión en borrador"
+              disabled={!workingVersionId}
               onClick={() => void handleSincronizarPresupuesto()}
             />
+            )}
           </div>
         ) : (
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4, padding: '0.25rem 0' }}>
@@ -3598,7 +3646,7 @@ export default function ModuloProgramacionObra({
                 API={API}
                 t={t}
                 versionId={workingVersionId}
-                editable={!!(esBorradorEditable && puedeEditar)}
+                editable={!!(esBorradorEditable && puedeEscribir)}
                 showToast={showToast}
               />
             </div>

@@ -2,6 +2,7 @@
 export function buildProgObraRibbonItems({
   esBorradorEditable,
   puedeEditar,
+  puedeExportar = false,
   workingVersionId,
   versionIdForWork,
   versionBaselineId,
@@ -11,7 +12,7 @@ export function buildProgObraRibbonItems({
   onExport,
   onEliminar,
 }) {
-  return [
+  const items = [
     {
       key: 'auto',
       icon: '⚡',
@@ -48,4 +49,9 @@ export function buildProgObraRibbonItems({
       onClick: onEliminar,
     },
   ]
+  return items.filter((it) => {
+    if (it.key === 'export') return puedeExportar
+    if (it.key === 'auto' || it.key === 'delete') return puedeEditar
+    return true
+  })
 }

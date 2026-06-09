@@ -126,6 +126,8 @@ function DepPanel({ title, t, children }) {
   )
 }
 
+const DEP_SAVED_COLOR = '#0d9488'
+
 function DepRow({
   dep,
   estructuraMap,
@@ -133,12 +135,14 @@ function DepRow({
   editable,
   deletingId,
   updatingDepId,
+  savedDepId,
   onEliminar,
   onUpdateDep,
 }) {
   const norm = normalizeDep(dep)
   const [lagLocal, setLagLocal] = useState(String(Number(dep.lag_dias) || 0))
   const busy = deletingId === dep.id || updatingDepId === dep.id
+  const justSaved = savedDepId === dep.id
 
   useEffect(() => {
     setLagLocal(String(Number(dep.lag_dias) || 0))
@@ -158,7 +162,14 @@ function DepRow({
   }
 
   return (
-    <tr style={{ borderBottom: `1px solid ${t.border}22`, opacity: busy ? 0.65 : 1 }}>
+    <tr
+      style={{
+        borderBottom: `1px solid ${t.border}22`,
+        opacity: busy ? 0.65 : 1,
+        background: justSaved ? 'rgba(13, 148, 136, 0.12)' : undefined,
+        transition: 'background 0.25s ease',
+      }}
+    >
       <td
         style={{
           padding: '6px 8px',
@@ -171,6 +182,19 @@ function DepRow({
         title={formatDepTooltip(dep, estructuraMap)}
       >
         {formatDepCellText(dep, estructuraMap)}
+        {justSaved && (
+          <span
+            style={{
+              marginLeft: 8,
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 700,
+              color: DEP_SAVED_COLOR,
+            }}
+            title="Cambio guardado"
+          >
+            ✓ Guardada
+          </span>
+        )}
       </td>
       <td style={{ padding: '6px 8px', width: 72 }}>
         {editable ? (
@@ -271,7 +295,22 @@ export default function ProgObraDependencias({
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
   const [updatingDepId, setUpdatingDepId] = useState(null)
+  const [savedDepId, setSavedDepId] = useState(null)
+  const savedDepTimerRef = useRef(null)
   const [ayudaOpen, setAyudaOpen] = useState(false)
+
+  const markDepSaved = useCallback((depId) => {
+    if (savedDepTimerRef.current) clearTimeout(savedDepTimerRef.current)
+    setSavedDepId(depId)
+    savedDepTimerRef.current = setTimeout(() => {
+      setSavedDepId(null)
+      savedDepTimerRef.current = null
+    }, 2500)
+  }, [])
+
+  useEffect(() => () => {
+    if (savedDepTimerRef.current) clearTimeout(savedDepTimerRef.current)
+  }, [])
 
   const cpmDirty = !!cpmDirtyProp
   const setCpmDirty = onCpmDirtyChange ?? (() => {})
@@ -410,7 +449,8 @@ export default function ProgObraDependencias({
       })
       setDeps((prev) => [...prev, normalizeDep(data)])
       setCpmDirty(true)
-      showToast?.('Dependencia por capitulo agregada.', 'ok')
+      markDepSaved(data.id)
+      showToast?.('Dependencia guardada y persistida.', 'ok')
     } catch (e) {
       setFormError(e.message)
     } finally {
@@ -449,7 +489,8 @@ export default function ProgObraDependencias({
       })
       setDeps((prev) => [...prev, normalizeDep(data)])
       setCpmDirty(true)
-      showToast?.('Dependencia por agrupador agregada.', 'ok')
+      markDepSaved(data.id)
+      showToast?.('Dependencia guardada y persistida.', 'ok')
     } catch (e) {
       setFormError(e.message)
     } finally {
@@ -491,6 +532,8 @@ export default function ProgObraDependencias({
       }
       setDeps((prev) => prev.map((d) => (d.id === depId ? normalizeDep({ ...d, ...data }) : d)))
       setCpmDirty(true)
+      markDepSaved(depId)
+      showToast?.('Dependencia actualizada y persistida.', 'ok')
       return true
     } catch {
       showToast?.('Error de red al actualizar dependencia.', 'err')
@@ -579,10 +622,12 @@ export default function ProgObraDependencias({
             <span style={{ fontSize: 'var(--cc-caption)', background: '#FEF3C7', color: '#92400E', borderRadius: 4, padding: '2px 6px' }}>CPM desactualizado</span>
           )}
         </div>
+        {editable && (
         <button type="button" disabled={cpmCalculando || !versionId} onClick={handleCalcularCpm}
           style={{ padding: '6px 14px', fontSize: 'var(--cc-caption)', fontWeight: 600, borderRadius: 6, border: `1px solid ${t.primary}`, background: t.bgCard, color: t.primary, cursor: 'pointer' }}>
           {cpmCalculando ? 'Calculando…' : 'Calcular CPM'}
         </button>
+        )}
       </div>
 
       <div>
@@ -614,6 +659,7 @@ export default function ProgObraDependencias({
                     editable={editable}
                     deletingId={deletingId}
                     updatingDepId={updatingDepId}
+                    savedDepId={savedDepId}
                     onEliminar={handleEliminar}
                     onUpdateDep={handleUpdateDep}
                   />
