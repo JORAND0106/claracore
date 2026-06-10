@@ -177,3 +177,22 @@ def test_expand_batch_genera_fila_por_pk_con_cantidad_propia():
     assert c368["cantidad_programada"] == 250
     assert c367["fecha_inicio"] == "2026-03-01"
     assert c368["duracion_dias_habiles"] == 12
+
+
+def test_aggregate_resuelve_item_con_punto_final_listado_vs_presupuesto():
+    """Listado '3.1' y presupuesto '3.1.' deben caer en el mismo agrupador WBS."""
+    cap = "2. ESTRUCTURA DE PAVIMENTO Y ADOQUINES"
+    rows = [
+        {"pk_id": "120368", "capitulo": cap, "item": "2.8.", "cant_total": 10, "costo_directo": 100, "und": "M3", "vlr_unitario": 10},
+        {"pk_id": "120368", "capitulo": cap, "item": "3.1.", "cant_total": 20, "costo_directo": 200, "und": "M3", "vlr_unitario": 10},
+    ]
+    ag_by_item = {
+        (cap, "2.8."): 17,
+        (cap, "3.1"): 17,
+    }
+    meta = {17: {"id": 17, "nombre": "CUNETAS", "codigo_wbs": "2.D", "orden": 3}}
+    cap_map = _aggregate_ppto_rows_tramo(rows, ag_by_item, meta)
+    assert 17 in cap_map[cap]
+    items = cap_map[cap][17]["items"]
+    assert set(items.keys()) == {"2.8.", "3.1."}
+    assert float(items["3.1."]["cant_total"]) == 20

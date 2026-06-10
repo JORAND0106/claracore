@@ -15,10 +15,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from prog_obra_compare import fetch_compare_nodes, supplement_nodes_missing_presupuesto
 from prog_obra_costos_presupuesto import (
     apply_ppto_cost_overlay,
+    build_brecha_presupuesto_programacion,
     build_cost_overlay_maps,
     fetch_ppto_baseline_version_id,
     fetch_ppto_borrador_version_id,
     ppto_scope_direct_total,
+    resolve_ppto_vigente_version_id,
     _fetch_agrupadores_meta,
 )
 from prog_obra_pk_filter import filter_nodes_by_pk, parse_pk_ids_param, parse_tramos_param
@@ -109,10 +111,11 @@ def _nodes_with_ppto_costs(
         tramos=tramos,
         pk_ids=pk_ids,
     )
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
+    nodes = apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
     if schedule_mode == "programada":
-        ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
         nodes = supplement_nodes_missing_presupuesto(nodes, ag_costs, ag_meta)
-    return apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
+    return nodes
 
 
 def _aggregate_version_monthly(
@@ -318,7 +321,9 @@ def build_curva_s(
     if not tid and not bid:
         raise ValueError("No hay versión de programación para la curva S")
 
-    ppto_vigente_id = _resolve_version_ppto_id(sb, contrato_id, version_ppto_id)
+    ppto_vigente_id = resolve_ppto_vigente_version_id(
+        sb, contrato_id, version_ppto_id, force_vigente=True,
+    )
     ppto_baseline_id = fetch_ppto_baseline_version_id(sb, contrato_id) or ppto_vigente_id
 
     if bid:
@@ -377,7 +382,27 @@ def build_curva_s(
 
     prog_a_fecha = acc_t if hoy_key in base_m or hoy_key in tgt_m else acc_t
     ej_a_fecha = acc_e
-    presupuesto_total = max(base_total, tgt_total)
+    ppto_contrato_total = (
+        ppto_scope_direct_total(
+            sb, contrato_id, ppto_vigente_id, tramos=tramos_list, pk_ids=pk_set,
+        )
+        if ppto_vigente_id
+        else 0.0
+    )
+    brecha = (
+        build_brecha_presupuesto_programacion(
+            sb,
+            contrato_id,
+            str(tid),
+            ppto_vigente_id,
+            pk_ids=pk_set,
+            tramos=tramos_list,
+            schedule_mode="cpm",
+        )
+        if tid and ppto_vigente_id
+        else None
+    )
+    presupuesto_total = max(ppto_contrato_total, base_total, tgt_total)
     pct_prog = (prog_a_fecha / presupuesto_total * 100) if presupuesto_total > 0 else 0.0
     pct_ej = (ej_a_fecha / presupuesto_total * 100) if presupuesto_total > 0 else 0.0
     desv = ej_a_fecha - prog_a_fecha
@@ -407,6 +432,9 @@ def build_curva_s(
         "version_ppto_baseline_id": ppto_baseline_id,
         "indicadores": {
             "presupuesto_total": round(presupuesto_total, 2),
+            "presupuesto_contrato": round(ppto_contrato_total, 2),
+            "programado_curva_total": round(tgt_total, 2),
+            "brecha_presupuesto": round(float((brecha or {}).get("diferencia") or 0), 2),
             "programado_a_fecha": round(prog_a_fecha, 2),
             "programado_pct": round(pct_prog, 1),
             "ejecutado_a_fecha": round(ej_a_fecha, 2),
@@ -414,6 +442,7 @@ def build_curva_s(
             "desviacion_valor": round(desv, 2),
             "desviacion_pct": round(desv_pct, 1),
         },
+        "brecha_presupuesto": brecha,
         "meses": rows,
         "detalle_pk": {
             "baseline": detalle_baseline,
@@ -868,15 +897,41 @@ def _build_curva_s_chart_svg(meses: List[dict], width: int = 920, height: int = 
 
 
 def _svg_to_png_b64(svg: str) -> str:
-    """Rasteriza SVG a PNG base64 para incrustar en PDF (xhtml2pdf no dibuja SVG inline)."""
+    """Rasteriza SVG a PNG base64 (Excel). Prueba varios backends de renderPM."""
     from reportlab.graphics import renderPM
     from svglib.svglib import svg2rlg
 
     drawing = svg2rlg(io.BytesIO(svg.encode("utf-8")))
     if drawing is None:
         raise ValueError("No se pudo interpretar el SVG del gráfico")
-    png = renderPM.drawToString(drawing, fmt="PNG", dpi=CHART_RENDER_DPI)
-    return base64.b64encode(png).decode("ascii")
+
+    last_err: Optional[Exception] = None
+    for backend in ("_renderPM", "rlPyCairo", None):
+        try:
+            kwargs: dict = {"fmt": "PNG", "dpi": CHART_RENDER_DPI}
+            if backend is not None:
+                kwargs["backend"] = backend
+            png = renderPM.drawToString(drawing, **kwargs)
+            return base64.b64encode(png).decode("ascii")
+        except Exception as exc:
+            last_err = exc
+    raise ValueError(
+        "No se pudo rasterizar el gráfico para Excel. "
+        "Instale soporte renderPM (pycairo / rlPyCairo o _rl_renderPM)."
+    ) from last_err
+
+
+def _svg_to_pdf_img_html(svg: str, *, width: int, height: int) -> str:
+    """Incrusta SVG en PDF vía data-URI (xhtml2pdf; evita renderPM/Cairo)."""
+    c = PDF_CLR
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<div style="width:100%;max-width:{width}px;height:{height}px;margin:4px 0 8px;overflow:hidden;'
+        f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">'
+        f'<img src="data:image/svg+xml;base64,{b64}" width="100%" height="{height}" '
+        f'style="display:block;max-width:100%;" />'
+        f"</div>"
+    )
 
 
 def _build_curva_s_chart_block(meses: List[dict]) -> str:
@@ -892,14 +947,7 @@ def _build_curva_s_chart_block(meses: List[dict]) -> str:
             "</div>"
         )
     svg = _build_curva_s_chart_svg(meses, width=width, height=height)
-    b64 = _svg_to_png_b64(svg)
-    return (
-        f'<div style="width:100%;max-width:{width}px;height:{height}px;margin:4px 0 8px;overflow:hidden;'
-        f'background:{c["bg_page"]};border:1px solid {c["border_light"]};">'
-        f'<img src="data:image/png;base64,{b64}" width="100%" height="{height}" '
-        f'style="display:block;max-width:100%;" />'
-        f"</div>"
-    )
+    return _svg_to_pdf_img_html(svg, width=width, height=height)
 
 
 def _flatten_cronograma_rows(tree: List[dict]) -> List[dict]:

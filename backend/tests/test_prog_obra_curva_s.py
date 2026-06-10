@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from openpyxl import load_workbook
 
 from prog_obra_curva_s import (
+    _build_curva_s_chart_block,
     _nodes_with_ppto_costs,
     _xl_curva_s_sumif_detalle,
     _xl_detalle_pk_month_formula,
@@ -48,26 +49,40 @@ def test_nodes_with_ppto_costs_no_strict_zero(mock_fetch, mock_maps, mock_apply)
     assert len(mock_apply.call_args.args) == 3
 
 
+@patch("prog_obra_curva_s.build_brecha_presupuesto_programacion")
 @patch("prog_obra_curva_s._fetch_ejecutado_mensual")
+@patch("prog_obra_curva_s._apply_ppto_scope_total_scale")
 @patch("prog_obra_curva_s._aggregate_version_monthly")
-@patch("prog_obra_curva_s._resolve_version_ppto_id")
+@patch("prog_obra_curva_s.resolve_ppto_vigente_version_id")
 @patch("prog_obra_curva_s.fetch_baseline_version_id")
 @patch("prog_obra_curva_s.fetch_vigente_meta")
+@patch("prog_obra_curva_s.ppto_scope_direct_total")
 def test_build_curva_s_nonzero_totals(
-    mock_vigente, mock_baseline, mock_ppto, mock_agg, mock_ej
+    mock_scope, mock_vigente, mock_baseline, mock_ppto, mock_agg, mock_scale, mock_ej, mock_brecha
 ):
     mock_vigente.return_value = ("target-vid", {})
     mock_baseline.return_value = "baseline-vid"
-    mock_ppto.return_value = "ppto-vid"
+    mock_ppto.return_value = "ppto-vigente-id"
     mock_agg.return_value = ({"2026-06": 250_000.0}, 250_000.0)
+    mock_scale.side_effect = lambda _sb, _c, m, t, *_a, **_k: (m, t)
     mock_ej.return_value = ({"2026-06": 50_000.0}, 50_000.0)
+    mock_scope.return_value = 250_000.0
+    mock_brecha.return_value = {
+        "presupuesto_total": 250_000.0,
+        "programado_total": 250_000.0,
+        "diferencia": 0.0,
+        "tiene_brecha": False,
+    }
 
-    data = build_curva_s(MagicMock(), 1)
+    data = build_curva_s(MagicMock(), 1, version_ppto_id="ppto-sellada")
 
     assert data["indicadores"]["presupuesto_total"] == 250_000.0
     assert data["meses"][0]["baseline_mes"] == 250_000.0
     assert data["meses"][0]["vigente_mes"] == 250_000.0
-    assert data["version_ppto_id"] == "ppto-vid"
+    assert data["version_ppto_id"] == "ppto-vigente-id"
+    mock_ppto.assert_called_once()
+    assert mock_ppto.call_args.kwargs.get("force_vigente") is True
+    assert mock_scale.call_count == 1
 
 
 def test_xl_formula_helpers():
@@ -132,3 +147,6 @@ def test_build_curva_s_xlsx_uses_formulas():
     assert ws_det["F5"].value in (date(2026, 6, 1), datetime(2026, 6, 1))
     assert str(ws["A6"].value).startswith("=SUMIF")
     assert str(ws["B6"].value).startswith("=E")
+    assert "image/svg+xml" in _build_curva_s_chart_block(
+        [{"mes": "2026-06", "mes_label": "Jun", "baseline_acum": 1, "vigente_acum": 1, "ejecutado_acum": 0}]
+    )

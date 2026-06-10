@@ -103,6 +103,11 @@ export function defaultPptoVersionAnalisisId(versiones) {
   return vigente?.id ? String(vigente.id) : null
 }
 
+/** UUID de la versión de presupuesto vigente en edición (es_vigente). */
+export function pptoVigenteVersionId(versiones) {
+  return defaultPptoVersionAnalisisId(versiones)
+}
+
 export function pptoVigenteAprobada(versiones) {
   return (versiones || []).find((v) => v.es_vigente_aprobada) || null
 }

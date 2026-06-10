@@ -12,7 +12,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 
-from prog_obra_service import _listado_agrupador_por_item
+from prog_obra_service import (
+    _listado_agrupador_por_item,
+    _resolve_listado_agrupador_id,
+    _resolve_listado_descripcion,
+)
 
 PAGE = 1000
 
@@ -46,6 +50,60 @@ def fetch_ppto_borrador_version_id(sb, contrato_id: int) -> Optional[str]:
         or []
     )
     return str(rows[0]["id"]) if rows else None
+
+
+def resolve_ppto_vigente_version_id(
+    sb,
+    contrato_id: int,
+    version_ppto_id: Optional[str] = None,
+    *,
+    force_vigente: bool = False,
+) -> Optional[str]:
+    """
+    Resuelve la versión de presupuesto a usar en programación.
+    force_vigente=True: siempre la versión es_vigente (fuente del módulo Presupuesto).
+    """
+    vig = fetch_ppto_borrador_version_id(sb, contrato_id)
+    if force_vigente:
+        return vig or ((version_ppto_id or "").strip() or None)
+    vid = (version_ppto_id or "").strip()
+    if vid:
+        return vid
+    return vig
+
+
+def fetch_ppto_rows_programacion(
+    sb,
+    contrato_id: int,
+    *,
+    pk_id: Optional[str] = None,
+    pk_ids: Optional[Set[str]] = None,
+    tramo: Optional[str] = None,
+    tramos: Optional[List[str]] = None,
+    version_ppto_id: Optional[str] = None,
+    force_vigente: bool = True,
+) -> List[dict]:
+    """Ítems de presupuesto para WBS/sync: por defecto la versión vigente (es_vigente)."""
+    vid = resolve_ppto_vigente_version_id(
+        sb, contrato_id, version_ppto_id, force_vigente=force_vigente,
+    )
+    if vid:
+        pk_set = None
+        pk_one = (pk_id or "").strip()
+        if pk_one:
+            pk_set = {pk_one}
+        elif pk_ids:
+            pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
+        return fetch_ppto_items_version(
+            sb,
+            contrato_id,
+            vid,
+            pk_id=pk_one or None,
+            tramo=tramo,
+            tramos=tramos,
+            pk_ids=pk_set,
+        )
+    return []
 
 
 def fetch_ppto_baseline_version_id(sb, contrato_id: int) -> Optional[str]:
@@ -191,7 +249,7 @@ def _aggregate_items_por_agrupador(
         cant = float(r.get("cant_total") or 0)
         vlr = float(r.get("vlr_unitario") or 0)
         subtotal = _line_costo(r)
-        desc = (r.get("descripcion") or "").strip() or desc_lp.get((cap, it), "")
+        desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp, cap, it)
         item_obj = {
             "item": it,
             "descripcion": desc,
@@ -206,7 +264,7 @@ def _aggregate_items_por_agrupador(
         cur["cantidad"] = round(cur["cantidad"] + cant, 4)
         cur["subtotal"] = round(cur["subtotal"] + subtotal, 2)
 
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is None:
             sin_ag.append({**item_obj, "capitulo": cap})
             continue
@@ -242,16 +300,23 @@ def compute_costos_por_version(
     tramo: Optional[str] = None,
     tramos: Optional[List[str]] = None,
     solo_programados: bool = False,
+    *,
+    force_vigente: bool = True,
 ) -> dict:
-    """Costos por agrupador WBS según versión de presupuesto."""
-    vrow = assert_ppto_version_contrato(sb, contrato_id, version_ppto_id)
+    """Costos por agrupador WBS según versión de presupuesto (vigente por defecto)."""
+    vid = resolve_ppto_vigente_version_id(
+        sb, contrato_id, version_ppto_id, force_vigente=force_vigente,
+    )
+    if not vid:
+        raise HTTPException(status_code=404, detail="No hay versión de presupuesto vigente")
+    vrow = assert_ppto_version_contrato(sb, contrato_id, vid)
     scope_pks = pk_ids
     if (pk_id or "").strip() and not scope_pks:
         scope_pks = {(pk_id or "").strip()}
     ppto_rows = fetch_ppto_items_version(
         sb,
         contrato_id,
-        version_ppto_id,
+        vid,
         pk_id=pk_id if not scope_pks else None,
         tramo=tramo,
         tramos=tramos,
@@ -291,7 +356,7 @@ def compute_costos_por_version(
 
     return {
         "version_prog_id": str(version_prog_id),
-        "version_ppto_id": str(version_ppto_id),
+        "version_ppto_id": str(vid),
         "version_ppto_numero": int(vrow.get("numero_version") or 0),
         "version_ppto_etiqueta": (vrow.get("etiqueta") or "").strip(),
         "es_vigente_aprobada": bool(vrow.get("es_vigente_aprobada")),
@@ -504,3 +569,191 @@ def costo_total_programado_version(
         solo_programados=True,
     )
     return float(data.get("costo_directo_total") or 0)
+
+
+MAX_BRECHA_DETALLE = 100
+
+
+def build_brecha_presupuesto_programacion(
+    sb,
+    contrato_id: int,
+    version_prog_id: str,
+    version_ppto_id: str,
+    pk_ids: Optional[Set[str]] = None,
+    tramos: Optional[List[str]] = None,
+    *,
+    schedule_mode: str = "cpm",
+) -> dict:
+    """
+    Compara presupuesto vigente (alcance) vs lo que entra en Curva S / cronograma con fechas.
+    La diferencia suele deberse a agrupadores o ítems sin programación o sin fechas CPM.
+    """
+    from prog_obra_compare import _node_key, fetch_compare_nodes
+    from prog_obra_pk_filter import filter_nodes_by_pk
+
+    tramo = tramos[0] if tramos and len(tramos) == 1 else None
+    ppto_rows = fetch_ppto_items_version(
+        sb,
+        contrato_id,
+        version_ppto_id,
+        tramo=tramo,
+        tramos=tramos,
+        pk_ids=pk_ids,
+    )
+    presupuesto_total = _round_money(sum(_line_costo(r) for r in ppto_rows))
+
+    ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
+    ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp)
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
+
+    act_rows = (
+        sb.table("prog_actividades")
+        .select("pk_id,capitulo,item")
+        .eq("version_id", str(version_prog_id))
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    existing_acts: Set[Tuple[str, str, str]] = set()
+    for r in act_rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        it = str(r.get("item") or "").strip()
+        if not pk or not cap or not it:
+            continue
+        if pk_ids and pk not in pk_ids:
+            continue
+        existing_acts.add((pk, cap, it))
+
+    items_nuevos_sin_actividad: List[dict] = []
+    for (pk, cap, it), rec in sorted(item_map.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
+        if (pk, cap, it) in existing_acts:
+            continue
+        costo = _round_money(float(rec.get("subtotal") or 0))
+        if costo <= 0:
+            continue
+        ag_raw = _resolve_listado_agrupador_id(ag_by_item, cap, it)
+        wbs = ""
+        if ag_raw is not None:
+            meta = ag_meta.get(int(ag_raw)) or {}
+            wbs = str(meta.get("codigo_wbs") or "").strip()
+        items_nuevos_sin_actividad.append(
+            {
+                "pk_id": pk,
+                "capitulo": cap,
+                "item": it,
+                "descripcion": str(rec.get("descripcion") or _resolve_listado_descripcion(desc_lp, cap, it)).strip(),
+                "codigo_wbs": wbs,
+                "costo_directo": costo,
+                "motivo": "nuevo_en_presupuesto_sin_fila_programacion",
+            }
+        )
+
+    nodes = fetch_compare_nodes(sb, version_prog_id, contrato_id, schedule_mode=schedule_mode)
+    nodes = filter_nodes_by_pk(nodes, pk_ids)
+    ag_costs, item_costs = build_cost_overlay_maps(
+        sb,
+        contrato_id,
+        version_ppto_id,
+        tramo=tramo,
+        tramos=tramos,
+        pk_ids=pk_ids,
+    )
+    nodes = apply_ppto_cost_overlay(nodes, ag_costs, item_costs)
+
+    programado_total = 0.0
+    agrupadores_sin_programar: List[dict] = []
+    agrupadores_sin_fecha: List[dict] = []
+    items_sin_programar: List[dict] = []
+
+    for (pk, cap, ag_id), bucket in sorted(ag_buckets.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
+        costo = _round_money(float(bucket.get("costo_directo") or 0))
+        if costo <= 0:
+            continue
+        meta = ag_meta.get(int(ag_id)) or {}
+        wbs = str(meta.get("codigo_wbs") or f"AG{ag_id}").strip()
+        nombre = str(meta.get("nombre") or wbs).strip()
+        nk = _node_key(pk, cap, agrupador_id=int(ag_id))
+        n = nodes.get(nk)
+        entry = {
+            "pk_id": pk,
+            "capitulo": cap,
+            "agrupador_id": int(ag_id),
+            "codigo_wbs": wbs,
+            "nombre": nombre,
+            "costo_directo": costo,
+        }
+        if not n:
+            agrupadores_sin_programar.append(entry)
+            continue
+        fi, ff = n.get("fecha_inicio"), n.get("fecha_fin")
+        if not fi or not ff:
+            agrupadores_sin_fecha.append({**entry, "motivo": "sin_fecha_cpm" if schedule_mode == "cpm" else "sin_fecha"})
+            continue
+        programado_total += costo
+
+    for (pk, cap, it), rec in sorted(item_map.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
+        if _resolve_listado_agrupador_id(ag_by_item, cap, it) is not None:
+            continue
+        costo = _round_money(float(rec.get("subtotal") or 0))
+        if costo <= 0:
+            continue
+        nk = _node_key(pk, cap, item=it)
+        n = nodes.get(nk)
+        if n and n.get("fecha_inicio") and n.get("fecha_fin"):
+            programado_total += costo
+            continue
+        items_sin_programar.append(
+            {
+                "pk_id": pk,
+                "capitulo": cap,
+                "item": it,
+                "descripcion": str(rec.get("descripcion") or desc_lp.get((cap, it), "")).strip(),
+                "costo_directo": costo,
+                "motivo": "sin_fecha" if n else "sin_actividad",
+            }
+        )
+
+    programado_total = _round_money(programado_total)
+    diferencia = _round_money(presupuesto_total - programado_total)
+
+    def _cap(lst: List[dict]) -> Tuple[List[dict], bool]:
+        if len(lst) <= MAX_BRECHA_DETALLE:
+            return lst, False
+        return lst[:MAX_BRECHA_DETALLE], True
+
+    ag_sp, ag_sp_trunc = _cap(agrupadores_sin_programar)
+    ag_sf, ag_sf_trunc = _cap(agrupadores_sin_fecha)
+    it_sp, it_sp_trunc = _cap(items_sin_programar)
+    nuevos_sp, nuevos_trunc = _cap(items_nuevos_sin_actividad)
+
+    n_nuevos = len(items_nuevos_sin_actividad)
+    return {
+        "presupuesto_total": presupuesto_total,
+        "programado_total": programado_total,
+        "diferencia": diferencia,
+        "tiene_brecha": abs(diferencia) > 0.01,
+        "mensaje": (
+            (
+                f"Diferencia de ${_round_money(diferencia):,.0f} frente al presupuesto vigente. "
+                f"{n_nuevos} ítem(s) del presupuesto sin fila en programación; "
+                f"{len(agrupadores_sin_programar)} agrupador(es) sin actividad; "
+                f"{len(agrupadores_sin_fecha)} sin fecha CPM. "
+                "Programe ítems en el WBS; use «Sincronizar» solo para actualizar costos de lo ya programado."
+            )
+            if abs(diferencia) > 0.01
+            else "El presupuesto vigente del alcance coincide con lo programado en el cronograma."
+        ),
+        "agrupadores_sin_programar": ag_sp,
+        "agrupadores_sin_fecha": ag_sf,
+        "items_sin_agrupador_sin_programar": it_sp,
+        "items_nuevos_sin_actividad": nuevos_sp,
+        "resumen": {
+            "n_agrupadores_sin_programar": len(agrupadores_sin_programar),
+            "n_agrupadores_sin_fecha": len(agrupadores_sin_fecha),
+            "n_items_sin_programar": len(items_sin_programar),
+            "n_items_nuevos_sin_actividad": n_nuevos,
+            "detalle_truncado": ag_sp_trunc or ag_sf_trunc or it_sp_trunc or nuevos_trunc,
+        },
+    }

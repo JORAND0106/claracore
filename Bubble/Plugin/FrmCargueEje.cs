@@ -140,6 +140,15 @@ namespace SicoePresupuestoNET8
                     AbsInicioB = absInicioB
                 };
 
+                var doc = acApp.Application.DocumentManager.MdiActiveDocument;
+                if (doc != null)
+                {
+                    using var tr = doc.Database.TransactionManager.StartTransaction();
+                    if (tr.GetObject(ax.AxisA, acDb.OpenMode.ForRead) is acDb.Curve crvA)
+                        AxisMath.RefreshChainageDirection(ax, crvA);
+                    tr.Commit();
+                }
+
                 Axes.Add(ax);
                 RefreshGrid();
                 SaveData();
@@ -207,6 +216,9 @@ namespace SicoePresupuestoNET8
                                 ax.AxisB = ResolveObjectId(db, ax.HandleB);
                                 ax.Pk0A = new acGeo.Point3d(ax.XA, ax.YA, ax.ZA);
                                 ax.Pk0B = new acGeo.Point3d(ax.XB, ax.YB, ax.ZB);
+
+                                if (tr.GetObject(ax.AxisA, acDb.OpenMode.ForRead) is acDb.Curve crvA)
+                                    AxisMath.RefreshChainageDirection(ax, crvA);
                             }
                             tr.Commit();
                         }

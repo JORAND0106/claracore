@@ -642,7 +642,7 @@ def prog_list_validaciones(contrato_id: int, version_id: str, current_user=Depen
 
 @router.post("/{contrato_id}/versiones/{version_id}/sincronizar-estados-pk")
 def prog_sincronizar_estados_pk(contrato_id: int, version_id: str, current_user=Depends(get_current_user)):
-    """Recalcula prog_pk_estado y cantidades de actividades vs presupuesto actual."""
+    """Actualiza costos/cantidades de actividades existentes y recalcula prog_pk_estado (no inserta ítems)."""
     require_permiso_programacion_obra(current_user, "editar")
     _require_contract_access(current_user, contrato_id)
     v = assert_version_borrador(supabase, version_id)
@@ -1717,15 +1717,18 @@ def _curva_s_pdf_response(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    html = build_curva_s_pdf_html(
-        ctx["contrato"],
-        ctx["data"],
-        cronograma=ctx["cronograma"],
-        prog_meta=ctx["prog_meta"],
-        ppto_meta=ctx["ppto_meta"],
-        cpm_export=ctx.get("cpm_export"),
-        resumen_ejecutivo=ctx.get("resumen_ejecutivo"),
-    )
+    try:
+        html = build_curva_s_pdf_html(
+            ctx["contrato"],
+            ctx["data"],
+            cronograma=ctx["cronograma"],
+            prog_meta=ctx["prog_meta"],
+            ppto_meta=ctx["ppto_meta"],
+            cpm_export=ctx.get("cpm_export"),
+            resumen_ejecutivo=ctx.get("resumen_ejecutivo"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo generar PDF: {e}")
     try:
         from topografia_utils import to_pdf_bytes
         pdf = to_pdf_bytes(html)

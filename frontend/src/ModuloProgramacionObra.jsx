@@ -959,6 +959,12 @@ export default function ModuloProgramacionObra({
   const [tramoEstructuraData, setTramoEstructuraData] = useState(null)
   const [loadTramoEstructura, setLoadTramoEstructura] = useState(false)
   const [modalSessionId, setModalSessionId] = useState(0)
+  const [presupuestoDataKey, setPresupuestoDataKey] = useState(0)
+
+  const pptoVersionVigenteId = useMemo(
+    () => defaultPptoVersionAnalisisId(pptoVersiones),
+    [pptoVersiones],
+  )
 
   const handleCpmUpdated = useCallback((resultados) => {
     const ids = new Set()
@@ -1715,8 +1721,8 @@ export default function ModuloProgramacionObra({
 
   const tramoEstructuraFetchKey = useMemo(() => {
     if (modalMode !== 'tramo' || !tramoModalTramo || !versionIdForModal) return null
-    return `${versionIdForModal}\0${tramoModalTramo}\0${tramoModalPkIdsKey}\0${pptoVersionAnalisisId ?? ''}\0${modalSessionId}`
-  }, [modalMode, tramoModalTramo, tramoModalPkIdsKey, versionIdForModal, pptoVersionAnalisisId, modalSessionId])
+    return `${versionIdForModal}\0${tramoModalTramo}\0${tramoModalPkIdsKey}\0${pptoVersionVigenteId ?? ''}\0${modalSessionId}\0${presupuestoDataKey}`
+  }, [modalMode, tramoModalTramo, tramoModalPkIdsKey, versionIdForModal, pptoVersionVigenteId, modalSessionId, presupuestoDataKey])
 
   const modalTramoContextRef = useRef(modalTramoContext)
   modalTramoContextRef.current = modalTramoContext
@@ -1731,7 +1737,7 @@ export default function ModuloProgramacionObra({
         versionId: versionIdForModal,
         tramo: ctx.tramo,
         pkIds: ctx.pkIds,
-        versionPptoId: pptoVersionAnalisisId || undefined,
+        versionPptoId: pptoVersionVigenteId || undefined,
       })
       setTramoEstructuraData(d && typeof d === 'object' ? d : null)
     } catch {
@@ -1739,7 +1745,7 @@ export default function ModuloProgramacionObra({
     } finally {
       if (!silent) setLoadTramoEstructura(false)
     }
-  }, [cid, token, API, versionIdForModal, pptoVersionAnalisisId])
+  }, [cid, token, API, versionIdForModal, pptoVersionVigenteId])
 
   useEffect(() => {
     if (!cid || !token || !tramoEstructuraFetchKey) {
@@ -1754,7 +1760,7 @@ export default function ModuloProgramacionObra({
       versionId: versionIdForModal,
       tramo: ctx.tramo,
       pkIds: ctx.pkIds,
-      versionPptoId: pptoVersionAnalisisId || undefined,
+      versionPptoId: pptoVersionVigenteId || undefined,
     })
       .then((d) => {
         if (!cancel) setTramoEstructuraData(d && typeof d === 'object' ? d : null)
@@ -1768,7 +1774,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, API, tramoEstructuraFetchKey, versionIdForModal, pptoVersionAnalisisId])
+  }, [cid, token, API, tramoEstructuraFetchKey, versionIdForModal, pptoVersionVigenteId])
 
   useEffect(() => {
     if (!cid || !token || !pkForData) {
@@ -1806,7 +1812,7 @@ export default function ModuloProgramacionObra({
     setLoadEstructura(true)
     setProgEstructura({ capitulos: [] })
     const q = new URLSearchParams({ pk_id: pkForData })
-    if (pptoVersionAnalisisId) q.set('version_ppto_id', String(pptoVersionAnalisisId))
+    if (pptoVersionVigenteId) q.set('version_ppto_id', String(pptoVersionVigenteId))
     fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [] }))
       .then((d) => {
@@ -1821,7 +1827,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, pkForData, API, pptoVersionAnalisisId])
+  }, [cid, token, pkForData, API, pptoVersionVigenteId, presupuestoDataKey])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -1836,8 +1842,10 @@ export default function ModuloProgramacionObra({
         const list = Array.isArray(rows) ? rows : []
         setPptoVersiones(list)
         setPptoVersionAnalisisId((prev) => {
+          const vig = defaultPptoVersionAnalisisId(list)
+          if (vig && String(prev) !== String(vig)) return vig
           if (prev && list.some((v) => String(v.id) === String(prev))) return prev
-          return defaultPptoVersionAnalisisId(list)
+          return vig
         })
       })
       .catch(() => {
@@ -1852,7 +1860,7 @@ export default function ModuloProgramacionObra({
   }, [cid, token, API])
 
   useEffect(() => {
-    if (!cid || !token || !pptoVersionAnalisisId || !versionIdForData) {
+    if (!cid || !token || !pptoVersionVigenteId || !versionIdForData) {
       setPptoCostosData(null)
       return
     }
@@ -1860,7 +1868,7 @@ export default function ModuloProgramacionObra({
     setLoadPptoCostos(true)
     fetchCostosPorVersionPresupuesto(API, cid, token, {
       versionProgId: String(versionIdForData),
-      versionPptoId: String(pptoVersionAnalisisId),
+      versionPptoId: String(pptoVersionVigenteId),
       pkId: pkForData || undefined,
     })
       .then((d) => {
@@ -1875,7 +1883,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, API, pptoVersionAnalisisId, versionIdForData, pkForData])
+  }, [cid, token, API, pptoVersionVigenteId, versionIdForData, pkForData, presupuestoDataKey])
 
   useEffect(() => {
     if (!cid || !token || !pkForData || !versionIdForData) {
@@ -2164,7 +2172,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, API])
+  }, [cid, token, API, presupuestoDataKey])
 
   const fetchActividadesByPk = useCallback(
     async (pkid) => {
@@ -2462,6 +2470,7 @@ export default function ModuloProgramacionObra({
     if (!res.ok) throw new Error(await parseApiError(res))
     await reloadActividadesPk()
     await refreshMapaYVersiones()
+    setPresupuestoDataKey((k) => k + 1)
   }, [cid, versionIdForWork, token, hdrs, API, refreshMapaYVersiones, reloadActividadesPk])
 
   const handleSincronizarPresupuesto = useCallback(async () => {
@@ -2476,8 +2485,12 @@ export default function ModuloProgramacionObra({
       const data = await res.json()
       await reloadActividadesPk()
       await refreshMapaYVersiones()
+      setPresupuestoDataKey((k) => k + 1)
       const n = Number(data?.pks_actualizados ?? 0)
-      showToast(`${n} PK${n === 1 ? '' : 's'} actualizado${n === 1 ? '' : 's'}`)
+      const acts = Number(data?.actividades_actualizadas ?? 0)
+      showToast(
+        `${n} PK${n === 1 ? '' : 's'} sincronizado${n === 1 ? '' : 's'} · ${acts} actividad${acts === 1 ? '' : 'es'} actualizada${acts === 1 ? '' : 's'}`,
+      )
     } catch (e) {
       showToast(e?.message || 'No se pudo sincronizar con el presupuesto', 'err')
     } finally {
@@ -2530,7 +2543,7 @@ export default function ModuloProgramacionObra({
         if (format === 'xml') {
           const { blob, filename } = await downloadProjectXml(API, cid, token, {
             versionId: String(vid),
-            versionPptoId: pptoVersionAnalisisId || undefined,
+            versionPptoId: pptoVersionVigenteId || undefined,
             pkIds: pkParam,
           })
           const a = document.createElement('a')
@@ -2543,7 +2556,7 @@ export default function ModuloProgramacionObra({
           const blob = await downloadCurvaSPdf(API, cid, token, {
             baselineId: versionBaselineId,
             targetId: compareTargetForGlobal,
-            versionPptoId: pptoVersionAnalisisId || undefined,
+            versionPptoId: pptoVersionVigenteId || undefined,
             pkIds: pkParam,
             tramos: tramoParam,
           })
@@ -2557,7 +2570,7 @@ export default function ModuloProgramacionObra({
           const blob = await downloadCurvaSExcel(API, cid, token, {
             baselineId: versionBaselineId,
             targetId: compareTargetForGlobal,
-            versionPptoId: pptoVersionAnalisisId || undefined,
+            versionPptoId: pptoVersionVigenteId || undefined,
             pkIds: pkParam,
             tramos: tramoParam,
           })
@@ -2583,7 +2596,7 @@ export default function ModuloProgramacionObra({
       versionIdForWork,
       workingVersionId,
       compareTargetForGlobal,
-      pptoVersionAnalisisId,
+      pptoVersionVigenteId,
       versionBaselineId,
       usuario?.contrato_numero,
       usuario?.contratista,
@@ -3087,7 +3100,7 @@ export default function ModuloProgramacionObra({
         token={token}
         baselineId={versionBaselineId}
         targetId={compareTargetForGlobal}
-        versionPptoId={pptoVersionAnalisisId}
+        versionPptoId={pptoVersionVigenteId}
         versionProgId={compareTargetForGlobal || workingVersionId}
         pptoVersiones={pptoVersiones}
         contratoNumero={usuario?.contrato_numero || cid}
@@ -3516,6 +3529,10 @@ export default function ModuloProgramacionObra({
               <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}% programado</strong>
             </span>
             {puedeEscribir && (
+            <>
+            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
+              Actualiza cantidades y costos de actividades ya programadas según el presupuesto vigente. No crea ítems nuevos en el cronograma.
+            </div>
             <ProgPanelActionBtn
               t={t}
               label="🔄 Sincronizar con presupuesto"
@@ -3524,6 +3541,7 @@ export default function ModuloProgramacionObra({
               disabled={!workingVersionId}
               onClick={() => void handleSincronizarPresupuesto()}
             />
+            </>
             )}
           </div>
         ) : (

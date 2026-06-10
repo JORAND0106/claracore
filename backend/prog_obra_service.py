@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -69,19 +70,25 @@ def _niveles_prog_desde_contrato(sb, contrato_id: int) -> List[int]:
 def _ppto_items_por_pk(sb, contrato_id: int, pk_id: str) -> Tuple[int, List[Tuple[str, str, Decimal, str, Decimal]]]:
     """
     Devuelve (n_items_distintos, filas (capitulo, item, cant_total, und, vlr_unitario)) agregando
-    filas de presupuesto (PRESUPUESTO_TIPO_POLIGONO) por capitulo+item.
+    filas del presupuesto vigente (es_vigente) por capitulo+item.
     """
-    rows = (
-        sb.table("presupuesto")
-        .select("capitulo,item,cant_total,und,vlr_unitario")
-        .eq("contrato_id", contrato_id)
-        .eq("pk_id", pk_id)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+    rows = fetch_ppto_rows_programacion(
+        sb, contrato_id, pk_id=(pk_id or "").strip(), force_vigente=True,
     )
+    if not rows:
+        rows = (
+            sb.table("presupuesto")
+            .select("capitulo,item,cant_total,und,vlr_unitario")
+            .eq("contrato_id", contrato_id)
+            .eq("pk_id", pk_id)
+            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
     agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in rows:
         cap = (r.get("capitulo") or "").strip()
@@ -144,6 +151,31 @@ def fetch_tramos_contrato(sb, contrato_id: int) -> List[dict]:
     return group_tramos_from_presupuesto_rows(rows)
 
 
+def _norm_prog_item_key(item: Optional[str]) -> str:
+    """Alinea presupuesto.item ↔ listado_precios.item_numero (p. ej. '3.1.' → '3.1')."""
+    if item is None:
+        return ""
+    t = str(item).strip()
+    if not t:
+        return ""
+    return re.sub(r"\.+$", "", t)
+
+
+def _register_listado_item_key(
+    target: Dict[Tuple[str, str], Any],
+    cap: str,
+    it: str,
+    value: Any,
+) -> None:
+    """Registra clave exacta y normalizada para lookup cruzado presupuesto/listado."""
+    if not cap or not it:
+        return
+    target[(cap, it)] = value
+    it_norm = _norm_prog_item_key(it)
+    if it_norm and it_norm != it:
+        target.setdefault((cap, it_norm), value)
+
+
 def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, str], Optional[int]], Dict[Tuple[str, str], str]]:
     """Mapa (capitulo, item_numero) -> agrupador_id y descripcion desde listado_precios."""
     rows = (
@@ -161,10 +193,9 @@ def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, s
         it = (r.get("item_numero") or "").strip()
         if not cap or not it:
             continue
-        key = (cap, it)
-        ag_map[key] = r.get("agrupador_id")
+        _register_listado_item_key(ag_map, cap, it, r.get("agrupador_id"))
         if r.get("descripcion"):
-            desc_map[key] = str(r["descripcion"]).strip()
+            _register_listado_item_key(desc_map, cap, it, str(r["descripcion"]).strip())
     return ag_map, desc_map
 
 
@@ -176,25 +207,31 @@ def _fetch_ppto_rows_para_estructura(
     pk_ids: Optional[List[str]] = None,
     tramo: Optional[str] = None,
     version_ppto_id: Optional[str] = None,
+    force_vigente: bool = True,
 ) -> List[dict]:
-    """Ítems de presupuesto para armar WBS (vivo o versión seleccionada)."""
-    vid = (version_ppto_id or "").strip()
-    if vid:
-        from prog_obra_costos_presupuesto import fetch_ppto_items_version
+    """Ítems de presupuesto para armar WBS (versión vigente por defecto)."""
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
 
-        pk_set = None
-        pk_one = (pk_id or "").strip()
-        if pk_one:
-            pk_set = {pk_one}
-        elif pk_ids:
-            pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
-        return fetch_ppto_items_version(
-            sb,
-            contrato_id,
-            vid,
-            tramo=tramo,
-            pk_ids=pk_set,
-        )
+    pk_set = None
+    if pk_ids:
+        pk_set = {str(p).strip() for p in pk_ids if str(p).strip()}
+    pk_one = (pk_id or "").strip()
+    # Alcance por PK(s): el tramo ya está definido por pk_ids; filtrar además por columna tramo
+    # suele vaciar la estructura (ítems con pk del tramo pero tramo distinto o vacío en presupuesto).
+    tramo_filter = (tramo or "").strip() or None
+    if pk_one or pk_set:
+        tramo_filter = None
+    rows = fetch_ppto_rows_programacion(
+        sb,
+        contrato_id,
+        pk_id=pk_one or None,
+        pk_ids=pk_set,
+        tramo=tramo_filter,
+        version_ppto_id=version_ppto_id,
+        force_vigente=force_vigente,
+    )
+    if rows:
+        return rows
 
     q = (
         sb.table("presupuesto")
@@ -203,16 +240,14 @@ def _fetch_ppto_rows_para_estructura(
         .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
         .eq("dado_de_baja", False)
     )
-    pk_one = (pk_id or "").strip()
     if pk_one:
         q = q.eq("pk_id", pk_one)
     elif pk_ids:
         ids = [str(p).strip() for p in pk_ids if str(p).strip()]
         if ids:
             q = q.in_("pk_id", ids)
-    tramo_s = (tramo or "").strip()
-    if tramo_s:
-        q = q.eq("tramo", tramo_s)
+    elif tramo_filter:
+        q = q.eq("tramo", tramo_filter)
     return q.execute().data or []
 
 
@@ -278,10 +313,10 @@ def fetch_estructura_programacion_pk(
     for (cap, it), v in sorted(item_agg.items(), key=lambda x: (x[0][0], x[0][1])):
         if cap not in cap_map:
             cap_map[cap] = {"agrupadores": {}, "sin_agrupador": []}
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         item_obj = {
             "item": it,
-            "descripcion": v["descripcion"] or desc_lp.get((cap, it), ""),
+            "descripcion": v["descripcion"] or _resolve_listado_descripcion(desc_lp, cap, it),
             "cant_total": float(v["cant"]),
             "und": v["und"] or "?",
             "vlr_unitario": float(v["vlr"]),
@@ -344,7 +379,7 @@ def _aggregate_ppto_rows_tramo(
         pk = str(r.get("pk_id") or "").strip()
         if not cap or not it or not pk:
             continue
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is None or int(ag_id) not in agr_meta:
             continue
         ag_id_int = int(ag_id)
@@ -353,7 +388,7 @@ def _aggregate_ppto_rows_tramo(
         vlr = Decimal(str(r.get("vlr_unitario") or 0))
         line_cd = cd if cd > 0 else ct * vlr
         und = (r.get("und") or "?")[:20]
-        desc = (r.get("descripcion") or "").strip() or (desc_lp or {}).get((cap, it), "")
+        desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp or {}, cap, it)
         if cap not in cap_map:
             cap_map[cap] = {}
         ag_bucket = cap_map[cap]
@@ -403,6 +438,75 @@ def _capitulo_cpm_match_key(capitulo: str) -> str:
     if m:
         return m.group(1)
     return s.casefold()
+
+
+def _resolve_listado_agrupador_id(
+    ag_by_item: Dict[Tuple[str, str], Optional[int]],
+    capitulo: str,
+    item: str,
+) -> Optional[int]:
+    """
+    Resuelve agrupador WBS desde listado_precios para una fila de presupuesto.
+    Tolera diferencias de formato en item (3.1 vs 3.1.) y capítulo (prefijo numérico).
+    """
+    cap = (capitulo or "").strip()
+    it = (item or "").strip()
+    if not cap or not it:
+        return None
+    it_norm = _norm_prog_item_key(it)
+    for it_try in (it, it_norm):
+        if not it_try:
+            continue
+        ag = ag_by_item.get((cap, it_try))
+        if ag is not None:
+            return ag
+    cap_key = _capitulo_cpm_match_key(cap)
+    matches: List[Optional[int]] = []
+    for (c, i), ag in ag_by_item.items():
+        if ag is None:
+            continue
+        if _norm_prog_item_key(i) != it_norm:
+            continue
+        if _capitulo_cpm_match_key(c) == cap_key:
+            matches.append(ag)
+    uniq = set(matches)
+    if len(uniq) == 1:
+        return matches[0]
+    return None
+
+
+def _resolve_listado_descripcion(
+    desc_lp: Dict[Tuple[str, str], str],
+    capitulo: str,
+    item: str,
+) -> str:
+    cap = (capitulo or "").strip()
+    it = (item or "").strip()
+    if not cap or not it:
+        return ""
+    it_norm = _norm_prog_item_key(it)
+    for it_try in (it, it_norm):
+        desc = desc_lp.get((cap, it_try))
+        if desc:
+            return desc
+    cap_key = _capitulo_cpm_match_key(cap)
+    for (c, i), desc in desc_lp.items():
+        if not desc:
+            continue
+        if _norm_prog_item_key(i) == it_norm and _capitulo_cpm_match_key(c) == cap_key:
+            return desc
+    return ""
+
+
+def _ppto_item_in_listado_set(item: str, listado_items: set) -> bool:
+    """True si el ítem presupuesto coincide con algún item_numero del listado (± punto final)."""
+    it_n = _norm_prog_item_key(item)
+    if not it_n:
+        return False
+    for lp_it in listado_items:
+        if lp_it == item or _norm_prog_item_key(lp_it) == it_n:
+            return True
+    return False
 
 
 def _stored_duracion_agrupador(
@@ -714,7 +818,6 @@ def fetch_estructura_tramo(
         sb,
         contrato_id,
         pk_ids=pk_ids,
-        tramo=tramo_s,
         version_ppto_id=version_ppto_id,
     )
 
@@ -763,7 +866,7 @@ def _build_agrupador_pk_metrics(
         pk = str(r.get("pk_id") or "").strip()
         if not cap or not it or not pk:
             continue
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is None or int(ag_id) not in agr_meta:
             continue
         ag_id_int = int(ag_id)
@@ -1520,7 +1623,7 @@ def fetch_sin_agrupador_count_by_pk(sb, contrato_id: int) -> Dict[str, int]:
     for (pk, cap, it), cant in agg.items():
         if cant <= 0:
             continue
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         sin = False
         if ag_id is None:
             sin = True
@@ -1570,7 +1673,7 @@ def propagar_fechas_agrupador_a_hijos(
     hijo_ppto = [
         (p_cap, it, cant, und, vlr)
         for p_cap, it, cant, und, vlr in ppto_items
-        if p_cap == cap and ag_by_item.get((p_cap, it)) == agrupador_id
+        if p_cap == cap and _resolve_listado_agrupador_id(ag_by_item, p_cap, it) == agrupador_id
     ]
     if not hijo_ppto:
         ag_items_list = [
@@ -1593,7 +1696,7 @@ def propagar_fechas_agrupador_a_hijos(
         hijo_ppto = [
             (p_cap, it, cant, und, vlr)
             for p_cap, it, cant, und, vlr in ppto_items
-            if p_cap == cap and it in ag_items_set
+            if p_cap == cap and _ppto_item_in_listado_set(it, ag_items_set)
         ]
         if not hijo_ppto:
             return 0
@@ -1842,7 +1945,7 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
         if (cap, it) in direct_with_fecha:
             seen.add((cap, it))
             continue
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is not None:
             try:
                 if (cap, int(ag_id)) in agrupadores_con_fecha:
@@ -2037,7 +2140,7 @@ def _count_items_sin_agrupador(sb, contrato_id: int, pk_id: str) -> int:
     agr_validos = _agrupadores_validos_por_contrato(sb, contrato_id)
     n = 0
     for cap, it, _, _, _ in ppto_items:
-        ag_id = ag_by_item.get((cap, it))
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is None:
             n += 1
             continue
@@ -2062,21 +2165,27 @@ def _compute_estado_pk(items_total: int, items_con_fecha: int, items_sin_agrupad
 
 
 def _items_total_por_pks(sb, contrato_id: int, pk_ids: List[str]) -> Dict[str, int]:
-    """Cuenta ítems distintos de presupuesto por PK en una sola consulta."""
+    """Cuenta ítems distintos del presupuesto vigente por PK."""
     pks = [str(p).strip() for p in (pk_ids or []) if str(p).strip()]
     if not pks:
         return {}
-    rows = (
-        sb.table("presupuesto")
-        .select("pk_id,capitulo,item")
-        .eq("contrato_id", contrato_id)
-        .in_("pk_id", pks)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+    rows = fetch_ppto_rows_programacion(
+        sb, contrato_id, pk_ids=set(pks), force_vigente=True,
     )
+    if not rows:
+        rows = (
+            sb.table("presupuesto")
+            .select("pk_id,capitulo,item")
+            .eq("contrato_id", contrato_id)
+            .in_("pk_id", pks)
+            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
     seen: Dict[str, set] = {}
     counts: Dict[str, int] = {}
     for r in rows:
@@ -2123,21 +2232,27 @@ def _reset_prog_pk_estado_tramo(
 
 
 def _ppto_keys_por_pks(sb, contrato_id: int, pk_ids: List[str]) -> Dict[str, set]:
-    """Claves (capitulo, item) de presupuesto por PK en una consulta."""
+    """Claves (capitulo, item) del presupuesto vigente por PK."""
     pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
     if not pks:
         return {}
-    rows = (
-        sb.table("presupuesto")
-        .select("pk_id,capitulo,item")
-        .eq("contrato_id", contrato_id)
-        .in_("pk_id", pks)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+    rows = fetch_ppto_rows_programacion(
+        sb, contrato_id, pk_ids=set(pks), force_vigente=True,
     )
+    if not rows:
+        rows = (
+            sb.table("presupuesto")
+            .select("pk_id,capitulo,item")
+            .eq("contrato_id", contrato_id)
+            .in_("pk_id", pks)
+            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
     out: Dict[str, set] = {}
     for r in rows:
         pk = str(r.get("pk_id") or "").strip()
@@ -2202,7 +2317,7 @@ def _count_items_con_fecha_bulk(
             if (cap, it) in direct_by_pk.get(pk, set()):
                 seen.add((cap, it))
                 continue
-            ag_id = ag_by_item.get((cap, it))
+            ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
             if ag_id is not None:
                 try:
                     if (cap, int(ag_id)) in agr_fecha_by_pk.get(pk, set()):
@@ -2295,54 +2410,101 @@ def _all_pks_contrato(sb, contrato_id: int) -> List[str]:
     return sorted(pks)
 
 
-def _sync_actividades_pk_desde_presupuesto(
-    sb, version_id: str, contrato_id: int, pk_id: str
-) -> int:
-    """Actualiza cantidad/unidad/costo en actividades existentes según presupuesto vivo del PK."""
-    _, items = _ppto_items_por_pk(sb, contrato_id, pk_id)
-    ppto_map: Dict[Tuple[str, str], Tuple[Decimal, str, Decimal]] = {
-        (cap, it): (cant, und, vlr) for cap, it, cant, und, vlr in items
-    }
-    acts = (
-        sb.table("prog_actividades")
-        .select("id,capitulo,item,segmento,cantidad_programada,agrupador_id")
-        .eq("version_id", version_id)
-        .eq("pk_id", pk_id.strip())
-        .execute()
-        .data
-        or []
-    )
-    by_item: Dict[Tuple[str, str], List[dict]] = {}
-    for a in acts:
-        if a.get("agrupador_id") is not None:
-            continue
-        cap = (a.get("capitulo") or "").strip()
-        it = (a.get("item") or "").strip()
-        if not cap or not it:
+_SYNC_PAGE = 1000
+_SYNC_PK_ESTADO_CHUNK = 150
+
+
+def _fetch_actividades_version_all(sb, version_id: str, contrato_id: int) -> List[dict]:
+    """Todas las actividades de una versión (paginado)."""
+    out: List[dict] = []
+    off = 0
+    cols = "id,pk_id,capitulo,item,segmento,cantidad_programada"
+    while True:
+        batch = (
+            sb.table("prog_actividades")
+            .select(cols)
+            .eq("version_id", version_id)
+            .eq("contrato_id", int(contrato_id))
+            .range(off, off + _SYNC_PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        out.extend(batch)
+        if len(batch) < _SYNC_PAGE:
+            break
+        off += _SYNC_PAGE
+    return out
+
+
+def _build_ppto_item_map_contrato(
+    sb, contrato_id: int,
+) -> Dict[str, Dict[Tuple[str, str], Tuple[Decimal, str, Decimal]]]:
+    """Mapa pk → (capitulo, item) → (cant_total, und, vlr) desde presupuesto vigente."""
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+    rows = fetch_ppto_rows_programacion(sb, contrato_id, force_vigente=True)
+    agg: Dict[str, Dict[Tuple[str, str], Dict[str, Any]]] = defaultdict(dict)
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not pk or not cap or not it:
             continue
         key = (cap, it)
-        by_item.setdefault(key, []).append(a)
+        ct = Decimal(str(r.get("cant_total") or 0))
+        cur = agg[pk].get(key)
+        if cur is None:
+            agg[pk][key] = {
+                "cant": ct,
+                "und": (r.get("und") or "?")[:20],
+                "vlr": Decimal(str(r.get("vlr_unitario") or 0)),
+            }
+        else:
+            cur["cant"] += ct
+    out: Dict[str, Dict[Tuple[str, str], Tuple[Decimal, str, Decimal]]] = {}
+    for pk, items in agg.items():
+        out[pk] = {
+            k: (v["cant"], v["und"], v["vlr"])
+            for k, v in items.items()
+        }
+    return out
 
-    now = datetime.now(timezone.utc).isoformat()
-    n_updated = 0
-    for key, segs in by_item.items():
-        if key not in ppto_map:
+
+def _patches_costos_actividades_existentes(
+    actividades: List[dict],
+    ppto_by_pk: Dict[str, Dict[Tuple[str, str], Tuple[Decimal, str, Decimal]]],
+    now: str,
+) -> List[dict]:
+    """Parches de cantidad/unidad/costo solo para filas ya programadas (no inserta)."""
+    groups: Dict[Tuple[str, str, str], List[dict]] = defaultdict(list)
+    for a in actividades:
+        pk = str(a.get("pk_id") or "").strip()
+        cap = (a.get("capitulo") or "").strip()
+        it = (a.get("item") or "").strip()
+        if pk and cap and it:
+            groups[(pk, cap, it)].append(a)
+
+    patches: List[dict] = []
+    for (pk, cap, it), segs in groups.items():
+        ppto = (ppto_by_pk.get(pk) or {}).get((cap, it))
+        if not ppto:
             continue
-        cant_ppto, und, vlr = ppto_map[key]
+        cant_ppto, und, vlr = ppto
         cant_ppto_f = float(cant_ppto)
         vlr_f = float(vlr)
         und_s = (und or "?")[:20]
         segs_sorted = sorted(segs, key=lambda x: int(x.get("segmento") or 1))
         if len(segs_sorted) == 1:
-            sb.table("prog_actividades").update(
+            patches.append(
                 {
+                    "id": segs_sorted[0]["id"],
                     "cantidad_programada": cant_ppto_f,
                     "unidad": und_s,
                     "costo_unitario": vlr_f,
                     "actualizado_en": now,
                 }
-            ).eq("id", segs_sorted[0]["id"]).execute()
-            n_updated += 1
+            )
             continue
         old_total = sum(float(s.get("cantidad_programada") or 0) for s in segs_sorted)
         for s in segs_sorted:
@@ -2351,53 +2513,85 @@ def _sync_actividades_pk_desde_presupuesto(
                 new_c = cant_ppto_f * (old_c / old_total)
             else:
                 new_c = cant_ppto_f / len(segs_sorted)
-            sb.table("prog_actividades").update(
+            patches.append(
                 {
+                    "id": s["id"],
                     "cantidad_programada": new_c,
                     "unidad": und_s,
                     "costo_unitario": vlr_f,
                     "actualizado_en": now,
                 }
-            ).eq("id", s["id"]).execute()
-            n_updated += 1
-    return n_updated
+            )
+    return patches
 
 
 def sync_presupuesto_version(sb, version_id: str, contrato_id: int) -> dict:
     """
-    Sincroniza actividades y prog_pk_estado de todos los PK del contrato
-    contra el presupuesto poligonal vigente.
+    Actualiza cantidades/costos de actividades ya existentes y recalcula prog_pk_estado.
+    No crea actividades nuevas: los ítems del presupuesto se programan en el flujo WBS.
     """
-    pks = _all_pks_contrato(sb, contrato_id)
-    act_updates = 0
-    for pk in pks:
-        act_updates += _sync_actividades_pk_desde_presupuesto(sb, version_id, contrato_id, pk)
-        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    now = datetime.now(timezone.utc).isoformat()
+    ppto_by_pk = _build_ppto_item_map_contrato(sb, contrato_id)
+    actividades = _fetch_actividades_version_all(sb, version_id, contrato_id)
+    patches = _patches_costos_actividades_existentes(actividades, ppto_by_pk, now)
+    _bulk_patch_prog_actividades_by_id(sb, patches)
+
+    pks: Set[str] = set(ppto_by_pk.keys())
+    for a in actividades:
+        pk = str(a.get("pk_id") or "").strip()
+        if pk:
+            pks.add(pk)
+    pk_list = sorted(pks)
+    if pk_list:
+        ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+        ppto_keys_by_pk = {pk: set((ppto_by_pk.get(pk) or {}).keys()) for pk in pk_list}
+        totals = {pk: len(ppto_by_pk.get(pk) or {}) for pk in pk_list}
+        cf_by_pk = _count_items_con_fecha_bulk(
+            sb, version_id, contrato_id, pk_list, ppto_keys_by_pk, ag_by_item,
+        )
+        sin_ag_all = fetch_sin_agrupador_count_by_pk(sb, contrato_id)
+        estado_rows = []
+        for pk in pk_list:
+            total = int(totals.get(pk, 0))
+            cf = int(cf_by_pk.get(pk, 0))
+            sin_ag = int(sin_ag_all.get(pk, 0))
+            estado_rows.append({
+                "version_id": version_id,
+                "contrato_id": contrato_id,
+                "pk_id": pk,
+                "estado_programacion": _compute_estado_pk(total, cf, sin_ag),
+                "items_total": total,
+                "items_con_fecha": min(cf, total) if total > 0 else 0,
+                "actualizado_en": now,
+            })
+        for i in range(0, len(estado_rows), _SYNC_PK_ESTADO_CHUNK):
+            sb.table("prog_pk_estado").upsert(
+                estado_rows[i : i + _SYNC_PK_ESTADO_CHUNK],
+                on_conflict="version_id,pk_id",
+            ).execute()
+
     return {
         "ok": True,
-        "pks_actualizados": len(pks),
-        "actividades_actualizadas": act_updates,
+        "pks_actualizados": len(pk_list),
+        "actividades_actualizadas": len(patches),
+        "actividades_insertadas": 0,
     }
 
 
 def validate_segment_quantities(
     sb, version_id: str, contrato_id: int, pk_id: str, capitulo: str, item: str
 ) -> None:
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
     ppto_qty = Decimal(0)
-    rows = (
-        sb.table("presupuesto")
-        .select("cant_total")
-        .eq("contrato_id", contrato_id)
-        .eq("pk_id", pk_id)
-        .eq("capitulo", capitulo)
-        .eq("item", item)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    rows = fetch_ppto_rows_programacion(
+        sb, contrato_id, pk_id=pk_id.strip(), force_vigente=True,
     )
     for r in rows:
+        if (r.get("capitulo") or "").strip() != capitulo.strip():
+            continue
+        if (r.get("item") or "").strip() != item.strip():
+            continue
         ppto_qty += Decimal(str(r.get("cant_total") or 0))
     act_rows = (
         sb.table("prog_actividades")
@@ -2427,17 +2621,21 @@ def fetch_mapa_rows_rpc(sb, contrato_id: int) -> List[dict]:
 
 
 def _ppto_distinct_item_counts_by_pk(sb, contrato_id: int) -> Dict[str, int]:
-    """Una sola consulta a presupuesto: cuenta items distintos (capitulo+item) por PK."""
-    rows = (
-        sb.table("presupuesto")
-        .select("pk_id,capitulo,item")
-        .eq("contrato_id", contrato_id)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
-    )
+    """Cuenta items distintos (capitulo+item) por PK desde presupuesto vigente."""
+    from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+    rows = fetch_ppto_rows_programacion(sb, contrato_id, force_vigente=True)
+    if not rows:
+        rows = (
+            sb.table("presupuesto")
+            .select("pk_id,capitulo,item")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
     seen: Dict[str, set] = {}
     for r in rows:
         pk = str(r.get("pk_id") or "").strip()
@@ -5038,13 +5236,17 @@ def _hijos_ppto_agrupador_en_memoria(
     for p_cap, it in ppto_keys:
         if p_cap != cap:
             continue
-        if ag_by_item.get((p_cap, it)) == ag_id:
+        if _resolve_listado_agrupador_id(ag_by_item, p_cap, it) == ag_id:
             out.append((p_cap, it))
     if out:
         return out
-    for it in listado_items.get((cap, ag_id), set()):
-        if (cap, it) in ppto_keys:
-            out.append((cap, it))
+    for lp_it in listado_items.get((cap, ag_id), set()):
+        for p_cap, p_it in ppto_keys:
+            if p_cap != cap:
+                continue
+            if _norm_prog_item_key(p_it) == _norm_prog_item_key(lp_it):
+                out.append((p_cap, p_it))
+                break
     return out
 
 
@@ -5221,7 +5423,7 @@ def _hijo_ppto_for_agrupador(
     hijo_ppto = [
         (p_cap, it, cant, und, vlr)
         for p_cap, it, cant, und, vlr in ppto_items
-        if p_cap == cap and ag_by_item.get((p_cap, it)) == agrupador_id
+        if p_cap == cap and _resolve_listado_agrupador_id(ag_by_item, p_cap, it) == agrupador_id
     ]
     if hijo_ppto:
         return hijo_ppto
@@ -5245,7 +5447,7 @@ def _hijo_ppto_for_agrupador(
     return [
         (p_cap, it, cant, und, vlr)
         for p_cap, it, cant, und, vlr in ppto_items
-        if p_cap == cap and it in ag_items_set
+        if p_cap == cap and _ppto_item_in_listado_set(it, ag_items_set)
     ]
 
 

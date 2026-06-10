@@ -1542,7 +1542,7 @@ namespace SicoePresupuestoNET8
                 if (ejeA == null)
                     return false;
 
-                (bool ok, double pk, double signedOffset) Project(Autodesk.AutoCAD.DatabaseServices.Curve eje, double pk0dist, double absIniSector, Autodesk.AutoCAD.Geometry.Point3d p)
+                (bool ok, double pk, double signedOffset) Project(Autodesk.AutoCAD.DatabaseServices.Curve eje, bool calzadaA, Autodesk.AutoCAD.Geometry.Point3d p)
                 {
                     try
                     {
@@ -1559,7 +1559,7 @@ namespace SicoePresupuestoNET8
                         double signed = (cross > 0) ? off : -off;
 
                         double dist = eje.GetDistanceAtParameter(par);
-                        double pk = dist - pk0dist + absIniSector;
+                        double pk = AxisMath.DistAlongToPk(dist, ctx, calzadaA);
 
                         return (true, pk, signed);
                     }
@@ -1583,7 +1583,7 @@ namespace SicoePresupuestoNET8
                 else if (prefCalz == 'B' && hasB) preferA = false;
                 else
                 {
-                    var a = Project(ejeA, ctx.Pk0DistA, ctx.AbsInicioA, pRef);
+                    var a = Project(ejeA, calzadaA: true, pRef);
                     bool inA = a.ok && Inside(a.signedOffset, ctx.OrdIzq_A, ctx.OrdDer_A);
 
                     if (!hasB)
@@ -1592,7 +1592,7 @@ namespace SicoePresupuestoNET8
                     }
                     else
                     {
-                        var b = Project(ejeB!, ctx.Pk0DistB, ctx.AbsInicioB, pRef);
+                        var b = Project(ejeB!, calzadaA: false, pRef);
                         bool inB = b.ok && Inside(b.signedOffset, ctx.OrdIzq_B, ctx.OrdDer_B);
 
                         if (inA && !inB) preferA = true;
@@ -1603,8 +1603,7 @@ namespace SicoePresupuestoNET8
                 }
 
                 var eje = preferA ? ejeA : ejeB!;
-                double pk0dist = preferA ? ctx.Pk0DistA : ctx.Pk0DistB;
-                double absInicio = preferA ? ctx.AbsInicioA : ctx.AbsInicioB;
+                bool calzadaPrefer = preferA;
                 double limI = preferA ? ctx.OrdIzq_A : ctx.OrdIzq_B;
                 double limD = preferA ? ctx.OrdDer_A : ctx.OrdDer_B;
 
@@ -1617,7 +1616,7 @@ namespace SicoePresupuestoNET8
 
                 foreach (var p in pts)
                 {
-                    var ev = Project(eje, pk0dist, absInicio, p);
+                    var ev = Project(eje, calzadaPrefer, p);
                     if (!ev.ok) continue;
 
                     if (!Inside(ev.signedOffset, limI, limD))
@@ -1761,7 +1760,7 @@ namespace SicoePresupuestoNET8
                 if (ejeA == null) return false;
 
                 // Proyección robusta a pk (sin offset firmado ni Inside)
-                (bool ok, double pk) ProjectPk(acDb.Curve eje, double pk0dist, double absIniSector, acGeo.Point3d p)
+                (bool ok, double pk) ProjectPk(acDb.Curve eje, bool calzadaA, acGeo.Point3d p)
                 {
                     try
                     {
@@ -1769,7 +1768,7 @@ namespace SicoePresupuestoNET8
                         var proj = eje.GetClosestPointTo(pFlat, false);
                         double par = eje.GetParameterAtPoint(proj);
                         double dist = eje.GetDistanceAtParameter(par);
-                        double pk = dist - pk0dist + absIniSector;
+                        double pk = AxisMath.DistAlongToPk(dist, ctx, calzadaA);
                         return (true, pk);
                     }
                     catch
@@ -1813,8 +1812,7 @@ namespace SicoePresupuestoNET8
                 }
 
                 var eje = useA ? ejeA : ejeB!;
-                double pk0 = useA ? ctx.Pk0DistA : ctx.Pk0DistB;
-                double absInicio = useA ? ctx.AbsInicioA : ctx.AbsInicioB;
+                bool calzadaUse = useA;
                 calzadaOut = useA ? "A" : "B";
 
                 double pkMin = double.MaxValue;
@@ -1823,7 +1821,7 @@ namespace SicoePresupuestoNET8
 
                 foreach (var p in pts)
                 {
-                    var r = ProjectPk(eje, pk0, absInicio, p);
+                    var r = ProjectPk(eje, calzadaUse, p);
                     if (!r.ok) continue;
 
                     any = true;

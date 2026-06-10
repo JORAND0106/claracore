@@ -1537,10 +1537,12 @@ namespace SicoePresupuestoNET8
                                             case acDb.DBPoint pt: p1 = pt.Position; break;
                                             case acDb.BlockReference br: p1 = br.Position; break;
                                         }
-                                        double pk0 = axisEnt.Pk0DistA;
-                                        double absBase = axisEnt.AbsInicioA;
-                                        double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0 + absBase;
-                                        double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0 + absBase;
+                                        double d0 = AxisMath.DistAlongToPk(
+                                            eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))),
+                                            axisEnt, calzadaA: true);
+                                        double d1 = AxisMath.DistAlongToPk(
+                                            eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))),
+                                            axisEnt, calzadaA: true);
                                         ai = PkFormatter.ToPkString(Math.Min(d0, d1));
                                         af = PkFormatter.ToPkString(Math.Max(d0, d1));
                                     }
@@ -1647,10 +1649,12 @@ namespace SicoePresupuestoNET8
                                                         case acDb.DBPoint pt: p1 = pt.Position; break;
                                                         case acDb.BlockReference br: p1 = br.Position; break;
                                                     }
-                                                    double pk0 = axisEnt2.Pk0DistA;
-                                                    double absBase = axisEnt2.AbsInicioA;
-                                                    double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0 + absBase;
-                                                    double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0 + absBase;
+                                                    double d0 = AxisMath.DistAlongToPk(
+                                                        eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))),
+                                                        axisEnt2, calzadaA: true);
+                                                    double d1 = AxisMath.DistAlongToPk(
+                                                        eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))),
+                                                        axisEnt2, calzadaA: true);
                                                     ai = PkFormatter.ToPkString(Math.Min(d0, d1));
                                                     af = PkFormatter.ToPkString(Math.Max(d0, d1));
                                                 }
@@ -3757,6 +3761,9 @@ namespace SicoePresupuestoNET8
                         ax.Pk0A = new acGeo.Point3d(ax.XA, ax.YA, ax.ZA);
                         ax.Pk0B = new acGeo.Point3d(ax.XB, ax.YB, ax.ZB);
 
+                        if (!ax.AxisA.IsNull && tr.GetObject(ax.AxisA, acDb.OpenMode.ForRead) is acDb.Curve crvA)
+                            AxisMath.RefreshChainageDirection(ax, crvA);
+
                         // Validar si se recuperó algo útil
                         if (ax.AxisA.IsNull && ax.AxisB.IsNull)
                         {
@@ -4814,6 +4821,16 @@ namespace SicoePresupuestoNET8
         private int DibujarAbscisadoSobreEje(AxisContext ctx)
         {
             int total = 0;
+
+            var docPre = acApp.Application.DocumentManager.MdiActiveDocument;
+            if (docPre != null)
+            {
+                using var trPre = docPre.Database.TransactionManager.StartTransaction();
+                if (!ctx.AxisA.IsNull && trPre.GetObject(ctx.AxisA, acDb.OpenMode.ForRead) is acDb.Curve crvPre)
+                    AxisMath.RefreshChainageDirection(ctx, crvPre);
+                trPre.Commit();
+            }
+
             double intervalo = Math.Max(0.01, ctx.IntervaloPk);
             double altura = ParseOrZero(txtAltText.Text);
             if (altura <= 0) altura = 2.0; // AUMENTAR tamaño por defecto a 2.0 para visibilidad
@@ -4843,7 +4860,7 @@ namespace SicoePresupuestoNET8
                     if (ejeA != null)
                     {
                         ejeA.Layer = capaEjeA; // Mueve el eje a su capa
-                        total += DibujarAbscisadoDeCalzada(ejeA, ctx.Pk0DistA, ctx.AbsInicioA, intervalo, altura, capaTxtA, btr, tr);
+                        total += DibujarAbscisadoDeCalzada(ejeA, ctx.Pk0DistA, ctx.AbsInicioA, ctx.ChainageTowardEnd, intervalo, altura, capaTxtA, btr, tr);
                     }
                 }
 
@@ -4854,7 +4871,7 @@ namespace SicoePresupuestoNET8
                     if (ejeB != null)
                     {
                         ejeB.Layer = capaEjeB; // Mueve el eje a su capa
-                        total += DibujarAbscisadoDeCalzada(ejeB, ctx.Pk0DistB, ctx.AbsInicioB, intervalo, altura, capaTxtB, btr, tr);
+                        total += DibujarAbscisadoDeCalzada(ejeB, ctx.Pk0DistB, ctx.AbsInicioB, ctx.ChainageTowardEnd, intervalo, altura, capaTxtB, btr, tr);
                     }
                 }
 
@@ -4870,6 +4887,7 @@ namespace SicoePresupuestoNET8
                     acDb.Curve eje,
                     double pk0Dist,
                     double absInicio,
+                    bool chainageTowardEnd,
                     double intervalo,
                     double altura,
             string capaTxt,
@@ -4931,8 +4949,13 @@ namespace SicoePresupuestoNET8
                 var normalUnit = new acGeo.Vector3d(-tan.Y, tan.X, 0).GetNormal();
                 var pDesfasado = p + normalUnit.MultiplyBy(altura * 0.8);
 
-                // Texto PK relativo a PK0
-                double pkMeters = Math.Abs(dSafe - pk0Dist) + absInicio;
+                var ctxTmp = new AxisContext
+                {
+                    Pk0DistA = pk0Dist,
+                    AbsInicioA = absInicio,
+                    ChainageTowardEnd = chainageTowardEnd
+                };
+                double pkMeters = AxisMath.DistAlongToPk(dSafe, ctxTmp, calzadaA: true);
                 string pkStr = PkFormatter.ToPkString(pkMeters);
 
                 // === PUNTOS (DBPoint) ===

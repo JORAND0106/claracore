@@ -65,7 +65,7 @@ export default function ProgPresupuestoSelector({
       </select>
       {selected && (
         <div style={{ marginTop: '0.35rem', fontSize: 'var(--cc-caption)', lineHeight: 1.4, color: t.textMuted }}>
-          Visualizando costos según presupuesto v{numSel}
+          WBS y costos usan siempre el presupuesto en edición (es_vigente). Este selector aplica a Curva S y exportaciones.
         </div>
       )}
       {selected && !esOficial && (

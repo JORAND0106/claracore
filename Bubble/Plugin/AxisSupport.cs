@@ -40,6 +40,13 @@ namespace SicoePresupuestoNET8
         // ── NUEVO: abscisa real donde comienza cada sector ────────────────
         public double AbsInicioA { get; set; } = 0.0;   // ej: 500.0 → empieza en 0+500
         public double AbsInicioB { get; set; } = 0.0;
+
+        /// <summary>
+        /// True: la abscisa crece hacia EndParam (distancia creciente en la curva).
+        /// False: crece hacia StartParam (PK0 cerca del final geométrico de la polilínea).
+        /// </summary>
+        public bool ChainageTowardEnd { get; set; } = true;
+
         public string Orientacion { get; set; } = "";
         public string NombreA { get; set; } = "Única";
         public string NombreB { get; set; } = "";
@@ -73,6 +80,42 @@ namespace SicoePresupuestoNET8
     }
     public static class AxisMath
     {
+        /// <summary>
+        /// Infiere si la abscisa crece hacia EndParam o hacia StartParam.
+        /// PK0 marca el inicio del sector; la cadena continúa por el tramo más largo desde PK0.
+        /// </summary>
+        public static bool InferChainageTowardEnd(acDb.Curve eje, double pk0dist)
+        {
+            double dEnd = eje.GetDistanceAtParameter(eje.EndParam);
+            double towardEnd = Math.Max(0, dEnd - pk0dist);
+            double towardStart = Math.Max(0, pk0dist);
+            return towardEnd >= towardStart;
+        }
+
+        public static void RefreshChainageDirection(AxisContext ax, acDb.Curve? ejeA)
+        {
+            if (ejeA == null || ax == null) return;
+            try
+            {
+                ax.ChainageTowardEnd = InferChainageTowardEnd(ejeA, ax.Pk0DistA);
+            }
+            catch
+            {
+                ax.ChainageTowardEnd = true;
+            }
+        }
+
+        /// <summary>Convierte distancia acumulada en la curva a abscisa (metros de cadena).</summary>
+        public static double DistAlongToPk(double distAlong, AxisContext ctx, bool calzadaA = true)
+        {
+            double pk0 = calzadaA ? ctx.Pk0DistA : ctx.Pk0DistB;
+            double abs0 = calzadaA ? ctx.AbsInicioA : ctx.AbsInicioB;
+            double delta = ctx.ChainageTowardEnd
+                ? (distAlong - pk0)
+                : (pk0 - distAlong);
+            return abs0 + delta;
+        }
+
         public static PkResult ComputePkAndOffset(acDb.Entity ent, AxisContext ctx)
         {
             if (ent == null) throw new ArgumentNullException(nameof(ent));
@@ -101,7 +144,7 @@ namespace SicoePresupuestoNET8
 
             // ========= CANDIDATO A =========
             double signedOffA = (evalA.lado == 'I') ? evalA.minOffset : -evalA.minOffset;
-            double pkRawA = evalA.axisDist - ctx.Pk0DistA + ctx.AbsInicioA;
+            double pkRawA = DistAlongToPk(evalA.axisDist, ctx, calzadaA: true);
 
             var candA = new PkResult
             {
@@ -120,7 +163,7 @@ namespace SicoePresupuestoNET8
             if (hasB)
             {
                 double signedOffB = (evalB.lado == 'I') ? evalB.minOffset : -evalB.minOffset;
-                double pkRawB = evalB.axisDist - ctx.Pk0DistB + ctx.AbsInicioB;
+                double pkRawB = DistAlongToPk(evalB.axisDist, ctx, calzadaA: false);
 
                 candB = new PkResult
                 {
@@ -224,8 +267,8 @@ namespace SicoePresupuestoNET8
             var B = ejeB != null ? Eval(ejeB) : default;
             bool hasB = ejeB != null;
 
-            var pkA = A.dist - ctx.Pk0DistA + ctx.AbsInicioA;
-            var pkB = hasB ? B.dist - ctx.Pk0DistB + ctx.AbsInicioB : double.MaxValue;
+            var pkA = DistAlongToPk(A.dist, ctx, calzadaA: true);
+            var pkB = hasB ? DistAlongToPk(B.dist, ctx, calzadaA: false) : double.MaxValue;
 
             PkResult rA = new PkResult
             {
@@ -284,8 +327,8 @@ namespace SicoePresupuestoNET8
             var B = ejeB != null ? Eval(ejeB) : default;
             bool hasB = ejeB != null;
 
-            var pkA = A.dist - ctx.Pk0DistA + ctx.AbsInicioA;
-            var pkB = hasB ? B.dist - ctx.Pk0DistB + ctx.AbsInicioB : double.MaxValue;
+            var pkA = DistAlongToPk(A.dist, ctx, calzadaA: true);
+            var pkB = hasB ? DistAlongToPk(B.dist, ctx, calzadaA: false) : double.MaxValue;
 
             PkResult rA = new PkResult
             {
@@ -471,6 +514,9 @@ namespace SicoePresupuestoNET8
                             }
                         }
 
+                        if (tr.GetObject(ax.AxisA, acDb.OpenMode.ForRead) is acDb.Curve crvA)
+                            AxisMath.RefreshChainageDirection(ax, crvA);
+
                         result.Add(ax);
 
                     }
@@ -547,6 +593,7 @@ namespace SicoePresupuestoNET8
 
         /// <summary>
         /// Elige el eje/sector más cercano al punto (soporta múltiples sectores).
+        /// Penaliza ejes cuya abscisa inferida quede antes del inicio del sector.
         /// </summary>
         public static AxisContext? ResolveAxisForPoint(acGeo.Point3d p)
         {
@@ -557,17 +604,48 @@ namespace SicoePresupuestoNET8
             if (axes.Count == 1)
                 return axes[0];
 
-            AxisContext? best = null;
-            double bestDist = double.MaxValue;
+            var doc = acApp.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return axes[0];
 
-            foreach (var ax in axes)
+            var db = doc.Database;
+            var pFlat = new acGeo.Point3d(p.X, p.Y, 0.0);
+
+            AxisContext? best = null;
+            double bestScore = double.MaxValue;
+
+            using (var tr = db.TransactionManager.StartTransaction())
             {
-                double d = MinDistanceToAxisContext(p, ax);
-                if (d < bestDist)
+                foreach (var ax in axes)
                 {
-                    bestDist = d;
-                    best = ax;
+                    if (ax.AxisA.IsNull) continue;
+                    if (tr.GetObject(ax.AxisA, acDb.OpenMode.ForRead) is not acDb.Curve ejeA)
+                        continue;
+
+                    try
+                    {
+                        var proj = ejeA.GetClosestPointTo(pFlat, false);
+                        double off = pFlat.DistanceTo(proj);
+                        double par = ejeA.GetParameterAtPoint(proj);
+                        double dist = ejeA.GetDistanceAtParameter(par);
+                        double pk = AxisMath.DistAlongToPk(dist, ax, calzadaA: true);
+
+                        double score = off;
+                        // Fuera del sector (abscisa menor al inicio): penalizar fuerte
+                        if (pk < ax.AbsInicioA - 80.0)
+                            score += 5000.0;
+                        // Muy por delante del tramo típico del sector anterior
+                        if (pk < ax.AbsInicioA - 5.0)
+                            score += 500.0;
+
+                        if (score < bestScore)
+                        {
+                            bestScore = score;
+                            best = ax;
+                        }
+                    }
+                    catch { }
                 }
+                tr.Commit();
             }
 
             return best ?? axes[0];

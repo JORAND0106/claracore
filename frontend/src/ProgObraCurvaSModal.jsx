@@ -56,13 +56,21 @@ export default function ProgObraCurvaSModal({
   const [escenariosSel, setEscenariosSel] = useState(() => new Set())
   const [escenariosData, setEscenariosData] = useState(null)
   const [loadingEscenarios, setLoadingEscenarios] = useState(false)
+  const [brechaAlertOpen, setBrechaAlertOpen] = useState(true)
+  const [brechaDetalleOpen, setBrechaDetalleOpen] = useState(false)
 
   useEffect(() => {
     if (!open) {
       setModoEscenarios(false)
       setEscenariosData(null)
+      setBrechaAlertOpen(true)
+      setBrechaDetalleOpen(false)
     }
   }, [open])
+
+  useEffect(() => {
+    if (data?.brecha_presupuesto?.tiene_brecha) setBrechaAlertOpen(true)
+  }, [data])
 
   const pkIdsKey = pkIds?.length ? pkIds.join(',') : ''
   const tramosKey = tramoNames?.length ? tramoNames.join(',') : ''
@@ -153,6 +161,52 @@ export default function ProgObraCurvaSModal({
   }, [escenariosData])
 
   const ind = data?.indicadores || {}
+  const brecha = data?.brecha_presupuesto || null
+  const brechaRows = useMemo(() => {
+    if (!brecha?.tiene_brecha) return []
+    const rows = []
+    for (const r of brecha.items_nuevos_sin_actividad || []) {
+      rows.push({
+        tipo: 'Ítem nuevo sin fila en programación',
+        pk: r.pk_id,
+        cap: r.capitulo,
+        ref: r.codigo_wbs ? `${r.codigo_wbs} · ${r.item}` : r.item,
+        desc: r.descripcion,
+        costo: r.costo_directo,
+      })
+    }
+    for (const r of brecha.agrupadores_sin_programar || []) {
+      rows.push({
+        tipo: 'Agrupador sin actividad',
+        pk: r.pk_id,
+        cap: r.capitulo,
+        ref: r.codigo_wbs || r.nombre,
+        desc: r.nombre,
+        costo: r.costo_directo,
+      })
+    }
+    for (const r of brecha.agrupadores_sin_fecha || []) {
+      rows.push({
+        tipo: 'Agrupador sin fecha',
+        pk: r.pk_id,
+        cap: r.capitulo,
+        ref: r.codigo_wbs || r.nombre,
+        desc: r.nombre,
+        costo: r.costo_directo,
+      })
+    }
+    for (const r of brecha.items_sin_agrupador_sin_programar || []) {
+      rows.push({
+        tipo: 'Ítem sin programar',
+        pk: r.pk_id,
+        cap: r.capitulo,
+        ref: r.item,
+        desc: r.descripcion,
+        costo: r.costo_directo,
+      })
+    }
+    return rows
+  }, [brecha])
 
   const toggleEscenario = useCallback((id) => {
     setEscenariosSel((prev) => {
@@ -397,11 +451,109 @@ export default function ProgObraCurvaSModal({
         {busy && <div style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>Cargando curva S…</div>}
         {error && <div style={{ padding: 16, color: '#dc2626' }}>{error}</div>}
 
+        {!busy && !modoEscenarios && data && brecha?.tiene_brecha && brechaAlertOpen && (
+          <div
+            style={{
+              margin: '10px 16px 0',
+              padding: '12px 14px',
+              borderRadius: 8,
+              background: '#fef3c7',
+              border: '1px solid #f59e0b',
+              color: '#92400e',
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div>
+                <strong>Diferencia con el presupuesto vigente</strong>
+                <div style={{ marginTop: 4 }}>
+                  La Curva S refleja lo programado con fechas. Elementos del presupuesto vigente que
+                  aún no están en el cronograma (o ítems nuevos sin sincronizar) explican una brecha de{' '}
+                  <strong>{fmtCOP(brecha.diferencia ?? ind.brecha_presupuesto)}</strong> frente al presupuesto
+                  vigente ({fmtCOP(brecha.presupuesto_total ?? ind.presupuesto_contrato)}).
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11 }}>
+                  Programado en curva: {fmtCOP(brecha.programado_total ?? ind.programado_curva_total)} ·{' '}
+                  {brecha.resumen?.n_items_nuevos_sin_actividad ?? 0} ítem(s) nuevo(s) sin fila ·{' '}
+                  {brecha.resumen?.n_agrupadores_sin_programar ?? 0} agrupador(es) sin actividad ·{' '}
+                  {brecha.resumen?.n_agrupadores_sin_fecha ?? 0} sin fecha ·{' '}
+                  {brecha.resumen?.n_items_sin_programar ?? 0} ítem(s) sueltos sin programar.
+                  Sincronice para actualizar costos de lo ya programado, o programe ítems en el WBS.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBrechaAlertOpen(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', padding: 0 }}
+                aria-label="Cerrar alerta"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setBrechaDetalleOpen((v) => !v)}
+                style={{
+                  padding: '5px 10px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  border: '1px solid #f59e0b',
+                  background: '#fff',
+                  color: '#92400e',
+                  cursor: 'pointer',
+                }}
+              >
+                {brechaDetalleOpen ? 'Ocultar detalle' : 'Ver detalle'}
+              </button>
+            </div>
+            {brechaDetalleOpen && brechaRows.length > 0 && (
+              <div style={{ marginTop: 10, maxHeight: 180, overflow: 'auto', background: '#fff', borderRadius: 6, border: '1px solid #fcd34d' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <thead>
+                    <tr>
+                      {['Tipo', 'PK', 'Cap.', 'Ref.', 'Descripción', 'Costo'].map((h) => (
+                        <th key={h} style={{ ...cell, fontWeight: 700, textAlign: h === 'Costo' ? 'right' : 'left', background: '#fffbeb', position: 'sticky', top: 0 }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {brechaRows.map((r, i) => (
+                      <tr key={`${r.tipo}-${r.pk}-${r.ref}-${i}`}>
+                        <td style={cell}>{r.tipo}</td>
+                        <td style={cell}>{r.pk}</td>
+                        <td style={cell}>{r.cap}</td>
+                        <td style={cell}>{r.ref}</td>
+                        <td style={cell}>{r.desc || '—'}</td>
+                        <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.costo)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {brecha.resumen?.detalle_truncado && (
+                  <div style={{ padding: '6px 8px', fontSize: 10, color: '#92400e' }}>
+                    Mostrando los primeros registros. Corrija la programación de los elementos listados.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {!busy && !modoEscenarios && data && (
           <>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 24px', padding: '10px 16px', fontSize: 11, borderBottom: `1px solid ${t.border}`, background: `${t.primary}08` }}>
-              <span>Presupuesto total: <strong>{fmtCOP(ind.presupuesto_total)}</strong></span>
-              <span>Programado a la fecha: <strong>{fmtCOP(ind.programado_a_fecha)} ({ind.programado_pct}%)</strong></span>
+              <span>Presupuesto vigente: <strong>{fmtCOP(ind.presupuesto_contrato ?? ind.presupuesto_total)}</strong></span>
+              <span>Programado (curva): <strong>{fmtCOP(ind.programado_curva_total ?? ind.programado_a_fecha)}</strong></span>
+              {Number(ind.brecha_presupuesto) > 0.01 && (
+                <span style={{ color: '#b45309' }}>
+                  Brecha: <strong>{fmtCOP(ind.brecha_presupuesto)}</strong>
+                </span>
+              )}
               <span>Ejecutado a la fecha: <strong>{fmtCOP(ind.ejecutado_a_fecha)} ({ind.ejecutado_pct}%)</strong></span>
               <span>Desviación: <strong style={{ color: Number(ind.desviacion_valor) < 0 ? '#dc2626' : '#16a34a' }}>{fmtCOP(ind.desviacion_valor)} ({fmtPct(ind.desviacion_pct)})</strong></span>
             </div>
