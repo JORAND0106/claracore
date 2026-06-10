@@ -17700,6 +17700,10 @@ class ValidarNivel2Body(BaseModel):
     objeto_pago_sub: Optional[bool] = None
     comentario_data: Optional[dict] = None
 
+
+class ObjetoPagoSubBody(BaseModel):
+    objeto_pago_sub: bool
+
 class ValidarNivel3Body(BaseModel):
     estado: str
     comentario_data: Optional[dict] = None
@@ -18165,6 +18169,78 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         except Exception:
             pass
         return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/sicoe-obra/{contrato_id}/registros/{registro_id}/objeto-pago-sub")
+def patch_objeto_pago_sub(
+    contrato_id: int,
+    registro_id: int,
+    body: ObjetoPagoSubBody,
+    current_user=Depends(get_current_user),
+):
+    """Marca o desmarca objeto de pago a subcontratista sin cambiar nivel2_estado."""
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 2, contrato_id)
+
+        def _get():
+            return (
+                supabase.table("so_registros")
+                .select(f"contrato_id,nivel1_estado,{SICOE_SELECT_NIVELES_ESTADO}")
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_get)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        if _registro_nivel_max_aprobado(rows[0], contrato_id):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado en el último nivel de validación del contrato y no puede modificarse por esta vía.",
+            )
+        if rows[0].get("nivel1_estado") != "Aprobado":
+            raise HTTPException(
+                status_code=422,
+                detail="El registro debe estar aprobado por Nivel 1 antes de marcar objeto de pago.",
+            )
+
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+
+        def _upd():
+            return (
+                supabase.table("so_registros")
+                .update({"nivel2_objeto_pago_sub": body.objeto_pago_sub})
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        supabase_execute(_upd)
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+            registrar_log(
+                u_log,
+                "EDITAR",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {"alcance": "objeto_pago_sub", "nivel2_objeto_pago_sub": body.objeto_pago_sub},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+            )
+        except Exception:
+            pass
+        return {"ok": True, "nivel2_objeto_pago_sub": body.objeto_pago_sub}
     except HTTPException:
         raise
     except Exception as e:

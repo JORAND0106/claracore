@@ -289,6 +289,56 @@ function sicoeBoundsForPkInPlano(planoRaw, pkStr) {
   return _boundsFromFeatureCollection({ type: 'FeatureCollection', features: matched })
 }
 
+function sicoeBoundsForPkRowInPlano(planoRaw, pkRow) {
+  if (!pkRow || typeof pkRow !== 'object') return null
+  const pkStr = String(pkRow.pk_id || '').trim()
+  if (pkStr) {
+    const b = sicoeBoundsForPkInPlano(planoRaw, pkStr)
+    if (b) return b
+  }
+  const civ = String(pkRow.civ || '').trim().toLowerCase()
+  if (!civ) return null
+  const fc = _normalizeContratoPlanoGeojson(planoRaw)
+  if (!fc?.features?.length) return null
+  const civN = civ.replace(/\s+/g, '')
+  const matched = fc.features.filter((f) => {
+    const layer = String(f?.properties?.Layer ?? f?.properties?.layer ?? f?.properties?.Name ?? '').trim().toLowerCase()
+    const fid = _sicoeFeaturePkId(f).toLowerCase().replace(/\s+/g, '')
+    const layerN = layer.replace(/\s+/g, '')
+    return layer === civ || layerN === civN || fid === civN || layer.includes(civ) || civ.includes(layer)
+  })
+  if (!matched.length) return null
+  return _boundsFromFeatureCollection({ type: 'FeatureCollection', features: matched })
+}
+
+function sicoeCentroLngLatDesdeBounds(bounds) {
+  if (!bounds) return null
+  return {
+    lng: (bounds.minLng + bounds.maxLng) / 2,
+    lat: (bounds.minLat + bounds.maxLat) / 2,
+  }
+}
+
+function sicoePkRowPorId(pkList, pkId) {
+  if (pkId == null || pkId === '') return null
+  const list = pkList || []
+  return list.find((p) => String(p.id) === String(pkId)) || null
+}
+
+function sicoeLngLatDesdeRegistroYPlano(reg, pkRow, planoRaw) {
+  let lat = reg?.coord_lat
+  let lng = reg?.coord_lng
+  if (lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng)) {
+    return { lat: +lat, lng: +lng, aproximado: false }
+  }
+  const llM = sicoePickLngLatMaestro(pkRow)
+  if (llM) return { lng: llM[0], lat: llM[1], aproximado: false }
+  const b = sicoeBoundsForPkRowInPlano(planoRaw, pkRow)
+  const c = sicoeCentroLngLatDesdeBounds(b)
+  if (c) return { ...c, aproximado: true }
+  return null
+}
+
 function _mapboxFitBoundsLngLat(map, bounds, opt = {}) {
   if (!map || !bounds) return
   let { minLng, maxLng, minLat, maxLat } = bounds
@@ -1038,6 +1088,104 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
       {modoEdicion && hasCoords && (
         <div style={{ position:'absolute', bottom:'36px', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', color:'#fff', borderRadius:'20px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'600', whiteSpace:'nowrap', pointerEvents:'none' }}>
           🖱️ Clic en el mapa para actualizar la ubicación
+        </div>
+      )}
+    </div>
+  )
+}
+
+const MAPA_PORTADA_MULTI_COLORS = ['#0077B6', '#F59E0B', '#10B981', '#8B5CF6', '#EC4899', '#0D9488', '#DC2626', '#6366F1']
+
+/** Mapa con varios marcadores (localización por registro en reportes «multiple»). */
+function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
+  const containerRef = useRef(null)
+  const mapRef = useRef(null)
+  const markersRef = useRef([])
+
+  useEffect(() => {
+    if (!containerRef.current || !import.meta.env.VITE_MAPBOX_TOKEN) return
+    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: 'mapbox://styles/mapbox/outdoors-v12',
+      center: [-74.07, 4.71],
+      zoom: 11,
+    })
+    const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    mapRef.current = map
+    return () => {
+      try { unregAttrib() } catch { /* ignore */ }
+      markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
+      markersRef.current = []
+      map.remove()
+      mapRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const pintar = () => {
+      markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
+      markersRef.current = []
+      const validos = (puntos || []).filter(
+        (p) => p.lat != null && p.lng != null && !Number.isNaN(+p.lat) && !Number.isNaN(+p.lng),
+      )
+      validos.forEach((pt, idx) => {
+        const el = document.createElement('div')
+        const col = MAPA_PORTADA_MULTI_COLORS[idx % MAPA_PORTADA_MULTI_COLORS.length]
+        el.style.width = '28px'
+        el.style.height = '28px'
+        el.style.borderRadius = '50%'
+        el.style.background = col
+        el.style.color = '#fff'
+        el.style.fontSize = '11px'
+        el.style.fontWeight = '800'
+        el.style.display = 'flex'
+        el.style.alignItems = 'center'
+        el.style.justifyContent = 'center'
+        el.style.border = '2px solid #fff'
+        el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.35)'
+        el.style.cursor = 'default'
+        el.textContent = pt.numero != null ? String(pt.numero) : String(idx + 1)
+        el.title = (pt.etiqueta || '') + (pt.aproximado ? ' (aprox.)' : '')
+        const m = new mapboxgl.Marker({ element: el }).setLngLat([+pt.lng, +pt.lat]).addTo(map)
+        markersRef.current.push(m)
+      })
+      if (validos.length >= 2) {
+        const bounds = new mapboxgl.LngLatBounds()
+        validos.forEach((p) => bounds.extend([+p.lng, +p.lat]))
+        map.fitBounds(bounds, { padding: 56, maxZoom: 16, duration: 650 })
+      } else if (validos.length === 1) {
+        map.flyTo({ center: [+validos[0].lng, +validos[0].lat], zoom: 15, duration: 650 })
+      } else if (fallbackBounds) {
+        _mapboxFitBoundsLngLat(map, fallbackBounds, { padding: 56, maxZoom: 14, duration: 650 })
+      }
+    }
+    if (map.isStyleLoaded()) pintar()
+    else map.once('load', pintar)
+  }, [puntos, fallbackBounds])
+
+  const tieneToken = !!import.meta.env.VITE_MAPBOX_TOKEN
+  const validos = (puntos || []).filter(
+    (p) => p.lat != null && p.lng != null && !Number.isNaN(+p.lat) && !Number.isNaN(+p.lng),
+  )
+  return (
+    <div style={{ position: 'relative', width: '100%', minHeight: '340px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${t.border}` }}>
+      {!tieneToken ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '340px', padding: '20px', color: t.textMuted, fontSize: 'var(--cc-sm)', textAlign: 'center' }}>
+          Configure <code>VITE_MAPBOX_TOKEN</code> para ver el mapa de localizaciones.
+        </div>
+      ) : (
+        <div ref={containerRef} style={{ width: '100%', minHeight: '340px' }} />
+      )}
+      {tieneToken && validos.length === 0 && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: `${t.bgCard}EE`, gap: '8px', pointerEvents: 'none' }}>
+          <span style={{ fontSize: '36px' }}>📍</span>
+          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, textAlign: 'center', padding: '0 20px' }}>
+            Sin coordenadas en los registros. Revise la localización en cada hoja de registro.
+          </span>
         </div>
       )}
     </div>
@@ -1878,6 +2026,7 @@ function sicoeHojaRegistroSyncKey(reg) {
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
   esDeveloper = false, puedeEliminarRegistroReporte = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null,
+  onOptimisticRegistroPatch = null,
   nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(),
   /** Tras guardar dimensiones/costo: vuelve a cargar la grilla de reportes (costo_directo_validación) sin cerrar la carpeta. */
   onRefrescarListadoSicoe = null,
@@ -2528,17 +2677,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const actualizarObjetoPagoSub = async (valor) => {
+    onOptimisticRegistroPatch?.(registro.id, { nivel2_objeto_pago_sub: valor })
     try {
-      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/validar-nivel2`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ estado: registro.nivel2_estado || 'Pendiente', objeto_pago_sub: valor })
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/objeto-pago-sub`, {
+        method: 'PATCH', headers: hdrs,
+        body: JSON.stringify({ objeto_pago_sub: valor }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         throw new Error(err.detail || `Error ${res.status}`)
       }
       onItemAsignado()
-    } catch(e) {
+    } catch (e) {
+      onItemAsignado?.()
       alert(`Error actualizando objeto de pago: ${e.message}`)
     }
   }
@@ -3748,6 +3899,63 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     [planoGeojsonPortada, pkTextoPlano],
   )
 
+  const esLocMultipleReporte = (reporte?.tipo_localizacion || 'unica') === 'multiple'
+
+  const marcadoresLocMultiple = useMemo(() => {
+    if (!esLocMultipleReporte) return []
+    const raw = []
+    for (const reg of registros) {
+      const pk = sicoePkRowPorId(listaPkIds, reg.pk_id_id)
+      const ll = sicoeLngLatDesdeRegistroYPlano(reg, pk, planoGeojsonPortada)
+      if (!ll) continue
+      const pkTxt = pk?.pk_id || (reg.pk_id_id != null ? `PK #${reg.pk_id_id}` : '')
+      const abs = reg.abs_inicio != null && reg.abs_final != null ? `${reg.abs_inicio} → ${reg.abs_final}` : ''
+      raw.push({
+        id: reg.id,
+        lat: ll.lat,
+        lng: ll.lng,
+        numero: reg.numero_registro,
+        etiqueta: `Registro #${reg.numero_registro}${pkTxt ? ` · ${pkTxt}` : ''}${abs ? ` · ${abs}` : ''}`,
+        aproximado: ll.aproximado,
+      })
+    }
+    raw.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0))
+    const seen = new Map()
+    return raw.map((pt) => {
+      const key = `${pt.lat.toFixed(6)},${pt.lng.toFixed(6)}`
+      const n = seen.get(key) || 0
+      seen.set(key, n + 1)
+      if (n === 0) return pt
+      return {
+        ...pt,
+        lng: pt.lng + n * 0.00008,
+        lat: pt.lat + n * 0.00006,
+        aproximado: true,
+        etiqueta: `${pt.etiqueta} (desplazado en mapa por coincidencia de coordenadas)`,
+      }
+    })
+  }, [esLocMultipleReporte, registros, listaPkIds, planoGeojsonPortada])
+
+  const portadaMapBoundsMultiple = useMemo(() => {
+    if (!esLocMultipleReporte) return null
+    let minLng = Infinity
+    let maxLng = -Infinity
+    let minLat = Infinity
+    let maxLat = -Infinity
+    let any = false
+    for (const reg of registros) {
+      const pk = sicoePkRowPorId(listaPkIds, reg.pk_id_id)
+      const b = sicoeBoundsForPkRowInPlano(planoGeojsonPortada, pk)
+      if (!b) continue
+      any = true
+      if (b.minLng < minLng) minLng = b.minLng
+      if (b.maxLng > maxLng) maxLng = b.maxLng
+      if (b.minLat < minLat) minLat = b.minLat
+      if (b.maxLat > maxLat) maxLat = b.maxLat
+    }
+    return any ? { minLng, maxLng, minLat, maxLat } : _boundsFromFeatureCollection(_normalizeContratoPlanoGeojson(planoGeojsonPortada))
+  }, [esLocMultipleReporte, registros, listaPkIds, planoGeojsonPortada])
+
   const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
   const registrosVisibles = nivelInfo.esSubcontratista
     ? registrosMostrados.filter(r => r.nivel2_objeto_pago_sub === true &&
@@ -3888,6 +4096,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setRegistros(prev => prev.map(r => r.id === registroId ? { ...r, [campo]: nuevoEstado } : r))
   }
 
+  const aplicarOptimisticRegistroPatch = (registroId, patch) => {
+    if (!patch || typeof patch !== 'object') return
+    setRegistros((prev) => prev.map((r) => (r.id === registroId ? { ...r, ...patch } : r)))
+  }
+
   const cargarComentariosRegistro = async (regId, rolOrigen) => {
     setComentariosError(null)
     setLoadingComentarios(true)
@@ -3974,6 +4187,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         const err = await postRes.json().catch(() => ({}))
         throw new Error(err.detail || `Error guardando puntos: ${postRes.status}`)
       }
+      setReporte((r) => ({ ...r, puntos: puntosValidos }))
       await recargar()
       setEditandoTopo(false)
     } catch(e) {
@@ -4720,12 +4934,26 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {/* GRUPO 3 — Localización */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                 <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
-                {(reporte.tipo_localizacion || 'unica') === 'multiple' && (
-                  <div style={{ marginBottom:'12px', padding:'10px 12px', background:'#0077B612', border:'1px solid #0077B633', borderRadius:'8px', fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
-                    Este reporte usa <strong>varias localizaciones</strong>. La ubicación de cada actividad se define en su hoja de registro.
-                  </div>
+                {esLocMultipleReporte && (
+                  <>
+                    <div style={{ marginBottom:'12px', padding:'10px 12px', background:'#0077B612', border:'1px solid #0077B633', borderRadius:'8px', fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
+                      Este reporte usa <strong>varias localizaciones</strong>. Cada marcador corresponde a un registro (número en el pin), según el PK asignado en su hoja de registro.
+                      Las <strong>coordenadas topográficas</strong> (Norte/Este) son del reporte completo y se registran más abajo; no se copian a cada registro.
+                    </div>
+                    <MapaPortadaMulti
+                      puntos={marcadoresLocMultiple}
+                      t={t}
+                      fallbackBounds={portadaMapBoundsMultiple}
+                    />
+                    {marcadoresLocMultiple.length > 0 && (
+                      <div style={{ marginTop:'10px', fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.45 }}>
+                        {marcadoresLocMultiple.length} ubicación(es) en mapa
+                        {marcadoresLocMultiple.some((p) => p.aproximado) ? ' · Algunas posiciones son aproximadas (centro del PK en plano).' : ''}
+                      </div>
+                    )}
+                  </>
                 )}
-                {(reporte.tipo_localizacion || 'unica') === 'multiple' ? null : (
+                {esLocMultipleReporte ? null : (
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
 
                   {/* Columna izquierda — campos */}
@@ -5152,6 +5380,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
+                          onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
                           puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
@@ -5295,6 +5524,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
+                          onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
                           puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
@@ -7164,6 +7394,12 @@ function ModuloSicoeObra({
     (elevCapPanel
       ? nvMasivoPanelGrilla >= 1 && nvMasivoPanelGrilla <= 3
       : nvMasivoPanelGrilla >= 2 && nvMasivoPanelGrilla <= 6)
+  const capasOkValidacionMasiva = sicoeCapasPermitenValidacionMasiva(capasValidacion)
+  /** Desarrollador / admin contrato: panel tras búsqueda aunque no haya capa de validación (otros roles sí la exigen). */
+  const mostrarPanelValidacionMasiva =
+    mostrarValidacionMasivaGrilla &&
+    sicoeVistaResultadosActiva &&
+    (capasOkValidacionMasiva || elevCapPanel)
 
   buscarReportesSicoeRef.current = buscarReportes
   cargarAnalisisSicoeRef.current = cargarAnalisis
@@ -8832,9 +9068,7 @@ function ModuloSicoeObra({
           ) : null
         }
         validacionMasivaPanel={
-          mostrarValidacionMasivaGrilla &&
-          sicoeVistaResultadosActiva &&
-          sicoeCapasPermitenValidacionMasiva(capasValidacion) ? (
+          mostrarPanelValidacionMasiva ? (
             <div style={{ marginTop: '10px', padding: '10px 12px', background: '#1E293B', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                 <div style={{ flex: '1 1 180px', minWidth: 0 }}>
@@ -8859,6 +9093,9 @@ function ModuloSicoeObra({
                     Solo afecta filas que ya cumplen su filtro (como la grilla). Hasta {SICOE_MASIVO_MAX_UI} por clic.
                     {nvMasivoPanelGrilla === 2 && ' En N2, sin topografía en el reporte no se aprueba esa línea.'}
                     {' '}Objeto de pago a subcontratista: excluido (revisión uno a uno).
+                    {elevCapPanel && !capasOkValidacionMasiva && (
+                      <> Sin capa de validación en Filtros: afecta todas las líneas del resultado. Agregue capa N1–N3 con estado «No Revisado», «Pendiente» o «Rechazado» para acotar.</>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
