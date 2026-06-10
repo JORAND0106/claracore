@@ -2351,6 +2351,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
+  const [reseteandoSicoe, setReseteandoSicoe] = useState(null); // id del contrato en proceso
   const [planoArchivoLabel, setPlanoArchivoLabel] = useState(null); // nombre local o leyenda servidor
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -2583,6 +2584,32 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Error al cambiar fase' });
     } finally { setTogglingFase(null); }
+  }
+
+  async function resetSicoeContadores(c) {
+    const ok = window.confirm(
+      `¿Resetear contadores SICOE del contrato "${c.numero}"?\n\n` +
+      `• Activa numeración desde 1 (solo este contrato).\n` +
+      `• Renumera reportes y registros existentes del 1 en adelante.\n` +
+      `• Sincroniza los contadores internos para que el siguiente reporte/registro sea consecutivo.\n\n` +
+      `No elimina datos de obra; solo corrige la numeración.`
+    );
+    if (!ok) return;
+    setReseteandoSicoe(c.id);
+    try {
+      const res = await call("POST", `/admin/contratos/${c.id}/reset-sicoe-contadores`, { renumerar_existentes: true });
+      setMsg({
+        type: 'success',
+        text: `Contadores SICOE reseteados en "${c.numero}". `
+          + `Reportes: ${res.reportes_renumerados ?? 0} (máx. #${res.max_numero_reporte ?? 0}, siguiente #${res.siguiente_numero_reporte ?? 1}). `
+          + `Registros: ${res.registros_renumerados ?? 0} (máx. #${res.max_numero_registro ?? 0}, siguiente #${res.siguiente_numero_registro ?? 1}).`,
+      });
+      recargarContratos();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Error al resetear contadores SICOE' });
+    } finally {
+      setReseteandoSicoe(null);
+    }
   }
 
   function _numONull(s) {
@@ -3113,7 +3140,18 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                       })}
                     </div>
                   )}
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {perms?.editar && (
+                    <button
+                      type="button"
+                      disabled={reseteandoSicoe === c.id}
+                      onClick={() => resetSicoeContadores(c)}
+                      title="Numeración SICOE desde 1 y sincronización de contadores de reportes/registros"
+                      style={{ background: 'transparent', border: '1px solid rgba(245,158,11,0.45)', borderRadius: 6, padding: '4px 10px', color: '#F59E0B', fontSize: 11, cursor: reseteandoSicoe === c.id ? 'wait' : 'pointer', whiteSpace: 'nowrap', opacity: reseteandoSicoe === c.id ? 0.65 : 1 }}
+                    >
+                      {reseteandoSicoe === c.id ? '⏳ Reseteando…' : '🔢 Reset contadores SICOE'}
+                    </button>
+                  )}
                   {perms?.editar && (
                     <button
                       onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}

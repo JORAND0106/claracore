@@ -40,6 +40,15 @@ export function validarLocalizacion(loc, { requerido = true } = {}) {
   return { ok: Object.keys(errores).length === 0, errores }
 }
 
+/** Etiqueta corta para UI (PK + abscisas). */
+export function fmtLocCorta(loc) {
+  const pk = loc?.pkSeleccionado?.pk_id || (loc?.pk_id_id != null ? `PK #${loc.pk_id_id}` : '')
+  const abs = loc?.absInicio != null && loc?.absInicio !== '' && loc?.absFinal != null && loc?.absFinal !== ''
+    ? `${loc.absInicio} → ${loc.absFinal}`
+    : ''
+  return [pk, abs].filter(Boolean).join(' · ') || 'Sin definir'
+}
+
 export function localizacionToApiFields(loc) {
   const pk = loc?.pkSeleccionado
   const absIni = loc?.absInicio

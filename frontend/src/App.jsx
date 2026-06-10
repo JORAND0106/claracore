@@ -46,6 +46,7 @@ import {
   sicoeLocFromRegistro,
   validarLocalizacion,
   localizacionToApiFields,
+  fmtLocCorta,
 } from './modules/sicoe-obra/sicoeLocalizacionHelpers'
 import {
   sicoeAppendFSicoeToSearchParams,
@@ -9303,8 +9304,6 @@ function ModuloSicoeObra({
           t={t} usuario={usuario} token={getToken()}
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
-          actasList={filtroActaList}
-          semanaVigente={semanaVigente}
           isOnline={isOnline}
           isOfflineReady={isOfflineReady}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
@@ -10127,16 +10126,18 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
 }
 
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
-function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial, actasList = [], semanaVigente = null, isOnline = true, isOfflineReady = false }) {
+function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial, isOnline = true, isOfflineReady = false }) {
   const [tabActivo, setTabActivo] = useState(0)
   const [guardando, setGuardando] = useState(false)
   const [errores, setErrores] = useState({})
   const [erroresLoc, setErroresLoc] = useState({})
   const [tipoLocalizacion, setTipoLocalizacion] = useState(reporteInicial?.tipo_localizacion || '')
-  const [semanaSel, setSemanaSel] = useState(reporteInicial?.semana_id ?? semanaVigente?.id ?? '')
-  const [actaSel, setActaSel] = useState(reporteInicial?.acta_rpo_id ?? '')
-  const [listaSemanas, setListaSemanas] = useState([])
-  const [erroresRegLoc, setErroresRegLoc] = useState({})
+  /** Lote de localización vigente al crear registros (modo multiple). */
+  const [locLoteActual, setLocLoteActual] = useState(sicoeLocVacia())
+  const [loteLocIdxActual, setLoteLocIdxActual] = useState(0)
+  const [modalNuevoLoteLoc, setModalNuevoLoteLoc] = useState(false)
+  const [locNuevoLoteDraft, setLocNuevoLoteDraft] = useState(sicoeLocVacia())
+  const [erroresNuevoLote, setErroresNuevoLote] = useState({})
 
   // Datos TAB 1
   const [descripcion, setDescripcion] = useState('')
@@ -10291,14 +10292,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/semanas`, { headers: hdrs })
-      .then(r => r.json()).then(d => setListaSemanas(Array.isArray(d) ? d : []))
-      .catch(() => setListaSemanas([]))
 // Precargar borrador si existe
     if (reporteInicial) {
       setTipoLocalizacion(reporteInicial.tipo_localizacion || 'unica')
-      if (reporteInicial.semana_id != null) setSemanaSel(reporteInicial.semana_id)
-      if (reporteInicial.acta_rpo_id != null) setActaSel(reporteInicial.acta_rpo_id)
       setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
       setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
       setMargen(reporteInicial.margen || '')
@@ -10503,14 +10499,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     const e = {}
     if (!descripcion.trim()) e.descripcion = 'Requerido'
     if (!subSeleccionado) e.sub = 'Requerido'
-    if (!semanaSel) e.semana = 'Requerido'
-    if (!actaSel) e.acta = 'Requerido'
-    setErrores(e)
-    return Object.keys(e).length === 0
-  }
-
-  const validarTabPlantilla = () => {
-    const e = {}
+    if (!inspSeleccionado) e.insp = 'Requerido'
     if (!capituloSel) e.capitulo = 'Requerido'
     setErrores(e)
     return Object.keys(e).length === 0
@@ -10521,18 +10510,55 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     margen, absInicio, absFinal, nodoIni, nodoFin, coordLat, coordLng,
   })
 
-  const validarTabTipoLoc = () => {
+  const stampLocEnRegistro = (base = {}) => {
+    if (tipoLocalizacion !== 'multiple') return base
+    return { ...base, ...locLoteActual, loteLocIdx: loteLocIdxActual }
+  }
+
+  const registrosEnLoteActual = () =>
+    registros.filter((r) => (r.loteLocIdx ?? 0) === loteLocIdxActual)
+
+  const validarTabLocalizacion = () => {
     const e = {}
     if (!tipoLocalizacion) e.tipo = 'Seleccione una opción'
     setErrores(e)
     if (Object.keys(e).length) return false
-    if (tipoLocalizacion === 'unica' && !modoEdicion) {
-      const { ok, errores: el } = validarLocalizacion(locReporteActual())
+    if (!modoEdicion) {
+      const loc = tipoLocalizacion === 'multiple' ? locLoteActual : locReporteActual()
+      const { ok, errores: el } = validarLocalizacion(loc)
       setErroresLoc(el)
+      if (ok && tipoLocalizacion === 'multiple') setLocLoteActual(loc)
       return ok
     }
     setErroresLoc({})
     return true
+  }
+
+  const abrirModalNuevoLote = () => {
+    if (registrosEnLoteActual().length === 0) {
+      alert('Agrega al menos un registro con la localización actual antes de definir otra.')
+      return
+    }
+    setLocNuevoLoteDraft(sicoeLocVacia())
+    setErroresNuevoLote({})
+    setModalNuevoLoteLoc(true)
+  }
+
+  const confirmarNuevoLoteLoc = () => {
+    const { ok, errores: el } = validarLocalizacion(locNuevoLoteDraft)
+    setErroresNuevoLote(el)
+    if (!ok) return
+    setLocLoteActual(locNuevoLoteDraft)
+    setLoteLocIdxActual((i) => i + 1)
+    setModalNuevoLoteLoc(false)
+  }
+
+  const continuarATopografia = () => {
+    if (registros.length === 0) {
+      alert('Debe tener al menos un registro')
+      return
+    }
+    setTabActivo(4)
   }
 
   const aplicarPlantilla = (plantilla) => {
@@ -10548,7 +10574,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         foto_url: null, foto_numero: null, foto_descripcion: '',
         grafico_url: null, grafico_numero: null, grafico_descripcion: '',
         _fotoOk: false, _grafOk: false,
-        ...(tipoLocalizacion === 'multiple' ? sicoeLocVacia() : {}),
+        ...stampLocEnRegistro(),
       })))
     }
   }
@@ -10567,7 +10593,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       foto_url: null, foto_numero: null, foto_descripcion: '',
       grafico_url: null, grafico_numero: null, grafico_descripcion: '',
       _fotoOk: false, _grafOk: false,
-      ...(tipoLocalizacion === 'multiple' ? sicoeLocVacia() : {}),
+      ...stampLocEnRegistro(),
     }])
   }
 
@@ -10575,16 +10601,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const guardarReporte = async () => {
     if (!validarTab1()) { setTabActivo(0); return }
-    if (!validarTabPlantilla()) { setTabActivo(1); return }
-    if (!validarTabTipoLoc()) { setTabActivo(2); return }
+    if (!validarTabLocalizacion()) { setTabActivo(2); return }
     if (registros.length === 0) { alert('Debe tener al menos un registro'); setTabActivo(3); return }
     if (tipoLocalizacion === 'multiple') {
       for (let i = 0; i < registros.length; i++) {
         const { ok } = validarLocalizacion(registros[i])
         if (!ok) {
-          alert(`El registro #${i + 1} no tiene localización completa. Ábralo y diligénciela antes de guardar.`)
+          alert(`El registro #${i + 1} no tiene localización asignada. Revise los lotes en el paso Registros.`)
           setTabActivo(3)
-          setModalRegistro(i)
           return
         }
       }
@@ -10603,9 +10627,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           capitulo: capituloSel || 'Sin asignar',
           estado: 'Sin Asignar Ítem',
           tipo_localizacion: tipoLocalizacion || 'unica',
-          semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-          acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
           subcontratista_id: subSeleccionado?.id || null,
+          inspector_id: inspSeleccionado?.id || null,
           ...locRep,
         }
         const reporteLocal = await crearReporteLocal(contrato_id, { id: localId, ...reporteData })
@@ -10672,9 +10695,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             capitulo: capituloSel || 'Sin asignar',
             estado: 'Borrador',
             tipo_localizacion: tipoLocalizacion || 'unica',
-            semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-            acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
             subcontratista_id: subSeleccionado?.id || null,
+            inspector_id: inspSeleccionado?.id || null,
             ...locRepApi,
           })
         })
@@ -10706,8 +10728,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         inspector_id: inspSeleccionado?.id || null,
         capitulo: capituloSel,
         tipo_localizacion: tipoLocalizacion || 'unica',
-        semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-        acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
         enlace_soporte: enlacesMerged.length ? JSON.stringify(enlacesMerged) : null,
         ...locRepApi,
       }
@@ -10777,7 +10797,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     border: `1px solid ${err ? '#EF4444' : t.border}`, outline: 'none'
   })
 
-  const TABS = ['📋 Identificación', '📄 Plantilla', '📍 Localización', '📝 Registros', '📍 Topografía']
+  const TABS = ['📋 Info General', '📄 Plantilla', '📍 Localización', '📝 Registros', '📍 Topografía']
   const TAB_TOPO = 4
 
   return (
@@ -10857,41 +10877,33 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {errores.sub && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.sub}</span>}
               </div>
 
-              {/* Semana */}
-              <div>
+              {/* Inspector */}
+              <div style={{ position:'relative' }}>
                 <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  SEMANA *
+                  INSPECTOR *
                 </label>
-                <select value={semanaSel} onChange={e => setSemanaSel(e.target.value)} style={inpStyle(errores.semana)}>
-                  <option value="">-- Seleccionar semana --</option>
-                  {(listaSemanas.length ? listaSemanas : (semanaVigente ? [semanaVigente] : [])).map(s => (
-                    <option key={s.id} value={s.id}>
-                      Sem. {s.numero_semana} · {s.fecha_inicio} → {s.fecha_fin}
-                    </option>
-                  ))}
-                </select>
-                {errores.semana && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.semana}</span>}
+                <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
+                  onChange={e => { setInspBusqueda(e.target.value); setInspSeleccionado(null); setInspDropOpen(true) }}
+                  onFocus={() => setInspDropOpen(true)}
+                  placeholder="Buscar inspector de obra..." style={inpStyle(errores.insp)} />
+                {inspDropOpen && inspFiltrados.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
+                    {inspFiltrados.map(i => (
+                      <div key={i.id} onClick={() => { setInspSeleccionado(i); setInspBusqueda(''); setInspDropOpen(false) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
+                          borderBottom:`1px solid ${t.border}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        {i.nombre}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {errores.insp && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.insp}</span>}
               </div>
 
-              {/* Acta RPO */}
-              <div>
-                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  ACTA RPO *
-                </label>
-                <select value={actaSel} onChange={e => setActaSel(e.target.value)} style={inpStyle(errores.acta)}>
-                  <option value="">-- Seleccionar acta RPO --</option>
-                  {(actasList || []).map(a => (
-                    <option key={a.id} value={a.id}>RPO #{a.numero_rpo}</option>
-                  ))}
-                </select>
-                {errores.acta && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.acta}</span>}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 1: Plantilla ── */}
-          {tabActivo === 1 && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+              {/* Capítulo */}
               <div style={{ position:'relative' }}>
                 <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   CAPÍTULO *
@@ -10922,6 +10934,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           {c.capitulo}
                         </div>
                       ))}
+                    {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
+                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'var(--cc-sm)', textAlign:'center' }}>
+                        No se encontró el capítulo
+                      </div>
+                    )}
                   </div>
                 )}
                 {capituloSel && (
@@ -10929,10 +10946,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 )}
                 {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.capitulo}</span>}
               </div>
+            </div>
+          )}
 
+          {/* ── TAB 1: Plantilla ── */}
+          {tabActivo === 1 && (
+            <div>
               {!capituloSel && (
                 <div style={{ padding:'30px', textAlign:'center', color:t.textMuted }}>
-                  Selecciona un capítulo para ver las plantillas disponibles.
+                  Selecciona un capítulo en Info General para ver las plantillas disponibles.
                 </div>
               )}
               {capituloSel && (
@@ -10979,7 +11001,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
           )}
 
-          {/* ── TAB 2: Tipo de localización ── */}
+          {/* ── TAB 2: Localización ── */}
           {tabActivo === 2 && (
             <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
               <div style={{ fontSize:'var(--cc-md)', fontWeight:700, color:t.text }}>
@@ -10988,7 +11010,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
                 {[
                   { id: 'unica', title: 'Una sola localización', desc: 'La misma PK, abscisas y nodos aplican a todos los registros.' },
-                  { id: 'multiple', title: 'Varias localizaciones', desc: 'Cada registro llevará su propia localización al diligenciarlo.' },
+                  { id: 'multiple', title: 'Varias localizaciones', desc: 'Varios registros pueden compartir la misma localización por lotes; podrás agregar más lotes antes de Topografía.' },
                 ].map(opt => (
                   <button key={opt.id} type="button" onClick={() => setTipoLocalizacion(opt.id)}
                     style={{
@@ -11026,12 +11048,29 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               )}
               {tipoLocalizacion === 'unica' && modoEdicion && (
                 <div style={{ padding:'14px', background:t.bg, borderRadius:'10px', border:`1px solid ${t.border}`, color:t.textMuted, fontSize:'var(--cc-sm)' }}>
-                  La localización del reporte ya fue definida al crearlo. Use la portada para consultarla.
+                  La localización del reporte ya fue definida al crearlo.
                 </div>
               )}
-              {tipoLocalizacion === 'multiple' && (
-                <div style={{ padding:'14px', background:'#0077B615', borderRadius:'10px', border:'1px solid #0077B633', color:t.text, fontSize:'var(--cc-sm)', lineHeight:1.5 }}>
-                  No se pedirá localización aquí. En el paso <strong>Registros</strong>, cada actividad tendrá su bloque de localización obligatorio antes de guardar.
+              {tipoLocalizacion === 'multiple' && !modoEdicion && (
+                <>
+                  <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
+                    Define la <strong>primera localización</strong>. Se asignará automáticamente a los registros que agregues hasta que indiques un nuevo lote.
+                  </div>
+                  <SicoeLocalizacionFields
+                    t={t}
+                    token={token}
+                    contratoId={contrato_id}
+                    value={locLoteActual}
+                    onChange={setLocLoteActual}
+                    errores={erroresLoc}
+                    pkIds={pkIds}
+                    nodos={nodos}
+                  />
+                </>
+              )}
+              {tipoLocalizacion === 'multiple' && modoEdicion && (
+                <div style={{ padding:'14px', background:t.bg, borderRadius:'10px', border:`1px solid ${t.border}`, color:t.textMuted, fontSize:'var(--cc-sm)' }}>
+                  Las localizaciones por lote ya fueron definidas al crear el reporte.
                 </div>
               )}
             </div>
@@ -11040,6 +11079,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           {/* ── TAB 3: Registros ── */}
           {tabActivo === 3 && (
             <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+              {tipoLocalizacion === 'multiple' && (
+                <div style={{ padding:'12px 14px', background:'#0077B612', border:'1px solid #0077B633', borderRadius:'10px', fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.5 }}>
+                  <div style={{ fontWeight:700, marginBottom:'4px' }}>
+                    📍 Lote de localización #{loteLocIdxActual + 1}
+                  </div>
+                  <div style={{ color:t.textMuted }}>{fmtLocCorta(locLoteActual)}</div>
+                  <div style={{ marginTop:'6px', fontSize:'var(--cc-label)', color:t.textMuted }}>
+                    {registrosEnLoteActual().length} actividad(es) en este lote · {registros.length} en total
+                  </div>
+                </div>
+              )}
               {registros.length === 0 && (
                 <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, background:t.bg, borderRadius:'8px' }}>
                   No hay actividades. Agrega una o aplica una plantilla en el TAB anterior.
@@ -11069,6 +11119,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
                       {reg.observacion || <span style={{ fontStyle:'italic' }}>Click para diligenciar...</span>}
                     </div>
+                    {tipoLocalizacion === 'multiple' && (
+                      <div style={{ fontSize:'var(--cc-caption)', color:t.primary, marginTop:'2px' }}>
+                        Loc. lote #{(reg.loteLocIdx ?? 0) + 1}{reg.pkSeleccionado?.pk_id ? ` · ${reg.pkSeleccionado.pk_id}` : ''}
+                      </div>
+                    )}
                   </div>
                   <div style={{ fontWeight:'700', color: reg.cantidad_total ? '#10B981' : t.textMuted, fontSize:'var(--cc-sm)' }}>
                     {reg.cantidad_total != null ? Number(reg.cantidad_total).toFixed(2) : '—'}
@@ -11222,11 +11277,22 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             {borradorId && puedeEliminarBorradorReporte ? '🗑️ Cancelar / Eliminar borrador' : 'Cancelar'}
           </button>
           <div style={{ display:'flex', gap:'8px' }}>
-            {tabActivo < TAB_TOPO && (
+            {tabActivo === 3 && tipoLocalizacion === 'multiple' && (
+              <>
+                <button type="button" onClick={abrirModalNuevoLote} style={{
+                  background:'transparent', color:t.primary, border:`1px solid ${t.primary}`,
+                  borderRadius:'8px', padding:'8px 16px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
+                }}>➕ Agregar otra localización</button>
+                <button type="button" onClick={continuarATopografia} style={{
+                  background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                  padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
+                }}>Continuar a Topografía →</button>
+              </>
+            )}
+            {tabActivo < TAB_TOPO && !(tabActivo === 3 && tipoLocalizacion === 'multiple') && (
               <button onClick={() => {
                 if (tabActivo === 0 && !validarTab1()) return
-                if (tabActivo === 1 && !validarTabPlantilla()) return
-                if (tabActivo === 2 && !validarTabTipoLoc()) return
+                if (tabActivo === 2 && !validarTabLocalizacion()) return
                 if (tabActivo === 3 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
                 setTabActivo(tabActivo + 1)
               }} style={{
@@ -11266,20 +11332,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'14px' }}>
               {tipoLocalizacion === 'multiple' && (
-                <SicoeLocalizacionFields
-                  t={t}
-                  token={token}
-                  contratoId={contrato_id}
-                  value={registros[modalRegistro]}
-                  onChange={(loc) => {
-                    const a = [...registros]
-                    a[modalRegistro] = { ...a[modalRegistro], ...loc }
-                    setRegistros(a)
-                  }}
-                  errores={erroresRegLoc}
-                  pkIds={pkIds}
-                  nodos={nodos}
-                />
+                <div style={{ padding:'10px 12px', background:t.bg, borderRadius:'8px', border:`1px solid ${t.border}`, fontSize:'var(--cc-label)', color:t.textMuted }}>
+                  📍 Localización del lote #{(registros[modalRegistro].loteLocIdx ?? 0) + 1}: {fmtLocCorta(registros[modalRegistro])}
+                </div>
               )}
               {/* Dimensiones + Unidad en una sola fila */}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:'10px' }}>
@@ -11402,20 +11457,54 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   alert('La foto de obra es obligatoria')
                   return
                 }
-                if (tipoLocalizacion === 'multiple') {
-                  const { ok, errores: el } = validarLocalizacion(reg)
-                  setErroresRegLoc(el)
-                  if (!ok) {
-                    alert('Complete la localización del registro antes de guardar')
-                    return
-                  }
-                }
-                setErroresRegLoc({})
                 setModalRegistro(null)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
                 padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>✅ Guardar Registro</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal nueva localización (lote) ── */}
+      {modalNuevoLoteLoc && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:2100,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'640px',
+            maxHeight:'90vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div>
+                <div style={{ fontWeight:'700', color:t.text }}>➕ Nueva localización (lote #{loteLocIdxActual + 2})</div>
+                <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginTop:'4px' }}>
+                  Los registros que agregues después usarán esta ubicación.
+                </div>
+              </div>
+              <button type="button" onClick={() => setModalNuevoLoteLoc(false)} style={{
+                background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ flex:1, overflowY:'auto', padding:'20px' }}>
+              <SicoeLocalizacionFields
+                t={t}
+                token={token}
+                contratoId={contrato_id}
+                value={locNuevoLoteDraft}
+                onChange={setLocNuevoLoteDraft}
+                errores={erroresNuevoLote}
+                pkIds={pkIds}
+                nodos={nodos}
+              />
+            </div>
+            <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
+              <button type="button" onClick={() => setModalNuevoLoteLoc(false)} style={{
+                background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                borderRadius:'8px', padding:'8px 16px', cursor:'pointer', fontSize:'var(--cc-sm)'
+              }}>Cancelar</button>
+              <button type="button" onClick={confirmarNuevoLoteLoc} style={{
+                background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                padding:'8px 20px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
+              }}>Aplicar a nuevos registros</button>
             </div>
           </div>
         </div>

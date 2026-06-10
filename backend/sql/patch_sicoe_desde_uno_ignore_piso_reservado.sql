@@ -1,16 +1,5 @@
--- Consecutivos SICOE: numeración natural (1, 2, 3…) solo en contratos marcados.
--- Contratos sin marca siguen con piso 35000 (reportes) y 55000 (registros).
---
--- 1) Ejecuta TODO este archivo en el SQL Editor de Supabase.
--- 2) Marca el contrato nuevo, p. ej. id = 3:
---      UPDATE public.contratos SET sicoe_consecutivos_desde_uno = true WHERE id = 3;
--- 3) Pon reservado_hasta en 0 para ese contrato (o vuelve a correr el script Python de migración PK).
-
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS sicoe_consecutivos_desde_uno boolean NOT NULL DEFAULT false;
-
-COMMENT ON COLUMN public.contratos.sicoe_consecutivos_desde_uno IS
-  'Si true: siguiente_numero_reporte/registro no usan piso 35k/55k; el primero es 1 tras limpiar obra y reservado_hasta=0.';
+-- Si el contrato usa sicoe_consecutivos_desde_uno pero el contador quedó en piso legacy
+-- (34999/54999 o superior), ignorar ese reservado_hasta y numerar desde MAX(tabla)+1.
 
 CREATE OR REPLACE FUNCTION public.siguiente_numero_registro(p_contrato_id integer)
 RETURNS integer
@@ -205,7 +194,3 @@ BEGIN
   RETURN ARRAY(SELECT generate_series(inicio, fin_));
 END;
 $$;
-
-GRANT EXECUTE ON FUNCTION public.siguiente_numero_registro(integer) TO service_role, authenticated;
-GRANT EXECUTE ON FUNCTION public.siguiente_numero_reporte(integer) TO service_role, authenticated;
-GRANT EXECUTE ON FUNCTION public.siguiente_n_numeros_registro(integer, integer) TO service_role, authenticated;

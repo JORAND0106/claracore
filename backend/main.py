@@ -4332,6 +4332,225 @@ def admin_contratos_resumen(current_user=Depends(get_current_user)):
     return supabase.table("contratos").select("id, numero, fase").order("numero").execute().data or []
 
 
+def _sicoe_rsv_efectivo(desde_uno: bool, rsv: int, m_tab: int, piso: int) -> int:
+    """Alinea reservado_hasta con numeración desde 1 (ignora pisos legacy 35k/55k)."""
+    if desde_uno and rsv is not None and int(rsv) >= piso:
+        return int(m_tab or 0)
+    return int(rsv or 0)
+
+
+def _sicoe_renumerar_reportes_contrato(contrato_id: int) -> int:
+    """Renumera so_reportes del contrato 1..N (dos fases para evitar colisiones)."""
+    def _listar():
+        return (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte")
+            .eq("contrato_id", contrato_id)
+            .order("numero_reporte")
+            .order("id")
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_listar) or []
+    if not rows:
+        return 0
+    for r in rows:
+        rid = r.get("id")
+        if rid is None:
+            continue
+
+        def _tmp():
+            return (
+                supabase.table("so_reportes")
+                .update({"numero_reporte": -int(rid)})
+                .eq("id", rid)
+                .eq("contrato_id", contrato_id)
+                .execute()
+            )
+
+        supabase_execute(_tmp)
+    for i, r in enumerate(rows, start=1):
+        rid = r.get("id")
+        if rid is None:
+            continue
+
+        def _fin():
+            return (
+                supabase.table("so_reportes")
+                .update({"numero_reporte": i})
+                .eq("id", rid)
+                .eq("contrato_id", contrato_id)
+                .execute()
+            )
+
+        supabase_execute(_fin)
+    return len(rows)
+
+
+def _sicoe_renumerar_registros_contrato(contrato_id: int) -> int:
+    """Renumera so_registros del contrato 1..N (dos fases para evitar colisiones)."""
+    def _listar():
+        return (
+            supabase.table("so_registros")
+            .select("id, numero_registro")
+            .eq("contrato_id", contrato_id)
+            .order("numero_registro")
+            .order("id")
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_listar) or []
+    if not rows:
+        return 0
+    for r in rows:
+        rid = r.get("id")
+        if rid is None:
+            continue
+
+        def _tmp():
+            return (
+                supabase.table("so_registros")
+                .update({"numero_registro": -int(rid)})
+                .eq("id", rid)
+                .eq("contrato_id", contrato_id)
+                .execute()
+            )
+
+        supabase_execute(_tmp)
+    for i, r in enumerate(rows, start=1):
+        rid = r.get("id")
+        if rid is None:
+            continue
+
+        def _fin():
+            return (
+                supabase.table("so_registros")
+                .update({"numero_registro": i})
+                .eq("id", rid)
+                .eq("contrato_id", contrato_id)
+                .execute()
+            )
+
+        supabase_execute(_fin)
+    return len(rows)
+
+
+class ResetSicoeContadoresBody(BaseModel):
+    renumerar_existentes: bool = True
+
+
+@app.post("/admin/contratos/{contrato_id}/reset-sicoe-contadores")
+def admin_reset_sicoe_contadores(
+    contrato_id: int,
+    body: ResetSicoeContadoresBody = ResetSicoeContadoresBody(),
+    current_user=Depends(get_current_user),
+):
+    """Activa numeración desde 1, opcionalmente renumerar obra existente y sincroniza contadores."""
+    if not _es_desarrollador(current_user) and not _es_admin_o_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo Administrador o Desarrollador puede resetear contadores SICOE")
+
+    def _contrato():
+        return supabase.table("contratos").select("id, numero").eq("id", contrato_id).limit(1).execute().data
+
+    crows = supabase_execute(_contrato)
+    if not crows:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+
+    def _marcar():
+        return (
+            supabase.table("contratos")
+            .update({"sicoe_consecutivos_desde_uno": True})
+            .eq("id", contrato_id)
+            .execute()
+        )
+
+    supabase_execute(_marcar)
+
+    n_rep = 0
+    n_reg = 0
+    if body.renumerar_existentes:
+        n_rep = _sicoe_renumerar_reportes_contrato(contrato_id)
+        n_reg = _sicoe_renumerar_registros_contrato(contrato_id)
+
+    def _max_rep():
+        return (
+            supabase.table("so_reportes")
+            .select("numero_reporte")
+            .eq("contrato_id", contrato_id)
+            .order("numero_reporte", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    def _max_reg():
+        return (
+            supabase.table("so_registros")
+            .select("numero_registro")
+            .eq("contrato_id", contrato_id)
+            .order("numero_registro", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    mrep_rows = supabase_execute(_max_rep)
+    mreg_rows = supabase_execute(_max_reg)
+    max_rep = int(mrep_rows[0]["numero_reporte"]) if mrep_rows and mrep_rows[0].get("numero_reporte") is not None else 0
+    max_reg = int(mreg_rows[0]["numero_registro"]) if mreg_rows and mreg_rows[0].get("numero_registro") is not None else 0
+
+    def _upsert_rep():
+        return (
+            supabase.table("sico_ultimo_numero_reporte")
+            .upsert({"contrato_id": contrato_id, "reservado_hasta": max_rep}, on_conflict="contrato_id")
+            .execute()
+        )
+
+    def _upsert_reg():
+        return (
+            supabase.table("sico_ultimo_numero_registro")
+            .upsert({"contrato_id": contrato_id, "reservado_hasta": max_reg}, on_conflict="contrato_id")
+            .execute()
+        )
+
+    supabase_execute(_upsert_rep)
+    supabase_execute(_upsert_reg)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "ADMIN",
+            "contrato",
+            str(contrato_id),
+            {
+                "accion": "reset_sicoe_contadores",
+                "renumerar_existentes": body.renumerar_existentes,
+                "reportes_renumerados": n_rep,
+                "registros_renumerados": n_reg,
+                "max_numero_reporte": max_rep,
+                "max_numero_registro": max_reg,
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "sicoe_consecutivos_desde_uno": True,
+        "reportes_renumerados": n_rep,
+        "registros_renumerados": n_reg,
+        "max_numero_reporte": max_rep,
+        "max_numero_registro": max_reg,
+        "siguiente_numero_reporte": max_rep + 1 if max_rep else 1,
+        "siguiente_numero_registro": max_reg + 1 if max_reg else 1,
+    }
+
+
 @app.get("/contratos/{contrato_id}/plano-geojson")
 def obtener_contrato_plano_geojson(contrato_id: int):
     """Solo plano + centro. Usar desde el cliente con caché para no repetir descargas de JSON enormes."""
@@ -11474,6 +11693,7 @@ def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)
     if rsv is None:
         rsv = 0 if desde_uno else 34999
     piso = 35000
+    rsv = _sicoe_rsv_efectivo(desde_uno, rsv, m_tab, piso)
     if desde_uno:
         sig = max(m_tab + 1, rsv + 1)
     else:
@@ -16635,7 +16855,7 @@ def reemplazar_registros_nuevo_reporte(
     def _get_rep():
         return supabase.table("so_reportes").select(
             "pk_id_id,civ,tramo,infraestructura,calzada,ubicacion,"
-            "coord_lat,coord_lng,abs_inicio,abs_final,nodo_ini,nodo_fin,"
+            "coord_lat,coord_lng,margen,abs_inicio,abs_final,nodo_ini,nodo_fin,"
             "subcontratista_id,inspector_id,tipo_localizacion"
         ).eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
     rep_rows = supabase_execute(_get_rep)
