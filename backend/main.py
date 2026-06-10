@@ -11520,7 +11520,6 @@ class ReporteCreate(BaseModel):
     semana_id: Optional[int] = None
     acta_rpo_id: Optional[int] = None
     corte_id: Optional[int] = None
-    tipo_localizacion: Optional[str] = 'unica'
 
 @app.get("/sicoe-obra/{contrato_id}/cargos-validacion")
 def cargos_con_validacion(contrato_id: int, current_user=Depends(get_current_user)):
@@ -16229,7 +16228,6 @@ class RegistroCreate(BaseModel):
     abs_final: Optional[float] = None
     nodo_ini: Optional[str] = None
     nodo_fin: Optional[str] = None
-    margen: Optional[str] = None
     subcontratista_id: Optional[int] = None
     inspector_id: Optional[int] = None
     creado_por_reg: Optional[int] = None
@@ -16252,19 +16250,6 @@ class RegistroLineaNuevoReporte(BaseModel):
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
-    pk_id_id: Optional[int] = None
-    civ: Optional[str] = None
-    tramo: Optional[str] = None
-    infraestructura: Optional[str] = None
-    calzada: Optional[str] = None
-    ubicacion: Optional[str] = None
-    coord_lat: Optional[float] = None
-    coord_lng: Optional[float] = None
-    margen: Optional[str] = None
-    abs_inicio: Optional[float] = None
-    abs_final: Optional[float] = None
-    nodo_ini: Optional[str] = None
-    nodo_fin: Optional[str] = None
 
 class AsignarActoresPorPkBody(BaseModel):
     """Inspector y subcontratista en todas las cabeceras `so_reportes` con el mismo `pk_id_id`."""
@@ -16636,7 +16621,7 @@ def reemplazar_registros_nuevo_reporte(
         return supabase.table("so_reportes").select(
             "pk_id_id,civ,tramo,infraestructura,calzada,ubicacion,"
             "coord_lat,coord_lng,abs_inicio,abs_final,nodo_ini,nodo_fin,"
-            "subcontratista_id,inspector_id,tipo_localizacion"
+            "subcontratista_id,inspector_id"
         ).eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
     rep_rows = supabase_execute(_get_rep)
     if not rep_rows:
@@ -16719,17 +16704,9 @@ def reemplazar_registros_nuevo_reporte(
         data["numero_registro"] = numero
         data["contrato_id"] = contrato_id
         data["creado_por_reg"] = uid
-        es_loc_multiple = (rep.get("tipo_localizacion") or "unica") == "multiple"
-        campos_desde_reporte = ("subcontratista_id", "inspector_id")
-        if not es_loc_multiple:
-            campos_desde_reporte = (
-                "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
-                "coord_lat", "coord_lng", "margen", "abs_inicio", "abs_final",
-                "nodo_ini", "nodo_fin", "subcontratista_id", "inspector_id",
-            )
-        for campo in campos_desde_reporte:
-            if es_loc_multiple and campo in data and data.get(campo) is not None:
-                continue
+        for campo in ("pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+                      "coord_lat", "coord_lng", "abs_inicio", "abs_final",
+                      "nodo_ini", "nodo_fin", "subcontratista_id", "inspector_id"):
             if rep.get(campo) is not None:
                 data[campo] = rep[campo]
         rows_to_insert.append(data)

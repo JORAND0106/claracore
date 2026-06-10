@@ -40,13 +40,6 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
-import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
-import {
-  sicoeLocVacia,
-  sicoeLocFromRegistro,
-  validarLocalizacion,
-  localizacionToApiFields,
-} from './modules/sicoe-obra/sicoeLocalizacionHelpers'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -1948,11 +1941,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [corteSel,               setCorteSel]               = useState('')
   const [guardandoCorte,         setGuardandoCorte]         = useState(false)
   const [nivelTargetValidacion, setNivelTargetValidacion]   = useState(null)
-  const esLocMultiple = (reporte?.tipo_localizacion || 'unica') === 'multiple'
-  const [locRegistro, setLocRegistro] = useState(() => sicoeLocFromRegistro(registro))
-  const [pkIdsHoja, setPkIdsHoja] = useState([])
-  const [nodosHoja, setNodosHoja] = useState([])
-  const [erroresLocHoja, setErroresLocHoja] = useState({})
   const API = API_URL
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id)
   const encPorNivelHojaReg = useMemo(
@@ -2004,29 +1992,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   useEffect(() => {
     setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
   }, [registro.id, registro.corte_id])
-
-  useEffect(() => {
-    setLocRegistro(sicoeLocFromRegistro(registro, pkIdsHoja))
-  }, [
-    registro.id, registro.pk_id_id, registro.margen, registro.abs_inicio, registro.abs_final,
-    registro.nodo_ini, registro.nodo_fin, pkIdsHoja.length,
-  ])
-
-  useEffect(() => {
-    if (!esLocMultiple || !contrato_id) return
-    fetch(`${API}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => setPkIdsHoja(Array.isArray(d) ? d : []))
-      .catch(() => setPkIdsHoja([]))
-  }, [esLocMultiple, contrato_id, API, hdrs])
-
-  useEffect(() => {
-    if (!esLocMultiple || !contrato_id || !capituloHoja) { setNodosHoja([]); return }
-    fetch(`${API}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(capituloHoja)}`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => setNodosHoja(Array.isArray(d) ? d : []))
-      .catch(() => setNodosHoja([]))
-  }, [esLocMultiple, contrato_id, capituloHoja, API, hdrs])
 
   useEffect(() => {
     if (!soloCorteNivel3 || !reporte.subcontratista_id) {
@@ -2286,14 +2251,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       alert('Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).')
       return
     }
-    if (esLocMultiple && editableCampos) {
-      const { ok, errores } = validarLocalizacion(locRegistro)
-      setErroresLocHoja(errores)
-      if (!ok) {
-        alert('Complete la localización del registro antes de guardar.')
-        return
-      }
-    }
     setGuardando(true)
     try {
       // 1. Guardar dimensiones + observacion (null en JSON = borrar en BD; el backend ya no filtra esos null)
@@ -2311,7 +2268,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
             : {}),
           observacion:     observacion || null,
-          ...(esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}),
         })
       })
       if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
@@ -3040,39 +2996,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       </div>
 
-      {/* ─ Sección: Localización ─ */}
+      {/* ─ Sección: Abscisado y Nodos ─ */}
       <div style={{ marginBottom:'16px' }}>
-        {esLocMultiple && editableCampos ? (
-          <SicoeLocalizacionFields
-            t={t}
-            token={getToken()}
-            contratoId={contrato_id}
-            value={locRegistro}
-            onChange={setLocRegistro}
-            errores={erroresLocHoja}
-            pkIds={pkIdsHoja}
-            nodos={nodosHoja}
-          />
-        ) : esLocMultiple ? (
-          <SicoeLocalizacionFields
-            t={t}
-            token={getToken()}
-            contratoId={contrato_id}
-            value={sicoeLocFromRegistro(registro, pkIdsHoja)}
-            readOnly
-          />
-        ) : (
-          <>
-            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
-              <CampoRO label="Abs. Inicio"  valor={registro.abs_inicio} />
-              <CampoRO label="Abs. Final"   valor={registro.abs_final} />
-              <CampoRO label="Nodo Inicio"  valor={registro.nodo_ini} />
-              <CampoRO label="Nodo Final"   valor={registro.nodo_fin} />
-            </div>
-          </>
-        )}
-      </div>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
+          <CampoRO label="Abs. Inicio"  valor={registro.abs_inicio} />
+          <CampoRO label="Abs. Final"   valor={registro.abs_final} />
+          <CampoRO label="Nodo Inicio"  valor={registro.no_inicio} />
+          <CampoRO label="Nodo Final"   valor={registro.no_final} />
+        </div>
+      </div>    
 
       {/* ─ Sección: Coordenadas Topográficas ─ */}
       <div style={{ marginBottom:'16px' }}>
@@ -4719,12 +4652,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {/* GRUPO 3 — Localización */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                 <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
-                {(reporte.tipo_localizacion || 'unica') === 'multiple' && (
-                  <div style={{ marginBottom:'12px', padding:'10px 12px', background:'#0077B612', border:'1px solid #0077B633', borderRadius:'8px', fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
-                    Este reporte usa <strong>varias localizaciones</strong>. La ubicación de cada actividad se define en su hoja de registro.
-                  </div>
-                )}
-                {(reporte.tipo_localizacion || 'unica') === 'multiple' ? null : (
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
 
                   {/* Columna izquierda — campos */}
@@ -4836,7 +4763,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     pkMapHint={pkTextoPlano || null}
                   />
                 </div>
-                )}
               </div>
 
               {/* GRUPO 4 — Coordenadas Topográficas (siempre visible) */}
@@ -9303,8 +9229,6 @@ function ModuloSicoeObra({
           t={t} usuario={usuario} token={getToken()}
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
-          actasList={filtroActaList}
-          semanaVigente={semanaVigente}
           isOnline={isOnline}
           isOfflineReady={isOfflineReady}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
@@ -10127,16 +10051,10 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
 }
 
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
-function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial, actasList = [], semanaVigente = null, isOnline = true, isOfflineReady = false }) {
+function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial, isOnline = true, isOfflineReady = false }) {
   const [tabActivo, setTabActivo] = useState(0)
   const [guardando, setGuardando] = useState(false)
   const [errores, setErrores] = useState({})
-  const [erroresLoc, setErroresLoc] = useState({})
-  const [tipoLocalizacion, setTipoLocalizacion] = useState(reporteInicial?.tipo_localizacion || '')
-  const [semanaSel, setSemanaSel] = useState(reporteInicial?.semana_id ?? semanaVigente?.id ?? '')
-  const [actaSel, setActaSel] = useState(reporteInicial?.acta_rpo_id ?? '')
-  const [listaSemanas, setListaSemanas] = useState([])
-  const [erroresRegLoc, setErroresRegLoc] = useState({})
 
   // Datos TAB 1
   const [descripcion, setDescripcion] = useState('')
@@ -10291,14 +10209,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/semanas`, { headers: hdrs })
-      .then(r => r.json()).then(d => setListaSemanas(Array.isArray(d) ? d : []))
-      .catch(() => setListaSemanas([]))
 // Precargar borrador si existe
     if (reporteInicial) {
-      setTipoLocalizacion(reporteInicial.tipo_localizacion || 'unica')
-      if (reporteInicial.semana_id != null) setSemanaSel(reporteInicial.semana_id)
-      if (reporteInicial.acta_rpo_id != null) setActaSel(reporteInicial.acta_rpo_id)
       setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
       setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
       setMargen(reporteInicial.margen || '')
@@ -10326,8 +10238,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         cantidad_total: r.cantidad_total, unidad: r.unidad || '',
         observacion: (r.observacion != null && String(r.observacion).trim() !== '') ? r.observacion : (r.descripcion || ''),
         foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
-        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url,
-        ...sicoeLocFromRegistro(r, pkIds),
+        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
       })))
       {
         const regs = reporteInicial.registros || []
@@ -10503,36 +10414,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     const e = {}
     if (!descripcion.trim()) e.descripcion = 'Requerido'
     if (!subSeleccionado) e.sub = 'Requerido'
-    if (!semanaSel) e.semana = 'Requerido'
-    if (!actaSel) e.acta = 'Requerido'
-    setErrores(e)
-    return Object.keys(e).length === 0
-  }
-
-  const validarTabPlantilla = () => {
-    const e = {}
+    if (!inspSeleccionado) e.insp = 'Requerido'
     if (!capituloSel) e.capitulo = 'Requerido'
+    if (!modoEdicion) {
+      if (!pkSeleccionado) e.pk = 'Requerido'
+      if (!margen) e.margen = 'Requerido'
+      if (absInicio === '') e.absInicio = 'Requerido'
+      if (absFinal === '') e.absFinal = 'Requerido'
+      if (!nodoIni.trim()) e.nodoIni = 'Requerido'
+      if (!nodoFin.trim()) e.nodoFin = 'Requerido'
+    }
     setErrores(e)
     return Object.keys(e).length === 0
-  }
-
-  const locReporteActual = () => ({
-    pkSeleccionado, pk_id_id: pkSeleccionado?.id,
-    margen, absInicio, absFinal, nodoIni, nodoFin, coordLat, coordLng,
-  })
-
-  const validarTabTipoLoc = () => {
-    const e = {}
-    if (!tipoLocalizacion) e.tipo = 'Seleccione una opción'
-    setErrores(e)
-    if (Object.keys(e).length) return false
-    if (tipoLocalizacion === 'unica' && !modoEdicion) {
-      const { ok, errores: el } = validarLocalizacion(locReporteActual())
-      setErroresLoc(el)
-      return ok
-    }
-    setErroresLoc({})
-    return true
   }
 
   const aplicarPlantilla = (plantilla) => {
@@ -10547,8 +10440,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         observacion: '',
         foto_url: null, foto_numero: null, foto_descripcion: '',
         grafico_url: null, grafico_numero: null, grafico_descripcion: '',
-        _fotoOk: false, _grafOk: false,
-        ...(tipoLocalizacion === 'multiple' ? sicoeLocVacia() : {}),
+        _fotoOk: false, _grafOk: false
       })))
     }
   }
@@ -10566,8 +10458,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       cantidad_total: null, unidad: '', observacion: '',
       foto_url: null, foto_numero: null, foto_descripcion: '',
       grafico_url: null, grafico_numero: null, grafico_descripcion: '',
-      _fotoOk: false, _grafOk: false,
-      ...(tipoLocalizacion === 'multiple' ? sicoeLocVacia() : {}),
+      _fotoOk: false, _grafOk: false
     }])
   }
 
@@ -10575,38 +10466,23 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const guardarReporte = async () => {
     if (!validarTab1()) { setTabActivo(0); return }
-    if (!validarTabPlantilla()) { setTabActivo(1); return }
-    if (!validarTabTipoLoc()) { setTabActivo(2); return }
-    if (registros.length === 0) { alert('Debe tener al menos un registro'); setTabActivo(3); return }
-    if (tipoLocalizacion === 'multiple') {
-      for (let i = 0; i < registros.length; i++) {
-        const { ok } = validarLocalizacion(registros[i])
-        if (!ok) {
-          alert(`El registro #${i + 1} no tiene localización completa. Ábralo y diligénciela antes de guardar.`)
-          setTabActivo(3)
-          setModalRegistro(i)
-          return
-        }
-      }
-    }
+    if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
     setGuardando(true)
 
     // ── Modo offline: guardar localmente y encolar ────────────────────────────
     if (!isOnline && isOfflineReady) {
       try {
         const localId = `local_${Date.now()}`
-        const esMult = tipoLocalizacion === 'multiple'
-        const locRep = esMult ? {} : localizacionToApiFields(locReporteActual())
         const reporteData = {
           numero_reporte: numeroReporte,
           descripcion_actividad: descripcion || 'Borrador',
           capitulo: capituloSel || 'Sin asignar',
           estado: 'Sin Asignar Ítem',
-          tipo_localizacion: tipoLocalizacion || 'unica',
-          semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-          acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
-          subcontratista_id: subSeleccionado?.id || null,
-          ...locRep,
+          margen: margen || null,
+          abs_inicio: parseFloat(absInicio) || null,
+          abs_final: parseFloat(absFinal) || null,
+          nodo_ini: nodoIni || null,
+          nodo_fin: nodoFin || null,
         }
         const reporteLocal = await crearReporteLocal(contrato_id, { id: localId, ...reporteData })
         for (let i = 0; i < registros.length; i++) {
@@ -10635,7 +10511,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             unidad: r.unidad, observacion: r.observacion,
             foto_url: r.foto_url, foto_numero: r.foto_numero,
             grafico_url: r.grafico_url, grafico_numero: r.grafico_numero,
-            ...(esMult ? localizacionToApiFields(r) : {}),
           }))},
           localData: reporteLocal,
           localTable: 'so_reportes',
@@ -10662,8 +10537,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       // Usar variable local para evitar problemas de closure con el estado asíncrono
       let idParaGuardar = borradorId
       // Localización: va en el PUT de cabecera (el PATCH /localizacion solo aplica en Borrador y falla al reintentar)
-      const esMult = tipoLocalizacion === 'multiple'
-      const locRepApi = esMult ? {} : localizacionToApiFields(locReporteActual())
       if (!idParaGuardar) {
         const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
@@ -10671,11 +10544,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             descripcion_actividad: descripcion || 'Borrador',
             capitulo: capituloSel || 'Sin asignar',
             estado: 'Borrador',
-            tipo_localizacion: tipoLocalizacion || 'unica',
-            semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-            acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
-            subcontratista_id: subSeleccionado?.id || null,
-            ...locRepApi,
+            pk_id_id: pkSeleccionado?.id || null,
+            civ: pkSeleccionado?.civ || null,
+            tramo: pkSeleccionado?.tramo || null,
+            infraestructura: pkSeleccionado?.infraestructura || null,
+            calzada: pkSeleccionado?.calzada || null,
+            ubicacion: pkSeleccionado?.ubicacion || null,
+            coord_lat: coordLat || null,
+            coord_lng: coordLng || null,
+            margen: margen || null,
+            abs_inicio: parseFloat(absInicio) || null,
+            abs_final: parseFloat(absFinal) || null,
+            nodo_ini: nodoIni || null,
+            nodo_fin: nodoFin || null,
           })
         })
         if (!bRes.ok) throw new Error(await httpErr(bRes))
@@ -10691,7 +10572,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           new URL(wEnlace)
         } catch {
           alert('El enlace en la pestaña Topografía no es una URL válida (usa https://…).')
-          setTabActivo(4)
+          setTabActivo(3)
           setGuardando(false)
           return
         }
@@ -10705,11 +10586,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         subcontratista_id: subSeleccionado?.id || null,
         inspector_id: inspSeleccionado?.id || null,
         capitulo: capituloSel,
-        tipo_localizacion: tipoLocalizacion || 'unica',
-        semana_id: semanaSel ? parseInt(semanaSel, 10) : null,
-        acta_rpo_id: actaSel ? parseInt(actaSel, 10) : null,
+        pk_id_id: pkSeleccionado?.id || null,
+        civ: pkSeleccionado?.civ || null,
+        tramo: pkSeleccionado?.tramo || null,
+        infraestructura: pkSeleccionado?.infraestructura || null,
+        calzada: pkSeleccionado?.calzada || null,
+        ubicacion: pkSeleccionado?.ubicacion || null,
+        coord_lat: coordLat, coord_lng: coordLng,
+        margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
+        nodo_ini: nodoIni, nodo_fin: nodoFin,
         enlace_soporte: enlacesMerged.length ? JSON.stringify(enlacesMerged) : null,
-        ...locRepApi,
       }
       const rUpd = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
@@ -10728,7 +10614,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           grafico_url: reg.grafico_url || reporteGraficoUrl || null,
           grafico_numero: reg.grafico_numero ?? reporteGraficoNumero ?? null,
           grafico_descripcion: reg.grafico_descripcion || (reporteGraficoUrl ? 'Gráfico del reporte' : null),
-          ...(esMult ? localizacionToApiFields(reg) : {}),
         }))
       }
       // Reintento: en móvil 4G el fetch largo a veces corta; el servidor puede haber quedado ok (idempotente: borra e inserta de nuevo)
@@ -10777,8 +10662,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     border: `1px solid ${err ? '#EF4444' : t.border}`, outline: 'none'
   })
 
-  const TABS = ['📋 Identificación', '📄 Plantilla', '📍 Localización', '📝 Registros', '📍 Topografía']
-  const TAB_TOPO = 4
+  const TABS = ['📋 Info General', '📄 Plantilla', '📝 Registros', '📍 Topografía']
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000,
@@ -10857,41 +10741,33 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {errores.sub && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.sub}</span>}
               </div>
 
-              {/* Semana */}
-              <div>
+              {/* Inspector */}
+              <div style={{ position:'relative' }}>
                 <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  SEMANA *
+                  INSPECTOR *
                 </label>
-                <select value={semanaSel} onChange={e => setSemanaSel(e.target.value)} style={inpStyle(errores.semana)}>
-                  <option value="">-- Seleccionar semana --</option>
-                  {(listaSemanas.length ? listaSemanas : (semanaVigente ? [semanaVigente] : [])).map(s => (
-                    <option key={s.id} value={s.id}>
-                      Sem. {s.numero_semana} · {s.fecha_inicio} → {s.fecha_fin}
-                    </option>
-                  ))}
-                </select>
-                {errores.semana && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.semana}</span>}
+                <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
+                  onChange={e => { setInspBusqueda(e.target.value); setInspSeleccionado(null); setInspDropOpen(true) }}
+                  onFocus={() => setInspDropOpen(true)}
+                  placeholder="Buscar inspector de obra..." style={inpStyle(errores.insp)} />
+                {inspDropOpen && inspFiltrados.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
+                    {inspFiltrados.map(i => (
+                      <div key={i.id} onClick={() => { setInspSeleccionado(i); setInspBusqueda(''); setInspDropOpen(false) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
+                          borderBottom:`1px solid ${t.border}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        {i.nombre}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {errores.insp && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.insp}</span>}
               </div>
 
-              {/* Acta RPO */}
-              <div>
-                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  ACTA RPO *
-                </label>
-                <select value={actaSel} onChange={e => setActaSel(e.target.value)} style={inpStyle(errores.acta)}>
-                  <option value="">-- Seleccionar acta RPO --</option>
-                  {(actasList || []).map(a => (
-                    <option key={a.id} value={a.id}>RPO #{a.numero_rpo}</option>
-                  ))}
-                </select>
-                {errores.acta && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.acta}</span>}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 1: Plantilla ── */}
-          {tabActivo === 1 && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+              {/* Capítulo */}
               <div style={{ position:'relative' }}>
                 <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   CAPÍTULO *
@@ -10922,6 +10798,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           {c.capitulo}
                         </div>
                       ))}
+                    {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
+                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'var(--cc-sm)', textAlign:'center' }}>
+                        No se encontró el capítulo
+                      </div>
+                    )}
                   </div>
                 )}
                 {capituloSel && (
@@ -10930,9 +10811,287 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.capitulo}</span>}
               </div>
 
+              {/* Localización + Margen en fila */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 180px', gap:'12px', alignItems:'start' }}>
+                {/* PK_ID */}
+                <div style={{ position:'relative' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    LOCALIZACIÓN (PK_ID){!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion ? (
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>
+                      📍 CIV: {reporteInicial.civ || '—'} · {reporteInicial.tramo || '—'} · {reporteInicial.infraestructura || '—'} · {reporteInicial.calzada || '—'}
+                    </div>
+                  ) : (
+                    <>
+                      {tienePlanoMapa ? (
+                        <div style={{ display:'flex', gap:'6px', alignItems:'stretch' }}>
+                          <input
+                            readOnly
+                            disabled
+                            tabIndex={-1}
+                            value={pkSeleccionado?.pk_id ?? ''}
+                            placeholder="Pulsa el mapa y elige un polígono →"
+                            style={{
+                              ...inpStyle(errores.pk),
+                              flex: 1,
+                              minHeight: '38px',
+                              cursor: 'not-allowed',
+                              opacity: 0.92,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setModalMapaPk(true)}
+                            title="Seleccionar PK_ID en el mapa"
+                            style={{
+                              background: t.primary,
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '8px',
+                              padding: '0 14px',
+                              cursor: 'pointer',
+                              fontSize: 'var(--cc-lg)',
+                              flexShrink: 0,
+                              height: '38px',
+                            }}
+                          >
+                            🗺️
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ position:'relative' }}>
+                          <div style={{ display:'flex', gap:'6px', alignItems:'stretch' }}>
+                            <input
+                              readOnly
+                              disabled
+                              tabIndex={-1}
+                              value={pkSeleccionado?.pk_id ?? ''}
+                              placeholder="Elige un PK con la lista →"
+                              style={{
+                                ...inpStyle(errores.pk),
+                                flex: 1,
+                                minHeight: '38px',
+                                cursor: 'not-allowed',
+                                opacity: 0.92,
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setPkDropOpen(o => !o)}
+                              title="Lista de PK del contrato"
+                              style={{
+                                background: t.bgCard,
+                                color: t.primary,
+                                border: `1px solid ${t.border}`,
+                                borderRadius: '8px',
+                                padding: '0 12px',
+                                cursor: 'pointer',
+                                fontSize: 'var(--cc-lg)',
+                                flexShrink: 0,
+                                height: '38px',
+                              }}
+                            >
+                              📋
+                            </button>
+                          </div>
+                          {pkDropOpen && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                marginTop: '8px',
+                                background: t.bgCard,
+                                border: `1px solid ${t.border}`,
+                                borderRadius: '8px',
+                                zIndex: 25,
+                                padding: '10px',
+                                boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
+                              }}
+                            >
+                              <input
+                                value={pkBusqueda}
+                                onChange={e => {
+                                  setPkBusqueda(e.target.value)
+                                  setPkSeleccionado(null)
+                                }}
+                                placeholder="Filtrar por código o ubicación..."
+                                style={{ ...inpStyle(false), marginBottom: '8px', fontSize: 'var(--cc-sm)' }}
+                                autoFocus
+                              />
+                              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                                {pkFiltrados.length === 0 ? (
+                                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '8px' }}>
+                                    Sin coincidencias
+                                  </div>
+                                ) : (
+                                  pkFiltrados.map(p => (
+                                    <div
+                                      key={p.id}
+                                      onMouseDown={() => {
+                                        selPkId(p)
+                                        setPkDropOpen(false)
+                                      }}
+                                      style={{
+                                        padding: '8px 10px',
+                                        cursor: 'pointer',
+                                        fontSize: 'var(--cc-sm)',
+                                        color: t.text,
+                                        borderBottom: `1px solid ${t.border}`,
+                                      }}
+                                    >
+                                      <span style={{ fontWeight: '700' }}>{p.pk_id}</span>
+                                      <span style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginLeft: '8px' }}>
+                                        {p.ubicacion || ''}
+                                      </span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '6px' }}>
+                            Sin plano GeoJSON no hay mapa; usa 📋 o pide cargar el plano en Contratos.
+                          </div>
+                        </div>
+                      )}
+                      {pkSeleccionado && (
+                        <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
+                          borderRadius:'6px', fontSize:'var(--cc-label)', color:t.textMuted }}>
+                          📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
+                        </div>
+                      )}
+                      {errores.pk && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.pk}</span>}
+                    </>
+                  )}
+                </div>
+
+                {/* Margen */}
+                <div>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    MARGEN{!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion ? (
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{margen || '—'}</div>
+                  ) : (
+                    <>
+                      <select value={margen.startsWith('Otro:') ? 'Otro' : margen}
+                        onChange={e => setMargen(e.target.value === 'Otro' ? 'Otro: ' : e.target.value)}
+                        style={inpStyle(errores.margen)}>
+                        <option value=''>-- Seleccionar --</option>
+                        {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
+                          <option key={m} value={m}>{m}</option>)}
+                      </select>
+                      {margen.startsWith('Otro:') && (
+                        <input value={margen.replace('Otro: ','')}
+                          onChange={e => setMargen('Otro: ' + e.target.value)}
+                          placeholder='Especificar...'
+                          style={{ ...inpStyle(false), marginTop:'6px' }} />
+                      )}
+                      {errores.margen && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.margen}</span>}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Abscisado + Nodos en una sola fila */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'12px' }}>
+                <div>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    ABS. INICIAL{!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{absInicio !== '' ? absInicio : '—'}</div>
+                    : <><input type='number' step='0.01' value={absInicio} onChange={e => setAbsInicio(e.target.value)} placeholder='0.00' style={inpStyle(errores.absInicio)} />
+                       {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.absInicio}</span>}</>
+                  }
+                </div>
+                <div>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    ABS. FINAL{!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{absFinal !== '' ? absFinal : '—'}</div>
+                    : <><input type='number' step='0.01' value={absFinal} onChange={e => setAbsFinal(e.target.value)} placeholder='0.00' style={inpStyle(errores.absFinal)} />
+                       {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.absFinal}</span>}</>
+                  }
+                </div>
+                <div>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    NODO INICIAL{!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{nodoIni || '—'}</div>
+                    : <>
+                        <input value={nodoIni}
+                          onChange={e => {
+                            setNodoIni(e.target.value); setNodoIniWarn(false)
+                            if (e.target.value.length > 1)
+                              setNodoIniSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                            else setNodoIniSugg([])
+                          }}
+                          onBlur={() => {
+                            if (nodoIni && !nodos.includes(nodoIni)) setNodoIniWarn(true)
+                            setTimeout(() => setNodoIniSugg([]), 200)
+                          }}
+                          placeholder='Nodo inicial...' style={inpStyle(errores.nodoIni)} />
+                        {nodoIniSugg.length > 0 && (
+                          <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                            {nodoIniSugg.map(n => (
+                              <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text }}>{n}</div>
+                            ))}
+                          </div>
+                        )}
+                        {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'var(--cc-label)' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.nodoIni}</span>}
+                      </>
+                  }
+                </div>
+                <div>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    NODO FINAL{!modoEdicion && ' *'}
+                  </label>
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{nodoFin || '—'}</div>
+                    : <>
+                        <input value={nodoFin}
+                          onChange={e => {
+                            setNodoFin(e.target.value); setNodoFinWarn(false)
+                            if (e.target.value.length > 1)
+                              setNodoFinSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                            else setNodoFinSugg([])
+                          }}
+                          onBlur={() => {
+                            if (nodoFin && !nodos.includes(nodoFin)) setNodoFinWarn(true)
+                            setTimeout(() => setNodoFinSugg([]), 200)
+                          }}
+                          placeholder='Nodo final...' style={inpStyle(errores.nodoFin)} />
+                        {nodoFinSugg.length > 0 && (
+                          <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                            {nodoFinSugg.map(n => (
+                              <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text }}>{n}</div>
+                            ))}
+                          </div>
+                        )}
+                        {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'var(--cc-label)' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.nodoFin}</span>}
+                      </>
+                  }
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB 1: Plantilla ── */}
+          {tabActivo === 1 && (
+            <div>
               {!capituloSel && (
                 <div style={{ padding:'30px', textAlign:'center', color:t.textMuted }}>
-                  Selecciona un capítulo para ver las plantillas disponibles.
+                  Selecciona un capítulo en el TAB 1 para ver las plantillas disponibles.
                 </div>
               )}
               {capituloSel && (
@@ -10971,7 +11130,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   {plantillaSel && (
                     <div style={{ padding:'10px 14px', background:'#10B98122', border:'1px solid #10B981',
                       borderRadius:'8px', fontSize:'var(--cc-sm)', color:'#10B981' }}>
-                      ✅ Plantilla "{plantillaSel.nombre}" aplicada — {registros.length} actividades cargadas en Registros
+                      ✅ Plantilla "{plantillaSel.nombre}" aplicada — {registros.length} actividades cargadas en TAB 3
                     </div>
                   )}
                 </div>
@@ -10979,66 +11138,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
           )}
 
-          {/* ── TAB 2: Tipo de localización ── */}
+          {/* ── TAB 2: Registros ── */}
           {tabActivo === 2 && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
-              <div style={{ fontSize:'var(--cc-md)', fontWeight:700, color:t.text }}>
-                ¿Este reporte tiene una sola localización o varias localizaciones?
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
-                {[
-                  { id: 'unica', title: 'Una sola localización', desc: 'La misma PK, abscisas y nodos aplican a todos los registros.' },
-                  { id: 'multiple', title: 'Varias localizaciones', desc: 'Cada registro llevará su propia localización al diligenciarlo.' },
-                ].map(opt => (
-                  <button key={opt.id} type="button" onClick={() => setTipoLocalizacion(opt.id)}
-                    style={{
-                      textAlign:'left', padding:'16px', borderRadius:'12px', cursor:'pointer',
-                      border: `2px solid ${tipoLocalizacion === opt.id ? t.primary : t.border}`,
-                      background: tipoLocalizacion === opt.id ? t.primary + '11' : t.bg,
-                    }}>
-                    <div style={{ fontWeight:800, color:t.text, marginBottom:'6px' }}>{opt.title}</div>
-                    <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>{opt.desc}</div>
-                  </button>
-                ))}
-              </div>
-              {errores.tipo && <span style={{ color:'#EF4444', fontSize:'var(--cc-sm)' }}>{errores.tipo}</span>}
-
-              {tipoLocalizacion === 'unica' && !modoEdicion && (
-                <SicoeLocalizacionFields
-                  t={t}
-                  token={token}
-                  contratoId={contrato_id}
-                  value={locReporteActual()}
-                  onChange={(loc) => {
-                    if (loc.pkSeleccionado !== undefined) setPkSeleccionado(loc.pkSeleccionado)
-                    if (loc.margen !== undefined) setMargen(loc.margen)
-                    if (loc.absInicio !== undefined) setAbsInicio(loc.absInicio)
-                    if (loc.absFinal !== undefined) setAbsFinal(loc.absFinal)
-                    if (loc.nodoIni !== undefined) setNodoIni(loc.nodoIni)
-                    if (loc.nodoFin !== undefined) setNodoFin(loc.nodoFin)
-                    if (loc.coordLat !== undefined) setCoordLat(loc.coordLat)
-                    if (loc.coordLng !== undefined) setCoordLng(loc.coordLng)
-                  }}
-                  errores={erroresLoc}
-                  pkIds={pkIds}
-                  nodos={nodos}
-                />
-              )}
-              {tipoLocalizacion === 'unica' && modoEdicion && (
-                <div style={{ padding:'14px', background:t.bg, borderRadius:'10px', border:`1px solid ${t.border}`, color:t.textMuted, fontSize:'var(--cc-sm)' }}>
-                  La localización del reporte ya fue definida al crearlo. Use la portada para consultarla.
-                </div>
-              )}
-              {tipoLocalizacion === 'multiple' && (
-                <div style={{ padding:'14px', background:'#0077B615', borderRadius:'10px', border:'1px solid #0077B633', color:t.text, fontSize:'var(--cc-sm)', lineHeight:1.5 }}>
-                  No se pedirá localización aquí. En el paso <strong>Registros</strong>, cada actividad tendrá su bloque de localización obligatorio antes de guardar.
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── TAB 3: Registros ── */}
-          {tabActivo === 3 && (
             <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
               {registros.length === 0 && (
                 <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, background:t.bg, borderRadius:'8px' }}>
@@ -11122,8 +11223,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
           )}
 
-          {/* ── TAB 4: Topografía ── */}
-          {tabActivo === TAB_TOPO && (
+          {/* ── TAB 3: Topografía ── */}
+          {tabActivo === 3 && (
             <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
               <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>
                 Registra las coordenadas levantadas en campo. Opcional — puedes importar desde CSV.
@@ -11222,19 +11323,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             {borradorId && puedeEliminarBorradorReporte ? '🗑️ Cancelar / Eliminar borrador' : 'Cancelar'}
           </button>
           <div style={{ display:'flex', gap:'8px' }}>
-            {tabActivo < TAB_TOPO && (
+            {tabActivo < 3 && (
               <button onClick={() => {
                 if (tabActivo === 0 && !validarTab1()) return
-                if (tabActivo === 1 && !validarTabPlantilla()) return
-                if (tabActivo === 2 && !validarTabTipoLoc()) return
-                if (tabActivo === 3 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
+                if (tabActivo === 2 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
                 setTabActivo(tabActivo + 1)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
                 padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>Siguiente →</button>
             )}
-            {tabActivo === TAB_TOPO && (
+            {tabActivo === 3 && (
               <button onClick={guardarReporte} disabled={guardando} style={{
                 background: guardando ? t.border : '#10B981', color:'#fff', border:'none',
                 borderRadius:'8px', padding:'8px 24px', cursor: guardando ? 'not-allowed' : 'pointer',
@@ -11265,22 +11364,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'14px' }}>
-              {tipoLocalizacion === 'multiple' && (
-                <SicoeLocalizacionFields
-                  t={t}
-                  token={token}
-                  contratoId={contrato_id}
-                  value={registros[modalRegistro]}
-                  onChange={(loc) => {
-                    const a = [...registros]
-                    a[modalRegistro] = { ...a[modalRegistro], ...loc }
-                    setRegistros(a)
-                  }}
-                  errores={erroresRegLoc}
-                  pkIds={pkIds}
-                  nodos={nodos}
-                />
-              )}
               {/* Dimensiones + Unidad en una sola fila */}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:'10px' }}>
                 {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
@@ -11402,15 +11485,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   alert('La foto de obra es obligatoria')
                   return
                 }
-                if (tipoLocalizacion === 'multiple') {
-                  const { ok, errores: el } = validarLocalizacion(reg)
-                  setErroresRegLoc(el)
-                  if (!ok) {
-                    alert('Complete la localización del registro antes de guardar')
-                    return
-                  }
-                }
-                setErroresRegLoc({})
                 setModalRegistro(null)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
