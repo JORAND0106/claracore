@@ -164,6 +164,7 @@ export default function PptoFiltroMapaPk({
         center: center0,
         zoom: 12,
         bearing: NORTH_RIGHT_BEARING,
+        preserveDrawingBuffer: true,
       })
       map.addControl(new mapboxgl.NavigationControl(), 'top-right')
       mapRef.current = map
@@ -172,7 +173,30 @@ export default function PptoFiltroMapaPk({
       const toFit = []
       const markerEls = []
 
-      const togglePk = (pkv) => {
+      const esperarMapaIdle = () =>
+        new Promise((resolve) => {
+          if (map.loaded()) map.once('idle', resolve)
+          else map.once('load', () => map.once('idle', resolve))
+        })
+
+      const capturarVistaPlano = async (lngLat) => {
+        if (!lngLat) return null
+        try {
+          map.flyTo({
+            center: [lngLat.lng, lngLat.lat],
+            zoom: 16,
+            duration: 0,
+            bearing: NORTH_RIGHT_BEARING,
+          })
+          await esperarMapaIdle()
+          await new Promise((r) => setTimeout(r, 450))
+          return map.getCanvas().toDataURL('image/jpeg', 0.88)
+        } catch {
+          return null
+        }
+      }
+
+      const togglePk = (pkv, meta = null) => {
         const v = String(pkv || '').trim()
         if (!v) return
         const cur = String(selectedRef.current || '').trim().toLowerCase()
@@ -181,7 +205,7 @@ export default function PptoFiltroMapaPk({
           onClearRef.current?.()
         } else {
           selectedRef.current = v
-          onPickRef.current(v)
+          onPickRef.current(v, meta)
         }
         applySelectionStyle(map)
         markerEls.forEach(({ el, pk }) => {
@@ -234,11 +258,14 @@ export default function PptoFiltroMapaPk({
             layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
             paint: MAPBOX_PLANO_PAINT_LABELS,
           })
-          map.on('click', 'ppto-plano-fill', (e) => {
+          map.on('click', 'ppto-plano-fill', async (e) => {
             const f = e.features?.[0]
             if (!f) return
             const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
-            if (v) togglePk(v)
+            if (!v) return
+            const meta = e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : null
+            const screenshot = meta ? await capturarVistaPlano(e.lngLat) : null
+            togglePk(v, screenshot ? { ...meta, screenshot } : meta)
           })
           map.on('mouseenter', 'ppto-plano-fill', () => {
             map.getCanvas().style.cursor = 'pointer'
@@ -266,7 +293,7 @@ export default function PptoFiltroMapaPk({
           markerEls.push({ el, pk: pkv })
           el.addEventListener('click', (ev) => {
             ev.stopPropagation()
-            togglePk(pkv)
+            togglePk(pkv, { lng: ll[0], lat: ll[1] })
           })
         })
         try {

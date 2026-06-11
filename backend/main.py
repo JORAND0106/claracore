@@ -12329,6 +12329,191 @@ def buscar_reportes_obra(
 
 
 # ─── SICOE OBRA: Exportar registros filtrados ───────────────────────────────
+
+def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
+    """Resuelve FK internas (reporte, acta, semana, PK, subcontratista, inspector) a valores de negocio."""
+    if not rows:
+        return rows
+    reporte_ids = list({r.get("reporte_id") for r in rows if r.get("reporte_id")})
+    rep_map = {}
+    if reporte_ids:
+        try:
+            rep_rows = supabase_execute(
+                lambda: supabase.table("so_reportes")
+                .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id, inspector_id")
+                .in_("id", reporte_ids)
+                .execute()
+                .data
+            )
+            rep_map = {r["id"]: r for r in rep_rows if r.get("id")}
+        except Exception:
+            rep_map = {}
+
+    acta_ids = list({
+        (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+        for r in rows
+        if (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+    })
+    semana_ids = list({
+        (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
+        for r in rows
+        if (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
+    })
+    pk_ids = list({
+        (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+        for r in rows
+        if (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+    })
+
+    acta_map = {}
+    if acta_ids:
+        try:
+            aa = supabase_execute(
+                lambda: supabase.table("actas")
+                .select("id, numero_rpo")
+                .in_("id", acta_ids)
+                .execute()
+                .data
+            )
+            acta_map = {a["id"]: a.get("numero_rpo") for a in aa if a.get("id")}
+        except Exception:
+            acta_map = {}
+
+    semana_map = {}
+    if semana_ids:
+        try:
+            ss = supabase_execute(
+                lambda: supabase.table("so_semanas")
+                .select("id, numero_semana")
+                .in_("id", semana_ids)
+                .execute()
+                .data
+            )
+            semana_map = {s["id"]: s.get("numero_semana") for s in ss if s.get("id")}
+        except Exception:
+            semana_map = {}
+
+    pk_map = {}
+    if pk_ids:
+        try:
+            pp = supabase_execute(
+                lambda: supabase.table("pk_ids")
+                .select("id, pk_id")
+                .in_("id", pk_ids)
+                .execute()
+                .data
+            )
+            pk_map = {p["id"]: p.get("pk_id") for p in pp if p.get("id")}
+        except Exception:
+            pk_map = {}
+
+    sub_ids = list({
+        (r.get("subcontratista_id") or (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id"))
+        for r in rows
+        if (r.get("subcontratista_id") or (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id"))
+    })
+    sub_map = {}
+    if sub_ids:
+        try:
+            ssb = supabase_execute(
+                lambda: supabase.table("subcontratistas")
+                .select("id, razon_social")
+                .in_("id", sub_ids)
+                .execute()
+                .data
+            )
+            sub_map = {s["id"]: s.get("razon_social") for s in ssb if s.get("id")}
+        except Exception:
+            sub_map = {}
+
+    insp_ids = list({
+        (r.get("inspector_id") or (rep_map.get(r.get("reporte_id")) or {}).get("inspector_id"))
+        for r in rows
+        if (r.get("inspector_id") or (rep_map.get(r.get("reporte_id")) or {}).get("inspector_id"))
+    })
+    insp_map = {}
+    if insp_ids:
+        try:
+            uu = supabase_execute(
+                lambda: supabase.table("usuarios")
+                .select("id, nombre, apellidos")
+                .in_("id", insp_ids)
+                .execute()
+                .data
+            )
+            insp_map = {
+                u["id"]: f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+                for u in uu
+                if u.get("id")
+            }
+        except Exception:
+            insp_map = {}
+
+    for r in rows:
+        rep = rep_map.get(r.get("reporte_id")) or {}
+        acta_id = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
+        sem_id = r.get("semana_id") or rep.get("semana_id")
+        pk_id_id = rep.get("pk_id_id")
+        sub_id = r.get("subcontratista_id") or rep.get("subcontratista_id")
+        insp_id = r.get("inspector_id") or rep.get("inspector_id")
+        r["reporte_numero"] = rep.get("numero_reporte")
+        r["acta_rpo_numero"] = acta_map.get(acta_id)
+        r["semana_numero"] = semana_map.get(sem_id)
+        r["pk_id_valor"] = pk_map.get(pk_id_id)
+        r["subcontratista_nombre"] = sub_map.get(sub_id)
+        r["inspector_nombre"] = insp_map.get(insp_id)
+    return rows
+
+
+_SICOE_DASH_XLSX_COLUMNS: List[Tuple[str, str]] = [
+    ("semana_numero", "Semana"),
+    ("acta_rpo_numero", "Acta"),
+    ("subcontratista_nombre", "Subcontratista"),
+    ("inspector_nombre", "Inspector"),
+    ("numero_registro", "Registro"),
+    ("reporte_numero", "Reporte"),
+    ("capitulo", "Capítulo"),
+    ("item_numero", "Ítem"),
+    ("item_descripcion", "Descripción"),
+    ("unidad", "Unidad"),
+    ("vlr_unitario", "Valor unitario"),
+    ("longitud", "Longitud"),
+    ("ancho", "Ancho"),
+    ("espesor", "Espesor"),
+    ("cantidad_total", "Cantidad total"),
+    ("costo_directo", "Costo directo"),
+    ("pk_id_valor", "PK"),
+    ("tramo", "Tramo"),
+    ("margen", "Margen"),
+    ("abs_inicio", "Abs. inicio"),
+    ("abs_final", "Abs. final"),
+    ("nivel1_estado", "Estado N1"),
+    ("nivel2_estado", "Estado N2"),
+    ("nivel3_estado", "Estado N3"),
+    ("nivel4_estado", "Estado N4"),
+    ("nivel5_estado", "Estado N5"),
+    ("nivel6_estado", "Estado N6"),
+    ("observacion", "Observación"),
+]
+
+
+def _sicoe_registros_xlsx_presentable(rows: List[dict]) -> List[dict]:
+    """Filas SICOE para Excel del dashboard: sin IDs internos, con etiquetas legibles."""
+    if not rows:
+        return []
+    enriched = _sicoe_enriquecer_registros_export(list(rows))
+    cols = list(_SICOE_DASH_XLSX_COLUMNS)
+    for n in range(4, 7):
+        key = f"nivel{n}_estado"
+        if any(r.get(key) not in (None, "") for r in enriched):
+            if not any(k == key for k, _ in cols):
+                cols.append((key, f"Estado N{n}"))
+    out: List[dict] = []
+    for r in enriched:
+        out.append({label: r.get(key) for key, label in cols})
+    return out
+
+
 class ExportarRegistrosBody(BaseModel):
     campos: List[str]
 
@@ -13391,114 +13576,6 @@ def exportar_registros_sicoe(
 
     registros: list = []
     batch_size = 999
-
-    def _enriquecer_registros_export(rows: List[dict]) -> List[dict]:
-        if not rows:
-            return rows
-        reporte_ids = list({r.get("reporte_id") for r in rows if r.get("reporte_id")})
-        rep_map = {}
-        if reporte_ids:
-            try:
-                rep_rows = supabase_execute(
-                    lambda: supabase.table("so_reportes")
-                    .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id, estado")
-                    .in_("id", reporte_ids)
-                    .execute()
-                    .data
-                )
-                rep_map = {r["id"]: r for r in rep_rows if r.get("id")}
-            except Exception:
-                rep_map = {}
-
-        acta_ids = list({
-            (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
-            for r in rows
-            if (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
-        })
-        semana_ids = list({
-            (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
-            for r in rows
-            if (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
-        })
-        pk_ids = list({
-            (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
-            for r in rows
-            if (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
-        })
-
-        acta_map = {}
-        if acta_ids:
-            try:
-                aa = supabase_execute(
-                    lambda: supabase.table("actas")
-                    .select("id, numero_rpo")
-                    .in_("id", acta_ids)
-                    .execute()
-                    .data
-                )
-                acta_map = {a["id"]: a.get("numero_rpo") for a in aa if a.get("id")}
-            except Exception:
-                acta_map = {}
-
-        semana_map = {}
-        if semana_ids:
-            try:
-                ss = supabase_execute(
-                    lambda: supabase.table("so_semanas")
-                    .select("id, numero_semana")
-                    .in_("id", semana_ids)
-                    .execute()
-                    .data
-                )
-                semana_map = {s["id"]: s.get("numero_semana") for s in ss if s.get("id")}
-            except Exception:
-                semana_map = {}
-
-        pk_map = {}
-        if pk_ids:
-            try:
-                pp = supabase_execute(
-                    lambda: supabase.table("pk_ids")
-                    .select("id, pk_id")
-                    .in_("id", pk_ids)
-                    .execute()
-                    .data
-                )
-                pk_map = {p["id"]: p.get("pk_id") for p in pp if p.get("id")}
-            except Exception:
-                pk_map = {}
-
-        sub_ids = list({
-            (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id")
-            for r in rows
-            if (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id")
-        })
-        sub_map = {}
-        if sub_ids:
-            try:
-                ssb = supabase_execute(
-                    lambda: supabase.table("subcontratistas")
-                    .select("id, razon_social")
-                    .in_("id", sub_ids)
-                    .execute()
-                    .data
-                )
-                sub_map = {s["id"]: s.get("razon_social") for s in ssb if s.get("id")}
-            except Exception:
-                sub_map = {}
-
-        for r in rows:
-            rep = rep_map.get(r.get("reporte_id")) or {}
-            acta_id = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
-            sem_id = r.get("semana_id") or rep.get("semana_id")
-            pk_id_id = rep.get("pk_id_id")
-            sub_id = rep.get("subcontratista_id")
-            r["reporte_numero"] = rep.get("numero_reporte")
-            r["acta_rpo_numero"] = acta_map.get(acta_id)
-            r["semana_numero"] = semana_map.get(sem_id)
-            r["pk_id_valor"] = pk_map.get(pk_id_id)
-            r["subcontratista_nombre"] = sub_map.get(sub_id)
-        return rows
 
     def _fetch_by_reporte_id_list(id_list: List[int]):
         out: list = []
@@ -16428,6 +16505,7 @@ class RegistroCreate(BaseModel):
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
+    graficos_historial: Optional[List[Dict[str, Any]]] = None
     competencia: Optional[str] = None
     item_numero: Optional[str] = None
     item_descripcion: Optional[str] = None
@@ -16705,6 +16783,7 @@ def _pydantic_dump_exclude_unset(model: BaseModel) -> dict:
 
 # Dimensiones SICOE: el cliente envía `null` para borrar un campo; no filtrar esos None o la BD nunca se actualiza.
 _REGPUT_DIM_NULLABLE = frozenset({"longitud", "ancho", "espesor", "cantidad"})
+_REGPUT_GRAFICO_NULLABLE = frozenset({"grafico_url", "grafico_numero", "grafico_descripcion"})
 
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
@@ -16725,7 +16804,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     for k, v in raw.items():
         if v is not None:
             data[k] = v
-        elif k in _REGPUT_DIM_NULLABLE or k == "observacion":
+        elif k in _REGPUT_DIM_NULLABLE or k == "observacion" or k in _REGPUT_GRAFICO_NULLABLE:
             data[k] = None
 
     if _registro_nivel3_aprobado(prev_row):
@@ -22234,7 +22313,11 @@ def _export_sicoe_obra_rows_capitulo(
     capitulo: str,
     items_sorted: List[str],
 ) -> List[dict]:
-    """Obra SICOE aprobada (nivel máx. contrato) para ítems del capítulo en presupuesto."""
+    """Obra SICOE aprobada (nivel máx. contrato) para ítems del capítulo en presupuesto.
+
+    Devuelve filas listas para Excel: sin IDs internos de BD; semana, acta, subcontratista,
+    inspector, registro y reporte con valores de negocio (misma lógica que export SICOE Obra).
+    """
     if not items_sorted:
         return []
     cap_key = _dash_norm_capitulo_key_py(capitulo)
@@ -22275,7 +22358,7 @@ def _export_sicoe_obra_rows_capitulo(
         if len(batch) < 1000:
             break
         off += 1000
-    return rows
+    return _sicoe_registros_xlsx_presentable(rows)
 
 
 def _gerencial_ppto_split_por_capitulo(

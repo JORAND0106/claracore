@@ -55,11 +55,19 @@ def test_aggregate_cronograma_por_capitulo():
     assert agg["02"]["agrupadores"] == 1
 
 
+@patch("prog_obra_ejecutado.build_ejecucion_resumen")
 @patch("prog_obra_curva_s._fetch_distinct_capitulos_presupuesto")
 @patch("prog_obra_service.make_prog_calendar_loader")
-def test_build_resumen_ejecutivo_data_cpm_y_desfases(mock_loader, mock_caps):
+def test_build_resumen_ejecutivo_data_cpm_y_desfases(mock_loader, mock_caps, mock_ej):
     mock_caps.return_value = ["01", "02"]
     mock_loader.return_value = lambda _cid, _d0, _d1: []
+    mock_ej.return_value = {
+        "presupuesto_total": 1000.0,
+        "ejecutado_total": 200.0,
+        "ejecutado_pct": 20.0,
+        "regla": "test",
+        "por_capitulo": [{"capitulo": "01", "presupuesto": 600, "ejecutado": 200, "ejecutado_pct": 33.3}],
+    }
 
     cronograma = [
         {
@@ -124,13 +132,23 @@ def test_build_resumen_ejecutivo_data_cpm_y_desfases(mock_loader, mock_caps):
     assert caps["02"]["sin_programar"] is True
     assert data["version"]["cpm_estado"] == "Vigente"
     assert data["version"]["estado"] == "Borrador"
+    assert data["ejecucion"]["ejecutado_pct"] == 20.0
+    assert caps["01"]["ejecutado_pct"] == 33.3
 
 
+@patch("prog_obra_ejecutado.build_ejecucion_resumen")
 @patch("prog_obra_curva_s._fetch_distinct_capitulos_presupuesto")
 @patch("prog_obra_service.make_prog_calendar_loader")
-def test_build_resumen_sin_cpm(mock_loader, mock_caps):
+def test_build_resumen_sin_cpm(mock_loader, mock_caps, mock_ej):
     mock_caps.return_value = ["01"]
     mock_loader.return_value = lambda _cid, _d0, _d1: []
+    mock_ej.return_value = {
+        "presupuesto_total": 0,
+        "ejecutado_total": 0,
+        "ejecutado_pct": 0,
+        "regla": "test",
+        "por_capitulo": [],
+    }
 
     data = build_resumen_ejecutivo_data(
         MagicMock(),

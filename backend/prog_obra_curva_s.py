@@ -148,63 +148,16 @@ def _aggregate_version_monthly(
     return dict(monthly), total
 
 
-def _registro_aprobado(row: dict) -> bool:
-    for n in (6, 5, 4, 3, 2, 1):
-        st = (row.get(f"nivel{n}_estado") or "").strip().lower()
-        if st in ("aprobado", "validación aprobada", "validacion aprobada"):
-            return True
-    return False
+def _fetch_ejecutado_mensual(
+    sb,
+    contrato_id: int,
+    *,
+    pk_ids: Optional[Set[str]] = None,
+) -> Tuple[Dict[str, float], float]:
+    """Ejecutado real: SICOE con aprobación nivel 1 (inspector), por mes de nivel1_fecha."""
+    from prog_obra_ejecutado import fetch_ejecutado_nivel1_mensual
 
-
-def _fecha_aprobacion(row: dict) -> Optional[date]:
-    for n in (6, 5, 4, 3, 2, 1):
-        st = (row.get(f"nivel{n}_estado") or "").strip().lower()
-        if st in ("aprobado", "validación aprobada", "validacion aprobada"):
-            return _parse_d(row.get(f"nivel{n}_fecha"))
-    return None
-
-
-def _fetch_ejecutado_mensual(sb, contrato_id: int) -> Tuple[Dict[str, float], float]:
-    """Ejecutado real desde so_registros aprobados, agrupado por mes de aprobación."""
-    monthly: Dict[str, float] = defaultdict(float)
-    total = 0.0
-    off = 0
-    cols = (
-        "costo_directo,cantidad_total,vlr_unitario,"
-        "nivel1_estado,nivel1_fecha,nivel2_estado,nivel2_fecha,"
-        "nivel3_estado,nivel3_fecha,nivel4_estado,nivel4_fecha,"
-        "nivel5_estado,nivel5_fecha,nivel6_estado,nivel6_fecha"
-    )
-    while True:
-        batch = (
-            sb.table("so_registros")
-            .select(cols)
-            .eq("contrato_id", int(contrato_id))
-            .range(off, off + 999)
-            .execute()
-            .data
-            or []
-        )
-        for r in batch:
-            if not _registro_aprobado(r):
-                continue
-            costo = float(r.get("costo_directo") or 0)
-            if costo <= 0:
-                cant = float(r.get("cantidad_total") or 0)
-                vlr = float(r.get("vlr_unitario") or 0)
-                costo = cant * vlr
-            if costo <= 0:
-                continue
-            fd = _fecha_aprobacion(r)
-            if not fd:
-                continue
-            mk = _month_key(fd)
-            monthly[mk] += costo
-            total += costo
-        if len(batch) < 1000:
-            break
-        off += 1000
-    return dict(monthly), total
+    return fetch_ejecutado_nivel1_mensual(sb, contrato_id, pk_ids=pk_ids)
 
 
 def _detalle_pk_mensual(
@@ -348,7 +301,7 @@ def build_curva_s(
     else:
         tgt_m, tgt_total = {}, 0.0
 
-    ej_m, ej_total = _fetch_ejecutado_mensual(sb, contrato_id)
+    ej_m, ej_total = _fetch_ejecutado_mensual(sb, contrato_id, pk_ids=pk_set)
 
     all_months = sorted(set(base_m.keys()) | set(tgt_m.keys()) | set(ej_m.keys()))
     if not all_months:
@@ -439,6 +392,7 @@ def build_curva_s(
             "programado_pct": round(pct_prog, 1),
             "ejecutado_a_fecha": round(ej_a_fecha, 2),
             "ejecutado_pct": round(pct_ej, 1),
+            "ejecutado_regla": "SICOE con nivel 1 (inspector) aprobado",
             "desviacion_valor": round(desv, 2),
             "desviacion_pct": round(desv_pct, 1),
         },
@@ -1580,11 +1534,32 @@ def build_resumen_ejecutivo_data(
     if tiene_cpm:
         cpm_estado = "Desactualizado" if meta.get("cpm_dirty") else "Vigente"
 
+    from prog_obra_ejecutado import _norm_capitulo_key, build_ejecucion_resumen
+
+    ejecucion = build_ejecucion_resumen(
+        sb,
+        contrato_id,
+        version_ppto_id=version_ppto_id,
+        pk_ids=pk_ids,
+    )
+    ej_by_cap = {
+        _norm_capitulo_key(x.get("capitulo")): x
+        for x in (ejecucion.get("por_capitulo") or [])
+    }
+
+    for row in capitulos_rows:
+        cap_key = _norm_capitulo_key(row.get("capitulo"))
+        ej_cap = ej_by_cap.get(cap_key) or {}
+        row["presupuesto"] = float(ej_cap.get("presupuesto") or 0)
+        row["ejecutado"] = float(ej_cap.get("ejecutado") or 0)
+        row["ejecutado_pct"] = float(ej_cap.get("ejecutado_pct") or 0)
+
     return {
         "capitulos": capitulos_rows,
         "tiene_cpm": tiene_cpm,
         "criticos": criticos,
         "desfases": desfases,
+        "ejecucion": ejecucion,
         "version": {
             "tiene_version": bool(meta),
             "nombre": _prog_version_label(meta) if meta else "—",
@@ -1669,6 +1644,90 @@ def _render_resumen_ejecutivo_pdf_html(
         prog_meta=prog_meta,
         fecha_gen=fecha_gen,
     )
+
+    ej = resumen.get("ejecucion") or {}
+    ej_kpi = f"""
+<div style="{sec}">Avance de ejecución (SICOE)</div>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:6px;background:{c['bg_kpi']};">
+  <tr>
+    <td style="{td('width:24%;font-weight:bold;')}">Presupuesto alcance</td>
+    <td style="{td('text-align:right;width:18%;')}">${float(ej.get('presupuesto_total') or 0):,.0f}</td>
+    <td style="{td('width:24%;font-weight:bold;')}">Ejecutado N1</td>
+    <td style="{td('text-align:right;width:18%;')}">${float(ej.get('ejecutado_total') or 0):,.0f}</td>
+    <td style="{td('width:8%;font-weight:bold;text-align:center;')}">%</td>
+    <td style="{td('text-align:center;font-weight:bold;color:' + c['accent'] + ';')}">{float(ej.get('ejecutado_pct') or 0):.1f}%</td>
+  </tr>
+</table>
+<div style="{note}">{_h(ej.get('regla') or 'Registros con nivel 1 (inspector) aprobado.')}</div>
+"""
+
+    cap_rows = ""
+    for cap in resumen.get("capitulos") or []:
+        cap_name = str(cap.get("capitulo") or "")
+        if cap.get("sin_programar"):
+            prog_txt = "Sin programar"
+            dias = ""
+        else:
+            prog_txt = f"{cap.get('fecha_inicio') or '—'} → {cap.get('fecha_fin') or '—'}"
+            dias = str(cap.get("dias_habiles") or "—")
+        cap_rows += (
+            f"<tr>"
+            f"<td style=\"{td()}\">{_h(cap_name)}</td>"
+            f"<td style=\"{td('text-align:center;')}\">{cap.get('num_agrupadores') or 0}</td>"
+            f"<td style=\"{td('font-size:6pt;')}\">{_h(prog_txt)}</td>"
+            f"<td style=\"{td('text-align:center;')}\">{_h(dias)}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(cap.get('presupuesto') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:right;')}\">${float(cap.get('ejecutado') or 0):,.0f}</td>"
+            f"<td style=\"{td('text-align:center;font-weight:bold;')}\">{float(cap.get('ejecutado_pct') or 0):.1f}%</td>"
+            f"</tr>"
+        )
+    if not cap_rows:
+        cap_rows = (
+            f'<tr><td colspan="7" style="{td("text-align:center;color:" + c["muted"] + ";")}">'
+            "Sin capítulos en el alcance.</td></tr>"
+        )
+
+    cap_table = f"""
+<div style="{sec}">Cronograma y ejecución por capítulo</div>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">
+  <thead><tr>
+    <th style="{_pdf_th_style('text-align:left;')}">Capítulo</th>
+    <th style="{_pdf_th_style('text-align:center;width:8%;')}">WBS</th>
+    <th style="{_pdf_th_style('text-align:left;width:22%;')}">Programación</th>
+    <th style="{_pdf_th_style('text-align:center;width:8%;')}">Días háb.</th>
+    <th style="{_pdf_th_style('text-align:right;width:14%;')}">Ppto.</th>
+    <th style="{_pdf_th_style('text-align:right;width:14%;')}">Ejec. N1</th>
+    <th style="{_pdf_th_style('text-align:center;width:8%;')}">%</th>
+  </tr></thead>
+  <tbody>{cap_rows}</tbody>
+</table>
+"""
+
+    rc_html = ""
+    if tiene_cpm:
+        rc_rows = ""
+        for cr in resumen.get("criticos") or []:
+            rc_rows += (
+                f"<tr><td style=\"{td()}\">{_h(cr.get('nombre'))}</td>"
+                f"<td style=\"{td('text-align:center;')}\">{_h(cr.get('fecha_inicio'))}</td>"
+                f"<td style=\"{td('text-align:center;')}\">{_h(cr.get('fecha_fin'))}</td>"
+                f"<td style=\"{td('text-align:center;')}\">{_h(cr.get('holgura'))}</td></tr>"
+            )
+        if not rc_rows:
+            rc_rows = f'<tr><td colspan="4" style="{td("text-align:center;color:" + c["muted"] + ";")}">Sin agrupadores en ruta crítica.</td></tr>'
+        rc_html = f"""
+<div style="{sec}">Ruta crítica (CPM)</div>
+<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-top:4px;">
+  <thead><tr>
+    <th style="{_pdf_th_style('text-align:left;')}">Agrupador WBS</th>
+    <th style="{_pdf_th_style('text-align:center;')}">Inicio</th>
+    <th style="{_pdf_th_style('text-align:center;')}">Fin</th>
+    <th style="{_pdf_th_style('text-align:center;')}">Holgura</th>
+  </tr></thead>
+  <tbody>{rc_rows}</tbody>
+</table>
+"""
+
     return f"""
 <div class="page-cronograma">
   <div class="frame-double-outer">
@@ -1676,6 +1735,9 @@ def _render_resumen_ejecutivo_pdf_html(
       {header}
       <div style="{sec}">Versión activa</div>
       {ver_block}
+      {ej_kpi}
+      {cap_table}
+      {rc_html}
     </div>
   </div>
 </div>
@@ -1851,6 +1913,7 @@ def _render_curva_s_pdf_header_block(
       Presupuesto total: <strong style="color:{c['accent']};">${float(ind.get('presupuesto_total') or 0):,.0f}</strong>
       &nbsp;&nbsp;&nbsp;Programado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong>
       &nbsp;&nbsp;&nbsp;Ejecutado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong>
+      <span style="font-size:6pt;color:{c['muted']};"> · {_h(ind.get('ejecutado_regla') or 'Nivel 1 aprobado')}</span>
       &nbsp;&nbsp;&nbsp;Desviación: <strong style="color:{desv_color};">${desv_val:,.0f} ({ind.get('desviacion_pct')}%)</strong>
     </td>
   </tr>
@@ -2924,23 +2987,42 @@ def _write_resumen_ejecutivo_excel_sheet(
     ws["A2"].alignment = Alignment(wrap_text=True)
 
     row = 4
+    ej = (resumen or {}).get("ejecucion") or {}
+    ws.cell(row=row, column=1, value="Avance de ejecución (SICOE nivel 1)").font = Font(bold=True, size=10)
+    row += 1
+    for label, key, fmt in [
+        ("Presupuesto alcance", "presupuesto_total", EXCEL_COP_FMT),
+        ("Ejecutado N1 aprobado", "ejecutado_total", EXCEL_COP_FMT),
+        ("Porcentaje ejecución", "ejecutado_pct", "0.0%"),
+    ]:
+        ws.cell(row=row, column=1, value=label).font = Font(bold=True, size=9)
+        cell = ws.cell(row=row, column=2, value=float(ej.get(key) or 0))
+        cell.number_format = fmt
+        row += 1
+    ws.cell(row=row, column=1, value=str(ej.get("regla") or "")).font = Font(size=8, italic=True, color="64748B")
+    row += 2
+
     ws.cell(row=row, column=1, value="Indicadores Curva S").font = Font(bold=True, size=10)
     row += 1
     for label, key in [
-        ("Presupuesto total", "presupuesto_total"),
+        ("Presupuesto total (curva)", "presupuesto_total"),
         ("Programado a la fecha", "programado_a_fecha"),
-        ("Ejecutado a la fecha", "ejecutado_a_fecha"),
+        ("Ejecutado a la fecha (N1)", "ejecutado_a_fecha"),
         ("Desviación", "desviacion_valor"),
     ]:
         ws.cell(row=row, column=1, value=label).font = Font(bold=True, size=9)
         cell = ws.cell(row=row, column=2, value=float(ind.get(key) or 0))
         cell.number_format = EXCEL_COP_FMT
         row += 1
+    ws.cell(row=row, column=1, value=str(ind.get("ejecutado_regla") or "")).font = Font(size=8, italic=True, color="64748B")
+    row += 2
 
+    ws.cell(row=row, column=1, value="Cronograma y ejecución por capítulo").font = Font(bold=True, size=10)
     row += 1
-    ws.cell(row=row, column=1, value="Resumen por capítulo").font = Font(bold=True, size=10)
-    row += 1
-    headers = ["Capítulo", "Agrupadores WBS", "Inicio", "Fin", "Días hábiles"]
+    headers = [
+        "Capítulo", "Agrupadores WBS", "Inicio", "Fin", "Días hábiles",
+        "Presupuesto", "Ejecutado N1", "% ejecución",
+    ]
     for col, h in enumerate(headers, start=1):
         c = ws.cell(row=row, column=col, value=h)
         c.font = Font(bold=True, color="1E3A8A", size=9)
@@ -2954,7 +3036,7 @@ def _write_resumen_ejecutivo_excel_sheet(
         row += 1
     for cap in caps:
         if cap.get("sin_programar"):
-            vals = [cap.get("capitulo"), 0, "Sin programar", "", ""]
+            vals = [cap.get("capitulo"), 0, "Sin programar", "", "", cap.get("presupuesto"), cap.get("ejecutado"), cap.get("ejecutado_pct")]
         else:
             vals = [
                 cap.get("capitulo"),
@@ -2962,9 +3044,19 @@ def _write_resumen_ejecutivo_excel_sheet(
                 cap.get("fecha_inicio"),
                 cap.get("fecha_fin"),
                 cap.get("dias_habiles"),
+                cap.get("presupuesto"),
+                cap.get("ejecutado"),
+                cap.get("ejecutado_pct"),
             ]
         for col, val in enumerate(vals, start=1):
-            ws.cell(row=row, column=col, value=val).border = _xl_thin_border()
+            cell = ws.cell(row=row, column=col, value=val)
+            cell.border = _xl_thin_border()
+            if col in (6, 7):
+                cell.number_format = EXCEL_COP_FMT
+            if col == 8 and val is not None:
+                cell.number_format = "0.0%"
+                if isinstance(val, (int, float)) and val > 1:
+                    cell.value = float(val) / 100.0
         row += 1
 
     row += 1

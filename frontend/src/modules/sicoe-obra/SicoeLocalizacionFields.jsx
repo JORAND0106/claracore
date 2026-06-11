@@ -27,13 +27,33 @@ export default function SicoeLocalizacionFields({
   nodos = [],
   readOnly = false,
   showTitle = true,
+  /** Tras clic en el plano con GPS capturado (persistir en backend desde el padre). */
+  onGpsCapturado = null,
+  /** Pantallazo JPEG del plano en el punto del clic (adjuntar como gráfico desde el padre). */
+  onMapaCapturado = null,
 }) {
   const [nodoIniSugg, setNodoIniSugg] = useState([])
   const [nodoFinSugg, setNodoFinSugg] = useState([])
   const [nodoIniWarn, setNodoIniWarn] = useState(false)
   const [nodoFinWarn, setNodoFinWarn] = useState(false)
 
-  const patch = (p) => onChange?.({ ...value, ...p })
+  const patch = (p) => {
+    const next = { ...value, ...p }
+    onChange?.(next)
+    const lat = p.coordLat ?? next.coordLat
+    const lng = p.coordLng ?? next.coordLng
+    if (
+      p.coordLat != null &&
+      p.coordLng != null &&
+      lat != null &&
+      lng != null &&
+      !Number.isNaN(+lat) &&
+      !Number.isNaN(+lng) &&
+      typeof onGpsCapturado === 'function'
+    ) {
+      onGpsCapturado(next)
+    }
+  }
 
   const pkRow = value?.pkSeleccionado
   const pkIdStr = pkRow?.id != null ? String(pkRow.id) : (value?.pk_id_id != null ? String(value.pk_id_id) : '')
@@ -82,9 +102,19 @@ export default function SicoeLocalizacionFields({
             pkList={pkIds}
             pkIdSeleccionado={pkIdStr}
             pkLabel={pkRow?.pk_id || ''}
-            onSeleccionar={({ pk_id_id }) => {
+            onSeleccionar={({ pk_id_id, coordLat, coordLng, mapaScreenshot }) => {
               const found = pkIds.find((p) => String(p.id) === String(pk_id_id))
-              if (found) patch({ pkSeleccionado: found, pk_id_id: found.id })
+              if (found) {
+                patch({
+                  pkSeleccionado: found,
+                  pk_id_id: found.id,
+                  coordLat: coordLat ?? null,
+                  coordLng: coordLng ?? null,
+                })
+                if (mapaScreenshot && typeof onMapaCapturado === 'function') {
+                  onMapaCapturado(mapaScreenshot)
+                }
+              }
             }}
             onLimpiar={() => patch({ pkSeleccionado: null, pk_id_id: null, coordLat: null, coordLng: null })}
           />
@@ -94,6 +124,9 @@ export default function SicoeLocalizacionFields({
             </div>
           )}
           {errores.pk && <span style={{ color: '#EF4444', fontSize: 'var(--cc-label)' }}>{errores.pk}</span>}
+          <div style={{ marginTop: '6px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
+            Pulse el polígono en el mapa para fijar el punto de localización (coordenadas y pantallazo del plano se guardan automáticamente).
+          </div>
         </div>
 
         <div>

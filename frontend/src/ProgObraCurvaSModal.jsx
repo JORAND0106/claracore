@@ -574,10 +574,13 @@ export default function ProgObraCurvaSModal({
             </div>
 
             <div style={{ maxHeight: 220, overflow: 'auto', padding: '0 12px 12px' }}>
+              <div style={{ fontSize: 10, color: t.textMuted, padding: '4px 0 6px' }}>
+                Tabla por mes (inversión devengada en el periodo). La gráfica superior muestra acumulados.
+              </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: t.bgCard, position: 'sticky', top: 0 }}>
-                    {['Mes', 'Baseline', 'Vigente', 'Ejecutado', 'Δ Vigente', 'Δ Ejecutado'].map((h) => (
+                    {['Mes', 'Baseline mes', 'Vigente mes', 'Ejecutado mes', 'Δ Vigente', 'Δ Ejecutado'].map((h) => (
                       <th key={h} style={{ ...cell, fontWeight: 700, color: t.textMuted, textAlign: h === 'Mes' ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr>
@@ -586,9 +589,9 @@ export default function ProgObraCurvaSModal({
                   {(data.meses || []).map((r) => (
                     <tr key={r.mes}>
                       <td style={cell}>{r.mes_label}</td>
-                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.baseline_acum)}</td>
-                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.vigente_acum)}</td>
-                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.ejecutado_acum)}</td>
+                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.baseline_mes)}</td>
+                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.vigente_mes)}</td>
+                      <td style={{ ...cell, textAlign: 'right' }}>{fmtCOP(r.ejecutado_mes)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmtPct(r.delta_vigente_pct)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmtPct(r.delta_ejecutado_pct)}</td>
                     </tr>

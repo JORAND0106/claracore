@@ -23,6 +23,7 @@ import ProgObraAlcanceExportModal from './ProgObraAlcanceExportModal'
 import ProgObraAutoScheduleWizard from './ProgObraAutoScheduleWizard'
 import ProgPresupuestoSelector from './ProgPresupuestoSelector'
 import ProgTramoSelector from './ProgTramoSelector'
+import { formatCOP } from './utils/formatCOP'
 import {
   clearVersionProgramacion,
   downloadCurvaSPdf,
@@ -193,33 +194,59 @@ function colorForEstado(estado) {
   }
 }
 
-function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set(), tramoPkSet = null) {
+function colorForEjecutadoPct(pct) {
+  const p = Number(pct)
+  if (!Number.isFinite(p) || p <= 0) {
+    return { fill: '#fca5a5', line: '#ef4444', op: 0.42, bucket: '0-25' }
+  }
+  if (p <= 25) return { fill: '#ef4444', line: '#b91c1c', op: 0.68, bucket: '0-25' }
+  if (p <= 50) return { fill: '#f97316', line: '#c2410c', op: 0.72, bucket: '25-50' }
+  if (p <= 75) return { fill: '#eab308', line: '#a16207', op: 0.76, bucket: '50-75' }
+  if (p <= 90) return { fill: '#22d3ee', line: '#0891b2', op: 0.78, bucket: '75-90' }
+  return { fill: '#22c55e', line: '#15803d', op: 0.82, bucket: '90+' }
+}
+
+function buildEnrichedPlano(planoFc, metaMap, tramoPkSet = null, mapViewMode = 'programacion') {
   if (!planoFc?.features) return { type: 'FeatureCollection', features: [] }
+  const modoEjecutado = mapViewMode === 'ejecutado'
   return {
     ...planoFc,
     features: (planoFc.features || []).map((f) => {
       const pkid = featurePkId(f)
       const row = metaMap[pkid] || {}
       const est = row.estado_programacion || 'sin_iniciar'
-      const c = colorForEstado(est)
-      const critico = Boolean(row.tiene_ruta_critica) || criticalPkIds.has(pkid)
-      const desviacion = Boolean(row.tiene_desviacion) && !critico
+      const progC = colorForEstado(est)
+      const desviacion = Boolean(row.tiene_desviacion) && !modoEjecutado
       const atenuado = tramoPkSet != null && tramoPkSet.size > 0 && !tramoPkSet.has(pkid)
-      const op = atenuado ? Math.max(c.op * 0.18, 0.08) : c.op
-      const lineOp = atenuado ? 0.25 : 0.9
+      let fill = progC.fill
+      let line = progC.line
+      let op = atenuado ? Math.max(progC.op * 0.18, 0.08) : progC.op
+      let lineOp = atenuado ? 0.25 : 0.9
+      let progBgOp = null
+      if (modoEjecutado) {
+        const ejC = colorForEjecutadoPct(row.ejecutado_pct)
+        progBgOp = atenuado ? Math.max(progC.op * 0.1, 0.06) : Math.max(progC.op * 0.14, 0.08)
+        fill = ejC.fill
+        line = ejC.line
+        op = atenuado ? Math.max(ejC.op * 0.35, 0.1) : ejC.op
+        lineOp = atenuado ? 0.3 : 0.85
+      }
       return {
         ...f,
         properties: {
           ...f.properties,
           pk_id: pkid,
           prog_estado: est,
-          prog_fill: c.fill,
-          prog_line: c.line,
+          prog_fill: fill,
+          prog_line: line,
           prog_op: op,
           prog_line_op: lineOp,
-          prog_critico: critico ? 1 : 0,
+          prog_fill_prog: progC.fill,
+          prog_op_prog: progBgOp,
           prog_desviacion: desviacion ? 1 : 0,
           prog_desviacion_tipo: row.desviacion_tipo || '',
+          ejecutado_pct: Number(row.ejecutado_pct) || 0,
+          ejecutado: Number(row.ejecutado) || 0,
         },
       }
     }),
@@ -233,6 +260,14 @@ const MAPA_LEYENDA_ESTADOS = [
   { key: 'en_progreso', label: 'En progreso', desc: 'Algunos ítems con fecha', fill: '#EF9F27', op: 0.6 },
   { key: 'completa', label: 'Completamente programado', desc: 'Todos los ítems con fecha', fill: '#2563EB', op: 0.7 },
   { key: 'desviacion', label: 'Desviación vs baseline', desc: 'Fin de obra fuera del umbral configurado', fill: '#f97316', op: 0.9, lineOnly: true },
+]
+
+const MAPA_LEYENDA_EJECUTADO = [
+  { key: 'ej1', label: '0 – 25 %', desc: 'Ejecución baja vs presupuesto directo del PK', fill: '#ef4444', op: 0.68 },
+  { key: 'ej2', label: '25 – 50 %', desc: 'Ejecución en rampa inicial', fill: '#f97316', op: 0.72 },
+  { key: 'ej3', label: '50 – 75 %', desc: 'Ejecución en mitad de avance', fill: '#eab308', op: 0.76 },
+  { key: 'ej4', label: '75 – 90 %', desc: 'Ejecución avanzada', fill: '#22d3ee', op: 0.78 },
+  { key: 'ej5', label: '> 90 %', desc: 'Ejecución casi completa o superior al presupuesto', fill: '#22c55e', op: 0.82 },
 ]
 
 function progBarVisual(pct, estado) {
@@ -371,9 +406,8 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
             const { blocks, fill } = progBarVisual(pctNum, est)
             const pctLabel = pctNum != null && Number.isFinite(pctNum) ? `${Math.round(pctNum)}%` : '—'
             const selected = pk === selPk
-            const critico = Boolean(r.tiene_ruta_critica)
             const sinAg = Number(r.items_sin_agrupador) || 0
-            const cardBg = critico ? '#fee2e2' : selected ? `${t.primary}18` : t.bg
+            const cardBg = selected ? `${t.primary}18` : t.bg
             return (
               <button
                 key={pk}
@@ -382,12 +416,10 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '64px 1fr auto',
-                  gridTemplateRows: critico ? 'auto auto' : 'auto',
                   columnGap: 6,
-                  rowGap: critico ? 1 : 0,
                   alignItems: 'center',
                   width: '100%',
-                  padding: critico ? '4px 6px' : '3px 6px',
+                  padding: '3px 6px',
                   marginBottom: 3,
                   border: `1px solid ${selected ? t.primary : t.border}`,
                   borderRadius: 5,
@@ -401,7 +433,6 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
               >
                 <span
                   style={{
-                    gridRow: critico ? '1 / -1' : undefined,
                     alignSelf: 'center',
                     fontWeight: selected ? 700 : 600,
                     color: selected ? t.primary : t.text,
@@ -411,7 +442,6 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
                 </span>
                 <span
                   style={{
-                    gridRow: critico ? '1 / -1' : undefined,
                     alignSelf: 'center',
                     fontFamily: 'ui-monospace, monospace',
                     fontSize: 'var(--cc-caption)',
@@ -426,21 +456,6 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
                   {sinAg > 0 ? <span style={{ color: '#b45309', marginRight: 3 }} title={`${sinAg} ítems sin agrupador`}>⚠</span> : null}
                   {pctLabel}
                 </span>
-                {critico && (
-                  <span
-                    style={{
-                      gridColumn: 3,
-                      textAlign: 'right',
-                      fontSize: 8,
-                      fontWeight: 600,
-                      color: '#dc2626',
-                      lineHeight: 1.2,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    ⚠ Ruta crítica
-                  </span>
-                )}
               </button>
             )
           })}
@@ -500,8 +515,9 @@ const PROG_MAP_HANDLERS = Symbol('progMapHandlers')
 function removeProgLayersIfAny(map) {
   try {
     if (map.getLayer('prog-labels-abscisa')) map.removeLayer('prog-labels-abscisa')
-    if (map.getLayer('prog-critico-line')) map.removeLayer('prog-critico-line')
     if (map.getLayer('prog-desviacion-line')) map.removeLayer('prog-desviacion-line')
+    if (map.getLayer('prog-fill-ejec')) map.removeLayer('prog-fill-ejec')
+    if (map.getLayer('prog-fill-prog-bg')) map.removeLayer('prog-fill-prog-bg')
     if (map.getLayer('prog-line')) map.removeLayer('prog-line')
     if (map.getLayer('prog-fill')) map.removeLayer('prog-fill')
   } catch {
@@ -515,7 +531,7 @@ function removeProgLayersIfAny(map) {
 }
 
 /** Tras `load` o `style.load`: terreno solo en satélite; fuente/capas/eventos de polígonos. */
-function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
+function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick, mapViewMode = 'programacion') {
   if (!map || !enriched) return
   if (basemapMode === 'satellite') {
     clearMapTerrain(map)
@@ -523,22 +539,53 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
   } else {
     clearMapTerrain(map)
   }
+  const modoEjecutado = mapViewMode === 'ejecutado'
+  const prevMode = map.__progViewMode
+  const modeChanged = prevMode != null && prevMode !== mapViewMode
+  map.__progViewMode = mapViewMode
+  const layerOk = !modeChanged && (modoEjecutado
+    ? map.getLayer('prog-fill-ejec') && map.getLayer('prog-fill-prog-bg')
+    : map.getLayer('prog-fill'))
   const existingSource = map.getSource('prog-pol')
-  if (existingSource && typeof existingSource.setData === 'function' && map.getLayer('prog-fill')) {
+  if (existingSource && typeof existingSource.setData === 'function' && layerOk) {
     existingSource.setData(enriched)
+    if (map.getLayer('prog-desviacion-line')) {
+      map.setFilter('prog-desviacion-line', ['==', ['get', 'prog_desviacion'], 1])
+    }
     return
   }
   removeProgLayersIfAny(map)
   map.addSource('prog-pol', { type: 'geojson', data: enriched })
-  map.addLayer({
-    id: 'prog-fill',
-    type: 'fill',
-    source: 'prog-pol',
-    paint: {
-      'fill-color': ['get', 'prog_fill'],
-      'fill-opacity': ['get', 'prog_op'],
-    },
-  })
+  if (modoEjecutado) {
+    map.addLayer({
+      id: 'prog-fill-prog-bg',
+      type: 'fill',
+      source: 'prog-pol',
+      paint: {
+        'fill-color': ['coalesce', ['get', 'prog_fill_prog'], '#888780'],
+        'fill-opacity': ['coalesce', ['get', 'prog_op_prog'], 0.1],
+      },
+    })
+    map.addLayer({
+      id: 'prog-fill-ejec',
+      type: 'fill',
+      source: 'prog-pol',
+      paint: {
+        'fill-color': ['get', 'prog_fill'],
+        'fill-opacity': ['get', 'prog_op'],
+      },
+    })
+  } else {
+    map.addLayer({
+      id: 'prog-fill',
+      type: 'fill',
+      source: 'prog-pol',
+      paint: {
+        'fill-color': ['get', 'prog_fill'],
+        'fill-opacity': ['get', 'prog_op'],
+      },
+    })
+  }
   map.addLayer({
     id: 'prog-line',
     type: 'line',
@@ -553,21 +600,10 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
     id: 'prog-desviacion-line',
     type: 'line',
     source: 'prog-pol',
-    filter: ['all', ['==', ['get', 'prog_desviacion'], 1], ['!=', ['get', 'prog_critico'], 1]],
+    filter: ['==', ['get', 'prog_desviacion'], 1],
     paint: {
       'line-color': '#f97316',
       'line-width': 3,
-      'line-opacity': 0.9,
-    },
-  })
-  map.addLayer({
-    id: 'prog-critico-line',
-    type: 'line',
-    source: 'prog-pol',
-    filter: ['==', ['get', 'prog_critico'], 1],
-    paint: {
-      'line-color': '#ef4444',
-      'line-width': 4,
       'line-opacity': 0.9,
     },
   })
@@ -579,12 +615,13 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
     layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
     paint: MAPBOX_PLANO_PAINT_LABELS,
   })
+  const clickLayer = modoEjecutado ? 'prog-fill-ejec' : 'prog-fill'
   const prev = map[PROG_MAP_HANDLERS]
   if (prev) {
     try {
-      map.off('click', 'prog-fill', prev.onClick)
-      map.off('mouseenter', 'prog-fill', prev.onEnter)
-      map.off('mouseleave', 'prog-fill', prev.onLeave)
+      if (prev.clickLayer) map.off('click', prev.clickLayer, prev.onClick)
+      if (prev.clickLayer) map.off('mouseenter', prev.clickLayer, prev.onEnter)
+      if (prev.clickLayer) map.off('mouseleave', prev.clickLayer, prev.onLeave)
     } catch {
       /* ignore */
     }
@@ -600,10 +637,10 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
   const onLeave = () => {
     map.getCanvas().style.cursor = ''
   }
-  map.on('click', 'prog-fill', onClick)
-  map.on('mouseenter', 'prog-fill', onEnter)
-  map.on('mouseleave', 'prog-fill', onLeave)
-  map[PROG_MAP_HANDLERS] = { onClick, onEnter, onLeave }
+  map.on('click', clickLayer, onClick)
+  map.on('mouseenter', clickLayer, onEnter)
+  map.on('mouseleave', clickLayer, onLeave)
+  map[PROG_MAP_HANDLERS] = { onClick, onEnter, onLeave, clickLayer }
 }
 
 function basemapStyleUrl(mode, isDarkTheme) {
@@ -902,8 +939,10 @@ export default function ModuloProgramacionObra({
   const mapRef = useRef(null)
   const mapInst = useRef(null)
   const mapBaseModeRef = useRef('plano')
+  const mapViewModeRef = useRef('programacion')
   const enrichedGeojsonRef = useRef(null)
   const mapRefreshDebounceRef = useRef(null)
+  const ejecucionInitRef = useRef(false)
   const [plano, setPlano] = useState(undefined)
   const [mapaResp, setMapaResp] = useState(null)
   const [versiones, setVersiones] = useState([])
@@ -950,8 +989,6 @@ export default function ModuloProgramacionObra({
   const [modalOpenCompareTab, setModalOpenCompareTab] = useState(false)
   const [modalPkTabs, setModalPkTabs] = useState([])
   const [activeModalPk, setActiveModalPk] = useState(null)
-  const [criticalPkIds, setCriticalPkIds] = useState(new Set())
-  const criticalPulseRef = useRef(null)
   const [tramos, setTramos] = useState([])
   const [tramoFilter, setTramoFilter] = useState(null)
   const [modalMode, setModalMode] = useState('pk')
@@ -960,43 +997,18 @@ export default function ModuloProgramacionObra({
   const [loadTramoEstructura, setLoadTramoEstructura] = useState(false)
   const [modalSessionId, setModalSessionId] = useState(0)
   const [presupuestoDataKey, setPresupuestoDataKey] = useState(0)
+  const [mapViewMode, setMapViewMode] = useState('programacion')
+  const [ejecucionResumen, setEjecucionResumen] = useState(null)
+  const [ejecucionBusy, setEjecucionBusy] = useState(false)
+  const [ejecucionActualizadoEn, setEjecucionActualizadoEn] = useState(null)
+
+  mapViewModeRef.current = mapViewMode
 
   const pptoVersionVigenteId = useMemo(
     () => defaultPptoVersionAnalisisId(pptoVersiones),
     [pptoVersiones],
   )
 
-  const handleCpmUpdated = useCallback((resultados) => {
-    const ids = new Set()
-    for (const r of resultados || []) {
-      if (r.es_ruta_critica) ids.add(String(r.pk_id || '').trim())
-    }
-    setCriticalPkIds(ids)
-  }, [])
-
-  useEffect(() => {
-    const ids = new Set()
-    for (const r of mapaResp?.pk || []) {
-      if (r.tiene_ruta_critica) ids.add(String(r.pk_id || '').trim())
-    }
-    if (mapaResp?.pk) setCriticalPkIds(ids)
-  }, [mapaResp])
-
-  useEffect(() => {
-    if (criticalPulseRef.current) { clearInterval(criticalPulseRef.current); criticalPulseRef.current = null }
-    const map = mapInst.current
-    if (!map || criticalPkIds.size === 0) return
-    let opHigh = true
-    const tick = () => {
-      try {
-        if (!map.getLayer('prog-critico-line')) return
-        map.setPaintProperty('prog-critico-line', 'line-opacity', opHigh ? 0.9 : 0.2)
-        opHigh = !opHigh
-      } catch { /* ignore */ }
-    }
-    criticalPulseRef.current = setInterval(tick, 700)
-    return () => { if (criticalPulseRef.current) { clearInterval(criticalPulseRef.current); criticalPulseRef.current = null } }
-  }, [criticalPkIds])
   /** 'plano' = callejero claro/oscuro; 'topo' = outdoors; 'satellite' = satélite + relieve 3D. */
   const [mapBaseMode, setMapBaseMode] = useState('plano')
   mapBaseModeRef.current = mapBaseMode
@@ -1040,6 +1052,22 @@ export default function ModuloProgramacionObra({
       return m
     },
     [cid, token, API, applyVersionesPayload],
+  )
+
+  const fetchEjecucionResumen = useCallback(
+    async (tramo = null, pkSet = null) => {
+      if (!cid || !token) return null
+      const params = new URLSearchParams()
+      if (tramo) params.set('tramos', tramo)
+      if (pkSet?.size) params.set('pk_ids', [...pkSet].join(','))
+      const qs = params.toString()
+      const res = await fetch(`${API}/prog-obra/${cid}/ejecucion/resumen${qs ? `?${qs}` : ''}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return null
+      return res.json()
+    },
+    [cid, token, API],
   )
 
   const scheduleMapRefresh = useCallback(() => {
@@ -1203,6 +1231,36 @@ export default function ModuloProgramacionObra({
     return new Set((tr.pk_ids || []).map((pk) => String(pk).trim()).filter(Boolean))
   }, [tramoFilter, tramos])
 
+  const refreshEjecucionResumen = useCallback(async () => {
+    const data = await fetchEjecucionResumen(tramoFilter, tramoPkSet)
+    if (data) setEjecucionResumen(data)
+    return data
+  }, [fetchEjecucionResumen, tramoFilter, tramoPkSet])
+
+  const refreshEjecucionCache = useCallback(
+    async ({ reloadMapa = true } = {}) => {
+      if (!cid || !token) return
+      setEjecucionBusy(true)
+      try {
+        const res = await fetch(`${API}/prog-obra/${cid}/ejecucion/refresh`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok) {
+          const body = await res.json()
+          if (body?.actualizado_en) setEjecucionActualizadoEn(body.actualizado_en)
+        }
+        await refreshEjecucionResumen()
+        if (reloadMapa) await refreshMapaYVersiones()
+      } catch {
+        /* ignore */
+      } finally {
+        setEjecucionBusy(false)
+      }
+    },
+    [cid, token, API, refreshEjecucionResumen, refreshMapaYVersiones],
+  )
+
   const pkRowsVisibles = useMemo(() => {
     if (!tramoFilter || !tramoPkSet?.size) return pkRowsProgramables
     return pkRowsProgramables.filter((r) => tramoPkSet.has(String(r.pk_id || '').trim()))
@@ -1213,6 +1271,23 @@ export default function ModuloProgramacionObra({
     const ok = tramos.some((tr) => tr.tramo === tramoFilter && (programableCountByTramo[tr.tramo] || 0) > 0)
     if (!ok) setTramoFilter(null)
   }, [tramoFilter, tramos, programableCountByTramo])
+
+  useEffect(() => {
+    if (!cid || !token) {
+      ejecucionInitRef.current = false
+      setEjecucionResumen(null)
+      setEjecucionActualizadoEn(null)
+      return
+    }
+    if (ejecucionInitRef.current) return
+    ejecucionInitRef.current = true
+    void refreshEjecucionCache()
+  }, [cid, token, refreshEjecucionCache])
+
+  useEffect(() => {
+    if (!cid || !token) return
+    void refreshEjecucionResumen()
+  }, [cid, token, tramoFilter, tramoPkSet, refreshEjecucionResumen])
 
   const pkTieneCantidad = useCallback(
     (pkid) => {
@@ -1445,9 +1520,9 @@ export default function ModuloProgramacionObra({
     )
 
     map.on('load', () => {
-      const enriched = buildEnrichedPlano(plano, pkMeta(), new Set(), null)
+      const enriched = buildEnrichedPlano(plano, pkMeta(), new Set(), mapViewModeRef.current)
       enrichedGeojsonRef.current = enriched
-      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk), mapViewModeRef.current)
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
       if (lab) lab.textContent = basemapLabel(mapBaseModeRef.current)
       const b = boundsLngLatFromFeatureCollection(enriched)
@@ -1485,13 +1560,13 @@ export default function ModuloProgramacionObra({
   useEffect(() => {
     const map = mapInst.current
     if (!map || !MAPBOX_TOKEN || !plano?.features?.length || !mapaResp) return
-    const enriched = buildEnrichedPlano(plano, pkMeta(), criticalPkIds, tramoPkSet)
+    const enriched = buildEnrichedPlano(plano, pkMeta(), tramoPkSet, mapViewMode)
     enrichedGeojsonRef.current = enriched
     const apply = () =>
-      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk), mapViewMode)
     if (map.isStyleLoaded()) apply()
     else map.once('load', apply)
-  }, [mapaResp, pkMeta, plano, criticalPkIds, tramoPkSet])
+  }, [mapaResp, pkMeta, plano, tramoPkSet, mapViewMode])
 
   useEffect(() => {
     const map = mapInst.current
@@ -1532,7 +1607,7 @@ export default function ModuloProgramacionObra({
     map.setStyle(url)
     const modeAtSwitch = mapBaseMode
     map.once('style.load', () => {
-      applyProgMapAfterStyle(map, modeAtSwitch, enrichedGeojsonRef.current, (pk) => onMapPkClickRef.current(pk))
+      applyProgMapAfterStyle(map, modeAtSwitch, enrichedGeojsonRef.current, (pk) => onMapPkClickRef.current(pk), mapViewModeRef.current)
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
       if (lab) lab.textContent = basemapLabel(modeAtSwitch)
     })
@@ -2400,11 +2475,11 @@ export default function ModuloProgramacionObra({
           const id = String(r.pk_id || '').trim()
           if (id) metaMap[id] = r
         }
-        const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds, tramoPkSet)
+        const enriched = buildEnrichedPlano(plano, metaMap, tramoPkSet, mapViewMode)
         map.getSource('prog-pol').setData(enriched)
       }
     },
-    [refreshMapaYVersiones, plano, criticalPkIds, tramoPkSet],
+    [refreshMapaYVersiones, plano, tramoPkSet, mapViewMode],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -3056,7 +3131,6 @@ export default function ModuloProgramacionObra({
         onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}
         showToast={showToast}
         allPkIds={modalMode === 'tramo' ? (modalTramoContext?.pkIds || []) : pkIdsProgramables}
-        onCpmUpdated={handleCpmUpdated}
         onVersionHorizonteSaved={handleVersionHorizonteSaved}
         openCompareTab={modalOpenCompareTab}
         compareBaselineId={modalCompareBaselineId ?? desviacionContrato?.baseline_id ?? versionBaselineId}
@@ -3345,6 +3419,106 @@ export default function ModuloProgramacionObra({
         <div
           style={{
             position: 'absolute',
+            top: borradorMeta ? 52 : 10,
+            left: 10,
+            zIndex: 4,
+            maxWidth: 300,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: `${t.bgCard}f2`,
+            border: `1px solid ${t.border}`,
+            boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
+            fontSize: 'var(--cc-sm)',
+            color: t.text,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, color: '#15803d', fontSize: 12 }}>
+              Ejecución SICOE (N1)
+              {tramoFilter ? ` · ${tramoFilter}` : ''}
+            </div>
+            <button
+              type="button"
+              title="Recalcular ejecutado desde SICOE"
+              disabled={ejecucionBusy}
+              onClick={() => void refreshEjecucionCache()}
+              style={{
+                border: `1px solid ${t.border}`,
+                background: t.bg,
+                color: ejecucionBusy ? t.textMuted : t.text,
+                borderRadius: 6,
+                padding: '2px 8px',
+                fontSize: 10,
+                cursor: ejecucionBusy ? 'wait' : 'pointer',
+              }}
+            >
+              {ejecucionBusy ? '…' : '↻'}
+            </button>
+          </div>
+          {ejecucionResumen ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 10px', marginBottom: 4 }}>
+                <span style={{ color: t.textMuted }}>Presupuesto</span>
+                <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatCOP(ejecucionResumen.presupuesto_total)}</span>
+                <span style={{ color: t.textMuted }}>Ejecutado</span>
+                <span style={{ textAlign: 'right', fontWeight: 600, color: '#15803d' }}>{formatCOP(ejecucionResumen.ejecutado_total)}</span>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#15803d', lineHeight: 1.2 }}>
+                {Number(ejecucionResumen.ejecutado_pct || 0).toFixed(1)}%
+              </div>
+              {ejecucionActualizadoEn && (
+                <div style={{ marginTop: 4, fontSize: 10, color: t.textMuted }}>
+                  Cache mapa: {new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ color: t.textMuted, fontSize: 11 }}>{ejecucionBusy ? 'Calculando…' : 'Sin datos de ejecución'}</div>
+          )}
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            top: borradorMeta ? 52 : 10,
+            right: 52,
+            zIndex: 4,
+            display: 'flex',
+            borderRadius: 8,
+            overflow: 'hidden',
+            border: `1px solid ${t.border}`,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            background: t.bgCard,
+          }}
+        >
+          {[
+            { id: 'programacion', label: 'Programación' },
+            { id: 'ejecutado', label: 'Ejecutado' },
+          ].map((opt) => {
+            const active = mapViewMode === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setMapViewMode(opt.id)}
+                style={{
+                  border: 'none',
+                  borderRight: opt.id === 'programacion' ? `1px solid ${t.border}` : 'none',
+                  background: active ? (opt.id === 'ejecutado' ? '#dcfce7' : `${t.primary}14`) : t.bgCard,
+                  color: active ? (opt.id === 'ejecutado' ? '#15803d' : t.primary) : t.textMuted,
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 11,
+                  padding: '7px 12px',
+                  cursor: 'pointer',
+                }}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+        <div
+          style={{
+            position: 'absolute',
             left: 10,
             bottom: 10,
             zIndex: 4,
@@ -3359,8 +3533,10 @@ export default function ModuloProgramacionObra({
             pointerEvents: 'none',
           }}
         >
-          <div style={{ fontWeight: 700, color: t.primary, marginBottom: 8, fontSize: 12 }}>Estado de programación</div>
-          {MAPA_LEYENDA_ESTADOS.map((it) => (
+          <div style={{ fontWeight: 700, color: mapViewMode === 'ejecutado' ? '#0891b2' : t.primary, marginBottom: 8, fontSize: 12 }}>
+            {mapViewMode === 'ejecutado' ? 'Ejecutado en mapa (costo N1)' : 'Estado de programación'}
+          </div>
+          {(mapViewMode === 'ejecutado' ? MAPA_LEYENDA_EJECUTADO : MAPA_LEYENDA_ESTADOS).map((it) => (
             <div key={it.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
               <span
                 aria-hidden

@@ -79,7 +79,13 @@ from prog_obra_curva_s import (
     build_curva_s_xlsx_bytes,
     load_curva_s_export_context,
 )
-from prog_obra_pk_filter import parse_pk_ids_param
+from prog_obra_ejecutado import (
+    build_ejecucion_resumen,
+    enrich_mapa_rows_with_ejecutado,
+    fetch_prog_pk_ejecutado_map,
+    refresh_prog_pk_ejecutado,
+)
+from prog_obra_pk_filter import parse_pk_ids_param, parse_tramos_param
 from prog_obra_auto_schedule import (
     check_auto_schedule_prereqs,
     preview_auto_schedule,
@@ -372,6 +378,11 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
     rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
     sin_ag_by_pk = fetch_sin_agrupador_count_by_pk(supabase, contrato_id)
     rows = enrich_mapa_rows_sin_agrupador(rows, sin_ag_by_pk)
+    try:
+        ej_map = fetch_prog_pk_ejecutado_map(supabase, contrato_id)
+    except Exception:
+        ej_map = {}
+    rows = enrich_mapa_rows_with_ejecutado(rows, ej_map)
     desviacion_meta = None
     try:
         desv = compute_desviaciones(
@@ -404,6 +415,39 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
         "meta": meta_out,
         "tiempo_ms": ms,
     }
+
+
+@router.get("/{contrato_id}/ejecucion/resumen")
+def prog_ejecucion_resumen(
+    contrato_id: int,
+    tramos: Optional[str] = Query(None, description="Tramos separados por coma (opcional)"),
+    pk_ids: Optional[str] = Query(None, description="PKs separados por coma (opcional)"),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    tramo_list = parse_tramos_param(tramos)
+    pk_set = parse_pk_ids_param(pk_ids)
+    return build_ejecucion_resumen(
+        supabase,
+        contrato_id,
+        pk_ids=pk_set,
+        tramos=tramo_list,
+    )
+
+
+@router.post("/{contrato_id}/ejecucion/refresh")
+def prog_ejecucion_refresh(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    t0 = time.perf_counter()
+    try:
+        out = refresh_prog_pk_ejecutado(supabase, contrato_id)
+    except Exception as exc:
+        _logger.exception("ejecucion refresh contrato %s", contrato_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    out["tiempo_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+    return out
 
 
 @router.get("/{contrato_id}/comparar")

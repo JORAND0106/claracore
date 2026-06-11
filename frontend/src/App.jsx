@@ -44,10 +44,19 @@ import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionField
 import {
   sicoeLocVacia,
   sicoeLocFromRegistro,
+  sicoePkRowFromRegistro,
   validarLocalizacion,
   localizacionToApiFields,
+  sicoeLocSpreadEnRegistro,
   fmtLocCorta,
 } from './modules/sicoe-obra/sicoeLocalizacionHelpers'
+import {
+  listaGraficosRegistro,
+  parseGraficosHistorial,
+  agregarEntradaGraficoHistorial,
+  etiquetaOrigenGrafico,
+  fmtFechaGrafico,
+} from './modules/sicoe-obra/sicoeGraficosHelpers'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -274,17 +283,22 @@ function _boundsFromFeatureCollection(fc) {
   return { minLng, maxLng, minLat, maxLat }
 }
 
-/** BBox de features cuyo pk_id en el plano coincide con el texto del maestro (ej. 141383). */
+/** Coincidencia estricta de pk_id en polígonos del plano (no puntos de abscisa). */
+function sicoeFeatureCoincidePkPlano(f, wantNorm) {
+  const gt = f?.geometry?.type
+  if (gt !== 'Polygon' && gt !== 'MultiPolygon') return false
+  const id = _sicoeFeaturePkId(f).toLowerCase().replace(/\s+/g, '')
+  if (!id || !wantNorm) return false
+  return id === wantNorm
+}
+
+/** BBox de polígonos cuyo pk_id coincide exactamente con el maestro (ej. 120115). */
 function sicoeBoundsForPkInPlano(planoRaw, pkStr) {
-  const want = String(pkStr || '').trim().toLowerCase()
+  const want = String(pkStr || '').trim().toLowerCase().replace(/\s+/g, '')
   if (!want) return null
   const fc = _normalizeContratoPlanoGeojson(planoRaw)
   if (!fc?.features?.length) return null
-  const matched = fc.features.filter((f) => {
-    const id = _sicoeFeaturePkId(f).toLowerCase().replace(/\s+/g, '')
-    const w = want.replace(/\s+/g, '')
-    return id === w || id.endsWith(w) || w.endsWith(id)
-  })
+  const matched = fc.features.filter((f) => sicoeFeatureCoincidePkPlano(f, want))
   if (!matched.length) return null
   return _boundsFromFeatureCollection({ type: 'FeatureCollection', features: matched })
 }
@@ -296,19 +310,7 @@ function sicoeBoundsForPkRowInPlano(planoRaw, pkRow) {
     const b = sicoeBoundsForPkInPlano(planoRaw, pkStr)
     if (b) return b
   }
-  const civ = String(pkRow.civ || '').trim().toLowerCase()
-  if (!civ) return null
-  const fc = _normalizeContratoPlanoGeojson(planoRaw)
-  if (!fc?.features?.length) return null
-  const civN = civ.replace(/\s+/g, '')
-  const matched = fc.features.filter((f) => {
-    const layer = String(f?.properties?.Layer ?? f?.properties?.layer ?? f?.properties?.Name ?? '').trim().toLowerCase()
-    const fid = _sicoeFeaturePkId(f).toLowerCase().replace(/\s+/g, '')
-    const layerN = layer.replace(/\s+/g, '')
-    return layer === civ || layerN === civN || fid === civN || layer.includes(civ) || civ.includes(layer)
-  })
-  if (!matched.length) return null
-  return _boundsFromFeatureCollection({ type: 'FeatureCollection', features: matched })
+  return null
 }
 
 function sicoeCentroLngLatDesdeBounds(bounds) {
@@ -325,18 +327,12 @@ function sicoePkRowPorId(pkList, pkId) {
   return list.find((p) => String(p.id) === String(pkId)) || null
 }
 
-function sicoeLngLatDesdeRegistroYPlano(reg, pkRow, planoRaw) {
-  let lat = reg?.coord_lat
-  let lng = reg?.coord_lng
-  if (lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng)) {
-    return { lat: +lat, lng: +lng, aproximado: false }
-  }
-  const llM = sicoePickLngLatMaestro(pkRow)
-  if (llM) return { lng: llM[0], lat: llM[1], aproximado: false }
-  const b = sicoeBoundsForPkRowInPlano(planoRaw, pkRow)
-  const c = sicoeCentroLngLatDesdeBounds(b)
-  if (c) return { ...c, aproximado: true }
-  return null
+/** Solo coordenadas WGS84 guardadas en el registro (sin interpolar abscisa ni centro de PK). */
+function sicoeLngLatGpsRegistro(reg) {
+  const lat = reg?.coord_lat
+  const lng = reg?.coord_lng
+  if (lat == null || lng == null || Number.isNaN(+lat) || Number.isNaN(+lng)) return null
+  return { lat: +lat, lng: +lng }
 }
 
 function _mapboxFitBoundsLngLat(map, bounds, opt = {}) {
@@ -1080,8 +1076,8 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
           <span style={{ fontSize:'36px' }}>📍</span>
           <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
             {pkMapHint && fallbackBounds
-              ? `Vista del plano en la zona del PK ${pkMapHint}. ${modoEdicion ? 'Haz clic en el mapa para las coordenadas WGS84.' : 'Sin coordenadas GPS en la portada.'}`
-              : modoEdicion ? 'Haz clic en el mapa para fijar las coordenadas' : 'Sin coordenadas geográficas'}
+              ? `Vista del plano en la zona del PK ${pkMapHint}. ${modoEdicion ? 'Haz clic en el mapa para fijar el punto de localización.' : 'Sin punto de localización en mapa.'}`
+              : modoEdicion ? 'Haz clic en el mapa para fijar el punto de localización' : 'Sin punto de localización en mapa'}
           </span>
         </div>
       )}
@@ -1097,10 +1093,11 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
 const MAPA_PORTADA_MULTI_COLORS = ['#0077B6', '#F59E0B', '#10B981', '#8B5CF6', '#EC4899', '#0D9488', '#DC2626', '#6366F1']
 
 /** Mapa con varios marcadores (localización por registro en reportes «multiple»). */
-function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
+function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson = null }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markersRef = useRef([])
+  const planoLayerReadyRef = useRef(false)
 
   useEffect(() => {
     if (!containerRef.current || !import.meta.env.VITE_MAPBOX_TOKEN) return
@@ -1114,12 +1111,14 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
     const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
     mapRef.current = map
+    planoLayerReadyRef.current = false
     return () => {
       try { unregAttrib() } catch { /* ignore */ }
       markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
       markersRef.current = []
       map.remove()
       mapRef.current = null
+      planoLayerReadyRef.current = false
     }
   }, [])
 
@@ -1127,6 +1126,38 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
     const map = mapRef.current
     if (!map) return
     const pintar = () => {
+      const fc = _normalizeContratoPlanoGeojson(planoGeojson)
+      if (fc?.features?.length) {
+        try {
+          if (map.getSource('portada-plano')) {
+            map.getSource('portada-plano').setData(fc)
+          } else {
+            map.addSource('portada-plano', { type: 'geojson', data: fc })
+            map.addLayer({
+              id: 'portada-plano-fill',
+              type: 'fill',
+              source: 'portada-plano',
+              paint: { 'fill-color': '#0077B6', 'fill-opacity': 0.28 },
+            })
+            map.addLayer({
+              id: 'portada-plano-line',
+              type: 'line',
+              source: 'portada-plano',
+              paint: { 'line-color': '#00A896', 'line-width': 1.2 },
+            })
+            map.addLayer({
+              id: 'portada-labels-abscisa',
+              type: 'symbol',
+              source: 'portada-plano',
+              filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+              layout: _mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+              paint: MAPBOX_PLANO_PAINT_LABELS,
+            })
+            planoLayerReadyRef.current = true
+          }
+        } catch { /* capas ya existentes o estilo no listo */ }
+      }
+
       markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
       markersRef.current = []
       const validos = (puntos || []).filter(
@@ -1165,12 +1196,14 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
     }
     if (map.isStyleLoaded()) pintar()
     else map.once('load', pintar)
-  }, [puntos, fallbackBounds])
+  }, [puntos, fallbackBounds, planoGeojson])
 
   const tieneToken = !!import.meta.env.VITE_MAPBOX_TOKEN
   const validos = (puntos || []).filter(
     (p) => p.lat != null && p.lng != null && !Number.isNaN(+p.lat) && !Number.isNaN(+p.lng),
   )
+  const tienePlano = !!_normalizeContratoPlanoGeojson(planoGeojson)?.features?.length
+  const mostrarAvisoSinPins = validos.length === 0 && !tienePlano && !fallbackBounds
   return (
     <div style={{ position: 'relative', width: '100%', minHeight: '340px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${t.border}` }}>
       {!tieneToken ? (
@@ -1180,12 +1213,17 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null }) {
       ) : (
         <div ref={containerRef} style={{ width: '100%', minHeight: '340px' }} />
       )}
-      {tieneToken && validos.length === 0 && (
+      {tieneToken && mostrarAvisoSinPins && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: `${t.bgCard}EE`, gap: '8px', pointerEvents: 'none' }}>
           <span style={{ fontSize: '36px' }}>📍</span>
           <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, textAlign: 'center', padding: '0 20px' }}>
             Sin coordenadas en los registros. Revise la localización en cada hoja de registro.
           </span>
+        </div>
+      )}
+      {tieneToken && validos.length === 0 && tienePlano && (
+        <div style={{ position: 'absolute', left: 10, bottom: 10, right: 10, background: `${t.bgCard}DD`, borderRadius: 8, padding: '8px 10px', fontSize: 'var(--cc-caption)', color: t.textMuted, pointerEvents: 'none', lineHeight: 1.4 }}>
+          Plano de referencia. Los marcadores solo aparecen cuando cada registro tiene coord_lat y coord_lng guardadas al seleccionar el punto en el mapa.
         </div>
       )}
     </div>
@@ -2068,6 +2106,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
+  const [graficosHistLocal, setGraficosHistLocal] = useState(() => parseGraficosHistorial(registro))
+  const [graficoIdx, setGraficoIdx] = useState(0)
+  const [eliminandoGraf, setEliminandoGraf] = useState(false)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
   const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
@@ -2079,7 +2120,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }, [registro.id, registro.foto_url, reporte?.registros])
   useEffect(() => {
     setGrafLocal(registro.grafico_url || graficoReporte?.grafico_url || null)
-  }, [registro.id, registro.grafico_url, graficoReporte?.grafico_url])
+    setGraficosHistLocal(parseGraficosHistorial(registro))
+  }, [registro.id, registro.grafico_url, registro.graficos_historial, graficoReporte?.grafico_url])
+
+  const graficosLista = useMemo(() => {
+    const merged = { ...registro, graficos_historial: graficosHistLocal, grafico_url: grafLocal || registro.grafico_url }
+    return listaGraficosRegistro(merged)
+  }, [registro, graficosHistLocal, grafLocal])
+
+  useEffect(() => {
+    setGraficoIdx((prev) => Math.min(prev, Math.max(0, graficosLista.length - 1)))
+  }, [graficosLista.length, registro.id])
+
+  const graficoActual = graficosLista[graficoIdx] || null
 
   const _urlMedia = (v) => {
     if (v == null) return null
@@ -2091,7 +2144,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const fotoVista = _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url) || _urlMedia(fotoLocal)
   const strRefCarpeta = strRefCarpetaFoto(registro)
   const esFotoConsecBd = regTieneFotoNumeroEnBd(registro)
-  const grafVista = _urlMedia(registro.grafico_url) || _urlMedia(regMismoEnReporte?.grafico_url) || _urlMedia(graficoReporte?.grafico_url) || _urlMedia(grafLocal)
+  const grafVista = _urlMedia(graficoActual?.url)
+    || _urlMedia(registro.grafico_url)
+    || _urlMedia(regMismoEnReporte?.grafico_url)
+    || _urlMedia(graficoReporte?.grafico_url)
+    || _urlMedia(grafLocal)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
   const [listaCortes,            setListaCortes]            = useState([])
@@ -2159,7 +2216,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setLocRegistro(sicoeLocFromRegistro(registro, pkIdsHoja))
   }, [
     registro.id, registro.pk_id_id, registro.margen, registro.abs_inicio, registro.abs_final,
-    registro.nodo_ini, registro.nodo_fin, pkIdsHoja.length,
+    registro.nodo_ini, registro.nodo_fin, registro.coord_lat, registro.coord_lng, registro.civ,
+    pkIdsHoja.length,
   ])
 
   useEffect(() => {
@@ -2211,6 +2269,33 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
     return res.json()
   }, [API, hdrs])
+
+  /** Clic en plano → persiste coord_lat/coord_lng y localización en so_registros (sin mostrar GPS en UI). */
+  const persistirLocalizacionGps = useCallback(async (loc) => {
+    if (!esLocMultiple || !editableCampos || !registro?.id) return
+    const fields = localizacionToApiFields(loc)
+    if (fields.coord_lat == null || fields.coord_lng == null) return
+    try {
+      await apiCallSicoe('PUT', `/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        reporte_id: registro.reporte_id,
+        numero_registro: registro.numero_registro,
+        ...fields,
+      })
+      onOptimisticRegistroPatch?.(registro.id, fields)
+    } catch (e) {
+      setToastMsg(`No se pudo guardar la ubicación: ${e?.message || String(e)}`)
+      setTimeout(() => setToastMsg(null), 4000)
+    }
+  }, [
+    esLocMultiple,
+    editableCampos,
+    registro?.id,
+    registro?.reporte_id,
+    registro?.numero_registro,
+    contrato_id,
+    apiCallSicoe,
+    onOptimisticRegistroPatch,
+  ])
 
   // Capítulos + catálogo de competencias al cambiar contrato
   useEffect(() => {
@@ -2326,8 +2411,43 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setUploadingFoto(false)
   }
 
-  // Subir gráfico
-  const subirGrafico = async (file) => {
+  const persistirGraficoEnRegistro = async (url, numero, origen = 'manual') => {
+    const entrada = {
+      url,
+      numero: numero ?? null,
+      creado_en: new Date().toISOString(),
+      origen,
+    }
+    let baseHist = graficosHistLocal
+    if (!baseHist.length && registro.grafico_url && registro.grafico_url !== url) {
+      baseHist = [{
+        url: registro.grafico_url,
+        numero: registro.grafico_numero ?? null,
+        creado_en: registro.updated_at || registro.created_at || null,
+        origen: 'legacy',
+      }]
+    }
+    const nuevoHist = agregarEntradaGraficoHistorial(baseHist, entrada)
+    const rid = registro?.id
+    const body = {
+      reporte_id: registro.reporte_id,
+      numero_registro: registro.numero_registro,
+      grafico_url: url,
+      grafico_numero: numero ?? null,
+      graficos_historial: nuevoHist,
+    }
+    if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+      await apiCallSicoe('PUT', `/sicoe-obra/${contrato_id}/registros/${rid}`, body)
+      onOptimisticRegistroPatch?.(rid, body)
+    }
+    setGraficosHistLocal(nuevoHist)
+    setGrafLocal(url)
+    setGraficoIdx(Math.max(0, nuevoHist.length - 1))
+  }
+
+  // Subir gráfico (manual o pantallazo del plano)
+  const subirGrafico = async (file, opts = {}) => {
+    const { origen = 'manual' } = opts
     setUploadingGraf(true)
     try {
       if (!isOnline && isOfflineReady) {
@@ -2342,17 +2462,53 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const fd = new FormData(); fd.append('file', file); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
-      const rid = registro?.id
-      if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
-        const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
-          method:'PUT', headers: hdrs,
-          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, grafico_url: res.url, grafico_numero: res.numero ?? numero })
-        })
-        await sicoeFetchJsonOThrow(put)
-      }
-      setGrafLocal(res.url)
+      await persistirGraficoEnRegistro(res.url, res.numero ?? numero, origen)
     } catch(e) { alert('Error subiendo gráfico: ' + (e?.message || String(e))) }
     setUploadingGraf(false)
+  }
+
+  const guardarGraficoDesdeMapa = async (dataUrl) => {
+    if (!editableFotoGrafico || !dataUrl) return
+    try {
+      const resp = await fetch(dataUrl)
+      const blob = await resp.blob()
+      const file = new File(
+        [blob],
+        `plano_reg${registro.numero_registro ?? registro.id}_${Date.now()}.jpg`,
+        { type: 'image/jpeg' },
+      )
+      await subirGrafico(file, { origen: 'mapa' })
+    } catch (e) {
+      console.error('guardarGraficoDesdeMapa', e)
+    }
+  }
+
+  const eliminarGraficoActual = async () => {
+    if (!editableFotoGrafico || !graficosLista.length) return
+    if (!window.confirm('¿Eliminar este gráfico del registro? (La foto no se modifica)')) return
+    setEliminandoGraf(true)
+    try {
+      const nuevoHist = graficosLista.filter((_, i) => i !== graficoIdx)
+      const ultimo = nuevoHist[nuevoHist.length - 1] || null
+      const rid = registro?.id
+      const body = {
+        reporte_id: registro.reporte_id,
+        numero_registro: registro.numero_registro,
+        graficos_historial: nuevoHist,
+        grafico_url: ultimo?.url ?? null,
+        grafico_numero: ultimo?.numero ?? null,
+      }
+      if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+        await apiCallSicoe('PUT', `/sicoe-obra/${contrato_id}/registros/${rid}`, body)
+        onOptimisticRegistroPatch?.(rid, body)
+      }
+      setGraficosHistLocal(nuevoHist)
+      setGrafLocal(ultimo?.url ?? null)
+      setGraficoIdx(Math.max(0, nuevoHist.length - 1))
+    } catch (e) {
+      alert('No se pudo eliminar el gráfico: ' + (e?.message || String(e)))
+    }
+    setEliminandoGraf(false)
   }
 
   const calcCantTotal = (l, a, e, c) => {
@@ -3201,6 +3357,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             contratoId={contrato_id}
             value={locRegistro}
             onChange={setLocRegistro}
+            onGpsCapturado={persistirLocalizacionGps}
+            onMapaCapturado={guardarGraficoDesdeMapa}
             errores={erroresLocHoja}
             pkIds={pkIdsHoja}
             nodos={nodosHoja}
@@ -3338,34 +3496,60 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </div>
             )}
           </div>
-          {/* Gráfico del reporte */}
+          {/* Gráfico / plano (historial: automático del mapa + cargas manuales) */}
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
             {grafVista ? (
               <>
-                <img src={grafVista} alt="Gráfico" referrerPolicy="no-referrer" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
-                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <span>📐 Gráfico / Plano</span>
-                  {editableFotoGrafico && (
-                    <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
-                      Cambiar
-                      <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
-                        onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
-                    </label>
+                <div style={{ position:'relative' }}>
+                  <img src={grafVista} alt="Gráfico" referrerPolicy="no-referrer" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+                  {graficosLista.length > 1 && (
+                    <>
+                      <button type="button" disabled={graficoIdx <= 0} onClick={() => setGraficoIdx((i) => Math.max(0, i - 1))}
+                        style={{ position:'absolute', left:6, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:28, height:28, cursor: graficoIdx <= 0 ? 'default' : 'pointer', opacity: graficoIdx <= 0 ? 0.35 : 1 }}>‹</button>
+                      <button type="button" disabled={graficoIdx >= graficosLista.length - 1} onClick={() => setGraficoIdx((i) => Math.min(graficosLista.length - 1, i + 1))}
+                        style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:28, height:28, cursor: graficoIdx >= graficosLista.length - 1 ? 'default' : 'pointer', opacity: graficoIdx >= graficosLista.length - 1 ? 0.35 : 1 }}>›</button>
+                    </>
+                  )}
+                </div>
+                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', flexDirection:'column', gap:'4px' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'6px' }}>
+                    <span>📐 Gráfico / Plano{graficosLista.length > 1 ? ` (${graficoIdx + 1}/${graficosLista.length})` : ''}</span>
+                    <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                      {editableFotoGrafico && (
+                        <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
+                          + Añadir
+                          <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                            onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
+                        </label>
+                      )}
+                      {editableFotoGrafico && (
+                        <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
+                          style={{ background:'transparent', border:'none', color:'#EF4444', fontSize:'var(--cc-label)', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer' }}>
+                          {eliminandoGraf ? '…' : '🗑️ Quitar gráfico'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {graficoActual && (
+                    <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.35 }}>
+                      {fmtFechaGrafico(graficoActual.creado_en)} · {etiquetaOrigenGrafico(graficoActual.origen)}
+                      {graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}
+                    </div>
                   )}
                 </div>
               </>
             ) : (
               <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableFotoGrafico ? 'pointer' : 'default', gap:'8px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                 {uploadingGraf
-                  ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
+                  ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo plano...</span>
                   : <>
                       <span style={{ fontSize:'32px' }}>📐</span>
-                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Gráfico del reporte</span>
-                      <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 10px' }}>Gráfico del registro</span>
+                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', padding:'0 12px', lineHeight:1.35 }}>Se genera al localizar en el mapa, o toque para cargar manualmente</span>
                     </>
                 }
                 <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableFotoGrafico}
-                  onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
+                  onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
               </label>
             )}
           </div>
@@ -3891,6 +4075,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       .catch(() => setPlanoGeojsonPortada(null))
   }, [contrato_id])
 
+  useEffect(() => {
+    if (!contrato_id) return
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
+      .then((r) => r.json())
+      .then((d) => setListaPkIds(Array.isArray(d) ? d : []))
+      .catch(() => setListaPkIds([]))
+  }, [contrato_id, API_URL])
+
   const pkTextoPlano = String(
     reporte?.pk_id_valor || listaPkIds.find((p) => p.id === reporte?.pk_id_id)?.pk_id || '',
   ).trim()
@@ -3905,9 +4097,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!esLocMultipleReporte) return []
     const raw = []
     for (const reg of registros) {
-      const pk = sicoePkRowPorId(listaPkIds, reg.pk_id_id)
-      const ll = sicoeLngLatDesdeRegistroYPlano(reg, pk, planoGeojsonPortada)
+      const ll = sicoeLngLatGpsRegistro(reg)
       if (!ll) continue
+      const pk = sicoePkRowFromRegistro(reg, listaPkIds)
       const pkTxt = pk?.pk_id || (reg.pk_id_id != null ? `PK #${reg.pk_id_id}` : '')
       const abs = reg.abs_inicio != null && reg.abs_final != null ? `${reg.abs_inicio} → ${reg.abs_final}` : ''
       raw.push({
@@ -3916,7 +4108,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         lng: ll.lng,
         numero: reg.numero_registro,
         etiqueta: `Registro #${reg.numero_registro}${pkTxt ? ` · ${pkTxt}` : ''}${abs ? ` · ${abs}` : ''}`,
-        aproximado: ll.aproximado,
+        aproximado: false,
       })
     }
     raw.sort((a, b) => (a.numero ?? 0) - (b.numero ?? 0))
@@ -3930,11 +4122,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         ...pt,
         lng: pt.lng + n * 0.00008,
         lat: pt.lat + n * 0.00006,
-        aproximado: true,
-        etiqueta: `${pt.etiqueta} (desplazado en mapa por coincidencia de coordenadas)`,
+        etiqueta: `${pt.etiqueta} (misma coordenada GPS)`,
       }
     })
-  }, [esLocMultipleReporte, registros, listaPkIds, planoGeojsonPortada])
+  }, [esLocMultipleReporte, registros, listaPkIds])
 
   const portadaMapBoundsMultiple = useMemo(() => {
     if (!esLocMultipleReporte) return null
@@ -3944,7 +4135,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     let maxLat = -Infinity
     let any = false
     for (const reg of registros) {
-      const pk = sicoePkRowPorId(listaPkIds, reg.pk_id_id)
+      const pk = sicoePkRowFromRegistro(reg, listaPkIds)
       const b = sicoeBoundsForPkRowInPlano(planoGeojsonPortada, pk)
       if (!b) continue
       any = true
@@ -4225,6 +4416,27 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }
     setModoEdicion(true)
   }
+
+  /** Clic en mapa de portada (localización única) → persiste coord_lat/coord_lng sin mostrarlas en UI. */
+  const persistirCoordsPortada = useCallback(async (la, lo) => {
+    setEditLat(la)
+    setEditLng(lo)
+    if (!reporte?.id) return
+    const lat = parseFloat(la)
+    const lng = parseFloat(lo)
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify({ ...reporte, coord_lat: lat, coord_lng: lng }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setReporte((prev) => ({ ...prev, coord_lat: lat, coord_lng: lng }))
+    } catch (e) {
+      console.error('persistirCoordsPortada', e)
+    }
+  }, [reporte, contrato_id, API_URL, hdrs])
 
   const guardarEdicion = async () => {
     setGuardandoEdicion(true)
@@ -4937,20 +5149,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {esLocMultipleReporte && (
                   <>
                     <div style={{ marginBottom:'12px', padding:'10px 12px', background:'#0077B612', border:'1px solid #0077B633', borderRadius:'8px', fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
-                      Este reporte usa <strong>varias localizaciones</strong>. Cada marcador corresponde a un registro (número en el pin), según el PK asignado en su hoja de registro.
-                      Las <strong>coordenadas topográficas</strong> (Norte/Este) son del reporte completo y se registran más abajo; no se copian a cada registro.
+                      Este reporte usa <strong>varias localizaciones</strong>. Cada marcador es un registro (número en el pin) <strong>solo si tiene latitud y longitud guardadas</strong> al seleccionar el punto en el mapa de su hoja.
+                      Las <strong>coordenadas topográficas</strong> (Norte/Este) son del reporte completo y se registran más abajo; no sustituyen el GPS por registro.
                     </div>
                     <MapaPortadaMulti
                       puntos={marcadoresLocMultiple}
                       t={t}
                       fallbackBounds={portadaMapBoundsMultiple}
+                      planoGeojson={planoGeojsonPortada}
                     />
-                    {marcadoresLocMultiple.length > 0 && (
-                      <div style={{ marginTop:'10px', fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.45 }}>
-                        {marcadoresLocMultiple.length} ubicación(es) en mapa
-                        {marcadoresLocMultiple.some((p) => p.aproximado) ? ' · Algunas posiciones son aproximadas (centro del PK en plano).' : ''}
-                      </div>
-                    )}
+                    <div style={{ marginTop:'10px', fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.45 }}>
+                      {marcadoresLocMultiple.length > 0
+                        ? `${marcadoresLocMultiple.length} de ${registros.length} registro(s) con coordenadas GPS guardadas en mapa.`
+                        : `Ningún registro tiene coordenadas GPS guardadas (${registros.length} en este reporte). Abra cada hoja → Localización → Seleccionar PK en mapa → clic en el punto (se guarda automáticamente).`}
+                    </div>
                   </>
                 )}
                 {esLocMultipleReporte ? null : (
@@ -4986,29 +5198,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
                       <CampoInfo label="Costado"        valor={modoEdicion ? (editCalzadaLocal || reporte.calzada) : reporte.calzada} />
                       <CampoInfo label="Infraestructura" valor={modoEdicion ? (editInfraLocal || reporte.infraestructura) : reporte.infraestructura} />
-                    </div>
-
-                    {/* Latitud | Longitud */}
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
-                      {modoEdicion ? (
-                        <>
-                          <div>
-                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
-                            <input type="number" step="0.0000001" value={editLat} onChange={e => setEditLat(e.target.value)} placeholder="4.710989"
-                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-                          </div>
-                          <div>
-                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
-                            <input type="number" step="0.0000001" value={editLng} onChange={e => setEditLng(e.target.value)} placeholder="-74.072092"
-                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <CampoInfo label="Latitud"  valor={reporte.coord_lat} />
-                          <CampoInfo label="Longitud" valor={reporte.coord_lng} />
-                        </>
-                      )}
                     </div>
 
                     {/* Abscisado | Nodos */}
@@ -5059,7 +5248,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     lat={modoEdicion ? editLat : reporte.coord_lat}
                     lng={modoEdicion ? editLng : reporte.coord_lng}
                     modoEdicion={modoEdicion && puedeEditarCabecera}
-                    onCoordsChange={(la, lo) => { setEditLat(la); setEditLng(lo) }}
+                    onCoordsChange={persistirCoordsPortada}
                     t={t}
                     fallbackBounds={portadaMapBounds}
                     pkMapHint={pkTextoPlano || null}
@@ -10749,8 +10938,20 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const stampLocEnRegistro = (base = {}) => {
     if (tipoLocalizacion !== 'multiple') return base
-    return { ...base, ...locLoteActual, loteLocIdx: loteLocIdxActual }
+    return { ...base, ...sicoeLocSpreadEnRegistro(locLoteActual), loteLocIdx: loteLocIdxActual }
   }
+
+  /** Clic en plano del wizard → actualiza lote actual y registros ya agregados en ese lote. */
+  const aplicarLocLoteActual = useCallback((loc) => {
+    setLocLoteActual(loc)
+    setRegistros((prev) =>
+      prev.map((r) =>
+        (r.loteLocIdx ?? 0) === loteLocIdxActual
+          ? { ...r, ...sicoeLocSpreadEnRegistro(loc), loteLocIdx: r.loteLocIdx ?? loteLocIdxActual }
+          : r
+      )
+    )
+  }, [loteLocIdxActual])
 
   const registrosEnLoteActual = () =>
     registros.filter((r) => (r.loteLocIdx ?? 0) === loteLocIdxActual)
@@ -10764,7 +10965,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       const loc = tipoLocalizacion === 'multiple' ? locLoteActual : locReporteActual()
       const { ok, errores: el } = validarLocalizacion(loc)
       setErroresLoc(el)
-      if (ok && tipoLocalizacion === 'multiple') setLocLoteActual(loc)
+      if (ok && tipoLocalizacion === 'multiple') aplicarLocLoteActual(loc)
       return ok
     }
     setErroresLoc({})
@@ -11298,7 +11499,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     token={token}
                     contratoId={contrato_id}
                     value={locLoteActual}
-                    onChange={setLocLoteActual}
+                    onChange={aplicarLocLoteActual}
                     errores={erroresLoc}
                     pkIds={pkIds}
                     nodos={nodos}

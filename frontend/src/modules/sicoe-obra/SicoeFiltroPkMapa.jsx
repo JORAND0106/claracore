@@ -21,7 +21,7 @@ export default function SicoeFiltroPkMapa({
     ? (pkList.find((p) => String(p.id) === String(pkIdSeleccionado))?.pk_id || `ID ${pkIdSeleccionado}`)
     : '')
 
-  const resolverPkId = (pkVal) => {
+  const resolverPkId = (pkVal, meta) => {
     const v = String(pkVal || '').trim()
     if (!v) return
     const row = (pkList || []).find(
@@ -30,7 +30,13 @@ export default function SicoeFiltroPkMapa({
         || String(p.civ || '').trim().toLowerCase() === v.toLowerCase(),
     )
     if (row?.id != null) {
-      onSeleccionar?.({ pk_id_id: String(row.id), pk_label: String(row.pk_id || row.civ || v) })
+      onSeleccionar?.({
+        pk_id_id: String(row.id),
+        pk_label: String(row.pk_id || row.civ || v),
+        coordLat: meta?.lat ?? null,
+        coordLng: meta?.lng ?? null,
+        mapaScreenshot: meta?.screenshot ?? null,
+      })
       setMapaOpen(false)
     }
   }

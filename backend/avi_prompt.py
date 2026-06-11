@@ -681,6 +681,27 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Días de trabajo real; excluye sábados, domingos y festivos colombianos (Ley 51 de 1983).
    - Al escribir duración en días hábiles, la fecha fin se calcula sola.
 
+   Tramo (programación consolidada):
+   - Varios PK agrupados en un tramo (ej. «TRAMO 7») se programan juntos en una sola grilla.
+   - Modal «Abrir programación» puede abrir vista consolidada por tramo: cantidades sumadas por agrupador WBS.
+   - Útil cuando la misma actividad (ej. 2.D CUNETAS) se repite en varios PK del tramo.
+
+   Presupuesto vigente vs programación:
+   - Los costos y cantidades en programación usan el presupuesto VIGENTE (borrador en edición), no una versión sellada antigua.
+   - Botón «Sincronizar con presupuesto»: actualiza cantidad/unidad/costo de actividades YA programadas; NO crea filas nuevas.
+   - Ítems nuevos del presupuesto deben programarse manualmente vía WBS/modal.
+   - Curva S puede mostrar brecha si hay costo presupuestado sin fechas CPM (normal hasta programar).
+
+   % programado vs % ejecutado (NO confundir):
+   - **% programado** (mapa PK): ítems del presupuesto que ya tienen fecha asignada (directa o vía agrupador WBS). NO es ejecución física.
+   - **% ejecutado** (informe PDF/Excel Curva S): costo de registros SICOE con **nivel 1 (inspector) aprobado** ÷ presupuesto del alcance.
+   - Un registro SICOE solo cuenta como ejecutado cuando nivel1_estado = Aprobado (aunque niveles superiores sigan pendientes).
+   - El mapa aún NO muestra % ejecutado; eso está en el informe exportado (PDF/Excel). Próximamente en mapa.
+
+   Matching ítems listado ↔ presupuesto:
+   - El sistema tolera diferencias de formato (ej. listado «3.1» vs presupuesto «3.1.») al cruzar agrupadores WBS.
+   - Si un ítem aparece en listado WBS pero no en programación, verificar agrupador asignado y formato del ítem.
+
    Baseline:
    - Primera versión sellada y aprobada; referencia oficial que no cambia.
    - Reprogramaciones se comparan contra el baseline (bordes naranjas en mapa, tab «Comparar vs baseline»).
@@ -699,16 +720,23 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    3. Se crea automáticamente como baseline (primera versión).
    4. Selector: «nº1 · baseline · borrador».
 
-   PASO 3 — Programar un sector (PK)
+   PASO 3 — Programar un sector (PK) o tramo
    1. Clic en polígono gris oscuro en el mapa (tiene cantidades, sin programar).
    2. Panel derecho: resumen del PK → «Abrir programación».
-   3. Modal: capítulos con agrupadores; por cada agrupador:
+   3. Modal: capítulos con agrupadores WBS; por cada agrupador:
       - Fecha inicio (dd/mm/aaaa)
       - Días hábiles de duración
       - Fecha fin (calculada automáticamente)
+      - Ítems hijo del agrupador (cantidades del presupuesto vigente)
    4. «Guardar cambios».
    5. Color del polígono: amarillo = parcialmente programado; azul = completamente programado.
+   Tip tramo: puede programar todo un tramo consolidado (varios PK) en una sola grilla.
    Tip: con el modal abierto puede «+ Agregar PK (clic en el mapa)» para programar varios PK a la vez.
+
+   PASO 3b — Sincronizar costos con presupuesto (sin crear actividades)
+   1. Si el presupuesto vigente cambió cantidades o precios, use «Sincronizar con presupuesto».
+   2. Solo actualiza lo ya programado (incluye ítems bajo agrupador WBS).
+   3. Para ítems nuevos del presupuesto: programe en el modal WBS (sync no los inserta).
 
    PASO 4 — Definir dependencias (opcional, recomendado)
    1. En el modal → pestaña «Dependencias».
@@ -736,6 +764,12 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    3. Clona la versión anterior; solo modifique lo que cambió.
    4. Mismo flujo de validación; al sellarse reemplaza la anterior como vigente.
 
+   PASO 8 — Exportar informe (PDF / Excel Curva S)
+   1. Panel programación → Curva S → exportar PDF o Excel.
+   2. El informe incluye: curva baseline/vigente/ejecutado, detalle por PK, **resumen ejecutivo con % ejecución**.
+   3. **% ejecución** = costo SICOE con nivel 1 aprobado ÷ presupuesto del alcance (por capítulo y total).
+   4. Use el informe para comparar lo programado vs lo realmente validado por inspectoría en campo.
+
    ── COLORES DEL MAPA ──
    | Color / borde | Significado |
    | Gris tenue | Sin cantidades en presupuesto |
@@ -750,15 +784,23 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    | «Este tramo tiene X ítems sin agrupador WBS» | Admin → Listado de Precios → Programación WBS → crear agrupadores |
    | «CPM desactualizado» | Modal → Dependencias → «Calcular CPM» |
    | «El presupuesto tiene X ítems pendientes de aprobación» | Interventoría debe aprobar todo el presupuesto antes de enviar a validación |
-   | «Borrador en progreso — X% programado» | Normal; % = ítems con fecha asignada |
+   | «Borrador en progreso — X% programado» | Normal; % = ítems con fecha asignada (NO es ejecución SICOE) |
    | Polígono no cambia de color tras guardar | Verificar agrupadores WBS en todos los ítems del PK; sin ellos nunca llega a «completo» (solo «en progreso») |
+   | «Sin agrupadores WBS en este tramo» | Presupuesto del tramo sin ítems mapeados a agrupadores; revisar Listado Precios → Programación WBS |
+   | Ítem en listado WBS pero no en modal programación | Puede ser formato distinto (3.1 vs 3.1.); verificar capítulo e ítem en presupuesto vigente |
+   | Curva S «Vigente» menor que presupuesto total | Normal si hay ítems/costos sin fechas CPM; programe en WBS o revise brecha en modal Curva S |
+   | Ejecutado en Curva S no sube | Solo cuenta registros SICOE con **nivel 1 aprobado**; validar en módulo SICOE |
 
    ── PREGUNTAS FRECUENTES ──
    · ¿Programar sin dependencias? Sí; opcionales. Sin dependencias el CPM no calcula pero las fechas funcionan.
-   · ¿Error en una fecha? En borrador: abra el modal del PK, corrija y guarde.
-   · ¿Varios PK a la vez? Sí: modal abierto → «+ Agregar PK (clic en el mapa)».
+   · ¿Error en una fecha? En borrador: abra el modal del PK/tramo, corrija y guarde.
+   · ¿Varios PK a la vez? Sí: modal abierto → «+ Agregar PK (clic en el mapa)» o vista consolidada por tramo.
    · ¿Ver cronogramas anteriores? Panel lateral → «Historial de versiones» (solo lectura).
    · ¿Cómo sé si voy bien o mal vs plan original? Bordes naranjas en mapa; tab «Comparar vs baseline» en el modal.
+   · ¿Diferencia % programado y % ejecutado? Programado = fechas en cronograma. Ejecutado = SICOE nivel 1 aprobado (informe PDF/Excel).
+   · ¿Cuándo aparece un ítem en el agrupador WBS? Cuando está en listado de precios con agrupador asignado Y existe en presupuesto vigente del PK/tramo.
+   · ¿Sync trae ítems nuevos del presupuesto? No. Solo actualiza costos/cantidades de lo ya programado.
+   · ¿Qué es la brecha presupuesto en Curva S? Diferencia entre costo total vigente y lo programado con fechas; indica qué falta programar.
 
    ── LENGUAJE AL EXPLICAR PROGRAMACIÓN ──
    - No diga WBS como sigla sin explicar: «agrupador de actividades» o «agrupador WBS».
@@ -1257,25 +1299,35 @@ Dos tipos de «buscar» (no confundir):
 PROG_OBRA_CONTEXTO_SESION = """<programacion_obra_en_pantalla>
 El usuario está en **Programación de Obra**. Es el módulo más complejo: guíe paso a paso, sin ambigüedad,
 en lenguaje de obra (interventoría, residente, programador). Priorice lo visible: mapa PK, panel derecho,
-modal «Abrir programación», Gantt.
+modal «Abrir programación», Gantt, Curva S.
 
 ── PANTALLA ──
-· Mapa central: polígonos PK (colores = avance de programación).
-· Panel derecho: versión activa, resumen PK, «+ Nueva versión», historial, enviar a validación.
+· Mapa central: polígonos PK (colores = avance de **programación**, no ejecución SICOE).
+· Panel derecho: versión activa, resumen PK, «+ Nueva versión», historial, enviar a validación, Curva S.
 · Clic polígono gris oscuro → resumen → «Abrir programación».
+· % en mapa = ítems con fecha / total ítems presupuesto (NO es % ejecutado en obra).
 
 ── ORDEN LÓGICO (si pregunta «por dónde empiezo») ──
-1. Admin → Listado de Precios → Programación WBS → agrupadores sin ⚠
+1. Admin → Listado de Precios → Programación WBS → agrupadores sin ⚠ (todos los ítems con cantidad)
 2. Programación → «+ Nueva versión» (baseline)
-3. Clic PK en mapa → «Abrir programación» → fechas por agrupador → Guardar
+3. Clic PK o tramo en mapa → «Abrir programación» → fechas por agrupador WBS → Guardar
 4. (Opcional) Tab Dependencias → cadena FS → «Calcular CPM»
 5. Presupuesto aprobado por interventoría → enviar versión a validación → sellado
+6. Exportar PDF/Excel Curva S para ver **% ejecución** (SICOE nivel 1 aprobado)
 
 ── MODAL PROGRAMACIÓN ──
-· Por agrupador: fecha inicio (dd/mm/aaaa) + días hábiles → fin automático (festivos CO).
+· Vista PK o tramo consolidado (cantidades sumadas por agrupador).
+· Por agrupador WBS: fecha inicio + días hábiles → fin automático (festivos CO).
+· Ítems hijo: cantidades/costos del presupuesto vigente agrupados bajo el WBS.
 · «+ Agregar PK (clic en el mapa)» con modal abierto = varios PK a la vez.
 · Tab Dependencias: origen, tipo (FS usual), lag, destino → «+ Agregar» → «Calcular CPM».
 · Tab «Comparar vs baseline»: desviaciones vs plan original sellado.
+· «Sincronizar con presupuesto»: solo actualiza costos/cantidades de lo ya programado (no inserta ítems).
+
+── % PROGRAMADO vs % EJECUTADO ──
+· **Programado** (mapa): fechas asignadas a ítems/agrupadores. Gris→amarillo→azul.
+· **Ejecutado** (informe PDF/Excel): costo SICOE con inspector (nivel 1) aprobado ÷ presupuesto.
+· Validar obra en SICOE nivel 1 → sube ejecutado en informe, NO cambia color del mapa (por ahora).
 
 ── COLORES MAPA (respuesta rápida) ──
 Gris tenue = sin cantidades | Gris oscuro = sin programar | Amarillo = parcial | Azul = completo
@@ -1285,19 +1337,26 @@ Borde rojo pulsante = ruta crítica | Borde naranja = desviación vs baseline
 · Ítems sin agrupador WBS → Admin Listado Precios Programación WBS
 · CPM desactualizado → Calcular CPM de nuevo
 · Presupuesto pendiente aprobación → Interventoría en módulo Presupuesto primero
-· PK no pasa a azul → faltan agrupadores en algún ítem del PK
+· PK no pasa a azul → faltan agrupadores o fechas en algún ítem del PK
+· WBS vacío en tramo → ítems presupuesto sin agrupador en listado de precios
+· Brecha Curva S → costo presupuesto vigente > programado con fechas; falta programar
+· Ítem falta en modal pero está en WBS listado → revisar formato ítem (3.1 vs 3.1.)
 
 ── FAQ RÁPIDAS ──
 · ¿Sin dependencias? Sí, programación funciona; CPM vacío o limitado.
-· ¿Corregir fecha? Solo en borrador: modal PK → editar → Guardar.
+· ¿Corregir fecha? Solo en borrador: modal PK/tramo → editar → Guardar.
 · ¿Ver versiones viejas? Historial panel lateral (solo lectura).
 · ¿Qué es baseline? Primera versión sellada; referencia que no cambia.
+· ¿Dónde veo % ejecución? PDF/Excel Curva S → resumen ejecutivo (no en mapa aún).
+· ¿Qué cuenta como ejecutado? Registro SICOE con nivel 1 = Aprobado.
 
 ── RESPUESTAS PRECISAS ──
 · «No puedo programar» → ¿Hay agrupadores WBS? ¿Versión en borrador? ¿PK con cantidades (gris oscuro)?
 · «CPM no sale» → ¿Definió dependencias? ¿Pulsó Calcular CPM?
 · «No puedo enviar a validación» → ¿Presupuesto 100% aprobado interventoría? ¿PKs con fechas?
-· «Mapa no cambia color» → Agrupadores WBS completos en todos los ítems del PK.
+· «Mapa no cambia color» → Agrupadores WBS completos + fechas en todos los ítems del PK.
+· «Falta ítem en agrupador WBS» → Listado precios + presupuesto vigente; formatos 3.1/3.1.
+· «Ejecutado no cuadra» → Solo nivel 1 SICOE; no niveles 2-6 ni registros pendientes.
 · No confunda con Plano semáforo (Dashboard) ni mapa PK de Presupuesto (solo filtra cantidades).
 · Si la duda no está aquí → administrador del contrato o soporte ClaraCore.
 </programacion_obra_en_pantalla>"""
