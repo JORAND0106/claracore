@@ -12360,9 +12360,13 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         if (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
     })
     pk_ids = list({
-        (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+        rid
         for r in rows
-        if (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+        for rid in (
+            r.get("pk_id_id"),
+            (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id"),
+        )
+        if rid
     })
 
     acta_map = {}
@@ -12453,64 +12457,84 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         rep = rep_map.get(r.get("reporte_id")) or {}
         acta_id = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
         sem_id = r.get("semana_id") or rep.get("semana_id")
-        pk_id_id = rep.get("pk_id_id")
+        pk_id_id = r.get("pk_id_id") or rep.get("pk_id_id")
         sub_id = r.get("subcontratista_id") or rep.get("subcontratista_id")
         insp_id = r.get("inspector_id") or rep.get("inspector_id")
         r["reporte_numero"] = rep.get("numero_reporte")
         r["acta_rpo_numero"] = acta_map.get(acta_id)
         r["semana_numero"] = semana_map.get(sem_id)
-        r["pk_id_valor"] = pk_map.get(pk_id_id)
+        # pk_id en so_registros es el valor de negocio; pk_id_id es FK interna opcional.
+        r["pk_id_valor"] = r.get("pk_id") or pk_map.get(pk_id_id)
         r["subcontratista_nombre"] = sub_map.get(sub_id)
         r["inspector_nombre"] = insp_map.get(insp_id)
     return rows
 
 
-_SICOE_DASH_XLSX_COLUMNS: List[Tuple[str, str]] = [
-    ("semana_numero", "Semana"),
-    ("acta_rpo_numero", "Acta"),
-    ("subcontratista_nombre", "Subcontratista"),
-    ("inspector_nombre", "Inspector"),
-    ("numero_registro", "Registro"),
-    ("reporte_numero", "Reporte"),
-    ("capitulo", "Capítulo"),
-    ("item_numero", "Ítem"),
-    ("item_descripcion", "Descripción"),
-    ("unidad", "Unidad"),
-    ("vlr_unitario", "Valor unitario"),
-    ("longitud", "Longitud"),
-    ("ancho", "Ancho"),
-    ("espesor", "Espesor"),
-    ("cantidad_total", "Cantidad total"),
-    ("costo_directo", "Costo directo"),
-    ("pk_id_valor", "PK"),
-    ("tramo", "Tramo"),
-    ("margen", "Margen"),
-    ("abs_inicio", "Abs. inicio"),
-    ("abs_final", "Abs. final"),
-    ("nivel1_estado", "Estado N1"),
-    ("nivel2_estado", "Estado N2"),
-    ("nivel3_estado", "Estado N3"),
-    ("nivel4_estado", "Estado N4"),
-    ("nivel5_estado", "Estado N5"),
-    ("nivel6_estado", "Estado N6"),
-    ("observacion", "Observación"),
-]
+_SICOE_XLSX_SKIP_KEYS = frozenset({
+    "id",
+    "contrato_id",
+    "pk_id_id",
+    "corte_id",
+    # Virtuales de enriquecimiento (se vuelcan sobre las columnas *_id originales).
+    "reporte_numero",
+    "acta_rpo_numero",
+    "semana_numero",
+    "pk_id_valor",
+    "subcontratista_nombre",
+    "inspector_nombre",
+})
+
+_SICOE_XLSX_FK_A_VALOR = {
+    "semana_id": "semana_numero",
+    "acta_rpo_id": "acta_rpo_numero",
+    "subcontratista_id": "subcontratista_nombre",
+    "inspector_id": "inspector_nombre",
+    "reporte_id": "reporte_numero",
+}
 
 
-def _sicoe_registros_xlsx_presentable(rows: List[dict]) -> List[dict]:
-    """Filas SICOE para Excel del dashboard: sin IDs internos, con etiquetas legibles."""
+def _sicoe_registros_xlsx_sin_ids_internos(rows: List[dict]) -> List[dict]:
+    """Export dashboard: mismas columnas que so_registros, FKs con valor legible (no ID interno).
+
+    - pk_id_id (FK interna) se exporta como pk_id con el valor de pk_ids.pk_id.
+    - numero_registro permanece (en lugar del id interno de fila).
+    - semana_id / acta_rpo_id / subcontratista_id / inspector_id / reporte_id muestran
+      número de semana, acta, nombre, inspector y reporte respectivamente.
+    """
     if not rows:
         return []
-    enriched = _sicoe_enriquecer_registros_export(list(rows))
-    cols = list(_SICOE_DASH_XLSX_COLUMNS)
-    for n in range(4, 7):
-        key = f"nivel{n}_estado"
-        if any(r.get(key) not in (None, "") for r in enriched):
-            if not any(k == key for k, _ in cols):
-                cols.append((key, f"Estado N{n}"))
+    enriched = _sicoe_enriquecer_registros_export([dict(r) for r in rows])
+
+    def _columnas(sample: dict) -> List[str]:
+        cols: List[str] = []
+        for k in sample.keys():
+            if k == "pk_id_id":
+                if "pk_id" not in cols:
+                    cols.append("pk_id")
+                continue
+            if k in _SICOE_XLSX_SKIP_KEYS:
+                continue
+            if k.startswith("nivel") and k.endswith("_usuario_id"):
+                continue
+            if k == "pk_id" and "pk_id" in cols:
+                continue
+            cols.append(k)
+        if "pk_id" not in cols and sample.get("pk_id_valor") is not None:
+            cols.append("pk_id")
+        return cols
+
+    col_order = _columnas(enriched[0])
     out: List[dict] = []
     for r in enriched:
-        out.append({label: r.get(key) for key, label in cols})
+        row: dict = {}
+        for k in col_order:
+            if k == "pk_id":
+                row[k] = r.get("pk_id_valor") or r.get("pk_id")
+            elif k in _SICOE_XLSX_FK_A_VALOR:
+                row[k] = r.get(_SICOE_XLSX_FK_A_VALOR[k])
+            else:
+                row[k] = r.get(k)
+        out.append(row)
     return out
 
 
@@ -13664,7 +13688,7 @@ def exportar_registros_sicoe(
                 if len(batch) < batch_size + 1:
                     break
                 off += batch_size + 1
-        registros = _enriquecer_registros_export(registros)
+        registros = _sicoe_enriquecer_registros_export(registros)
         if _defer_capas_or_export and registros:
             registros = _filtrar_registros_validacion_capas_sicoe(
                 registros, capas_exp_export, None, "or", contrato_id
@@ -13689,7 +13713,7 @@ def exportar_registros_sicoe(
         chunk = reporte_ids_base[i:i + _CHUNK]
         registros.extend(_fetch_by_reporte_id_list(chunk))
 
-    registros = _enriquecer_registros_export(registros)
+    registros = _sicoe_enriquecer_registros_export(registros)
     if _defer_capas_or_export and registros:
         registros = _filtrar_registros_validacion_capas_sicoe(
             registros, capas_exp_export, None, "or", contrato_id
@@ -22315,8 +22339,9 @@ def _export_sicoe_obra_rows_capitulo(
 ) -> List[dict]:
     """Obra SICOE aprobada (nivel máx. contrato) para ítems del capítulo en presupuesto.
 
-    Devuelve filas listas para Excel: sin IDs internos de BD; semana, acta, subcontratista,
-    inspector, registro y reporte con valores de negocio (misma lógica que export SICOE Obra).
+    Devuelve filas de so_registros con las mismas columnas que antes; los campos *_id
+    muestran valores de negocio (semana, acta, subcontratista, inspector, reporte).
+    pk_id_id se resuelve a pk_id (valor de pk_ids.pk_id).
     """
     if not items_sorted:
         return []
@@ -22358,7 +22383,7 @@ def _export_sicoe_obra_rows_capitulo(
         if len(batch) < 1000:
             break
         off += 1000
-    return _sicoe_registros_xlsx_presentable(rows)
+    return _sicoe_registros_xlsx_sin_ids_internos(rows)
 
 
 def _gerencial_ppto_split_por_capitulo(

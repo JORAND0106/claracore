@@ -13330,6 +13330,60 @@ function IconMigrarPresupuestoSicoe({ size = 18, color = 'currentColor' }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
+
+/** Solo actualiza el texto «Hace X min» sin recargar datos ni re-renderizar todo el dashboard. */
+function DashResumenEdadBadge({ updatedAt, t, du, dashInfoColor, dashKpiLoading, onRefresh }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (updatedAt == null) return undefined
+    const iv = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(iv)
+  }, [updatedAt])
+  if (updatedAt == null) return null
+  const dashElapsedMin = Math.floor((now - updatedAt) / 60000)
+  return (
+    <span style={{
+      fontSize: `${du.sub}px`,
+      color: dashElapsedMin < 2 ? '#0f766e' : t.textMuted,
+      fontWeight: 700,
+      whiteSpace: 'nowrap',
+      padding: '3px 8px',
+      borderRadius: 999,
+      background: dashElapsedMin < 2 ? '#0f766e14' : t.bg,
+      border: `1px solid ${dashElapsedMin < 2 ? '#0f766e33' : t.border}`,
+    }}>
+      {dashElapsedMin < 2 ? (
+        '● Al día'
+      ) : dashElapsedMin <= 5 ? (
+        `Hace ${dashElapsedMin} min`
+      ) : (
+        <>
+          {`Hace ${dashElapsedMin} min · `}
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={dashKpiLoading}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              color: dashInfoColor,
+              fontSize: 'inherit',
+              fontWeight: 800,
+              cursor: dashKpiLoading ? 'wait' : 'pointer',
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+            }}
+          >
+            ¿Refrescar?
+          </button>
+        </>
+      )}
+    </span>
+  )
+}
+
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
@@ -13396,7 +13450,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashKpiError, setDashKpiError] = useState(null)
   const [dashKpiReloadKey, setDashKpiReloadKey] = useState(0)
   const [dashResumenUpdatedAt, setDashResumenUpdatedAt] = useState(null)
-  const [, setDashRefreshTick] = useState(0)
   const [dashDrill,    setDashDrill]    = useState([])
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
@@ -13665,8 +13718,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (!contratoIdDash || !dashModuloActivo) return
     setDashKpiLoading(true)
     setDashKpiError(null)
-    setKpiCobro(null)
-    setKpiPpto(null)
     const cid = contratoIdDash
     const tok = getToken()
     const vq = `vista=${encodeURIComponent(dashVistaParam)}`
@@ -13707,26 +13758,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     void cargarDashboardResumen()
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen])
 
-  /** Canal 3 — dashboard: so_registros del contrato (MV dashboard se refresca; API lee VM, no RPC pesado) */
-  useEffect(() => {
-    if (isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoIdDash || !dashModuloActivo) return
-    const cid = String(contratoIdDash)
-    const filt = `contrato_id=eq.${cid}`
-    const debouncer = createRealtimeDebouncer(() => { void cargarDashboardResumen() })
-    const channel = supabase
-      .channel(`dashboard-resumen-${cid}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
-        () => debouncer.schedule(),
-      )
-      .subscribe()
-    return () => {
-      debouncer.dispose()
-      void supabase.removeChannel(channel)
-    }
-  }, [contratoIdDash, dashModuloActivo, cargarDashboardResumen])
-
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
     const tok = getToken()
@@ -13735,12 +13766,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       .then((d) => { if (d) setDwgEnlazadoDash(d.enlazado) })
       .catch(() => {})
   }, [contratoIdDash, dashModuloActivo, API_URL])
-
-  useEffect(() => {
-    if (!dashModuloActivo || dashResumenUpdatedAt == null) return
-    const iv = setInterval(() => setDashRefreshTick((n) => n + 1), 30000)
-    return () => clearInterval(iv)
-  }, [dashModuloActivo, dashResumenUpdatedAt])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
@@ -15239,10 +15264,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const porActa = (kpiCobro?.por_acta || []).sort((a,b) => (a.acta||0)-(b.acta||0))
           const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
-          const dashEsperando = dashKpiLoading
-          const dashElapsedMin = dashResumenUpdatedAt != null
-            ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
-            : null
+          const dashEsperando = dashKpiLoading && kpiCobro == null && kpiPpto == null
           const dashInfoColor = t.primary || '#0077B6'
           const dashTabItems = [
             ['resumen', 'Resumen'],
@@ -15403,47 +15425,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   />
                   Actualizar
                 </button>
-                {dashElapsedMin != null && (
-                  <span style={{
-                    fontSize: `${du.sub}px`,
-                    color: dashElapsedMin < 2 ? '#0f766e' : t.textMuted,
-                    fontWeight: 700,
-                    whiteSpace: 'nowrap',
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    background: dashElapsedMin < 2 ? '#0f766e14' : t.bg,
-                    border: `1px solid ${dashElapsedMin < 2 ? '#0f766e33' : t.border}`,
-                  }}>
-                    {dashElapsedMin < 2 ? (
-                      '● Al día'
-                    ) : dashElapsedMin <= 5 ? (
-                      `Hace ${dashElapsedMin} min`
-                    ) : (
-                      <>
-                        {`Hace ${dashElapsedMin} min · `}
-                        <button
-                          type="button"
-                          onClick={() => { void cargarDashboardResumen() }}
-                          disabled={dashKpiLoading}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 0,
-                            margin: 0,
-                            color: dashInfoColor,
-                            fontSize: 'inherit',
-                            fontWeight: 800,
-                            cursor: dashKpiLoading ? 'wait' : 'pointer',
-                            textDecoration: 'underline',
-                            textUnderlineOffset: 2,
-                          }}
-                        >
-                          ¿Refrescar?
-                        </button>
-                      </>
-                    )}
-                  </span>
-                )}
+                <DashResumenEdadBadge
+                  updatedAt={dashResumenUpdatedAt}
+                  t={t}
+                  du={du}
+                  dashInfoColor={dashInfoColor}
+                  dashKpiLoading={dashKpiLoading}
+                  onRefresh={() => { void cargarDashboardResumen() }}
+                />
                 {usuario?._contratos?.length > 1 ? (
                   <select
                     value={usuario.contrato_id || ''}
