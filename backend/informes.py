@@ -1204,17 +1204,30 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
 @router.get("/{contrato_id}/subcontratistas")
 def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
     _perm_informes_ccd(current_user, "ver")
-    rows = _sb.table("subcontratistas")\
-        .select("id, razon_social, nit, nombre_contacto, telefono")\
-        .order("razon_social").execute().data
+    rows = (
+        _sb.table("subcontratistas")
+        .select("id, razon_social, nit, nombre_contacto, telefono")
+        .eq("contrato_id", int(contrato_id))
+        .order("razon_social")
+        .execute()
+        .data
+    )
     return rows or []
 
 @router.get("/{contrato_id}/cortes/{sub_id}")
 def inf_cortes(contrato_id: int, sub_id: int, current_user=Depends(_get_user)):
     _perm_informes_ccd(current_user, "ver")
-    rows = _sb.table("subcontratista_cortes").select("*")\
-        .eq("subcontratista_id", sub_id)\
-        .order("consecutivo").execute().data
+    sub = _row("subcontratistas", "id, contrato_id", id=int(sub_id))
+    if not sub or int(sub.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato")
+    rows = (
+        _sb.table("subcontratista_cortes")
+        .select("*")
+        .eq("subcontratista_id", int(sub_id))
+        .order("consecutivo")
+        .execute()
+        .data
+    )
     return rows or []
 
 @router.get("/{contrato_id}/items-corte/{corte_id}")

@@ -100,6 +100,55 @@ def norm_estado_revisado(v: Any) -> str:
     return s
 
 
+def _ppto_metricas_por_estado(rows_it: List[dict]) -> Tuple[Dict[str, Dict[str, float]], str]:
+    """Cantidad y costo directo por estado de revisado (NR | P | R | A) + unidad."""
+    est: Dict[str, Dict[str, float]] = {
+        "NR": {"cant": 0.0, "costo": 0.0},
+        "P": {"cant": 0.0, "costo": 0.0},
+        "R": {"cant": 0.0, "costo": 0.0},
+        "A": {"cant": 0.0, "costo": 0.0},
+    }
+    rev_map = {
+        "No Revisado": "NR",
+        "Pendiente": "P",
+        "Rechazado": "R",
+        "Aprobado": "A",
+    }
+    und = ""
+    for x in rows_it or []:
+        rev = norm_estado_revisado(x.get("revisado"))
+        k = rev_map.get(rev, "NR")
+        est[k]["cant"] += float(x.get("cant_total") or 0)
+        est[k]["costo"] += float(x.get("costo_directo") or 0)
+        if not und:
+            u = str(x.get("und") or "").strip()
+            if u:
+                und = u
+    return est, und
+
+
+def _drill_item_estado_fields(est: Dict[str, Dict[str, float]], unidad: str, sg: Dict[str, Any]) -> Dict[str, Any]:
+    cob_q = float(sg.get("ap_q") or 0)
+    cob_c = float(sg.get("ap_c") or 0)
+    total_q = sum(float(est[k]["cant"]) for k in est)
+    total_c = sum(float(est[k]["costo"]) for k in est)
+    return {
+        "unidad": unidad,
+        "cant_nr": round(est["NR"]["cant"], 3),
+        "costo_nr": round(est["NR"]["costo"], 2),
+        "cant_p": round(est["P"]["cant"], 3),
+        "costo_p": round(est["P"]["costo"], 2),
+        "cant_r": round(est["R"]["cant"], 3),
+        "costo_r": round(est["R"]["costo"], 2),
+        "cant_a": round(est["A"]["cant"], 3),
+        "costo_a": round(est["A"]["costo"], 2),
+        "total_claracore_cant": round(total_q, 3),
+        "total_claracore_costo": round(total_c, 2),
+        "cant_cobrado": round(cob_q, 3),
+        "costo_cobrado": round(cob_c, 2),
+    }
+
+
 def _ppto_claracore_split(rows_it: List[dict]) -> Tuple[float, float]:
     """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado.
 
@@ -375,6 +424,7 @@ def _ingest_presupuesto_row(
         "costo_directo": cost,
         "revisado": rev,
         "pk_id": r.get("pk_id"),
+        "und": (r.get("und") or "").strip(),
     }
     if ppto_by_item is not None:
         ppto_by_item[(ck, ik)].append(row)
@@ -404,7 +454,7 @@ def _scan_live_presupuesto(
     ppto_by_item: Optional[Dict[ItemKey, List[dict]]] = None if resumen_only else defaultdict(list)
     ppto_keys: Optional[Set[ItemKey]] = set() if track_keys else None
     cap_db = resolve_capitulo_db(sb, contrato_id, capitulo or "", tipo_ejecucion=tipo_ejecucion) if capitulo else ""
-    cols = "capitulo, costo_directo, revisado" if resumen_only else "capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id"
+    cols = "capitulo, costo_directo, revisado" if resumen_only else "capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und"
     # Fuente OFICIAL: si hay una versión sellada vigente (solo aplica a Presupuesto
     # de Obra), el dashboard lee de su snapshot inmutable, no del borrador vivo.
     # Sin versión sellada → None → fallback al vivo (comportamiento actual).
@@ -486,7 +536,7 @@ def _scan_version_items(sb, contrato_id: int, version_id: str) -> Dict[str, Any]
     while True:
         q = (
             sb.table("presupuesto_version_items")
-            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id")
+            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und")
             .eq("version_id", version_id)
             .eq("contrato_id", int(contrato_id))
             .eq("dado_de_baja", False)
@@ -509,6 +559,7 @@ def _scan_version_items(sb, contrato_id: int, version_id: str) -> Dict[str, Any]
                     "costo_directo": cost,
                     "revisado": rev,
                     "pk_id": r.get("pk_id"),
+                    "und": (r.get("und") or "").strip(),
                 }
             )
             ppto_total_c[cap_disp] += cost
@@ -573,7 +624,7 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
     while True:
         q = (
             sb.table("presupuesto_version_items")
-            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id")
+            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und")
             .eq("version_id", version_id)
             .eq("contrato_id", int(contrato_id))
             .eq("capitulo", cap_raw)
@@ -597,6 +648,7 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
                     "costo_directo": cost,
                     "revisado": rev,
                     "pk_id": r.get("pk_id"),
+                    "und": (r.get("und") or "").strip(),
                 }
             )
             ppto_total_c[cap_disp] += cost
@@ -870,20 +922,17 @@ def drill_items_capitulo_vista(
     out = []
     for k in sorted(keys, key=lambda x: str(x[1])):
         rows_it = ppto_by.get(k, [])
+        est, unidad = _ppto_metricas_por_estado(rows_it)
         p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
         p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
-        pap = sum(
-            float(x.get("costo_directo") or 0)
-            for x in rows_it
-            if norm_estado_revisado(x.get("revisado")) == "Aprobado"
-        )
-        pnr = p_cost - pap
-        # Base ClaraCore para informes: Aprobado + No Revisado (excluye Pendiente/Rechazado).
+        pap = est["A"]["costo"]
+        pnr = est["NR"]["costo"] + est["P"]["costo"] + est["R"]["costo"]
         cc_cant, cc_cost = _ppto_claracore_split(rows_it)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         sg = sicoe_by_item.get(k, {})
         apc = float(sg.get("ap_c") or 0)
         pp_show = p_cost
+        estado_fields = _drill_item_estado_fields(est, unidad, sg)
         out.append(
             {
                 "item": k[1],
@@ -901,6 +950,8 @@ def drill_items_capitulo_vista(
                 "costo_ppto_claracore": round(cc_cost, 2),
                 "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
                 "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
+                "tiene_ppto_obra_ejecutada": bool(rows_it),
+                **estado_fields,
             }
         )
     return out

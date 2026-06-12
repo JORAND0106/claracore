@@ -102,18 +102,19 @@ export default function SicoeLocalizacionFields({
             pkList={pkIds}
             pkIdSeleccionado={pkIdStr}
             pkLabel={pkRow?.pk_id || ''}
-            onSeleccionar={({ pk_id_id, coordLat, coordLng, mapaScreenshot }) => {
+            onSeleccionar={({ pk_id_id, coordLat, coordLng, mapaScreenshot, screenshotOnly }) => {
               const found = pkIds.find((p) => String(p.id) === String(pk_id_id))
-              if (found) {
+              if (!found) return
+              if (!screenshotOnly) {
                 patch({
                   pkSeleccionado: found,
                   pk_id_id: found.id,
                   coordLat: coordLat ?? null,
                   coordLng: coordLng ?? null,
                 })
-                if (mapaScreenshot && typeof onMapaCapturado === 'function') {
-                  onMapaCapturado(mapaScreenshot)
-                }
+              }
+              if (mapaScreenshot && typeof onMapaCapturado === 'function') {
+                onMapaCapturado(mapaScreenshot)
               }
             }}
             onLimpiar={() => patch({ pkSeleccionado: null, pk_id_id: null, coordLat: null, coordLng: null })}

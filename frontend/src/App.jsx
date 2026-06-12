@@ -12488,8 +12488,8 @@ function pkidTablaRowsToColores(rows) {
   for (const r of rows) {
     const pk = String(r?.pk_id ?? '').trim()
     if (!pk) continue
-    const presupuesto = Number(r.costo_ppto ?? 0)
-    const cobrado = Number(r.costo_sicoe_aprobado ?? r.costo_sicoe ?? 0)
+    const presupuesto = Number(r.total_claracore_costo ?? r.costo_ppto ?? 0)
+    const cobrado = Number(r.costo_cobrado ?? r.costo_sicoe_aprobado ?? r.costo_sicoe ?? 0)
     out[pk] = {
       cobrado,
       presupuesto,
@@ -12500,13 +12500,72 @@ function pkidTablaRowsToColores(rows) {
   return out
 }
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
-function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false }) {
+function MiniMapaToolbar({ t, modo, setModo, capEtiquetas, setCapEtiquetas, compact = false }) {
+  const btnModo = (key, label, color) => (
+    <button key={key} type="button" onClick={() => setModo(key)} style={{
+      background: modo === key ? color : 'transparent',
+      color: modo === key ? '#fff' : t.textMuted,
+      border: `1.5px solid ${modo === key ? color : t.border}`,
+      borderRadius: compact ? '14px' : '20px',
+      padding: compact ? '2px 8px' : '2px 10px',
+      fontSize: compact ? 'var(--cc-caption)' : 'var(--cc-caption)',
+      fontWeight: modo === key ? '700' : '400',
+      cursor: 'pointer',
+      transition: 'all 0.15s',
+      whiteSpace: 'nowrap',
+    }}>{label}</button>
+  )
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap: compact ? '6px' : '8px', flexWrap:'wrap' }}>
+      <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center' }}>
+        {btnModo('presupuesto', compact ? 'Ppto' : '📋 Presupuesto', '#0077B6')}
+        {btnModo('cobro', compact ? 'Cobro' : '💰 Cobro', '#00A896')}
+        {btnModo('ambos', compact ? 'Ambos' : '⚡ Ambos', '#7C3AED')}
+      </div>
+      <span style={{ color: t.border, fontSize:'var(--cc-caption)', userSelect:'none' }}>|</span>
+      <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center', fontSize:'var(--cc-caption)', color:t.textMuted }}>
+        {!compact && <span style={{ marginRight:'2px' }}>Etiquetas:</span>}
+        {[
+          ['pk', 'PK'],
+          ['abscisa', 'Abscisa'],
+          ['ambos', 'Ambas'],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setCapEtiquetas(key)}
+            style={{
+              background: capEtiquetas === key ? t.primary : 'transparent',
+              color: capEtiquetas === key ? '#fff' : t.textMuted,
+              border: `1px solid ${capEtiquetas === key ? t.primary : t.border}`,
+              borderRadius: '14px',
+              padding: '2px 8px',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: capEtiquetas === key ? '600' : '400',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >{label}</button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MiniMapaSemaforo({
+  t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false,
+  modo: modoProp, onModoChange, capEtiquetas: capEtiquetasProp, onCapEtiquetasChange, showToolbar = true,
+}) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
   const onClickRef    = useRef(onPkidClick)
   const [listo, setListo] = useState(false)
-  const [modo, setModo]   = useState('ambos')
-  const [capEtiquetas, setCapEtiquetas] = useState('ambos')
+  const [modoInt, setModoInt]   = useState('ambos')
+  const [capInt, setCapInt] = useState('ambos')
+  const modo = modoProp !== undefined ? modoProp : modoInt
+  const setModo = onModoChange || setModoInt
+  const capEtiquetas = capEtiquetasProp !== undefined ? capEtiquetasProp : capInt
+  const setCapEtiquetas = onCapEtiquetasChange || setCapInt
   const capEtiquetasMiniRef = useRef('ambos')
   capEtiquetasMiniRef.current = capEtiquetas
   const [planoBase, setPlanoBase] = useState(undefined)
@@ -12737,48 +12796,15 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
     map.setLayoutProperty('mini-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
   }, [capEtiquetas, listo])
 
-  const btnModo = (key, label, color) => (
-    <button key={key} onClick={() => setModo(key)} style={{
-      background: modo === key ? color : 'transparent',
-      color: modo === key ? '#fff' : t.textMuted,
-      border: `1.5px solid ${modo === key ? color : t.border}`,
-      borderRadius: '20px', padding: '2px 10px', fontSize: 'var(--cc-caption)',
-      fontWeight: modo === key ? '700' : '400', cursor: 'pointer',
-      transition: 'all 0.15s'
-    }}>{label}</button>
-  )
-
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-      <div style={{ display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap' }}>
-        {btnModo('presupuesto', '📋 Presupuesto', '#0077B6')}
-        {btnModo('cobro',       '💰 Cobro',       '#00A896')}
-        {btnModo('ambos',       '⚡ Ambos',        '#7C3AED')}
-      </div>
-      <div style={{ display:'flex', gap:'6px', justifyContent:'center', alignItems:'center', flexWrap:'wrap', fontSize:'var(--cc-caption)', color:t.textMuted }}>
-        <span style={{ marginRight:'2px' }}>Etiquetas:</span>
-        {[
-          ['pk', 'PK'],
-          ['abscisa', 'Abscisa'],
-          ['ambos', 'Ambas'],
-        ].map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setCapEtiquetas(key)}
-            style={{
-              background: capEtiquetas === key ? t.primary : 'transparent',
-              color: capEtiquetas === key ? '#fff' : t.textMuted,
-              border: `1px solid ${capEtiquetas === key ? t.primary : t.border}`,
-              borderRadius: '14px',
-              padding: '2px 8px',
-              fontSize: 'var(--cc-caption)',
-              fontWeight: capEtiquetas === key ? '600' : '400',
-              cursor: 'pointer',
-            }}
-          >{label}</button>
-        ))}
-      </div>
+    <div style={{ display:'flex', flexDirection:'column', gap: showToolbar ? '8px' : 0 }}>
+      {showToolbar && (
+        <>
+          <div style={{ display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap' }}>
+            <MiniMapaToolbar t={t} modo={modo} setModo={setModo} capEtiquetas={capEtiquetas} setCapEtiquetas={setCapEtiquetas} />
+          </div>
+        </>
+      )}
       <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
         <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
         {!listo && (
@@ -13316,6 +13342,61 @@ function sortComparativoCapitulos(rows) {
   })
 }
 
+/** Une comparativo (todos los capítulos) con filas financieras gerenciales por clave normalizada. */
+function mergeCapFinRows(capFin, comparativo) {
+  const finByKey = {}
+  for (const r of (capFin?.capitulos || [])) {
+    finByKey[dashNormCapituloKey(r.capitulo)] = r
+  }
+  const seen = new Set()
+  const rows = []
+  const baseCaps = sortComparativoCapitulos(comparativo || [])
+  for (const c of baseCaps) {
+    const capName = c.capitulo || ''
+    const ck = dashNormCapituloKey(capName)
+    if (!ck || ck === 'Sin capítulo' || seen.has(ck)) continue
+    seen.add(ck)
+    const fin = finByKey[ck]
+    if (fin) {
+      rows.push(fin)
+    } else {
+      const ap = Number(c.presupuesto_aprobado_n3) || 0
+      const nr = Number(c.presupuesto_no_revisado_n3) || 0
+      const cob = Number(c.cobrado) || 0
+      const cl = ap + nr
+      rows.push({
+        capitulo: capName,
+        claracore: Math.round(cl),
+        cobrado: Math.round(cob),
+        delta: Math.round(cl - cob),
+      })
+    }
+  }
+  for (const r of sortComparativoCapitulos(capFin?.capitulos || [])) {
+    const ck = dashNormCapituloKey(r.capitulo)
+    if (!seen.has(ck)) {
+      seen.add(ck)
+      rows.push(r)
+    }
+  }
+  return sortComparativoCapitulos(rows)
+}
+
+/** Orden ítems drill: prefijo numérico (3.01, 3.02…) y luego alfanumérico. */
+function sortDashDrillItems(rows) {
+  if (!Array.isArray(rows)) return []
+  const parseNum = (s) => {
+    const m = String(s || '').trim().match(/^(\d+(?:\.\d+)?)/)
+    return m ? parseFloat(m[1]) : 999999
+  }
+  return [...rows].sort((a, b) => {
+    const na = parseNum(a.item || a.nombre)
+    const nb = parseNum(b.item || b.nombre)
+    if (na !== nb) return na - nb
+    return String(a.item || a.nombre || '').localeCompare(String(b.item || b.nombre || ''), undefined, { numeric: true, sensitivity: 'base' })
+  })
+}
+
 /** Icono: tabla/listado → obra (migrar presupuesto a SICOE Obra). */
 function IconMigrarPresupuestoSicoe({ size = 18, color = 'currentColor' }) {
   return (
@@ -13450,6 +13531,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashKpiError, setDashKpiError] = useState(null)
   const [dashKpiReloadKey, setDashKpiReloadKey] = useState(0)
   const [dashResumenUpdatedAt, setDashResumenUpdatedAt] = useState(null)
+  const [dashCapFin, setDashCapFin] = useState(null)
+  const [dashCapFinLoading, setDashCapFinLoading] = useState(false)
+  const [dashCapFinError, setDashCapFinError] = useState(null)
   const [dashDrill,    setDashDrill]    = useState([])
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
@@ -13459,6 +13543,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [dashDrillPag, setDashDrillPag] = useState(0)
+  /** Columnas colapsables tabla ítems (popup capítulo): CC | costos CC | costo cobrado */
+  const [dashDrillColExp, setDashDrillColExp] = useState({ cc: false, ccCost: false })
+  const [dashPkColExp, setDashPkColExp] = useState({ cc: false, ccCost: false })
+  const [dashMapModo, setDashMapModo] = useState('ambos')
+  const [dashMapEtiquetas, setDashMapEtiquetas] = useState('ambos')
   const [panelFoco, setPanelFoco] = useState(null)
   const [matrizValidacion, setMatrizValidacion] = useState(null)
   const [matrizValidacionLoad, setMatrizValidacionLoad] = useState(false)
@@ -13520,6 +13609,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     () => (dashVistaEjecucion === 'Obra Ejecutada' ? 'obra_ejecutada' : 'presupuesto_obra'),
     [dashVistaEjecucion],
   )
+  const puedeExportarDashboard = useMemo(() => {
+    const cargo = String(usuario?.cargo_nombre || '').trim().toLowerCase()
+    if (cargo === 'desarrollador') return true
+    return (usuario?.permisos || []).some(
+      (p) => p.funcion_nombre === 'Dashboard' && p.exportar,
+    )
+  }, [usuario])
 
   const limpiarCachesDashVista = useCallback(() => {
     dashDrillCache.current = {}
@@ -13702,6 +13798,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     dashDrillFetchSeqRef.current += 1
     setKpiPpto(null)
     setKpiCobro(null)
+    setDashCapFin(null)
+    setDashCapFinError(null)
     setDashResumenUpdatedAt(null)
     setDashKpiError(null)
     setDashDrill([])
@@ -13753,10 +13851,39 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
 
+  const cargarDashCapFin = useCallback(async () => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    setDashCapFinLoading(true)
+    setDashCapFinError(null)
+    const cid = contratoIdDash
+    const tok = getToken()
+    const vq = `vista=${encodeURIComponent(dashVistaParam)}`
+    try {
+      const r = await fetch(`${API_URL}/sicoe-obra/${cid}/dashboard-capitulos-financiero?${vq}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(120000)
+          : undefined,
+      })
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(txt?.slice(0, 120) || `Error ${r.status}`)
+      }
+      const d = await r.json()
+      setDashCapFin(d)
+      setDashResumenUpdatedAt(Date.now())
+    } catch (err) {
+      setDashCapFinError(err?.message || 'No se pudo cargar el panorama por capítulo')
+    } finally {
+      setDashCapFinLoading(false)
+    }
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
+
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
     void cargarDashboardResumen()
-  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen])
+    void cargarDashCapFin()
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen, cargarDashCapFin])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
@@ -13854,15 +13981,56 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
     if (!Array.isArray(rows)) return null
     return rows.map(r => ({
-      item: r.item || r.nombre, descripcion: r.descripcion || '',
-      presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
+      ...r,
+      item: r.item || r.nombre || '',
+      descripcion: (r.descripcion || r.descripcion_item || '').trim(),
+      unidad: (r.unidad || r.und || '').trim(),
+      presupuesto: r.presupuesto ?? 0,
+      cobrado: r.cobrado ?? 0,
       presupuesto_aprobado_n3: r.presupuesto_aprobado_n3 ?? 0,
       presupuesto_no_revisado_n3: r.presupuesto_no_revisado_n3 ?? 0,
       sicoe_no_revisado_n3: r.sicoe_no_revisado_n3 ?? 0,
-      cant_ppto: r.cant_ppto || 0,
+      cant_ppto: r.cant_ppto ?? 0,
       cant_sicoe_aprobado: r.cant_sicoe_aprobado ?? 0,
       cant_sicoe_no_revisado: r.cant_sicoe_no_revisado ?? 0,
+      cant_cobrado: r.cant_cobrado ?? r.cant_sicoe_aprobado ?? 0,
+      costo_cobrado: r.costo_cobrado ?? r.cobrado ?? 0,
+      total_claracore_cant: r.total_claracore_cant,
+      total_claracore_costo: r.total_claracore_costo,
+      delta_cant: r.delta_cant,
+      delta_costo: r.delta_costo,
+      cant_nr: r.cant_nr,
+      cant_p: r.cant_p,
+      cant_r: r.cant_r,
+      cant_a: r.cant_a,
+      costo_nr: r.costo_nr,
+      costo_p: r.costo_p,
+      costo_r: r.costo_r,
+      costo_a: r.costo_a,
+      tiene_ppto_obra_ejecutada: r.tiene_ppto_obra_ejecutada,
+      claracore_igualado_cobro: r.claracore_igualado_cobro,
     }))
+  }
+
+  function abrirDashCapitulo(capituloRaw) {
+    const raw = String(capituloRaw ?? '').trim()
+    const ck = dashNormCapituloKey(raw)
+    if (!raw || ck === 'Sin capítulo') return
+    const cacheKey = contratoIdDash ? dashDrillCacheKey(dashDrillCapCachePart(raw)) : null
+    const cached = cacheKey ? dashDrillCache.current[cacheKey] : null
+    const cachedFinOk = cached?.data?.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_cant != null)
+    setDashDrillPag(0)
+    setDashDrillColExp({ cc: false, ccCost: false })
+    setDashDrillError(null)
+    if (cached?.data?.length && cachedFinOk) {
+      setDashData(cached.data)
+      setDashLoading(false)
+    } else {
+      setDashData(null)
+      setDashLoading(true)
+    }
+    setDashDrill([{ campo: 'capitulo', valor: raw }])
+    setPopupCapitulo(true)
   }
 
   async function cargarDashDrill(drill) {
@@ -13924,7 +14092,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           throw new Error('Respuesta inválida del servidor')
         }
       }
-      if (cached && (ahora - cached.ts) < CACHE_TTL && cached.data?.rows?.length > 0) {
+      const cachedPkFinOk = cached?.data?.rows?.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_costo != null)
+        && cached?.data?.meta?.pk_cc_coherente_item === true
+      if (cached && cachedPkFinOk && (ahora - cached.ts) < CACHE_TTL && cached.data?.rows?.length > 0) {
         setDashTabla(cached.data)
         setDashTablaLoad(false)
         syncMapaFromTabla(cached.data)
@@ -13996,7 +14166,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         throw new Error('Respuesta inválida del servidor')
       }
     }
-    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data) && cached.data.length > 0) {
+    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data) && cached.data.length > 0
+        && cached.data.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_cant != null)) {
       setDashData(cached.data)
       setDashLoading(false)
       setDashDrillError(null)
@@ -14087,6 +14258,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   async function ejecutarExportDashExcel({ soloResumen, capitulo, itemValor }) {
     if (dashExportInFlightRef.current) return
+    if (!puedeExportarDashboard) return
     dashExportInFlightRef.current = true
     const tok = getToken()
     const capRaw = capitulo || dashDrill[0]?.valor || ''
@@ -14215,6 +14387,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   async function ejecutarExportGerencial() {
     if (dashExportInFlightRef.current) return
+    if (!puedeExportarDashboard) return
     dashExportInFlightRef.current = true
     const tok = getToken()
     const downloadFilename = `ClaraCore_Gerencial_${new Date().toISOString().slice(0, 10)}.xlsx`
@@ -14269,6 +14442,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   function abrirModalExportDashExcel() {
     if (dashExportInFlightRef.current) return
+    if (!puedeExportarDashboard) return
     if (dashDrill[1]?.valor) {
       void ejecutarExportDashExcel({
         soloResumen: false,
@@ -15259,12 +15433,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const pptoApN3 = kpiCobro?.total_presupuesto_aprobado_n3 ?? 0
           const pptoNrN3 = kpiCobro?.total_presupuesto_no_revisado_n3 ?? 0
           const kpiNm = sicoeKpiNivelMax(nivelesDashContrato)
-
-          // Datos para gráficos
           const porActa = (kpiCobro?.por_acta || []).sort((a,b) => (a.acta||0)-(b.acta||0))
           const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
           const dashEsperando = dashKpiLoading && kpiCobro == null && kpiPpto == null
+          const dashRefreshBusy = dashKpiLoading || dashCapFinLoading
+          const capFinRows = dashVistaEjecucion === 'Obra Ejecutada'
+            ? sortComparativoCapitulos(dashCapFin?.capitulos || [])
+            : mergeCapFinRows(dashCapFin, kpiCobro?.comparativo_capitulos)
+          const capFinTot = dashCapFin?.totales || (capFinRows.length ? {
+            claracore: capFinRows.reduce((s, r) => s + (Number(r.claracore) || 0), 0),
+            cobrado: capFinRows.reduce((s, r) => s + (Number(r.cobrado) || 0), 0),
+            delta: capFinRows.reduce((s, r) => s + (Number(r.delta) || 0), 0),
+          } : {})
           const dashInfoColor = t.primary || '#0077B6'
           const dashTabItems = [
             ['resumen', 'Resumen'],
@@ -15398,21 +15579,21 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               }}>
                 <button
                   type="button"
-                  onClick={() => { void cargarDashboardResumen() }}
-                  disabled={dashKpiLoading}
+                  onClick={() => { void cargarDashboardResumen(); void cargarDashCapFin() }}
+                  disabled={dashRefreshBusy}
                   title="Actualizar resumen"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    background: dashKpiLoading ? t.bg : `${t.primary}12`,
+                    background: dashRefreshBusy ? t.bg : `${t.primary}12`,
                     border: `1px solid ${t.primary}44`,
                     borderRadius: 8,
                     padding: '5px 12px',
-                    color: dashKpiLoading ? t.textMuted : t.primary,
+                    color: dashRefreshBusy ? t.textMuted : t.primary,
                     fontSize: `${du.sub}px`,
                     fontWeight: 800,
-                    cursor: dashKpiLoading ? 'wait' : 'pointer',
+                    cursor: dashRefreshBusy ? 'wait' : 'pointer',
                   }}
                 >
                   <i
@@ -15420,7 +15601,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     style={{
                       fontSize: '1.05rem',
                       lineHeight: 1,
-                      animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
+                      animation: dashRefreshBusy ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
                     }}
                   />
                   Actualizar
@@ -15430,8 +15611,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   t={t}
                   du={du}
                   dashInfoColor={dashInfoColor}
-                  dashKpiLoading={dashKpiLoading}
-                  onRefresh={() => { void cargarDashboardResumen() }}
+                  dashKpiLoading={dashRefreshBusy}
+                  onRefresh={() => { void cargarDashboardResumen(); void cargarDashCapFin() }}
                 />
                 {usuario?._contratos?.length > 1 ? (
                   <select
@@ -15467,6 +15648,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               <div style={{ textAlign:'center', padding:'16px', marginBottom:'16px', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:'12px', color:'#991B1B', fontSize:`${du.body}px` }}>
                 {dashKpiError}
                 <button type="button" onClick={() => setDashKpiReloadKey((k) => k + 1)} style={{ marginLeft:10, background:'transparent', border:'1px solid #991B1B', borderRadius:6, padding:'4px 10px', color:'#991B1B', cursor:'pointer', fontWeight:700 }}>Reintentar</button>
+              </div>
+            )}
+            {dashCapFinError && !dashCapFinLoading && (
+              <div style={{ textAlign:'center', padding:'12px 16px', marginBottom:'12px', background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:'10px', color:'#92400E', fontSize:`${du.sub}px` }}>
+                Tabla financiera: {dashCapFinError}
               </div>
             )}
             {!dashEsperando && (
@@ -15612,12 +15798,33 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 )}
               </div>
 
-              {/* 🟢 Presupuesto vs Obra + Matriz validación (SICOE / Acta RPO) */}
+              {/* 🟢 Ppto vs Cobro + Matriz validación (SICOE / Acta RPO) */}
               <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: panelFoco==='ppto-cobro' ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 SICOE y presupuesto (revisado) por capítulo</div>
+                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 Ppto vs Cobro por capítulo</div>
+                    {puedeExportarDashboard && (
+                      <button
+                        type="button"
+                        title="Exportar informe gerencial Excel"
+                        disabled={dashExportModal?.phase === 'generating'}
+                        onClick={() => void ejecutarExportGerencial()}
+                        style={{
+                          background:'transparent',
+                          color:'#1E8449',
+                          border:'1.5px solid #1E8449',
+                          borderRadius:'8px',
+                          padding:'2px 8px',
+                          fontSize:'var(--cc-lg)',
+                          cursor: dashExportModal?.phase === 'generating' ? 'wait' : 'pointer',
+                          lineHeight:1,
+                          opacity: dashExportModal?.phase === 'generating' ? 0.55 : 1,
+                        }}
+                      >
+                        📊
+                      </button>
+                    )}
                     <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
                       style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                       title="Expandir panel">
@@ -15625,163 +15832,70 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     </button>
                   </div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
-                    SICOE {kpiNm.corto} aprobado ({kpiNm.encabezado}) · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                    Total ClaraCore · Total Cobrado · Δ — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                    {dashCapFinLoading && capFinRows.length === 0 ? ' · Cargando tabla…' : ''}
                   </div>
                 </div>
-                {(() => {
-                  const comp = sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
-                  if (comp.length === 0) return (
-                    <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
-                  )
-                  const maxVal = Math.max(
-                    ...comp.map(c => Math.max(
-                      Number(c.presupuesto_aprobado_n3) || 0,
-                      Number(c.cobrado) || 0,
-                      Number(c.presupuesto_no_revisado_n3) || 0,
-                      0
-                    )),
-                    1
-                  )
-                  const PAD_R = 12
-                  const PAD_TOP = 10
-                  const GAP_BARS = 4
-                  const BAR_H = Math.max(5, du.barH - 1)
-                  const ROW_INNER = 4 + BAR_H * 3 + GAP_BARS * 2
-                  const ROW_H = ROW_INNER + du.rowGap
-                  const TEXT_START = 26
-                  const BAR_START = TEXT_START + du.padLabelW + 8
-                  const vbW = Math.max(820, BAR_START + 440)
-                  const chartW = vbW - PAD_R - BAR_START
-                  const scaleW = (v) => (Math.min(v, maxVal) / maxVal) * chartW
-                  const chartBottom = PAD_TOP + comp.length * ROW_H
-                  const AXIS_H = 22
-                  const vbH = chartBottom + AXIS_H
-                  const maxChars = Math.max(12, Math.floor(du.padLabelW / 5.2))
-                  const C_PP_AP = '#0f766e'
-                  const C_AP = '#0077B6'
-                  const C_PP_NR = '#ca8a04'
-
-                  return (
-                    <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'hidden', width:'100%', paddingRight:'2px' }}>
-                      <div style={{ fontSize:`${du.chartAxis}px`, color:t.textMuted, marginBottom:'6px' }}>
-                        Escala (mayor de los tres por vista): {fmtM(0)} — {fmtM(maxVal * 0.5)} — {fmtM(maxVal)}
-                      </div>
-                      <svg width="100%" height={vbH} viewBox={`0 0 ${vbW} ${vbH}`} preserveAspectRatio="xMinYMin meet" style={{ overflow:'visible', display:'block', maxWidth:'100%' }}>
-                        {[0, 25, 50, 75, 100].map(pct => {
-                          const gx = BAR_START + (pct / 100) * chartW
+                {capFinRows.length === 0 && !dashCapFinLoading ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
+                ) : (
+                  <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'auto', width:'100%' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:560 }}>
+                      <thead>
+                        <tr style={{ background:'#4472C4', color:'#fff', position:'sticky', top:0, zIndex:1 }}>
+                          <th style={{ textAlign:'left', padding:'8px 10px', fontWeight:700 }}>Capítulo</th>
+                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total ClaraCore</th>
+                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total Cobrado</th>
+                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {capFinRows.map((row, i) => {
+                          const isSel = dashDrill[0]?.valor === row.capitulo
+                          const delta = Number(row.delta) || 0
+                          const zebra = i % 2 === 0 ? t.bgCard : (themeIsDarkChrome(activeTheme) ? '#1e293b22' : '#f8fafc')
                           return (
-                            <line key={`gx-${pct}`} x1={gx} x2={gx} y1={PAD_TOP} y2={chartBottom} stroke={t.border} strokeWidth="0.5" strokeDasharray="4,4" />
+                            <tr
+                              key={`${row.capitulo}-${i}`}
+                              onClick={() => abrirDashCapitulo(row.capitulo)}
+                              title="Clic para ver ítems del capítulo"
+                              style={{ background: isSel ? `${t.primary}18` : zebra, cursor:'pointer' }}
+                              onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = `${t.primary}0c` }}
+                              onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = zebra }}
+                            >
+                              <td style={{ padding:'6px 10px', fontWeight:600, color:t.text }}>{row.capitulo}</td>
+                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.claracore)}</td>
+                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.cobrado)}</td>
+                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap', color: delta < 0 ? '#dc2626' : t.text }}>{fmtD(delta)}</td>
+                            </tr>
                           )
                         })}
-                        {comp.map((cap, i) => {
-                          const rowY = PAD_TOP + i * ROW_H
-                          const y1 = rowY + 4
-                          const y2 = y1 + BAR_H + GAP_BARS
-                          const y3 = y2 + BAR_H + GAP_BARS
-                          const ap = Number(cap.cobrado) || 0
-                          const ppA = Number(cap.presupuesto_aprobado_n3) || 0
-                          const ppN = Number(cap.presupuesto_no_revisado_n3) || 0
-                          const w1 = Math.max(scaleW(ap), 2)
-                          const w2 = Math.max(scaleW(ppA), 2)
-                          const w3 = Math.max(scaleW(ppN), 2)
-                          const isSelected = dashDrill[0]?.valor === cap.capitulo
-                          const rawCap = cap.capitulo || ''
-                          const nomCap = rawCap.length > maxChars ? `${rawCap.slice(0, maxChars)}…` : rawCap
-                          const tipId = `tip-vs-h-${i}`
-                          const openCap = () => {
-                            const raw = String(cap.capitulo ?? cap.nombre ?? '').trim()
-                            const ck = dashNormCapituloKey(raw)
-                            if (!raw || ck === 'Sin capítulo') return
-                            const cacheKey = contratoIdDash
-                              ? dashDrillCacheKey(dashDrillCapCachePart(raw))
-                              : null
-                            const cached = cacheKey ? dashDrillCache.current[cacheKey] : null
-                            setDashDrillPag(0)
-                            setDashDrillError(null)
-                            if (cached?.data?.length) {
-                              setDashData(cached.data)
-                              setDashLoading(false)
-                            } else {
-                              setDashData(null)
-                              setDashLoading(true)
-                            }
-                            setDashDrill([{ campo: 'capitulo', valor: raw }])
-                            setPopupCapitulo(true)
-                          }
-                          return (
-                            <g key={`${rawCap}-${i}`}>
-                              <text x={TEXT_START - 4} y={rowY + ROW_INNER / 2} textAnchor="end" dominantBaseline="middle" fontSize={du.chartLabel} fill={t.primary} fontWeight="700" style={{ userSelect: 'none' }}>{i + 1}</text>
-                              <text x={TEXT_START} y={rowY + ROW_INNER / 2} textAnchor="start" dominantBaseline="middle" fontSize={du.chartLabel} fill={t.textMuted} style={{ userSelect: 'none' }}>
-                                <title>{rawCap}</title>{nomCap}
-                              </text>
-                              <rect x={BAR_START} y={y1} width={w1} height={BAR_H} fill={C_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
-                              <rect x={BAR_START} y={y2} width={w2} height={BAR_H} fill={C_PP_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
-                              <rect x={BAR_START} y={y3} width={w3} height={BAR_H} fill={C_PP_NR} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
-                              <rect x={0} y={rowY} width={vbW} height={ROW_INNER} fill="transparent" style={{ cursor: 'pointer' }} onClick={openCap}
-                                onMouseEnter={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'block' }}
-                                onMouseLeave={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'none' }} />
-                            </g>
-                          )
-                        })}
-                        {[0, 25, 50, 75, 100].map(pct => {
-                          const x = BAR_START + (pct / 100) * chartW
-                          const val = maxVal * (pct / 100)
-                          return (
-                            <text key={`ax-${pct}`} x={x} y={chartBottom + 14} textAnchor="middle" fontSize={du.chartAxis} fill={t.textMuted} style={{ userSelect: 'none' }}>{fmtM(val)}</text>
-                          )
-                        })}
-                        {comp.map((cap, i) => {
-                          const rowY = PAD_TOP + i * ROW_H
-                          const ap = Number(cap.cobrado) || 0
-                          const ppA = Number(cap.presupuesto_aprobado_n3) || 0
-                          const ppN = Number(cap.presupuesto_no_revisado_n3) || 0
-                          const tipId = `tip-vs-h-${i}`
-                          const tx = Math.min(BAR_START + 8, vbW - 240)
-                          const tipTop = Math.max(4, rowY - 4)
-                          const tipPad = 8
-                          const lineStep = 14
-                          const yCap = tipTop + tipPad + lineStep
-                          const yPptoTot = yCap + lineStep
-                          const ySicoe = yPptoTot + lineStep
-                          const yRev = ySicoe + lineStep
-                          const yNoRev = yRev + lineStep
-                          const tipH = yNoRev + tipPad - tipTop
-                          return (
-                            <g key={`tip-${tipId}`} id={tipId} style={{ display: 'none', pointerEvents: 'none' }}>
-                              <rect x={tx} y={tipTop} width="234" height={tipH} rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1" style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.25))' }} />
-                              <text x={tx + 10} y={yCap} fontSize={du.chartTip} fontWeight="700" fill={t.text}>
-                                {(cap.capitulo || '').length > 30 ? `${(cap.capitulo || '').slice(0, 30)}…` : (cap.capitulo || '')}
-                              </text>
-                              <text x={tx + 10} y={yPptoTot} fontSize={du.chartTip} fill={t.textMuted}>Ppto CC: <tspan fontWeight="700" fill="#64748b">{fmtD(cap.presupuesto)}</tspan></text>
-                              <text x={tx + 10} y={ySicoe} fontSize={du.chartTip} fill={t.textMuted}>SICOE {kpiNm.corto} ✓: <tspan fontWeight="700" fill={C_AP}>{fmtD(ap)}</tspan></text>
-                              <text x={tx + 10} y={yRev} fontSize={du.chartTip} fill={t.textMuted}>Ppto rev. ✓: <tspan fontWeight="700" fill={C_PP_AP}>{fmtD(ppA)}</tspan></text>
-                              <text x={tx + 10} y={yNoRev} fontSize={du.chartTip} fill={t.textMuted}>Ppto no rev.: <tspan fontWeight="700" fill={C_PP_NR}>{fmtD(ppN)}</tspan></text>
-                            </g>
-                          )
-                        })}
-                      </svg>
-                      <div style={{ display:'flex', flexWrap:'wrap', gap:'12px', marginTop:'8px', justifyContent:'center' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> SICOE {kpiNm.corto} aprobado
-                        </div>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0f766e' }}/> Ppto. aprobado (revisado)
-                        </div>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no revisado
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })()}
-              {/* ── Drill → ahora vive en el popup ── */}
+                      </tbody>
+                      {capFinRows.length > 0 && (
+                        <tfoot>
+                          <tr style={{ background:'#111827', color:'#fff', position:'sticky', bottom:0 }}>
+                            <td style={{ padding:'8px 10px', fontWeight:800 }}>TOTAL CONTRATO</td>
+                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.claracore)}</td>
+                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.cobrado)}</td>
+                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.delta)}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                )}
+                <div style={{ marginTop:'8px', fontSize:`${du.sub}px`, color:t.textMuted }}>
+                  Clic en un capítulo para abrir mapa semáforo e ítems
+                </div>
               </div>
+              {/* ── Drill → ahora vive en el popup ── */}
 
               <div style={{
                 background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow,
                 flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box',
                 maxHeight: panelFoco==='ppto-cobro' ? 'none' : 'min(92vh, 780px)', overflowY:'auto',
               }}>
+
                 <div style={{ marginBottom:'12px' }}>
                   <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'4px' }}>
@@ -15943,103 +16057,127 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             {popupCapitulo && dashDrill.length > 0 && (
               <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center' }}
                 onClick={() => { setPopupCapitulo(false); setDashDrill([]); setDashLoading(false); setDashDrillError(null) }}>
-                <div style={{ background:t.bgCard, borderRadius:'16px', width:'88vw', maxWidth:'1160px', height:'90vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.55)', border:`1px solid ${t.border}` }}
+                <div style={{ background:t.bgCard, borderRadius:'16px', width:'92vw', maxWidth:'1450px', height:'90vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.55)', border:`1px solid ${t.border}` }}
                   onClick={e => e.stopPropagation()}>
 
-                  {/* Header fijo */}
-                  <div style={{ padding:'14px 24px', borderBottom:`1px solid ${t.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0, background:t.bgCard }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
-                      <span style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary }}>📊 {dashDrill[0]?.valor}</span>
-                      {dashDrill[1] && (
-                        <>
-                          <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>›</span>
-                          <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 12px' }}>
-                            Ítem: {dashDrill[1]?.valor}
-                          </span>
-                          {(() => {
-                            const desc = dashTabla?.descripcion_item
-                              || dashDrill[1]?.descripcion
-                              || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
-                              || ''
-                            return desc ? (
-                              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted, fontStyle:'italic', maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                                — {desc}
-                              </span>
-                            ) : null
-                          })()}
-                          <button onClick={() => setDashDrill([dashDrill[0]])}
-                            style={{ background:'transparent', border:'none', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer' }}>✕ volver a ítems</button>
-                        </>
-                      )}
-                    </div>                    
-                    <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0 }}>
-                      <button
-                        id="btn-exportar-xlsx"
-                        title="Exportar informe Excel del capítulo o ítem"
-                        disabled={dashExportModal?.phase === 'generating'}
-                        onClick={() => abrirModalExportDashExcel()}
-                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor: dashExportModal?.phase === 'generating' ? 'wait' : 'pointer', lineHeight:1, transition:'all 0.15s', opacity: dashExportModal?.phase === 'generating' ? 0.55 : 1 }}
-                        onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
-                        onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
-                        📊
-                      </button>
-                      {puedeCrearReporteDash && dashDrill.length >= 1 && (dashDrill.length >= 2 || (!dashLoading && (dashData?.length > 0))) && (
-                        <button
-                          type="button"
-                          title="Migrar presupuesto a SICOE Obra"
-                          disabled={dashReportesDeltaLoad}
-                          onClick={() => { void abrirModalMigracionPresupuestoSicoe() }}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            background: dashReportesDeltaLoad ? t.border : '#0f766e',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: '8px',
-                            padding: '6px 12px',
-                            fontSize: 'var(--cc-sm)',
-                            fontWeight: '700',
-                            cursor: dashReportesDeltaLoad ? 'wait' : 'pointer',
-                            opacity: dashReportesDeltaLoad ? 0.85 : 1,
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          <IconMigrarPresupuestoSicoe size={18} color="#fff" />
-                          {dashReportesDeltaLoad ? '⏳ Trabajando…' : 'Migrar a SICOE Obra'}
-                        </button>
-                      )}
-                      <button onClick={() => { setPopupCapitulo(false); setDashDrill([]); setDashLoading(false); setDashDrillError(null) }}
-                        style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted }}>
-                        ✕ Cerrar
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Cuerpo scrolleable */}
-                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column' }}>
-
-                    {/* Mapa sticky */}
-                    <div style={{ position:'sticky', top:0, zIndex:10, background:t.bgCard, padding:'14px 24px 10px', borderBottom:`1px solid ${t.border}44`, flexShrink:0 }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                        <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
-                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>
-                          {miniMapaColoresLoad ? 'Cargando mapa…' : (() => {
+                  {/* Header unificado: capítulo + plano/controles + acciones */}
+                  <div style={{ padding:'10px 20px', borderBottom:`1px solid ${t.border}`, flexShrink:0, background:t.bgCard }}>
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', flexWrap:'wrap' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', minWidth:0, flex:'1 1 180px' }}>
+                        <span style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary, whiteSpace:'nowrap' }}>📊 {dashDrill[0]?.valor}</span>
+                        {dashDrill[1] && (
+                          <>
+                            <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>›</span>
+                            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px', whiteSpace:'nowrap' }}>
+                              Ítem: {dashDrill[1]?.valor}
+                            </span>
+                            {(() => {
+                              const desc = dashTabla?.descripcion_item
+                                || dashDrill[1]?.descripcion
+                                || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
+                                || ''
+                              return desc ? (
+                                <span style={{ fontSize:'var(--cc-label)', color:t.textMuted, fontStyle:'italic', maxWidth:'280px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={desc}>
+                                  — {desc}
+                                </span>
+                              ) : null
+                            })()}
+                            <button type="button" onClick={() => setDashDrill([dashDrill[0]])}
+                              style={{ background:'transparent', border:'none', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer', whiteSpace:'nowrap' }}>✕ volver a ítems</button>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex:'2 1 360px', justifyContent:'center' }}>
+                        <span style={{ fontSize:`${du.sub}px`, fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', whiteSpace:'nowrap' }}>🗺️ PLANO SEMÁFORO</span>
+                        <span style={{ fontSize:`${du.sub}px`, color:t.textMuted, whiteSpace:'nowrap' }}>
+                          {miniMapaColoresLoad ? 'Cargando…' : (() => {
                             const n = Object.keys(miniMapaColores).filter((k) => {
                               const d = miniMapaColores[k]
                               return d && ((Number(d.presupuesto) || 0) > 0 || (Number(d.cobrado) || 0) > 0)
                             }).length
                             return dashDrill.length >= 2
-                              ? `${n} PK_IDs con datos del ítem`
+                              ? `${n} PK con datos`
                               : `${Object.keys(miniMapaColores).length} PK_IDs`
                           })()}
                         </span>
+                        <MiniMapaToolbar
+                          t={t}
+                          modo={dashMapModo}
+                          setModo={setDashMapModo}
+                          capEtiquetas={dashMapEtiquetas}
+                          setCapEtiquetas={setDashMapEtiquetas}
+                          compact
+                        />
                       </div>
-                      <MiniMapaSemaforo t={t} colores={miniMapaColores} contratoId={contratoIdDash} token={getToken()} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} soloPkConDatos={dashDrill.length >= 2} />
+                      <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0, flex:'0 0 auto' }}>
+                        {puedeExportarDashboard && (
+                        <button
+                          id="btn-exportar-xlsx"
+                          title="Exportar informe Excel del capítulo o ítem"
+                          disabled={dashExportModal?.phase === 'generating'}
+                          onClick={() => abrirModalExportDashExcel()}
+                          style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor: dashExportModal?.phase === 'generating' ? 'wait' : 'pointer', lineHeight:1, transition:'all 0.15s', opacity: dashExportModal?.phase === 'generating' ? 0.55 : 1 }}
+                          onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
+                          onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
+                          📊
+                        </button>
+                        )}
+                        {puedeCrearReporteDash && dashDrill.length >= 1 && (dashDrill.length >= 2 || (!dashLoading && (dashData?.length > 0))) && (
+                          <button
+                            type="button"
+                            title="Migrar presupuesto a SICOE Obra"
+                            disabled={dashReportesDeltaLoad}
+                            onClick={() => { void abrirModalMigracionPresupuestoSicoe() }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              background: dashReportesDeltaLoad ? t.border : '#0f766e',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '8px',
+                              padding: '6px 12px',
+                              fontSize: 'var(--cc-sm)',
+                              fontWeight: '700',
+                              cursor: dashReportesDeltaLoad ? 'wait' : 'pointer',
+                              opacity: dashReportesDeltaLoad ? 0.85 : 1,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            <IconMigrarPresupuestoSicoe size={18} color="#fff" />
+                            {dashReportesDeltaLoad ? '⏳ Trabajando…' : 'Migrar a SICOE Obra'}
+                          </button>
+                        )}
+                        <button onClick={() => { setPopupCapitulo(false); setDashDrill([]); setDashLoading(false); setDashDrillError(null) }}
+                          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted, whiteSpace:'nowrap' }}>
+                          ✕ Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Cuerpo: mapa compacto + tabla con scroll propio */}
+                  <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
+
+                    <div style={{ padding:'8px 20px 6px', borderBottom:`1px solid ${t.border}44`, flexShrink:0 }}>
+                      <MiniMapaSemaforo
+                        t={t}
+                        colores={miniMapaColores}
+                        contratoId={contratoIdDash}
+                        token={getToken()}
+                        height={200}
+                        onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null}
+                        soloPkConDatos={dashDrill.length >= 2}
+                        showToolbar={false}
+                        modo={dashMapModo}
+                        onModoChange={setDashMapModo}
+                        capEtiquetas={dashMapEtiquetas}
+                        onCapEtiquetasChange={setDashMapEtiquetas}
+                      />
                     </div>
 
                     {/* Área drill */}
-                    <div style={{ padding:'16px 24px', flex:1 }}>
+                    <div style={{ padding:'12px 20px', flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
 
                       {/* Nivel 1: ítems */}
                       {dashDrill.length === 1 && (
@@ -16056,84 +16194,197 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             </div>
                           </div>
                         ) : dashData?.length > 0 ? (() => {
-                          const POR_PAG = 15
-                          const totalPags = Math.ceil(dashData.length / POR_PAG)
-                          const paginaItems = dashDrillPag || 0
-                          const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
-                          const maxV = Math.max(...slice.map(d => Math.max(
-                            Number(d.cobrado)||0, Number(d.presupuesto_aprobado_n3)||0, Number(d.presupuesto_no_revisado_n3)||0
-                          )), 1)
-                          const BAR_W = 10, GAP_IN = 3, GAP_GRP = 14, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
-                          const grpW = BAR_W * 3 + GAP_IN * 2
-                          const totalW = PAD_L + slice.length * (grpW + GAP_GRP) + PAD_R
-                          const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
+                          const filas = sortDashDrillItems(dashData)
                           const fmtD = n => n != null ? formatCOP(n) : '—'
+                          const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+                          const fmtQty = v => { const n = num(v); return Math.abs(n) < 1e-9 ? '—' : n.toFixed(2) }
+                          const cobCant = item => num(item.cant_cobrado) || num(item.cant_sicoe_aprobado)
+                          const cobCost = item => num(item.costo_cobrado) || num(item.cobrado)
+                          const ccCant = item => {
+                            if (item.tiene_ppto_obra_ejecutada) {
+                              if (item.total_claracore_cant != null && item.total_claracore_cant !== '') {
+                                return num(item.total_claracore_cant)
+                              }
+                              const sq = num(item.cant_nr) + num(item.cant_p) + num(item.cant_r) + num(item.cant_a)
+                              return sq || num(item.cant_ppto) || 0
+                            }
+                            if (item.claracore_igualado_cobro || item.tiene_ppto_obra_ejecutada === false) {
+                              return num(item.total_claracore_cant) || cobCant(item)
+                            }
+                            return num(item.total_claracore_cant) || cobCant(item)
+                          }
+                          const ccCost = item => {
+                            if (item.tiene_ppto_obra_ejecutada) {
+                              if (item.total_claracore_costo != null && item.total_claracore_costo !== '') {
+                                return num(item.total_claracore_costo)
+                              }
+                              return num(item.costo_nr) + num(item.costo_p) + num(item.costo_r) + num(item.costo_a)
+                                || num(item.presupuesto) || 0
+                            }
+                            return num(item.total_claracore_costo) || cobCost(item)
+                          }
+                          const dCant = item => item.delta_cant != null ? num(item.delta_cant) : ccCant(item) - cobCant(item)
+                          const dCost = item => item.delta_costo != null ? num(item.delta_costo) : ccCost(item) - cobCost(item)
+                          const exp = dashDrillColExp
+                          const ESTADOS = [
+                            { key: 'NR', cant: 'cant_nr', costo: 'costo_nr', color: '#b45309', title: 'No revisado' },
+                            { key: 'P', cant: 'cant_p', costo: 'costo_p', color: '#7c3aed', title: 'Pendiente' },
+                            { key: 'R', cant: 'cant_r', costo: 'costo_r', color: '#dc2626', title: 'Rechazado' },
+                            { key: 'A', cant: 'cant_a', costo: 'costo_a', color: '#0f766e', title: 'Aprobado' },
+                          ]
+                          const thBase = { padding:'5px 6px', fontSize:`${du.table}px`, fontWeight:700, borderBottom:`1px solid ${t.border}`, whiteSpace:'nowrap', lineHeight:1.25 }
+                          const thToggle = { ...thBase, cursor:'pointer', userSelect:'none' }
+                          const tdBase = { padding:'5px 6px', fontSize:`${du.table}px`, borderBottom:`1px solid ${t.border}44`, verticalAlign:'middle' }
+                          const minTbl = 640 + (exp.cc ? (exp.ccCost ? ESTADOS.length * 120 : ESTADOS.length * 56) : 0)
+                          const tot = filas.reduce((acc, row) => {
+                            acc.ccQ += ccCant(row)
+                            acc.ccC += ccCost(row)
+                            acc.cobQ += cobCant(row)
+                            acc.cobC += cobCost(row)
+                            acc.dQ += dCant(row)
+                            acc.dC += dCost(row)
+                            for (const e of ESTADOS) {
+                              acc[e.cant] = (acc[e.cant] || 0) + num(row[e.cant])
+                              acc[e.costo] = (acc[e.costo] || 0) + num(row[e.costo])
+                            }
+                            return acc
+                          }, { ccQ: 0, ccC: 0, cobQ: 0, cobC: 0, dQ: 0, dC: 0 })
+                          const fmtDeltaQty = v => {
+                            const n = num(v)
+                            if (Math.abs(n) < 1e-9) return '0.00'
+                            return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`
+                          }
                           return (
-                            <div style={{ marginTop:'8px' }}>
-                              {totalPags > 1 && (
-                                <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
-                                  <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{paginaItems*POR_PAG+1}–{Math.min((paginaItems+1)*POR_PAG, dashData.length)} de {dashData.length} ítems</span>
-                                  <button onClick={() => setDashDrillPag(p => Math.max(0,p-1))} disabled={paginaItems===0}
-                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:paginaItems===0?'default':'pointer', color:paginaItems===0?t.textMuted:t.text }}>‹</button>
-                                  {Array.from({length: totalPags}, (_,i) => (
-                                    <button key={i} onClick={() => setDashDrillPag(i)}
-                                      style={{ background:paginaItems===i?t.primary:'transparent', color:paginaItems===i?'#fff':t.textMuted, border:`1px solid ${paginaItems===i?t.primary:t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:'pointer' }}>{i+1}</button>
-                                  ))}
-                                  <button onClick={() => setDashDrillPag(p => Math.min(totalPags-1,p+1))} disabled={paginaItems===totalPags-1}
-                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:paginaItems===totalPags-1?'default':'pointer', color:paginaItems===totalPags-1?t.textMuted:t.text }}>›</button>
-                                </div>
-                              )}
-                              <div style={{ width:'100%', overflowX:'auto' }}>
-                                <svg width="100%" viewBox={`0 0 ${totalW} ${H}`} style={{ overflow:'visible', display:'block' }}>
-                                  {[0,50,100].map(pct => { const y=PAD_T+(1-pct/100)*(H-PAD_T-PAD_B); return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/> })}
-                                  {slice.map((item, i) => {
-                                    const x0 = PAD_L + i * (grpW + GAP_GRP)
-                                    const ap = Number(item.cobrado)||0, ppA = Number(item.presupuesto_aprobado_n3)||0, ppN = Number(item.presupuesto_no_revisado_n3)||0
-                                    const yA = scaleH(ap), yP1 = scaleH(ppA), yP2 = scaleH(ppN)
-                                    const hA = H-PAD_B-yA, hP1 = H-PAD_B-yP1, hP2 = H-PAD_B-yP2
-                                    const nomCorto=String(item.item||'').length>6?String(item.item||'').slice(0,6)+'…':String(item.item||'')
-                                    const cx = x0 + grpW/2
-                                    const tipId = `tip-drill-p${paginaItems}-i${i}`
-                                    const tipX = Math.min(Math.max(8, x0 - 32), totalW - 242)
-                                    const tipY = PAD_T + 4
-                                    const showTip = (show) => {
-                                      const tip = document.getElementById(tipId)
-                                      if (tip) tip.style.display = show ? 'block' : 'none'
-                                    }
-                                    return (
-                                      <g key={`${paginaItems}-${i}-${item.item || i}`} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor:item.item, descripcion:item.descripcion||''}])} style={{cursor:'pointer'}}>
-                                        <rect x={x0} y={yA} width={BAR_W} height={Math.max(hA,2)} fill="#0077B6" rx="2" opacity="0.88"
-                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
-                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
-                                        <rect x={x0+BAR_W+GAP_IN} y={yP1} width={BAR_W} height={Math.max(hP1,2)} fill="#0f766e" rx="2" opacity="0.88"
-                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
-                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
-                                        <rect x={x0+2*(BAR_W+GAP_IN)} y={yP2} width={BAR_W} height={Math.max(hP2,2)} fill="#ca8a04" rx="2" opacity="0.88"
-                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
-                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
-                                        <text x={cx} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
-                                        <g id={tipId} style={{display:'none',pointerEvents:'none'}}>
-                                          <rect x={tipX} y={tipY} width="234" height="128" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                                          <text x={tipX+10} y={tipY+18} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'—').length>28?String(item.item||'').slice(0,28)+'…':String(item.item||'—')}</text>
-                                          <text x={tipX+10} y={tipY+36} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>38?String(item.descripcion||'').slice(0,38)+'…':String(item.descripcion||'')}</text>
-                                          <text x={tipX+10} y={tipY+54} fontSize="9" fill={t.textMuted}>SICOE {kpiNm.corto} ✓: <tspan fontWeight="700" fill="#0077B6">{fmtD(ap)}</tspan></text>
-                                          <text x={tipX+10} y={tipY+70} fontSize="9" fill={t.textMuted}>Ppto val. nivel máx. ✓: <tspan fontWeight="700" fill="#0f766e">{fmtD(ppA)}</tspan></text>
-                                          <text x={tipX+10} y={tipY+86} fontSize="9" fill={t.textMuted}>Ppto (no val. nivel máx.): <tspan fontWeight="700" fill="#ca8a04">{fmtD(ppN)}</tspan></text>
-                                          <text x={tipX+10} y={tipY+102} fontSize="9" fill={t.textMuted}>Ppto total ítem: <tspan fontWeight="700" fill="#64748b">{fmtD(item.presupuesto)}</tspan></text>
-                                          <text x={tipX+10} y={tipY+118} fontSize="8" fill={t.textMuted}>Cant. SICOE {kpiNm.corto} ✓: {(item.cant_sicoe_aprobado??0).toFixed(2)} · Cant. ppto total: {(item.cant_ppto??0).toFixed(2)}</text>
-                                        </g>
-                                      </g>
-                                    )
-                                  })}
-                                </svg>
+                            <div style={{ marginTop:'4px', flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
+                              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
+                                <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>{filas.length} ítems · vista: <strong style={{ color:t.text }}>{dashVistaEjecucion}</strong></span>
+                                <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Cant CC · $ CC · desglose NR · P · R · A</span>
                               </div>
-                              <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center', flexWrap:'wrap' }}>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> SICOE {kpiNm.corto} ap.</div>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0f766e' }}/> Ppto. rev. ✓</div>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no rev.</div>
+                              <div style={{ flex:1, minHeight:0, overflowY:'auto', overflowX:'auto', width:'100%' }}>
+                                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth: minTbl }}>
+                                  <thead>
+                                    <tr style={{ background:'#4472C4', color:'#fff', position:'sticky', top:0, zIndex:2 }}>
+                                      <th style={{ ...thBase, textAlign:'center', position:'sticky', left:0, zIndex:3, background:'#4472C4' }}>#</th>
+                                      <th style={{ ...thBase, textAlign:'left', position:'sticky', left:28, zIndex:3, background:'#4472C4', minWidth:72 }}>Ítem</th>
+                                      <th style={{ ...thBase, textAlign:'left', minWidth:220, maxWidth:320 }}>Descripción</th>
+                                      <th style={{ ...thBase, textAlign:'center' }}>Und</th>
+                                      <th
+                                        style={{ ...thToggle, textAlign:'right', background: exp.cc ? '#365899' : '#4472C4' }}
+                                        title="Cantidad total ClaraCore (NR+P+R+A)"
+                                        onClick={() => setDashDrillColExp(p => ({ ...p, cc: !p.cc, ccCost: p.cc ? p.ccCost : false }))}
+                                      >
+                                        Cant CC {exp.cc ? '▼' : '▶'}
+                                      </th>
+                                      <th style={{ ...thBase, textAlign:'right', whiteSpace:'nowrap' }} title="Costo directo total ClaraCore">$ CC</th>
+                                      {exp.cc && ESTADOS.map(e => (
+                                        <Fragment key={e.key}>
+                                          <th style={{ ...thBase, textAlign:'right', background:'#365899' }} title={`Cant. ${e.title}`}>Cant {e.key}</th>
+                                          {exp.ccCost && (
+                                            <th style={{ ...thBase, textAlign:'right', background:'#2d4a73' }} title={`Costo directo ${e.title}`}>$ {e.key}</th>
+                                          )}
+                                        </Fragment>
+                                      ))}
+                                      {exp.cc && (
+                                        <th
+                                          style={{ ...thToggle, textAlign:'center', background:'#365899', fontSize:`${du.sub}px`, minWidth:72 }}
+                                          title="Mostrar u ocultar costos directos NR · P · R · A"
+                                          onClick={ev => { ev.stopPropagation(); setDashDrillColExp(p => ({ ...p, ccCost: !p.ccCost, cc: true })) }}
+                                        >
+                                          {exp.ccCost ? '$ CC ▼' : '$ CC ▶'}
+                                        </th>
+                                      )}
+                                      <th style={{ ...thBase, textAlign:'right' }}>Cant cob.</th>
+                                      <th style={{ ...thBase, textAlign:'right' }}>$ cob.</th>
+                                      <th style={{ ...thBase, textAlign:'right' }}>Δ cant</th>
+                                      <th style={{ ...thBase, textAlign:'right' }}>Δ costo</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {filas.map((item, i) => {
+                                      const zebra = i % 2 === 0 ? t.bgCard : (themeIsDarkChrome(activeTheme) ? '#1e293b22' : '#f8fafc')
+                                      const dc = dCost(item)
+                                      const dq = dCant(item)
+                                      const descFull = String(item.descripcion || '').trim()
+                                      const descShow = descFull || '—'
+                                      return (
+                                        <tr
+                                          key={`${item.item || i}-${i}`}
+                                          onClick={() => { setDashPkColExp({ cc: false, ccCost: false }); setDashDrill([dashDrill[0], { campo:'item', valor:item.item, descripcion: descFull }]) }}
+                                          title="Clic para ver detalle por PK"
+                                          style={{ background: zebra, cursor:'pointer' }}
+                                          onMouseEnter={e => { e.currentTarget.style.background = `${t.primary}0c` }}
+                                          onMouseLeave={e => { e.currentTarget.style.background = zebra }}
+                                        >
+                                          <td style={{ ...tdBase, textAlign:'center', color:t.textMuted, position:'sticky', left:0, background: zebra, fontWeight:600 }}>{i + 1}</td>
+                                          <td style={{ ...tdBase, fontWeight:700, color:t.primary, position:'sticky', left:28, background: zebra, whiteSpace:'nowrap' }}>{item.item || '—'}</td>
+                                          <td
+                                            style={{
+                                              ...tdBase,
+                                              color: descFull ? t.text : t.textMuted,
+                                              minWidth: 180,
+                                              maxWidth: 320,
+                                              overflow: 'hidden',
+                                              display: '-webkit-box',
+                                              WebkitLineClamp: 2,
+                                              WebkitBoxOrient: 'vertical',
+                                              lineHeight: 1.35,
+                                              cursor: descFull ? 'help' : 'pointer',
+                                            }}
+                                            title={descFull || 'Sin descripción'}
+                                            onClick={ev => ev.stopPropagation()}
+                                            onMouseEnter={ev => { if (descFull) ev.currentTarget.setAttribute('data-tip', descFull) }}
+                                          >
+                                            {descShow}
+                                          </td>
+                                          <td style={{ ...tdBase, textAlign:'center', color:t.textMuted }}>{item.unidad || '—'}</td>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:700 }}>{fmtQty(ccCant(item))}</td>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color:'#0f766e', whiteSpace:'nowrap' }}>{fmtD(ccCost(item))}</td>
+                                          {exp.cc && ESTADOS.map(e => (
+                                            <Fragment key={e.key}>
+                                              <td style={{ ...tdBase, textAlign:'right', color:e.color, fontWeight: num(item[e.cant]) ? 600 : 400 }}>{fmtQty(item[e.cant])}</td>
+                                              {exp.ccCost && (
+                                                <td style={{ ...tdBase, textAlign:'right', color:e.color, fontWeight: num(item[e.costo]) ? 600 : 400 }}>{fmtD(item[e.costo])}</td>
+                                              )}
+                                            </Fragment>
+                                          ))}
+                                          {exp.cc && <td style={{ ...tdBase, textAlign:'center', color:t.textMuted }} />}
+                                          <td style={{ ...tdBase, textAlign:'right' }}>{fmtQty(cobCant(item))}</td>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color:'#0077B6', whiteSpace:'nowrap' }}>{fmtD(cobCost(item))}</td>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color: dq < -1e-9 ? '#dc2626' : dq > 1e-9 ? '#10B981' : t.text }}>
+                                            {fmtDeltaQty(dq)}
+                                          </td>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:800, color: dc < -1e-9 ? '#dc2626' : t.text }}>
+                                            {fmtD(dc)}
+                                          </td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr style={{ background:'#111827', color:'#fff', position:'sticky', bottom:0 }}>
+                                      <td colSpan={4} style={{ ...tdBase, fontWeight:800, borderBottom:'none' }}>TOTAL CAPÍTULO</td>
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtQty(tot.ccQ)}</td>
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none', whiteSpace:'nowrap' }}>{fmtD(tot.ccC)}</td>
+                                      {exp.cc && ESTADOS.map(e => (
+                                        <Fragment key={e.key}>
+                                          <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtQty(tot[e.cant])}</td>
+                                          {exp.ccCost && (
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtD(tot[e.costo])}</td>
+                                          )}
+                                        </Fragment>
+                                      ))}
+                                      {exp.cc && <td style={{ ...tdBase, borderBottom:'none' }} />}
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtQty(tot.cobQ)}</td>
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none', whiteSpace:'nowrap' }}>{fmtD(tot.cobC)}</td>
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtDeltaQty(tot.dQ)}</td>
+                                      <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtD(tot.dC)}</td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
                               </div>
-                              <p style={{ margin:'8px 0 0', fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', lineHeight:1.45, maxWidth:'720px', marginLeft:'auto', marginRight:'auto' }}>
-                                <strong style={{ color:t.text }}>Nota:</strong> las barras verdes y naranjas son <strong>presupuesto</strong> (validado nivel máx. ✓ y resto). La tabla por PK lista siempre obra SICOE {kpiNm.corto} ✓, montos de presupuesto por estado (aprobado / pendiente / rechazado) y Δ respecto al aprobado en nivel máx.
+                              <p style={{ margin:'8px 0 0', fontSize:`${du.sub}px`, color:t.textMuted, lineHeight:1.45 }}>
+                                <strong style={{ color:t.text }}>Nota:</strong> <strong>Cant CC</strong> y <strong>$ CC</strong> son totales ClaraCore (NR·P·R·A).
+                                Sin fila en Obra Ejecutada → CC = cobrado y Δ = 0. Pase el cursor sobre la descripción para ver el texto completo.
                               </p>
                             </div>
                           )
@@ -16145,100 +16396,184 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         dashTablaLoad ? (
                           <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando tabla...</div>
                         ) : dashTabla ? (
-                          <div style={{ width:'100%', overflowX:'auto' }}>
-                            {(() => {
-                              const filas = dashTabla.rows || dashTabla.filas || []
-                              const fmtD = n => n != null ? formatCOP(n) : '—'
-                              const thSum = (content, color, bg) => (
-                                <th style={{ padding:'4px 6px', fontSize:'var(--cc-caption)', fontWeight:'800', color, background: bg, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap', lineHeight:1.35 }}>{content}</th>
-                              )
-                              const thH = { padding:'5px 6px', fontSize:'9px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'normal', lineHeight:1.25 }
-                              const numCell = (v) => {
-                                if (v == null || v === '') return 0
-                                const n = Number(v)
-                                return Number.isFinite(n) ? n : 0
+                          (() => {
+                            const filasRaw = dashTabla.rows || dashTabla.filas || []
+                            const filas = [...filasRaw].sort((a, b) => String(a.pk_id ?? '').localeCompare(String(b.pk_id ?? ''), undefined, { numeric: true }))
+                            if (!filas.length) {
+                              return <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin filas PK</div>
+                            }
+                            const fmtD = n => n != null ? formatCOP(n) : '—'
+                            const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+                            const fmtQty = v => { const n = num(v); return Math.abs(n) < 1e-9 ? '—' : n.toFixed(2) }
+                            const cobCant = row => num(row.cant_cobrado) || num(row.cant_sicoe_aprobado) || num(row.cant_sicoe)
+                            const cobCost = row => num(row.costo_cobrado) || num(row.costo_sicoe_aprobado) || num(row.costo_sicoe)
+                            const ccCant = row => {
+                              if (row.total_claracore_cant != null && row.total_claracore_cant !== '') {
+                                return num(row.total_claracore_cant)
                               }
-                              const TABLA_PK_COLS = [
-                                { key:'sq', label:`SICOE ${kpiNm.corto}`, field:'cant_sicoe_aprobado', kind:'qty', color:t.text, sumBg:'transparent' },
-                                { key:'sc', label:`COSTO SICOE ${kpiNm.corto}`, field:'costo_sicoe_aprobado', kind:'money', color:'#0077B6', sumBg:'#0077B612' },
-                                { key:'pq', label:'APROBADO PPTO NIVEL MÁX.', field:'cant_ppto_aprobado_n3', kind:'qty', color:t.text, sumBg:'transparent' },
-                                { key:'pc', label:'COSTO APROBADO PPTO NIVEL MÁX.', field:'costo_ppto_aprobado_n3', kind:'money', color:'#0f766e', sumBg:'#0f766e18' },
-                                { key:'pnrq', label:'NO REVISADO PPTO NIVEL MÁX.', field:'cant_ppto_estado_no_revisado', kind:'qty', color:t.text, sumBg:'transparent' },
-                                { key:'pnrc', label:'COSTO NO REVISADO PPTO NIVEL MÁX.', field:'costo_ppto_estado_no_revisado', kind:'money', color:'#b45309', sumBg:'#ca8a0412' },
-                                { key:'pdc', label:'COSTO PENDIENTE PPTO NIVEL MÁX.', field:'costo_ppto_estado_pendiente', kind:'money', color:'#7c3aed', sumBg:'#a855f712' },
-                                { key:'prc', label:'COSTO RECHAZADO PPTO NIVEL MÁX.', field:'costo_ppto_estado_rechazado', kind:'money', color:'#dc2626', sumBg:'#ef444412' },
-                              ]
-                              const rowDeltaCant  = (f) => numCell(f.cant_ppto_aprobado_n3) - numCell(f.cant_sicoe_aprobado ?? f.cant_sicoe)
-                              const rowDeltaCosto = (f) => numCell(f.costo_ppto_aprobado_n3) - numCell(f.costo_sicoe_aprobado ?? f.costo_sicoe)
-                              const totalDeltaCant  = filas.reduce((s, f) => s + rowDeltaCant(f), 0)
-                              const totalDeltaCosto = filas.reduce((s, f) => s + rowDeltaCosto(f), 0)
-                              const deltaHint = `Δ = APROBADO PPTO NIVEL MÁX. − SICOE ${kpiNm.corto} ✓ (cantidad y costo directo) por PK.`
-                              if (!filas.length) {
-                                return <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin filas</div>
+                              if (row.tiene_ppto_obra_ejecutada) {
+                                const sq = num(row.cant_nr) + num(row.cant_p) + num(row.cant_r) + num(row.cant_a)
+                                return sq || num(row.cant_ppto) || 0
                               }
-                              const sumField = (field, kind) => {
-                                const s = filas.reduce((a, f) => a + numCell(f[field]), 0)
-                                return kind === 'qty' ? s.toFixed(2) : fmtD(s)
+                              if (row.claracore_igualado_cobro || row.tiene_ppto_obra_ejecutada === false) {
+                                return cobCant(row)
                               }
-                              const pctEach = 88 / (TABLA_PK_COLS.length + 2)
-                              return (
-                                <div style={{ width:'100%' }}>
-                                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', tableLayout:'fixed', minWidth:'1120px' }}>
-                                    <colgroup>
-                                      <col style={{ width:'11%', minWidth:'72px' }} />
-                                      {TABLA_PK_COLS.map(c => (
-                                        <col key={c.key} style={{ width:`${pctEach}%`, minWidth:'84px' }} />
-                                      ))}
-                                      <col style={{ width:`${pctEach}%`, minWidth:'72px' }} />
-                                      <col style={{ width:`${pctEach}%`, minWidth:'88px' }} />
-                                    </colgroup>
+                              return num(row.cant_ppto) || cobCant(row)
+                            }
+                            const ccCost = row => {
+                              if (row.total_claracore_costo != null && row.total_claracore_costo !== '') {
+                                return num(row.total_claracore_costo)
+                              }
+                              if (row.tiene_ppto_obra_ejecutada) {
+                                return num(row.costo_nr) + num(row.costo_p) + num(row.costo_r) + num(row.costo_a)
+                                  || num(row.costo_ppto) || 0
+                              }
+                              return cobCost(row)
+                            }
+                            const dCant = row => row.delta_cant != null ? num(row.delta_cant) : ccCant(row) - cobCant(row)
+                            const dCost = row => row.delta_costo != null ? num(row.delta_costo) : ccCost(row) - cobCost(row)
+                            const exp = dashPkColExp
+                            const ESTADOS = [
+                              { key: 'NR', cant: 'cant_nr', costo: 'costo_nr', color: '#b45309', title: 'No revisado' },
+                              { key: 'P', cant: 'cant_p', costo: 'costo_p', color: '#7c3aed', title: 'Pendiente' },
+                              { key: 'R', cant: 'cant_r', costo: 'costo_r', color: '#dc2626', title: 'Rechazado' },
+                              { key: 'A', cant: 'cant_a', costo: 'costo_a', color: '#0f766e', title: 'Aprobado' },
+                            ]
+                            const thBase = { padding:'5px 6px', fontSize:`${du.table}px`, fontWeight:700, borderBottom:`1px solid ${t.border}`, whiteSpace:'nowrap', lineHeight:1.25 }
+                            const thToggle = { ...thBase, cursor:'pointer', userSelect:'none' }
+                            const tdBase = { padding:'5px 6px', fontSize:`${du.table}px`, borderBottom:`1px solid ${t.border}44`, verticalAlign:'middle' }
+                            const minTbl = 520 + (exp.cc ? (exp.ccCost ? ESTADOS.length * 120 : ESTADOS.length * 56) : 0)
+                            const tot = filas.reduce((acc, row) => {
+                              acc.ccQ += ccCant(row)
+                              acc.ccC += ccCost(row)
+                              acc.cobQ += cobCant(row)
+                              acc.cobC += cobCost(row)
+                              acc.dQ += dCant(row)
+                              acc.dC += dCost(row)
+                              for (const e of ESTADOS) {
+                                acc[e.cant] = (acc[e.cant] || 0) + num(row[e.cant])
+                                acc[e.costo] = (acc[e.costo] || 0) + num(row[e.costo])
+                              }
+                              return acc
+                            }, { ccQ: 0, ccC: 0, cobQ: 0, cobC: 0, dQ: 0, dC: 0 })
+                            const fmtDeltaQty = v => {
+                              const n = num(v)
+                              if (Math.abs(n) < 1e-9) return '0.00'
+                              return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`
+                            }
+                            return (
+                              <div style={{ marginTop:'4px', flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
+                                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
+                                  <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>{filas.length} PK · ítem <strong style={{ color:t.text }}>{dashDrill[1]?.valor}</strong> · {dashVistaEjecucion}</span>
+                                  <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Cant CC · $ CC · desglose NR · P · R · A · cobrado</span>
+                                </div>
+                                <div style={{ flex:1, minHeight:0, overflowY:'auto', overflowX:'auto', width:'100%' }}>
+                                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth: minTbl }}>
                                     <thead>
-                                      <tr>
-                                        <th style={{ ...thH, borderBottom:`1px solid ${t.border}44`, fontSize:'var(--cc-caption)' }}>Σ</th>
-                                        {TABLA_PK_COLS.map(c => (
-                                          <Fragment key={`sum-${c.key}`}>
-                                            {thSum(sumField(c.field, c.kind), c.kind === 'money' ? c.color : t.text, c.sumBg)}
+                                      <tr style={{ background:'#4472C4', color:'#fff', position:'sticky', top:0, zIndex:2 }}>
+                                        <th style={{ ...thBase, textAlign:'right', position:'sticky', left:0, zIndex:3, background:'#4472C4', minWidth:88 }}>PK_ID</th>
+                                        <th
+                                          style={{ ...thToggle, textAlign:'right', background: exp.cc ? '#365899' : '#4472C4' }}
+                                          title="Cantidad total ClaraCore (NR+P+R+A)"
+                                          onClick={() => setDashPkColExp(p => ({ ...p, cc: !p.cc, ccCost: p.cc ? p.ccCost : false }))}
+                                        >
+                                          Cant CC {exp.cc ? '▼' : '▶'}
+                                        </th>
+                                        <th style={{ ...thBase, textAlign:'right', whiteSpace:'nowrap' }} title="Costo directo total ClaraCore">$ CC</th>
+                                        {exp.cc && ESTADOS.map(e => (
+                                          <Fragment key={e.key}>
+                                            <th style={{ ...thBase, textAlign:'right', background:'#365899' }} title={`Cant. ${e.title}`}>Cant {e.key}</th>
+                                            {exp.ccCost && (
+                                              <th style={{ ...thBase, textAlign:'right', background:'#2d4a73' }} title={`Costo directo ${e.title}`}>$ {e.key}</th>
+                                            )}
                                           </Fragment>
                                         ))}
-                                        <Fragment key="sum-dcant">
-                                          {thSum(`${totalDeltaCant >= 0 ? '+' : ''}${totalDeltaCant.toFixed(2)}`, totalDeltaCant >= 0 ? '#10B981' : '#EF4444', totalDeltaCant >= 0 ? '#10B98112' : '#EF444412')}
-                                        </Fragment>
-                                        <Fragment key="sum-dcost">
-                                          {thSum(`${totalDeltaCosto >= 0 ? '+' : ''}${fmtD(totalDeltaCosto)}`, totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', totalDeltaCosto >= 0 ? '#10B98112' : '#EF444412')}
-                                        </Fragment>
-                                      </tr>
-                                      <tr>
-                                        <th style={{ ...thH, color:t.textMuted, fontWeight:'800' }}>PK_ID</th>
-                                        {TABLA_PK_COLS.map(c => (
-                                          <th key={c.key} style={{ ...thH, color:t.text, fontWeight:'700' }}>{c.label}</th>
-                                        ))}
-                                        <th title={deltaHint} style={{ ...thH, color:t.text, fontWeight:'700' }}>▲ CANT.</th>
-                                        <th title={deltaHint} style={{ ...thH, color:t.text, fontWeight:'700' }}>▲ COSTO DIRECTO</th>
+                                        {exp.cc && (
+                                          <th
+                                            style={{ ...thToggle, textAlign:'center', background:'#365899', fontSize:`${du.sub}px`, minWidth:72 }}
+                                            title="Mostrar u ocultar costos directos NR · P · R · A"
+                                            onClick={ev => { ev.stopPropagation(); setDashPkColExp(p => ({ ...p, ccCost: !p.ccCost, cc: true })) }}
+                                          >
+                                            {exp.ccCost ? '$ CC ▼' : '$ CC ▶'}
+                                          </th>
+                                        )}
+                                        <th style={{ ...thBase, textAlign:'right' }}>Cant cob.</th>
+                                        <th style={{ ...thBase, textAlign:'right' }}>$ cob.</th>
+                                        <th style={{ ...thBase, textAlign:'right' }}>Δ cant</th>
+                                        <th style={{ ...thBase, textAlign:'right' }}>Δ costo</th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {filas.map((row, i) => {
-                                        const dCant = rowDeltaCant(row)
-                                        const dCosto = rowDeltaCosto(row)
+                                        const zebra = i % 2 === 0 ? t.bgCard : (themeIsDarkChrome(activeTheme) ? '#1e293b22' : '#f8fafc')
+                                        const dc = dCost(row)
+                                        const dq = dCant(row)
+                                        const pk = String(row.pk_id || row.id_pol || '').trim()
                                         return (
-                                          <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : t.bg + '88' }}>
-                                            <td style={{ padding:'5px 6px', fontWeight:'600', color:t.primary, textAlign:'right', wordBreak:'break-word' }}>{row.pk_id || row.id_pol || '—'}</td>
-                                            {TABLA_PK_COLS.map(c => (
-                                              <td key={c.key} style={{ padding:'5px 6px', textAlign:'right', color: c.kind === 'money' ? c.color : t.text, fontWeight: c.kind === 'money' ? '600' : '400' }}>
-                                                {c.kind === 'qty' ? numCell(row[c.field]).toFixed(2) : fmtD(row[c.field])}
-                                              </td>
+                                          <tr
+                                            key={`${pk}-${i}`}
+                                            onClick={() => pk && abrirPopupPkid(pk)}
+                                            title={pk ? 'Clic para abrir detalle del PK en mapa' : undefined}
+                                            style={{ background: zebra, cursor: pk ? 'pointer' : 'default' }}
+                                            onMouseEnter={e => { if (pk) e.currentTarget.style.background = `${t.primary}0c` }}
+                                            onMouseLeave={e => { e.currentTarget.style.background = zebra }}
+                                          >
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color:t.primary, position:'sticky', left:0, background: zebra, whiteSpace:'nowrap' }}>{pk || '—'}</td>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700 }}>{fmtQty(ccCant(row))}</td>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color:'#0f766e', whiteSpace:'nowrap' }}>{fmtD(ccCost(row))}</td>
+                                            {exp.cc && ESTADOS.map(e => (
+                                              <Fragment key={e.key}>
+                                                <td style={{ ...tdBase, textAlign:'right', color:e.color, fontWeight: num(row[e.cant]) ? 600 : 400 }}>{fmtQty(row[e.cant])}</td>
+                                                {exp.ccCost && (
+                                                  <td style={{ ...tdBase, textAlign:'right', color:e.color, fontWeight: num(row[e.costo]) ? 600 : 400 }}>{fmtD(row[e.costo])}</td>
+                                                )}
+                                              </Fragment>
                                             ))}
-                                            <td style={{ padding:'5px 6px', textAlign:'right', color: dCant >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCant >= 0 ? '+' : ''}{Number(dCant).toFixed(2)}</td>
-                                            <td style={{ padding:'5px 6px', textAlign:'right', color: dCosto >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCosto >= 0 ? '+' : ''}{fmtD(dCosto)}</td>
+                                            {exp.cc && <td style={{ ...tdBase, textAlign:'center', color:t.textMuted }} />}
+                                            <td style={{ ...tdBase, textAlign:'right' }}>{fmtQty(cobCant(row))}</td>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color:'#0077B6', whiteSpace:'nowrap' }}>{fmtD(cobCost(row))}</td>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, color: dq < -1e-9 ? '#dc2626' : dq > 1e-9 ? '#10B981' : t.text }}>
+                                              {fmtDeltaQty(dq)}
+                                            </td>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:800, color: dc < -1e-9 ? '#dc2626' : t.text }}>
+                                              {fmtD(dc)}
+                                            </td>
                                           </tr>
                                         )
                                       })}
                                     </tbody>
+                                    <tfoot>
+                                      <tr style={{ background:'#111827', color:'#fff', position:'sticky', bottom:0 }}>
+                                        <td style={{ ...tdBase, fontWeight:800, borderBottom:'none', position:'sticky', left:0, background:'#111827' }}>TOTAL ÍTEM</td>
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtQty(tot.ccQ)}</td>
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none', whiteSpace:'nowrap' }}>{fmtD(tot.ccC)}</td>
+                                        {exp.cc && ESTADOS.map(e => (
+                                          <Fragment key={e.key}>
+                                            <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtQty(tot[e.cant])}</td>
+                                            {exp.ccCost && (
+                                              <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtD(tot[e.costo])}</td>
+                                            )}
+                                          </Fragment>
+                                        ))}
+                                        {exp.cc && <td style={{ ...tdBase, borderBottom:'none' }} />}
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none' }}>{fmtQty(tot.cobQ)}</td>
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:700, borderBottom:'none', whiteSpace:'nowrap' }}>{fmtD(tot.cobC)}</td>
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtDeltaQty(tot.dQ)}</td>
+                                        <td style={{ ...tdBase, textAlign:'right', fontWeight:800, borderBottom:'none' }}>{fmtD(tot.dC)}</td>
+                                      </tr>
+                                    </tfoot>
                                   </table>
                                 </div>
-                              )
-                            })()}
-                          </div>
+                                <p style={{ margin:'8px 0 0', fontSize:`${du.sub}px`, color:t.textMuted, lineHeight:1.45 }}>
+                                  <strong style={{ color:t.text }}>Nota:</strong> filas por <strong>PK_ID</strong> sincronizadas con el plano semáforo.
+                                  {dashTabla?.meta?.item_tiene_ppto_obra_ejecutada
+                                    ? ' Ítem con Obra Ejecutada: Cant CC solo en PKs con presupuesto; cobro sin ppto en ese tramo → CC=0 y Δ negativo. El total PK debe coincidir con la fila del ítem.'
+                                    : ' Ítem sin Obra Ejecutada: PK solo cobrado → CC = cobrado y Δ = 0.'}
+                                  {' '}Clic en fila o en el mapa para detalle del PK.
+                                </p>
+                              </div>
+                            )
+                          })()
                         ) : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin datos</div>
                       )}
 
@@ -17538,9 +17873,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       </div>
                     </div>
                     <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
-                      <li>Total ClaraCore, Cobrado y Δ por capítulo (en pesos)</li>
-                      <li>Desglose Aprobado · Pendiente · Rechazado · No Revisado</li>
-                      <li>Gráfico de torta con el estado financiero del análisis</li>
+                      <li>Total ClaraCore, Total Cobrado y Δ por capítulo (igual al dashboard)</li>
+                      <li>Encabezado con logo, contrato, versión y usuario que genera</li>
+                      <li>Sin gráficos ni desgloses adicionales</li>
                     </ul>
                     <button
                       type="button"

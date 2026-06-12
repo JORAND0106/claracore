@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import PptoFiltroMapaPk from '../presupuesto/PptoFiltroMapaPk'
+import { buscarPkMaestroPorValorPlano } from './sicoePkResolver'
 
 /**
  * Selector de PK por mapa (polígono del plano), no por número manual.
@@ -16,6 +17,7 @@ export default function SicoeFiltroPkMapa({
   compact = false,
 }) {
   const [mapaOpen, setMapaOpen] = useState(false)
+  const [pkMapaAviso, setPkMapaAviso] = useState('')
 
   const pkDisplay = pkLabel || (pkIdSeleccionado && pkList?.length
     ? (pkList.find((p) => String(p.id) === String(pkIdSeleccionado))?.pk_id || `ID ${pkIdSeleccionado}`)
@@ -24,21 +26,21 @@ export default function SicoeFiltroPkMapa({
   const resolverPkId = (pkVal, meta) => {
     const v = String(pkVal || '').trim()
     if (!v) return
-    const row = (pkList || []).find(
-      (p) =>
-        String(p.pk_id || '').trim().toLowerCase() === v.toLowerCase()
-        || String(p.civ || '').trim().toLowerCase() === v.toLowerCase(),
-    )
-    if (row?.id != null) {
-      onSeleccionar?.({
-        pk_id_id: String(row.id),
-        pk_label: String(row.pk_id || row.civ || v),
-        coordLat: meta?.lat ?? null,
-        coordLng: meta?.lng ?? null,
-        mapaScreenshot: meta?.screenshot ?? null,
-      })
-      setMapaOpen(false)
+    const row = buscarPkMaestroPorValorPlano(v, pkList)
+    if (row?.id == null) {
+      setPkMapaAviso(`No se encontró «${v}» en el maestro PK del contrato.`)
+      return
     }
+    setPkMapaAviso('')
+    onSeleccionar?.({
+      pk_id_id: String(row.id),
+      pk_label: String(row.pk_id || row.civ || v),
+      coordLat: meta?.lat ?? null,
+      coordLng: meta?.lng ?? null,
+      mapaScreenshot: meta?.screenshot ?? null,
+      screenshotOnly: !!meta?.screenshotOnly,
+    })
+    if (!meta?.screenshotOnly) setMapaOpen(false)
   }
 
   const btnSec = {
@@ -57,7 +59,7 @@ export default function SicoeFiltroPkMapa({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: compact ? 0 : 8 }}>
         <button
           type="button"
-          onClick={() => setMapaOpen(true)}
+          onClick={() => { setPkMapaAviso(''); setMapaOpen(true) }}
           style={{ ...btnSec, background: `${t.primary}18`, borderColor: t.primary, color: t.primary, fontWeight: 700 }}
         >
           🗺️ {compact ? 'PK mapa' : 'Seleccionar PK en mapa'}
@@ -106,6 +108,11 @@ export default function SicoeFiltroPkMapa({
                 Cerrar
               </button>
             </div>
+            {pkMapaAviso ? (
+              <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, background: '#FEF2F2', border: '1px solid #FECACA', fontSize: 'var(--cc-caption)', color: '#B91C1C', lineHeight: 1.4 }}>
+                {pkMapaAviso}
+              </div>
+            ) : null}
             <div style={{ flex: 1, minHeight: 0 }}>
               <PptoFiltroMapaPk
                 t={t}

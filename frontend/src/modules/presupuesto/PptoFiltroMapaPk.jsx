@@ -3,6 +3,7 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
+import { sanitizePlanoFeatureCollection } from '../../geoPlanoSanitize'
 import {
   FILTER_MAPBOX_LABEL_ABSCISA,
   mapboxPlanoSymbolLayout,
@@ -166,6 +167,8 @@ export default function PptoFiltroMapaPk({
         bearing: NORTH_RIGHT_BEARING,
         preserveDrawingBuffer: true,
       })
+      try { map.doubleClickZoom.disable() } catch { /* ignore */ }
+      map.getCanvas().style.touchAction = 'manipulation'
       map.addControl(new mapboxgl.NavigationControl(), 'top-right')
       mapRef.current = map
 
@@ -188,8 +191,11 @@ export default function PptoFiltroMapaPk({
             duration: 0,
             bearing: NORTH_RIGHT_BEARING,
           })
-          await esperarMapaIdle()
-          await new Promise((r) => setTimeout(r, 450))
+          await Promise.race([
+            esperarMapaIdle(),
+            new Promise((r) => setTimeout(r, 2500)),
+          ])
+          await new Promise((r) => setTimeout(r, 200))
           return map.getCanvas().toDataURL('image/jpeg', 0.88)
         } catch {
           return null
@@ -219,9 +225,20 @@ export default function PptoFiltroMapaPk({
         if (cancelled) return
 
         let planoData = null
-        if (plano && plano.type === 'FeatureCollection' && Array.isArray(plano.features) && plano.features.length > 0) {
+        const planoFc = sanitizePlanoFeatureCollection(
+          plano && plano.type === 'FeatureCollection' ? plano : { type: 'FeatureCollection', features: [] },
+        )
+        const soloPoligonos = (planoFc.features || []).filter(
+          (f) => f?.geometry?.type === 'Polygon' || f?.geometry?.type === 'MultiPolygon',
+        ).map((f) => {
+          const pkid = featurePkId(f)
+          return pkid
+            ? { ...f, properties: { ...f.properties, pk_id: f.properties?.pk_id || pkid } }
+            : f
+        })
+        if (soloPoligonos.length > 0) {
           if (isFiltered) {
-            const matched = plano.features.filter((f) => {
+            const matched = soloPoligonos.filter((f) => {
               const id = featurePkId(f)
               return id && permitSet.has(id.toLowerCase())
             })
@@ -229,7 +246,7 @@ export default function PptoFiltroMapaPk({
               planoData = { type: 'FeatureCollection', features: matched }
             }
           } else {
-            planoData = plano
+            planoData = { type: 'FeatureCollection', features: soloPoligonos }
           }
         }
 
@@ -258,15 +275,20 @@ export default function PptoFiltroMapaPk({
             layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
             paint: MAPBOX_PLANO_PAINT_LABELS,
           })
-          map.on('click', 'ppto-plano-fill', async (e) => {
+          const manejarTapPlano = (e) => {
             const f = e.features?.[0]
             if (!f) return
             const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
             if (!v) return
             const meta = e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : null
-            const screenshot = meta ? await capturarVistaPlano(e.lngLat) : null
-            togglePk(v, screenshot ? { ...meta, screenshot } : meta)
-          })
+            togglePk(v, meta)
+            if (meta) {
+              capturarVistaPlano(e.lngLat).then((screenshot) => {
+                if (screenshot) onPickRef.current?.(v, { ...meta, screenshot, screenshotOnly: true })
+              })
+            }
+          }
+          map.on('click', 'ppto-plano-fill', manejarTapPlano)
           map.on('mouseenter', 'ppto-plano-fill', () => {
             map.getCanvas().style.cursor = 'pointer'
           })

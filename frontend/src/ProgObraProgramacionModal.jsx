@@ -2856,6 +2856,8 @@ export default function ProgObraProgramacionModal({
     if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
     setResetConfirmOpen(false)
     setResettingPk(true)
+    saveFlushInProgressRef.current = true
+    rowDraftRef.current = {}
     try {
       const res = await fetch(
         `${API}/prog-obra/${cid}/versiones/${workingVersion.id}/pk/${encodeURIComponent(activePk)}/programacion`,
@@ -2878,12 +2880,15 @@ export default function ProgObraProgramacionModal({
       preSaveDraftSnapshotRef.current = null
       setFinOverrides({})
       setGanttActOverlay(null)
+      setCpmResultados([])
+      setCpmResumenOpen(false)
       setCpmDirty(true)
-      setSaveGeneration((g) => g + 1)
-      showToast?.(`Programación del PK ${activePk} reseteada.`, 'ok')
+      onCpmUpdatedRef.current?.([])
       if (onReloadActividades) {
         await onReloadActividades(activePk)
       }
+      setSaveGeneration((g) => g + 1)
+      showToast?.(`Programación del PK ${activePk} reseteada.`, 'ok')
       if (onSaveSuccess) {
         await onSaveSuccess(activePk)
       }
@@ -2891,6 +2896,7 @@ export default function ProgObraProgramacionModal({
       console.error('[ProgObra] Resetear programación PK:', e)
       showToast?.(e?.message || 'Error al resetear programación del PK', 'err')
     } finally {
+      saveFlushInProgressRef.current = false
       setResettingPk(false)
     }
   }
@@ -2899,6 +2905,8 @@ export default function ProgObraProgramacionModal({
     if (!editable || historicalReadOnly || !workingVersion?.id || !tramoContext?.tramo) return
     setResetConfirmOpen(false)
     setResettingPk(true)
+    saveFlushInProgressRef.current = true
+    rowDraftRef.current = {}
     try {
       await clearTramoProgramacion(API, cid, token, workingVersion.id, {
         tramo: tramoContext.tramo,
@@ -2912,15 +2920,21 @@ export default function ProgObraProgramacionModal({
       setCpmResumenOpen(false)
       setCpmDirty(true)
       onCpmUpdatedRef.current?.([])
+      onTramoScheduleCleared?.()
+      if (onReloadActividades) await onReloadActividades()
       setSaveGeneration((g) => g + 1)
       const n = tramoContext.pkCount || tramoContext.pkIds?.length || 0
       showToast?.(`Programación del ${tramoContext.tramo} reseteada (${n} PK${n === 1 ? '' : 's'}).`, 'ok')
-      if (onReloadActividades) await onReloadActividades()
-      onScheduleRefresh?.()
+      if (onSaveSuccess) {
+        await onSaveSuccess(tramoContext.pkIds?.[0] || '')
+      } else {
+        onScheduleRefresh?.()
+      }
     } catch (e) {
       console.error('[ProgObra] Resetear programación tramo:', e)
       showToast?.(e?.message || 'Error al resetear programación del tramo', 'err')
     } finally {
+      saveFlushInProgressRef.current = false
       setResettingPk(false)
     }
   }
@@ -3529,7 +3543,7 @@ export default function ProgObraProgramacionModal({
                           isAgExpanded={(agId) => isAgExpanded(cap, agId)}
                           onToggleAgExpand={(agId) => toggleAgExpand(cap, agId)}
                           saveGeneration={saveGeneration}
-                          suspendAutoSave={localSaving}
+                          suspendAutoSave={localSaving || resettingPk}
                           puedeEditarListadoPrecios={puedeEditarListadoPrecios}
                           onIrListadoPrecios={onIrListadoPrecios}
                           tramoConsolidado={tramoConsolidado}

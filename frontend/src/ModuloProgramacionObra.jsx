@@ -1077,6 +1077,14 @@ export default function ModuloProgramacionObra({
     }, 2000)
   }, [refreshMapaYVersiones])
 
+  const refreshMapaImmediate = useCallback(async () => {
+    if (mapRefreshDebounceRef.current) {
+      clearTimeout(mapRefreshDebounceRef.current)
+      mapRefreshDebounceRef.current = null
+    }
+    return refreshMapaYVersiones()
+  }, [refreshMapaYVersiones])
+
   useEffect(() => {
     if (!cid || !token) {
       setPlano({ type: 'FeatureCollection', features: [] })
@@ -2192,14 +2200,17 @@ export default function ModuloProgramacionObra({
     try {
       await clearVersionProgramacion(API, cid, token, String(workingVersionId))
       setShowEliminarProgramacion(false)
-      await refreshMapaYVersiones()
+      setActData({ capitulos: [], actividades: [] })
+      setTramoEstructuraData(null)
+      setModalSessionId((s) => s + 1)
+      await refreshMapaImmediate()
       showToast('Programación eliminada. El mapa se actualizó.', 'ok')
     } catch (e) {
       showToast(e?.message || 'No se pudo eliminar la programación', 'err')
     } finally {
       setPanelBusy(false)
     }
-  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaYVersiones, showToast])
+  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaImmediate, showToast])
 
   const progTipoLabel = (tipo) => {
     const t0 = (tipo || '').toLowerCase()
@@ -2467,6 +2478,10 @@ export default function ModuloProgramacionObra({
 
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
+      if (mapRefreshDebounceRef.current) {
+        clearTimeout(mapRefreshDebounceRef.current)
+        mapRefreshDebounceRef.current = null
+      }
       const m = await refreshMapaYVersiones()
       const map = mapInst.current
       if (map && map.getSource('prog-pol') && m) {

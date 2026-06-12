@@ -656,11 +656,19 @@ export default function ModuloInformes({
       setFirmantesCcd([])
       setActasConc([])
       setActaIdFoEo04('')
+      setSubId('')
+      setCorteId('')
+      setCortes([])
+      setItems([])
       setSemanasConc([])
       semanasConcFetchRef.current = null
       return
     }
     setActaIdFoEo04('')
+    setSubId('')
+    setCorteId('')
+    setCortes([])
+    setItems([])
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')

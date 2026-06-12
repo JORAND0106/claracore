@@ -47,8 +47,8 @@ def test_clear_tramo_programacion_elimina_y_recalcula_pks(monkeypatch):
     )
     upsert_calls = []
     monkeypatch.setattr(
-        "prog_obra_service.upsert_prog_pk_estado",
-        lambda sb, vid, cid, pk: upsert_calls.append(pk),
+        "prog_obra_service._reset_prog_pk_estado_tramo",
+        lambda sb, vid, cid, pks: upsert_calls.extend(pks),
     )
     mark_dirty = []
     monkeypatch.setattr(
@@ -69,4 +69,4 @@ def test_clear_tramo_programacion_elimina_y_recalcula_pks(monkeypatch):
     assert result["eliminados"] == 12
     assert upsert_calls == ["120367", "120368"]
     assert mark_dirty == ["ver-1"]
-    sb.table.return_value.delete.return_value.eq.return_value.in_.return_value.execute.assert_called_once()
+    assert sb.table.return_value.delete.return_value.eq.return_value.in_.return_value.execute.call_count == 3

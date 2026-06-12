@@ -3148,6 +3148,8 @@ def clear_pk_programacion(sb, version_id: str, contrato_id: int, pk_id: str) -> 
     )
     eliminados = int(r.count or 0)
     sb.table("prog_actividades").delete().eq("version_id", version_id).eq("pk_id", pk).execute()
+    sb.table("prog_actividades_capitulo").delete().eq("version_id", version_id).eq("pk_id", pk).execute()
+    sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).eq("pk_id", pk).execute()
     upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
     mark_cpm_dirty(sb, version_id)
     return {"ok": True, "version_id": version_id, "pk_id": pk, "eliminados": eliminados}
@@ -3191,6 +3193,7 @@ def clear_tramo_programacion(
     )
     eliminados = int(r.count or 0)
     sb.table("prog_actividades").delete().eq("version_id", version_id).in_("pk_id", pks).execute()
+    sb.table("prog_actividades_capitulo").delete().eq("version_id", version_id).in_("pk_id", pks).execute()
     sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).in_("pk_id", pks).execute()
     _reset_prog_pk_estado_tramo(sb, version_id, contrato_id, pks)
     mark_cpm_dirty(sb, version_id)
