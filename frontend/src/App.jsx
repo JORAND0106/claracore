@@ -3969,6 +3969,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [editCalzadaLocal, setEditCalzadaLocal]    = useState(repoProp.calzada || '')
   const [editInfraLocal, setEditInfraLocal]        = useState(repoProp.infraestructura || '')
   const [listaPkIds, setListaPkIds]               = useState([])
+  const [nodosPortada, setNodosPortada]           = useState([])
+  const [locPortada, setLocPortada]               = useState(() => sicoeLocFromRegistro(repoProp, []))
   const [planoGeojsonPortada, setPlanoGeojsonPortada] = useState(null)
   const [seleccionados, setSeleccionados]         = useState([])
   const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
@@ -4092,6 +4094,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   )
 
   const esLocMultipleReporte = (reporte?.tipo_localizacion || 'unica') === 'multiple'
+
+  useEffect(() => {
+    setLocPortada(sicoeLocFromRegistro(reporte, listaPkIds))
+  }, [
+    reporte.id, reporte.pk_id_id, reporte.margen, reporte.abs_inicio, reporte.abs_final,
+    reporte.nodo_ini, reporte.nodo_fin, reporte.coord_lat, reporte.coord_lng,
+    listaPkIds.length,
+  ])
+
+  useEffect(() => {
+    if (esLocMultipleReporte || !contrato_id || !reporte?.capitulo) {
+      setNodosPortada([])
+      return
+    }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(reporte.capitulo)}`, { headers: hdrs })
+      .then((r) => r.json())
+      .then((d) => setNodosPortada(Array.isArray(d) ? d : []))
+      .catch(() => setNodosPortada([]))
+  }, [esLocMultipleReporte, contrato_id, reporte?.capitulo, hdrs, API_URL])
 
   const marcadoresLocMultiple = useMemo(() => {
     if (!esLocMultipleReporte) return []
@@ -4417,26 +4438,49 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setModoEdicion(true)
   }
 
+  /** Localización única en portada: persiste reporte + todos los registros (PK, GPS, abscisas). */
+  const persistirLocalizacionPortadaUnica = async (loc) => {
+    if (esLocMultipleReporte || !reporte?.id) return
+    const fields = localizacionToApiFields(loc)
+    if (fields.pk_id_id == null && fields.coord_lat == null) return
+    try {
+      const pRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/localizacion`, {
+        method: 'PATCH',
+        headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      })
+      if (!pRes.ok) throw new Error(`HTTP ${pRes.status}`)
+      setReporte((prev) => ({ ...prev, ...fields }))
+      setLocPortada(loc)
+      const regs = registros.filter((r) => r?.id)
+      if (regs.length) {
+        await Promise.all(regs.map((reg) =>
+          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
+            method: 'PUT',
+            headers: { ...hdrs, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              reporte_id: reg.reporte_id,
+              numero_registro: reg.numero_registro,
+              ...fields,
+            }),
+          }),
+        ))
+        setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...fields } : r)))
+      }
+    } catch (e) {
+      console.error('persistirLocalizacionPortadaUnica', e)
+    }
+  }
+
   /** Clic en mapa de portada (localización única) → persiste coord_lat/coord_lng sin mostrarlas en UI. */
   const persistirCoordsPortada = useCallback(async (la, lo) => {
     setEditLat(la)
     setEditLng(lo)
-    if (!reporte?.id) return
     const lat = parseFloat(la)
     const lng = parseFloat(lo)
     if (Number.isNaN(lat) || Number.isNaN(lng)) return
-    try {
-      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
-        method: 'PUT',
-        headers: hdrs,
-        body: JSON.stringify({ ...reporte, coord_lat: lat, coord_lng: lng }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setReporte((prev) => ({ ...prev, coord_lat: lat, coord_lng: lng }))
-    } catch (e) {
-      console.error('persistirCoordsPortada', e)
-    }
-  }, [reporte, contrato_id, API_URL, hdrs])
+    await persistirLocalizacionPortadaUnica({ ...locPortada, coordLat: lat, coordLng: lng })
+  }, [locPortada, esLocMultipleReporte, reporte?.id, contrato_id, registros, hdrs, API_URL])
 
   const guardarEdicion = async () => {
     setGuardandoEdicion(true)
@@ -5165,7 +5209,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     </div>
                   </>
                 )}
-                {esLocMultipleReporte ? null : (
+                {esLocMultipleReporte ? null : modoEdicion && puedeEditarCabecera ? (
+                  <SicoeLocalizacionFields
+                    t={t}
+                    token={getToken()}
+                    contratoId={contrato_id}
+                    value={locPortada}
+                    onChange={setLocPortada}
+                    onGpsCapturado={persistirLocalizacionPortadaUnica}
+                    pkIds={listaPkIds}
+                    nodos={nodosPortada}
+                  />
+                ) : (
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
 
                   {/* Columna izquierda — campos */}
@@ -10936,6 +10991,60 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     margen, absInicio, absFinal, nodoIni, nodoFin, coordLat, coordLng,
   })
 
+  const aplicarLocReporte = (loc) => {
+    const s = sicoeLocSpreadEnRegistro(loc)
+    setPkSeleccionado(s.pkSeleccionado)
+    setMargen(s.margen)
+    setAbsInicio(s.absInicio)
+    setAbsFinal(s.absFinal)
+    setNodoIni(s.nodoIni)
+    setNodoFin(s.nodoFin)
+    setCoordLat(s.coordLat)
+    setCoordLng(s.coordLng)
+    if (tipoLocalizacion === 'unica') {
+      setRegistros((prev) => prev.map((r) => ({ ...r, ...s })))
+    }
+  }
+
+  /** Localización única: clic en plano → persiste en so_reportes (y estado del wizard). */
+  const persistirLocalizacionReporte = async (loc) => {
+    if (tipoLocalizacion !== 'unica') return
+    const fields = localizacionToApiFields(loc)
+    if (fields.pk_id_id == null && fields.coord_lat == null) return
+    try {
+      let rid = borradorId
+      if (!rid) {
+        const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+          method: 'POST',
+          headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            descripcion_actividad: descripcion.trim() || 'Borrador',
+            capitulo: capituloSel || 'Sin asignar',
+            tipo_localizacion: 'unica',
+            subcontratista_id: subSeleccionado?.id || null,
+            inspector_id: inspSeleccionado?.id || null,
+            ...fields,
+          }),
+        })
+        if (!bRes.ok) return
+        const bData = await bRes.json()
+        if (!bData.id) return
+        rid = bData.id
+        setBorradorId(bData.id)
+        if (bData.numero_reporte != null) setNumeroReporte(bData.numero_reporte)
+      } else {
+        const pRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rid}/localizacion`, {
+          method: 'PATCH',
+          headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify(fields),
+        })
+        if (!pRes.ok) return
+      }
+    } catch (e) {
+      console.error('persistirLocalizacionReporte', e)
+    }
+  }
+
   const stampLocEnRegistro = (base = {}) => {
     if (tipoLocalizacion !== 'multiple') return base
     return { ...base, ...sicoeLocSpreadEnRegistro(locLoteActual), loteLocIdx: loteLocIdxActual }
@@ -11096,7 +11205,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             unidad: r.unidad, observacion: r.observacion,
             foto_url: r.foto_url, foto_numero: r.foto_numero,
             grafico_url: r.grafico_url, grafico_numero: r.grafico_numero,
-            ...(esMult ? localizacionToApiFields(r) : {}),
+            ...(esMult ? localizacionToApiFields(r) : localizacionToApiFields(locReporteActual())),
           }))},
           localData: reporteLocal,
           localTable: 'so_reportes',
@@ -11186,7 +11295,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           grafico_url: reg.grafico_url || reporteGraficoUrl || null,
           grafico_numero: reg.grafico_numero ?? reporteGraficoNumero ?? null,
           grafico_descripcion: reg.grafico_descripcion || (reporteGraficoUrl ? 'Gráfico del reporte' : null),
-          ...(esMult ? localizacionToApiFields(reg) : {}),
+          ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
         }))
       }
       // Reintento: en móvil 4G el fetch largo a veces corta; el servidor puede haber quedado ok (idempotente: borra e inserta de nuevo)
@@ -11469,16 +11578,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   token={token}
                   contratoId={contrato_id}
                   value={locReporteActual()}
-                  onChange={(loc) => {
-                    if (loc.pkSeleccionado !== undefined) setPkSeleccionado(loc.pkSeleccionado)
-                    if (loc.margen !== undefined) setMargen(loc.margen)
-                    if (loc.absInicio !== undefined) setAbsInicio(loc.absInicio)
-                    if (loc.absFinal !== undefined) setAbsFinal(loc.absFinal)
-                    if (loc.nodoIni !== undefined) setNodoIni(loc.nodoIni)
-                    if (loc.nodoFin !== undefined) setNodoFin(loc.nodoFin)
-                    if (loc.coordLat !== undefined) setCoordLat(loc.coordLat)
-                    if (loc.coordLng !== undefined) setCoordLng(loc.coordLng)
-                  }}
+                  onChange={aplicarLocReporte}
+                  onGpsCapturado={persistirLocalizacionReporte}
                   errores={erroresLoc}
                   pkIds={pkIds}
                   nodos={nodos}
@@ -17793,8 +17894,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       </div>
                     </div>
                     <ul style={{ margin: 0, paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
-                      <li>Una hoja con totales por ítem (presupuesto vs cobro)</li>
-                      <li>Ideal para revisión rápida o gerencia</li>
+                      <li>Una hoja con todos los ítems del capítulo (igual al popup del dashboard)</li>
+                      <li>Columnas NR·P·R·A ocultas; Cant CC y Δ con fórmulas Excel</li>
+                      <li>Encabezado institucional con logo, contrato y versión</li>
                     </ul>
                   </button>
 
@@ -17814,9 +17916,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       </div>
                     </div>
                     <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.55 }}>
-                      <li>Detalle por PK en cada ítem (por cobrar / devolución / equilibrio)</li>
-                      <li>Hoja base <strong style={{ color: t.text }}>Presupuesto</strong> del capítulo</li>
-                      <li>Hoja base <strong style={{ color: t.text }}>SICOE Obra</strong> aprobada</li>
+                      <li>Hoja <strong style={{ color: t.text }}>Resumen ejecutivo</strong> (misma tabla del dashboard)</li>
+                      <li>Una pestaña por ítem: meta, resumen por Acta RPO, balance y tabla de soporte</li>
+                      <li>Cantidades según fuente: Obra Ejecutada (presupuesto) o cobrado (SICOE aprobado)</li>
                     </ul>
                     <div
                       style={{

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone, date
 import pytz
 from dotenv import load_dotenv
 import os
+import sys
 import logging
 import traceback
 import time
@@ -16604,7 +16605,11 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
         return supabase.table("so_reportes").select("*").eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
     prev_rows = supabase_execute(_prev_rep)
     prev_rep = prev_rows[0] if prev_rows else {}
-    data = body.dict()
+    _dump = getattr(body, "model_dump", None)
+    if _dump is not None:
+        data = _dump(exclude_unset=True)
+    else:
+        data = body.dict(exclude_unset=True)
     _so_reportes_normalizar_payload_cabecera(data)
     # Se persisten localización y PK en so_reportes (antes se descartaban y solo existía PATCH en Borrador;
     # un reintento tras guardar cabecera dejaba estado≠Borrador y el PATCH devolvía 400).
@@ -16687,13 +16692,13 @@ def asignar_actores_por_pk(
 
 @app.patch("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion")
 def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: dict, current_user=Depends(get_current_user)):
-    """Solo actualiza localización si el reporte está en Borrador."""
+    """Actualiza solo campos de localización en so_reportes (cualquier estado del reporte)."""
     def _check():
-        return supabase.table("so_reportes").select("estado")\
-            .eq("id", reporte_id).eq("contrato_id", contrato_id).single().execute().data
-    reporte = supabase_execute(_check)
-    if not reporte or reporte.get("estado") != "Borrador":
-        raise HTTPException(status_code=400, detail="Solo se puede actualizar localización en Borrador")
+        return supabase.table("so_reportes").select("id,estado")\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    rep_rows = supabase_execute(_check)
+    if not rep_rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
     campos = {k: v for k, v in body.items() if k in (
         'pk_id_id','civ','tramo','infraestructura','calzada',
         'ubicacion','coord_lat','coord_lng','abs_inicio','abs_final',
@@ -22285,6 +22290,31 @@ def _xlsx_cell_display_width(val, cell) -> int:
     return len(str(val))
 
 
+def _xlsx_apply_outer_double_border(
+    ws,
+    row_start: int,
+    row_end: int,
+    col_start: int,
+    col_end: int,
+    *,
+    color: str = "000000",
+) -> None:
+    """Contorno perimetral de doble línea sobre una región con bordes interiores existentes."""
+    from openpyxl.styles import Border, Side
+
+    double = Side(style="double", color=color)
+    for r in range(row_start, row_end + 1):
+        for c in range(col_start, col_end + 1):
+            cell = ws.cell(row=r, column=c)
+            b = cell.border
+            cell.border = Border(
+                left=double if c == col_start else b.left,
+                right=double if c == col_end else b.right,
+                top=double if r == row_start else b.top,
+                bottom=double if r == row_end else b.bottom,
+            )
+
+
 def _xlsx_merged_span_width(ws, row: int, col: int) -> float:
     """Ancho efectivo de celda (suma columnas si está en un merge)."""
     from openpyxl.utils import get_column_letter
@@ -23091,33 +23121,13 @@ def _contrato_presupuesto_version_label(contrato_id: int) -> str:
     return "Vigente"
 
 
-def _dash_capitulo_num_sort_key(label: str) -> int:
-    """Prefijo numérico del capítulo (1, 2, … 10) para orden consecutivo, no lexicográfico."""
-    m = re.match(r"^\s*(\d+)", str(label or "").strip())
-    return int(m.group(1)) if m else 999999
-
-
-def _build_dashboard_gerencial_xlsx(
-    contrato_id: int, vista: str = "presupuesto_obra", current_user=None
-) -> Tuple[bytes, str]:
-    """Informe gerencial: misma tabla que dashboard «Ppto vs Cobro por capítulo» (4 columnas COP)."""
-    from openpyxl import Workbook
-    from openpyxl.drawing.image import Image as XLImage
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-
-    rows = _gerencial_capitulos_data(contrato_id, vista, current_user)
-    tipo_label = (
-        "Obra Ejecutada"
-        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
-        else "Presupuesto de Obra"
-    )
-    titulo_informe = f"Informe Gerencial · Ppto vs Cobro por capítulo"
-
-    contrato_numero = ""
-    contrato_objeto = ""
-    contrato_contratista = ""
-    logo_url = ""
+def _xlsx_load_contrato_export_meta(contrato_id: int) -> Dict[str, str]:
+    meta = {
+        "numero": "",
+        "objeto": "",
+        "contratista": "",
+        "logo_contratista": "",
+    }
     try:
         cr = (
             supabase.table("contratos")
@@ -23128,37 +23138,58 @@ def _build_dashboard_gerencial_xlsx(
             .data
         )
         if cr:
-            contrato_numero = (cr[0].get("numero") or "").strip()
-            contrato_objeto = (cr[0].get("objeto") or "").strip()
-            contrato_contratista = (cr[0].get("contratista") or "").strip()
-            logo_url = (cr[0].get("logo_contratista") or "").strip()
+            meta["numero"] = (cr[0].get("numero") or "").strip()
+            meta["objeto"] = (cr[0].get("objeto") or "").strip()
+            meta["contratista"] = (cr[0].get("contratista") or "").strip()
+            meta["logo_contratista"] = (cr[0].get("logo_contratista") or "").strip()
     except Exception:
         pass
+    return meta
 
-    version_lbl = _contrato_presupuesto_version_label(contrato_id)
-    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
-    descargado_por = _calculo_usuario_label(current_user)
 
-    fill_hdr = PatternFill("solid", fgColor="4472C4")
-    fill_tot = PatternFill("solid", fgColor="111827")
+def _xlsx_apply_informe_header(
+    ws,
+    *,
+    titulo: str,
+    ncols: int,
+    contrato_meta: Dict[str, str],
+    version_lbl: str,
+    gen_ts: str,
+    descargado_por: str,
+    subtitulo_tabla: Optional[str] = None,
+    label_merge_end: int = 1,
+    item_meta: Optional[Dict[str, Any]] = None,
+) -> int:
+    """
+    Encabezado institucional (logo, contrato, objeto, contratista, meta).
+    ``label_merge_end``: columnas 1..N del bloque izquierdo (logo / contrato / contratista).
+    ``item_meta``: si se pasa, filas 5–6 bajo contratista (Capítulo/Ítem/Und/Vlr + Descripción).
+    Devuelve la primera fila libre tras el subtítulo (contenido: actas, tablas, etc.).
+    """
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
     fill_meta = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
-    fill_zebra = PatternFill("solid", fgColor="F8FAFC")
     fill_white = PatternFill("solid", fgColor="FFFFFF")
-    _side = Side(style="thin", color="FF7A7A7A")
     _side_hdr = Side(style="medium", color="4472C4")
-    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+    _side_fine = Side(style="thin", color="FF7A7A7A")
+    border_fine = Border(left=_side_fine, right=_side_fine, top=_side_fine, bottom=_side_fine)
     _ROW_H_INFO = 25
     _ROW_H_LOGO = 50
     _ROW_H_OBJ = 35
     al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    al_right = Alignment(horizontal="right", vertical="center")
     al_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    al_left_top = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    al_right = Alignment(horizontal="right", vertical="center")
+    label_merge_end = max(1, min(int(label_merge_end), ncols - 2))
+    body_start = label_merge_end + 1
+    mid_end = max(body_start, ncols - 1)
 
-    ncols = 4
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Gerencial"
+    contrato_numero = contrato_meta.get("numero") or ""
+    contrato_objeto = contrato_meta.get("objeto") or ""
+    contrato_contratista = contrato_meta.get("contratista") or ""
+    logo_url = contrato_meta.get("logo_contratista") or ""
+
     ws.page_setup.orientation = "portrait"
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.fitToPage = True
@@ -23167,13 +23198,14 @@ def _build_dashboard_gerencial_xlsx(
     ws.print_options.horizontalCentered = True
     ws.sheet_view.showGridLines = False
 
-    ws.column_dimensions["A"].width = 60
-    ws.column_dimensions["B"].width = 22
-    ws.column_dimensions["C"].width = 22
-    ws.column_dimensions["D"].width = 22
+    logo_col_w = sum(
+        float(ws.column_dimensions[get_column_letter(c)].width or 12)
+        for c in range(1, label_merge_end + 1)
+    )
 
-    # ── Encabezado institucional ─────────────────────────────────────────
-    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=3)
+    if label_merge_end > 1:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=label_merge_end)
+    ws.merge_cells(start_row=1, start_column=body_start, end_row=1, end_column=mid_end)
 
     logo_cell = ws.cell(row=1, column=1, value="")
     logo_cell.fill = fill_meta
@@ -23182,7 +23214,7 @@ def _build_dashboard_gerencial_xlsx(
     if logo_bytes:
         try:
             img = XLImage(io.BytesIO(logo_bytes))
-            _xlsx_fit_image_to_cell(img, _ROW_H_LOGO, ws.column_dimensions["A"].width)
+            _xlsx_fit_image_to_cell(img, _ROW_H_LOGO, logo_col_w)
             ws.add_image(img, "A1")
         except Exception:
             logo_cell.value = contrato_contratista or "Logo contratista"
@@ -23194,45 +23226,72 @@ def _build_dashboard_gerencial_xlsx(
     for cc in range(1, ncols + 1):
         ws.cell(row=1, column=cc).fill = fill_meta
 
-    t1 = ws.cell(row=1, column=2, value=titulo_informe)
+    t1 = ws.cell(row=1, column=body_start, value=titulo)
     t1.font = Font(bold=True, color=_CC_XLSX_DARK, size=14)
     t1.alignment = al_center
     t1.fill = fill_meta
 
-    v1 = ws.cell(row=1, column=4, value=f"Versión\n{version_lbl}")
+    v1 = ws.cell(row=1, column=ncols, value=f"Versión\n{version_lbl}")
     v1.font = Font(bold=True, color=_CC_XLSX_DARK, size=10)
     v1.alignment = al_center
     v1.fill = fill_meta
 
-    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=4)
-    r2a = ws.cell(row=2, column=1, value=f"Contrato N° {contrato_numero}" if contrato_numero else "Contrato N° —")
+    if label_merge_end > 1:
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=label_merge_end)
+        ws.merge_cells(start_row=2, start_column=body_start, end_row=2, end_column=ncols)
+    else:
+        ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=ncols)
+    r2a = ws.cell(
+        row=2,
+        column=1,
+        value=f"Contrato N° {contrato_numero}" if contrato_numero else "Contrato N° —",
+    )
     r2a.font = Font(bold=True, size=10, color=_CC_XLSX_DARK)
     r2a.fill = fill_white
     r2a.alignment = al_left
-    r2b = ws.cell(row=2, column=2, value=f"Objeto: {contrato_objeto}" if contrato_objeto else "Objeto: —")
+    r2b = ws.cell(
+        row=2,
+        column=body_start if label_merge_end > 1 else 2,
+        value=f"Objeto: {contrato_objeto}" if contrato_objeto else "Objeto: —",
+    )
     r2b.font = Font(size=8, color=_CC_XLSX_DARK)
     r2b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     r2b.fill = fill_white
+    for cc in range(1, ncols + 1):
+        ws.cell(row=2, column=cc).fill = fill_white
 
-    ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=4)
+    if label_merge_end > 1:
+        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=label_merge_end)
+        ws.merge_cells(start_row=3, start_column=body_start, end_row=3, end_column=ncols)
+    else:
+        ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=ncols)
     r3a = ws.cell(row=3, column=1, value="Contratista")
     r3a.font = Font(bold=True, size=10, color=_CC_XLSX_DARK)
     r3a.fill = fill_white
-    r3b = ws.cell(row=3, column=2, value=contrato_contratista or "—")
+    r3b = ws.cell(row=3, column=body_start if label_merge_end > 1 else 2, value=contrato_contratista or "—")
     r3b.font = Font(size=10, color=_CC_XLSX_DARK)
     r3b.alignment = al_left
     r3b.fill = fill_white
+    for cc in range(1, ncols + 1):
+        ws.cell(row=3, column=cc).fill = fill_white
 
-    ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=2)
-    ws.merge_cells(start_row=4, start_column=3, end_row=4, end_column=4)
+    split = max(body_start, ncols // 2)
+    ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=split)
+    ws.merge_cells(start_row=4, start_column=split + 1, end_row=4, end_column=ncols)
     r4a = ws.cell(row=4, column=1, value=f"Generado por: {descargado_por}")
     r4a.font = Font(size=9, color=_CC_XLSX_DARK)
     r4a.fill = fill_meta
     r4a.alignment = al_left
-    r4b = ws.cell(row=4, column=3, value=f"Fecha y hora: {gen_ts}")
+    r4b = ws.cell(row=4, column=split + 1, value=f"Fecha y hora: {gen_ts}")
     r4b.font = Font(size=9, color=_CC_XLSX_DARK)
     r4b.fill = fill_meta
     r4b.alignment = al_right
+    for cc in range(1, ncols + 1):
+        ws.cell(row=4, column=cc).fill = fill_meta
+
+    for r in range(1, 5):
+        for c in range(1, ncols + 1):
+            ws.cell(row=r, column=c).border = border_fine
 
     ws.row_dimensions[1].height = _ROW_H_LOGO
     ws.row_dimensions[2].height = _ROW_H_OBJ
@@ -23240,24 +23299,481 @@ def _build_dashboard_gerencial_xlsx(
         ws.row_dimensions[rr].height = _xlsx_estimate_row_height_pt(
             ws, rr, range(1, ncols + 1), min_height=_ROW_H_INFO, font_size=10
         )
-    for cc in range(1, ncols + 1):
-        ws.cell(row=5, column=cc).border = Border(top=_side_hdr)
 
-    # ── Subtítulo + tabla (igual dashboard) ──────────────────────────────
-    ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=ncols)
-    sub = ws.cell(
-        row=6,
-        column=1,
-        value=f"Total ClaraCore · Total Cobrado · Δ — vista: {tipo_label}",
-    )
+    fill_item_lbl = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
+    font_item_lbl = Font(bold=True, size=10, color=_CC_XLSX_DARK)
+    font_item_val = Font(size=10, color=_CC_XLSX_DARK)
+    al_left_top = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+    next_row = 5
+    if item_meta:
+        cap_v = item_meta.get("capitulo") or "—"
+        item_v = item_meta.get("item") or "—"
+        und_v = item_meta.get("und") or "—"
+        desc_v = item_meta.get("descripcion") or "—"
+        vlr_v = item_meta.get("vlr_unitario")
+        try:
+            vlr_f = round(float(vlr_v or 0), 2)
+        except (TypeError, ValueError):
+            vlr_f = 0.0
+
+        # Fila 5: Capítulo | Ítem | Und | Vlr Unitario
+        def _meta_lbl(col: int, text: str):
+            c = ws.cell(row=next_row, column=col, value=text)
+            c.fill = fill_item_lbl
+            c.font = font_item_lbl
+            c.alignment = al_center
+            c.border = border_fine
+
+        def _meta_val(col: int, val, *, align=None, fmt=None):
+            c = ws.cell(row=next_row, column=col, value=val)
+            c.fill = fill_white
+            c.font = font_item_val
+            c.alignment = align or al_left
+            c.border = border_fine
+            if fmt:
+                c.number_format = fmt
+
+        _meta_lbl(1, "Capítulo")
+        _meta_val(2, cap_v)
+        _meta_lbl(3, "Ítem")
+        _meta_val(4, item_v)
+        _meta_lbl(5, "Und")
+        _meta_val(6, und_v, align=al_center)
+        _meta_lbl(7, "Vlr Unitario")
+        if ncols > 8:
+            ws.merge_cells(start_row=next_row, start_column=8, end_row=next_row, end_column=ncols)
+        _meta_val(8, vlr_f, align=al_right, fmt='"$"#,##0.00')
+        ws.row_dimensions[next_row].height = _xlsx_estimate_row_height_pt(
+            ws, next_row, [2, 4], min_height=_ROW_H_INFO, font_size=10
+        )
+        next_row += 1
+
+        # Fila 6: Descripción (etiqueta + valor combinado)
+        desc_lbl_end = min(2, ncols)
+        ws.merge_cells(start_row=next_row, start_column=1, end_row=next_row, end_column=desc_lbl_end)
+        ws.cell(row=next_row, column=1, value="Descripción").fill = fill_item_lbl
+        ws.cell(row=next_row, column=1).font = font_item_lbl
+        ws.cell(row=next_row, column=1).alignment = al_center
+        ws.cell(row=next_row, column=1).border = border_fine
+        if desc_lbl_end < ncols:
+            ws.merge_cells(start_row=next_row, start_column=desc_lbl_end + 1, end_row=next_row, end_column=ncols)
+        dcell = ws.cell(row=next_row, column=desc_lbl_end + 1, value=desc_v)
+        dcell.fill = fill_white
+        dcell.font = font_item_val
+        dcell.alignment = al_left_top
+        dcell.border = border_fine
+        for cc in range(1, ncols + 1):
+            ws.cell(row=next_row, column=cc).border = border_fine
+        ws.row_dimensions[next_row].height = _xlsx_estimate_row_height_pt(
+            ws, next_row, [desc_lbl_end + 1], min_height=_ROW_H_INFO, font_size=10
+        )
+        next_row += 1
+
+    for cc in range(1, ncols + 1):
+        ws.cell(row=next_row, column=cc).border = Border(top=_side_hdr)
+
+    sub_row = next_row + 1
+    ws.merge_cells(start_row=sub_row, start_column=1, end_row=sub_row, end_column=ncols)
+    sub = ws.cell(row=sub_row, column=1, value=subtitulo_tabla or "")
     sub.font = Font(italic=True, size=10, color=_CC_XLSX_DARK)
     sub.alignment = al_left
-    ws.row_dimensions[6].height = _xlsx_estimate_row_height_pt(
-        ws, 6, [1], min_height=_ROW_H_INFO, font_size=10
+    for c in range(1, ncols + 1):
+        ws.cell(row=sub_row, column=c).border = border_fine
+    ws.row_dimensions[sub_row].height = _xlsx_estimate_row_height_pt(
+        ws, sub_row, [1], min_height=_ROW_H_INFO, font_size=10
+    )
+    return sub_row + 1
+
+
+def _xlsx_cc_sum_formula(r: int, vista: str, qty_cols: Tuple[int, int, int, int], cob_col: int) -> str:
+    """Cant CC = suma NR·P·R·A (Obra Ejecutada) o NR·A (Presupuesto); si suma=0 → cobrado."""
+    from openpyxl.utils import get_column_letter
+
+    nr, p, rv, a = (get_column_letter(c) for c in qty_cols)
+    cob = get_column_letter(cob_col)
+    if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
+        s = f"{nr}{r}+{p}{r}+{rv}{r}+{a}{r}"
+    else:
+        s = f"{nr}{r}+{a}{r}"
+    return f"=IF({s}=0,{cob}{r},{s})"
+
+
+def _xlsx_cc_cost_sum_formula(r: int, vista: str, cost_cols: Tuple[int, int, int, int], cob_col: int) -> str:
+    from openpyxl.utils import get_column_letter
+
+    nr, p, rv, a = (get_column_letter(c) for c in cost_cols)
+    cob = get_column_letter(cob_col)
+    if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
+        s = f"{nr}{r}+{p}{r}+{rv}{r}+{a}{r}"
+    else:
+        s = f"{nr}{r}+{a}{r}"
+    return f"=IF({s}=0,{cob}{r},{s})"
+
+
+def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
+    contrato_id: int,
+    capitulo: str,
+    vista: str = "presupuesto_obra",
+    current_user=None,
+    item_filtro: Optional[str] = None,
+) -> Tuple[bytes, str]:
+    """Resumen ejecutivo por capítulo: misma tabla que el popup del dashboard (con NR·P·R·A ocultas)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    cap_raw = (capitulo or "").strip()
+    tipo_label = (
+        "Obra Ejecutada"
+        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+        else "Presupuesto de Obra"
+    )
+    items = _drill_agg_by_item(contrato_id, cap_raw, item_filtro, vista, current_user)
+    items = sorted(items, key=lambda r: (_dash_norm_item_key_py(r.get("item")), str(r.get("item") or "")))
+
+    C_NUM, C_ITEM, C_DESC, C_UND = 1, 2, 3, 4
+    C_NR_Q, C_NR_C = 5, 6
+    C_P_Q, C_P_C = 7, 8
+    C_R_Q, C_R_C = 9, 10
+    C_A_Q, C_A_C = 11, 12
+    C_CC_Q, C_CC_C = 13, 14
+    C_CO_Q, C_CO_C = 15, 16
+    C_DQ, C_DC = 17, 18
+    NCOLS = 18
+
+    meta = _xlsx_load_contrato_export_meta(contrato_id)
+    version_lbl = _contrato_presupuesto_version_label(contrato_id)
+    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
+    descargado_por = _calculo_usuario_label(current_user)
+    titulo = f"Resumen ejecutivo · {cap_raw}"
+    cc_sum_label = (
+        "NR·P·R·A"
+        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+        else "NR·A"
+    )
+    subtitulo = (
+        f"Cant Final y Costo Directo Final = ClaraCore ({cc_sum_label}) · "
+        f"vista: {tipo_label} · {len(items)} ítem(s)"
+    )
+
+    fill_hdr = PatternFill("solid", fgColor="4472C4")
+    fill_tot = PatternFill("solid", fgColor="111827")
+    fill_zebra = PatternFill("solid", fgColor="F8FAFC")
+    fill_white = PatternFill("solid", fgColor="FFFFFF")
+    _side = Side(style="thin", color="FF7A7A7A")
+    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+    al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    al_right = Alignment(horizontal="right", vertical="center")
+    al_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    al_left_top = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    _ROW_H_INFO = 25
+    _ROW_H_DATA = 30
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = _xlsx_safe_sheet_name(f"Resumen {cap_raw[:20]}", "Resumen")
+
+    ws.column_dimensions["A"].width = 5
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 60
+    ws.column_dimensions["D"].width = 7
+    for c in range(C_NR_Q, C_A_C + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 11
+    ws.column_dimensions[get_column_letter(C_CC_Q)].width = 13
+    ws.column_dimensions[get_column_letter(C_CC_C)].width = 18
+    ws.column_dimensions[get_column_letter(C_CO_Q)].width = 13
+    ws.column_dimensions[get_column_letter(C_CO_C)].width = 16
+    ws.column_dimensions[get_column_letter(C_DQ)].width = 12
+    ws.column_dimensions[get_column_letter(C_DC)].width = 16
+
+    hr = _xlsx_apply_informe_header(
+        ws,
+        titulo=titulo,
+        ncols=NCOLS,
+        contrato_meta=meta,
+        version_lbl=version_lbl,
+        gen_ts=gen_ts,
+        descargado_por=descargado_por,
+        subtitulo_tabla=subtitulo,
+        label_merge_end=C_UND,
+    )
+
+    hdr_visible = [
+        (C_NUM, "#"),
+        (C_ITEM, "Ítem"),
+        (C_DESC, "Descripción"),
+        (C_UND, "Und"),
+        (C_CC_Q, "Cant Final"),
+        (C_CC_C, "Costo Directo Final"),
+        (C_CO_Q, "Cant cob."),
+        (C_CO_C, "$ cob."),
+        (C_DQ, "Δ cant"),
+        (C_DC, "Δ costo"),
+    ]
+    hdr_hidden = [
+        (C_NR_Q, "Cant NR"),
+        (C_NR_C, "$ NR"),
+        (C_P_Q, "Cant P"),
+        (C_P_C, "$ P"),
+        (C_R_Q, "Cant R"),
+        (C_R_C, "$ R"),
+        (C_A_Q, "Cant A"),
+        (C_A_C, "$ A"),
+    ]
+    for col, label in hdr_visible + hdr_hidden:
+        cell = ws.cell(row=hr, column=col, value=label)
+        cell.fill = fill_hdr
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.alignment = (
+            al_center
+            if col in (C_NUM, C_UND, C_CC_Q, C_CC_C, C_CO_Q, C_CO_C, C_DQ, C_DC)
+            else (al_left if col == C_DESC else al_right)
+        )
+        cell.border = border_tbl
+    ws.row_dimensions[hr].height = _ROW_H_INFO
+
+    for c in range(C_NR_Q, C_A_C + 1):
+        ws.column_dimensions[get_column_letter(c)].hidden = True
+
+    qty_cols = (C_NR_Q, C_P_Q, C_R_Q, C_A_Q)
+    cost_cols = (C_NR_C, C_P_C, C_R_C, C_A_C)
+    L = get_column_letter
+
+    ri = hr + 1
+    first_data = ri
+    last_data = ri - 1
+    if not items:
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=NCOLS)
+        c0 = ws.cell(row=ri, column=1, value=f"Sin ítems en este capítulo ({tipo_label}).")
+        c0.font = Font(italic=True, color="666666")
+        c0.alignment = al_center
+        ri += 1
+    else:
+        for idx, row in enumerate(items, start=1):
+            cant_nr = round(float(row.get("cant_nr") or 0), 4)
+            cost_nr = round(float(row.get("costo_nr") or 0), 0)
+            cant_p = round(float(row.get("cant_p") or 0), 4)
+            cost_p = round(float(row.get("costo_p") or 0), 0)
+            cant_r = round(float(row.get("cant_r") or 0), 4)
+            cost_r = round(float(row.get("costo_r") or 0), 0)
+            cant_a = round(float(row.get("cant_a") or 0), 4)
+            cost_a = round(float(row.get("costo_a") or 0), 0)
+            cant_cob = round(float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0), 4)
+            cost_cob = round(float(row.get("costo_cobrado") or row.get("cobrado") or 0), 0)
+
+            ws.cell(row=ri, column=C_NUM, value=idx).alignment = al_center
+            ws.cell(row=ri, column=C_ITEM, value=row.get("item") or "").alignment = al_left
+            dcell = ws.cell(row=ri, column=C_DESC, value=(row.get("descripcion") or "").strip())
+            dcell.alignment = al_left_top
+            ws.cell(row=ri, column=C_UND, value=(row.get("unidad") or row.get("und") or "")).alignment = al_center
+
+            for col, val in (
+                (C_NR_Q, cant_nr),
+                (C_NR_C, cost_nr),
+                (C_P_Q, cant_p),
+                (C_P_C, cost_p),
+                (C_R_Q, cant_r),
+                (C_R_C, cost_r),
+                (C_A_Q, cant_a),
+                (C_A_C, cost_a),
+            ):
+                cell = ws.cell(row=ri, column=col, value=val)
+                cell.number_format = _XLSX_FMT_CANT if col in qty_cols else _XLSX_FMT_COP
+                cell.alignment = al_right
+
+            ccq = ws.cell(row=ri, column=C_CC_Q, value=_xlsx_cc_sum_formula(ri, vista, qty_cols, C_CO_Q))
+            ccq.number_format = _XLSX_FMT_CANT
+            ccq.alignment = al_right
+            ccc = ws.cell(row=ri, column=C_CC_C, value=_xlsx_cc_cost_sum_formula(ri, vista, cost_cols, C_CO_C))
+            ccc.number_format = _XLSX_FMT_COP
+            ccc.alignment = al_right
+
+            coq = ws.cell(row=ri, column=C_CO_Q, value=cant_cob)
+            coq.number_format = _XLSX_FMT_CANT
+            coq.alignment = al_right
+            coc = ws.cell(row=ri, column=C_CO_C, value=cost_cob)
+            coc.number_format = _XLSX_FMT_COP
+            coc.alignment = al_right
+
+            dq = ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
+            dq.number_format = _XLSX_FMT_CANT
+            dq.alignment = al_right
+            dc = ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
+            dc.number_format = _XLSX_FMT_COP
+            dc.alignment = al_right
+
+            zfill = fill_zebra if idx % 2 else fill_white
+            for c in range(1, NCOLS + 1):
+                cell = ws.cell(row=ri, column=c)
+                cell.border = border_tbl
+                cell.fill = zfill
+                if c in (C_ITEM, C_DESC):
+                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
+                elif c in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
+                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
+                elif c == C_DC:
+                    delta_v = float(row.get("delta_costo") or 0)
+                    cell.font = Font(
+                        bold=True,
+                        size=10,
+                        color="DC2626" if delta_v < -0.5 else _CC_XLSX_DARK,
+                    )
+                elif c == C_DQ:
+                    delta_q = float(row.get("delta_cant") or 0)
+                    cell.font = Font(
+                        bold=True,
+                        size=10,
+                        color="DC2626" if delta_q < -0.5 else _CC_XLSX_DARK,
+                    )
+
+            ws.row_dimensions[ri].height = _xlsx_estimate_row_height_pt(
+                ws, ri, [C_DESC], min_height=_ROW_H_DATA, font_size=10
+            )
+            ri += 1
+        last_data = ri - 1
+
+    if items:
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=C_UND)
+        ws.cell(row=ri, column=1, value="TOTAL CAPÍTULO").font = Font(bold=True, color="FFFFFF")
+        ws.cell(row=ri, column=1).alignment = al_left
+        ws.row_dimensions[ri].height = _ROW_H_DATA
+
+        for col in (C_NR_Q, C_NR_C, C_P_Q, C_P_C, C_R_Q, C_R_C, C_A_Q, C_A_C):
+            cell = ws.cell(
+                row=ri,
+                column=col,
+                value=f"=SUM({L(col)}{first_data}:{L(col)}{last_data})",
+            )
+            cell.number_format = _XLSX_FMT_CANT if col in qty_cols else _XLSX_FMT_COP
+            cell.alignment = al_right
+
+        for col in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
+            cell = ws.cell(
+                row=ri,
+                column=col,
+                value=f"=SUM({L(col)}{first_data}:{L(col)}{last_data})",
+            )
+            cell.number_format = _XLSX_FMT_CANT if col in (C_CC_Q, C_CO_Q) else _XLSX_FMT_COP
+            cell.alignment = al_right
+
+        ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
+        ws.cell(row=ri, column=C_DQ).number_format = _XLSX_FMT_CANT
+        ws.cell(row=ri, column=C_DQ).alignment = al_right
+        ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
+        ws.cell(row=ri, column=C_DC).number_format = _XLSX_FMT_COP
+        ws.cell(row=ri, column=C_DC).alignment = al_right
+
+        for c in range(1, NCOLS + 1):
+            cell = ws.cell(row=ri, column=c)
+            cell.fill = fill_tot
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.border = border_tbl
+        note_row = ri + 2
+    else:
+        note_row = ri + 1
+
+    table_last_row = (ri if items else max(hr, ri - 1))
+    _xlsx_apply_outer_double_border(ws, hr, table_last_row, 1, NCOLS)
+
+    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=NCOLS)
+    nota = (
+        f"Cant Final y Costo Directo Final = ClaraCore ({cc_sum_label}); "
+        "desglose en columnas NR·P·R·A (ocultas). "
+        "Sin fila en Obra Ejecutada → CC = cobrado y Δ = 0."
+    )
+    ws.cell(row=note_row, column=1, value=nota).font = Font(size=8, color="64748B", italic=True)
+    ws.cell(row=note_row, column=1).alignment = al_center
+
+    footer_row = note_row + 2
+    ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=NCOLS)
+    ws.cell(
+        row=footer_row,
+        column=1,
+        value="ClaraCore · Producto de gestión de obra · Todos los derechos reservados · claracore.co",
+    ).font = Font(size=8, color="64748B", italic=True)
+    ws.cell(row=footer_row, column=1).alignment = al_center
+
+    ws.print_area = f"A1:{L(NCOLS)}{footer_row}"
+    try:
+        from openpyxl.worksheet.header_footer import HeaderFooterItem
+
+        footer_item = HeaderFooterItem()
+        footer_item.text = (
+            "&LClaraCore&CResumen ejecutivo - Uso confidencial del contrato&RGenerado con ClaraCore"
+        )
+        ws.oddFooter = footer_item
+    except Exception:
+        pass
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    safe_cap = re.sub(r"[^\w\-.]+", "_", cap_raw)[:40]
+    fn = f"ClaraCore_{safe_cap}_resumen_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
+    return bio.getvalue(), fn
+
+
+def _dash_capitulo_num_sort_key(label: str) -> int:
+    """Prefijo numérico del capítulo (1, 2, … 10) para orden consecutivo, no lexicográfico."""
+    m = re.match(r"^\s*(\d+)", str(label or "").strip())
+    return int(m.group(1)) if m else 999999
+
+
+def _build_dashboard_gerencial_xlsx(
+    contrato_id: int, vista: str = "presupuesto_obra", current_user=None
+) -> Tuple[bytes, str]:
+    """Informe gerencial: misma tabla que dashboard «Ppto vs Cobro por capítulo» (4 columnas COP)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    rows = _gerencial_capitulos_data(contrato_id, vista, current_user)
+    tipo_label = (
+        "Obra Ejecutada"
+        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+        else "Presupuesto de Obra"
+    )
+    titulo_informe = f"Informe Gerencial · Ppto vs Cobro por capítulo"
+
+    meta = _xlsx_load_contrato_export_meta(contrato_id)
+    version_lbl = _contrato_presupuesto_version_label(contrato_id)
+    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
+    descargado_por = _calculo_usuario_label(current_user)
+
+    fill_hdr = PatternFill("solid", fgColor="4472C4")
+    fill_tot = PatternFill("solid", fgColor="111827")
+    fill_zebra = PatternFill("solid", fgColor="F8FAFC")
+    fill_white = PatternFill("solid", fgColor="FFFFFF")
+    _side = Side(style="thin", color="FF7A7A7A")
+    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+    _ROW_H_INFO = 25
+    al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    al_right = Alignment(horizontal="right", vertical="center")
+    al_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    ncols = 4
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Gerencial"
+
+    ws.column_dimensions["A"].width = 60
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 22
+
+    subtitulo = f"Total ClaraCore · Total Cobrado · Δ — vista: {tipo_label}"
+    hr = _xlsx_apply_informe_header(
+        ws,
+        titulo=titulo_informe,
+        ncols=ncols,
+        contrato_meta=meta,
+        version_lbl=version_lbl,
+        gen_ts=gen_ts,
+        descargado_por=descargado_por,
+        subtitulo_tabla=subtitulo,
     )
 
     hdr = ["Capítulo", "Total ClaraCore", "Total Cobrado", "Δ (= CC − Cobrado)"]
-    hr = 7
     for j, h in enumerate(hdr, start=1):
         cell = ws.cell(row=hr, column=j, value=h)
         cell.fill = fill_hdr
@@ -23309,6 +23825,7 @@ def _build_dashboard_gerencial_xlsx(
     last_data_row = ri - 1
 
     ws.cell(row=ri, column=1, value="TOTAL CONTRATO")
+    ws.cell(row=ri, column=1).border = border_tbl
     for j in range(2, ncols + 1):
         col = get_column_letter(j)
         if j == 4:
@@ -23327,6 +23844,7 @@ def _build_dashboard_gerencial_xlsx(
     ws.row_dimensions[ri].height = _xlsx_estimate_row_height_pt(
         ws, ri, [1], min_height=_ROW_H_INFO, font_size=10
     )
+    _xlsx_apply_outer_double_border(ws, hr, ri, 1, ncols)
     footer_note_row = ri + 2
 
     ws.merge_cells(start_row=footer_note_row, start_column=1, end_row=footer_note_row, end_column=ncols)
@@ -23360,6 +23878,32 @@ def _build_dashboard_gerencial_xlsx(
     return bio.getvalue(), fn_name
 
 
+def _build_dashboard_capitulo_completo_xlsx(
+    contrato_id: int,
+    capitulo: str,
+    vista: str,
+    current_user,
+    *,
+    items_sorted: List[str],
+    by_item: Dict[str, List[dict]],
+    item_filtro: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> Tuple[bytes, str]:
+    from dashboard_capitulo_completo_xlsx import build_dashboard_capitulo_completo_xlsx
+
+    return build_dashboard_capitulo_completo_xlsx(
+        sys.modules[__name__],
+        contrato_id,
+        capitulo,
+        vista,
+        current_user,
+        items_sorted=items_sorted,
+        by_item=by_item,
+        item_filtro=item_filtro,
+        job_id=job_id,
+    )
+
+
 def _build_dashboard_capitulo_xlsx(
     contrato_id: int,
     capitulo: str,
@@ -23369,201 +23913,8 @@ def _build_dashboard_capitulo_xlsx(
     job_id: Optional[str] = None,
     solo_resumen: bool = False,
 ):
-    """
-    Informe multi-hoja: (1) resumen por ítem del capítulo presupuesto vs obra aprobada N3,
-    (2..n) análisis por PK por ítem, (n-1) base presupuesto capítulo, (n) obra filtrada a esos ítems.
-
-    Los totales «Cobrada/Cobrado» del resumen se calculan con la misma lógica que el análisis por PK
-    (_dashboard_pkid_tabla_obra_core), no por agrupación cruda de item_numero en obra (evita
-    desfaces cuando el texto del ítem en obra no coincide exactamente con el del presupuesto).
-    """
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
-    fill_hdr = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY)
-    fill_tot = PatternFill("solid", fgColor=_CC_XLSX_DARK)
-    fill_title = PatternFill("solid", fgColor=_CC_XLSX_DARK)
-    fill_subhdr = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
-    fill_green = PatternFill("solid", fgColor=_CC_XLSX_GREEN_BG)
-    fill_red = PatternFill("solid", fgColor=_CC_XLSX_RED_BG)
-    fill_white = PatternFill("solid", fgColor="FFFFFF")
-    font_hdr = Font(bold=True, color="FFFFFF", size=11)
-    font_bold = Font(bold=True, color=_CC_XLSX_DARK)
-    font_title = Font(bold=True, color="FFFFFF", size=14)
-    font_resumen_cant = Font(size=10, color=_CC_XLSX_DARK)
-    font_resumen_cop = Font(bold=True, size=11, color=_CC_XLSX_PRIMARY)
-    al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    al_right = Alignment(horizontal="right", vertical="center")
-    _side = Side(style="thin", color="FFB4B4B4")
-    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
-    tbl_cols = _XLSX_PK_COLS
-    n_pk_cols = len(tbl_cols)
-
-    def _fmt_cell(ws, r: int, c: int, val, is_cop: bool = False, is_cant: bool = False):
-        cell = ws.cell(row=r, column=c, value=val)
-        cell.border = border_tbl
-        if is_cop:
-            cell.number_format = _XLSX_FMT_COP
-            cell.alignment = al_right
-        elif is_cant:
-            cell.number_format = _XLSX_FMT_CANT
-            cell.alignment = al_right
-        return cell
-
-    def _fmt_resumen(ws, r: int, c: int, val, kind: str = "text"):
-        cell = ws.cell(row=r, column=c, value=val)
-        cell.border = border_tbl
-        if kind == "cant":
-            cell.number_format = _XLSX_FMT_CANT
-            cell.alignment = al_right
-            cell.font = font_resumen_cant
-        elif kind == "cop":
-            cell.number_format = _XLSX_FMT_COP
-            cell.alignment = al_right
-            cell.font = font_resumen_cop
-        return cell
-
-    def _apply_pk_row_formats(ws, r: int):
-        for c in range(1, n_pk_cols + 1):
-            cell = ws.cell(row=r, column=c)
-            if c in _XLSX_PK_COP_COLS:
-                cell.number_format = _XLSX_FMT_COP
-                cell.alignment = al_right
-            elif c in _XLSX_PK_CANT_COLS:
-                cell.number_format = _XLSX_FMT_CANT
-                cell.alignment = al_right
-
-    def _style_header_row(ws, row_idx: int, ncols: int):
-        for c in range(1, ncols + 1):
-            cell = ws.cell(row=row_idx, column=c)
-            cell.fill = fill_hdr
-            cell.font = font_hdr
-            cell.alignment = al_center
-            cell.border = border_tbl
-
-    def _style_total_row(ws, row_idx: int, ncols: int):
-        for c in range(1, ncols + 1):
-            cell = ws.cell(row=row_idx, column=c)
-            cell.fill = fill_tot
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.border = border_tbl
-
-    def _style_item_total_row(ws, row_idx: int, ncols: int, delta_costo: float):
-        """Total ítem con fondo semáforo y texto oscuro legible (no blanco sobre rosa/verde)."""
-        _fill_data_row_by_delta(ws, row_idx, 1, ncols, delta_costo)
-        for c in range(1, ncols + 1):
-            cell = ws.cell(row=row_idx, column=c)
-            cell.font = Font(bold=True, color=_CC_XLSX_DARK, size=11)
-            cell.border = border_tbl
-            if c in _XLSX_PK_COP_COLS:
-                cell.number_format = _XLSX_FMT_COP
-                cell.alignment = al_right
-            elif c in _XLSX_PK_CANT_COLS:
-                cell.number_format = _XLSX_FMT_CANT
-                cell.alignment = al_right
-
-    def _border_range(ws, r1: int, r2: int, c1: int, c2: int):
-        for r in range(r1, r2 + 1):
-            for c in range(c1, c2 + 1):
-                ws.cell(row=r, column=c).border = border_tbl
-
-    def _row_fill(ws, r: int, c1: int, c2: int, fill):
-        for c in range(c1, c2 + 1):
-            ws.cell(row=r, column=c).fill = fill
-
-    def _fill_data_row_by_delta(ws, r: int, c1: int, c2: int, delta_costo: float):
-        dc = float(delta_costo or 0)
-        if dc > 0.5:
-            _row_fill(ws, r, c1, c2, fill_green)
-        elif dc < -0.5:
-            _row_fill(ws, r, c1, c2, fill_red)
-        else:
-            _row_fill(ws, r, c1, c2, fill_white)
-
-    def _write_pk_data_row(ws, r: int, pk_id, cant_p, cost_p, cant_c, cost_c, d_cant, d_cost, revisado=""):
-        _fmt_cell(ws, r, 1, pk_id)
-        _fmt_cell(ws, r, 2, cant_p, is_cant=True)
-        _fmt_cell(ws, r, 3, cost_p, is_cop=True)
-        _fmt_cell(ws, r, 4, cant_c, is_cant=True)
-        _fmt_cell(ws, r, 5, cost_c, is_cop=True)
-        _fmt_cell(ws, r, 6, d_cant, is_cant=True)
-        _fmt_cell(ws, r, 7, d_cost, is_cop=True)
-        _fmt_cell(ws, r, 8, revisado)
-
-    def _append_pk_table(ws, block_rows, title, fill_title, uniform_row_fill, is_subtotal=False, per_row_delta=False):
-        mr = ws.max_row + 1
-        if title:
-            ws.merge_cells(start_row=mr, start_column=1, end_row=mr, end_column=n_pk_cols)
-            c = ws.cell(row=mr, column=1)
-            c.value = title
-            if fill_title:
-                c.fill = fill_title
-            c.font = font_bold
-            c.alignment = Alignment(horizontal="left", vertical="center")
-            _border_range(ws, mr, mr, 1, n_pk_cols)
-        hr = ws.max_row + 1
-        for j, h in enumerate(tbl_cols, start=1):
-            ws.cell(row=hr, column=j, value=h)
-        _style_header_row(ws, hr, n_pk_cols)
-        for row in block_rows:
-            dr = ws.max_row + 1
-            ws.append(
-                [
-                    row.get("pk_id"),
-                    row.get("cant_ppto"),
-                    row.get("costo_ppto"),
-                    row.get("cant_sicoe"),
-                    row.get("costo_sicoe"),
-                    row.get("delta_cant"),
-                    row.get("delta_costo"),
-                    row.get("revisado"),
-                ]
-            )
-            _apply_pk_row_formats(ws, dr)
-            if per_row_delta:
-                _fill_data_row_by_delta(ws, dr, 1, n_pk_cols, float(row.get("delta_costo") or 0))
-            elif uniform_row_fill:
-                _row_fill(ws, dr, 1, n_pk_cols, uniform_row_fill)
-            else:
-                _row_fill(ws, dr, 1, n_pk_cols, fill_white)
-        if is_subtotal and block_rows:
-            agg = _sum_pk_export_rows(block_rows)
-            if "DEVOL" in (title or ""):
-                label = f"Subtotal DEVOLUCIÓN ({len(block_rows)} PK)"
-            elif "POR COBRAR" in (title or ""):
-                label = f"Subtotal POR COBRAR ({len(block_rows)} PK)"
-            elif "EQUILIBRIO" in (title or ""):
-                label = f"Subtotal EQUILIBRIO ({len(block_rows)} PK)"
-            else:
-                label = f"Subtotal ({len(block_rows)} PK)"
-            sr = ws.max_row + 1
-            _write_pk_data_row(
-                ws,
-                sr,
-                label,
-                agg["cant_ppto"],
-                agg["costo_ppto"],
-                agg["cant_sicoe"],
-                agg["costo_sicoe"],
-                agg["delta_cant"],
-                agg["delta_costo"],
-                "",
-            )
-            _style_total_row(ws, sr, n_pk_cols)
-            _apply_pk_row_formats(ws, sr)
-
-    meta_ct = ""
-    contrato_numero = ""
-    try:
-        cr = supabase.table("contratos").select("numero, contratista").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            contrato_numero = (cr[0].get("numero") or "").strip()
-            meta_ct = (cr[0].get("contratista") or contrato_numero or "").strip()
-    except Exception:
-        pass
-    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
-    tipo_ppto = ppto_tipo_for_vista(vista)
-    tipo_label = "Obra Ejecutada" if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA else "Presupuesto de Obra"
+    """Informe capítulo: resumen ejecutivo; completo = resumen + hoja por ítem con soporte de cantidades."""
+    item_filtro = (item or "").strip() or None
 
     ppto_all = _ppto_rows_capitulo(contrato_id, capitulo, vista, current_user)
     by_item: Dict[str, List[dict]] = {}
@@ -23573,327 +23924,26 @@ def _build_dashboard_capitulo_xlsx(
             continue
         by_item.setdefault(it, []).append(r)
     items_sorted = sorted(by_item.keys(), key=lambda x: str(x))
-    if item and str(item).strip():
-        it_f = _dash_norm_item_key_py(item)
+    if item_filtro:
+        it_f = _dash_norm_item_key_py(item_filtro)
         items_sorted = [it for it in items_sorted if _dash_norm_item_key_py(it) == it_f]
         by_item = {k: v for k, v in by_item.items() if _dash_norm_item_key_py(k) == it_f}
-        solo_resumen = False
 
-    cap_only_resumen = bool(solo_resumen and not (item and str(item).strip()))
-    drill_map: Dict[str, dict] = {}
-    core_by_item: Dict[str, Dict[str, Any]] = {}
-    if cap_only_resumen:
-        drill_items = _drill_agg_by_item(contrato_id, capitulo, None, vista, current_user)
-        drill_map = {
-            _dash_norm_item_key_py(r.get("item")): r
-            for r in (drill_items or [])
-            if isinstance(r, dict) and _dash_norm_item_key_py(r.get("item"))
-        }
-        if not items_sorted and drill_map:
-            items_sorted = sorted(drill_map.keys(), key=lambda x: str(x))
-        if job_id:
-            _export_job_set(job_id, progreso="resumen capítulo")
-    else:
-        # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
-        core_by_item = _fetch_export_core_by_item(
-            contrato_id,
-            capitulo,
-            items_sorted,
-            vista,
-            current_user,
-            ppto_all=ppto_all,
-            job_id=job_id,
+    if solo_resumen and not item_filtro:
+        return _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
+            contrato_id, capitulo, vista, current_user
         )
-        # Base ClaraCore (Aprobado + No Revisado) para todas las hojas del Excel.
-        for _it_data in core_by_item.values():
-            if isinstance(_it_data, dict):
-                _apply_export_claracore_basis_rows(_it_data.get("rows") or [])
 
-    wb = Workbook()
-    ws0 = wb.active
-    ws0.title = _xlsx_safe_sheet_name("Resumen capítulo", "Resumen")
-
-    # ── Hoja 1: resumen por ítem ───────────────────────────────────────────
-    ws0.merge_cells(start_row=1, start_column=1, end_row=2, end_column=13)
-    c1 = ws0.cell(row=1, column=1)
-    c1.value = f"RESUMEN POR CAPÍTULO — {capitulo} ({tipo_label})"
-    c1.font = font_title
-    c1.fill = fill_title
-    c1.alignment = Alignment(horizontal="center", vertical="center")
-    ws0.row_dimensions[1].height = 22
-    ws0.row_dimensions[2].height = 6
-    ws0.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
-    c3 = ws0.cell(row=3, column=1)
-    c3.value = f"Generado: {gen_ts}" + (f" | {meta_ct}" if meta_ct else "")
-    c3.font = Font(size=10, italic=True)
-    c3.alignment = Alignment(horizontal="center")
-
-    hdr1 = [
-        "Ítem",
-        "Descripción",
-        "Cant. ClaraCore",
-        "Costo ClaraCore",
-        "Cant. Cobrada",
-        "Costo Cobrado",
-        "Δ Cantidad",
-        "Δ Costo",
-        "Estado",
-        "Aprobado",
-        "Pendiente",
-        "Rechazado",
-        "No Revisado",
-    ]
-    _border_range(ws0, 3, 3, 1, len(hdr1))
-    r0 = 4
-    for j, h in enumerate(hdr1, start=1):
-        ws0.cell(row=r0, column=j, value=h)
-    _style_header_row(ws0, r0, len(hdr1))
-    for c_cop in (4, 6, 8, 10, 11, 12, 13):
-        hc = ws0.cell(row=r0, column=c_cop)
-        hc.fill = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
-        hc.font = Font(bold=True, color=_CC_XLSX_PRIMARY, size=11)
-
-    if not items_sorted:
-        ws0.cell(row=r0 + 1, column=1, value=f"Sin ítems en presupuesto ({tipo_label}) para este capítulo.")
-        ws0.merge_cells(start_row=r0 + 1, start_column=1, end_row=r0 + 1, end_column=len(hdr1))
-        c0 = ws0.cell(row=r0 + 1, column=1)
-        c0.font = Font(italic=True, color="666666")
-        c0.alignment = Alignment(horizontal="center")
-
-    tot_cc_cant = tot_cc_cost = tot_cb_cant = tot_cb_cost = tot_d_cant = tot_d_cost = 0.0
-    tot_ap = tot_pe = tot_re = tot_nr = 0.0
-    row_i = r0 + 1
-    for it in items_sorted:
-        rows_it = by_item[it]
-        desc = ""
-        for x in rows_it:
-            if x.get("descripcion"):
-                desc = str(x["descripcion"])
-                break
-        if cap_only_resumen:
-            dr = drill_map.get(_dash_norm_item_key_py(it)) or {}
-            # Base ClaraCore = Aprobado + No Revisado (excluye Pendiente/Rechazado).
-            cant_p = float(dr.get("cant_ppto_claracore") or 0)
-            cost_p = float(dr.get("costo_ppto_claracore") or 0)
-            cant_c = float(dr.get("cant_sicoe_aprobado") or 0)
-            cost_c = float(dr.get("cobrado") or 0)
-            d_cant = cant_p - cant_c
-            d_cost = cost_p - cost_c
-        else:
-            _rows_pk = (core_by_item.get(it) or {}).get("rows") or []
-            agg = _sum_pk_export_rows(_rows_pk)
-            cant_p = agg["cant_ppto"]
-            cost_p = agg["costo_ppto"]
-            cant_c = agg["cant_sicoe"]
-            cost_c = agg["costo_sicoe"]
-            d_cant = agg["delta_cant"]
-            d_cost = agg["delta_costo"]
-        estado = "Equilibrio"
-        if d_cost > 0.5:
-            estado = "Por cobrar"
-        elif d_cost < -0.5:
-            estado = "Devolución"
-        spl = _ppto_costo_por_revisado(rows_it)
-        tot_cc_cant += cant_p
-        tot_cc_cost += cost_p
-        tot_cb_cant += cant_c
-        tot_cb_cost += cost_c
-        tot_d_cant += d_cant
-        tot_d_cost += d_cost
-        tot_ap += spl["Aprobado"]
-        tot_pe += spl["Pendiente"]
-        tot_re += spl["Rechazado"]
-        tot_nr += spl["No Revisado"]
-
-        ws0.cell(row=row_i, column=1, value=it)
-        c_desc = ws0.cell(row=row_i, column=2, value=desc)
-        c_desc.alignment = Alignment(wrap_text=True, vertical="top")
-        c_desc.font = Font(color=_CC_XLSX_DARK, size=10)
-        _fmt_resumen(ws0, row_i, 3, cant_p, "cant")
-        _fmt_resumen(ws0, row_i, 4, cost_p, "cop")
-        _fmt_resumen(ws0, row_i, 5, cant_c, "cant")
-        _fmt_resumen(ws0, row_i, 6, cost_c, "cop")
-        _fmt_resumen(ws0, row_i, 7, d_cant, "cant")
-        _fmt_resumen(ws0, row_i, 8, d_cost, "cop")
-        ws0.cell(row=row_i, column=9, value=estado)
-        _fmt_resumen(ws0, row_i, 10, round(spl["Aprobado"], 0), "cop")
-        _fmt_resumen(ws0, row_i, 11, round(spl["Pendiente"], 0), "cop")
-        _fmt_resumen(ws0, row_i, 12, round(spl["Rechazado"], 0), "cop")
-        _fmt_resumen(ws0, row_i, 13, round(spl["No Revisado"], 0), "cop")
-        if estado == "Por cobrar":
-            _row_fill(ws0, row_i, 1, 13, fill_green)
-        elif estado == "Devolución":
-            _row_fill(ws0, row_i, 1, 13, fill_red)
-        else:
-            _row_fill(ws0, row_i, 1, 13, fill_white)
-        row_i += 1
-
-    ws0.cell(row=row_i, column=1, value="TOTALES CAPÍTULO")
-    _fmt_resumen(ws0, row_i, 3, tot_cc_cant, "cant")
-    _fmt_resumen(ws0, row_i, 4, tot_cc_cost, "cop")
-    _fmt_resumen(ws0, row_i, 5, tot_cb_cant, "cant")
-    _fmt_resumen(ws0, row_i, 6, tot_cb_cost, "cop")
-    _fmt_resumen(ws0, row_i, 7, tot_d_cant, "cant")
-    _fmt_resumen(ws0, row_i, 8, tot_d_cost, "cop")
-    _fmt_resumen(ws0, row_i, 10, round(tot_ap, 0), "cop")
-    _fmt_resumen(ws0, row_i, 11, round(tot_pe, 0), "cop")
-    _fmt_resumen(ws0, row_i, 12, round(tot_re, 0), "cop")
-    _fmt_resumen(ws0, row_i, 13, round(tot_nr, 0), "cop")
-    _style_total_row(ws0, row_i, len(hdr1))
-    for c_cop in (4, 6, 8, 10, 11, 12, 13):
-        ws0.cell(row=row_i, column=c_cop).font = Font(bold=True, color="FFFFFF", size=11)
-    _border_range(ws0, r0, row_i, 1, len(hdr1))
-    _xlsx_autofit_columns(ws0, 1, len(hdr1), r0, row_i, min_w=10, max_w=22, col_max={2: 52})
-    _xlsx_apply_print_summary(ws0, contrato_numero)
-
-    # ── Hojas por ítem: análisis PK (por cobrar / devolución) ────────────────
-    if cap_only_resumen:
-        bio = io.BytesIO()
-        wb.save(bio)
-        safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
-        fn = f"ClaraCore_{safe_cap}_resumen_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
-        return bio.getvalue(), fn
-
-    for idx_it, it in enumerate(items_sorted):
-        if job_id:
-            _export_job_set(job_id, progreso=f"Excel hoja {idx_it + 1}/{len(items_sorted)}")
-        data = core_by_item[it]
-        rows = data.get("rows") or []
-        desc_item = data.get("descripcion_item") or ""
-        ws = wb.create_sheet(title=_xlsx_safe_sheet_name(it, "Item"))
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_pk_cols)
-        t1 = ws.cell(row=1, column=1)
-        t1.value = f"ANÁLISIS DE COBRO — {it} | {desc_item[:180]}"
-        t1.font = Font(bold=True, size=12, color="FFFFFF")
-        t1.fill = fill_title
-        t1.alignment = al_center
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_pk_cols)
-        t2 = ws.cell(row=2, column=1)
-        t2.value = f"{capitulo} | {tipo_label} | Generado: {gen_ts}"
-        t2.font = Font(size=10, color=_CC_XLSX_PRIMARY)
-        t2.alignment = al_center
-
-        if rows:
-            agg = _sum_pk_export_rows(rows)
-            hr = 4
-            for j, h in enumerate(tbl_cols, start=1):
-                ws.cell(row=hr, column=j, value=h)
-            _style_header_row(ws, hr, n_pk_cols)
-            tr = hr + 1
-            _write_pk_data_row(
-                ws,
-                tr,
-                "TOTAL ÍTEM (todos los PK)",
-                agg["cant_ppto"],
-                agg["costo_ppto"],
-                agg["cant_sicoe"],
-                agg["costo_sicoe"],
-                agg["delta_cant"],
-                agg["delta_costo"],
-                "",
-            )
-            _style_item_total_row(ws, tr, n_pk_cols, agg["delta_costo"])
-            start_detail = tr + 2
-        else:
-            start_detail = 4
-
-        pos, neg, equi = _split_pk_export_rows(rows)
-        agg_pos = _sum_pk_export_rows(pos)
-        agg_neg = _sum_pk_export_rows(neg)
-        agg_equi = _sum_pk_export_rows(equi)
-
-        ws.cell(row=start_detail, column=1, value="")
-        if pos:
-            tit = (
-                f"POR COBRAR (Δ costo > {_DASH_DELTA_EPS}) — Subtotal: "
-                f"${agg_pos['delta_costo']:,.0f} · {len(pos)} PK"
-            )
-            _append_pk_table(ws, pos, tit, fill_green, fill_green, True, False)
-            ws.cell(row=ws.max_row + 1, column=1, value="")
-        if neg:
-            titn = (
-                f"DEVOLUCIÓN (Δ costo < -{_DASH_DELTA_EPS}) — Subtotal: "
-                f"${agg_neg['delta_costo']:,.0f} · {len(neg)} PK"
-            )
-            _append_pk_table(ws, neg, titn, fill_red, fill_red, True, False)
-            ws.cell(row=ws.max_row + 1, column=1, value="")
-        if equi:
-            tite = (
-                f"EQUILIBRIO (|Δ costo| ≤ {_DASH_DELTA_EPS}) — "
-                f"{len(equi)} PK · ClaraCore sin desvío de cobro"
-            )
-            _append_pk_table(ws, equi, tite, fill_subhdr, None, True, True)
-        _xlsx_autofit_columns(ws, 1, n_pk_cols, 4, ws.max_row, min_w=11, max_w=24, col_max={1: 36})
-        _xlsx_apply_print_item(ws, contrato_numero)
-
-    # ── Penúltima: presupuesto capítulo (tipo según vista del dashboard) ───
-    if job_id:
-        _export_job_set(job_id, progreso="Excel · hoja Presupuesto")
-    ws_p = wb.create_sheet(title=_xlsx_safe_sheet_name(f"Ppto {tipo_label[:8]}", "Presupuesto"))
-    ws_p.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
-    tp = ws_p.cell(row=1, column=1)
-    tp.value = f"Presupuesto ClaraCore — {tipo_label} — {capitulo}"
-    tp.font = Font(bold=True, size=12, color="FFFFFF")
-    tp.fill = fill_title
-    tp.alignment = al_center
-    if ppto_all:
-        keys = list(ppto_all[0].keys())
-        ws_p.append([])
-        ws_p.append(keys)
-        hdr_p = ws_p.max_row
-        _style_header_row(ws_p, hdr_p, len(keys))
-        for r in ppto_all:
-            ws_p.append([r.get(k) for k in keys])
-        nc = len(keys)
-        _border_range(ws_p, hdr_p, ws_p.max_row, 1, nc)
-        for rr in range(hdr_p + 1, ws_p.max_row + 1):
-            _row_fill(ws_p, rr, 1, nc, fill_white)
-        _xlsx_autofit_columns(ws_p, 1, nc, hdr_p, ws_p.max_row, min_w=10, max_w=28)
-    _xlsx_apply_print_summary(ws_p, contrato_numero)
-
-    # ── Última: obra SICOE aprobada (solo ítems presentes en presupuesto vista) ─
-    if job_id:
-        _export_job_set(job_id, progreso="Excel · hoja SICOE Obra")
-    ws_o = wb.create_sheet(title=_xlsx_safe_sheet_name("Sicoe obra items", "SicoeObra"))
-    ws_o.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
-    to = ws_o.cell(row=1, column=1)
-    to.value = f"SICOE Obra aprobada (nivel máx.) — ítems en {tipo_label}"
-    to.font = Font(bold=True, size=12, color="FFFFFF")
-    to.fill = fill_title
-    to.alignment = al_center
-    obra_rows = _export_sicoe_obra_rows_capitulo(contrato_id, capitulo, items_sorted)
-    if obra_rows:
-        keys_o = list(obra_rows[0].keys())
-        ws_o.append([])
-        ws_o.append(keys_o)
-        hdr_o = ws_o.max_row
-        _style_header_row(ws_o, hdr_o, len(keys_o))
-        for r in obra_rows:
-            row_vals = []
-            for k in keys_o:
-                v = r.get(k)
-                if isinstance(v, (dict, list)):
-                    row_vals.append(json.dumps(v, ensure_ascii=False)[:500])
-                else:
-                    row_vals.append(v)
-            ws_o.append(row_vals)
-        nco = len(keys_o)
-        _border_range(ws_o, hdr_o, ws_o.max_row, 1, nco)
-        for rr in range(hdr_o + 1, ws_o.max_row + 1):
-            _row_fill(ws_o, rr, 1, nco, fill_white)
-        _xlsx_autofit_columns(ws_o, 1, nco, hdr_o, ws_o.max_row, min_w=10, max_w=28)
-    _xlsx_apply_print_summary(ws_o, contrato_numero)
-
-    for _sh in wb.worksheets:
-        _sh.sheet_view.showGridLines = False
-
-    if job_id:
-        _export_job_set(job_id, progreso="guardando archivo…")
-    bio = io.BytesIO()
-    wb.save(bio)
-    safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
-    fn = f"ClaraCore_{safe_cap}_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
-    return bio.getvalue(), fn
+    return _build_dashboard_capitulo_completo_xlsx(
+        contrato_id,
+        capitulo,
+        vista,
+        current_user,
+        items_sorted=items_sorted,
+        by_item=by_item,
+        item_filtro=item_filtro,
+        job_id=job_id,
+    )
 
 
 @app.get("/sicoe-obra/{contrato_id}/dashboard-pkid-tabla")
