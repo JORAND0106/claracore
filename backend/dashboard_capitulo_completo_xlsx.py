@@ -31,12 +31,18 @@ _C_OBS = 11
 _BALANCE_OBS = "Ajuste de Cantidades por Balance de Obra"
 
 
+def _acta_rpo_label_from_registro(r: dict) -> str:
+    """Etiqueta visible de acta: numero_rpo (enriquecido) o valor ya resuelto en acta_rpo_id."""
+    for key in ("acta_rpo_numero", "acta_rpo", "acta_rpo_id"):
+        val = r.get(key)
+        if val not in (None, ""):
+            return str(val).strip()
+    return "—"
+
+
 def _detail_row_from_sicoe(r: dict) -> dict:
     cant = float(r.get("cantidad") or 0)
     cant_tot = float(r.get("cantidad_total") if r.get("cantidad_total") is not None else cant)
-    acta = r.get("acta_rpo_numero")
-    if acta is None:
-        acta = r.get("acta_rpo_id") or ""
     return {
         "registro": r.get("numero_registro") or r.get("id_pol") or "",
         "pk_id": r.get("pk_id") or r.get("pk_id_valor") or "",
@@ -48,7 +54,7 @@ def _detail_row_from_sicoe(r: dict) -> dict:
         "cantidad": cant,
         "cant_total": cant_tot,
         "observaciones": (r.get("observacion") or "").strip(),
-        "acta_rpo": str(acta).strip() if acta not in (None, "") else "—",
+        "acta_rpo": _acta_rpo_label_from_registro(r),
         "is_balance_adj": False,
     }
 
@@ -199,6 +205,7 @@ def _write_item_sheet_completo(
     gen_ts: str,
     descargado_por: str,
     listado_row: Optional[dict] = None,
+    logo_bytes: Optional[bytes] = None,
 ):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -272,6 +279,7 @@ def _write_item_sheet_completo(
             "und": und,
             "vlr_unitario": vlr_f,
         },
+        logo_bytes=logo_bytes,
     )
 
     acta_groups = _sicoe_acta_groups(sicoe_rows)
@@ -412,6 +420,16 @@ def _write_item_sheet_completo(
     ws.print_area = f"A1:{L(_ITEM_XLSX_NCOLS)}{footer}"
 
 
+def _group_sicoe_rows_by_item(main, rows: List[dict]) -> Dict[str, List[dict]]:
+    """Agrupa registros SICOE exportados por ítem normalizado."""
+    out: Dict[str, List[dict]] = defaultdict(list)
+    for r in rows or []:
+        ik = main._dash_norm_item_key_py(r.get("item_numero"))
+        if ik:
+            out[ik].append(r)
+    return out
+
+
 def build_dashboard_capitulo_completo_xlsx(
     main,
     contrato_id: int,
@@ -446,19 +464,26 @@ def build_dashboard_capitulo_completo_xlsx(
         if ik and ik not in item_labels:
             item_labels[ik] = raw
     items_for_sheets = sorted(item_labels.values(), key=lambda x: str(x))
+    n_items = len(items_for_sheets)
 
     meta = main._xlsx_load_contrato_export_meta(contrato_id)
     version_lbl = main._contrato_presupuesto_version_label(contrato_id)
     gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
     descargado_por = main._calculo_usuario_label(current_user)
     listado_idx = main._listado_precios_index_por_item_norm(contrato_id, cap_raw)
+    logo_bytes = main._xlsx_fetch_image_bytes(meta.get("logo_contratista") or "")
 
-    n_items = len(items_for_sheets)
+    if job_id:
+        main._export_job_set(job_id, progreso=f"cargando obra SICOE ({n_items} ítems)…")
+
+    sicoe_all = main._export_sicoe_obra_rows_capitulo(contrato_id, cap_raw, items_for_sheets)
+    sicoe_by_item = _group_sicoe_rows_by_item(main, sicoe_all)
+
     for idx, it in enumerate(items_for_sheets):
-        if job_id:
+        if job_id and (idx == 0 or idx == n_items - 1 or (idx + 1) % 5 == 0):
             main._export_job_set(
                 job_id,
-                progreso=f"ítem {idx + 1}/{n_items}: {it[:40]}…",
+                progreso=f"ítem {idx + 1}/{n_items}: {str(it)[:36]}…",
             )
         drill = drill_map.get(main._dash_norm_item_key_py(it), {})
         listado_row = listado_idx.get(main._dash_norm_item_key_py(it))
@@ -468,37 +493,46 @@ def build_dashboard_capitulo_completo_xlsx(
                 if main._dash_norm_item_key_py(k) == main._dash_norm_item_key_py(it):
                     ppto_it = rows
                     break
-        sicoe_it = main._export_sicoe_obra_rows_capitulo(contrato_id, cap_raw, [it])
-        sicoe_it = main._sicoe_registros_xlsx_sin_ids_internos(
-            main._sicoe_enriquecer_registros_export(sicoe_it)
-        )
+        it_key = main._dash_norm_item_key_py(it)
+        sicoe_it = sicoe_by_item.get(it_key, [])
 
         cant_final = round(float(drill.get("total_claracore_cant") or 0), 4)
         detail_rows = _build_sicoe_detail_rows(sicoe_it, cant_final)
 
         ws = wb.create_sheet(title=main._xlsx_safe_sheet_name(it, f"Item{idx + 1}"))
-        _write_item_sheet_completo(
-            main,
-            ws,
-            cap_raw=cap_raw,
-            item=it,
-            drill=drill,
-            ppto_rows=ppto_it,
-            detail_rows=detail_rows,
-            sicoe_rows=sicoe_it,
-            vista=vista,
-            meta=meta,
-            version_lbl=version_lbl,
-            gen_ts=gen_ts,
-            descargado_por=descargado_por,
-            listado_row=listado_row,
-        )
+        try:
+            _write_item_sheet_completo(
+                main,
+                ws,
+                cap_raw=cap_raw,
+                item=it,
+                drill=drill,
+                ppto_rows=ppto_it,
+                detail_rows=detail_rows,
+                sicoe_rows=sicoe_it,
+                vista=vista,
+                meta=meta,
+                version_lbl=version_lbl,
+                gen_ts=gen_ts,
+                descargado_por=descargado_por,
+                listado_row=listado_row,
+                logo_bytes=logo_bytes,
+            )
+        except Exception as exc:
+            ws.cell(row=1, column=1, value=f"Error al generar soporte del ítem {it}: {exc}")
 
     for sh in wb.worksheets:
         sh.sheet_view.showGridLines = False
 
     if job_id:
         main._export_job_set(job_id, progreso="guardando archivo…")
+        fp = main._export_file_path(job_id)
+        main._export_dir_ensure()
+        wb.save(fp)
+        safe_cap = re.sub(r"[^\w\-.]+", "_", cap_raw)[:40]
+        fn = f"ClaraCore_{safe_cap}_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
+        return None, fn
+
     bio = io.BytesIO()
     wb.save(bio)
     safe_cap = re.sub(r"[^\w\-.]+", "_", cap_raw)[:40]

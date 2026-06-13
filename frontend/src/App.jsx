@@ -14419,8 +14419,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       const res = await fetch(exportStart, { headers: { Authorization: `Bearer ${tok}` } })
       if (!res.ok) throw new Error('No se pudo iniciar la exportación completa.')
       const { job_id } = await res.json()
-      const pollMs = 2000
-      const maxIntentos = 300
+      const pollMs = 2500
+      const maxIntentos = 720
       let intentos = 0
       let listo = false
       let notFoundRetries = 0
@@ -14458,15 +14458,23 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         }
         if (estado.startsWith('error')) throw new Error(String(estado).replace(/^error:/, 'Error generando Excel: '))
         if (estado === 'listo') {
-          const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
-            headers: { Authorization: `Bearer ${tok}` },
-          })
-          if (!dl.ok) throw new Error('No se pudo descargar el archivo generado.')
-          const blob = await dl.blob()
-          saveBlob(blob, downloadFilename)
-          listo = true
-          setDashExportModal(null)
-          break
+          const dlAc = new AbortController()
+          const dlTo = setTimeout(() => dlAc.abort(), 15 * 60 * 1000)
+          try {
+            const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
+              headers: { Authorization: `Bearer ${tok}` },
+              signal: dlAc.signal,
+            })
+            if (!dl.ok) throw new Error('No se pudo descargar el archivo generado.')
+            const blob = await dl.blob()
+            if (!blob?.size) throw new Error('El archivo generado está vacío.')
+            saveBlob(blob, downloadFilename)
+            listo = true
+            setDashExportModal(null)
+            break
+          } finally {
+            clearTimeout(dlTo)
+          }
         }
       }
       if (!listo) {
@@ -17932,8 +17940,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         lineHeight: 1.45,
                       }}
                     >
-                      ⏱ Este archivo puede tardar <strong>varios minutos</strong> en capítulos con muchos ítems.
-                      No cierre la ventana mientras se genera.
+                      ⏱ Capítulos con muchos ítems (p. ej. ~200) pueden tardar <strong>10–30 minutos</strong>.
+                      La descarga corre en segundo plano: verá el avance por ítem. No cierre la ventana.
                     </div>
                     <button
                       type="button"

@@ -154,6 +154,9 @@ def _export_job_set(
                 job["buf"] = None
         except OSError:
             job["file_path"] = file_path
+    elif estado == "listo" and os.path.isfile(file_path):
+        job["file_path"] = file_path
+        job["buf"] = None
     elif prev.get("file_path"):
         job["file_path"] = prev["file_path"]
     _export_jobs[job_id] = job
@@ -12331,6 +12334,13 @@ def buscar_reportes_obra(
 
 # ─── SICOE OBRA: Exportar registros filtrados ───────────────────────────────
 
+def _as_int_id(val) -> Optional[int]:
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
     """Resuelve FK internas (reporte, acta, semana, PK, subcontratista, inspector) a valores de negocio."""
     if not rows:
@@ -12351,9 +12361,14 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
             rep_map = {}
 
     acta_ids = list({
-        (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+        aid
         for r in rows
-        if (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+        for raw_aid in (
+            r.get("acta_rpo_id"),
+            (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"),
+        )
+        for aid in [(_as_int_id(raw_aid) if raw_aid is not None else None)]
+        if aid is not None
     })
     semana_ids = list({
         (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
@@ -12375,12 +12390,18 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         try:
             aa = supabase_execute(
                 lambda: supabase.table("actas")
-                .select("id, numero_rpo")
+                .select("id, numero_rpo, consecutivo")
                 .in_("id", acta_ids)
                 .execute()
                 .data
             )
-            acta_map = {a["id"]: a.get("numero_rpo") for a in aa if a.get("id")}
+            acta_map = {
+                int(a["id"]): (
+                    a.get("numero_rpo") if a.get("numero_rpo") not in (None, "") else a.get("consecutivo")
+                )
+                for a in aa
+                if a.get("id") is not None
+            }
         except Exception:
             acta_map = {}
 
@@ -12456,7 +12477,8 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
 
     for r in rows:
         rep = rep_map.get(r.get("reporte_id")) or {}
-        acta_id = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
+        acta_id_raw = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
+        acta_id = _as_int_id(acta_id_raw)
         sem_id = r.get("semana_id") or rep.get("semana_id")
         pk_id_id = r.get("pk_id_id") or rep.get("pk_id_id")
         sub_id = r.get("subcontratista_id") or rep.get("subcontratista_id")
@@ -23159,6 +23181,7 @@ def _xlsx_apply_informe_header(
     subtitulo_tabla: Optional[str] = None,
     label_merge_end: int = 1,
     item_meta: Optional[Dict[str, Any]] = None,
+    logo_bytes: Optional[bytes] = None,
 ) -> int:
     """
     Encabezado institucional (logo, contrato, objeto, contratista, meta).
@@ -23210,7 +23233,8 @@ def _xlsx_apply_informe_header(
     logo_cell = ws.cell(row=1, column=1, value="")
     logo_cell.fill = fill_meta
     logo_cell.alignment = al_center
-    logo_bytes = _xlsx_fetch_image_bytes(logo_url)
+    if logo_bytes is None:
+        logo_bytes = _xlsx_fetch_image_bytes(logo_url)
     if logo_bytes:
         try:
             img = XLImage(io.BytesIO(logo_bytes))
@@ -24135,15 +24159,25 @@ def dashboard_export_capitulo_obra(
                 job_id=job_id,
                 solo_resumen=resumen_copy,
             )
-            _export_job_set(
-                job_id,
-                estado="listo",
-                buf=buf,
-                filename=fn,
-                progreso="listo",
-                usuario_id=uid,
-                contrato_id=int(contrato_id),
-            )
+            if buf is None:
+                _export_job_set(
+                    job_id,
+                    estado="listo",
+                    filename=fn,
+                    progreso="listo",
+                    usuario_id=uid,
+                    contrato_id=int(contrato_id),
+                )
+            else:
+                _export_job_set(
+                    job_id,
+                    estado="listo",
+                    buf=buf,
+                    filename=fn,
+                    progreso="listo",
+                    usuario_id=uid,
+                    contrato_id=int(contrato_id),
+                )
         except Exception as e:
             _export_job_set(
                 job_id,
