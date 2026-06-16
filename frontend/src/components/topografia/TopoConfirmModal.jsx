@@ -8,6 +8,8 @@ export default function TopoConfirmModal({
   children,
   confirmLabel = 'Aceptar',
   cancelLabel = 'Cancelar',
+  secondaryLabel,
+  onSecondary,
   onConfirm,
   onCancel,
   danger = false,
@@ -65,7 +67,7 @@ export default function TopoConfirmModal({
         <div style={{ padding: '18px 20px', fontSize: 'var(--cc-sm)', color: t.text || '#0F172A', lineHeight: 1.55, textAlign: 'center' }}>
           {children}
         </div>
-        <div style={{ padding: '4px 20px 18px', display: 'flex', justifyContent: 'center', gap: 10 }}>
+        <div style={{ padding: '4px 20px 18px', display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={onCancel}
@@ -83,6 +85,25 @@ export default function TopoConfirmModal({
           >
             {cancelLabel}
           </button>
+          {secondaryLabel && onSecondary && (
+            <button
+              type="button"
+              onClick={onSecondary}
+              disabled={busy}
+              style={{
+                background: t.bgCard || '#fff',
+                color: t.textMuted || '#64748B',
+                border: `1px solid ${t.border || '#CBD5E1'}`,
+                borderRadius: 8,
+                padding: '9px 22px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 700,
+                cursor: busy ? 'default' : 'pointer',
+              }}
+            >
+              {secondaryLabel}
+            </button>
+          )}
           <button
             type="button"
             onClick={onConfirm}

@@ -7,6 +7,14 @@ import io
 import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+_PDF_TZ = ZoneInfo("America/Bogota")
+
+
+def _fecha_informe_pdf() -> str:
+    """Fecha/hora local Colombia para encabezados PDF."""
+    return datetime.now(_PDF_TZ).strftime("%d/%m/%Y %H:%M")
 
 
 def gms_to_decimal(gms: float) -> float:
@@ -49,6 +57,43 @@ def decimal_a_gms_numero(decimal: float) -> float:
     minutos = int(minutos_dec)
     segundos = round((minutos_dec - minutos) * 60, 2)
     return round(grados + minutos / 100 + segundos / 10000, 4)
+
+
+def segundos_arco_a_gms_numero(seg: float) -> float:
+    """Convierte segundos de arco al valor numerico GG.MMSS (ej. 23.69 -> 0.002369)."""
+    n = float(seg or 0)
+    sign = -1.0 if n < 0 else 1.0
+    abs_n = abs(n)
+    grados = int(abs_n // 3600)
+    resto = abs_n - grados * 3600
+    minutos = int(resto // 60)
+    segundos = round(resto - minutos * 60, 2)
+    return sign * (grados + minutos / 100 + segundos / 10000)
+
+
+def formato_gms_numero_texto(gms: float, grados_pad: int = 2) -> str:
+    """Formatea GG.MMSS numerico con ceros a la izquierda (ej. 00.002369)."""
+    n = float(gms or 0)
+    sign = "-" if n < 0 else ""
+    abs_n = abs(n)
+    ent, _, frac = f"{abs_n:.6f}".partition(".")
+    return f"{sign}{int(ent):0{grados_pad}d}.{frac}"
+
+
+def segundos_arco_a_gms_texto(seg: float) -> str:
+    return formato_gms_numero_texto(segundos_arco_a_gms_numero(seg))
+
+
+def segundos_arco_a_texto(seg: float) -> str:
+    """Formato legible GG°MM'SS'' para error angular en segundos de arco."""
+    n = float(seg or 0)
+    sign = "-" if n < 0 else ""
+    abs_n = abs(n)
+    grados = int(abs_n // 3600)
+    resto = abs_n - grados * 3600
+    minutos = int(resto // 60)
+    segundos = round(resto - minutos * 60, 2)
+    return f"{sign}{grados:02d}°{minutos:02d}'{segundos:05.2f}\""
 
 
 def azimut_desde_deltas(dn: float, de: float) -> float:
@@ -259,6 +304,7 @@ def ajustar_poligonal_armadas(
     estaciones_db: list,
     amarres: dict,
     punto_inicial: Optional[dict],
+    punto_final: Optional[dict] = None,
 ) -> dict:
     """Corrección angular + Bowditch usando azimuts de radiación por armadas (ceros atrás)."""
     armadas_enr, _, flat = radiar_armadas(armadas, estaciones_db, amarres)
@@ -273,6 +319,8 @@ def ajustar_poligonal_armadas(
         tol_cota_mm_km=pol.get("tolerancia_cota_mm_km") or 12,
         precision_angular_seg=pol.get("precision_angular_seg") or 10.0,
         longitud_max_delta_m=pol.get("longitud_max_delta_m"),
+        punto_final=punto_final,
+        tipo_pol=pol.get("tipo") or "cerrada",
     )
 
     traverse = [
@@ -454,14 +502,12 @@ def calcular_cierre_poligonal(
     tol_cota_mm_km: float = 12,
     precision_angular_seg: float = 10.0,
     longitud_max_delta_m: Optional[float] = 300.0,
+    *,
+    punto_final: Optional[dict] = None,
+    tipo_pol: str = "cerrada",
 ) -> dict:
-    """Calcula el cierre angular y lineal de una poligonal cerrada por armadas.
-
-    - Vertices/perimetro: legs entre vertices 'estacion' hasta que el punto adelante
-      regresa al punto inicial (leg de cierre incluido).
-    - Angular: suma de los angulos observados de los puntos 'estacion' de todas las
-      armadas (incluida la armada de cierre de orientacion).
-    """
+    """Calcula cierre angular y lineal (cerrada → al inicio; abierta → a llegada)."""
+    tipo_pol = (tipo_pol or "cerrada").lower()
     start_name = (punto_inicial or {}).get("nombre") if punto_inicial else None
     if not start_name and armadas_enr:
         start_name = armadas_enr[0].get("estacion_nombre")
@@ -472,6 +518,18 @@ def calcular_cierre_poligonal(
             "este": punto_inicial.get("este"),
             "cota": punto_inicial.get("cota"),
         }
+
+    target = None
+    end_name = start_name
+    if tipo_pol == "abierta" and punto_final:
+        end_name = punto_final.get("nombre") or end_name
+        if punto_final.get("norte") is not None and punto_final.get("este") is not None:
+            target = {
+                "norte": punto_final.get("norte"),
+                "este": punto_final.get("este"),
+                "cota": punto_final.get("cota"),
+                "nombre": punto_final.get("nombre"),
+            }
 
     angulos_travesia: List[float] = []
     perimetro = 0.0
@@ -499,7 +557,7 @@ def calcular_cierre_poligonal(
                 angulos_travesia.append(ang)
             perimetro += dist
             n_legs += 1
-            if fwd.get("nombre_punto") == start_name and fwd.get("norte") is not None:
+            if fwd.get("nombre_punto") == end_name and fwd.get("norte") is not None:
                 retorno = fwd
                 cerrado = True
         elif (dist <= 1e-9) and ang is not None:
@@ -546,7 +604,14 @@ def calcular_cierre_poligonal(
         sum_dn += dist * math.cos(az_r)
         sum_de += dist * math.sin(az_r)
 
-    if cerrado and retorno and start:
+    if cerrado and retorno and target:
+        dN = round(float(target["norte"]) - float(retorno["norte"]), 4)
+        dE = round(float(target["este"]) - float(retorno["este"]), 4)
+        if target.get("cota") is not None and retorno.get("cota") is not None:
+            dZ = round(float(target["cota"]) - float(retorno["cota"]), 4)
+        e_lineal = round(math.hypot(dN, dE), 4)
+        precision = (perimetro / e_lineal) if e_lineal > 1e-9 else None
+    elif cerrado and retorno and start and tipo_pol != "abierta":
         dN = round(start["norte"] - retorno["norte"], 4)
         dE = round(start["este"] - retorno["este"], 4)
         if start.get("cota") is not None and retorno.get("cota") is not None:
@@ -568,9 +633,9 @@ def calcular_cierre_poligonal(
     admisible_angular = (abs(error_ang_seg) <= tol_ang_seg) if (error_ang_seg is not None and tol_ang_seg) else None
 
     vertices = _vertices_poligonal_cierre(armadas_enr)
-    area_m2 = area_por_coordenadas(vertices) if len(vertices) >= 3 else 0.0
+    area_m2 = area_por_coordenadas(vertices) if len(vertices) >= 3 and tipo_pol != "abierta" else 0.0
     tol_res643 = tolerancia_relativa_res643(area_m2)
-    lados = _lados_poligonal(vertices, cerrado)
+    lados = _lados_poligonal(vertices, cerrado and tipo_pol != "abierta")
     max_lado = max((l["longitud"] for l in lados), default=0.0)
     lim_delta = float(longitud_max_delta_m) if longitud_max_delta_m is not None else None
     admisible_lados = True
@@ -594,6 +659,18 @@ def calcular_cierre_poligonal(
     )
 
     return {
+        "tipo_pol": tipo_pol,
+        "llegada_objetivo": target,
+        "llegada_calculada": (
+            {
+                "nombre": retorno.get("nombre_punto"),
+                "norte": retorno.get("norte"),
+                "este": retorno.get("este"),
+                "cota": retorno.get("cota"),
+            }
+            if retorno and tipo_pol == "abierta"
+            else None
+        ),
         "sentido": sentido,
         "cerrado": cerrado,
         "tiene_orientacion": tiene_orientacion,
@@ -666,6 +743,671 @@ def perimetro_por_coordenadas(puntos: list) -> float:
         de = puntos[j]["este"] - puntos[i]["este"]
         total += math.sqrt(dn * dn + de * de)
     return total
+
+
+def _interseccion_circulos(
+    n1: float, e1: float, r1: float, n2: float, e2: float, r2: float,
+) -> list[tuple[float, float]]:
+    """Interseccion de dos circulos (centros P1/P2, radios = distancias medidas)."""
+    dn = n2 - n1
+    de = e2 - e1
+    d = math.hypot(dn, de)
+    if d < 1e-9:
+        return []
+    if d > r1 + r2 + 1e-6 or d < abs(r1 - r2) - 1e-6:
+        return []
+    a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    h2 = r1 * r1 - a * a
+    if h2 < -1e-6:
+        return []
+    h = math.sqrt(max(0.0, h2))
+    n0 = n1 + a * dn / d
+    e0 = e1 + a * de / d
+    px, py = -de / d, dn / d
+    return [(n0 + h * px, e0 + h * py), (n0 - h * px, e0 - h * py)]
+
+
+def _angulo_interior_estacion(
+    nu: float, eu: float, n1: float, e1: float, n2: float, e2: float,
+) -> float:
+    """Angulo interior en la estacion entre las visuales a P1 y P2 (grados, 0–180)."""
+    v1n, v1e = n1 - nu, e1 - eu
+    v2n, v2e = n2 - nu, e2 - eu
+    d1 = math.hypot(v1n, v1e)
+    d2 = math.hypot(v2n, v2e)
+    if d1 < 1e-9 or d2 < 1e-9:
+        return 0.0
+    cos_a = max(-1.0, min(1.0, (v1n * v2n + v1e * v2e) / (d1 * d2)))
+    return math.degrees(math.acos(cos_a))
+
+
+def _punto_dentro_poligono(n: float, e: float, vertices: list[tuple[float, float]]) -> bool:
+    """Ray casting: True si (norte, este) cae dentro del poligono."""
+    if len(vertices or []) < 3:
+        return False
+    x, y = e, n
+    inside = False
+    j = len(vertices) - 1
+    for i in range(len(vertices)):
+        ni, ei = vertices[i]
+        nj, ej = vertices[j]
+        yi, xi = ni, ei
+        yj, xj = nj, ej
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-15) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _detalle_opcion_newpoint(
+    letra: str,
+    nu: float, eu: float,
+    n1: float, e1: float, n2: float, e2: float,
+    alpha_deg: float,
+    vertices_poligonal: list[tuple[float, float]] | None,
+) -> dict:
+    ang_int = _angulo_interior_estacion(nu, eu, n1, e1, n2, e2)
+    err_ang = abs(ang_int - alpha_deg) * 3600
+    inside = (
+        _punto_dentro_poligono(nu, eu, vertices_poligonal)
+        if vertices_poligonal and len(vertices_poligonal) >= 3
+        else None
+    )
+    return {
+        "id": letra,
+        "norte": round(nu, 4),
+        "este": round(eu, 4),
+        "error_angular_segundos": round(err_ang, 2),
+        "error_angular_gms_texto": segundos_arco_a_texto(err_ang),
+        "angulo_calculado_texto": decimal_to_gms(ang_int),
+        "dentro_poligonal": inside,
+    }
+
+
+def newpoint_por_angulo_distancias(
+    n1: float, e1: float, d1: float,
+    n2: float, e2: float, d2: float,
+    angulo_observado_gms: float,
+    vertices_poligonal: list[tuple[float, float]] | None = None,
+) -> dict:
+    """NewPoint: calcula opciones A y B (soluciones espejo); el usuario elige en campo."""
+    alpha_deg = gms_to_decimal(angulo_observado_gms)
+    alpha = math.radians(alpha_deg)
+    d_p1p2 = math.hypot(n2 - n1, e2 - e1)
+    d_triangulo = math.sqrt(max(0.0, d1 * d1 + d2 * d2 - 2 * d1 * d2 * math.cos(alpha)))
+    error_lineal_medicion = abs(d_p1p2 - d_triangulo)
+
+    candidatos = _interseccion_circulos(n1, e1, d1, n2, e2, d2)
+    if not candidatos:
+        a_n = n2 - n1
+        a_e = e2 - e1
+        c = -d1 + d2 * math.cos(alpha)
+        s = d2 * math.sin(alpha)
+        if abs(c) < 1e-12 and abs(s) < 1e-12:
+            raise ValueError("Geometria degenerada: revise distancias y angulo observado.")
+        theta = math.atan2(a_e, a_n) - math.atan2(s, c)
+        candidatos = [(n1 - d1 * math.cos(theta), e1 - d1 * math.sin(theta))]
+
+    # Orden estable: A = menor norte (desempate este)
+    candidatos = sorted(candidatos, key=lambda p: (p[0], p[1]))
+    letras = ["A", "B"]
+    opciones = [
+        _detalle_opcion_newpoint(letras[i], nu, eu, n1, e1, n2, e2, alpha_deg, vertices_poligonal)
+        for i, (nu, eu) in enumerate(candidatos[:2])
+    ]
+    err_ang_ref = opciones[0]["error_angular_segundos"] if opciones else 0.0
+
+    return {
+        "opciones": opciones,
+        "distancia_p1p2": round(d_p1p2, 4),
+        "distancia_triangulo": round(d_triangulo, 4),
+        "error_lineal": round(error_lineal_medicion, 4),
+        "error_angular_segundos": err_ang_ref,
+        "error_angular_gms_texto": segundos_arco_a_texto(err_ang_ref),
+    }
+
+
+def desarrollo_triangulo_reseccion_newpoint(
+    nu: float, eu: float,
+    n1: float, e1: float, d1: float,
+    n2: float, e2: float, d2: float,
+    angulo_observado_gms: float,
+) -> dict:
+    """Desarrollo completo del triángulo de resección: elementos, ángulos y radiaciones."""
+    gamma_deg = gms_to_decimal(angulo_observado_gms)
+    gamma_rad = math.radians(gamma_deg)
+
+    dn12 = n2 - n1
+    de12 = e2 - e1
+    c = math.hypot(dn12, de12)
+    a = d2
+    b = d1
+
+    c_cos = math.sqrt(max(0.0, b * b + a * a - 2 * b * a * math.cos(gamma_rad)))
+    err_c = abs(c - c_cos)
+
+    cos_beta = max(-1.0, min(1.0, (b * b + c * c - a * a) / (2 * b * c))) if b * c > 0 else 0.0
+    cos_delta = max(-1.0, min(1.0, (a * a + c * c - b * b) / (2 * a * c))) if a * c > 0 else 0.0
+    beta_deg = math.degrees(math.acos(cos_beta))
+    delta_deg = math.degrees(math.acos(cos_delta))
+
+    az_12 = math.degrees(math.atan2(de12, dn12)) % 360
+    az_21 = math.degrees(math.atan2(-de12, -dn12)) % 360
+    az_1p = math.degrees(math.atan2(eu - e1, nu - n1)) % 360
+    az_2p = math.degrees(math.atan2(eu - e2, nu - n2)) % 360
+
+    giro_p1 = (az_1p - az_12 + 360) % 360
+    signo_p1 = "+" if giro_p1 <= 180 else "−"
+    az_1p_calc = (az_12 + beta_deg) % 360 if giro_p1 <= 180 else (az_12 - beta_deg + 360) % 360
+
+    giro_p2 = (az_2p - az_21 + 360) % 360
+    signo_p2 = "+" if giro_p2 <= 180 else "−"
+    az_2p_calc = (az_21 + delta_deg) % 360 if giro_p2 <= 180 else (az_21 - delta_deg + 360) % 360
+
+    n_rad_p1 = n1 + b * math.cos(math.radians(az_1p))
+    e_rad_p1 = e1 + b * math.sin(math.radians(az_1p))
+    n_rad_p2 = n2 + a * math.cos(math.radians(az_2p))
+    e_rad_p2 = e2 + a * math.sin(math.radians(az_2p))
+
+    d_chk_p1 = math.hypot(n1 - nu, e1 - eu)
+    d_chk_p2 = math.hypot(n2 - nu, e2 - eu)
+    ang_chk = _angulo_interior_estacion(nu, eu, n1, e1, n2, e2)
+    err_ang = abs(ang_chk - gamma_deg) * 3600
+
+    return {
+        "delta_n_12": round(dn12, 4),
+        "delta_e_12": round(de12, 4),
+        "lado_a_p2_puesto": round(a, 4),
+        "lado_b_p1_puesto": round(b, 4),
+        "lado_c_p1_p2": round(c, 4),
+        "lado_c_cosenos": round(c_cos, 4),
+        "error_lado_c": round(err_c, 4),
+        "angulo_puesto_gamma_texto": decimal_to_gms(gamma_deg),
+        "angulo_p1_beta_texto": decimal_to_gms(beta_deg),
+        "angulo_p2_delta_texto": decimal_to_gms(delta_deg),
+        "cos_beta": round(cos_beta, 6),
+        "cos_delta": round(cos_delta, 6),
+        "azimut_p1_p2_texto": decimal_to_gms(az_12),
+        "azimut_p2_p1_texto": decimal_to_gms(az_21),
+        "azimut_p1_puesto_texto": decimal_to_gms(az_1p),
+        "azimut_p2_puesto_texto": decimal_to_gms(az_2p),
+        "azimut_p1_puesto_desde_beta_texto": decimal_to_gms(az_1p_calc),
+        "azimut_p2_puesto_desde_delta_texto": decimal_to_gms(az_2p_calc),
+        "signo_beta": signo_p1,
+        "signo_delta": signo_p2,
+        "n_radiacion_p1": round(n_rad_p1, 4),
+        "e_radiacion_p1": round(e_rad_p1, 4),
+        "n_radiacion_p2": round(n_rad_p2, 4),
+        "e_radiacion_p2": round(e_rad_p2, 4),
+        "norte_puesto": round(nu, 4),
+        "este_puesto": round(eu, 4),
+        "distancia_calc_p1": round(d_chk_p1, 4),
+        "distancia_calc_p2": round(d_chk_p2, 4),
+        "error_dist_p1": round(abs(d_chk_p1 - b), 4),
+        "error_dist_p2": round(abs(d_chk_p2 - a), 4),
+        "angulo_calculado_texto": decimal_to_gms(ang_chk),
+        "angulo_observado_texto": decimal_to_gms(gamma_deg),
+        "error_angular_gms_texto": segundos_arco_a_texto(err_ang),
+    }
+
+
+def demostracion_calculo_newpoint(
+    nu: float, eu: float,
+    n1: float, e1: float, d1_obs: float,
+    n2: float, e2: float, d2_obs: float,
+    angulo_observado_gms: float,
+) -> dict:
+    """Alias compacto sobre desarrollo_triangulo_reseccion_newpoint."""
+    d = desarrollo_triangulo_reseccion_newpoint(
+        nu, eu, n1, e1, d1_obs, n2, e2, d2_obs, angulo_observado_gms,
+    )
+    return {
+        **d,
+        "distancia_p1p2": d["lado_c_p1_p2"],
+        "distancia_triangulo": d["lado_c_cosenos"],
+        "error_lineal_triangulo": d["error_lado_c"],
+    }
+
+
+def faltantes_campo_newpoint(row: dict) -> list[str]:
+    """Campos obligatorios de campo antes de validación contratista (nivel 1)."""
+    labels = {
+        "operador": "operador",
+        "fecha": "fecha de campo",
+        "equipo_marca": "marca del equipo",
+        "equipo_referencia": "modelo / referencia del equipo",
+        "equipo_serial": "serial del equipo",
+    }
+    falt: list[str] = []
+    for key, label in labels.items():
+        val = row.get(key)
+        if val is None or not str(val).strip():
+            falt.append(label)
+    return falt
+
+
+def media_hilos_nivelacion(h_sup, h_med, h_inf) -> float | None:
+    """Media aritmética de hilos de nivel automático (solo valores no nulos)."""
+    vals = [v for v in (h_sup, h_med, h_inf) if v is not None]
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+STADIA_K = 100
+
+
+def distancia_taquimetrica_nivelacion(
+    h_sup: float | None, h_inf: float | None, k: float = STADIA_K
+) -> float | None:
+    """Distancia horizontal taquimétrica: K × |hilo inf − hilo sup|."""
+    if h_sup is None or h_inf is None:
+        return None
+    return abs(float(h_inf) - float(h_sup)) * float(k)
+
+
+def distancia_lectura_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
+    """Distancia de una lectura: taquimétrica (automático) o manual (electrónico)."""
+    if tipo_nivel == "automatico":
+        return distancia_taquimetrica_nivelacion(
+            lect.get("hilo_superior"), lect.get("hilo_inferior")
+        )
+    d = lect.get("distancia_m")
+    return float(d) if d is not None else None
+
+
+def lectura_efectiva_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
+    """Lectura de cálculo: hilo medio (automático) o lectura directa (electrónico)."""
+    h_med = lect.get("hilo_medio")
+    lectura = lect.get("lectura")
+    if tipo_nivel == "automatico":
+        if h_med is not None:
+            return float(h_med)
+        if lectura is not None:
+            return float(lectura)
+        return None
+    if lectura is not None:
+        return float(lectura)
+    if h_med is not None:
+        return float(h_med)
+    return None
+
+
+def _tipos_procesamiento_grupo(grupo: list[dict]) -> list[str]:
+    orden = ["V-", "Vi", "V+"]
+    presentes = set()
+    for l in grupo:
+        t = (l.get("tipo_lectura") or "").strip().replace("V−", "V-")
+        if t.upper() == "VI":
+            t = "Vi"
+        elif t == "V+":
+            t = "V+"
+        presentes.add(t)
+    return [t for t in orden if t in presentes]
+
+
+def _agrupar_lecturas_por_fila(lecturas: list[dict]) -> list[list[dict]]:
+    ordenadas = sorted(lecturas, key=lambda x: x.get("orden") or 0)
+    if not ordenadas:
+        return []
+    if all((l.get("orden") or 0) < 10 for l in ordenadas):
+        return [[l] for l in ordenadas]
+    grupos: dict[int, list[dict]] = {}
+    for lect in ordenadas:
+        o = lect.get("orden") or 0
+        rk = (o - 1) // 10
+        grupos.setdefault(rk, []).append(lect)
+    return [grupos[k] for k in sorted(grupos)]
+
+
+def calcular_nivelacion_geometrica(
+    nivelacion: dict,
+    lecturas: list[dict],
+    cotas_biblioteca: dict[str, float],
+    bm_inicial_nombre: str | None = None,
+    bm_final_nombre: str | None = None,
+) -> dict:
+    """
+    Calcula HI, cotas, error de cierre y semáforo para nivelación geométrica.
+
+    cotas_biblioteca: mapa nombre_punto -> cota (m) desde biblioteca / BM inicial-final.
+    """
+    dist_max = float(nivelacion.get("distancia_max_visual_m") or 50)
+    max_km = float(nivelacion.get("distancia_max_circuito_km") or 1)
+    tol_mm_km = float(nivelacion.get("tolerancia_mm_km") or 1)
+    tipo_nivel = nivelacion.get("tipo_nivel") or "electronico"
+
+    errores: list[str] = []
+    avisos: list[str] = []
+    hi: float | None = None
+    cotas: dict[str, float] = dict(cotas_biblioteca)
+    dist_total_m = 0.0
+    dist_vplus_m = 0.0
+    dist_vminus_m = 0.0
+    filas: list[dict] = []
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+
+    for g_idx, grupo in enumerate(grupos):
+        lect_por_tipo = {}
+        for lect in grupo:
+            row = dict(lect)
+            tipo_lect = (row.get("tipo_lectura") or "").strip()
+            if tipo_lect.upper() in ("V+",):
+                tipo_lect = "V+"
+            elif tipo_lect in ("V-", "V−"):
+                tipo_lect = "V-"
+            elif tipo_lect.upper() == "VI":
+                tipo_lect = "Vi"
+            lect_por_tipo[tipo_lect] = row
+
+        for tipo_lect in ("V+", "V-"):
+            row = lect_por_tipo.get(tipo_lect)
+            if not row:
+                continue
+            if lectura_efectiva_nivelacion(row, tipo_nivel) is None:
+                continue
+            dist = row.get("distancia_m")
+            if dist is None and tipo_nivel == "automatico":
+                dist = distancia_taquimetrica_nivelacion(
+                    row.get("hilo_superior"), row.get("hilo_inferior")
+                )
+                if dist is not None:
+                    row["distancia_m"] = round(dist, 3)
+            if dist is None:
+                continue
+            try:
+                d = abs(float(dist))
+            except (TypeError, ValueError):
+                errores.append(f"Fila {g_idx + 1}: distancia inválida en {tipo_lect}.")
+                continue
+            dist_total_m += d
+            if tipo_lect == "V+":
+                dist_vplus_m += d
+            else:
+                dist_vminus_m += d
+            if d > dist_max:
+                errores.append(
+                    f"Fila {g_idx + 1}: Dist ({tipo_lect}) {d:.2f} m supera el tope de {dist_max:.0f} m."
+                )
+
+        cota_calculada_fila: float | None = None
+
+        for tipo_lect in _tipos_procesamiento_grupo(grupo):
+            row = lect_por_tipo.get(tipo_lect)
+            if not row:
+                continue
+            lectura = lectura_efectiva_nivelacion(row, tipo_nivel)
+            if lectura is None:
+                errores.append(f"Fila {g_idx + 1}: falta hilo medio en {tipo_lect}.")
+                filas.append(row)
+                continue
+
+            nombre = (row.get("nombre_punto") or row.get("nombre") or "").strip()
+
+            if tipo_lect == "V+":
+                cota_ref = cotas.get(nombre)
+                if cota_ref is None:
+                    cota_ref = cota_calculada_fila
+                if cota_ref is None:
+                    errores.append(
+                        f"Fila {g_idx + 1} ({nombre or 'cambio'}): V+ requiere cota "
+                        f"(biblioteca, V−/Vi previa o V− en la misma fila)."
+                    )
+                else:
+                    hi = cota_ref + float(lectura)
+                    row["altura_instrumento"] = round(hi, 4)
+                    row["cota_calculada"] = round(cota_ref, 4)
+            elif tipo_lect in ("V-", "Vi"):
+                if hi is None:
+                    errores.append(
+                        f"Fila {g_idx + 1}: {tipo_lect} sin altura instrumental previa (falta V+ en BM o cambio)."
+                    )
+                else:
+                    cota = hi - float(lectura)
+                    cota_calculada_fila = cota
+                    row["cota_calculada"] = round(cota, 4)
+                    row["altura_instrumento"] = round(hi, 4)
+                    if nombre:
+                        cotas[nombre] = cota
+
+            filas.append(row)
+
+    dist_km = dist_total_m / 1000.0
+    dist_vplus_km = dist_vplus_m / 1000.0
+    dist_vminus_km = dist_vminus_m / 1000.0
+    if dist_vplus_km > max_km:
+        errores.append(
+            f"Distancia V+ {dist_vplus_km:.3f} km supera el máximo de {max_km:.1f} km."
+        )
+    if dist_vminus_km > max_km:
+        errores.append(
+            f"Distancia V− {dist_vminus_km:.3f} km supera el máximo de {max_km:.1f} km."
+        )
+    if dist_km > max_km:
+        errores.append(
+            f"Distancia total del circuito {dist_km:.3f} km supera el máximo de {max_km:.1f} km."
+        )
+
+    bm_ini = (bm_inicial_nombre or nivelacion.get("bm_inicial") or "").strip()
+    bm_fin = (bm_final_nombre or nivelacion.get("bm_final") or "").strip()
+    cota_bm_fin_bib = cotas_biblioteca.get(bm_fin) if bm_fin else None
+
+    grupos_cierre = _agrupar_lecturas_por_fila(lecturas)
+    ultimo_grupo = grupos_cierre[-1] if grupos_cierre else []
+    tiene_fila_cierre = bool(ultimo_grupo) and _grupo_es_cierre(ultimo_grupo, bm_fin)
+    tiene_vminus_cierre = (
+        _fila_tiene_lectura_vminus(ultimo_grupo, tipo_nivel) if tiene_fila_cierre else False
+    )
+
+    cota_fin_calc = _cota_vminus_cierre(filas) if tiene_vminus_cierre else None
+    if cota_fin_calc is None and bm_fin:
+        cota_fin_calc = cotas.get(bm_fin)
+    if cota_fin_calc is None and filas:
+        ult = filas[-1]
+        cota_fin_calc = ult.get("cota_calculada")
+
+    error_cierre: float | None = None
+    if not tiene_fila_cierre or not tiene_vminus_cierre:
+        avisos.append("Ingrese cierre: use «Ingresar cierre» y registre V− en el BM final.")
+    elif cota_fin_calc is not None and cota_bm_fin_bib is not None:
+        error_cierre = float(cota_fin_calc) - float(cota_bm_fin_bib)
+    elif bm_ini and bm_fin and bm_ini == bm_fin and tiene_vminus_cierre:
+        cota_ini = cotas_biblioteca.get(bm_ini)
+        if cota_ini is not None and cota_fin_calc is not None:
+            error_cierre = float(cota_fin_calc) - float(cota_ini)
+
+    tolerancia_m: float | None = None
+    admisible = False
+    if error_cierre is not None and dist_km > 0 and tiene_fila_cierre and tiene_vminus_cierre:
+        tolerancia_m = (tol_mm_km * math.sqrt(dist_km)) / 1000.0
+        admisible = abs(error_cierre) <= tolerancia_m and not errores
+        if not admisible and not errores:
+            avisos.append(
+                f"Error de cierre {error_cierre * 1000:.2f} mm excede tolerancia "
+                f"{tolerancia_m * 1000:.2f} mm ({tol_mm_km} mm/km × √{dist_km:.3f})."
+            )
+    elif not bm_fin:
+        avisos.append("Defina BM final en biblioteca para error de cierre.")
+    elif error_cierre is None:
+        avisos.append("No se pudo calcular error de cierre: verifique lecturas y BM.")
+
+    n = len(filas)
+    if error_cierre is not None and n > 0:
+        for i, row in enumerate(filas, start=1):
+            corr = -(error_cierre * i / n)
+            row["correccion"] = round(corr, 6)
+            cc = row.get("cota_calculada")
+            if cc is not None:
+                row["cota_ajustada"] = round(float(cc) + corr, 4)
+
+    semaforo = "verde" if admisible else "rojo"
+
+    return {
+        "lecturas": filas,
+        "altura_instrumento_ultima": hi,
+        "distancia_total_m": round(dist_total_m, 3),
+        "distancia_total_km": round(dist_km, 4),
+        "distancia_vplus_m": round(dist_vplus_m, 3),
+        "distancia_vminus_m": round(dist_vminus_m, 3),
+        "distancia_vplus_km": round(dist_vplus_km, 4),
+        "distancia_vminus_km": round(dist_vminus_km, 4),
+        "distancia_km": round(dist_km, 4),
+        "error_cierre": round(error_cierre, 6) if error_cierre is not None else None,
+        "tolerancia_cierre": round(tolerancia_m, 6) if tolerancia_m is not None else None,
+        "tolerancia": round(tolerancia_m, 6) if tolerancia_m is not None else None,
+        "tolerancia_calculada": round(tolerancia_m, 6) if tolerancia_m is not None else None,
+        "admisible": admisible,
+        "semaforo": semaforo,
+        "errores": errores,
+        "avisos": avisos,
+        "cotas": {k: round(v, 4) for k, v in cotas.items()},
+    }
+
+
+def _fila_tiene_lectura_vminus(lecturas_grupo: list[dict], tipo_nivel: str) -> bool:
+    for l in lecturas_grupo:
+        if (l.get("tipo_lectura") or "").replace("V−", "V-") != "V-":
+            continue
+        if lectura_efectiva_nivelacion(l, tipo_nivel) is not None:
+            return True
+    return False
+
+
+def _fila_tiene_lectura_vplus(lecturas_grupo: list[dict], tipo_nivel: str) -> bool:
+    for l in lecturas_grupo:
+        if (l.get("tipo_lectura") or "").strip() != "V+":
+            continue
+        if lectura_efectiva_nivelacion(l, tipo_nivel) is not None:
+            return True
+    return False
+
+
+def _fila_tiene_lectura_vi(lecturas_grupo: list[dict], tipo_nivel: str) -> bool:
+    for l in lecturas_grupo:
+        t = (l.get("tipo_lectura") or "").strip().upper()
+        if t not in ("VI",):
+            continue
+        if lectura_efectiva_nivelacion(l, tipo_nivel) is not None:
+            return True
+    return False
+
+
+def _grupo_es_cierre(grupo: list[dict], bm_fin: str | None = None) -> bool:
+    if any(l.get("punto_biblioteca_id") for l in grupo):
+        return True
+    if not grupo:
+        return False
+    g0 = grupo[0]
+    desc = (g0.get("descripcion_punto") or g0.get("ubicacion") or "").lower()
+    if "cierre" in desc:
+        return True
+    if bm_fin:
+        nombre = (g0.get("nombre_punto") or "").strip()
+        if nombre and nombre == bm_fin.strip():
+            return True
+    return False
+
+
+def _cota_vminus_cierre(filas_calc: list[dict]) -> float | None:
+    """Cota de la última V− (lectura de cierre)."""
+    for row in reversed(filas_calc):
+        if (row.get("tipo_lectura") or "").replace("V−", "V-") != "V-":
+            continue
+        cc = row.get("cota_calculada")
+        if cc is not None:
+            return float(cc)
+    return None
+
+
+def _fila_vplus_sin_vista(grupo: list[dict], g_idx: int, tipo_nivel: str, grupos: list | None = None) -> bool:
+    if g_idx == 0:
+        return False
+    if not _fila_tiene_lectura_vplus(grupo, tipo_nivel):
+        return False
+    if grupos and g_idx + 1 < len(grupos) and _grupo_es_cierre(grupos[g_idx + 1]):
+        return False
+    return not _fila_tiene_lectura_vminus(grupo, tipo_nivel) and not _fila_tiene_lectura_vi(grupo, tipo_nivel)
+
+
+def _abscisa_numerica_valida(abscisa: str) -> bool:
+    s = (abscisa or "").strip().replace(",", ".")
+    if not s:
+        return False
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def validar_lecturas_nivelacion(
+    lecturas: list[dict],
+    tipo_nivel: str,
+    bm_inicial_nombre: str | None = None,
+) -> list[str]:
+    errores: list[str] = []
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+    for g_idx, grupo in enumerate(grupos):
+        nombre = (grupo[0].get("nombre_punto") or "").strip()
+        if g_idx == 0 and bm_inicial_nombre:
+            nombre = bm_inicial_nombre
+        abscisa = (grupo[0].get("abscisa") or "").strip()
+        desc = (grupo[0].get("descripcion_punto") or grupo[0].get("ubicacion") or "").strip()
+        tipo = (grupo[0].get("tipo_punto") or "").strip()
+        if g_idx == 0 and not tipo:
+            tipo = "BM"
+        if tipo == "TP":
+            tipo = "estacion"
+        tiene_lect = any(lectura_efectiva_nivelacion(l, tipo_nivel) is not None for l in grupo)
+        if tiene_lect:
+            if not nombre or not abscisa or not desc or not tipo:
+                errores.append(f"Fila {g_idx + 1}: complete nombre, abscisa, descripción y tipo.")
+            elif not _abscisa_numerica_valida(abscisa):
+                errores.append(f"Fila {g_idx + 1}: la abscisa debe ser numérica.")
+            if (
+                g_idx > 0
+                and _fila_tiene_lectura_vplus(grupo, tipo_nivel)
+                and not _fila_tiene_lectura_vminus(grupo, tipo_nivel)
+            ):
+                errores.append(f"Fila {g_idx + 1}: V+ requiere V− en la misma fila (cambio).")
+            if _fila_vplus_sin_vista(grupo, g_idx, tipo_nivel, grupos):
+                errores.append(
+                    f"Fila {g_idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+."
+                )
+    for g_idx, grupo in enumerate(grupos):
+        if _grupo_es_cierre(grupo) and not _fila_tiene_lectura_vminus(grupo, tipo_nivel):
+            errores.append(f"Fila {g_idx + 1}: complete la lectura V− en el punto de cierre.")
+    if grupos:
+        ultimo = grupos[-1]
+        if _grupo_es_cierre(ultimo):
+            pass
+        elif _fila_tiene_lectura_vminus(ultimo, tipo_nivel) and not _fila_tiene_lectura_vplus(ultimo, tipo_nivel):
+            errores.append("La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo.")
+        ult_idx = len(grupos) - 1
+        if (
+            not _grupo_es_cierre(ultimo)
+            and _fila_tiene_lectura_vplus(ultimo, tipo_nivel)
+            and not _fila_tiene_lectura_vminus(ultimo, tipo_nivel)
+            and not _fila_tiene_lectura_vi(ultimo, tipo_nivel)
+        ):
+            errores.append("La última fila tiene V+ sin Vi ni V−. Complete el tramo o ingrese cierre.")
+    return errores
+
+
+def faltantes_campo_nivelacion(row: dict) -> list[str]:
+    """Campos obligatorios de campo antes de validación contratista (nivel 1)."""
+    labels = {
+        "operador": "operador",
+        "equipo_marca": "marca del equipo",
+        "equipo_referencia": "modelo / referencia del equipo",
+        "equipo_serial": "serial del equipo",
+    }
+    falt: list[str] = []
+    for key, label in labels.items():
+        val = row.get(key)
+        if val is None or not str(val).strip():
+            falt.append(label)
+    return falt
 
 
 def interseccion_dos_puntos(
@@ -794,17 +1536,179 @@ def svg_poligono(puntos: list, width: int = 500, height: int = 400, titulo: str 
     )
 
 
+def svg_newpoint_opciones(
+    vertices_poligonal: list[dict],
+    p1: dict,
+    p2: dict,
+    opciones: list[dict],
+    *,
+    opcion_elegida: str | None = None,
+    nombre_nuevo: str = "",
+    punto_resultado: dict | None = None,
+    width: int = 560,
+    height: int = 420,
+    titulo: str = "NewPoint",
+) -> str:
+    """SVG: poligonal completa, amarres P1/P2 resaltados y opciones A/B."""
+    todos: list[dict] = []
+    for v in vertices_poligonal or []:
+        if v.get("norte") is not None and v.get("este") is not None:
+            todos.append({"norte": v["norte"], "este": v["este"]})
+    for pt in (p1, p2):
+        if pt.get("norte") is not None and pt.get("este") is not None:
+            todos.append(pt)
+    for op in opciones or []:
+        if op.get("norte") is not None and op.get("este") is not None:
+            todos.append(op)
+    if punto_resultado and punto_resultado.get("norte") is not None:
+        todos.append(punto_resultado)
+    if not todos:
+        return f'<svg width="{width}" height="{height}"><text x="10" y="20">Sin datos</text></svg>'
+
+    nortes = [p["norte"] for p in todos]
+    estes = [p["este"] for p in todos]
+    min_n, max_n = min(nortes), max(nortes)
+    min_e, max_e = min(estes), max(estes)
+    pad = max((max_n - min_n), (max_e - min_e), 1) * 0.12
+    min_n -= pad
+    max_n += pad
+    min_e -= pad
+    max_e += pad
+
+    def tx(e):
+        return 44 + (e - min_e) / max(max_e - min_e, 0.001) * (width - 88)
+
+    def ty(n):
+        return height - 44 - (n - min_n) / max(max_n - min_n, 0.001) * (height - 88)
+
+    parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        f'<rect width="100%" height="100%" fill="#f8fafc"/>',
+    ]
+    if titulo:
+        parts.append(
+            f'<text x="{width / 2:.0f}" y="18" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">'
+            f'{html.escape(titulo)}</text>'
+        )
+
+    if vertices_poligonal and len(vertices_poligonal) >= 3:
+        coords = " ".join(f"{tx(v['este'])},{ty(v['norte'])}" for v in vertices_poligonal)
+        parts.append(
+            f'<polygon points="{coords}" fill="#2563eb" fill-opacity="0.12" stroke="#64748b" stroke-width="2"/>'
+        )
+        for v in vertices_poligonal:
+            x, y = tx(v["este"]), ty(v["norte"])
+            nm = html.escape(str(v.get("nombre") or ""))
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="#64748b"/>')
+            if nm:
+                parts.append(
+                    f'<text x="{x + 5:.1f}" y="{y - 4:.1f}" font-size="8" fill="#64748b">{nm}</text>'
+                )
+
+    x1, y1 = tx(p1["este"]), ty(p1["norte"])
+    x2, y2 = tx(p2["este"]), ty(p2["norte"])
+    parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>')
+
+    colores = {"A": "#16a34a", "B": "#7c3aed"}
+    if punto_resultado and punto_resultado.get("norte") is not None:
+        xo, yo = tx(float(punto_resultado["este"])), ty(float(punto_resultado["norte"]))
+        parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{xo:.1f}" y2="{yo:.1f}" stroke="#94a3b8" stroke-width="0.8" opacity="0.7"/>')
+        parts.append(f'<line x1="{x2:.1f}" y1="{y2:.1f}" x2="{xo:.1f}" y2="{yo:.1f}" stroke="#94a3b8" stroke-width="0.8" opacity="0.7"/>')
+        lbl = html.escape(str(punto_resultado.get("nombre") or nombre_nuevo or "P"))
+        parts.append(
+            f'<circle cx="{xo:.1f}" cy="{yo:.1f}" r="9" fill="#16a34a" fill-opacity="0.3" '
+            f'stroke="#16a34a" stroke-width="3"/>'
+        )
+        parts.append(
+            f'<text x="{xo:.1f}" y="{yo - 12:.1f}" text-anchor="middle" font-size="10" font-weight="700" fill="#16a34a">{lbl}</text>'
+        )
+    else:
+        for op in opciones or []:
+            oid = str(op.get("id") or "")
+            xo, yo = tx(op["este"]), ty(op["norte"])
+            parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{xo:.1f}" y2="{yo:.1f}" stroke="#94a3b8" stroke-width="0.8" opacity="0.7"/>')
+            parts.append(f'<line x1="{x2:.1f}" y1="{y2:.1f}" x2="{xo:.1f}" y2="{yo:.1f}" stroke="#94a3b8" stroke-width="0.8" opacity="0.7"/>')
+            color = colores.get(oid, "#0f766e")
+            sel = oid and oid == (opcion_elegida or "")
+            r = 9 if sel else 7
+            sw = 3 if sel else 1.5
+            parts.append(
+                f'<circle cx="{xo:.1f}" cy="{yo:.1f}" r="{r}" fill="{color}" fill-opacity="0.25" '
+                f'stroke="{color}" stroke-width="{sw}"/>'
+            )
+            lbl = oid or "?"
+            parts.append(
+                f'<text x="{xo:.1f}" y="{yo - 12:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="{color}">{lbl}</text>'
+            )
+            if sel and nombre_nuevo:
+                parts.append(
+                    f'<text x="{xo:.1f}" y="{yo + 18:.1f}" text-anchor="middle" font-size="9" fill="#1e293b">'
+                    f'{html.escape(nombre_nuevo)}</text>'
+                )
+
+    for pt, label, fill, r in (
+        (p1, p1.get("nombre", "P1"), "#f59e0b", 8),
+        (p2, p2.get("nombre", "P2"), "#f59e0b", 8),
+    ):
+        xp, yp = tx(pt["este"]), ty(pt["norte"])
+        parts.append(
+            f'<circle cx="{xp:.1f}" cy="{yp:.1f}" r="{r}" fill="{fill}" fill-opacity="0.35" '
+            f'stroke="#d97706" stroke-width="2"/>'
+        )
+        parts.append(
+            f'<text x="{xp:.1f}" y="{yp - 12:.1f}" text-anchor="middle" font-size="10" font-weight="700" fill="#b45309">'
+            f'{html.escape(str(label))}</text>'
+        )
+
+    parts.append(f'<text x="{width - 22}" y="22" font-size="10" fill="#64748b">N</text>')
+    parts.append(f'<line x1="{width - 22}" y1="28" x2="{width - 22}" y2="10" stroke="#64748b" stroke-width="1.5"/>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def svg_embed_pdf(svg: str, width: int, height: int) -> str:
+    """Inserta SVG como imagen base64 (WeasyPrint no renderiza bien SVG inline con rgba)."""
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<img src="data:image/svg+xml;base64,{b64}" '
+        f'width="{width}" height="{height}" style="display:block;margin:0 auto;" alt="Plano"/>'
+    )
+
+
+def svg_newpoint_resultado(
+    vertices_poligonal: list[dict],
+    p1: dict,
+    p2: dict,
+    puesto: dict,
+    *,
+    width: int = 340,
+    height: int = 300,
+    titulo: str = "Plano — poligonal y puesto",
+) -> str:
+    """SVG para informe: poligonal, amarres y único punto resultado."""
+    return svg_newpoint_opciones(
+        vertices_poligonal, p1, p2, [],
+        punto_resultado={
+            "nombre": puesto.get("nombre"),
+            "norte": puesto.get("norte"),
+            "este": puesto.get("este"),
+        },
+        width=width, height=height, titulo=titulo,
+    )
+
+
 def svg_interseccion(
     p1: dict, p2: dict, pn: dict,
     width: int = 500, height: int = 400,
+    titulo: str = "Interseccion de coordenadas",
 ) -> str:
-    """SVG del triangulo de interseccion."""
+    """SVG del triangulo de interseccion / NewPoint."""
     puntos = [
         {"nombre": p1.get("nombre", "P1"), "norte": p1["norte"], "este": p1["este"]},
         {"nombre": p2.get("nombre", "P2"), "norte": p2["norte"], "este": p2["este"]},
         {"nombre": pn.get("nombre", "XXX"), "norte": pn["norte"], "este": pn["este"]},
     ]
-    return svg_poligono(puntos, width=width, height=height, titulo="Interseccion de coordenadas")
+    return svg_poligono(puntos, width=width, height=height, titulo=titulo)
 
 
 def matplotlib_poligono_base64(
@@ -863,6 +1767,11 @@ def _fmt_pdf_num(v, dec=4) -> str:
 _PDF_CELL = "padding:1px 2px;font-size:6pt;border:1px solid #cbd5e1;vertical-align:middle;"
 _PDF_CELL_ANG = "padding:1px 1px;font-size:5.5pt;white-space:nowrap;border:1px solid #cbd5e1;vertical-align:middle;"
 _PDF_TH = "padding:2px 3px;font-size:6pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;"
+_PDF_SEC = "font-size:5.5pt;font-weight:700;color:#1e40af;margin:1px 0 0;"
+_PDF_TH_C = "padding:1px;font-size:5pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;vertical-align:middle;"
+_PDF_CELL_C = "padding:1px;font-size:5pt;border:1px solid #cbd5e1;vertical-align:middle;"
+_PDF_CELL_ANG_C = "padding:1px;font-size:4.8pt;white-space:nowrap;border:1px solid #cbd5e1;vertical-align:middle;"
+_PDF_TBL = "border-collapse:collapse;table-layout:fixed;width:100%;"
 
 
 def html_tabla_poligonal_pdf(estaciones: list, pol: dict) -> str:
@@ -1131,10 +2040,19 @@ def svg_plano_poligonal_profesional(
     width: int = 980,
     height: int = 420,
     escala_texto: str = "",
+    punto_final: Optional[dict] = None,
+    cierre: Optional[dict] = None,
 ) -> str:
     """Plano con cuadricula, norte, distancias y simbologia (▲ auxiliar)."""
     puntos = _puntos_para_plano(estaciones, punto_inicial)
-    if len(puntos) < 2:
+    extra_coords = []
+    if (pol.get("tipo") or "cerrada") == "abierta":
+        obj = (cierre or {}).get("llegada_objetivo") or punto_final
+        calc = (cierre or {}).get("llegada_calculada")
+        for p in (obj, calc):
+            if p and p.get("norte") is not None and p.get("este") is not None:
+                extra_coords.append(p)
+    if len(puntos) < 2 and not extra_coords:
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">'
             f'<text x="24" y="40" font-size="12" fill="#64748b">Sin geometría para el plano</text></svg>'
@@ -1147,8 +2065,8 @@ def svg_plano_poligonal_profesional(
     w = width - 2 * frame - ml - mr
     h = height - 2 * frame - mt - mb
 
-    nortes = [p["norte"] for p in puntos]
-    estes = [p["este"] for p in puntos]
+    nortes = [p["norte"] for p in puntos] + [float(p["norte"]) for p in extra_coords]
+    estes = [p["este"] for p in puntos] + [float(p["este"]) for p in extra_coords]
     min_n_raw, max_n_raw = min(nortes), max(nortes)
     min_e_raw, max_e_raw = min(estes), max(estes)
     span_n = max(max_n_raw - min_n_raw, 1.0)
@@ -1272,6 +2190,35 @@ def svg_plano_poligonal_profesional(
         parts.append(
             f'<text x="{x + 7:.1f}" y="{y - 6:.1f}" font-size="8" font-weight="700" fill="{label_fill}">{nombre}</text>'
         )
+
+    if (pol.get("tipo") or "cerrada") == "abierta":
+        obj = (cierre or {}).get("llegada_objetivo") or punto_final
+        calc = (cierre or {}).get("llegada_calculada")
+        if obj and obj.get("norte") is not None and obj.get("este") is not None:
+            ox, oy = tx(float(obj["este"])), ty(float(obj["norte"]))
+            s = 6
+            parts.append(
+                f'<polygon points="{ox:.1f},{oy - s:.1f} {ox + s:.1f},{oy:.1f} {ox:.1f},{oy + s:.1f} {ox - s:.1f},{oy:.1f}" '
+                f'fill="none" stroke="#15803d" stroke-width="1.2"/>'
+            )
+            nom = html.escape(str(obj.get("nombre") or "Llegada"))
+            parts.append(
+                f'<text x="{ox + 8:.1f}" y="{oy - 8:.1f}" font-size="7" font-weight="700" fill="#15803d">{nom} (obj.)</text>'
+            )
+        if calc and calc.get("norte") is not None and calc.get("este") is not None:
+            cx, cy = tx(float(calc["este"])), ty(float(calc["norte"]))
+            parts.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="5" fill="none" stroke="#c2410c" stroke-width="1.4" stroke-dasharray="3,2"/>'
+            )
+            nom_c = html.escape(str(calc.get("nombre") or "Llegada"))
+            parts.append(
+                f'<text x="{cx + 8:.1f}" y="{cy + 10:.1f}" font-size="7" font-weight="700" fill="#c2410c">{nom_c} (calc.)</text>'
+            )
+            if obj and obj.get("norte") is not None and obj.get("este") is not None:
+                ox, oy = tx(float(obj["este"])), ty(float(obj["norte"]))
+                parts.append(
+                    f'<line x1="{ox:.1f}" y1="{oy:.1f}" x2="{cx:.1f}" y2="{cy:.1f}" stroke="#94a3b8" stroke-width="0.8" stroke-dasharray="4,3"/>'
+                )
 
     nx, ny = x0 + w - 24, y0 + 18
     parts.append(f'<line x1="{nx}" y1="{ny + 16}" x2="{nx}" y2="{ny}" stroke="#000" stroke-width="0.6"/>')
@@ -1424,21 +2371,37 @@ def html_pagina_plano_poligonal(
     estaciones: list,
     punto_inicial: Optional[dict],
     firmas: List[dict],
+    punto_final: Optional[dict] = None,
+    cierre: Optional[dict] = None,
 ) -> str:
     """Una sola hoja carta horizontal: plano a escala uniforme y rotulado compacto."""
     titulo = f"Plano — {pol.get('nombre', '')}"
+    if (pol.get("tipo") or "cerrada") == "abierta":
+        titulo += " (abierta)"
     puntos = _puntos_para_plano(estaciones, punto_inicial)
     escala_txt, span_m = _escala_plano_sugerida(puntos)
     svg = svg_plano_poligonal_profesional(
-        estaciones, punto_inicial, pol, width=720, height=400, escala_texto=escala_txt
+        estaciones,
+        punto_inicial,
+        pol,
+        width=720,
+        height=400,
+        escala_texto=escala_txt,
+        punto_final=punto_final,
+        cierre=cierre,
     )
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     rotulado = html_rotulado_plano(contrato, pol, firmas)
     leyenda = (
         '<span style="font-size:5pt;margin-right:6px;">● Est.</span>'
         '<span style="font-size:5pt;margin-right:6px;color:#ea580c;">▲ Aux.</span>'
-        '<span style="font-size:5pt;color:#16a34a;">■ Am.</span>'
+        '<span style="font-size:5pt;margin-right:6px;color:#16a34a;">■ Am.</span>'
     )
+    if (pol.get("tipo") or "cerrada") == "abierta":
+        leyenda += (
+            '<span style="font-size:5pt;margin-right:6px;color:#15803d;">◆ Llegada obj.</span>'
+            '<span style="font-size:5pt;color:#c2410c;">○ Llegada calc.</span>'
+        )
     info_escala = (
         f'Escala sugerida {html.escape(escala_txt)} · Ext. ~{_fmt_pdf_num(span_m, 1)} m · Carta horizontal'
     )
@@ -1470,6 +2433,819 @@ def html_pagina_plano_poligonal(
     """
 
 
+def html_firmas_validacion_newpoint_pdf(np: dict, contrato: dict) -> str:
+    """Pie del informe: elabora (contratista) y aprueba (interventoría)."""
+    return html_firmas_elabora_aprueba_pdf(np, contrato)
+
+
+def html_firmas_elabora_aprueba_pdf(registro: dict, contrato: dict) -> str:
+    """Pie del informe: elabora (contratista) y aprueba (interventoría)."""
+    contratista = html.escape(str(contrato.get("contratista") or "—"))
+    interventoria = html.escape(str(contrato.get("interventoria") or "—"))
+    elabora = html.escape(str(registro.get("nivel1_usuario_nombre") or registro.get("operador") or ""))
+    aprueba = html.escape(str(registro.get("nivel2_usuario_nombre") or ""))
+    est_c = html.escape(str(registro.get("nivel1_estado") or "No Revisado"))
+    est_i = html.escape(str(registro.get("nivel2_estado") or "No Revisado"))
+    fc = str(registro.get("nivel1_fecha") or "")[:10]
+    fi = str(registro.get("nivel2_fecha") or "")[:10]
+    meta_c = f"{est_c}" + (f" · {fc}" if fc else "")
+    meta_i = f"{est_i}" + (f" · {fi}" if fi else "")
+    return f"""
+    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3px;border-top:1px solid #64748b;">
+      <tr>
+        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:5pt;">
+          <div style="font-weight:700;color:#1e40af;margin-bottom:8px;">ELABORÓ — Contratista</div>
+          <div style="border-top:1px solid #0f172a;width:90%;padding-top:2px;min-height:22px;">
+            <strong>{elabora or '—'}</strong><br/>
+            <span style="color:#475569;">{contratista}</span><br/>
+            <span style="color:#64748b;font-size:4.8pt;">{meta_c}</span>
+          </div>
+        </td>
+        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:5pt;border-left:1px solid #cbd5e1;">
+          <div style="font-weight:700;color:#1e40af;margin-bottom:8px;">APROBÓ — Interventoría</div>
+          <div style="border-top:1px solid #0f172a;width:90%;padding-top:2px;min-height:22px;">
+            <strong>{aprueba or '—'}</strong><br/>
+            <span style="color:#475569;">{interventoria}</span><br/>
+            <span style="color:#64748b;font-size:4.8pt;">{meta_i}</span>
+          </div>
+        </td>
+      </tr>
+    </table>"""
+
+
+def _tipo_lectura_norm(tipo: str) -> str:
+    t = (tipo or "").strip().replace("V−", "V-")
+    if t.upper() == "VI":
+        return "Vi"
+    if t == "V+":
+        return "V+"
+    if t in ("V-", "V−"):
+        return "V-"
+    return t
+
+
+def _bloque_hilos_pdf(lect: dict | None, tipo_nivel: str) -> str:
+    if not lect:
+        return "—"
+    if tipo_nivel == "automatico":
+        hs, hm, hi = lect.get("hilo_superior"), lect.get("hilo_medio"), lect.get("hilo_inferior")
+        if hs is None and hm is None and hi is None:
+            return "—"
+        return f"{_fmt_pdf_num(hs, 3)}/{_fmt_pdf_num(hm, 3)}/{_fmt_pdf_num(hi, 3)}"
+    v = lect.get("lectura")
+    return _fmt_pdf_num(v, 4) if v is not None else "—"
+
+
+def html_tabla_circuito_nivelacion_pdf(niv: dict, lecturas: list[dict]) -> str:
+    """Tabla cartera de circuito de nivelación (filas agrupadas)."""
+    tipo_nivel = niv.get("tipo_nivel") or "electronico"
+    th = _PDF_TH_C
+    td = _PDF_CELL_C
+    tbl = _PDF_TBL
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+    body = ""
+    for g_idx, grupo in enumerate(grupos):
+        base = grupo[0]
+        lect_map = {}
+        for l in grupo:
+            lect_map[_tipo_lectura_norm(l.get("tipo_lectura"))] = l
+        hi = None
+        cota = None
+        for l in grupo:
+            if l.get("altura_instrumento") is not None:
+                hi = l.get("altura_instrumento")
+            c = l.get("cota_ajustada")
+            if c is None:
+                c = l.get("cota_calculada")
+            if c is not None:
+                cota = c
+        dist_vp = None
+        dist_vm = None
+        l_vp = lect_map.get("V+")
+        l_vm = lect_map.get("V-")
+        if l_vp and lectura_efectiva_nivelacion(l_vp, tipo_nivel) is not None:
+            d = l_vp.get("distancia_m")
+            if d is None and tipo_nivel == "automatico":
+                d = distancia_taquimetrica_nivelacion(l_vp.get("hilo_superior"), l_vp.get("hilo_inferior"))
+            dist_vp = d
+        if l_vm and lectura_efectiva_nivelacion(l_vm, tipo_nivel) is not None:
+            d = l_vm.get("distancia_m")
+            if d is None and tipo_nivel == "automatico":
+                d = distancia_taquimetrica_nivelacion(l_vm.get("hilo_superior"), l_vm.get("hilo_inferior"))
+            dist_vm = d
+        nombre = html.escape(str(base.get("nombre_punto") or ""))
+        tipo_pto = html.escape(str(base.get("tipo_punto") or ""))
+        abscisa = html.escape(str(base.get("abscisa") or ""))
+        desc = html.escape(str(base.get("descripcion_punto") or base.get("ubicacion") or ""))
+        body += (
+            f"<tr>"
+            f'<td style="{td}">{g_idx + 1}</td>'
+            f'<td style="{td}"><b>{nombre}</b></td>'
+            f'<td style="{td}">{tipo_pto}</td>'
+            f'<td style="{td}">{_bloque_hilos_pdf(lect_map.get("V+"), tipo_nivel)}</td>'
+            f'<td style="{td}">{_fmt_pdf_num(dist_vp, 2) if dist_vp is not None else "—"}</td>'
+            f'<td style="{td}">{_bloque_hilos_pdf(lect_map.get("Vi"), tipo_nivel)}</td>'
+            f'<td style="{td}">{_bloque_hilos_pdf(lect_map.get("V-"), tipo_nivel)}</td>'
+            f'<td style="{td}">{_fmt_pdf_num(dist_vm, 2) if dist_vm is not None else "—"}</td>'
+            f'<td style="{td}">{_fmt_pdf_num(hi, 4) if hi is not None else "—"}</td>'
+            f'<td style="{td}">{_fmt_pdf_num(cota, 4) if cota is not None else "—"}</td>'
+            f'<td style="{td}">{abscisa or "—"}</td>'
+            f'<td style="{td}">{desc or "—"}</td>'
+            f"</tr>"
+        )
+    hilos_hdr = "S/M/I" if tipo_nivel == "automatico" else "Lect."
+    header = (
+        f"<tr>"
+        f'<th style="{th}">#</th>'
+        f'<th style="{th}">Punto</th>'
+        f'<th style="{th}">Tipo</th>'
+        f'<th style="{th}">V+ ({hilos_hdr})</th>'
+        f'<th style="{th}">Dist (V+)</th>'
+        f'<th style="{th}">Vi ({hilos_hdr})</th>'
+        f'<th style="{th}">V− ({hilos_hdr})</th>'
+        f'<th style="{th}">Dist (V−)</th>'
+        f'<th style="{th}">H. ins.</th>'
+        f'<th style="{th}">Cota</th>'
+        f'<th style="{th}">Abscisa</th>'
+        f'<th style="{th}">Descripción</th>'
+        f"</tr>"
+    )
+    return f"""
+    <table cellspacing="0" cellpadding="0" style="{tbl}margin-bottom:4px;">
+      <thead>{header}</thead>
+      <tbody>{body or f'<tr><td colspan="12" style="{td}">Sin lecturas</td></tr>'}</tbody>
+    </table>"""
+
+
+_PDF_TH_BLK = "padding:2px 4px;font-size:5.5pt;font-weight:700;background:#f8fafc;border:0.5pt solid #334155;vertical-align:middle;"
+_PDF_CELL_BLK = "padding:2px 4px;font-size:5.5pt;border:0.5pt solid #334155;vertical-align:top;line-height:1.35;"
+_PDF_TBL_BLK = "border-collapse:collapse;table-layout:fixed;width:100%;border:0.5pt solid #334155;"
+
+
+def _merge_lecturas_calculo_pdf(lecturas: list[dict], calc: dict) -> list[dict]:
+    """Fusiona cotas/HI del cálculo geométrico sobre las lecturas guardadas."""
+    calc_rows = calc.get("lecturas") or []
+    if not calc_rows:
+        return lecturas
+    by_id = {str(r["id"]): r for r in calc_rows if r.get("id")}
+    if not by_id:
+        return calc_rows
+    merged: list[dict] = []
+    for lect in lecturas:
+        row = dict(lect)
+        ref = by_id.get(str(lect.get("id")))
+        if ref:
+            for k in ("altura_instrumento", "cota_calculada", "cota_ajustada", "correccion", "distancia_m"):
+                if ref.get(k) is not None:
+                    row[k] = ref[k]
+        merged.append(row)
+    return merged
+
+
+def enriquecer_nivelacion_pdf(
+    contrato_id: int,
+    niv: dict,
+    lecturas: list[dict],
+    *,
+    cotas_biblioteca: dict[str, float],
+    bm_ini: str | None,
+    bm_fin: str | None,
+) -> tuple[dict, list[dict]]:
+    """Recalcula cierre (igual que la UI) para el informe PDF."""
+    out = dict(niv)
+    out["bm_inicial"] = bm_ini
+    out["bm_final"] = bm_fin or bm_ini
+    calc = calcular_nivelacion_geometrica(out, lecturas, cotas_biblioteca, bm_ini, bm_fin)
+    for k in (
+        "error_cierre",
+        "tolerancia_calculada",
+        "distancia_total_km",
+        "distancia_vplus_km",
+        "distancia_vminus_km",
+        "admisible",
+    ):
+        if calc.get(k) is not None:
+            out[k] = calc[k]
+    if calc.get("cotas"):
+        out["_cotas_calc"] = calc["cotas"]
+    lecturas_out = _merge_lecturas_calculo_pdf(lecturas, calc)
+    adm = _admisible_nivelacion_pdf(out)
+    if adm is not None:
+        out["admisible"] = adm
+    return out, lecturas_out
+
+
+def _resolver_bms_nivelacion_pdf(contrato_id: int, niv: dict, lecturas: list[dict]) -> tuple[str | None, str | None]:
+    """Nombres BM ini/fin desde filas de cartera si faltan en cabecera."""
+    bm_ini: str | None = None
+    bm_fin: str | None = None
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+    if grupos:
+        bm_ini = (grupos[0][0].get("nombre_punto") or "").strip() or None
+    if grupos:
+        for g in reversed(grupos):
+            if _grupo_es_cierre(g, bm_fin):
+                bm_fin = (g[0].get("nombre_punto") or "").strip() or None
+                break
+        if not bm_fin:
+            bm_fin = (grupos[-1][0].get("nombre_punto") or "").strip() or None
+    if not bm_fin and bm_ini:
+        bm_fin = bm_ini
+    return bm_ini, bm_fin
+
+
+def _admisible_nivelacion_pdf(niv: dict) -> bool | None:
+    adm = niv.get("admisible")
+    if adm is not None:
+        return bool(adm)
+    err = niv.get("error_cierre")
+    tol = niv.get("tolerancia_calculada")
+    if err is not None and tol is not None:
+        return abs(float(err)) <= float(tol)
+    return None
+
+
+def _distancia_grupo_nivelacion_m(grupo: list[dict], tipo_nivel: str) -> float:
+    total = 0.0
+    for lect in grupo:
+        tl = (lect.get("tipo_lectura") or "").strip().replace("V−", "V-")
+        if tl not in ("V+", "V-"):
+            continue
+        if lectura_efectiva_nivelacion(lect, tipo_nivel) is None:
+            continue
+        dist = lect.get("distancia_m")
+        if dist is None and tipo_nivel == "automatico":
+            dist = distancia_taquimetrica_nivelacion(lect.get("hilo_superior"), lect.get("hilo_inferior"))
+        if dist is not None:
+            total += abs(float(dist))
+    return total
+
+
+def _puntos_perfil_nivelacion(lecturas: list[dict], niv: dict) -> list[dict]:
+    tipo_nivel = niv.get("tipo_nivel") or "electronico"
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+    bm_ini = niv.get("bm_inicial")
+    bm_fin = niv.get("bm_final") or bm_ini
+    pts: list[dict] = []
+    prog = 0.0
+    for g_idx, grupo in enumerate(grupos):
+        base = grupo[0]
+        nombre = (base.get("nombre_punto") or f"P{g_idx + 1}").strip()
+        cota = None
+        for lect in grupo:
+            c = lect.get("cota_ajustada")
+            if c is None:
+                c = lect.get("cota_calculada")
+            if c is not None:
+                cota = float(c)
+        if cota is None:
+            cotas_map = niv.get("_cotas_calc") or {}
+            if nombre in cotas_map:
+                cota = float(cotas_map[nombre])
+        abscisa_raw = base.get("abscisa")
+        if abscisa_raw is not None and str(abscisa_raw).strip() and _abscisa_numerica_valida(str(abscisa_raw)):
+            abs_val = float(str(abscisa_raw).strip().replace(",", "."))
+        else:
+            abs_val = prog
+        if cota is not None:
+            pts.append({
+                "nombre": nombre,
+                "abscisa": abs_val,
+                "cota": cota,
+                "cierre": _grupo_es_cierre(grupo, bm_fin),
+            })
+        prog += _distancia_grupo_nivelacion_m(grupo, tipo_nivel)
+    return pts
+
+
+def svg_perfil_nivelacion_pdf(lecturas: list[dict], niv: dict, *, width: int = 720, height: int = 200) -> str:
+    """Perfil abscisa–cota del circuito para PDF."""
+    pts = _puntos_perfil_nivelacion(lecturas, niv)
+    if len(pts) < 2:
+        return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><text x="8" y="20" font-size="10" fill="#64748b">Sin cotas suficientes para el perfil</text></svg>'
+
+    abs_vals = [p["abscisa"] for p in pts]
+    cotas = [p["cota"] for p in pts]
+    min_a, max_a = min(abs_vals), max(abs_vals)
+    min_c, max_c = min(cotas), max(cotas)
+    pad_a = max(max_a - min_a, 1) * 0.12
+    pad_c = max(max_c - min_c, 0.5) * 0.15
+    min_a -= pad_a
+    max_a += pad_a
+    min_c -= pad_c
+    max_c += pad_c
+
+    margin = {"l": 52, "r": 24, "t": 28, "b": 44}
+    w = width - margin["l"] - margin["r"]
+    h = height - margin["t"] - margin["b"]
+
+    def tx(a):
+        return margin["l"] + (a - min_a) / max(max_a - min_a, 0.001) * w
+
+    def ty(c):
+        return margin["t"] + h - (c - min_c) / max(max_c - min_c, 0.001) * h
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        f'<rect width="100%" height="100%" fill="#fafafa"/>',
+        f'<text x="{width / 2:.0f}" y="14" text-anchor="middle" font-size="9" font-weight="600" fill="#334155">Perfil del circuito (Abscisa vs Cota)</text>',
+    ]
+
+    span_a = max(max_a - min_a, 1)
+    span_c = max(max_c - min_c, 0.5)
+
+    def _nice_step(span):
+        raw = span / 6
+        mag = 10 ** math.floor(math.log10(max(raw, 1e-6)))
+        norm = raw / mag
+        if norm <= 1:
+            return mag
+        if norm <= 2:
+            return 2 * mag
+        if norm <= 5:
+            return 5 * mag
+        return 10 * mag
+
+    step_a = _nice_step(span_a)
+    step_c = _nice_step(span_c)
+    a = math.ceil(min_a / step_a) * step_a
+    while a <= max_a:
+        x = tx(a)
+        parts.append(f'<line x1="{x:.1f}" y1="{margin["t"]}" x2="{x:.1f}" y2="{margin["t"] + h}" stroke="#cbd5e1" stroke-width="0.5"/>')
+        parts.append(
+            f'<text x="{x:.1f}" y="{margin["t"] + h + 10}" font-size="6" fill="#64748b" text-anchor="middle">'
+            f'{_fmt_pdf_num(a, 0 if step_a >= 1 else 2)}</text>'
+        )
+        a += step_a
+    c = math.ceil(min_c / step_c) * step_c
+    while c <= max_c:
+        y = ty(c)
+        parts.append(f'<line x1="{margin["l"]}" y1="{y:.1f}" x2="{margin["l"] + w}" y2="{y:.1f}" stroke="#cbd5e1" stroke-width="0.5"/>')
+        parts.append(
+            f'<text x="{margin["l"] - 4}" y="{y + 2:.1f}" font-size="6" fill="#64748b" text-anchor="end">'
+            f'{_fmt_pdf_num(c, 2 if step_c < 1 else 1)}</text>'
+        )
+        c += step_c
+
+    poly = " ".join(f"{tx(p['abscisa']):.1f},{ty(p['cota']):.1f}" for p in pts)
+    parts.append(f'<polyline points="{poly}" fill="none" stroke="#2563eb" stroke-width="1.5"/>')
+
+    for p in pts:
+        x, y = tx(p["abscisa"]), ty(p["cota"])
+        fill = "#7c3aed" if p.get("cierre") else "#2563eb"
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{fill}" stroke="#fff" stroke-width="0.8"/>')
+        nm = html.escape(p["nombre"][:12])
+        parts.append(f'<text x="{x + 5:.1f}" y="{y - 5:.1f}" font-size="7" fill="#334155">{nm}</text>')
+
+    nx = margin["l"] + w - 16
+    parts.append(f'<line x1="{nx}" y1="{margin["t"] + 16}" x2="{nx}" y2="{margin["t"] + 4}" stroke="#1e40af" stroke-width="1.2"/>')
+    parts.append(f'<text x="{nx}" y="{margin["t"] + 2}" font-size="8" fill="#1e40af" text-anchor="middle">N</text>')
+    cx = margin["l"] + w / 2
+    cy = margin["t"] + h / 2
+    parts.append(
+        f'<text x="{cx:.0f}" y="{height - 6}" font-size="7.5" fill="#334155" text-anchor="middle" font-weight="700">'
+        f'X · Abscisa (m)</text>'
+    )
+    parts.append(
+        f'<text x="14" y="{cy:.0f}" font-size="7.5" fill="#334155" text-anchor="middle" font-weight="700" '
+        f'transform="rotate(-90 14 {cy:.0f})">Y · Cota (m)</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) -> str:
+    """Cuadro de cierre (30% ancho), procedimiento a la derecha, conclusión y perfil."""
+    err = niv.get("error_cierre")
+    tol = niv.get("tolerancia_calculada")
+    dist_km = niv.get("distancia_total_km")
+    dist_vp_km = niv.get("distancia_vplus_km")
+    dist_vm_km = niv.get("distancia_vminus_km")
+    tol_mm_km = float(niv.get("tolerancia_mm_km") or 1)
+    max_km = niv.get("distancia_max_circuito_km")
+    adm = _admisible_nivelacion_pdf(niv)
+    tipo_nivel = niv.get("tipo_nivel") or "electronico"
+    tipo_txt = "Automático (3 hilos)" if tipo_nivel == "automatico" else "Electrónico"
+    bm_ini = html.escape(str(niv.get("bm_inicial") or "—"))
+    bm_fin = html.escape(str(niv.get("bm_final") or "—"))
+    err_mm = _fmt_pdf_num(float(err) * 1000, 2) if err is not None else "—"
+    tol_mm = _fmt_pdf_num(float(tol) * 1000, 2) if tol is not None else "—"
+    dist_km_s = _fmt_pdf_num(dist_km, 4) if dist_km is not None else "—"
+    dist_vp_s = _fmt_pdf_num(dist_vp_km, 4) if dist_vp_km is not None else "—"
+    dist_vm_s = _fmt_pdf_num(dist_vm_km, 4) if dist_vm_km is not None else "—"
+    sqrt_km = _fmt_pdf_num(math.sqrt(float(dist_km)), 4) if dist_km is not None else "—"
+    tol_formula = (
+        f"{tol_mm_km:g} mm/km × √{sqrt_km} km = {tol_mm} mm"
+        if dist_km is not None and tol is not None
+        else f"{tol_mm_km:g} mm/km × √km"
+    )
+    if adm is True:
+        adm_txt = "ACEPTADA"
+        adm_color = "#166534"
+        adm_bg = "#dcfce7"
+        conclusion = (
+            "El circuito de nivelación geométrica <b>cierra dentro de la tolerancia</b> "
+            f"(error {err_mm} mm ≤ {tol_mm} mm). Las cotas ajustadas son admisibles."
+        )
+    elif adm is False:
+        adm_txt = "NO ACEPTADA"
+        adm_color = "#991b1b"
+        adm_bg = "#fee2e2"
+        conclusion = (
+            "El circuito <b>no cierra</b> dentro de la tolerancia "
+            f"(error {err_mm} mm &gt; {tol_mm} mm). Debe corregir lecturas y recalcular."
+        )
+    else:
+        adm_txt = "PENDIENTE"
+        adm_color = "#64748b"
+        adm_bg = "#f1f5f9"
+        conclusion = (
+            "Complete la cartera, registre el cierre en el BM final y calcule el circuito "
+            "para determinar admisibilidad."
+        )
+
+    th, td, tbl, sec = _PDF_TH_BLK, _PDF_CELL_BLK, _PDF_TBL_BLK, _PDF_SEC
+    cuadro_cierre = f"""
+    <table cellspacing="0" cellpadding="0" style="{tbl}">
+      <tr><th style="{th}" colspan="2">Verificación de cierre</th></tr>
+      <tr>
+        <td style="{td}width:42%;"><b>Error cierre</b></td>
+        <td style="{td}"><b>{err_mm} mm</b></td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Tolerancia</b></td>
+        <td style="{td}"><b>{tol_mm} mm</b><br/><span style="font-size:5pt;color:#64748b;">{html.escape(tol_formula)}</span></td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Dist. total</b></td>
+        <td style="{td}">{dist_km_s} km</td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Dist. V+</b></td>
+        <td style="{td}">{dist_vp_s} km</td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Dist. V−</b></td>
+        <td style="{td}">{dist_vm_s} km</td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>BM ini. → fin.</b></td>
+        <td style="{td}">{bm_ini} → {bm_fin}</td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Tipo nivel</b></td>
+        <td style="{td}">{html.escape(tipo_txt)}</td>
+      </tr>
+      <tr>
+        <td style="{td}"><b>Dictamen</b></td>
+        <td style="{td}background:{adm_bg};color:{adm_color};font-weight:800;">{adm_txt}</td>
+      </tr>
+    </table>"""
+
+    procedimiento = f"""
+    <div style="font-size:5.5pt;font-weight:700;color:#1e40af;margin:0 0 4px;">Procedimiento de verificación</div>
+    <ul style="margin:0;padding-left:12px;font-size:5.5pt;line-height:1.5;color:#0f172a;">
+      <li>Circuito desde <b>{bm_ini}</b> con V+, Vi y V− ({html.escape(tipo_txt)}).</li>
+      <li>Distancia = suma tramos V+ y V− (excluye Vi).</li>
+      <li>Cierre en <b>{bm_fin}</b>: error = cota V− calculada − cota biblioteca.</li>
+      <li>Tolerancia <b>T = {tol_mm_km:g} mm/km × √L</b>; distribución proporcional del error.</li>
+    </ul>
+    <div style="font-size:5.5pt;font-weight:700;color:#1e40af;margin:8px 0 4px;">Conclusión</div>
+    <p style="margin:0;font-size:5.5pt;line-height:1.45;padding:4px 6px;border:0.5pt solid #334155;border-radius:2px;">{conclusion}</p>"""
+
+    layout = f"""
+    <div style="{sec}">Verificación y cierre del circuito</div>
+    <table cellspacing="0" cellpadding="0" style="width:100%;border:none;border-collapse:collapse;margin-bottom:6px;">
+      <tr>
+        <td width="32%" valign="top" style="padding:0 8px 0 0;border:none;">{cuadro_cierre}</td>
+        <td width="68%" valign="top" style="padding:0;border:none;">{procedimiento}</td>
+      </tr>
+    </table>"""
+
+    perfil_html = ""
+    if lecturas:
+        svg_raw = svg_perfil_nivelacion_pdf(lecturas, niv)
+        perfil_html = f"""
+    <div style="{sec}margin-top:6px;">Perfil del circuito de nivelación</div>
+    {svg_embed_pdf(svg_raw, 720, 200)}"""
+
+    return layout + perfil_html
+
+
+def html_documento_nivelacion_pdf(
+    contrato: dict,
+    niv: dict,
+    lecturas: list[dict],
+    *,
+    generado_por: str = "",
+) -> str:
+    """Informe PDF circuito de nivelación geométrica."""
+    nombre = str(niv.get("nombre") or "—")
+    titulo = "Informe de circuito de nivelación geométrica"
+    subtitulo = f"Circuito: {nombre}"
+    tipo_nivel = niv.get("tipo_nivel") or "electronico"
+    tipo_txt = "Automático (3 hilos)" if tipo_nivel == "automatico" else "Electrónico"
+    operador = html.escape(str(niv.get("operador") or "—"))
+    fecha = html.escape(str(niv.get("fecha_campo") or "—"))
+    equipo = "—"
+    if niv.get("equipo_marca") or niv.get("equipo_referencia"):
+        parts = [p for p in [niv.get("equipo_marca"), niv.get("equipo_referencia")] if p]
+        equipo = html.escape(" / ".join(str(x) for x in parts))
+        if niv.get("equipo_serial"):
+            equipo += html.escape(f" · S/N {niv.get('equipo_serial')}")
+
+    datos_campo = f"""
+    <div style="{_PDF_SEC}">Datos de campo</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:4px;">
+      <tr>
+        <td style="{_PDF_CELL_C}"><b>Operador</b><br/>{operador}</td>
+        <td style="{_PDF_CELL_C}"><b>Fecha</b><br/>{fecha}</td>
+        <td style="{_PDF_CELL_C}"><b>Equipo</b><br/>{equipo}</td>
+        <td style="{_PDF_CELL_C}"><b>Tipo nivel</b><br/>{html.escape(tipo_txt)}</td>
+      </tr>
+    </table>
+    <div style="{_PDF_SEC}">Cálculo de nivelación — cartera de lecturas</div>
+    """
+    firmas = html_firmas_elabora_aprueba_pdf(niv, contrato)
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head>
+    <body style="font-family:Arial,Helvetica,sans-serif;font-size:8pt;margin:8px;color:#0f172a;">
+    {html_encabezado_pdf_compacto(contrato, titulo, subtitulo, generado_por=generado_por)}
+    {datos_campo}
+    {html_tabla_circuito_nivelacion_pdf(niv, lecturas)}
+    {html_cierre_nivelacion_pdf(niv, lecturas)}
+    {firmas}
+    {html_pie_pdf(contrato)}
+    </body></html>"""
+
+
+def html_documento_newpoint_pdf(
+    contrato: dict,
+    np: dict,
+    p1: dict,
+    p2: dict,
+    vertices_poligonal: list[dict] | None = None,
+) -> str:
+    """Informe NewPoint: procedimiento y demostración solo para la coordenada confirmada."""
+    nombre_nuevo_raw = str(np.get("nombre_punto_nuevo") or "—")
+    titulo = "Informe de creación de puntos de amarre por resección de coordenadas"
+    subtitulo = f"Punto nuevo: {nombre_nuevo_raw}"
+    p1n = html.escape(str(p1.get("nombre") or np.get("punto1_nombre") or "P1"))
+    p2n = html.escape(str(p2.get("nombre") or np.get("punto2_nombre") or "P2"))
+    pol_nombre = html.escape(str(np.get("poligonal_nombre") or "—"))
+    nombre_nuevo = html.escape(str(np.get("nombre_punto_nuevo") or "—"))
+    operador = html.escape(str(np.get("operador") or "—"))
+    fecha_campo = html.escape(str(np.get("fecha") or "—"))
+    eq_serial = html.escape(str(np.get("equipo_serial") or "—"))
+    equipo_txt = "—"
+    if np.get("equipo_marca") or np.get("equipo_referencia") or np.get("equipo_serial"):
+        parts_eq = [p for p in [np.get("equipo_marca"), np.get("equipo_referencia")] if p]
+        equipo_txt = html.escape(" / ".join(str(x) for x in parts_eq))
+        if np.get("equipo_serial"):
+            equipo_txt += html.escape(f" · S/N {np.get('equipo_serial')}")
+    tipo_pto = html.escape(str(np.get("tipo_punto") or "auxiliar"))
+    desc = html.escape(str(np.get("descripcion") or ""))
+
+    n_res = np.get("norte_resultado")
+    e_res = np.get("este_resultado")
+    if n_res is None or e_res is None:
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body style="font-family:Arial;font-size:9pt;">
+        {html_encabezado_pdf_compacto(contrato, titulo, subtitulo)}
+        <p style="color:#b45309;">Debe confirmar la posición del puesto en la plataforma antes de generar el informe.</p>
+        {html_pie_pdf(contrato)}</body></html>"""
+
+    n1f = float(p1.get("norte") or np.get("punto1_norte") or 0)
+    e1f = float(p1.get("este") or np.get("punto1_este") or 0)
+    n2f = float(p2.get("norte") or np.get("punto2_norte") or 0)
+    e2f = float(p2.get("este") or np.get("punto2_este") or 0)
+    d1 = float(np.get("distancia1") or 0)
+    d2 = float(np.get("distancia2") or 0)
+    ang_gms = float(np.get("angulo_observado_gms") or 0)
+
+    demo = desarrollo_triangulo_reseccion_newpoint(
+        float(n_res), float(e_res), n1f, e1f, d1, n2f, e2f, d2, ang_gms,
+    )
+    ang_obs = html.escape(demo["angulo_observado_texto"])
+    ang_calc = html.escape(demo["angulo_calculado_texto"])
+    err_ang = html.escape(demo["error_angular_gms_texto"])
+    admisible = np.get("admisible")
+    diag = "ADMISIBLE" if admisible else "INADMISIBLE"
+    diag_color = "#16a34a" if admisible else "#dc2626"
+
+    n1 = _fmt_pdf_num(n1f, 4)
+    e1 = _fmt_pdf_num(e1f, 4)
+    n2 = _fmt_pdf_num(n2f, 4)
+    e2 = _fmt_pdf_num(e2f, 4)
+    d1s = _fmt_pdf_num(d1, 4)
+    d2s = _fmt_pdf_num(d2, 4)
+
+    svg_raw = svg_newpoint_resultado(
+        vertices_poligonal or [],
+        {"nombre": p1.get("nombre") or "P1", "norte": n1f, "este": e1f},
+        {"nombre": p2.get("nombre") or "P2", "norte": n2f, "este": e2f},
+        {"nombre": np.get("nombre_punto_nuevo"), "norte": float(n_res), "este": float(e_res)},
+        width=300, height=240,
+    )
+    svg = svg_embed_pdf(svg_raw, 280, 220)
+    th, td, tda = _PDF_TH_C, _PDF_CELL_C, _PDF_CELL_ANG_C
+    sec = _PDF_SEC
+
+    bloque_datos = f"""
+    <div style="{sec}">1. Datos del cálculo</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:1px;">
+      <colgroup><col width="11%"/><col width="39%"/><col width="11%"/><col width="39%"/></colgroup>
+      <tr>
+        <td style="{th}">Poligonal</td><td style="{td}">{pol_nombre}</td>
+        <td style="{th}">Punto</td><td style="{td}"><b>{nombre_nuevo}</b> ({tipo_pto})</td>
+      </tr>
+      <tr>
+        <td style="{th}">Fecha</td><td style="{td}">{fecha_campo}</td>
+        <td style="{th}">Operador</td><td style="{td}">{operador}</td>
+      </tr>
+      <tr>
+        <td style="{th}">Equipo</td><td style="{td}">{equipo_txt}</td>
+        <td style="{th}">Serial</td><td style="{td}">{eq_serial}</td>
+      </tr>
+      {f'<tr><td style="{th}">Descripción</td><td colspan="3" style="{td}">{desc}</td></tr>' if desc else ''}
+    </table>
+    <div style="{sec}">2. Puntos de amarre (poligonal sellada)</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:2px;">
+      <colgroup><col width="14%"/><col width="12%"/><col width="26%"/><col width="26%"/><col width="22%"/></colgroup>
+      <tr>
+        <th style="{th}">Rol</th><th style="{th}">Pto</th><th style="{th}">Norte</th>
+        <th style="{th}">Este</th><th style="{th}">Dist.(m)</th>
+      </tr>
+      <tr>
+        <td style="{td}">00.0000→</td><td style="{td}"><b>{p1n}</b></td>
+        <td style="{td}">{n1}</td><td style="{td}">{e1}</td><td style="{td}">{d1s}</td>
+      </tr>
+      <tr>
+        <td style="{td}">Amarre 2</td><td style="{td}"><b>{p2n}</b></td>
+        <td style="{td}">{n2}</td><td style="{td}">{e2}</td><td style="{td}">{d2s}</td>
+      </tr>
+    </table>"""
+
+    bloque_procedimiento = f"""
+    <div style="{sec}">3. Procedimiento y metodología</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:2px;">
+      <colgroup><col width="6%"/><col width="94%"/></colgroup>
+      <tr><td colspan="2" style="{th}">A. Procedimiento de campo — puesto arbitrario</td></tr>
+      <tr>
+        <td style="{td}">1</td>
+        <td style="{td}">Armar estación en puesto sin coordenadas. <b>No hay azimut inicial</b>; la referencia horizontal es
+        <b>00.0000</b> hacia el primer amarre <b>{p1n}</b>.</td>
+      </tr>
+      <tr>
+        <td style="{td}">2</td>
+        <td style="{td}">Medir ángulo horizontal observado <b>{p1n} → {p2n}</b>: γ = {ang_obs}.</td>
+      </tr>
+      <tr>
+        <td style="{td}">3</td>
+        <td style="{td}">Medir distancias inclinadas a amarres de biblioteca: b ({p1n}→{nombre_nuevo}) = {d1s} m;
+        a ({p2n}→{nombre_nuevo}) = {d2s} m.</td>
+      </tr>
+      <tr><td colspan="2" style="{th}">B. Modelo analítico — triángulo Δ({p1n} — {nombre_nuevo} — {p2n})</td></tr>
+      <tr>
+        <td style="{td}">4</td>
+        <td style="{td}">Se dispone de <b>1 ángulo</b> (γ en el puesto) y <b>3 lados</b>: b y a de campo; c = distancia
+        entre amarres, calculada con coordenadas de la poligonal sellada.</td>
+      </tr>
+      <tr>
+        <td style="{td}">5</td>
+        <td style="{td}"><b>Ley de cosenos</b> en el triángulo: c = √(b² + a² − 2·b·a·cos γ). Con c se obtienen los
+        ángulos β en {p1n} y δ en {p2n}.</td>
+      </tr>
+      <tr>
+        <td style="{td}">6</td>
+        <td style="{td}"><b>Radiación</b> desde {p1n}: Az({p1n}→{nombre_nuevo}) = Az({p1n}→{p2n}) {html.escape(demo['signo_beta'])} β;
+        N = N + b·cos(Az), E = E + b·sen(Az). Comprobación independiente desde {p2n} con δ.</td>
+      </tr>
+    </table>"""
+
+    bloque_elementos = f"""
+    <div style="{sec}">4. Elementos del triángulo</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:2px;">
+      <colgroup><col width="28%"/><col width="8%"/><col width="22%"/><col width="42%"/></colgroup>
+      <tr>
+        <th style="{th}">Elem.</th><th style="{th}">Sym</th><th style="{th}">Valor</th><th style="{th}">Origen</th>
+      </tr>
+      <tr><td style="{td}">{p1n}→{nombre_nuevo}</td><td style="{td}">b</td><td style="{td}">{d1s}</td><td style="{td}">Campo</td></tr>
+      <tr><td style="{td}">{p2n}→{nombre_nuevo}</td><td style="{td}">a</td><td style="{td}">{d2s}</td><td style="{td}">Campo</td></tr>
+      <tr><td style="{td}">{p1n}→{p2n}</td><td style="{td}">c</td><td style="{td}">{_fmt_pdf_num(demo['lado_c_p1_p2'], 4)}</td><td style="{td}">Coord.</td></tr>
+      <tr><td style="{td}">∠ puesto γ</td><td style="{td}">γ</td><td style="{tda}">{ang_obs}</td><td style="{td}">Campo</td></tr>
+    </table>"""
+
+    bloque_lado_c = f"""
+    <div style="{sec}">5. Lado c ({p1n}—{p2n})</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+      <colgroup><col width="38%"/><col width="62%"/></colgroup>
+      <tr><td style="{td}">ΔN</td><td style="{td}">{_fmt_pdf_num(demo['delta_n_12'], 4)}</td></tr>
+      <tr><td style="{td}">ΔE</td><td style="{td}">{_fmt_pdf_num(demo['delta_e_12'], 4)}</td></tr>
+      <tr><td style="{td}">c=√(ΔN²+ΔE²)</td><td style="{td}"><b>{_fmt_pdf_num(demo['lado_c_p1_p2'], 4)}</b></td></tr>
+      <tr><td style="{td}">|Δc|</td><td style="{td}">{_fmt_pdf_num(demo['error_lado_c'], 4)}</td></tr>
+      <tr><td style="{td}">c=√(b²+a²−2ab·cosγ)</td><td style="{td}">{_fmt_pdf_num(demo['lado_c_cosenos'], 4)}</td></tr>
+    </table>"""
+
+    bloque_angulos = f"""
+    <div style="{sec}">6. Ángulos en amarres (ley de cosenos)</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+      <colgroup><col width="38%"/><col width="62%"/></colgroup>
+      <tr><td colspan="2" style="{td}font-size:4.6pt;">cos β = (b² + c² − a²) / (2·b·c)</td></tr>
+      <tr><td style="{td}">{p1n} β</td><td style="{tda}"><b>{html.escape(demo['angulo_p1_beta_texto'])}</b></td></tr>
+      <tr><td colspan="2" style="{td}font-size:4.6pt;">cos δ = (a² + c² − b²) / (2·a·c)</td></tr>
+      <tr><td style="{td}">{p2n} δ</td><td style="{tda}"><b>{html.escape(demo['angulo_p2_delta_texto'])}</b></td></tr>
+      <tr><td style="{td}">cos β</td><td style="{td}">{demo['cos_beta']}</td></tr>
+      <tr><td style="{td}">cos δ</td><td style="{td}">{demo['cos_delta']}</td></tr>
+    </table>"""
+
+    bloque_radiacion_p1 = f"""
+    <div style="{sec}">7. Radiación desde {p1n}</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+      <colgroup><col width="42%"/><col width="58%"/></colgroup>
+      <tr><td colspan="2" style="{td}font-size:4.6pt;">Az({p1n}→{nombre_nuevo}) = Az({p1n}→{p2n}) {html.escape(demo['signo_beta'])} β</td></tr>
+      <tr><td style="{td}">Az→{p2n}</td><td style="{tda}">{html.escape(demo['azimut_p1_p2_texto'])}</td></tr>
+      <tr><td style="{td}">Az→{nombre_nuevo}</td><td style="{tda}"><b>{html.escape(demo['azimut_p1_puesto_texto'])}</b></td></tr>
+      <tr><td colspan="2" style="{td}font-size:4.6pt;">N = N + b·cos(Az) · E = E + b·sen(Az)</td></tr>
+      <tr><td style="{td}">N</td><td style="{td}"><b>{_fmt_pdf_num(demo['n_radiacion_p1'], 4)}</b></td></tr>
+      <tr><td style="{td}">E</td><td style="{td}"><b>{_fmt_pdf_num(demo['e_radiacion_p1'], 4)}</b></td></tr>
+    </table>"""
+
+    bloque_radiacion_p2 = f"""
+    <div style="{sec}">8. Comprobación desde {p2n}</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+      <colgroup><col width="42%"/><col width="58%"/></colgroup>
+      <tr><td colspan="2" style="{td}font-size:4.6pt;">Az({p2n}→{nombre_nuevo}) = Az({p2n}→{p1n}) {html.escape(demo['signo_delta'])} δ</td></tr>
+      <tr><td style="{td}">Az→{p1n}</td><td style="{tda}">{html.escape(demo['azimut_p2_p1_texto'])}</td></tr>
+      <tr><td style="{td}">Az→{nombre_nuevo}</td><td style="{tda}">{html.escape(demo['azimut_p2_puesto_texto'])}</td></tr>
+      <tr><td style="{td}">N / E</td><td style="{td}">{_fmt_pdf_num(demo['n_radiacion_p2'], 4)} / {_fmt_pdf_num(demo['e_radiacion_p2'], 4)}</td></tr>
+    </table>"""
+
+    bloque_verificacion = f"""
+    <div style="{sec}">9. Verificación geométrica</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:1px;">
+      <colgroup><col width="22%"/><col width="26%"/><col width="26%"/><col width="26%"/></colgroup>
+      <tr>
+        <th style="{th}">Check</th><th style="{th}">Obs.</th><th style="{th}">Calc.</th><th style="{th}">Δ</th>
+      </tr>
+      <tr>
+        <td style="{td}">Dist→{p1n}</td><td style="{td}">{d1s}</td>
+        <td style="{td}">{_fmt_pdf_num(demo['distancia_calc_p1'], 4)}</td><td style="{td}">{_fmt_pdf_num(demo['error_dist_p1'], 4)}</td>
+      </tr>
+      <tr>
+        <td style="{td}">Dist→{p2n}</td><td style="{td}">{d2s}</td>
+        <td style="{td}">{_fmt_pdf_num(demo['distancia_calc_p2'], 4)}</td><td style="{td}">{_fmt_pdf_num(demo['error_dist_p2'], 4)}</td>
+      </tr>
+      <tr>
+        <td style="{td}">∠ puesto</td><td style="{tda}">{ang_obs}</td>
+        <td style="{tda}">{ang_calc}</td><td style="{tda}">{err_ang}</td>
+      </tr>
+    </table>
+    <div style="{sec}">10. Resultado final — {nombre_nuevo}</div>
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:1px;">
+      <colgroup><col width="22%"/><col width="28%"/><col width="28%"/><col width="22%"/></colgroup>
+      <tr>
+        <td style="{td}"><b>Norte (m)</b></td><td style="{td}font-size:6pt;font-weight:700;">{_fmt_pdf_num(n_res, 4)}</td>
+        <td style="{td}"><b>Este (m)</b></td><td style="{td}font-size:6pt;font-weight:700;">{_fmt_pdf_num(e_res, 4)}</td>
+      </tr>
+      <tr>
+        <td style="{td}">Diagnóstico</td><td style="{td}color:{diag_color};font-weight:700;">{diag}</td>
+        <td style="{td}">Tolerancia</td><td style="{td}">{_fmt_pdf_num(np.get('tolerancia_lineal'), 3)} m / {_fmt_pdf_num(np.get('tolerancia_angular_seg'), 0)}″</td>
+      </tr>
+    </table>"""
+
+    firmas = html_firmas_validacion_newpoint_pdf(np, contrato)
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
+    <style>@page {{ size: letter landscape; margin: 5mm 6mm; }}</style></head>
+    <body style="font-family:Arial,Helvetica,sans-serif;font-size:5.5pt;margin:0;color:#0f172a;line-height:1.2;">
+    {html_encabezado_pdf_compacto(contrato, titulo, subtitulo)}
+    <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+      <colgroup><col width="57%"/><col width="43%"/></colgroup>
+      <tr>
+        <td valign="top" style="padding-right:3px;">
+          {bloque_datos}{bloque_procedimiento}{bloque_elementos}
+          <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}">
+            <colgroup><col width="50%"/><col width="50%"/></colgroup>
+            <tr>
+              <td valign="top" style="padding-right:2px;">{bloque_lado_c}</td>
+              <td valign="top" style="padding-left:2px;">{bloque_angulos}</td>
+            </tr>
+            <tr>
+              <td valign="top" style="padding-right:2px;">{bloque_radiacion_p1}</td>
+              <td valign="top" style="padding-left:2px;">{bloque_radiacion_p2}</td>
+            </tr>
+          </table>
+          {bloque_verificacion}
+        </td>
+        <td valign="top" style="padding-left:3px;border-left:1px solid #e2e8f0;">
+          <div style="{sec}text-align:center;">Plano de ubicación — {nombre_nuevo}</div>
+          <div style="text-align:center;">{svg}</div>
+        </td>
+      </tr>
+    </table>
+    {firmas}
+    </body></html>"""
+
+
 def html_documento_poligonal_pdf(
     contrato: dict,
     pol: dict,
@@ -1477,6 +3253,7 @@ def html_documento_poligonal_pdf(
     cierre: Optional[dict],
     firmas: List[dict],
     punto_inicial: Optional[dict] = None,
+    punto_final: Optional[dict] = None,
 ) -> str:
     """HTML: hoja cálculo compacta + hoja plano con rotulado."""
     titulo = f"Poligonal trigonométrica — {pol.get('nombre', '')}"
@@ -1484,7 +3261,9 @@ def html_documento_poligonal_pdf(
     {html_tabla_poligonal_pdf(estaciones, pol)}
     {html_cierre_poligonal_pdf(cierre, pol)}
     """
-    pagina_plano = html_pagina_plano_poligonal(contrato, pol, estaciones, punto_inicial, firmas)
+    pagina_plano = html_pagina_plano_poligonal(
+        contrato, pol, estaciones, punto_inicial, firmas, punto_final, cierre
+    )
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head>
     <body style="font-family:Arial,Helvetica,sans-serif;font-size:8pt;margin:8px;color:#0f172a;">
     {html_encabezado_pdf(contrato, titulo)}
@@ -1492,6 +3271,53 @@ def html_documento_poligonal_pdf(
     {html_firmas_pdf(firmas)}
     {pagina_plano}
     </body></html>"""
+
+
+def html_encabezado_pdf_compacto(
+    contrato: dict, titulo: str, subtitulo: str = "", *, generado_por: str = ""
+) -> str:
+    """Encabezado compacto: logo | título (+ subtítulo) | fecha; contrato | objeto | generado por."""
+    objeto = html.escape(str(contrato.get("objeto") or ""))
+    numero = html.escape(str(contrato.get("numero") or ""))
+    fecha = _fecha_informe_pdf()
+    gen = html.escape(str(generado_por or ""))
+    logo = contrato.get("logo_contratista") or ""
+    if logo and (str(logo).startswith("http://") or str(logo).startswith("https://")):
+        logo = ""
+    logo_html = (
+        f'<img src="{html.escape(str(logo), quote=True)}" style="max-height:36px;max-width:72px;" />'
+        if logo
+        else '<div style="border:1px dashed #cbd5e1;padding:4px 6px;font-size:6pt;color:#94a3b8;">LOGO</div>'
+    )
+    sub_html = ""
+    if subtitulo:
+        sub_html = (
+            f'<div style="font-size:6pt;font-weight:600;color:#475569;margin-top:1px;line-height:1.2;">'
+            f"{html.escape(subtitulo)}</div>"
+        )
+    gen_html = f' &nbsp;|&nbsp; <b>Generado por:</b> {gen}' if gen else ""
+    return f"""
+    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:3px;">
+      <tr>
+        <td width="14%" valign="middle" style="padding:2px 4px;">{logo_html}</td>
+        <td width="66%" valign="middle" align="center" style="padding:2px 6px;">
+          <div style="font-size:8.5pt;font-weight:bold;color:#1e293b;line-height:1.15;">{html.escape(titulo)}</div>
+          {sub_html}
+        </td>
+        <td width="20%" valign="middle" align="right" style="font-size:6.5pt;color:#64748b;padding:2px 4px;white-space:nowrap;">
+          {fecha}
+        </td>
+      </tr>
+      <tr>
+        <td colspan="3" style="border-bottom:1.5px solid #1e40af;padding:0;height:1px;"></td>
+      </tr>
+      <tr>
+        <td colspan="3" style="font-size:6.5pt;color:#475569;padding:3px 4px 2px;line-height:1.3;">
+          <b>Contrato N° {numero}</b> &nbsp;|&nbsp; <b>Objeto:</b> {objeto}{gen_html}
+        </td>
+      </tr>
+    </table>
+    """
 
 
 def html_encabezado_pdf(contrato: dict, titulo: str) -> str:
@@ -1503,7 +3329,7 @@ def html_encabezado_pdf(contrato: dict, titulo: str) -> str:
     entidad = html.escape(
         str(contrato.get("entidad") or contrato.get("entidad_otra") or contrato.get("municipio") or "")
     )
-    fecha = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    fecha = _fecha_informe_pdf()
     logo = contrato.get("logo_contratista") or ""
     if logo and (str(logo).startswith("http://") or str(logo).startswith("https://")):
         logo = ""

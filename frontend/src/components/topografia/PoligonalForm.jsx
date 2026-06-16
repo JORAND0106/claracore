@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import PoligonalModal from './PoligonalModal'
-
-import PoligonalGrafico from './PoligonalGrafico'
-
-import PoligonalCalculoTable from './PoligonalCalculoTable'
-
-import PoligonalCierrePanel from './PoligonalCierrePanel'
-
-import FirmaPerfilTopo from './FirmaPerfilTopo'
+import PoligonalResumen from './PoligonalResumen'
 
 import TopoErrorModal from './TopoErrorModal'
 
@@ -16,7 +9,7 @@ import TopoConfirmModal from './TopoConfirmModal'
 
 import { parseApiError, PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
-export default function PoligonalForm({ contratoId, token, permisos }) {
+export default function PoligonalForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
 
@@ -32,6 +25,8 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
   const [modalOpen, setModalOpen] = useState(false)
 
+  const [modalModo, setModalModo] = useState('editar')
+
   const [modalPoligonalId, setModalPoligonalId] = useState(null)
 
   const [puntosVerificados, setPuntosVerificados] = useState([])
@@ -41,10 +36,6 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
   const [eliminando, setEliminando] = useState(false)
 
   const [refreshingVista, setRefreshingVista] = useState(false)
-
-  const [vistaRev, setVistaRev] = useState(0)
-
-  const [ajustando, setAjustando] = useState(false)
 
   const [pdfBusy, setPdfBusy] = useState(false)
 
@@ -88,8 +79,6 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
       setSel(id)
 
-      setVistaRev(Date.now())
-
       setResultado(null)
 
     } catch (e) {
@@ -127,21 +116,21 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
 
   const abrirNueva = () => {
-
     setModalPoligonalId(null)
-
+    setModalModo('editar')
     setModalOpen(true)
-
   }
 
-
-
   const abrirEditar = (id) => {
-
     setModalPoligonalId(id || sel)
-
+    setModalModo('editar')
     setModalOpen(true)
+  }
 
+  const abrirVer = (id) => {
+    setModalPoligonalId(id || sel)
+    setModalModo('ver')
+    setModalOpen(true)
   }
 
 
@@ -163,54 +152,6 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
     } finally {
 
       setPdfBusy(false)
-
-    }
-
-  }
-
-
-
-  const ajustarPoligonal = async () => {
-
-    if (!sel) return
-
-    setAjustando(true)
-
-    try {
-
-      await api(`/poligonales/${sel}/calcular`, { method: 'POST' })
-
-      await cargarDetalle(sel)
-
-    } catch (e) {
-
-      showError(e)
-
-    } finally {
-
-      setAjustando(false)
-
-    }
-
-  }
-
-
-
-  const validar = async () => {
-
-    if (!sel) return
-
-    try {
-
-      await api(`/poligonales/${sel}/validar`, { method: 'POST' })
-
-      cargarDetalle(sel)
-
-      cargarLista()
-
-    } catch (e) {
-
-      showError(e)
 
     }
 
@@ -314,7 +255,7 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
                 onClick={() => seleccionarTab(p.id)}
 
-                onDoubleClick={() => abrirEditar(p.id)}
+                onDoubleClick={() => (p.estado === 'cerrado' || (p.nivel2_estado || '') === 'Aprobado' || p.biblioteca_at ? abrirVer(p.id) : abrirEditar(p.id))}
 
                 title={`${p.nombre} (${p.estado}). Doble clic: abrir libreta`}
 
@@ -322,7 +263,7 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
                 <span>{p.nombre}</span>
 
-                <small style={{ color: ui.textMuted, fontWeight: 400 }}>({p.estado})</small>
+                <small style={{ color: ui.textMuted, fontWeight: 400 }}>({p.estado}{p.nivel1_estado && p.nivel1_estado !== 'No Revisado' ? ` · C:${p.nivel1_estado}` : ''}{p.nivel2_estado && p.nivel2_estado !== 'No Revisado' ? ` · I:${p.nivel2_estado}` : ''})</small>
 
               </button>
 
@@ -388,51 +329,38 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
 
 
 
-      {detalle ? (
-
+      {detalle ? (() => {
+        const pol = detalle.poligonal || {}
+        const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+        const terminada = pol.estado === 'cerrado'
+        return (
         <div>
-
-          <div style={{ ...ui.card, marginBottom: 16 }}>
-            <h3 style={{ marginTop: 0 }}>{detalle.poligonal?.nombre}</h3>
-            {detalle.cierre && (
-              <div style={{ marginBottom: 12 }}>
-                <PoligonalCierrePanel cierre={detalle.cierre} />
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+          <div style={{ ...ui.card, padding: '12px 14px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px 16px' }}>
+            <PoligonalResumen poligonal={pol} cierre={detalle.cierre} />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0, alignSelf: 'flex-start' }}>
               <button
                 type="button"
                 style={ui.btnSecondary}
-                title="Recalcula la cartera y el cierre desde el servidor (use tras guardar en la libreta)"
+                title="Recalcula el resumen desde el servidor"
                 onClick={() => cargarDetalle(sel)}
                 disabled={!sel || refreshingVista}
               >
-                {refreshingVista ? 'Actualizando…' : 'Actualizar vista'}
+                {refreshingVista ? 'Actualizando…' : 'Actualizar'}
               </button>
-              {puede(permisos, 'editar') && (
-                <button type="button" style={ui.btnPrimary} onClick={() => abrirEditar(sel)}>
-                  Editar en libreta
+              {puede(permisos, 'editar') && !sellada && !terminada && (
+                <button type="button" style={ui.btnPrimary} onClick={() => abrirEditar(sel)} title="Libreta de cálculo, armadas y terminar poligonal">
+                  Editar poligonal
                 </button>
               )}
-              {puede(permisos, 'editar') && detalle?.cierre?.cerrado && (
-                <button
-                  type="button"
-                    style={{ ...ui.btnPrimary, background: '#047857' }}
-                  onClick={ajustarPoligonal}
-                  disabled={ajustando}
-                  title="Distribuye error angular y aplica Bowditch; guarda coordenadas ajustadas"
-                >
-                  {ajustando ? 'Ajustando…' : 'Corregir y ajustar'}
+              {(terminada && !sellada) && (
+                <button type="button" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas calculadas, ajuste y validación contratista / interventoría">
+                  Validar poligonal
                 </button>
               )}
-              {puede(permisos, 'validar') && (
-                <button
-                  type="button"
-                  style={ui.btnSecondary}
-                  onClick={validar}
-                  title={detalle?.poligonal?.ajustada_at ? 'Usa datos ajustados' : 'Requiere ajuste previo'}
-                >
-                  Validar
+              {sellada && (
+                <button type="button" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas y validación (solo lectura)">
+                  Ver poligonal
                 </button>
               )}
               {puede(permisos, 'exportar') && (
@@ -441,55 +369,11 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
                 </button>
               )}
             </div>
-          </div>
-
-
-
-          <PoligonalCalculoTable
-
-            key={vistaRev || sel}
-
-            estaciones={detalle.estaciones}
-
-            poligonal={detalle.poligonal}
-
-            cierre={detalle.cierre}
-
-            modoAjuste={!!detalle.poligonal?.ajustada_at}
-
-          />
-
-
-
-          <div style={{ marginTop: 12 }}>
-
-            <PoligonalGrafico
-
-              estaciones={detalle.estaciones}
-
-              puntoInicial={detalle.punto_inicial}
-
-              cierre={detalle.cierre}
-
-            />
-
-          </div>
-
-
-
-          <PermisoAviso permisos={permisos} accion="editar">
-
-            <div style={{ marginTop: 12 }}>
-
-              <FirmaPerfilTopo api={api} poligonalId={sel} token={token} />
-
             </div>
-
-          </PermisoAviso>
-
+          </div>
         </div>
-
-      ) : lista.length > 0 && !refreshingVista ? (
+        )
+      })() : lista.length > 0 && !refreshingVista ? (
 
         <p style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>Seleccione una poligonal en las pestañas superiores.</p>
 
@@ -516,6 +400,12 @@ export default function PoligonalForm({ contratoId, token, permisos }) {
         api={api}
 
         permisos={permisos}
+
+        usuario={usuario}
+
+        modoInicial={modalModo}
+
+        token={token}
 
         theme={ui.t}
 

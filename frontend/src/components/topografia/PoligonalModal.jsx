@@ -3,7 +3,8 @@ import TopoAngularInput from './TopoAngularInput'
 import PoligonalCalculoTable from './PoligonalCalculoTable'
 import PoligonalCierrePanel from './PoligonalCierrePanel'
 import PoligonalGrafico from './PoligonalGrafico'
-import TopoErrorModal from './TopoErrorModal'
+import PoligonalValidacionPanel from './PoligonalValidacionPanel'
+import FirmaPerfilTopo from './FirmaPerfilTopo'
 import {
   useTopoTheme,
   parseApiError,
@@ -25,22 +26,45 @@ const td = { padding: 8, fontSize: 'var(--cc-xs)', borderBottom: '1px solid #e2e
 function CampoLabel({ texto, ayuda }) {
   return (
     <span
-      title={ayuda}
-      style={{ fontSize: 'var(--cc-xs)', color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      style={{
+        fontSize: 'var(--cc-xs)',
+        color: '#64748b',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap',
+        lineHeight: 1.2,
+        minHeight: 16,
+      }}
     >
       {texto}
       {ayuda && (
         <span
+          title={ayuda}
+          aria-label={ayuda}
           style={{
-            display: 'inline-flex', width: 14, height: 14, borderRadius: '50%',
-            background: '#cbd5e1', color: '#fff', fontSize: 9, fontWeight: 700,
-            alignItems: 'center', justifyContent: 'center', cursor: 'help',
+            display: 'inline-flex',
+            width: 14,
+            height: 14,
+            borderRadius: '50%',
+            background: '#cbd5e1',
+            color: '#fff',
+            fontSize: 9,
+            fontWeight: 700,
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'help',
+            flexShrink: 0,
           }}
-        >?</span>
+        >
+          ?
+        </span>
       )}
     </span>
   )
 }
+
+const setupField = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }
 
 const emptyForm = {
   nombre: '',
@@ -52,11 +76,13 @@ const emptyForm = {
   longitud_max_delta_m: 300,
   amarreModo: 'inline',
   punto_inicial_id: '',
-  punto_final_id: '',
   amarre: { nombre: '', norte: '', este: '', cota: '' },
   visadoModo: 'inline',
   punto_visado_id: '',
   visado: { nombre: '', norte: '', este: '', cota: '' },
+  finalModo: 'inline',
+  punto_final_id: '',
+  llegada: { nombre: '', norte: '', este: '', cota: '' },
   operador: '',
   fecha_campo: '',
   observaciones: '',
@@ -76,10 +102,13 @@ export default function PoligonalModal({
   poligonalId: initialPoligonalId = null,
   initialDetalle = null,
   puntosVerificados = [],
+  modoInicial = 'editar',
+  usuario = null,
+  token = null,
 }) {
   const ui = useTopoTheme()
   const theme = themeProp || ui.t
-  const [step, setStep] = useState('setup')
+  const [step, setStep] = useState('chooseTipo')
   const [poligonalId, setPoligonalId] = useState(null)
   const [detalle, setDetalle] = useState(null)
   const [resultado, setResultado] = useState(null)
@@ -111,7 +140,7 @@ export default function PoligonalModal({
   const [refreshing, setRefreshing] = useState(false)
   const [ultimaSync, setUltimaSync] = useState(null)
   const [syncMsg, setSyncMsg] = useState(null)
-  const [faseCierre, setFaseCierre] = useState(false)
+  const [modo, setModo] = useState('editar')
   const formRef = useRef(null)
   const [armadaForm, setArmadaForm] = useState({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
   const [mostrarCambioArmada, setMostrarCambioArmada] = useState(false)
@@ -141,7 +170,6 @@ export default function PoligonalModal({
       longitud_max_delta_m: data.poligonal.longitud_max_delta_m ?? 300,
       amarreModo: pi?.verificado ? 'biblioteca' : 'inline',
       punto_inicial_id: data.poligonal.punto_inicial_id || '',
-      punto_final_id: data.poligonal.punto_final_id || '',
       amarre: {
         nombre: pi?.nombre || '',
         norte: pi?.norte ?? '',
@@ -155,6 +183,14 @@ export default function PoligonalModal({
         norte: pv?.norte ?? '',
         este: pv?.este ?? '',
         cota: pv?.cota ?? '',
+      },
+      finalModo: data.punto_final?.verificado ? 'biblioteca' : 'inline',
+      punto_final_id: data.poligonal.punto_final_id || '',
+      llegada: {
+        nombre: data.punto_final?.nombre || '',
+        norte: data.punto_final?.norte ?? '',
+        este: data.punto_final?.este ?? '',
+        cota: data.punto_final?.cota ?? '',
       },
       operador: data.poligonal.operador || '',
       fecha_campo: data.poligonal.fecha_campo || '',
@@ -200,6 +236,7 @@ export default function PoligonalModal({
   }
 
   useEffect(() => {
+    if (open) setModo(modoInicial || 'editar')
     if (!open) return
     setResultado(null)
     setErrorModal(null)
@@ -215,17 +252,16 @@ export default function PoligonalModal({
         cargarDetalle(initialPoligonalId).catch(showError)
       }
     } else {
-      setStep('setup')
+      setStep('chooseTipo')
       setPoligonalId(null)
       setDetalle(null)
       setForm(emptyForm)
       setEstForm(resetEstForm())
       setEditandoId(null)
-      setFaseCierre(false)
       setMostrarCambioArmada(false)
       setArmadaForm({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
     }
-  }, [open, initialPoligonalId, initialDetalle, aplicarDetalle, cargarDetalle, showError, api])
+  }, [open, initialPoligonalId, initialDetalle, modoInicial, aplicarDetalle, cargarDetalle, showError, api])
 
   const puntoBiblioteca = useMemo(
     () => puntosVerificados.find((p) => p.id === form.punto_inicial_id),
@@ -286,6 +322,30 @@ export default function PoligonalModal({
     })
   }
 
+  const seleccionarLlegadaBiblioteca = (id) => {
+    const p = puntosVerificados.find((x) => x.id === id)
+    if (!p) {
+      setForm({ ...form, finalModo: 'inline', punto_final_id: '' })
+      return
+    }
+    setForm({
+      ...form,
+      finalModo: 'biblioteca',
+      punto_final_id: id,
+      llegada: {
+        nombre: p.nombre,
+        norte: p.norte ?? '',
+        este: p.este ?? '',
+        cota: p.cota ?? '',
+      },
+    })
+  }
+
+  const elegirTipoPoligonal = (tipo) => {
+    setForm({ ...emptyForm, tipo, nombre: form.nombre || '' })
+    setStep('setup')
+  }
+
   const iniciarPoligonal = async () => {
     if (!form.nombre.trim()) {
       setErrorModal({
@@ -324,6 +384,23 @@ export default function PoligonalModal({
       })
       return
     }
+    if (form.tipo === 'abierta') {
+      if (form.finalModo === 'biblioteca') {
+        if (!form.punto_final_id) {
+          setErrorModal({
+            titulo: 'Punto de llegada requerido',
+            mensaje: 'Seleccione el BM de llegada o ingrese sus coordenadas.',
+          })
+          return
+        }
+      } else if (!form.llegada.nombre.trim() || form.llegada.norte === '' || form.llegada.este === '') {
+        setErrorModal({
+          titulo: 'Llegada requerida',
+          mensaje: 'Indique nombre, Norte y Este del punto de llegada (cierre de la poligonal abierta).',
+        })
+        return
+      }
+    }
     setBusy(true)
     try {
       const payload = {
@@ -344,15 +421,24 @@ export default function PoligonalModal({
       }
       if (form.amarreModo === 'biblioteca') {
         payload.punto_inicial_id = form.punto_inicial_id
-        if (form.tipo === 'abierta' && form.punto_final_id) {
-          payload.punto_final_id = form.punto_final_id
-        }
       } else {
         payload.amarre_inicial = {
           nombre: form.amarre.nombre.trim(),
           norte: Number(form.amarre.norte),
           este: Number(form.amarre.este),
           cota: form.amarre.cota === '' ? null : Number(form.amarre.cota),
+        }
+      }
+      if (form.tipo === 'abierta') {
+        if (form.finalModo === 'biblioteca') {
+          payload.punto_final_id = form.punto_final_id
+        } else {
+          payload.amarre_final = {
+            nombre: form.llegada.nombre.trim(),
+            norte: Number(form.llegada.norte),
+            este: Number(form.llegada.este),
+            cota: form.llegada.cota === '' ? null : Number(form.llegada.cota),
+          }
         }
       }
       if (form.visadoModo === 'biblioteca') {
@@ -490,7 +576,7 @@ export default function PoligonalModal({
     try {
       await api(`/poligonales/${poligonalId}/cerrar`, { method: 'POST' })
       setResultado(null)
-      await sincronizarDetalle('Poligonal enviada a la biblioteca.')
+      await sincronizarDetalle('Poligonal terminada. Pendiente validación contratista e interventoría.')
     } catch (e) {
       showError(e)
     } finally {
@@ -571,6 +657,62 @@ export default function PoligonalModal({
     }
   }
 
+  const guardarAmarres = async () => {
+    if (!poligonalId) return
+    const build = (a, etiqueta) => {
+      if (!a.nombre?.trim()) {
+        setErrorModal({ titulo: 'Amarre incompleto', mensaje: `Indique el nombre del punto de ${etiqueta}.` })
+        return null
+      }
+      const norte = parseMetrosInput(a.norte)
+      const este = parseMetrosInput(a.este)
+      if (norte == null || este == null) {
+        setErrorModal({ titulo: 'Coordenadas requeridas', mensaje: `Norte y Este del ${etiqueta} son obligatorios (metros).` })
+        return null
+      }
+      const cotaRaw = a.cota === '' || a.cota == null ? null : parseMetrosInput(a.cota)
+      if (a.cota !== '' && a.cota != null && cotaRaw == null) {
+        setErrorModal({ titulo: 'Cota invalida', mensaje: `Revise la cota del ${etiqueta}.` })
+        return null
+      }
+      return { nombre: a.nombre.trim(), norte, este, cota: cotaRaw }
+    }
+    const estacion = build(form.amarre, 'estación (amarre)')
+    if (!estacion) return
+    const visado = build(form.visado, 'visado')
+    if (!visado) return
+    const payload = { estacion, visado }
+    if (detalle?.poligonal?.tipo === 'abierta') {
+      const llegada = build(form.llegada, 'llegada')
+      if (!llegada) return
+      payload.llegada = llegada
+    }
+    const teniaAjuste = Boolean(detalle?.poligonal?.ajustada_at)
+    setBusy(true)
+    try {
+      const data = await api(`/poligonales/${poligonalId}/amarres`, {
+        method: 'PUT',
+        body: JSON.stringify({ estacion, visado }),
+      })
+      if (data?.poligonal) {
+        aplicarDetalle(data, poligonalId)
+        onSaved?.(poligonalId)
+      } else {
+        await sincronizarDetalle()
+      }
+      setSyncMsg(
+        teniaAjuste
+          ? 'Amarres actualizados. Ejecute «Corregir y ajustar» para recalcular la poligonal.'
+          : 'Coordenadas de amarre actualizadas. Cartera recalculada.'
+      )
+      window.setTimeout(() => setSyncMsg(null), 5000)
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!open) return null
 
   const overlay = {
@@ -603,11 +745,32 @@ export default function PoligonalModal({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)' }}>
-                {step === 'setup' ? 'Nueva poligonal' : (detalle?.poligonal?.nombre || 'Poligonal')}
+                {step === 'chooseTipo'
+                  ? 'Nueva poligonal'
+                  : step === 'setup'
+                    ? `Nueva poligonal ${form.tipo === 'abierta' ? 'abierta' : 'cerrada'}`
+                    : (() => {
+                        const p = detalle?.poligonal
+                        const selladaT = (p?.nivel2_estado || '') === 'Aprobado' || Boolean(p?.biblioteca_at)
+                        const terminadaT = p?.estado === 'cerrado'
+                        const nombre = p?.nombre || 'Poligonal'
+                        if (terminadaT && selladaT) return `Ver · ${nombre}`
+                        if (terminadaT) return `Validar · ${nombre}`
+                        return `Editar · ${nombre}`
+                      })()}
               </h2>
+              {step === 'estaciones' && (
+                <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: 'var(--cc-sm)' }}>
+                  {detalle?.poligonal?.estado === 'cerrado'
+                    ? 'Coordenadas calculadas y validación.'
+                    : 'Libreta de cálculo — ingrese observaciones y termine cuando el cierre sea admisible.'}
+                </p>
+              )}
+              {step !== 'estaciones' && (
               <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: 'var(--cc-sm)' }}>
                 Poligonal trigonométrica — ingrese estaciones con angulos horizontal/vertical, HI y distancia.
               </p>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
               {step === 'estaciones' && poligonalId && (
@@ -630,45 +793,105 @@ export default function PoligonalModal({
             </p>
           )}
 
+          {step === 'chooseTipo' && (
+            <div>
+              <p style={{ margin: '0 0 16px', fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+                Elija el tipo de circuito. La libreta, cálculos y PDF comparten el mismo formato; la abierta cierra al punto de llegada.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => elegirTipoPoligonal('cerrada')}
+                  style={{
+                    textAlign: 'left',
+                    padding: 16,
+                    borderRadius: 10,
+                    border: `2px solid ${ui.accent}`,
+                    background: ui.accentSoft,
+                    cursor: 'pointer',
+                    color: ui.text,
+                  }}
+                >
+                  <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: ui.accent, marginBottom: 6 }}>Poligonal cerrada</div>
+                  <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                    Inicio = estación + visado. El circuito regresa al punto inicial. Cierre angular y lineal al amarre de partida.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => elegirTipoPoligonal('abierta')}
+                  style={{
+                    textAlign: 'left',
+                    padding: 16,
+                    borderRadius: 10,
+                    border: `2px solid ${ui.accent}`,
+                    background: ui.accentSoft,
+                    cursor: 'pointer',
+                    color: ui.text,
+                  }}
+                >
+                  <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: ui.accent, marginBottom: 6 }}>Poligonal abierta</div>
+                  <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                    Inicio = estación + visado + <strong>llegada</strong> (coordenada objetivo). El cierre se calcula contra la llegada, no al inicio.
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
           {step === 'setup' && (
             <div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 16 }}>
-                <label>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Nombre</span>
+              <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" style={ui.btnSecondary} onClick={() => setStep('chooseTipo')}>← Cambiar tipo</button>
+                <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: ui.accentSoft, color: ui.accent }}>
+                  {form.tipo === 'abierta' ? 'Abierta' : 'Cerrada'}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(128px, 1fr))', gap: 10, marginBottom: 16, alignItems: 'end' }}>
+                <label style={setupField}>
+                  <CampoLabel texto="Nombre" ayuda="Nombre del circuito en la libreta de cálculo." />
                   <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.inputStyle} placeholder="Poligonal 1" />
                 </label>
-                <label>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Tipo</span>
-                  <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })} style={ui.inputStyle}>
-                    <option value="cerrada">Cerrada</option>
-                    <option value="abierta">Abierta</option>
-                  </select>
-                </label>
-                <label title="Sentido de recorrido de la poligonal. Horario aplica angulos exteriores (n+2)*180; antihorario aplica interiores (n-2)*180.">
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Sentido</span>
+                <label style={setupField}>
+                  <CampoLabel
+                    texto="Sentido"
+                    ayuda="Sentido de recorrido de la poligonal. Horario aplica ángulos exteriores (n+2)×180°; antihorario aplica interiores (n−2)×180°."
+                  />
                   <select value={form.sentido} onChange={(e) => setForm({ ...form, sentido: e.target.value })} style={ui.inputStyle}>
                     <option value="antihorario">Antihorario (interiores)</option>
                     <option value="horario">Horario (exteriores)</option>
                   </select>
                 </label>
-                <label title="Res. 643 Tabla 2: menor a 1 000 m² → 1:20 000; hasta 1 ha → 1:15 000; hasta 10 ha → 1:10 000; ≥ 10 ha → 1:5 000.">
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Tolerancia plan 1:N</span>
+                <label style={setupField}>
+                  <CampoLabel
+                    texto="Plano"
+                    ayuda="Tolerancia de cierre lineal en planta (1:N). Res. 643 Tabla 2: menor a 1 000 m² → 1:20 000; hasta 1 ha → 1:15 000; hasta 10 ha → 1:10 000; ≥10 ha → 1:5 000."
+                  />
                   <input type="number" value={form.tolerancia_relativa} onChange={(e) => setForm({ ...form, tolerancia_relativa: e.target.value })} style={ui.inputStyle} />
                 </label>
-                <label title="Precisión angular del equipo (segundos). Tolerancia angular = este valor × √vértices (Res. 643 §9.2.2).">
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Prec. angular equipo (&quot;)</span>
+                <label style={setupField}>
+                  <CampoLabel
+                    texto="Angular"
+                    ayuda={'Precisión angular del equipo (segundos). Tolerancia angular = este valor × √vértices (Res. 643 §9.2.2).'}
+                  />
                   <input type="number" step="0.1" value={form.precision_angular_seg} onChange={(e) => setForm({ ...form, precision_angular_seg: e.target.value })} style={ui.inputStyle} placeholder="10" />
                 </label>
-                <label title="Longitud máxima recomendada entre deltas consecutivos (m). Referencia técnica 250–300 m; configurable.">
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Máx. entre deltas (m)</span>
+                <label style={setupField}>
+                  <CampoLabel
+                    texto="Deltas"
+                    ayuda="Longitud máxima recomendada entre deltas consecutivos (m). Referencia técnica 250–300 m; configurable."
+                  />
                   <input type="number" value={form.longitud_max_delta_m} onChange={(e) => setForm({ ...form, longitud_max_delta_m: e.target.value })} style={ui.inputStyle} placeholder="300" />
                 </label>
-                <label>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Tolerancia cota (mm/km)</span>
+                <label style={setupField}>
+                  <CampoLabel
+                    texto="Cota"
+                    ayuda="Tolerancia de cierre en cota (mm/km de recorrido)."
+                  />
                   <input type="number" value={form.tolerancia_cota_mm_km} onChange={(e) => setForm({ ...form, tolerancia_cota_mm_km: e.target.value })} style={ui.inputStyle} />
                 </label>
-                <label>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Operador</span>
+                <label style={setupField}>
+                  <CampoLabel texto="Operador" ayuda="Profesional responsable del levantamiento en campo." />
                   <select value={form.operador} onChange={(e) => setForm({ ...form, operador: e.target.value })} style={ui.inputStyle}>
                     <option value="">— Seleccione —</option>
                     {operadores.map((u) => (
@@ -679,25 +902,25 @@ export default function PoligonalModal({
                     )}
                   </select>
                 </label>
-                <label>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Fecha campo</span>
+                <label style={setupField}>
+                  <CampoLabel texto="Fecha" ayuda="Fecha en que se realizó el trabajo de campo." />
                   <input type="date" value={form.fecha_campo} onChange={(e) => setForm({ ...form, fecha_campo: e.target.value })} style={ui.inputStyle} />
                 </label>
               </div>
 
               <div style={{ border: '1px solid #cbd5e1', borderRadius: 10, padding: 14, marginBottom: 16, background: '#fff' }}>
                 <h4 style={{ margin: '0 0 8px' }}>Equipo de medición</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
-                  <label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, alignItems: 'end' }}>
+                  <label style={setupField}>
                     <CampoLabel texto="Marca" ayuda="Fabricante del instrumento (estación total, GPS, etc.)." />
                     <input value={form.equipo_marca} onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })} style={ui.inputStyle} placeholder="Ej. Leica" />
                   </label>
-                  <label>
-                    <CampoLabel texto="Referencia / modelo" ayuda="Modelo del equipo usado en campo." />
+                  <label style={setupField}>
+                    <CampoLabel texto="Modelo" ayuda="Referencia o modelo del equipo usado en campo." />
                     <input value={form.equipo_referencia} onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })} style={ui.inputStyle} placeholder="Ej. TS16" />
                   </label>
-                  <label>
-                    <CampoLabel texto="N° de serie" ayuda="Serial del instrumento según placa o factura." />
+                  <label style={setupField}>
+                    <CampoLabel texto="Serie" ayuda="Número de serie del instrumento según placa o factura." />
                     <input value={form.equipo_serial} onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })} style={ui.inputStyle} placeholder="Ej. 123456" />
                   </label>
                 </div>
@@ -706,37 +929,52 @@ export default function PoligonalModal({
               <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, marginBottom: 16, background: '#f8fafc' }}>
                 <h4 style={{ margin: '0 0 8px' }}>Puntos de amarre (estacion y visado)</h4>
                 <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: '#64748b' }}>
-                  Defina el punto de estacion (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al cerrar la poligonal con cierre admisible, los puntos calculados pasan a la biblioteca.
+                  Defina el punto de estacion (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al terminar con cierre admisible, la poligonal queda lista para validación; la biblioteca se publica cuando interventoría aprueba.
                 </p>
 
                 {puntosVerificados.length > 0 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10, marginBottom: 12 }}>
-                    <label>
-                      <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Estacion: usar BM verificado</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10, marginBottom: 12, alignItems: 'end' }}>
+                    <label style={setupField}>
+                      <CampoLabel texto="Estación" ayuda="Seleccione un BM verificado como punto de estación (amarre inicial), o ingrese coordenadas manualmente abajo." />
                       <select
                         value={form.amarreModo === 'biblioteca' ? form.punto_inicial_id : ''}
                         onChange={(e) => seleccionarBmBiblioteca(e.target.value)}
                         style={ui.inputStyle}
                       >
-                        <option value="">— Ingresar coordenadas manualmente —</option>
+                        <option value="">— Manual —</option>
                         {puntosVerificados.map((p) => (
                           <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
                         ))}
                       </select>
                     </label>
-                    <label>
-                      <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Visado: usar BM verificado</span>
+                    <label style={setupField}>
+                      <CampoLabel texto="Visado" ayuda="Seleccione un BM verificado como punto de visado (referencia atrás), o ingrese coordenadas manualmente abajo." />
                       <select
                         value={form.visadoModo === 'biblioteca' ? form.punto_visado_id : ''}
                         onChange={(e) => seleccionarVisadoBiblioteca(e.target.value)}
                         style={ui.inputStyle}
                       >
-                        <option value="">— Ingresar coordenadas manualmente —</option>
+                        <option value="">— Manual —</option>
                         {puntosVerificados.map((p) => (
                           <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
                         ))}
                       </select>
                     </label>
+                    {form.tipo === 'abierta' && (
+                      <label style={setupField}>
+                        <CampoLabel texto="Llegada" ayuda="Seleccione un BM verificado como punto de llegada (objetivo del cierre), o ingrese coordenadas manualmente abajo." />
+                        <select
+                          value={form.finalModo === 'biblioteca' ? form.punto_final_id : ''}
+                          onChange={(e) => seleccionarLlegadaBiblioteca(e.target.value)}
+                          style={ui.inputStyle}
+                        >
+                          <option value="">— Manual —</option>
+                          {puntosVerificados.map((p) => (
+                            <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                   </div>
                 )}
 
@@ -830,6 +1068,47 @@ export default function PoligonalModal({
                           />
                         </td>
                       </tr>
+                      {form.tipo === 'abierta' && (
+                        <tr>
+                          <td style={{ ...td, fontWeight: 600, color: ui.accent }}>Llegada</td>
+                          <td style={td}>
+                            <input
+                              value={form.llegada.nombre}
+                              disabled={form.finalModo === 'biblioteca'}
+                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, nombre: e.target.value } })}
+                              style={ui.inputStyle}
+                              placeholder="FIN"
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              value={form.llegada.norte}
+                              disabled={form.finalModo === 'biblioteca'}
+                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, norte: e.target.value } })}
+                              style={ui.inputStyle}
+                              placeholder="0.000"
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              value={form.llegada.este}
+                              disabled={form.finalModo === 'biblioteca'}
+                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, este: e.target.value } })}
+                              style={ui.inputStyle}
+                              placeholder="0.000"
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              value={form.llegada.cota}
+                              disabled={form.finalModo === 'biblioteca'}
+                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, cota: e.target.value } })}
+                              style={ui.inputStyle}
+                              placeholder="Opcional"
+                            />
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -856,16 +1135,10 @@ export default function PoligonalModal({
                 )}
               </div>
 
-              {form.tipo === 'abierta' && puntosVerificados.length > 0 && (
-                <label style={{ display: 'block', marginBottom: 16 }}>
-                  <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Punto final (poligonal abierta)</span>
-                  <select value={form.punto_final_id} onChange={(e) => setForm({ ...form, punto_final_id: e.target.value })} style={ui.inputStyle}>
-                    <option value="">— Opcional —</option>
-                    {puntosVerificados.map((p) => (
-                      <option key={p.id} value={p.id}>{p.nombre}</option>
-                    ))}
-                  </select>
-                </label>
+              {form.tipo === 'abierta' && (
+                <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: ui.accent }}>
+                  La llegada es la coordenada objetivo: al terminar el circuito se compara la posición calculada contra este punto.
+                </p>
               )}
 
               {puede(permisos, 'crear') && (
@@ -878,7 +1151,10 @@ export default function PoligonalModal({
 
           {step === 'estaciones' && detalle && (() => {
             const pol = detalle.poligonal || {}
-            const editable = puede(permisos, 'editar') && pol.estado !== 'cerrado'
+            const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+            const terminada = pol.estado === 'cerrado'
+            const soloVer = sellada
+            const editableLibreta = puede(permisos, 'editar') && !terminada && !soloVer
             const armadas = detalle.armadas || []
             const armadaActual = armadas.length ? armadas[armadas.length - 1] : null
             const estDisp = detalle.puntos_estacion_disponibles || []
@@ -886,27 +1162,218 @@ export default function PoligonalModal({
             const fmt = (v, d = 3) => (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(d)
             return (
             <div>
-              {/* Encabezado general */}
+              {!terminada && (
               <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, marginBottom: 16, background: '#f8fafc' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-                  <span style={{ fontSize: 'var(--cc-sm)', color: '#475569' }}>
-                    Estado: <strong>{pol.estado}</strong> · Tipo: {pol.tipo} · Tol. plan {fmtRatio(pol.tolerancia_relativa ?? 20000)} · Prec. ang. {pol.precision_angular_seg ?? 10}&quot; · Máx. delta {pol.longitud_max_delta_m ?? 300} m
+                  <span style={{ fontSize: 'var(--cc-sm)', color: '#475569' }} title="Datos generales del circuito">
+                    Libreta · {pol.tipo} · Tol. {fmtRatio(pol.tolerancia_relativa ?? 20000)}
                   </span>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8 }} title="Define la formula del cierre angular: horario usa angulos exteriores (n+2)·180; antihorario usa interiores (n-2)·180.">
-                    <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>Sentido</span>
+                  {editableLibreta && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <CampoLabel
+                      texto="Sentido"
+                      ayuda="Horario = ángulos exteriores; antihorario = interiores."
+                    />
                     <select
                       value={pol.sentido || 'antihorario'}
                       onChange={(e) => cambiarSentido(e.target.value)}
-                      disabled={!editable || busy}
+                      disabled={busy}
                       style={{ ...ui.inputStyle, width: 'auto', padding: '6px 8px' }}
                     >
                       <option value="antihorario">Antihorario (interiores)</option>
                       <option value="horario">Horario (exteriores)</option>
                     </select>
                   </label>
+                  )}
                 </div>
               </div>
+              )}
 
+              {editableLibreta && (() => {
+                const amarreInp = { ...ui.inputStyle, padding: '3px 6px', fontSize: 'var(--cc-xs)', minWidth: 0 }
+                const filaGrid = {
+                  display: 'grid',
+                  gridTemplateColumns: '52px repeat(4, minmax(0, 1fr))',
+                  gap: 6,
+                  alignItems: 'end',
+                }
+                return (
+              <div
+                style={{
+                  border: `1px solid ${ui.accent}66`,
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  marginBottom: 12,
+                  background: ui.accentSoft,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent }}>
+                    Amarres
+                    {detalle.base && (
+                      <span style={{ fontWeight: 500, color: ui.textMuted, marginLeft: 8 }}>
+                        · Base Az {detalle.base.azimut_texto ?? '—'} · {fmt(detalle.base.distancia, 3)} m
+                      </span>
+                    )}
+                  </span>
+                  {editableLibreta && (
+                    <button
+                      type="button"
+                      style={{ ...ui.btnPrimary, padding: '4px 10px', fontSize: 'var(--cc-xs)' }}
+                      onClick={guardarAmarres}
+                      disabled={busy}
+                      title="Coordenadas provisorias o definitivas; recalcula la cartera"
+                    >
+                      {busy ? '…' : 'Guardar'}
+                    </button>
+                  )}
+                </div>
+                <div style={{ ...filaGrid, marginBottom: 4, color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+                  <span />
+                  <span>Punto</span>
+                  <span>Norte</span>
+                  <span>Este</span>
+                  <span>Cota</span>
+                </div>
+                <div style={{ ...filaGrid, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Estación (amarre inicial)">
+                    Est.{detalle.punto_inicial?.verificado ? ' ✓' : ''}
+                  </span>
+                  <label>
+                    <input
+                      value={form.amarre.nombre}
+                      disabled={!editableLibreta || busy || Boolean(detalle.punto_inicial?.verificado)}
+                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, nombre: e.target.value } })}
+                      style={amarreInp}
+                      title="Nombre estación / amarre inicial"
+                      placeholder="BM1"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.amarre.norte}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, norte: e.target.value } })}
+                      style={amarreInp}
+                      title="Norte (m)"
+                      placeholder="N"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.amarre.este}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, este: e.target.value } })}
+                      style={amarreInp}
+                      title="Este (m)"
+                      placeholder="E"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.amarre.cota}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, cota: e.target.value } })}
+                      style={amarreInp}
+                      title="Cota (m)"
+                      placeholder="Z"
+                    />
+                  </label>
+                </div>
+                <div style={filaGrid}>
+                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Visado (referencia atrás)">
+                    Vis.{detalle.punto_visado?.verificado ? ' ✓' : ''}
+                  </span>
+                  <label>
+                    <input
+                      value={form.visado.nombre}
+                      disabled={!editableLibreta || busy || Boolean(detalle.punto_visado?.verificado)}
+                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, nombre: e.target.value } })}
+                      style={amarreInp}
+                      title="Nombre visado"
+                      placeholder="VIS"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.visado.norte}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, norte: e.target.value } })}
+                      style={amarreInp}
+                      title="Norte (m)"
+                      placeholder="N"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.visado.este}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, este: e.target.value } })}
+                      style={amarreInp}
+                      title="Este (m)"
+                      placeholder="E"
+                    />
+                  </label>
+                  <label>
+                    <input
+                      value={form.visado.cota}
+                      disabled={!editableLibreta || busy}
+                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, cota: e.target.value } })}
+                      style={amarreInp}
+                      title="Cota (m)"
+                      placeholder="Z"
+                    />
+                  </label>
+                </div>
+                {pol.tipo === 'abierta' && (
+                  <div style={{ ...filaGrid, marginTop: 6 }}>
+                    <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: '#15803d', paddingBottom: 4 }} title="Punto de llegada (objetivo)">
+                      Llg.{detalle.punto_final?.verificado ? ' ✓' : ''}
+                    </span>
+                    <label>
+                      <input
+                        value={form.llegada.nombre}
+                        disabled={!editableLibreta || busy || Boolean(detalle.punto_final?.verificado)}
+                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, nombre: e.target.value } })}
+                        style={amarreInp}
+                        placeholder="FIN"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.llegada.norte}
+                        disabled={!editableLibreta || busy}
+                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, norte: e.target.value } })}
+                        style={amarreInp}
+                        placeholder="N"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.llegada.este}
+                        disabled={!editableLibreta || busy}
+                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, este: e.target.value } })}
+                        style={amarreInp}
+                        placeholder="E"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.llegada.cota}
+                        disabled={!editableLibreta || busy}
+                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, cota: e.target.value } })}
+                        style={amarreInp}
+                        placeholder="Z"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+                )
+              })()}
+
+              {editableLibreta && (
+              <>
               {/* Armadas (compactas, 2+ columnas segun ancho) */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 8, marginBottom: 14 }}>
                 {armadas.map((arm) => {
@@ -919,12 +1386,12 @@ export default function PoligonalModal({
                         <span style={{ fontSize: 'var(--cc-xs)', color: '#1e40af', fontWeight: 700, marginLeft: 'auto' }}>
                           Az {arm.base_azimut_texto ?? '—'}
                         </span>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="Altura del instrumento de esta armada, en metros.">
-                          <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>HI</span>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <CampoLabel texto="HI" ayuda="Altura del instrumento de esta armada, en metros." />
                           <input
                             defaultValue={arm.altura_instrumento ?? ''}
-                            onBlur={(e) => { if (editable && String(e.target.value) !== String(arm.altura_instrumento ?? '')) actualizarHIArmada(arm.id, e.target.value) }}
-                            disabled={!editable || busy}
+                            onBlur={(e) => { if (editableLibreta && String(e.target.value) !== String(arm.altura_instrumento ?? '')) actualizarHIArmada(arm.id, e.target.value) }}
+                            disabled={!editableLibreta || busy}
                             style={{ ...ui.inputStyle, width: 70, padding: '3px 6px', fontSize: 'var(--cc-xs)' }}
                             placeholder="1.50"
                           />
@@ -941,25 +1408,18 @@ export default function PoligonalModal({
                 })}
               </div>
 
-              {/* Ingreso de punto adelante (armada actual) */}
-              {editable && (editandoId || (!faseCierre && armadaActual)) && (
+              {editableLibreta && (editandoId || armadaActual) && (
                 <div ref={formRef} style={{ border: `1px solid ${editandoId ? '#2563eb' : '#e2e8f0'}`, borderRadius: 10, padding: 14, marginBottom: 16, background: editandoId ? '#eff6ff' : '#fff' }}>
-                  <h4 style={{ marginTop: 0, marginBottom: 4 }}>
-                    {editandoId ? 'Editar punto' : `Agregar punto adelante (armada ${armadaActual?.orden ?? '—'})`}
+                  <h4 style={{ marginTop: 0, marginBottom: 8 }} title="Obligatorio: punto y ángulo observado. Distancia y ángulo vertical opcionales.">
+                    {editandoId ? 'Editar punto' : `Agregar punto (armada ${armadaActual?.orden ?? '—'})`}
                   </h4>
-                  <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#64748b' }}>
-                    Ceros atras: el equipo encerado en el visado de atras lee el angulo observado al punto adelante. Azimut = azimut base + angulo observado.
-                  </p>
-                  <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: '#475569' }}>
-                    Obligatorio: <strong>Punto</strong> y <strong>Angulo observado</strong>. La distancia y el angulo vertical son <strong>opcionales</strong> (p. ej. la observacion de cierre/orientacion solo lleva angulo; sin distancia no se calculan coordenadas y la fila se muestra con «—»).
-                  </p>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10, alignItems: 'end' }}>
-                    <label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, alignItems: 'end' }}>
+                    <label style={setupField}>
                       <CampoLabel texto="Punto" ayuda="Nombre del punto observado adelante (o radiado)." />
                       <input value={estForm.nombre_punto} onChange={(e) => setEstForm({ ...estForm, nombre_punto: e.target.value })} style={ui.inputStyle} placeholder="Ej. P1" />
                     </label>
-                    <label>
-                      <CampoLabel texto="Tipo de punto" ayuda="Estacion = vertice por donde pasara el equipo (puede ser estacion/visado de otra armada). Auxiliar = punto de detalle/radiado." />
+                    <label style={setupField}>
+                      <CampoLabel texto="Tipo" ayuda="Estación = vértice por donde pasará el equipo. Auxiliar = punto de detalle radiado." />
                       <select value={estForm.tipo_punto} onChange={(e) => setEstForm({ ...estForm, tipo_punto: e.target.value })} style={ui.inputStyle}>
                         <option value="auxiliar">Auxiliar</option>
                         <option value="estacion">Estacion</option>
@@ -967,12 +1427,12 @@ export default function PoligonalModal({
                     </label>
                     <TopoAngularInput label="Ang. observado (ceros atras GG.MMSS)" value={estForm.angulo_gms} onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_gms: v }))} />
                     <TopoAngularInput label="Ang. vertical cenital (GG.MMSS)" value={estForm.angulo_vertical_gms} onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_vertical_gms: v }))} />
-                    <label>
-                      <CampoLabel texto="Altura de prisma (m)" ayuda="HT: altura del prisma/objetivo sobre el punto observado, en metros." />
+                    <label style={setupField}>
+                      <CampoLabel texto="Prisma" ayuda="HT: altura del prisma u objetivo sobre el punto observado, en metros." />
                       <input value={estForm.altura_objetivo} onChange={(e) => setEstForm({ ...estForm, altura_objetivo: e.target.value })} style={ui.inputStyle} placeholder="0" />
                     </label>
-                    <label>
-                      <CampoLabel texto="Distancia (m)" ayuda="Distancia horizontal medida al punto observado, en metros." />
+                    <label style={setupField}>
+                      <CampoLabel texto="Distancia" ayuda="Distancia horizontal medida al punto observado, en metros." />
                       <input value={estForm.distancia} onChange={(e) => setEstForm({ ...estForm, distancia: e.target.value })} style={ui.inputStyle} placeholder="0.000" />
                     </label>
                     {editandoId ? (
@@ -986,44 +1446,42 @@ export default function PoligonalModal({
                       </button>
                     )}
                   </div>
-                  {armadaActual.altura_instrumento == null && (
-                    <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
-                      Defina el HI de esta armada (en su cabecera) para calcular las cotas radiadas.
+                  {armadaActual?.altura_instrumento == null && (
+                    <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }} title="Defina el HI en la cabecera de la armada">
+                      Falta HI en la armada actual.
                     </p>
                   )}
                 </div>
               )}
 
-              {/* Cambiar armada */}
-              {editable && !faseCierre && pol.estado !== 'cerrado' && (
+              {editableLibreta && (
                 <div style={{ marginBottom: 16 }}>
                   {!mostrarCambioArmada ? (
-                    <button type="button" style={ui.btnSecondary} onClick={() => setMostrarCambioArmada(true)} disabled={busy}>
+                    <button type="button" style={ui.btnSecondary} onClick={() => setMostrarCambioArmada(true)} disabled={busy} title="Traslade el equipo a otra estación">
                       Cambiar armada
                     </button>
                   ) : (
                     <div style={{ border: '1px solid #1e40af', borderRadius: 10, padding: 14, background: '#eff6ff' }}>
-                      <h4 style={{ marginTop: 0, marginBottom: 4 }}>Nueva armada</h4>
-                      <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: '#475569' }}>
-                        Traslade el equipo: elija la nueva estacion (un punto tipo Estacion ya radiado o el amarre) y el visado de atras conocido.
-                      </p>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10, alignItems: 'end' }}>
-                        <label>
-                          <CampoLabel texto="Estacion" ayuda="Punto donde se planta el equipo. Debe tener coordenadas (amarre o punto tipo Estacion ya radiado)." />
+                      <h4 style={{ marginTop: 0, marginBottom: 8 }} title="Elija estación (amarre o vértice radiado) y visado de atrás conocido.">
+                        Nueva armada
+                      </h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, alignItems: 'end' }}>
+                        <label style={setupField}>
+                          <CampoLabel texto="Estación" ayuda="Punto donde se planta el equipo. Debe tener coordenadas (amarre o estación ya radiada)." />
                           <select value={armadaForm.estacion_nombre} onChange={(e) => setArmadaForm({ ...armadaForm, estacion_nombre: e.target.value })} style={ui.inputStyle}>
                             <option value="">— Seleccione —</option>
                             {estDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
                           </select>
                         </label>
-                        <label>
-                          <CampoLabel texto="Visado (atras)" ayuda="Punto de atras al que se encera (0°). Debe ser un punto con coordenadas conocidas." />
+                        <label style={setupField}>
+                          <CampoLabel texto="Visado" ayuda="Punto de atrás al que se encera (0°). Debe tener coordenadas conocidas." />
                           <select value={armadaForm.visado_nombre} onChange={(e) => setArmadaForm({ ...armadaForm, visado_nombre: e.target.value })} style={ui.inputStyle}>
                             <option value="">— Seleccione —</option>
                             {visDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
                           </select>
                         </label>
-                        <label>
-                          <CampoLabel texto="HI (m)" ayuda="Altura del instrumento en la nueva estacion, en metros." />
+                        <label style={setupField}>
+                          <CampoLabel texto="HI" ayuda="Altura del instrumento en la nueva estación, en metros." />
                           <input value={armadaForm.altura_instrumento} onChange={(e) => setArmadaForm({ ...armadaForm, altura_instrumento: e.target.value })} style={ui.inputStyle} placeholder="1.500" />
                         </label>
                         <div style={{ display: 'flex', gap: 8 }}>
@@ -1039,25 +1497,16 @@ export default function PoligonalModal({
               <div style={{ marginTop: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
                   <h4 style={{ margin: 0 }}>Cartera consolidada</h4>
-                  {ultimaSync && (
-                    <span style={{ fontSize: 'var(--cc-xs)', color: '#64748b' }}>
-                      Última sync: {new Date(ultimaSync).toLocaleTimeString('es-CO')}
-                    </span>
-                  )}
                   <button
                     type="button"
                     style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-xs)' }}
                     onClick={() => sincronizarDetalle('Cartera recalculada.')}
                     disabled={busy || refreshing}
+                    title="Recalcular desde el servidor"
                   >
-                    {refreshing ? '…' : 'Actualizar cartera'}
+                    {refreshing ? '…' : 'Actualizar'}
                   </button>
                 </div>
-                {editandoId && (
-                  <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#2563eb' }}>
-                    Edite los campos arriba y pulse <strong>Guardar</strong>; la tabla se actualiza al guardar o con «Actualizar cartera».
-                  </p>
-                )}
                 <PoligonalCalculoTable
                   key={ultimaSync || 'cartera'}
                   estaciones={detalle.estaciones}
@@ -1065,8 +1514,8 @@ export default function PoligonalModal({
                   cierre={detalle.cierre}
                   modoAjuste={!!detalle.poligonal?.ajustada_at}
                   editandoId={editandoId}
-                  onEliminar={editable && !faseCierre ? eliminarPunto : null}
-                  onEditar={editable ? iniciarEdicion : null}
+                  onEliminar={editableLibreta ? eliminarPunto : null}
+                  onEditar={editableLibreta ? iniciarEdicion : null}
                 />
               </div>
 
@@ -1074,68 +1523,105 @@ export default function PoligonalModal({
                 <PoligonalGrafico
                   estaciones={detalle.estaciones}
                   puntoInicial={detalle.punto_inicial}
+                  puntoFinal={detalle.punto_final}
                   cierre={detalle.cierre}
                 />
               </div>
 
-              {/* Fase de cierre */}
-              {faseCierre && (
-                <div style={{ border: '1px solid #1e40af', borderRadius: 10, padding: 14, marginTop: 16, background: '#eff6ff' }}>
-                  <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 'var(--cc-sm)', color: '#1e40af' }}>Datos de cierre de la poligonal</div>
+              {detalle.cierre && (
+                <div style={{ marginTop: 16 }}>
                   <PoligonalCierrePanel cierre={detalle.cierre} />
-                  {!detalle.cierre?.cerrado && (
-                    <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
-                      La poligonal aun no cierra: falta la observacion que regresa al punto inicial (<strong>{detalle.punto_inicial?.nombre || 'amarre'}</strong>) como punto tipo «Estacion».
-                    </p>
-                  )}
-                  {detalle.cierre?.cerrado && !detalle.cierre?.admisible_lineal && (
-                    <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
-                      El cierre lineal esta fuera de tolerancia. Solo se podra enviar a la biblioteca cuando el cierre cumpla. Revise angulos y distancias (use el boton editar en la cartera).
-                    </p>
-                  )}
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
-                {puede(permisos, 'editar') && detalle.cierre?.cerrado && (
+              {editableLibreta && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+                  <button
+                    type="button"
+                    style={{ ...ui.btnPrimary, opacity: (detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) ? 1 : 0.5 }}
+                    onClick={cerrarCircuito}
+                    disabled={busy || !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) || !detalle.estaciones?.length}
+                    title={
+                      !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal)
+                        ? 'El circuito debe cerrar dentro de tolerancia antes de terminar'
+                        : 'Cierra la libreta y habilita validación contratista / interventoría'
+                    }
+                  >
+                    {busy ? 'Terminando…' : 'Terminar poligonal'}
+                  </button>
+                </div>
+              )}
+              </>
+              )}
+
+              {terminada && (
+              <>
+              <div style={{ marginTop: 4, marginBottom: 12 }}>
+                <PoligonalCierrePanel cierre={detalle.cierre} />
+              </div>
+
+              <div style={{ marginTop: 4 }}>
+                <h4 style={{ margin: '0 0 8px' }} title="Coordenadas calculadas (ajustadas si aplica)">Coordenadas calculadas</h4>
+                <PoligonalCalculoTable
+                  key={`term-${ultimaSync || 'cartera'}`}
+                  estaciones={detalle.estaciones}
+                  poligonal={detalle.poligonal}
+                  cierre={detalle.cierre}
+                  modoAjuste={!!detalle.poligonal?.ajustada_at}
+                  editandoId={null}
+                  onEliminar={null}
+                  onEditar={null}
+                />
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                <PoligonalGrafico
+                  estaciones={detalle.estaciones}
+                  puntoInicial={detalle.punto_inicial}
+                  puntoFinal={detalle.punto_final}
+                  cierre={detalle.cierre}
+                />
+              </div>
+
+              {!sellada && puede(permisos, 'editar') && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
                   <button
                     type="button"
                     style={{ ...ui.btnPrimary, background: '#047857' }}
                     onClick={ajustarPoligonal}
                     disabled={busy}
-                    title="Corrección angular + Bowditch; los datos ajustados se usan en validación y PDF"
+                    title="Corrección angular + Bowditch antes de validar"
                   >
-                    {busy ? 'Ajustando…' : detalle.poligonal?.ajustada_at ? 'Re-ajustar poligonal' : 'Corregir y ajustar'}
+                    {busy ? 'Ajustando…' : detalle.poligonal?.ajustada_at ? 'Re-ajustar' : 'Corregir y ajustar'}
                   </button>
-                )}
-                {puede(permisos, 'editar') && pol.estado !== 'cerrado' && !faseCierre && (
-                  <button
-                    type="button"
-                    style={{ ...ui.btnPrimary, opacity: (detalle.estaciones?.length ? 1 : 0.6) }}
-                    onClick={() => setFaseCierre(true)}
-                    disabled={busy || !detalle.estaciones?.length}
-                    title={detalle.estaciones?.length ? 'Terminar la cartera y pasar a los datos de cierre' : 'Agregue al menos un punto'}
-                  >
-                    Terminar poligonal
-                  </button>
-                )}
-                {puede(permisos, 'editar') && pol.estado !== 'cerrado' && faseCierre && (
-                  <>
-                    <button type="button" style={ui.btnSecondary} onClick={() => setFaseCierre(false)} disabled={busy}>
-                      Volver a la cartera
-                    </button>
-                    <button
-                      type="button"
-                      style={{ ...ui.btnPrimary, opacity: (detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) ? 1 : 0.5 }}
-                      onClick={cerrarCircuito}
-                      disabled={busy || !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal)}
-                      title={(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) ? 'Enviar los puntos a la biblioteca' : 'Solo disponible cuando la poligonal cierra dentro de tolerancia'}
-                    >
-                      Enviar a biblioteca de puntos
-                    </button>
-                  </>
-                )}
-              </div>
+                </div>
+              )}
+
+              <PoligonalValidacionPanel
+                poligonal={detalle.poligonal}
+                cierre={detalle.cierre}
+                permisos={permisos}
+                usuario={usuario}
+                contratoId={contratoId}
+                token={token}
+                api={api}
+                soloLectura={sellada}
+                onActualizado={() => sincronizarDetalle()}
+                onError={showError}
+              />
+
+              {!sellada && (
+                <div style={{ marginTop: 16 }}>
+                  <FirmaPerfilTopo
+                    api={api}
+                    poligonalId={poligonalId}
+                    token={token}
+                    onFirmado={() => sincronizarDetalle()}
+                  />
+                </div>
+              )}
+              </>
+              )}
             </div>
             )
           })()}

@@ -1,24 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTopoTheme } from './topografiaShared'
 
 export default function FirmaDigital({ firmaExistente, onConfirm, titulo = 'Firma digital' }) {
+  const ui = useTopoTheme()
   const canvasRef = useRef(null)
   const [drawing, setDrawing] = useState(false)
   const [saved, setSaved] = useState(firmaExistente || '')
+  const padBg = ui.t?.inputBg || '#f8fafc'
+  const strokeColor = ui.text || '#1e293b'
 
   useEffect(() => {
     setSaved(firmaExistente || '')
   }, [firmaExistente])
 
-  useEffect(() => {
+  const initCanvas = () => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = padBg
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.strokeStyle = '#1e293b'
+    ctx.strokeStyle = strokeColor
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
-  }, [])
+  }
+
+  useEffect(() => {
+    initCanvas()
+  }, [padBg, strokeColor])
 
   const pos = (e) => {
     const canvas = canvasRef.current
@@ -48,10 +56,7 @@ export default function FirmaDigital({ firmaExistente, onConfirm, titulo = 'Firm
   const end = () => setDrawing(false)
 
   const limpiar = () => {
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#fff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    initCanvas()
     setSaved('')
   }
 
@@ -61,17 +66,27 @@ export default function FirmaDigital({ firmaExistente, onConfirm, titulo = 'Firm
     onConfirm?.(data)
   }
 
+  const border = ui.t?.border || '#e2e8f0'
+
   return (
-    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, background: '#f8fafc' }}>
+    <div style={{ border: `1px solid ${border}`, borderRadius: 8, padding: 12, background: ui.t?.bgCard || '#f8fafc', color: ui.text }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>{titulo}</div>
       {saved ? (
-        <img src={saved} alt="Firma" style={{ maxWidth: '100%', border: '1px solid #cbd5e1', background: '#fff' }} />
+        <img src={saved} alt="Firma" style={{ maxWidth: '100%', border: `1px solid ${border}`, background: padBg, borderRadius: 6 }} />
       ) : (
         <canvas
           ref={canvasRef}
           width={420}
           height={120}
-          style={{ width: '100%', maxWidth: 420, border: '1px solid #cbd5e1', background: '#fff', touchAction: 'none', cursor: 'crosshair' }}
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            border: `1px solid ${border}`,
+            background: padBg,
+            touchAction: 'none',
+            cursor: 'crosshair',
+            borderRadius: 6,
+          }}
           onMouseDown={start}
           onMouseMove={move}
           onMouseUp={end}
@@ -82,12 +97,9 @@ export default function FirmaDigital({ firmaExistente, onConfirm, titulo = 'Firm
         />
       )}
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <button type="button" onClick={limpiar} style={btnSec}>Limpiar</button>
-        <button type="button" onClick={confirmar} style={btnPri}>Confirmar</button>
+        <button type="button" onClick={limpiar} style={ui.btnSecondary}>Limpiar</button>
+        <button type="button" onClick={confirmar} style={ui.btnPrimary}>Confirmar</button>
       </div>
     </div>
   )
 }
-
-const btnPri = { padding: '8px 14px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer' }
-const btnSec = { padding: '8px 14px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }

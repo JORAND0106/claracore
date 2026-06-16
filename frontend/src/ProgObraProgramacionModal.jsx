@@ -1275,6 +1275,7 @@ function ProgItemRow({
   onToggleAgExpand = null,
   saveGeneration = 0,
   suspendAutoSave = false,
+  blockAutoSaveRef = null,
   tramoConsolidado = false,
   cpmClasif = null,
   cpmNode = null,
@@ -1353,22 +1354,22 @@ function ProgItemRow({
   }, [debFecha, debDur, cid, token, API, ex.fecha_fin_calculada])
 
   const trySave = useCallback(async () => {
-    if (!effectiveEditable || saveStatus === 'saving' || suspendAutoSave) return false
+    if (!effectiveEditable || saveStatus === 'saving' || suspendAutoSave || blockAutoSaveRef?.current) return false
     if (tramoConsolidado) return false
     const d = parseInt(String(duracion), 10)
     if (!fechaIni || !(d > 0)) return false
     const ok = await onGuardarItem(itemDef, { fecha_inicio: fechaIni, duracion: String(d), override_manual: true, heredado_de_capitulo: false }, rk)
     if (ok) dirtyRef.current = false
     return ok
-  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, tramoConsolidado, itemDef, fechaIni, duracion, rk])
+  }, [effectiveEditable, saveStatus, suspendAutoSave, blockAutoSaveRef, onGuardarItem, tramoConsolidado, itemDef, fechaIni, duracion, rk])
 
   useEffect(() => {
-    if (!effectiveEditable || !dirtyRef.current || suspendAutoSave || tramoConsolidado) return undefined
+    if (!effectiveEditable || !dirtyRef.current || suspendAutoSave || blockAutoSaveRef?.current || tramoConsolidado) return undefined
     const d = parseInt(String(debDur), 10)
     if (!debFecha || !(d > 0)) return undefined
     const timer = setTimeout(() => trySave(), 700)
     return () => clearTimeout(timer)
-  }, [debFecha, debDur, editable, trySave, suspendAutoSave, tramoConsolidado])
+  }, [debFecha, debDur, editable, trySave, suspendAutoSave, blockAutoSaveRef, tramoConsolidado])
 
   const onBlurField = () => {
     if (tramoConsolidado) return
@@ -1611,6 +1612,7 @@ function ProgCapituloSection({
   onToggleAgExpand,
   saveGeneration,
   suspendAutoSave,
+  blockAutoSaveRef = null,
   puedeEditarListadoPrecios = false,
   onIrListadoPrecios = null,
   tramoConsolidado = false,
@@ -1734,6 +1736,7 @@ function ProgCapituloSection({
               rowKind="agrupador"
               saveGeneration={saveGeneration}
               suspendAutoSave={suspendAutoSave}
+              blockAutoSaveRef={blockAutoSaveRef}
               agExpanded={expanded}
               onToggleAgExpand={(ag.items || []).length ? () => onToggleAgExpand(ag.agrupador_id) : undefined}
               tramoConsolidado={tramoConsolidado}
@@ -1783,6 +1786,7 @@ function ProgCapituloSection({
             finOverride={finOverrides[itemRowKey(cap, it.item)]}
             saveGeneration={saveGeneration}
             suspendAutoSave={suspendAutoSave}
+            blockAutoSaveRef={blockAutoSaveRef}
           />
         ))}
     </>
@@ -1822,6 +1826,7 @@ export default function ProgObraProgramacionModal({
   panelBusy,
   onGuardarCambios,
   onSaveSuccess,
+  onProgramacionResetStart = null,
   onScheduleRefresh = null,
   onTramoScheduleCleared = null,
   onReloadActividades,
@@ -1846,6 +1851,7 @@ export default function ProgObraProgramacionModal({
   const [finOverrides, setFinOverrides] = useState({})
   const [localSaving, setLocalSaving] = useState(false)
   const [resettingPk, setResettingPk] = useState(false)
+  const resettingPkRef = useRef(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [rowDrafts, setRowDrafts] = useState({})
   const [saveGeneration, setSaveGeneration] = useState(0)
@@ -2855,8 +2861,10 @@ export default function ProgObraProgramacionModal({
   const ejecutarResetearPkProgramacion = async () => {
     if (!editable || historicalReadOnly || !workingVersion?.id || !activePk) return
     setResetConfirmOpen(false)
-    setResettingPk(true)
+    onProgramacionResetStart?.([activePk])
     saveFlushInProgressRef.current = true
+    resettingPkRef.current = true
+    setResettingPk(true)
     rowDraftRef.current = {}
     try {
       const res = await fetch(
@@ -2897,6 +2905,7 @@ export default function ProgObraProgramacionModal({
       showToast?.(e?.message || 'Error al resetear programación del PK', 'err')
     } finally {
       saveFlushInProgressRef.current = false
+      resettingPkRef.current = false
       setResettingPk(false)
     }
   }
@@ -2904,8 +2913,10 @@ export default function ProgObraProgramacionModal({
   const ejecutarResetearTramoProgramacion = async () => {
     if (!editable || historicalReadOnly || !workingVersion?.id || !tramoContext?.tramo) return
     setResetConfirmOpen(false)
-    setResettingPk(true)
+    onProgramacionResetStart?.(tramoContext.pkIds || [])
     saveFlushInProgressRef.current = true
+    resettingPkRef.current = true
+    setResettingPk(true)
     rowDraftRef.current = {}
     try {
       await clearTramoProgramacion(API, cid, token, workingVersion.id, {
@@ -2935,6 +2946,7 @@ export default function ProgObraProgramacionModal({
       showToast?.(e?.message || 'Error al resetear programación del tramo', 'err')
     } finally {
       saveFlushInProgressRef.current = false
+      resettingPkRef.current = false
       setResettingPk(false)
     }
   }
@@ -3544,6 +3556,7 @@ export default function ProgObraProgramacionModal({
                           onToggleAgExpand={(agId) => toggleAgExpand(cap, agId)}
                           saveGeneration={saveGeneration}
                           suspendAutoSave={localSaving || resettingPk}
+                          blockAutoSaveRef={saveFlushInProgressRef}
                           puedeEditarListadoPrecios={puedeEditarListadoPrecios}
                           onIrListadoPrecios={onIrListadoPrecios}
                           tramoConsolidado={tramoConsolidado}

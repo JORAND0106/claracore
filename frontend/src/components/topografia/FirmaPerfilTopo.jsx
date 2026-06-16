@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { API_BASE } from '../../apiBase'
-import { useTopoTheme } from './topografiaShared'
+import { parseApiError, useTopoTheme } from './topografiaShared'
 
 /**
  * Firma desde imagen del perfil del usuario (no lienzo local).
@@ -36,7 +36,8 @@ export default function FirmaPerfilTopo({ api, poligonalId, token, onFirmado }) 
       setRegistrada(true)
       onFirmado?.()
     } catch (e) {
-      setError(e?.message || 'No se pudo registrar la firma')
+      const parsed = parseApiError(e?.message || String(e))
+      setError(parsed.mensaje || parsed.titulo || 'No se pudo registrar la firma')
     } finally {
       setBusy(false)
     }
@@ -47,8 +48,8 @@ export default function FirmaPerfilTopo({ api, poligonalId, token, onFirmado }) 
   return (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, background: '#f8fafc' }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Firma digital (perfil de usuario)</div>
-      <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-xs)', color: '#64748b' }}>
-        Se usa la imagen de firma de su cuenta. Configúrela en Perfil de usuario si aún no la tiene.
+      <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-xs)', color: '#64748b' }} title="Configure su firma en Perfil de usuario">
+        Firma del perfil de su cuenta.
       </p>
       {firmaUrl ? (
         <img

@@ -64,6 +64,7 @@ export function applyClaraTypography(fontKey) {
   const sp = SPACES[k]
   const r = document.documentElement
   r.style.setProperty('--cc-caption', PX(s.caption))
+  r.style.setProperty('--cc-xs', PX(s.caption))
   r.style.setProperty('--cc-label', PX(s.label))
   r.style.setProperty('--cc-sm', PX(s.sm))
   r.style.setProperty('--cc-body', PX(s.body))

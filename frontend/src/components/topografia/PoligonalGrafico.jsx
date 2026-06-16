@@ -23,6 +23,7 @@ function niceStep(span) {
 export default function PoligonalGrafico({
   estaciones,
   puntoInicial = null,
+  puntoFinal = null,
   cierre = null,
   ancho = 560,
   alto = 400,
@@ -36,14 +37,25 @@ export default function PoligonalGrafico({
   const containerRef = useRef(null)
 
   const plot = useMemo(() => {
+    const tipoPol = cierre?.tipo_pol || (puntoFinal ? 'abierta' : 'cerrada')
+    const esAbierta = tipoPol === 'abierta'
     const puntos = puntosGrafico(estaciones)
     const amarre = puntoInicial?.norte != null && puntoInicial?.este != null
       ? { nombre: puntoInicial.nombre || 'Amarre', norte: puntoInicial.norte, este: puntoInicial.este, cota: puntoInicial.cota }
       : null
+    const llegadaObj = cierre?.llegada_objetivo || (puntoFinal?.norte != null && puntoFinal?.este != null
+      ? { nombre: puntoFinal.nombre || 'Llegada', norte: puntoFinal.norte, este: puntoFinal.este, cota: puntoFinal.cota }
+      : null)
+    const llegadaCalc = cierre?.llegada_calculada || null
 
     const all = [...puntos]
     if (amarre && !puntos.some((p) => p.nombre_punto === amarre.nombre)) {
       all.unshift(amarre)
+    }
+    for (const extra of [llegadaObj, llegadaCalc]) {
+      if (extra?.norte != null && extra?.este != null && !all.some((p) => p.norte === extra.norte && p.este === extra.este)) {
+        all.push({ ...extra, nombre_punto: extra.nombre })
+      }
     }
 
     if (all.length < 2) return null
@@ -80,11 +92,13 @@ export default function PoligonalGrafico({
     const traverse = puntos.length >= 2 ? puntos : all
     const coords = traverse.map((p) => ({ x: tx(p.este), y: ty(p.norte), p }))
     const polyStr = coords.map((c) => `${c.x},${c.y}`).join(' ')
+    const esCerrada = !esAbierta && coords.length >= 3
 
     const lados = []
-    for (let i = 0; i < coords.length; i++) {
-      const j = (i + 1) % coords.length
-      if (j === 0 && coords.length < 3) break
+    const nLados = esCerrada ? coords.length : Math.max(coords.length - 1, 0)
+    for (let i = 0; i < nLados; i++) {
+      const j = esCerrada ? (i + 1) % coords.length : i + 1
+      if (j >= coords.length) break
       const a = coords[i]
       const b = coords[j]
       const dist = Math.hypot(b.p.norte - a.p.norte, b.p.este - a.p.este)
@@ -92,31 +106,53 @@ export default function PoligonalGrafico({
     }
 
     let gapLine = null
-    if (amarre && cierre?.cerrado && coords.length >= 1) {
+    if (esAbierta && llegadaObj && llegadaCalc) {
+      const err = cierre?.error_lineal
+      if (err != null && err > 0.05) {
+        gapLine = {
+          x1: tx(llegadaObj.este),
+          y1: ty(llegadaObj.norte),
+          x2: tx(llegadaCalc.este),
+          y2: ty(llegadaCalc.norte),
+          err,
+          modo: 'llegada',
+        }
+      }
+    } else if (amarre && cierre?.cerrado && coords.length >= 1) {
       const last = coords[coords.length - 1]
       const ax = tx(amarre.este)
       const ay = ty(amarre.norte)
       const err = cierre.error_lineal
       if (err != null && err > 0.05) {
-        gapLine = { x1: last.x, y1: last.y, x2: ax, y2: ay, err }
+        gapLine = { x1: last.x, y1: last.y, x2: ax, y2: ay, err, modo: 'amarre' }
       }
     }
 
     const amarreCoord = amarre ? { x: tx(amarre.este), y: ty(amarre.norte), p: amarre } : null
+    const llegadaObjCoord = llegadaObj
+      ? { x: tx(llegadaObj.este), y: ty(llegadaObj.norte), p: llegadaObj }
+      : null
+    const llegadaCalcCoord = llegadaCalc
+      ? { x: tx(llegadaCalc.este), y: ty(llegadaCalc.norte), p: llegadaCalc }
+      : null
 
     return {
       coords,
       polyStr,
+      esCerrada,
+      esAbierta,
       gridLines,
       lados,
       gapLine,
       amarreCoord,
+      llegadaObjCoord,
+      llegadaCalcCoord,
       margin,
       w,
       h,
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
     }
-  }, [estaciones, puntoInicial, cierre, ancho, alto])
+  }, [estaciones, puntoInicial, puntoFinal, cierre, ancho, alto])
 
   const onWheel = useCallback((e) => {
     e.preventDefault()
@@ -174,7 +210,11 @@ export default function PoligonalGrafico({
 
       {plot.gapLine && (
         <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
-          El polígono de vértices radiados no coincide con el amarre inicial: error de cierre {fmtNum(plot.gapLine.err, 3)} m (línea punteada roja).
+          {plot.gapLine.modo === 'llegada' ? (
+            <>Error de cierre a la llegada: {fmtNum(plot.gapLine.err, 3)} m entre objetivo y posición calculada (línea punteada).</>
+          ) : (
+            <>El polígono de vértices radiados no coincide con el amarre inicial: error de cierre {fmtNum(plot.gapLine.err, 3)} m (línea punteada roja).</>
+          )}
         </p>
       )}
 
@@ -227,7 +267,11 @@ export default function PoligonalGrafico({
             <text x={plot.north.x} y={plot.north.tip - 5} fontSize="12" fill="#1e40af" fontWeight="700" textAnchor="middle">N</text>
           </g>
 
-          <polygon points={plot.polyStr} fill="rgba(37,99,235,0.08)" stroke="#2563eb" strokeWidth="2" strokeDasharray={plot.gapLine ? '6 4' : undefined} />
+          {plot.esCerrada ? (
+            <polygon points={plot.polyStr} fill="rgba(37,99,235,0.08)" stroke="#2563eb" strokeWidth="2" strokeDasharray={plot.gapLine ? '6 4' : undefined} />
+          ) : (
+            <polyline points={plot.polyStr} fill="none" stroke="#2563eb" strokeWidth="2" />
+          )}
 
           {plot.lados.map((l, i) => (
             <g key={i}>
@@ -245,10 +289,33 @@ export default function PoligonalGrafico({
               y1={plot.gapLine.y1}
               x2={plot.gapLine.x2}
               y2={plot.gapLine.y2}
-              stroke="#dc2626"
+              stroke={plot.gapLine.modo === 'llegada' ? '#94a3b8' : '#dc2626'}
               strokeWidth="2"
               strokeDasharray="4 3"
             />
+          )}
+
+          {plot.llegadaObjCoord && (
+            <g>
+              <polygon
+                points={`${plot.llegadaObjCoord.x},${plot.llegadaObjCoord.y - 6} ${plot.llegadaObjCoord.x + 6},${plot.llegadaObjCoord.y} ${plot.llegadaObjCoord.x},${plot.llegadaObjCoord.y + 6} ${plot.llegadaObjCoord.x - 6},${plot.llegadaObjCoord.y}`}
+                fill="none"
+                stroke="#15803d"
+                strokeWidth="1.5"
+              />
+              <text x={plot.llegadaObjCoord.x + 8} y={plot.llegadaObjCoord.y - 10} fontSize="10" fill="#15803d" fontWeight="700">
+                {plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)
+              </text>
+            </g>
+          )}
+
+          {plot.llegadaCalcCoord && (
+            <g>
+              <circle cx={plot.llegadaCalcCoord.x} cy={plot.llegadaCalcCoord.y} r="6" fill="none" stroke="#c2410c" strokeWidth="2" strokeDasharray="3 2" />
+              <text x={plot.llegadaCalcCoord.x + 8} y={plot.llegadaCalcCoord.y + 12} fontSize="10" fill="#c2410c" fontWeight="700">
+                {plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)
+              </text>
+            </g>
           )}
 
           {plot.amarreCoord && (

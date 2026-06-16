@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS topo_puntos (
     modulo_origen   VARCHAR(30),
     circuito_id     UUID,
     fecha_verificacion TIMESTAMPTZ,
+    operador        VARCHAR(100),
+    fecha_campo     DATE,
     creado_por      UUID,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(contrato_id, nombre)
@@ -47,6 +49,13 @@ CREATE TABLE IF NOT EXISTS topo_poligonales (
     num_vertices         INTEGER,
     estado               VARCHAR(20) DEFAULT 'borrador',
     nivel_validacion     INTEGER DEFAULT 0,
+    nivel1_estado        VARCHAR(20) DEFAULT 'No Revisado',
+    nivel1_usuario_id    INT,
+    nivel1_fecha         TIMESTAMPTZ,
+    nivel2_estado        VARCHAR(20) DEFAULT 'No Revisado',
+    nivel2_usuario_id    INT,
+    nivel2_fecha         TIMESTAMPTZ,
+    biblioteca_at        TIMESTAMPTZ,
     observaciones        TEXT,
     operador             VARCHAR(100),
     equipo               VARCHAR(100),
@@ -336,8 +345,23 @@ CREATE TABLE IF NOT EXISTS topo_firmas (
     fecha_firma     TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS topo_poligonal_comentarios (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    poligonal_id    UUID NOT NULL REFERENCES topo_poligonales(id) ON DELETE CASCADE,
+    contrato_id     INT NOT NULL,
+    autor_id        INT,
+    nivel           INT NOT NULL CHECK (nivel IN (1, 2)),
+    estado          VARCHAR(20) NOT NULL,
+    rol_origen      VARCHAR(30),
+    etiqueta        VARCHAR(120),
+    mensaje         TEXT NOT NULL,
+    destinatarios   JSONB DEFAULT '[]'::jsonb,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_topo_puntos_contrato ON topo_puntos(contrato_id);
 CREATE INDEX IF NOT EXISTS idx_topo_poligonales_contrato ON topo_poligonales(contrato_id);
+CREATE INDEX IF NOT EXISTS idx_topo_pol_com_pol ON topo_poligonal_comentarios(poligonal_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_topo_armadas_poligonal ON topo_poligonal_armadas(poligonal_id);
 CREATE INDEX IF NOT EXISTS idx_topo_nivelaciones_contrato ON topo_nivelaciones(contrato_id);
 CREATE INDEX IF NOT EXISTS idx_topo_equipos_contrato ON topo_equipos(contrato_id);

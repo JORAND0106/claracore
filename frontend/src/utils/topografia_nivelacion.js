@@ -1,0 +1,669 @@
+/** Utilidades de nivelación geométrica (cálculo en cliente). */
+
+export const STADIA_K = 100
+
+export function numOrNull(v) {
+  if (v === '' || v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Lectura de nivelación: siempre hilo medio (automático) o valor único (electrónico). */
+export function lecturaMedioBloque(bloque, tipoNivel) {
+  if (!bloque) return null
+  if (tipoNivel === 'automatico') {
+    return numOrNull(bloque.hM)
+  }
+  return numOrNull(bloque.lectura)
+}
+
+/** Distancia horizontal taquimétrica: K × |hilo inf − hilo sup|. */
+export function distanciaTaquimetrica(hSup, hInf, k = STADIA_K) {
+  const s = numOrNull(hSup)
+  const i = numOrNull(hInf)
+  if (s == null || i == null) return null
+  return Math.abs(i - s) * k
+}
+
+/** Tolerancia (m) para comparar separación S–M vs M–I en nivel automático. */
+export const HILO_PAR_TOL = 0.002
+
+/** True si los tres hilos están diligenciados y |S−M| ≠ |M−I| (incongruencia taquimétrica). */
+export function hilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
+  if (tipoNivel !== 'automatico' || !bloque) return false
+  const s = numOrNull(bloque.hS)
+  const m = numOrNull(bloque.hM)
+  const i = numOrNull(bloque.hI)
+  if (s == null || m == null || i == null) return false
+  return Math.abs(Math.abs(m - s) - Math.abs(i - m)) > tol
+}
+
+export const HILO_INCONGRUENCIA_MSG =
+  'Incongruencia entre hilos: la separación superior–medio debe ser igual a medio–inferior. Verifique la lectura.'
+
+export const ABSCISA_NUMERICA_MSG = 'La abscisa debe ser un valor numérico (metros).'
+
+/** Abscisa en metros; acepta coma decimal. */
+export function parseAbscisa(v) {
+  if (v === '' || v == null) return null
+  const s = String(v).trim().replace(/\s/g, '').replace(',', '.')
+  if (!s) return null
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+export function abscisaInvalida(fila) {
+  const raw = String(fila?.abscisa ?? '').trim()
+  if (!raw) return false
+  return parseAbscisa(fila.abscisa) === null
+}
+
+export function bloqueVacio() {
+  return { hS: '', hM: '', hI: '', lectura: '' }
+}
+
+/** Convierte lecturas al cambiar entre automático y electrónico en pantalla. */
+export function convertirFilasTipoNivel(filas, desde, hacia) {
+  if (desde === hacia) return filas
+  const conv = (bloque) => {
+    if (!bloque) return bloqueVacio()
+    if (desde === 'automatico' && hacia === 'electronico') {
+      const m = bloque.hM ?? ''
+      const lectura = m !== '' && m != null ? m : (bloque.lectura ?? '')
+      return { ...bloqueVacio(), lectura }
+    }
+    if (desde === 'electronico' && hacia === 'automatico') {
+      const l = bloque.lectura ?? ''
+      return { hS: '', hM: l, hI: '', lectura: '' }
+    }
+    return { ...bloque }
+  }
+  return filas.map((fila) => ({
+    ...fila,
+    vplus: conv(fila.vplus),
+    vi: conv(fila.vi),
+    vminus: conv(fila.vminus),
+  }))
+}
+
+export function nuevaFilaPunto(orden = 1, esPrimera = false) {
+  return {
+    orden,
+    nombre_punto: '',
+    tipo_punto: esPrimera ? 'BM' : '',
+    abscisa: '',
+    descripcion_punto: '',
+    dist_vplus_m: '',
+    dist_vminus_m: '',
+    vplus: bloqueVacio(),
+    vi: bloqueVacio(),
+    vminus: bloqueVacio(),
+    es_fila_cierre: false,
+    punto_biblioteca_id: null,
+  }
+}
+
+/** Fila de cierre: V− en BM de biblioteca para calcular error de cierre. */
+export function nuevaFilaCierre(punto, orden, abscisaSugerida = '0') {
+  const nombre = (punto?.nombre || '').trim()
+  const abscisaRaw = punto?.abscisa != null ? String(punto.abscisa) : abscisaSugerida
+  return {
+    ...nuevaFilaPunto(orden, false),
+    nombre_punto: nombre,
+    tipo_punto: 'estacion',
+    descripcion_punto: 'Punto de cierre',
+    es_fila_cierre: true,
+    punto_biblioteca_id: punto?.id || null,
+    abscisa: abscisaRaw.trim() || '0',
+  }
+}
+
+export function filasTieneCierre(filas) {
+  return (filas || []).some((f) => f.es_fila_cierre)
+}
+
+/** Filas/puntos con nombre en la cartera (no lecturas sueltas V+/Vi/V−). */
+export function contarPuntosFilas(filas) {
+  return (filas || []).filter((f) => String(f?.nombre_punto ?? '').trim()).length
+}
+
+/** Índice (0-based) y datos de la fila de cierre, si existe. */
+export function filaCierreInfo(filas) {
+  const idx = (filas || []).findIndex((f) => f.es_fila_cierre)
+  if (idx < 0) return null
+  const f = filas[idx]
+  return {
+    idx,
+    numero: idx + 1,
+    nombre: (f.nombre_punto || '').trim() || '—',
+    descripcion: (f.descripcion_punto || '').trim() || 'Punto de cierre',
+  }
+}
+
+export function mensajeFilaCierreExistente(filas) {
+  const info = filaCierreInfo(filas)
+  if (!info) return 'Ya hay una fila de cierre.'
+  return `La fila ${info.numero} (${info.nombre} · ${info.descripcion}) es el cierre del circuito. Elimínela con × si necesita agregar tramos o registrar otro cierre.`
+}
+
+export function filaTieneVminus(fila, tipoNivel) {
+  return bloqueTieneLecturaCalculo(fila?.vminus, tipoNivel)
+}
+
+export function filaTieneVplus(fila, tipoNivel) {
+  return bloqueTieneLecturaCalculo(fila?.vplus, tipoNivel)
+}
+
+export function filaTieneVi(fila, tipoNivel) {
+  return bloqueTieneLecturaCalculo(fila?.vi, tipoNivel)
+}
+
+/** V+ sin Vi ni V− en la misma fila (tramo abierto). Fila 1 (BM) puede iniciar solo con V+. */
+export function filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas = null) {
+  if (idx === 0) return false
+  if (!filaTieneVplus(fila, tipoNivel)) return false
+  if (filas?.[idx + 1]?.es_fila_cierre) return false
+  return !filaTieneVminus(fila, tipoNivel) && !filaTieneVi(fila, tipoNivel)
+}
+
+export function ultimaFilaVplusSinVista(filas, tipoNivel) {
+  if (!filas.length) return false
+  const last = filas[filas.length - 1]
+  if (last.es_fila_cierre) return false
+  if (!filaTieneVplus(last, tipoNivel)) return false
+  return !filaTieneVminus(last, tipoNivel) && !filaTieneVi(last, tipoNivel)
+}
+
+export function carteraVplusSinVista(filas, tipoNivel) {
+  return filas.some((fila, idx) => filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas))
+    || ultimaFilaVplusSinVista(filas, tipoNivel)
+}
+
+export function puedeIngresarCierre(filas, tipoNivel, bmInicialNombre) {
+  if (filasTieneCierre(filas)) {
+    return { ok: false, msg: mensajeFilaCierreExistente(filas), esCierre: true }
+  }
+  if (!filas.length) {
+    return { ok: false, msg: 'Registre al menos un tramo antes de ingresar cierre.' }
+  }
+  const lastIdx = filas.length - 1
+  const last = filas[lastIdx]
+  if (!metadatosFilaCompletos(last, lastIdx, bmInicialNombre)) {
+    return {
+      ok: false,
+      msg: 'Complete nombre, abscisa, descripción y tipo en la última fila antes del cierre.',
+    }
+  }
+  if (ultimaFilaVminusSinVplus(filas, tipoNivel)) {
+    return {
+      ok: false,
+      msg: 'La última fila tiene V− sin V+. Cierre el tramo con V+ (cambio) antes de ingresar cierre.',
+    }
+  }
+  return { ok: true }
+}
+
+export const MSG_VPLUS_SIN_VISTA =
+  'Hay V+ sin Vi ni V− en la misma fila. Registre vista adelante o borre la V+ antes de continuar.'
+
+export const COLORES_BLOQUE_NIV = {
+  vplus: { bg: '#eff6ff', border: '#93c5fd', header: '#dbeafe' },
+  vi: { bg: '#f0fdf4', border: '#86efac', header: '#dcfce7' },
+  vminus: { bg: '#fff7ed', border: '#fdba74', header: '#ffedd5' },
+}
+
+export function metadatosFilaCompletos(fila, idx, bmInicialNombre) {
+  const f = faltantesMetadatosFila(fila, idx, bmInicialNombre)
+  return !f.nombre && !f.abscisa && !f.descripcion && !f.tipo
+}
+
+/** Campos de metadatos faltantes en una fila (para resaltar en UI). */
+export function faltantesMetadatosFila(fila, idx, bmInicialNombre) {
+  const nombre = idx === 0
+    ? (bmInicialNombre || (fila.nombre_punto || '').trim())
+    : (fila.nombre_punto || '').trim()
+  const abscisaVal = parseAbscisa(fila.abscisa)
+  const descripcion = (fila.descripcion_punto || '').trim()
+  let tipo = (fila.tipo_punto || '').trim()
+  if (idx === 0 && !tipo) tipo = 'BM'
+  const abscisaNoNumerica = abscisaInvalida(fila)
+  return {
+    nombre: !nombre,
+    abscisa: abscisaVal == null,
+    abscisaNoNumerica,
+    descripcion: !descripcion,
+    tipo: idx > 0 && !tipo,
+  }
+}
+
+export function resaltadoValidacionUltimaFila(filas, tipoNivel, bmInicialNombre) {
+  if (!filas.length) return null
+  const idx = filas.length - 1
+  const fila = filas[idx]
+  const meta = faltantesMetadatosFila(fila, idx, bmInicialNombre)
+  const vminusSinVplus = ultimaFilaVminusSinVplus(filas, tipoNivel)
+  const incompleta = !metadatosFilaCompletos(fila, idx, bmInicialNombre)
+  if (!incompleta && !vminusSinVplus) return null
+  return { idx, meta, vminusSinVplus, incompleta }
+}
+
+export function ultimaFilaVminusSinVplus(filas, tipoNivel) {
+  if (!filas.length) return false
+  const last = filas[filas.length - 1]
+  return filaTieneVminus(last, tipoNivel) && !filaTieneVplus(last, tipoNivel)
+}
+
+export function puedeAgregarFila(filas, tipoNivel, bmInicialNombre) {
+  if (filasTieneCierre(filas)) {
+    return {
+      ok: false,
+      msg: mensajeFilaCierreExistente(filas),
+      esCierre: true,
+    }
+  }
+  if (!filas.length) return { ok: true }
+  const lastIdx = filas.length - 1
+  const last = filas[lastIdx]
+  if (!metadatosFilaCompletos(last, lastIdx, bmInicialNombre)) {
+    return {
+      ok: false,
+      msg: 'Complete nombre, abscisa, descripción y tipo en la última fila antes de agregar otra.',
+    }
+  }
+  if (ultimaFilaVminusSinVplus(filas, tipoNivel)) {
+    return {
+      ok: false,
+      msg: 'La última fila tiene V− sin V+. Cierre el tramo con V+ (cambio) o quite la V− antes de continuar.',
+    }
+  }
+  if (ultimaFilaVplusSinVista(filas, tipoNivel)) {
+    return { ok: false, msg: MSG_VPLUS_SIN_VISTA }
+  }
+  return { ok: true }
+}
+
+/** V+ nueva H.I. (fila > 0): exige V− gestionada en la misma fila. */
+export function puedeRegistrarVplus(fila, idx, tipoNivel) {
+  if (idx === 0) return { ok: true }
+  if (!filaTieneVminus(fila, tipoNivel)) {
+    return {
+      ok: false,
+      msg: 'Registre V− en esta fila antes de V+ (cambio de instrumento).',
+    }
+  }
+  return { ok: true }
+}
+
+export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre) {
+  const errores = []
+  filas.forEach((fila, idx) => {
+    const tieneLect = ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(fila[k], tipoNivel))
+    if (!tieneLect) return
+    if (!metadatosFilaCompletos(fila, idx, bmInicialNombre)) {
+      errores.push(`Fila ${idx + 1}: complete nombre, abscisa, descripción y tipo.`)
+    } else if (abscisaInvalida(fila)) {
+      errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
+    }
+    if (idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
+      errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
+    }
+    if (filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas)) {
+      errores.push(`Fila ${idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+.`)
+    }
+  })
+  const cierre = filas.find((f) => f.es_fila_cierre)
+  if (cierre && !filaTieneVminus(cierre, tipoNivel)) {
+    errores.push('Complete la lectura V− en la fila de cierre.')
+  }
+  if (ultimaFilaVminusSinVplus(filas, tipoNivel)) {
+    errores.push('La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo.')
+  }
+  if (ultimaFilaVplusSinVista(filas, tipoNivel)) {
+    errores.push(MSG_VPLUS_SIN_VISTA)
+  }
+  return errores
+}
+
+/** Validación laxa al guardar borrador: no exige cierre ni tramos cerrados. */
+export function validarCarteraParaGuardado(filas, tipoNivel, bmInicialNombre) {
+  const errores = []
+  filas.forEach((fila, idx) => {
+    const tieneLect = ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(fila[k], tipoNivel))
+    const esMarcador = Boolean(fila.es_fila_cierre)
+    if (!tieneLect && !esMarcador) return
+    if (!metadatosFilaCompletos(fila, idx, bmInicialNombre)) {
+      errores.push(`Fila ${idx + 1}: complete nombre, abscisa, descripción y tipo.`)
+    } else if (abscisaInvalida(fila)) {
+      errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
+    }
+    if (tieneLect && idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
+      errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
+    }
+  })
+  const conLectura = filas.some((f, i) => (
+    ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(f[k], tipoNivel))
+    || f.es_fila_cierre
+  ))
+  if (!conLectura) {
+    errores.push('No hay lecturas ni fila de cierre para guardar.')
+  }
+  return errores
+}
+
+/** Lectura efectiva: hilo medio (automático) o lectura única; admite hM si el tipo declarado no coincide. */
+function lecturaMedioEfectiva(bloque, tipoNivel) {
+  const m = lecturaMedioBloque(bloque, tipoNivel)
+  if (m != null) return m
+  return numOrNull(bloque?.hM)
+}
+
+function bloqueTieneHilosAutomaticos(filas) {
+  return (filas || []).some((fila) => (
+    ['vplus', 'vi', 'vminus'].some((k) => {
+      const b = fila[k]
+      return b && [b.hS, b.hM, b.hI].some((v) => v !== '' && v != null)
+    })
+  ))
+}
+
+function bloqueTieneLecturaElectronica(filas) {
+  return (filas || []).some((fila) => (
+    ['vplus', 'vi', 'vminus'].some((k) => {
+      const b = fila[k]
+      return b && b.lectura !== '' && b.lectura != null && numOrNull(b.lectura) != null
+    })
+  ))
+}
+
+/** Tipo real de las lecturas en pantalla (puede diferir del selector si no se guardó el cambio). */
+export function inferirTipoNivelFilas(filas, tipoDeclarado = 'electronico') {
+  const auto = bloqueTieneHilosAutomaticos(filas)
+  const elec = bloqueTieneLecturaElectronica(filas)
+  if (auto && !elec) return 'automatico'
+  if (elec && !auto) return 'electronico'
+  return tipoDeclarado || 'electronico'
+}
+
+function bloqueTieneDatos(bloque, tipoNivel) {
+  if (!bloque) return false
+  return lecturaMedioEfectiva(bloque, tipoNivel) != null
+    || [bloque.hS, bloque.hM, bloque.hI].some((v) => v !== '' && v != null)
+    || (bloque.lectura !== '' && bloque.lectura != null)
+}
+
+function bloqueTieneLecturaCalculo(bloque, tipoNivel) {
+  return lecturaMedioEfectiva(bloque, tipoNivel) != null
+}
+
+export function lecturaBloque(bloque, tipoNivel) {
+  return lecturaMedioBloque(bloque, tipoNivel)
+}
+
+/** Distancia taquimétrica o manual del bloque V+ (solo si hay lectura V+). */
+export function distanciaVplusFila(fila, tipoNivel) {
+  if (!filaTieneVplus(fila, tipoNivel)) return null
+  if (tipoNivel === 'electronico') {
+    const manual = numOrNull(fila.dist_vplus_m)
+    if (manual != null) return manual
+    const t = distanciaTaquimetrica(fila.vplus?.hS, fila.vplus?.hI)
+    return t != null ? t : null
+  }
+  return distanciaTaquimetrica(fila.vplus?.hS, fila.vplus?.hI)
+}
+
+/** Distancia taquimétrica o manual del bloque V− (solo si hay lectura V−). */
+export function distanciaVminusFila(fila, tipoNivel) {
+  if (!filaTieneVminus(fila, tipoNivel)) return null
+  if (tipoNivel === 'electronico') {
+    const manual = numOrNull(fila.dist_vminus_m)
+    if (manual != null) return manual
+    return distanciaTaquimetrica(fila.vminus?.hS, fila.vminus?.hI)
+  }
+  return distanciaTaquimetrica(fila.vminus?.hS, fila.vminus?.hI)
+}
+
+/** @deprecated Use distanciaVplusFila / distanciaVminusFila */
+export function distanciaFila(fila, tipoNivel) {
+  const dVp = distanciaVplusFila(fila, tipoNivel)
+  const dVm = distanciaVminusFila(fila, tipoNivel)
+  if (dVp != null && dVm != null) return dVp + dVm
+  return dVp ?? dVm
+}
+
+const TIPO_KEYS = { 'V+': 'vplus', Vi: 'vi', 'V-': 'vminus' }
+/** Cambio: V− → Vi → V+ (V+ actualiza H.I. con cota de la misma fila). */
+const ORDEN_LECTURAS = ['V-', 'Vi', 'V+']
+const TIPO_ORDEN = { 'V-': 1, Vi: 2, 'V+': 3 }
+
+function tiposProcesamientoFila(fila, tipoNivel) {
+  return ORDEN_LECTURAS.filter((tipo) => {
+    const key = TIPO_KEYS[tipo]
+    return bloqueTieneLecturaCalculo(fila[key], tipoNivel)
+  })
+}
+
+export function procesarFilaNivelacion(fila, hi, cotas, tipoNivel, idx, avisos) {
+  const nombre = (fila.nombre_punto || '').trim()
+  let rowHi = hi
+  let rowCota = null
+  /** Cota calculada por V−/Vi en esta fila (para V+ en cambio y visualización). */
+  let cotaCalculadaFila = null
+  const cotasLocal = { ...cotas }
+
+  for (const tipo of tiposProcesamientoFila(fila, tipoNivel)) {
+    const bloque = fila[TIPO_KEYS[tipo]]
+    const lect = lecturaMedioBloque(bloque, tipoNivel) ?? numOrNull(bloque?.hM)
+    if (lect == null) continue
+
+    if (tipo === 'V+') {
+      const cotaRef = cotasLocal[nombre] ?? cotaCalculadaFila
+      if (cotaRef == null) {
+        avisos.push(
+          `Fila ${idx + 1}: V+ requiere cota conocida (biblioteca, V−/Vi previa o V− en la misma fila de cambio).`,
+        )
+      } else {
+        hi = cotaRef + lect
+        rowHi = hi
+        if (cotaCalculadaFila == null) rowCota = cotaRef
+      }
+    } else if (hi != null) {
+      const cota = hi - lect
+      cotaCalculadaFila = cota
+      rowCota = cota
+      rowHi = hi
+      if (nombre) cotasLocal[nombre] = cota
+    } else {
+      avisos.push(`Fila ${idx + 1}: ${tipo} sin altura instrumental previa (registre V+ en BM o cambio).`)
+    }
+  }
+
+  return { hi, rowHi, rowCota, cotas: cotasLocal }
+}
+
+export function filasToLecturas(filas, tipoNivel) {
+  const tipoExport = inferirTipoNivelFilas(filas, tipoNivel)
+  const out = []
+  const filasConOrden = (filas || []).map((fila, rowIdx) => ({ fila, rowIdx }))
+
+  filasConOrden.forEach(({ fila, rowIdx }) => {
+    if (!fila.nombre_punto?.trim()) return
+    const distVplus = distanciaVplusFila(fila, tipoExport)
+    const distVminus = distanciaVminusFila(fila, tipoExport)
+    ;['V-', 'Vi', 'V+'].forEach((tipo) => {
+      const key = TIPO_KEYS[tipo]
+      const bloque = fila[key]
+      if (!bloqueTieneLecturaCalculo(bloque, tipoExport)) return
+      const lectura = lecturaMedioEfectiva(bloque, tipoExport)
+      const distLect = tipo === 'V+' ? distVplus : tipo === 'V-' ? distVminus : null
+      const item = {
+        orden: rowIdx * 10 + TIPO_ORDEN[tipo],
+        nombre_punto: fila.nombre_punto.trim(),
+        tipo_punto: fila.tipo_punto || (rowIdx === 0 ? 'BM' : 'estacion'),
+        tipo_lectura: tipo,
+        abscisa: fila.abscisa?.trim() || null,
+        descripcion_punto: fila.descripcion_punto?.trim() || null,
+        distancia_m: distLect,
+        lectura,
+        punto_biblioteca_id: fila.punto_biblioteca_id || null,
+      }
+      if (tipoExport === 'automatico' || numOrNull(bloque?.hM) != null) {
+        item.hilo_superior = numOrNull(bloque.hS)
+        item.hilo_medio = numOrNull(bloque.hM) ?? lectura
+        item.hilo_inferior = numOrNull(bloque.hI)
+      }
+      out.push(item)
+    })
+  })
+
+  // Fila de cierre sin V− aún: persistir metadatos para que no desaparezca al recargar
+  filasConOrden.forEach(({ fila, rowIdx }) => {
+    const nombre = (fila.nombre_punto || '').trim()
+    if (!nombre || !fila.es_fila_cierre) return
+    if (out.some((l) => Math.floor(((l.orden || 1) - 1) / 10) === rowIdx)) return
+    out.push({
+      orden: rowIdx * 10 + 2,
+      nombre_punto: nombre,
+      tipo_punto: fila.tipo_punto || 'estacion',
+      tipo_lectura: 'Vi',
+      abscisa: fila.abscisa?.trim() || null,
+      descripcion_punto: fila.descripcion_punto?.trim() || null,
+      distancia_m: null,
+      lectura: null,
+      punto_biblioteca_id: fila.punto_biblioteca_id || null,
+    })
+  })
+
+  return out.sort((a, b) => a.orden - b.orden)
+}
+
+export function lecturasToFilas(lecturas, tipoNivel) {
+  if (!lecturas?.length) return [nuevaFilaPunto(1)]
+  const sorted = [...lecturas].sort((a, b) => (a.orden || 0) - (b.orden || 0))
+  const legacy = sorted.every((l) => (l.orden || 0) < 10)
+
+  const assignLectura = (fila, l) => {
+    fila.nombre_punto = l.nombre_punto || fila.nombre_punto
+    fila.tipo_punto = l.tipo_punto === 'TP' ? 'estacion' : (l.tipo_punto || fila.tipo_punto)
+    fila.abscisa = l.abscisa ?? fila.abscisa ?? ''
+    fila.descripcion_punto = l.descripcion_punto ?? l.ubicacion ?? fila.descripcion_punto ?? ''
+    const tipo = (l.tipo_lectura || 'V+').replace('V−', 'V-')
+    if (tipoNivel === 'electronico' && l.distancia_m != null) {
+      if (tipo === 'V+') fila.dist_vplus_m = l.distancia_m
+      else if (tipo === 'V-') fila.dist_vminus_m = l.distancia_m
+    }
+    const key = TIPO_KEYS[tipo] || 'vplus'
+    if (tipoNivel === 'automatico') {
+      fila[key] = {
+        hS: l.hilo_superior ?? '',
+        hM: l.hilo_medio ?? '',
+        hI: l.hilo_inferior ?? '',
+        lectura: '',
+      }
+    } else {
+      fila[key] = { ...bloqueVacio(), lectura: l.lectura ?? '' }
+    }
+  }
+
+  if (legacy) {
+    return sorted.map((l, i) => {
+      const fila = nuevaFilaPunto(i + 1, i === 0)
+      assignLectura(fila, l)
+      if (l.punto_biblioteca_id) {
+        fila.punto_biblioteca_id = l.punto_biblioteca_id
+        fila.es_fila_cierre = true
+      } else if ((l.descripcion_punto || l.ubicacion || '').toLowerCase().includes('cierre')) {
+        fila.es_fila_cierre = true
+      }
+      if (i > 0 && !fila.tipo_punto) fila.tipo_punto = l.tipo_punto === 'TP' ? 'estacion' : (l.tipo_punto || '')
+      return fila
+    })
+  }
+
+  const rowMap = new Map()
+  for (const l of sorted) {
+    const rowIdx = Math.floor(((l.orden || 1) - 1) / 10)
+    if (!rowMap.has(rowIdx)) {
+      rowMap.set(rowIdx, nuevaFilaPunto(rowIdx + 1, rowIdx === 0))
+    }
+    assignLectura(rowMap.get(rowIdx), l)
+    if (l.punto_biblioteca_id) {
+      const fila = rowMap.get(rowIdx)
+      fila.punto_biblioteca_id = l.punto_biblioteca_id
+      fila.es_fila_cierre = true
+    } else if ((l.descripcion_punto || l.ubicacion || '').toLowerCase().includes('cierre')) {
+      const fila = rowMap.get(rowIdx)
+      fila.es_fila_cierre = true
+    }
+  }
+
+  return [...rowMap.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, f]) => f)
+}
+
+export function calcularVistaNivelacion(filas, tipoNivel, cotasBiblioteca = {}, opts = {}) {
+  const distMax = opts.distMax ?? 50
+  let cotas = { ...cotasBiblioteca }
+  let hi = null
+  let distVplusTotal = 0
+  let distVminusTotal = 0
+  const avisos = []
+
+  const filasVista = filas.map((fila, idx) => {
+    const distVp = distanciaVplusFila(fila, tipoNivel)
+    const distVm = distanciaVminusFila(fila, tipoNivel)
+    if (distVp != null) {
+      distVplusTotal += Math.abs(distVp)
+      if (distVp > distMax) {
+        avisos.push(`Fila ${idx + 1}: Dist (V+) ${distVp.toFixed(2)} m supera ${distMax} m.`)
+      }
+    }
+    if (distVm != null) {
+      distVminusTotal += Math.abs(distVm)
+      if (distVm > distMax) {
+        avisos.push(`Fila ${idx + 1}: Dist (V−) ${distVm.toFixed(2)} m supera ${distMax} m.`)
+      }
+    }
+
+    const res = procesarFilaNivelacion(fila, hi, cotas, tipoNivel, idx, avisos)
+    hi = res.hi
+    cotas = res.cotas
+
+    return {
+      ...fila,
+      distancia_vplus_calc: distVp,
+      distancia_vminus_calc: distVm,
+      altura_instrumento: res.rowHi,
+      cota: res.rowCota,
+    }
+  })
+
+  const distTotal = distVplusTotal + distVminusTotal
+
+  return {
+    filasVista,
+    cotas,
+    distancia_vplus_m: distVplusTotal,
+    distancia_vminus_m: distVminusTotal,
+    distancia_total_m: distTotal,
+    avisos,
+    lecturas: filasToLecturas(filas, tipoNivel),
+  }
+}
+
+export function cotasDesdePuntos(puntos) {
+  const m = {}
+  ;(puntos || []).forEach((p) => {
+    if (p.cota != null && p.nombre) m[p.nombre.trim()] = Number(p.cota)
+  })
+  return m
+}
+
+export function nombreBmDesdeId(puntos, bmId) {
+  if (!bmId) return ''
+  const p = (puntos || []).find((x) => x.id === bmId)
+  return (p?.nombre || '').trim()
+}
+
+/** Ancho de celdas de hilos (doble del tamaño base). */
+export const HILO_INPUT_WIDTH = 88

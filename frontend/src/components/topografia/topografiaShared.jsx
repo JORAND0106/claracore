@@ -26,12 +26,46 @@ export function topoStyles(t) {
     },
     inputStyle: {
       width: '100%',
-      padding: '8px 10px',
+      padding: 'var(--cc-space-2) var(--cc-space-3)',
       borderRadius: 6,
       border: `1px solid ${t?.inputBorder || border}`,
       background: inputBg,
       color: text,
+      fontSize: 'var(--cc-input)',
+      lineHeight: 1.35,
       boxSizing: 'border-box',
+    },
+    /** Fila compacta de campos (una línea); escala con pequeña / mediana / grande vía --cc-* */
+    compactFieldRow: {
+      display: 'flex',
+      flexWrap: 'nowrap',
+      gap: 'var(--cc-space-2)',
+      alignItems: 'flex-end',
+      overflowX: 'auto',
+      fontSize: 'var(--cc-input)',
+    },
+    compactFieldCol: (flex = '1 1 6em') => ({
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 'var(--cc-space-1)',
+      flex,
+      minWidth: 0,
+    }),
+    compactInput: {
+      width: '100%',
+      minWidth: 0,
+      padding: 'var(--cc-space-1) var(--cc-space-2)',
+      borderRadius: 6,
+      border: `1px solid ${t?.inputBorder || border}`,
+      background: inputBg,
+      color: text,
+      fontSize: 'var(--cc-input)',
+      lineHeight: 1.35,
+      boxSizing: 'border-box',
+    },
+    fieldCaption: {
+      fontSize: 'var(--cc-caption)',
+      lineHeight: 1.25,
     },
     btnPrimary: {
       padding: '8px 14px',
@@ -140,12 +174,64 @@ export function topoStyles(t) {
       labelFill: textMuted,
       pointLabel: text,
     },
+    /** Panel secundario (bloque de medición dentro de una card). */
+    insetPanel: {
+      marginTop: 14,
+      padding: 12,
+      borderRadius: 8,
+      background: inputBg,
+      border: `1px solid ${border}`,
+      color: text,
+    },
+    /** Tarjeta anidada dentro de insetPanel. */
+    nestedPanel: {
+      padding: 10,
+      borderRadius: 8,
+      border: `1px solid ${border}`,
+      background: bgCard,
+      color: text,
+    },
     badgeEstacion: { background: `${primary}22`, color: primary },
     badgeAux: { background: inputBg, color: textMuted },
     link: primary,
     success: '#047857',
     warn: '#b45309',
   }
+}
+
+/** Tintes de columnas V+/Vi/V− alineados con tema claro/oscuro. */
+export function coloresBloqueNiv(t) {
+  const primary = t?.primary || '#2563eb'
+  const inputBg = t?.inputBg || '#f8fafc'
+  const vi = t?.success || '#16a34a'
+  const vm = t?.warn || '#f97316'
+  const mk = (accent) => ({
+    accent,
+    header: inputBg,
+    bg: `${accent}0d`,
+    inputTint: inputBg,
+    inputMed: `${accent}22`,
+  })
+  return {
+    vplus: mk(primary),
+    vi: mk(vi),
+    vminus: mk(vm),
+    cierre: { accent: '#7c3aed', border: '#7c3aed', row: 'rgba(124,58,237,0.12)' },
+    alerta: { row: 'rgba(220,38,38,0.10)' },
+    aviso: { row: 'rgba(245,158,11,0.12)' },
+    inputBg,
+  }
+}
+
+/** color-scheme nativo para inputs/selects dentro de tablas topográficas. */
+export function themeColorScheme(t) {
+  const hex = String(t?.inputBg || '#f8fafc').replace('#', '')
+  if (hex.length < 6) return 'light'
+  const r = parseInt(hex.slice(0, 2), 16)
+  const g = parseInt(hex.slice(2, 4), 16)
+  const b = parseInt(hex.slice(4, 6), 16)
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return lum < 0.45 ? 'dark' : 'light'
 }
 
 const TopoThemeContext = createContext(topoStyles(null))
@@ -157,6 +243,112 @@ export function TopoThemeProvider({ t, children }) {
 
 export function useTopoTheme() {
   return useContext(TopoThemeContext)
+}
+
+/** Icono (?) con tooltip — ayuda de módulo o campo. */
+export function TopoHelpIcon({ ayuda, style }) {
+  if (!ayuda) return null
+  return (
+    <span
+      title={ayuda}
+      aria-label="Ayuda"
+      style={{
+        display: 'inline-flex',
+        width: '1.25em',
+        height: '1.25em',
+        borderRadius: '50%',
+        background: '#64748b',
+        color: '#fff',
+        fontSize: '0.75em',
+        fontWeight: 700,
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'help',
+        flexShrink: 0,
+        alignSelf: 'center',
+        ...style,
+      }}
+    >
+      ?
+    </span>
+  )
+}
+
+/** Panel con cabecera colapsable (título + resumen cuando está cerrado). */
+export function PanelColapsable({ titulo, resumen, abierto, onToggle, ui, children, style }) {
+  return (
+    <div style={{ ...ui.card, marginBottom: 16, ...style }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={abierto}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          textAlign: 'left',
+          color: ui.text,
+        }}
+      >
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 'var(--cc-base)', fontWeight: 700, margin: 0, color: ui.text }}>{titulo}</div>
+          {!abierto && resumen && (
+            <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{resumen}</div>
+          )}
+        </div>
+        <span style={{ fontSize: 'var(--cc-lg)', color: ui.textMuted, lineHeight: 1, flexShrink: 0 }} aria-hidden>
+          {abierto ? '▾' : '▸'}
+        </span>
+      </button>
+      {abierto && <div style={{ marginTop: 12 }}>{children}</div>}
+    </div>
+  )
+}
+
+/** Etiqueta compacta con tooltip (?) — usa --cc-caption y escala con el tamaño global. */
+export function TopoFieldLabel({ texto, ayuda, color }) {
+  return (
+    <span
+      style={{
+        fontSize: 'var(--cc-caption)',
+        lineHeight: 1.25,
+        color: color || '#64748b',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 'var(--cc-space-1)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {texto}
+      {ayuda && (
+        <span
+          title={ayuda}
+          style={{
+            display: 'inline-flex',
+            width: '1.15em',
+            height: '1.15em',
+            borderRadius: '50%',
+            background: '#cbd5e1',
+            color: '#fff',
+            fontSize: '0.72em',
+            fontWeight: 700,
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'help',
+            flexShrink: 0,
+          }}
+        >
+          ?
+        </span>
+      )}
+    </span>
+  )
 }
 
 const DRAFT_KEY = (contratoId, modulo) => `claracore_topo_draft_${contratoId}_${modulo}`
@@ -363,4 +555,79 @@ export function parseApiError(raw) {
     titulo: 'No se pudo completar la operacion',
     mensaje: msg,
   }
+}
+
+export const ETIQUETAS_VALIDACION_TOPO = [
+  'Observación técnica',
+  'Corregir coordenadas',
+  'Revisar cierre',
+  'Revisar ángulos',
+  'Documentación incompleta',
+  'Otro',
+]
+
+const COLOR_ESTADO_VAL = {
+  Aprobado: { bg: '#dcfce7', color: '#166534' },
+  Pendiente: { bg: '#fef3c7', color: '#92400e' },
+  Rechazado: { bg: '#fee2e2', color: '#991b1b' },
+  'No Revisado': { bg: '#f1f5f9', color: '#64748b' },
+}
+
+export function chipEstadoValidacion(estado) {
+  const e = estado || 'No Revisado'
+  const c = COLOR_ESTADO_VAL[e] || COLOR_ESTADO_VAL['No Revisado']
+  return { label: e, ...c }
+}
+
+/** Alineado con backend `_es_desarrollador` (cargo Desarrollador). */
+export function esDesarrolladorTopo(usuario) {
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
+  return cargo === 'desarrollador' || rol === 'desarrollador'
+}
+
+/** Sellado definitivo: solo tras BO interventoría aprobada (nivel2 + biblioteca). */
+export function poligonalSellada(pol) {
+  const p = pol || {}
+  return (p.nivel2_estado || '') === 'Aprobado' || Boolean(p.biblioteca_at)
+}
+
+/** Nivel de validación topográfica: 0=dev (ambos), 1=contratista, 2=interventoría, null=sin validar. */
+export function determinarNivelValidacionTopo(usuario, permisos) {
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  const esDev = esDesarrolladorTopo(usuario)
+  const puedeValidar = esDev || puede(permisos, 'validar')
+
+  if (!puedeValidar) {
+    return { puedeValidar: false, lado: null, esDev, niveles: [] }
+  }
+  if (esDev) {
+    return { puedeValidar: true, lado: 0, esDev: true, niveles: [1, 2] }
+  }
+  if (rol === 'interventoria' || rol === 'operativo interventoria' || (cargo.includes('topograf') && cargo.includes('intervent'))) {
+    return { puedeValidar: true, lado: 2, esDev: false, niveles: [2] }
+  }
+  if (
+    rol === 'contratista' ||
+    rol === 'operativo contratista' ||
+    rol === 'subcontratista' ||
+    cargo.includes('topograf') ||
+    cargo.includes('cadenero')
+  ) {
+    return { puedeValidar: true, lado: 1, esDev: false, niveles: [1] }
+  }
+  return { puedeValidar: true, lado: 1, esDev: false, niveles: [1] }
 }

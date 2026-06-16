@@ -93,6 +93,22 @@ export default function PoligonalCierrePanel({ cierre }) {
               </td>
             </tr>
             <tr><td style={C.rowL}>Error lineal</td><td style={C.rowV}>{fmtNum(cierre.error_lineal, 4)} m</td></tr>
+            {cierre.tipo_pol === 'abierta' && cierre.llegada_objetivo && (
+              <tr>
+                <td style={C.rowL}>Llegada obj.</td>
+                <td style={C.rowV}>
+                  N {fmtNum(cierre.llegada_objetivo.norte, 4)} · E {fmtNum(cierre.llegada_objetivo.este, 4)}
+                </td>
+              </tr>
+            )}
+            {cierre.tipo_pol === 'abierta' && cierre.llegada_calculada && (
+              <tr>
+                <td style={C.rowL}>Llegada calc.</td>
+                <td style={C.rowV}>
+                  N {fmtNum(cierre.llegada_calculada.norte, 4)} · E {fmtNum(cierre.llegada_calculada.este, 4)}
+                </td>
+              </tr>
+            )}
             <tr>
               <td style={C.rowL}>Cierre obtenido</td>
               <td style={{ ...C.rowV, background: cierre.admisible_lineal ? '#dcfce7' : '#fee2e2', color: cierre.admisible_lineal ? '#166534' : '#991b1b', fontWeight: 800 }}>

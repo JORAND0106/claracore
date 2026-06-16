@@ -28,6 +28,9 @@ export function decimalToGms(decimal) {
 }
 
 export function validarGms(valor) {
+  if (valor === '' || valor === null || valor === undefined) return false
+  const num = Number(valor)
+  if (Number.isFinite(num) && num === 0) return true
   const str = String(valor)
   const partes = str.split('.')
   if (partes.length !== 2) return false
@@ -35,6 +38,42 @@ export function validarGms(valor) {
   const ss = parseInt(partes[1].substring(2, 4), 10)
   if (Number.isNaN(mm) || Number.isNaN(ss)) return false
   return mm < 60 && ss < 60
+}
+
+/** Segundos de arco → valor numerico GG.MMSS (ej. 23.69 → 0.002369). */
+export function segundosArcoAGmsNumero(segundos) {
+  const n = Number(segundos)
+  if (!Number.isFinite(n)) return 0
+  const sign = n < 0 ? -1 : 1
+  const absN = Math.abs(n)
+  const grados = Math.floor(absN / 3600)
+  const resto = absN - grados * 3600
+  const minutos = Math.floor(resto / 60)
+  const seg = Math.round((resto - minutos * 60) * 100) / 100
+  return sign * (grados + minutos / 100 + seg / 10000)
+}
+
+/** Formato GG.MMSS con ceros a la izquierda (ej. 00.002369). */
+export function fmtGmsNumero(valor, gradosPad = 2) {
+  const n = Number(valor)
+  if (!Number.isFinite(n)) return '—'
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  const [ent, frac = '000000'] = abs.toFixed(6).split('.')
+  return `${sign}${ent.padStart(gradosPad, '0')}.${frac}`
+}
+
+/** Cierre angular en formato GG°MM'SS'' (ej. 23.69" → 00°00'23.69"). */
+export function fmtErrorAngularTexto(segundos) {
+  const n = Number(segundos)
+  if (!Number.isFinite(n)) return '—'
+  const sign = n < 0 ? '-' : ''
+  const absN = Math.abs(n)
+  const grados = Math.floor(absN / 3600)
+  const resto = absN - grados * 3600
+  const minutos = Math.floor(resto / 60)
+  const seg = Math.round((resto - minutos * 60) * 100) / 100
+  return `${sign}${String(grados).padStart(2, '0')}°${String(minutos).padStart(2, '0')}'${String(seg.toFixed(2)).padStart(5, '0')}"`
 }
 
 /** Miles con espacio; decimales con coma (formato CO en pantalla). */

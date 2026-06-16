@@ -942,6 +942,8 @@ export default function ModuloProgramacionObra({
   const mapViewModeRef = useRef('programacion')
   const enrichedGeojsonRef = useRef(null)
   const mapRefreshDebounceRef = useRef(null)
+  const mapaFetchSeqRef = useRef(0)
+  const saveEpochRef = useRef(0)
   const ejecucionInitRef = useRef(false)
   const [plano, setPlano] = useState(undefined)
   const [mapaResp, setMapaResp] = useState(null)
@@ -1039,6 +1041,7 @@ export default function ModuloProgramacionObra({
   const refreshMapaYVersiones = useCallback(
     async (ensureVersionRow = null) => {
       if (!cid || !token) return
+      const seq = ++mapaFetchSeqRef.current
       const [m, v] = await Promise.all([
         fetch(`${API}/prog-obra/${cid}/mapa`, { headers: { Authorization: `Bearer ${token}` } }).then((r) =>
           r.ok ? r.json() : null,
@@ -1047,11 +1050,56 @@ export default function ModuloProgramacionObra({
           r.ok ? r.json() : null,
         ),
       ])
+      if (seq !== mapaFetchSeqRef.current) return m
       setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
       applyVersionesPayload(v, ensureVersionRow)
       return m
     },
     [cid, token, API, applyVersionesPayload],
+  )
+
+  const cancelScheduledMapRefresh = useCallback(() => {
+    if (mapRefreshDebounceRef.current) {
+      clearTimeout(mapRefreshDebounceRef.current)
+      mapRefreshDebounceRef.current = null
+    }
+  }, [])
+
+  const patchMapaPkEstados = useCallback((pkIds, patch) => {
+    const ids = new Set((pkIds || []).map((p) => String(p).trim()).filter(Boolean))
+    if (!ids.size) return
+    setMapaResp((prev) => {
+      if (!prev?.pk) return prev
+      return {
+        ...prev,
+        pk: prev.pk.map((r) => {
+          const id = String(r.pk_id || '').trim()
+          if (!ids.has(id)) return r
+          return { ...r, ...patch }
+        }),
+      }
+    })
+  }, [])
+
+  const invalidateInFlightSaves = useCallback(() => {
+    saveEpochRef.current += 1
+    cancelScheduledMapRefresh()
+  }, [cancelScheduledMapRefresh])
+
+  const handleProgramacionResetStart = useCallback(
+    (pkIds) => {
+      invalidateInFlightSaves()
+      const ids = (pkIds || []).map((p) => String(p).trim()).filter(Boolean)
+      if (!ids.length) return
+      patchMapaPkEstados(ids, {
+        estado_programacion: 'sin_iniciar',
+        items_con_fecha: 0,
+        porcentaje_programado: 0,
+        tiene_desviacion: false,
+        desviacion_tipo: '',
+      })
+    },
+    [invalidateInFlightSaves, patchMapaPkEstados],
   )
 
   const fetchEjecucionResumen = useCallback(
@@ -1071,19 +1119,17 @@ export default function ModuloProgramacionObra({
   )
 
   const scheduleMapRefresh = useCallback(() => {
-    if (mapRefreshDebounceRef.current) clearTimeout(mapRefreshDebounceRef.current)
+    cancelScheduledMapRefresh()
     mapRefreshDebounceRef.current = setTimeout(() => {
+      mapRefreshDebounceRef.current = null
       refreshMapaYVersiones()
     }, 2000)
-  }, [refreshMapaYVersiones])
+  }, [refreshMapaYVersiones, cancelScheduledMapRefresh])
 
   const refreshMapaImmediate = useCallback(async () => {
-    if (mapRefreshDebounceRef.current) {
-      clearTimeout(mapRefreshDebounceRef.current)
-      mapRefreshDebounceRef.current = null
-    }
+    cancelScheduledMapRefresh()
     return refreshMapaYVersiones()
-  }, [refreshMapaYVersiones])
+  }, [refreshMapaYVersiones, cancelScheduledMapRefresh])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -1093,6 +1139,7 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
+    const seq = ++mapaFetchSeqRef.current
       setPlano(undefined)
       setErr('')
       setVersionVigenteId(null)
@@ -1109,7 +1156,7 @@ export default function ModuloProgramacionObra({
       ),
     ])
       .then(([c, m, v]) => {
-        if (cancel) return
+        if (cancel || seq !== mapaFetchSeqRef.current) return
         const raw = c?.plano_geojson ?? null
         setPlano(normalizePlanoGeojson(raw))
         setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
@@ -1289,7 +1336,7 @@ export default function ModuloProgramacionObra({
     }
     if (ejecucionInitRef.current) return
     ejecucionInitRef.current = true
-    void refreshEjecucionCache()
+    void refreshEjecucionCache({ reloadMapa: false })
   }, [cid, token, refreshEjecucionCache])
 
   useEffect(() => {
@@ -2198,6 +2245,9 @@ export default function ModuloProgramacionObra({
     if (!puedeEscribir || !cid || !workingVersionId || !token) return
     setPanelBusy(true)
     try {
+      invalidateInFlightSaves()
+      const allPkIds = (mapaResp?.pk || []).map((r) => String(r.pk_id || '').trim()).filter(Boolean)
+      handleProgramacionResetStart(allPkIds)
       await clearVersionProgramacion(API, cid, token, String(workingVersionId))
       setShowEliminarProgramacion(false)
       setActData({ capitulos: [], actividades: [] })
@@ -2210,7 +2260,7 @@ export default function ModuloProgramacionObra({
     } finally {
       setPanelBusy(false)
     }
-  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaImmediate, showToast])
+  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaImmediate, showToast, invalidateInFlightSaves, handleProgramacionResetStart, mapaResp])
 
   const progTipoLabel = (tipo) => {
     const t0 = (tipo || '').toLowerCase()
@@ -2286,6 +2336,7 @@ export default function ModuloProgramacionObra({
 
   const handleGuardarBatch = useCallback(
     async (items, pkId) => {
+      const epochAtStart = saveEpochRef.current
       const vid = versionIdForWork
       if (!puedeEscribir || !cid || !vid || !pkId) return { ok: false, saved: 0, errors: items?.length || 0 }
       const actividades = (items || []).map((row) => {
@@ -2320,6 +2371,9 @@ export default function ModuloProgramacionObra({
           const errText = await parseApiError(res)
           console.error('[ProgObra] actividades-batch HTTP', res.status, errText)
           throw new Error(errText)
+        }
+        if (epochAtStart !== saveEpochRef.current) {
+          return { ok: true, saved: 0, errors: 0, stale: true }
         }
         const batchData = await res.json()
         if (batchData?.ms > 5000) {
@@ -2364,7 +2418,7 @@ export default function ModuloProgramacionObra({
           return { capitulos: prev?.capitulos || [], actividades: [...untouched, ...updated] }
         })
 
-        await refreshMapaYVersiones()
+        await refreshMapaImmediate()
 
         return { ok: true, saved: actividades.length, errors: 0, pkId: String(pkId || '').trim() }
       } catch (e) {
@@ -2373,11 +2427,12 @@ export default function ModuloProgramacionObra({
         return { ok: false, saved: 0, errors: actividades.length }
       }
     },
-    [puedeEscribir, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones],
+    [puedeEscribir, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaImmediate],
   )
 
   const handleGuardarBatchTramo = useCallback(
     async (items, options = {}) => {
+      const epochAtStart = saveEpochRef.current
       const vid = versionIdForWork
       const tramo = modalTramoContext?.tramo
       if (!puedeEscribir || !cid || !vid || !tramo) return { ok: false, saved: 0, errors: items?.length || 0 }
@@ -2415,6 +2470,9 @@ export default function ModuloProgramacionObra({
           allowOverwrite: !!options.allowOverwrite,
           preserveCpmSync: !!options.preserveCpmSync,
         })
+        if (epochAtStart !== saveEpochRef.current) {
+          return { ok: true, saved: 0, errors: 0, stale: true }
+        }
         if (batchData?.ms > 5000) {
           showToast(`Guardado tramo en ${Math.round(batchData.ms)} ms`, 'info')
         }
@@ -2478,11 +2536,8 @@ export default function ModuloProgramacionObra({
 
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
-      if (mapRefreshDebounceRef.current) {
-        clearTimeout(mapRefreshDebounceRef.current)
-        mapRefreshDebounceRef.current = null
-      }
-      const m = await refreshMapaYVersiones()
+      cancelScheduledMapRefresh()
+      const m = await refreshMapaImmediate()
       const map = mapInst.current
       if (map && map.getSource('prog-pol') && m) {
         const metaMap = {}
@@ -2494,7 +2549,7 @@ export default function ModuloProgramacionObra({
         map.getSource('prog-pol').setData(enriched)
       }
     },
-    [refreshMapaYVersiones, plano, tramoPkSet, mapViewMode],
+    [refreshMapaImmediate, plano, tramoPkSet, mapViewMode, cancelScheduledMapRefresh],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -2786,6 +2841,7 @@ export default function ModuloProgramacionObra({
 
   const handleGuardarItem = async (itemDef, form, rowKey, options = {}) => {
     const { deferReload = false } = options
+    const epochAtStart = saveEpochRef.current
     if (!puedeEscribir || !cid || !versionIdForWork || !pkForData) return false
     const cant = Number(itemDef.cant_total)
     if (!(cant > 0)) {
@@ -2819,6 +2875,7 @@ export default function ModuloProgramacionObra({
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
+      if (epochAtStart !== saveEpochRef.current) return false
       if (!deferReload) {
         await reloadActividadesPk()
         scheduleMapRefresh()
@@ -3141,6 +3198,7 @@ export default function ModuloProgramacionObra({
         panelBusy={panelBusy}
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
+        onProgramacionResetStart={handleProgramacionResetStart}
         onScheduleRefresh={scheduleMapRefresh}
         onTramoScheduleCleared={handleTramoScheduleCleared}
         onReloadActividades={modalMode === 'tramo' ? reloadTramoEstructura : reloadActividadesPk}

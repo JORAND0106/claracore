@@ -4891,7 +4891,7 @@ def actualizar_mi_perfil(body: PerfilUpdate, current_user=Depends(get_current_us
         else:
             data["fecha_nacimiento"] = raw[:10]
     if not data:
-        return get_mi_usuario(current_user)
+        return get_mi_usuario(current_user=current_user)
     try:
         sb.table("usuarios").update(data).eq("id", uid).execute()
     except Exception as e:
@@ -4900,7 +4900,7 @@ def actualizar_mi_perfil(body: PerfilUpdate, current_user=Depends(get_current_us
             status_code=503,
             detail="No se pudo guardar el perfil. Si acabas de desplegar, ejecuta backend/sql/usuario_perfil.sql en Supabase.",
         )
-    return get_mi_usuario(current_user)
+    return get_mi_usuario(current_user=current_user)
 
 
 def _ext_desde_content_type(content_type: Optional[str]) -> str:

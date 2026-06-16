@@ -4,6 +4,21 @@ import { parseApiError, useTopografiaApi, useTopoTheme } from './topografiaShare
 
 const TIPOS = ['BM', 'estacion', 'auxiliar', 'PI', 'cambio']
 
+function fmtFechaPunto(p) {
+  const raw = p.fecha_campo || p.created_at
+  if (!raw) return '—'
+  const d = String(raw).slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [y, m, day] = d.split('-')
+    return `${day}/${m}/${y}`
+  }
+  try {
+    return new Date(raw).toLocaleDateString('es-CO')
+  } catch {
+    return '—'
+  }
+}
+
 export default function BibliiotecaPuntos({ contratoId, token, soloVerificados = false }) {
   const ui = useTopoTheme()
   const { api } = useTopografiaApi(contratoId, token)
@@ -51,8 +66,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
       <div style={{ ...ui.card, marginBottom: 16, background: ui.t?.inputBg || ui.card.background }}>
         <h3 style={{ marginTop: 0, color: ui.text }}>Biblioteca de puntos</h3>
         <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
-          Esta biblioteca es de solo consulta. Los puntos se incorporan automaticamente al cerrar poligonales,
-          nivelaciones o intersecciones admisibles. El primer BM se define en el popup de la poligonal (punto de amarre).
+          Esta biblioteca es de solo consulta. Los puntos se incorporan al sellar poligonales o aprobar NewPoint en interventoría.
         </p>
       </div>
 
@@ -80,13 +94,15 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
                 <th style={ui.th}>Cota</th>
                 <th style={ui.th}>Tipo</th>
                 <th style={ui.th}>Origen</th>
+                <th style={ui.th}>Operador</th>
+                <th style={ui.th}>Fecha</th>
                 <th style={ui.th}>Estado</th>
               </tr>
             </thead>
             <tbody>
               {!filtrados.length && (
                 <tr>
-                  <td colSpan={7} style={{ ...ui.td, color: ui.textMuted, textAlign: 'center' }}>
+                  <td colSpan={9} style={{ ...ui.td, color: ui.textMuted, textAlign: 'center' }}>
                     No hay puntos registrados. Cree y cierre una poligonal para poblar la biblioteca.
                   </td>
                 </tr>
@@ -99,8 +115,10 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
                   <td style={ui.td}>{p.cota ?? '—'}</td>
                   <td style={ui.td}>{p.tipo}</td>
                   <td style={ui.td}>{p.modulo_origen || '—'}</td>
+                  <td style={ui.td}>{p.operador || '—'}</td>
+                  <td style={ui.td}>{fmtFechaPunto(p)}</td>
                   <td style={ui.td}>
-                    <span style={{ color: p.verificado ? '#16a34a' : ui.textMuted, fontWeight: 600 }}>
+                    <span style={{ color: p.verificado ? (ui.t?.success || '#047857') : ui.textMuted, fontWeight: 600 }}>
                       {p.verificado ? 'Verificado' : 'Pendiente'}
                     </span>
                   </td>
