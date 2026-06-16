@@ -22803,8 +22803,74 @@ def _export_sicoe_obra_rows_capitulo(
     return _sicoe_registros_xlsx_sin_ids_internos(rows)
 
 
+def _listado_precios_tipo_calculo_index(contrato_id: int) -> Dict[Tuple[str, str], str]:
+    """(capítulo_norm, ítem_norm) → tipo_calculo (AIU | IVA | …) del listado de precios."""
+    idx: Dict[Tuple[str, str], str] = {}
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("listado_precios")
+                .select("capitulo, item_numero, tipo_calculo")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item_numero"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in idx:
+                idx[k] = (r.get("tipo_calculo") or "").strip().upper()
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return idx
+
+
+def _gerencial_item_bloque_precio(
+    cap_key: str,
+    item_key: str,
+    cap_display: Optional[str],
+    tipo_idx: Dict[Tuple[str, str], str],
+) -> str:
+    """Clasifica ítem como obra/AIU o ensayos/IVA (listado de precios o capítulo)."""
+    tc = (tipo_idx.get((cap_key, item_key)) or "").strip().upper()
+    if tc == "IVA":
+        return "iva"
+    if tc == "AIU":
+        return "aiu"
+    if _matriz_validacion_bloque_capitulo(cap_display or cap_key) == "ensayos":
+        return "iva"
+    return "aiu"
+
+
+def _gerencial_item_es_aiu(
+    cap_key: str,
+    item_key: str,
+    cap_display: Optional[str],
+    tipo_idx: Dict[Tuple[str, str], str],
+) -> bool:
+    return _gerencial_item_bloque_precio(cap_key, item_key, cap_display, tipo_idx) == "aiu"
+
+
+def _gerencial_item_es_iva(
+    cap_key: str,
+    item_key: str,
+    cap_display: Optional[str],
+    tipo_idx: Dict[Tuple[str, str], str],
+) -> bool:
+    return _gerencial_item_bloque_precio(cap_key, item_key, cap_display, tipo_idx) == "iva"
+
+
 def _gerencial_ppto_split_por_capitulo(
-    contrato_id: int, vista: str, current_user
+    contrato_id: int, vista: str, current_user, *, tipo_idx: Optional[Dict[Tuple[str, str], str]] = None
 ) -> Tuple[Dict[str, Dict[str, Any]], Set[Tuple[str, str]]]:
     """Costo de presupuesto por capítulo desglosado por estado de revisión.
 
@@ -22820,6 +22886,8 @@ def _gerencial_ppto_split_por_capitulo(
         if tipo == TIPO_PRESUPUESTO_OBRA
         else None
     )
+    if tipo_idx is None:
+        tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
     agg: Dict[str, Dict[str, Any]] = {}
     allowed: Set[Tuple[str, str]] = set()
@@ -22851,11 +22919,12 @@ def _gerencial_ppto_split_por_capitulo(
         for r in batch:
             ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
             ik = _dash_norm_item_key_py(r.get("item"))
+            cap_disp = _dash_norm_cap(r.get("capitulo"))
             cost = float(r.get("costo_directo") or 0)
             rev = _matriz_validacion_norm_estado(r.get("revisado"))
             d = agg.get(ck)
             if d is None:
-                d = {"display": _dash_norm_cap(r.get("capitulo")), "ap": 0.0, "pe": 0.0, "re": 0.0, "nr": 0.0}
+                d = {"display": cap_disp, "ap": 0.0, "pe": 0.0, "re": 0.0, "nr": 0.0}
                 agg[ck] = d
             if rev == "Aprobado":
                 d["ap"] += cost
@@ -22873,23 +22942,38 @@ def _gerencial_ppto_split_por_capitulo(
     return agg, allowed
 
 
-def _gerencial_ppto_items_obra_ejecutada(
-    contrato_id: int, current_user
+def _gerencial_ppto_items(
+    contrato_id: int, vista: str, current_user
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """Presupuesto Obra Ejecutada agregado por (capítulo_norm, ítem_norm)."""
+    """Presupuesto agregado por (capítulo_norm, ítem_norm), sin filtrar AIU/IVA."""
+    tipo = ppto_tipo_for_vista(vista)
+    oficial_vid = (
+        presupuesto_oficial_version_id(supabase, contrato_id)
+        if tipo == TIPO_PRESUPUESTO_OBRA
+        else None
+    )
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
     agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
     off = 0
     while True:
 
         def _b(o=off):
-            q = (
-                supabase.table("presupuesto")
-                .select("capitulo, item, costo_directo, revisado")
-                .eq("contrato_id", int(contrato_id))
-                .eq("dado_de_baja", False)
-                .eq("tipo_ejecucion", TIPO_OBRA_EJECUTADA)
-            )
+            if oficial_vid:
+                q = (
+                    supabase.table("presupuesto_version_items")
+                    .select("capitulo, item, costo_directo, revisado")
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("dado_de_baja", False)
+                    .eq("version_id", oficial_vid)
+                )
+            else:
+                q = (
+                    supabase.table("presupuesto")
+                    .select("capitulo, item, costo_directo, revisado")
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("dado_de_baja", False)
+                    .eq("tipo_ejecucion", tipo)
+                )
             if filtra_interv:
                 q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
             return q.order("id").range(o, o + 999).execute().data
@@ -22927,39 +23011,49 @@ def _gerencial_ppto_items_obra_ejecutada(
     return agg
 
 
-def _gerencial_capitulos_data_obra_ejecutada(
-    contrato_id: int, current_user
-) -> List[Dict[str, Any]]:
-    """Panorama financiero Obra Ejecutada por capítulo.
+def _gerencial_ppto_items_obra_ejecutada(
+    contrato_id: int, current_user, **kwargs
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """Presupuesto Obra Ejecutada agregado por (capítulo_norm, ítem_norm)."""
+    return _gerencial_ppto_items(contrato_id, DASH_VISTA_OBRA_EJECUTADA, current_user)
 
-    - Ítems en presupuesto Obra Ejecutada: ClaraCore = todos los estados (AP+PE+RE+NR).
-    - Ítems solo cobrados en SICOE (sin fila Obra Ejecutada): ClaraCore := Cobrado, Δ=0.
-    - Cobrado: SICOE aprobado (nivel máx.) de todo el contrato, sin recortar a intersección.
-    """
-    ppto_items = _gerencial_ppto_items_obra_ejecutada(contrato_id, current_user)
-    sicoe_by: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    try:
-        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id) or {}
-    except Exception as e:
-        print(f"gerencial obra_ejecutada sicoe falló: {type(e).__name__}: {e}", flush=True)
+
+def _gerencial_capitulos_aggregate(
+    ppto_items: Dict[Tuple[str, str], Dict[str, Any]],
+    sicoe_by: Dict[Tuple[str, str], Dict[str, Any]],
+    tipo_idx: Dict[Tuple[str, str], str],
+    bloque: str,
+    *,
+    obra_ejecutada: bool,
+) -> List[Dict[str, Any]]:
+    """Agrega filas por capítulo para bloque ``aiu`` o ``iva``."""
+    want_iva = bloque == "iva"
+
+    def _en_bloque(ck: str, ik: str, cap_ref: Optional[str]) -> bool:
+        es_iva = _gerencial_item_es_iva(ck, ik, cap_ref, tipo_idx)
+        return es_iva if want_iva else not es_iva
 
     all_keys: Set[Tuple[str, str]] = set(ppto_items.keys())
     for k, sg in sicoe_by.items():
-        if float(sg.get("ap_c") or 0) > 0:
+        ck, ik = k
+        if float(sg.get("ap_c") or 0) > 0 and _en_bloque(ck, ik, sg.get("cap_display")):
             all_keys.add(k)
 
     cap_agg: Dict[str, Dict[str, Any]] = {}
     for k in all_keys:
-        ck, _ik = k
+        ck, ik = k
         p = ppto_items.get(k)
         sg = sicoe_by.get(k) or {}
+        cap_ref = (p or {}).get("cap_display") or sg.get("cap_display")
+        if not _en_bloque(ck, ik, cap_ref):
+            continue
         cob = float(sg.get("ap_c") or 0)
         if p:
             ap = float(p.get("ap") or 0)
             pe = float(p.get("pe") or 0)
             re_ = float(p.get("re") or 0)
             nr = float(p.get("nr") or 0)
-            cc = ap + pe + re_ + nr
+            cc = (ap + pe + re_ + nr) if obra_ejecutada else (ap + nr)
             cap_disp = p.get("cap_display") or ck
         elif cob > 0:
             ap = pe = re_ = nr = 0.0
@@ -23014,60 +23108,46 @@ def _gerencial_capitulos_data_obra_ejecutada(
     return out
 
 
-def _gerencial_capitulos_data(
-    contrato_id: int, vista: str, current_user
+def _gerencial_capitulos_totales(rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    tot_cl = sum(float(r.get("claracore") or 0) for r in rows)
+    tot_co = sum(float(r.get("cobrado") or 0) for r in rows)
+    return {
+        "claracore": round(tot_cl, 0),
+        "cobrado": round(tot_co, 0),
+        "delta": round(tot_cl - tot_co, 0),
+        "aprobado": round(sum(float(r.get("aprobado") or 0) for r in rows), 0),
+        "pendiente": round(sum(float(r.get("pendiente") or 0) for r in rows), 0),
+        "rechazado": round(sum(float(r.get("rechazado") or 0) for r in rows), 0),
+        "no_revisado": round(sum(float(r.get("no_revisado") or 0) for r in rows), 0),
+    }
+
+
+def _gerencial_capitulos_data_obra_ejecutada(
+    contrato_id: int, current_user, *, bloque: str = "aiu"
 ) -> List[Dict[str, Any]]:
-    """Filas financieras por capítulo para el informe gerencial.
+    """Panorama financiero Obra Ejecutada por capítulo (bloque AIU o IVA)."""
+    return _gerencial_capitulos_data(contrato_id, DASH_VISTA_OBRA_EJECUTADA, current_user, bloque=bloque)
 
-    Presupuesto de Obra: ClaraCore = Aprobado + No Revisado; Delta = ClaraCore − Cobrado.
 
-    Obra Ejecutada: ver ``_gerencial_capitulos_data_obra_ejecutada``.
+def _gerencial_capitulos_data(
+    contrato_id: int, vista: str, current_user, *, bloque: str = "aiu"
+) -> List[Dict[str, Any]]:
+    """Filas financieras por capítulo para informe gerencial / dashboard (AIU o IVA).
+
+    Presupuesto de Obra: ClaraCore = Aprobado + No Revisado.
+    Obra Ejecutada: ClaraCore = todos los estados (AP+PE+RE+NR); solo-cobrado → CC := Cobrado.
     """
-    if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
-        return _gerencial_capitulos_data_obra_ejecutada(contrato_id, current_user)
-
-    ppto, _allowed = _gerencial_ppto_split_por_capitulo(contrato_id, vista, current_user)
-    cobrado_by_cap: Dict[str, float] = {}
-    disp_by_cap: Dict[str, str] = {}
+    tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
+    obra_ejecutada = parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+    ppto_items = _gerencial_ppto_items(contrato_id, vista, current_user)
+    sicoe_by: Dict[Tuple[str, str], Dict[str, Any]] = {}
     try:
-        for row in _drill_agg_capitulos(contrato_id, vista, current_user) or []:
-            cap = row.get("capitulo") or row.get("nombre") or ""
-            ck = _dash_norm_capitulo_key_py(cap)
-            cobrado_by_cap[ck] = cobrado_by_cap.get(ck, 0.0) + float(row.get("cobrado") or 0)
-            disp_by_cap.setdefault(ck, _dash_norm_cap(cap))
+        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id) or {}
     except Exception as e:
-        print(f"gerencial cobrado falló: {type(e).__name__}: {e}", flush=True)
-
-    keys = set(ppto.keys()) | set(cobrado_by_cap.keys())
-    out: List[Dict[str, Any]] = []
-    for ck in keys:
-        p = ppto.get(ck) or {}
-        ap = float(p.get("ap") or 0)
-        pe = float(p.get("pe") or 0)
-        re_ = float(p.get("re") or 0)
-        nr = float(p.get("nr") or 0)
-        claracore = ap + nr
-        cobrado = float(cobrado_by_cap.get(ck) or 0)
-        display = p.get("display") or disp_by_cap.get(ck) or ck
-        out.append(
-            {
-                "capitulo": display,
-                "claracore": round(claracore, 0),
-                "cobrado": round(cobrado, 0),
-                "delta": round(claracore - cobrado, 0),
-                "aprobado": round(ap, 0),
-                "pendiente": round(pe, 0),
-                "rechazado": round(re_, 0),
-                "no_revisado": round(nr, 0),
-            }
-        )
-    out.sort(
-        key=lambda r: (
-            _dash_capitulo_num_sort_key(r.get("capitulo") or ""),
-            str(r.get("capitulo") or "").lower(),
-        )
+        print(f"gerencial sicoe falló: {type(e).__name__}: {e}", flush=True)
+    return _gerencial_capitulos_aggregate(
+        ppto_items, sicoe_by, tipo_idx, bloque, obra_ejecutada=obra_ejecutada
     )
-    return out
 
 
 def _require_dashboard_export(current_user, contrato_id: int) -> None:
@@ -24043,7 +24123,7 @@ def dashboard_capitulos_financiero_obra(
     _require_contract_access(current_user, contrato_id)
     vista_n = parse_dash_vista(vista)
     cache_key = (
-        "dashboard_capitulos_fin",
+        "dashboard_capitulos_fin_v2",
         int(contrato_id),
         vista_n,
         _dashboard_resumen_user_cache_key(current_user),
@@ -24052,13 +24132,10 @@ def dashboard_capitulos_financiero_obra(
     if cached is not None:
         return cached
     try:
-        rows = _gerencial_capitulos_data(contrato_id, vista, current_user)
-        tot_cl = sum(float(r.get("claracore") or 0) for r in rows)
-        tot_co = sum(float(r.get("cobrado") or 0) for r in rows)
-        tot_ap = sum(float(r.get("aprobado") or 0) for r in rows)
-        tot_pe = sum(float(r.get("pendiente") or 0) for r in rows)
-        tot_re = sum(float(r.get("rechazado") or 0) for r in rows)
-        tot_nr = sum(float(r.get("no_revisado") or 0) for r in rows)
+        rows_aiu = _gerencial_capitulos_data(contrato_id, vista, current_user, bloque="aiu")
+        rows_iva = _gerencial_capitulos_data(contrato_id, vista, current_user, bloque="iva")
+        tot_aiu = _gerencial_capitulos_totales(rows_aiu)
+        tot_iva = _gerencial_capitulos_totales(rows_iva)
         contrato_meta: Dict[str, str] = {}
         try:
             cr = (
@@ -24080,16 +24157,12 @@ def dashboard_capitulos_financiero_obra(
         out = {
             "vista": vista_n,
             "contrato": contrato_meta,
-            "capitulos": rows,
-            "totales": {
-                "claracore": round(tot_cl, 0),
-                "cobrado": round(tot_co, 0),
-                "delta": round(tot_cl - tot_co, 0),
-                "aprobado": round(tot_ap, 0),
-                "pendiente": round(tot_pe, 0),
-                "rechazado": round(tot_re, 0),
-                "no_revisado": round(tot_nr, 0),
-            },
+            "capitulos": rows_aiu,
+            "capitulos_aiu": rows_aiu,
+            "capitulos_iva": rows_iva,
+            "totales": tot_aiu,
+            "totales_aiu": tot_aiu,
+            "totales_iva": tot_iva,
         }
         _dashboard_response_cache_set(cache_key, out)
         return out

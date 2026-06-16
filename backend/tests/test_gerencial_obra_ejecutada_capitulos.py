@@ -4,7 +4,8 @@ import main as m
 
 
 def test_obra_ejecutada_sicoe_sin_presupuesto_iguala_claracore(monkeypatch):
-    monkeypatch.setattr(m, "_gerencial_ppto_items_obra_ejecutada", lambda cid, u: {})
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
+    monkeypatch.setattr(m, "_gerencial_ppto_items", lambda cid, v, u: {})
     monkeypatch.setattr(
         m,
         "_dashboard_scan_sicoe_by_item",
@@ -20,10 +21,11 @@ def test_obra_ejecutada_sicoe_sin_presupuesto_iguala_claracore(monkeypatch):
 
 
 def test_obra_ejecutada_presupuesto_suma_todos_estados(monkeypatch):
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
     monkeypatch.setattr(
         m,
-        "_gerencial_ppto_items_obra_ejecutada",
-        lambda cid, u: {
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
             ("2_cap", "2.01"): {
                 "cap_display": "2. RELLENOS",
                 "ap": 100.0,
@@ -52,15 +54,21 @@ def test_obra_ejecutada_presupuesto_suma_todos_estados(monkeypatch):
 
 
 def test_presupuesto_obra_sigue_bolsa_ap_nr(monkeypatch):
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
     monkeypatch.setattr(
         m,
-        "_gerencial_ppto_split_por_capitulo",
-        lambda cid, v, u: (
-            {"c1": {"display": "1. X", "ap": 100.0, "pe": 200.0, "re": 50.0, "nr": 150.0}},
-            set(),
-        ),
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
+            ("c1", "1.01"): {
+                "cap_display": "1. X",
+                "ap": 100.0,
+                "pe": 200.0,
+                "re": 50.0,
+                "nr": 150.0,
+            },
+        },
     )
-    monkeypatch.setattr(m, "_drill_agg_capitulos", lambda cid, v, u: [])
+    monkeypatch.setattr(m, "_dashboard_scan_sicoe_by_item", lambda cid: {})
     rows = m._gerencial_capitulos_data(1, "presupuesto_obra", None)
     assert rows[0]["claracore"] == 250
     assert rows[0]["pendiente"] == 200
@@ -187,3 +195,63 @@ def test_pkid_delta_obra_ejecutada_ppto_vs_cobrado():
     m._apply_obra_ejecutada_pkid_delta(row)
     assert row["delta_cant"] == pytest.approx(-0.29, abs=0.01)
     assert row["delta_costo"] == -181_099
+
+
+def test_gerencial_excluye_items_iva(monkeypatch):
+    monkeypatch.setattr(
+        m,
+        "_listado_precios_tipo_calculo_index",
+        lambda cid: {
+            ("14_cap", "14.01"): "IVA",
+            ("7_cap", "7.01"): "AIU",
+        },
+    )
+    monkeypatch.setattr(
+        m,
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
+            ("14_cap", "14.01"): {
+                "cap_display": "14. ENSAYOS DE LABORATORIO",
+                "ap": 1_000_000.0,
+                "pe": 0.0,
+                "re": 0.0,
+                "nr": 0.0,
+            },
+            ("7_cap", "7.01"): {
+                "cap_display": "7. PLUVIAL",
+                "ap": 500_000.0,
+                "pe": 0.0,
+                "re": 0.0,
+                "nr": 0.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        m,
+        "_dashboard_scan_sicoe_by_item",
+        lambda cid: {
+            ("14_cap", "14.01"): {"ap_c": 900_000.0, "cap_display": "14. ENSAYOS DE LABORATORIO"},
+            ("7_cap", "7.01"): {"ap_c": 400_000.0, "cap_display": "7. PLUVIAL"},
+        },
+    )
+    rows = m._gerencial_capitulos_data_obra_ejecutada(1, None)
+    assert len(rows) == 1
+    assert rows[0]["capitulo"] == "7. PLUVIAL"
+    assert rows[0]["claracore"] == 500_000
+    assert rows[0]["cobrado"] == 400_000
+
+    rows_iva = m._gerencial_capitulos_data_obra_ejecutada(1, None, bloque="iva")
+    assert len(rows_iva) == 1
+    assert rows_iva[0]["capitulo"] == "14. ENSAYOS DE LABORATORIO"
+    assert rows_iva[0]["claracore"] == 1_000_000
+    assert rows_iva[0]["cobrado"] == 900_000
+
+
+def test_gerencial_item_es_aiu_fallback_capitulo_ensayos():
+    idx = {}
+    assert m._gerencial_item_bloque_precio("14_cap", "14.99", "14. ENSAYOS DE LABORATORIO", idx) == "iva"
+    assert m._gerencial_item_bloque_precio("7_cap", "7.01", "7. PLUVIAL", idx) == "aiu"
+    assert m._gerencial_item_es_aiu("7_cap", "7.02", "7. PLUVIAL", idx) is True
+    idx2 = {("7_cap", "7.02"): "IVA"}
+    assert not m._gerencial_item_es_aiu("7_cap", "7.02", "7. PLUVIAL", idx2)
+    assert m._gerencial_item_es_iva("7_cap", "7.02", "7. PLUVIAL", idx2)

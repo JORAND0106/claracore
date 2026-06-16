@@ -14584,26 +14584,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }
 
-  function abrirModalExportDashExcel() {
-    if (dashExportInFlightRef.current) return
-    if (!puedeExportarDashboard) return
-    if (dashDrill[1]?.valor) {
-      void ejecutarExportDashExcel({
-        soloResumen: false,
-        capitulo: dashDrill[0]?.valor,
-        itemValor: dashDrill[1].valor,
-      })
-      return
-    }
-    setDashExportModal({
-      phase: 'choose',
-      capitulo: dashDrill[0]?.valor || '',
-      itemCount: Array.isArray(dashData) ? dashData.length : null,
-      seg: 0,
-      progreso: null,
-      error: null,
-    })
-  }
 
   async function abrirPopupPkid(pkid) {
     if (dashDrill.length < 2 || !contratoIdDash) return
@@ -15582,14 +15562,110 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
           const dashEsperando = dashKpiLoading && kpiCobro == null && kpiPpto == null
           const dashRefreshBusy = dashKpiLoading || dashCapFinLoading
-          const capFinRows = dashVistaEjecucion === 'Obra Ejecutada'
-            ? sortComparativoCapitulos(dashCapFin?.capitulos || [])
-            : mergeCapFinRows(dashCapFin, kpiCobro?.comparativo_capitulos)
+          const capFinRows = sortComparativoCapitulos(dashCapFin?.capitulos || [])
           const capFinTot = dashCapFin?.totales || (capFinRows.length ? {
             claracore: capFinRows.reduce((s, r) => s + (Number(r.claracore) || 0), 0),
             cobrado: capFinRows.reduce((s, r) => s + (Number(r.cobrado) || 0), 0),
             delta: capFinRows.reduce((s, r) => s + (Number(r.delta) || 0), 0),
           } : {})
+          const capFinRowsIva = sortComparativoCapitulos(dashCapFin?.capitulos_iva || [])
+          const capFinTotIva = dashCapFin?.totales_iva || (capFinRowsIva.length ? {
+            claracore: capFinRowsIva.reduce((s, r) => s + (Number(r.claracore) || 0), 0),
+            cobrado: capFinRowsIva.reduce((s, r) => s + (Number(r.cobrado) || 0), 0),
+            delta: capFinRowsIva.reduce((s, r) => s + (Number(r.delta) || 0), 0),
+          } : {})
+          const renderCapFinTabla = (rows, tot, { headerBg = '#4472C4', footerLabel = 'TOTAL CONTRATO' } = {}) => (
+            rows.length === 0 && !dashCapFinLoading ? (
+              <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
+            ) : (
+              <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'auto', width:'100%' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:560 }}>
+                  <thead>
+                    <tr style={{ background:headerBg, color:'#fff', position:'sticky', top:0, zIndex:1 }}>
+                      {puedeExportarDashboard ? (
+                        <th style={{ width:64, padding:'8px 6px', fontWeight:700 }} aria-label="Exportar" />
+                      ) : null}
+                      <th style={{ textAlign:'left', padding:'8px 10px', fontWeight:700 }}>Capítulo</th>
+                      <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total ClaraCore</th>
+                      <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total Cobrado</th>
+                      <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, i) => {
+                      const isSel = dashDrill[0]?.valor === row.capitulo
+                      const delta = Number(row.delta) || 0
+                      const zebra = i % 2 === 0 ? t.bgCard : (themeIsDarkChrome(activeTheme) ? '#1e293b22' : '#f8fafc')
+                      const exportBusy = dashExportModal?.phase === 'generating'
+                      return (
+                        <tr
+                          key={`${row.capitulo}-${i}`}
+                          onClick={() => abrirDashCapitulo(row.capitulo)}
+                          title="Clic para ver ítems del capítulo"
+                          style={{ background: isSel ? `${t.primary}18` : zebra, cursor:'pointer' }}
+                          onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = `${t.primary}0c` }}
+                          onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = zebra }}
+                        >
+                          {puedeExportarDashboard ? (
+                            <td
+                              style={{ padding:'6px 8px', verticalAlign:'middle' }}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+                                <button
+                                  type="button"
+                                  title="Resumen ejecutivo (Excel)"
+                                  disabled={exportBusy}
+                                  onClick={() => void ejecutarExportDashExcel({ soloResumen: true, capitulo: row.capitulo })}
+                                  style={{
+                                    width:28, height:28, padding:0, flexShrink:0,
+                                    background: headerBg, color:'#fff', border:'none', borderRadius:4,
+                                    cursor: exportBusy ? 'wait' : 'pointer', fontSize:'13px', lineHeight:1,
+                                    opacity: exportBusy ? 0.45 : 1,
+                                  }}
+                                >
+                                  📋
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Informe completo (Excel)"
+                                  disabled={exportBusy}
+                                  onClick={() => void ejecutarExportDashExcel({ soloResumen: false, capitulo: row.capitulo })}
+                                  style={{
+                                    width:28, height:28, padding:0, flexShrink:0,
+                                    background: headerBg, color:'#fff', border:'none', borderRadius:4,
+                                    cursor: exportBusy ? 'wait' : 'pointer', fontSize:'13px', lineHeight:1,
+                                    opacity: exportBusy ? 0.45 : 1,
+                                  }}
+                                >
+                                  📁
+                                </button>
+                              </div>
+                            </td>
+                          ) : null}
+                          <td style={{ padding:'6px 10px', fontWeight:600, color:t.text }}>{row.capitulo}</td>
+                          <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.claracore)}</td>
+                          <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.cobrado)}</td>
+                          <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap', color: delta < 0 ? '#dc2626' : t.text }}>{fmtD(delta)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  {rows.length > 0 && (
+                    <tfoot>
+                      <tr style={{ background:'#111827', color:'#fff', position:'sticky', bottom:0 }}>
+                        {puedeExportarDashboard ? <td /> : null}
+                        <td style={{ padding:'8px 10px', fontWeight:800 }}>{footerLabel}</td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(tot.claracore)}</td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(tot.cobrado)}</td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(tot.delta)}</td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            )
+          )
           const dashInfoColor = t.primary || '#0077B6'
           const dashTabItems = [
             ['resumen', 'Resumen'],
@@ -15944,7 +16020,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
               {/* 🟢 Ppto vs Cobro + Matriz validación (SICOE / Acta RPO) */}
               <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: panelFoco==='ppto-cobro' ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
+              <div style={{
+                display:'flex', flexDirection:'column', gap:'16px',
+                flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)',
+                minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)',
+                boxSizing:'border-box',
+              }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                     <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 Ppto vs Cobro por capítulo</div>
@@ -15977,60 +16059,38 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
                     Total ClaraCore · Total Cobrado · Δ — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                    {' · '}
+                    <span title="Solo ítems con tipo de cálculo AIU en listado de precios; excluye IVA y capítulos de ensayos/sondeos">
+                      solo AIU
+                    </span>
                     {dashCapFinLoading && capFinRows.length === 0 ? ' · Cargando tabla…' : ''}
                   </div>
                 </div>
-                {capFinRows.length === 0 && !dashCapFinLoading ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
-                ) : (
-                  <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'auto', width:'100%' }}>
-                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:560 }}>
-                      <thead>
-                        <tr style={{ background:'#4472C4', color:'#fff', position:'sticky', top:0, zIndex:1 }}>
-                          <th style={{ textAlign:'left', padding:'8px 10px', fontWeight:700 }}>Capítulo</th>
-                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total ClaraCore</th>
-                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Total Cobrado</th>
-                          <th style={{ textAlign:'right', padding:'8px 10px', fontWeight:700, whiteSpace:'nowrap' }}>Δ</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {capFinRows.map((row, i) => {
-                          const isSel = dashDrill[0]?.valor === row.capitulo
-                          const delta = Number(row.delta) || 0
-                          const zebra = i % 2 === 0 ? t.bgCard : (themeIsDarkChrome(activeTheme) ? '#1e293b22' : '#f8fafc')
-                          return (
-                            <tr
-                              key={`${row.capitulo}-${i}`}
-                              onClick={() => abrirDashCapitulo(row.capitulo)}
-                              title="Clic para ver ítems del capítulo"
-                              style={{ background: isSel ? `${t.primary}18` : zebra, cursor:'pointer' }}
-                              onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = `${t.primary}0c` }}
-                              onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = zebra }}
-                            >
-                              <td style={{ padding:'6px 10px', fontWeight:600, color:t.text }}>{row.capitulo}</td>
-                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.claracore)}</td>
-                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtD(row.cobrado)}</td>
-                              <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap', color: delta < 0 ? '#dc2626' : t.text }}>{fmtD(delta)}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      {capFinRows.length > 0 && (
-                        <tfoot>
-                          <tr style={{ background:'#111827', color:'#fff', position:'sticky', bottom:0 }}>
-                            <td style={{ padding:'8px 10px', fontWeight:800 }}>TOTAL CONTRATO</td>
-                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.claracore)}</td>
-                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.cobrado)}</td>
-                            <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, whiteSpace:'nowrap' }}>{fmtD(capFinTot.delta)}</td>
-                          </tr>
-                        </tfoot>
-                      )}
-                    </table>
-                  </div>
-                )}
+                {renderCapFinTabla(capFinRows, capFinTot, { headerBg:'#4472C4', footerLabel:'TOTAL OBRA (AIU)' })}
                 <div style={{ marginTop:'8px', fontSize:`${du.sub}px`, color:t.textMuted }}>
                   Clic en un capítulo para abrir mapa semáforo e ítems
+                  {puedeExportarDashboard ? ' · 📋 ejecutivo · 📁 completo por fila' : ''}
                 </div>
+              </div>
+
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+                <div style={{ marginBottom:'14px' }}>
+                  <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>🧪 Ppto vs Cobro · IVA</div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
+                    Ensayos, sondeos y capítulos 14–15 — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                    {' · '}
+                    <span title="Ítems con tipo de cálculo IVA en listado de precios o capítulos de ensayos/sondeos">
+                      solo IVA
+                    </span>
+                    {dashCapFinLoading && capFinRowsIva.length === 0 ? ' · Cargando tabla…' : ''}
+                  </div>
+                </div>
+                {renderCapFinTabla(capFinRowsIva, capFinTotIva, { headerBg:'#7C3AED', footerLabel:'TOTAL IVA' })}
+                <div style={{ marginTop:'8px', fontSize:`${du.sub}px`, color:t.textMuted }}>
+                  Clic en un capítulo para abrir mapa semáforo e ítems
+                  {puedeExportarDashboard ? ' · 📋 ejecutivo · 📁 completo por fila' : ''}
+                </div>
+              </div>
               </div>
               {/* ── Drill → ahora vive en el popup ── */}
 
@@ -16254,18 +16314,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         />
                       </div>
                       <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0, flex:'0 0 auto' }}>
-                        {puedeExportarDashboard && (
-                        <button
-                          id="btn-exportar-xlsx"
-                          title="Exportar informe Excel del capítulo o ítem"
-                          disabled={dashExportModal?.phase === 'generating'}
-                          onClick={() => abrirModalExportDashExcel()}
-                          style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor: dashExportModal?.phase === 'generating' ? 'wait' : 'pointer', lineHeight:1, transition:'all 0.15s', opacity: dashExportModal?.phase === 'generating' ? 0.55 : 1 }}
-                          onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
-                          onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
-                          📊
-                        </button>
-                        )}
                         {puedeCrearReporteDash && dashDrill.length >= 1 && (dashDrill.length >= 2 || (!dashLoading && (dashData?.length > 0))) && (
                           <button
                             type="button"
@@ -17842,7 +17890,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 background: t.bgCard,
                 borderRadius: exportModalUi.radius,
                 border: `1px solid ${t.border}`,
-                maxWidth: dashExportModal.phase === 'choose' ? exportModalUi.maxChoose : exportModalUi.maxGen,
+                maxWidth: exportModalUi.maxGen,
                 width: '100%',
                 boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
                 overflow: 'hidden',
@@ -17904,144 +17952,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </button>
                 )}
               </div>
-
-              {dashExportModal.phase === 'choose' && (
-                <div style={{ padding: '18px 20px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.5 }}>
-                    Elija el tipo de archivo según lo que necesite revisar o compartir.
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void ejecutarExportDashExcel({
-                        soloResumen: true,
-                        capitulo: dashExportModal.capitulo,
-                      })
-                    }
-                    style={{
-                      textAlign: 'left',
-                      border: `2px solid #059669`,
-                      borderRadius: '12px',
-                      padding: '14px 16px',
-                      background: '#ecfdf5',
-                      cursor: 'pointer',
-                      transition: 'box-shadow 0.15s',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '22px' }} aria-hidden>📋</span>
-                      <div>
-                        <div style={{ fontWeight: 800, color: '#065f46', fontSize: 'var(--cc-sm)' }}>Resumen ejecutivo</div>
-                        <div style={{ fontSize: 'var(--cc-caption)', color: '#047857', marginTop: '2px' }}>Recomendado · listo en segundos</div>
-                      </div>
-                    </div>
-                    <ul style={{ margin: 0, paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
-                      <li>Una hoja con todos los ítems del capítulo (igual al popup del dashboard)</li>
-                      <li>Columnas NR·P·R·A ocultas; Cant CC y Δ con fórmulas Excel</li>
-                      <li>Encabezado institucional con logo, contrato y versión</li>
-                    </ul>
-                  </button>
-
-                  <div
-                    style={{
-                      border: `1px solid ${t.border}`,
-                      borderRadius: '12px',
-                      padding: '14px 16px',
-                      background: t.bgCard,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '22px' }} aria-hidden>📁</span>
-                      <div>
-                        <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>Archivo completo</div>
-                        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '2px' }}>Análisis detallado del capítulo</div>
-                      </div>
-                    </div>
-                    <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.55 }}>
-                      <li>Hoja <strong style={{ color: t.text }}>Resumen ejecutivo</strong> (misma tabla del dashboard)</li>
-                      <li>Una pestaña por ítem: meta, resumen por Acta RPO, balance y tabla de soporte</li>
-                      <li>Cantidades según fuente: Obra Ejecutada (presupuesto) o cobrado (SICOE aprobado)</li>
-                    </ul>
-                    <div
-                      style={{
-                        fontSize: 'var(--cc-caption)',
-                        color: '#92400e',
-                        background: '#fffbeb',
-                        border: '1px solid #fcd34d',
-                        borderRadius: '8px',
-                        padding: '10px 12px',
-                        marginBottom: '12px',
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      ⏱ Capítulos con muchos ítems (p. ej. ~200) pueden tardar <strong>10–30 minutos</strong>.
-                      La descarga corre en segundo plano: verá el avance por ítem. No cierre la ventana.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void ejecutarExportDashExcel({
-                          soloResumen: false,
-                          capitulo: dashExportModal.capitulo,
-                        })
-                      }
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: '8px',
-                        border: `1.5px solid ${t.primary || '#0f766e'}`,
-                        background: 'transparent',
-                        color: t.primary || '#0f766e',
-                        fontWeight: 700,
-                        fontSize: 'var(--cc-sm)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Generar archivo completo
-                    </button>
-                  </div>
-
-                  <div
-                    style={{
-                      border: `2px solid ${t.primary || '#0077B6'}`,
-                      borderRadius: '12px',
-                      padding: '14px 16px',
-                      background: '#eff6ff',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '22px' }} aria-hidden>🏛️</span>
-                      <div>
-                        <div style={{ fontWeight: 800, color: '#0c4a6e', fontSize: 'var(--cc-sm)' }}>Informe gerencial</div>
-                        <div style={{ fontSize: 'var(--cc-caption)', color: '#0369a1', marginTop: '2px' }}>Todos los capítulos · solo financiero</div>
-                      </div>
-                    </div>
-                    <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
-                      <li>Total ClaraCore, Total Cobrado y Δ por capítulo (igual al dashboard)</li>
-                      <li>Encabezado con logo, contrato, versión y usuario que genera</li>
-                      <li>Sin gráficos ni desgloses adicionales</li>
-                    </ul>
-                    <button
-                      type="button"
-                      onClick={() => void ejecutarExportGerencial()}
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        background: t.primary || '#0077B6',
-                        color: '#ffffff',
-                        fontWeight: 700,
-                        fontSize: 'var(--cc-sm)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Generar informe gerencial
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {dashExportModal.phase === 'generating' && (
                 <div style={{ padding: exportModalUi.padBody, textAlign: 'center' }}>
@@ -18109,13 +18019,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     <button
                       type="button"
                       onClick={() =>
-                        setDashExportModal({
-                          phase: 'choose',
+                        void ejecutarExportDashExcel({
+                          soloResumen: !!dashExportModal.soloResumen,
                           capitulo: dashExportModal.capitulo,
-                          itemCount: dashExportModal.itemCount,
-                          seg: 0,
-                          progreso: null,
-                          error: null,
+                          itemValor: dashExportModal.item || undefined,
                         })
                       }
                       style={{
@@ -18129,7 +18036,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         fontSize: 'var(--cc-sm)',
                       }}
                     >
-                      Elegir de nuevo
+                      Reintentar
                     </button>
                   </div>
                 </div>
