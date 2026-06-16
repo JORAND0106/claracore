@@ -6226,6 +6226,9 @@ function ModuloSicoeObra({
   const sicoeOperacionSeqRef = useRef(0)
   const sicoeBusquedaPaginaSeqRef = useRef(0)
   const sicoeRefrescoEnCursoRef = useRef(false)
+  /** Cancela GET /buscar y /analisis obsoletos al navegar el panel o relanzar búsqueda. */
+  const sicoeBusquedaAbortRef = useRef(null)
+  const sicoeBusquedaEnCursoRef = useRef(false)
   /** Refs para que cargarAnalisis/buscarReportes lean siempre el valor actual aunque sean closures viejas. */
   const efectivoOfflineRef = useRef(efectivoOffline)
   const isOfflineReadyRef = useRef(isOfflineReady)
@@ -6614,7 +6617,7 @@ function ModuloSicoeObra({
   const urlReporteDetalleRef = useRef(urlReporteDetalleSimple)
   urlReporteDetalleRef.current = urlReporteDetalleSimple
 
-  const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = [], capasOpParam, opSeqParam) => {
+  const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = [], capasOpParam, opSeqParam, abortSignal) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
       if (nuevoOffset === 0) {
@@ -6676,7 +6679,8 @@ function ModuloSicoeObra({
         p.set('offset', String(offset))
         p.set('limit', String(PAGE_SIZE))
         const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${p}`, {
-          headers: { Authorization: `Bearer ${getToken()}` }
+          headers: { Authorization: `Bearer ${getToken()}` },
+          signal: abortSignal,
         })
         return res.json()
       }
@@ -6706,6 +6710,7 @@ function ModuloSicoeObra({
         // Detalle sin aplicar_filtros_busqueda: si no, capas/validación pueden excluir la línea y no hay _autoRegistro
         const r2 = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, {
           headers: { Authorization: `Bearer ${getToken()}` },
+          signal: abortSignal,
         })
         const detalle = await r2.json()
         if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return
@@ -6720,6 +6725,7 @@ function ModuloSicoeObra({
         }
       }
     } catch(e) {
+      if (e?.name === 'AbortError') return
       // Red caída → fallback a IndexedDB si hay cache
       const seqVigenteFin = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
       if (isOfflineReady && seqVigenteFin) {
@@ -6871,7 +6877,7 @@ function ModuloSicoeObra({
     return false
   }, [sicoePanelChecks, sicoePanelChecksAplicados, panelGrupoLabels])
 
-  const cargarAnalisis = async (nuevosFiltros, capas = [], capasOpParam, opSeqParam) => {
+  const cargarAnalisis = async (nuevosFiltros, capas = [], capasOpParam, opSeqParam, abortSignal) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
     const seq = opSeqParam ?? ++sicoeOperacionSeqRef.current
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
@@ -6911,7 +6917,8 @@ function ModuloSicoeObra({
         params.set('validacion_capas_op', capasOpEff === 'or' ? 'or' : 'and')
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
-        headers: { Authorization: `Bearer ${getToken()}` }
+        headers: { Authorization: `Bearer ${getToken()}` },
+        signal: abortSignal,
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -6922,6 +6929,7 @@ function ModuloSicoeObra({
       if (data && Array.isArray(data.grupos)) setAnalisis(data)
       else setAnalisis(null)
     } catch(e) {
+      if (e?.name === 'AbortError') return
       if (seq === sicoeOperacionSeqRef.current) setAnalisis(null)
     } finally {
       if (seq === sicoeOperacionSeqRef.current) setCargandoAnalisis(false)
@@ -6934,11 +6942,26 @@ function ModuloSicoeObra({
    * Doble carga simultánea en API: aceptable frente a esperar el doble en cola.
    */
   const ejecutarBusquedaSicoeCompleta = async (f, capas, capasOpParam) => {
+    if (sicoeBusquedaAbortRef.current) {
+      sicoeBusquedaAbortRef.current.abort()
+    }
+    const ac = new AbortController()
+    sicoeBusquedaAbortRef.current = ac
     const opSeq = ++sicoeOperacionSeqRef.current
-    await Promise.all([
-      buscarReportes(f, 0, capas, capasOpParam, opSeq),
-      cargarAnalisis(f, capas, capasOpParam, opSeq),
-    ])
+    sicoeBusquedaEnCursoRef.current = true
+    try {
+      await Promise.all([
+        buscarReportes(f, 0, capas, capasOpParam, opSeq, ac.signal),
+        cargarAnalisis(f, capas, capasOpParam, opSeq, ac.signal),
+      ])
+    } catch (e) {
+      if (e?.name !== 'AbortError') throw e
+    } finally {
+      if (sicoeBusquedaAbortRef.current === ac) {
+        sicoeBusquedaAbortRef.current = null
+        sicoeBusquedaEnCursoRef.current = false
+      }
+    }
   }
 
   const aplicarSicoeFiltroBundle = useCallback((snap, ejecutarBusqueda = true) => {
@@ -7701,7 +7724,7 @@ function ModuloSicoeObra({
   }, [])
 
   const refrescarSicoeObraCompleto = useCallback(() => {
-    if (sicoeRefrescoEnCursoRef.current) return
+    if (sicoeRefrescoEnCursoRef.current || sicoeBusquedaEnCursoRef.current) return
     const f = filtrosSicoeRef.current
     const cap = capasSicoeRef.current
     const opSeq = ++sicoeOperacionSeqRef.current
@@ -7827,33 +7850,41 @@ function ModuloSicoeObra({
   }
 
   /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
-  const volverPanelAnterior = async () => {
-    setItemsFiltroChips([])
-    itemsFiltroChipsRef.current = []
-    setItemsFiltroOp('and')
-    itemsFiltroOpRef.current = 'and'
+  const volverPanelAnterior = () => {
+    if (cargando || cargandoAnalisis) return
     const itemT = String(filtros.item || '').trim()
     const capT = String(filtros.capitulo || '').trim()
     const modo = analisis?.modo
+    const hadPanelCaps = sicoePanelCapitulosRef.current.length > 0
+    const hadPanelActas = sicoePanelActasRpoRef.current.length > 0
+    const hadItemChips = itemsFiltroChipsRef.current.length > 0
 
     let nf = { ...filtros }
+    let retroceder = false
     if (itemT) {
       nf = { ...nf, item: '' }
+      retroceder = true
     } else if (capT) {
       nf = { ...nf, capitulo: '', item: '' }
+      retroceder = true
     } else if (modo === 'item_detalle') {
       nf = { ...nf, item: '' }
+      retroceder = true
     } else if (modo === 'capitulo_items') {
       nf = { ...nf, capitulo: '', item: '' }
-    } else {
-      return
+      retroceder = true
+    } else if (hadPanelActas || hadPanelCaps || hadItemChips) {
+      retroceder = true
     }
+    if (!retroceder) return
     aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
   }
   const puedeVolverPanel = !!(
     String(filtros.item || '').trim() ||
     String(filtros.capitulo || '').trim() ||
     (itemsFiltroChips && itemsFiltroChips.length > 0) ||
+    (sicoePanelCapitulos && sicoePanelCapitulos.length > 0) ||
+    (sicoePanelActasRpo && sicoePanelActasRpo.length > 0) ||
     analisis?.modo === 'item_detalle' ||
     analisis?.modo === 'capitulo_items'
   )
@@ -8900,10 +8931,12 @@ function ModuloSicoeObra({
                 <button
                   type="button"
                   data-sicoe-volver-panel
-                  onClick={(e) => { e.stopPropagation(); void volverPanelAnterior() }}
+                  onClick={(e) => { e.stopPropagation(); volverPanelAnterior() }}
+                  disabled={cargando || cargandoAnalisis}
                   style={{
                     background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.22)', borderRadius:'6px',
-                    padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#F1F5F9', cursor:'pointer', flexShrink:0,
+                    padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#F1F5F9', cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer', flexShrink:0,
+                    opacity: (cargando || cargandoAnalisis) ? 0.55 : 1,
                   }}
                 >
                   ← Volver
@@ -8981,10 +9014,11 @@ function ModuloSicoeObra({
                         key={g.label}
                         onClick={(e) => {
                           e.stopPropagation()
+                          if (cargando || cargandoAnalisis) return
                           const newF = { ...filtrosSicoeRef.current, item: g.label }
                           aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
                         }}
-                        style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
+                        style={{ borderBottom:`1px solid ${t.border}22`, cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer' }}
                         onMouseEnter={e => { e.currentTarget.style.background = t.bg + '88' }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                       >
@@ -9194,9 +9228,10 @@ function ModuloSicoeObra({
                   <tbody>
                     {analisis.grupos.map(g => (
                       <tr key={g.label} onClick={() => {
+                        if (cargando || cargandoAnalisis) return
                         const newF = { ...filtrosSicoeRef.current, capitulo: g.label, item: '' }
                         aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
-                      }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
+                      }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                         <td style={{ padding:'6px 10px', width:36, verticalAlign:'middle' }} onClick={(e) => e.stopPropagation()}>
