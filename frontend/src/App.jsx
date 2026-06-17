@@ -1558,7 +1558,6 @@ function capasInicialesValidacionFromUser(usuario, nivelesContrato, sicoeContrat
   const activos =
     Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
   if (!ni.nivelValidacion || !ni.puedeValidar) return []
-  if (ni.puedeEditar) return []
   if (ni.nivelValidacion === 0) return []
   if (!activos.includes(ni.nivelValidacion)) return []
   return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
@@ -6279,6 +6278,8 @@ function ModuloSicoeObra({
   /** Misma resolución de acta RPO que la matriz del dashboard (vigente / acta explícita). */
   const [sicoeMatrizSync, setSicoeMatrizSync] = useState(null)
   const sicoeActaAutoOnceRef = useRef(false)
+  /** Una vez por contrato: capa N{nivel} + No Revisado para validadores al entrar. */
+  const sicoeCapasAutoValidacionOnceRef = useRef(false)
 
   useEffect(() => {
     if (!contrato_id) return
@@ -6561,6 +6562,7 @@ function ModuloSicoeObra({
 
   useEffect(() => {
     sicoeActaAutoOnceRef.current = false
+    sicoeCapasAutoValidacionOnceRef.current = false
   }, [contrato_id])
 
   useEffect(() => {
@@ -7349,6 +7351,32 @@ function ModuloSicoeObra({
       if (cached) restaurarSicoeDesdeEntrada(cached)
     }
   }, [contrato_id, aplicarSicoeFiltroBundle, restaurarSicoeDesdeEntrada])
+
+  /** Validadores: al abrir el contrato, pre-cargar su nivel + «No Revisado» y lanzar búsqueda. */
+  useEffect(() => {
+    if (!contrato_id || sicoeCapasAutoValidacionOnceRef.current) return
+    if (
+      nivelesContrato?.contrato_id == null
+      || String(nivelesContrato.contrato_id) !== String(contrato_id)
+    ) return
+
+    const capasIni = capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
+    sicoeCapasAutoValidacionOnceRef.current = true
+    if (!capasIni.length || capasSicoeRef.current.length > 0) return
+
+    const snap = sicoeBundleFromAppState({
+      filtros: filtrosSicoeRef.current,
+      itemsChips: itemsFiltroChipsRef.current,
+      itemsOp: itemsFiltroOpRef.current,
+      sicoeFiltroObs: sicoeFiltroObsRef.current,
+      sicoeFiltroNodo: sicoeFiltroNodoRef.current,
+      capasValidacion: capasIni,
+      capasValidacionOp: 'and',
+      panelCapitulos: sicoePanelCapitulosRef.current,
+      panelActasRpo: sicoePanelActasRpoRef.current,
+    })
+    aplicarSicoeFiltroBundle(snap, true)
+  }, [contrato_id, nivelesContrato, usuario, aplicarSicoeFiltroBundle])
 
   const SICOE_AUTO_BUSQUEDA_DEBOUNCE_MS = 480
 
