@@ -27,7 +27,7 @@ import {
   filasDesdeSnapshot,
 } from './pptoUndoUltima'
 import PptoVersionador from './PptoVersionador'
-import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
+import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
@@ -1076,13 +1076,17 @@ useEffect(() => {
       if (!criterioVistaActivo(fObraRef.current || fObra, ctx)) {
         throw new Error('Pulse Buscar (o cambie el toggle) antes de exportar.')
       }
+      const tipoExport = exportPresupuestoModo.includes('obra_ejecutada')
+        ? PPTO_TIPO_EJECUCION_OBRA
+        : PPTO_TIPO_EJECUCION_DEFAULT
+      const esCrudo = exportPresupuestoModo.includes('_crudo')
       const res = await fetch(`${API}/presupuesto/${contratoId}/exportar-informe`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ ...filtros, modo: exportPresupuestoModo }),
+        body: JSON.stringify({ ...filtros, modo: exportPresupuestoModo, tipo_ejecucion: tipoExport }),
       })
       if (!res.ok) {
         let msg = `Error ${res.status} exportando presupuesto`
@@ -1095,17 +1099,21 @@ useEffect(() => {
         throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
       }
       const payload = await res.json()
-      if (!payload?.resumen?.length) {
-        throw new Error('No hay registros para exportar con los filtros actuales.')
+      const metaExport = {
+        ...(exportMetaContrato || {}),
+        logo_contratista: exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
       }
-      await downloadPresupuestoInformeExcel(
-        payload,
-        {
-          ...(exportMetaContrato || {}),
-          logo_contratista: exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
-        },
-        contratoId,
-      )
+      if (esCrudo || payload?.formato === 'crudo') {
+        if (!payload?.filas?.length) {
+          throw new Error('No hay registros para exportar con los filtros actuales.')
+        }
+        await downloadPresupuestoCrudoExcel(payload, metaExport, contratoId)
+      } else {
+        if (!payload?.resumen?.length) {
+          throw new Error('No hay registros para exportar con los filtros actuales.')
+        }
+        await downloadPresupuestoInformeExcel(payload, metaExport, contratoId)
+      }
       setExportPresupuestoOpen(false)
     } catch (e) {
       setExportPresupuestoError(e?.message || 'Error exportando Excel')
@@ -5336,7 +5344,7 @@ async function restaurar(id) {
           <div
             style={{
               width: '100%',
-              maxWidth: 480,
+              maxWidth: 520,
               background: t.bgCard,
               borderRadius: 16,
               border: `1px solid ${t.border}`,
@@ -5357,9 +5365,9 @@ async function restaurar(id) {
               }}
             >
               <div>
-                <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#fff' }}>📥 Exportar informe Excel</div>
+                <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#fff' }}>📥 Exportar Excel</div>
                 <div style={{ fontSize: 'var(--cc-sm)', color: '#94A3B8', marginTop: 2 }}>
-                  Resumen + soporte de cantidades por ítem
+                  Informe por ítem o base cruda (una pestaña)
                 </div>
               </div>
               <button
@@ -5374,6 +5382,9 @@ async function restaurar(id) {
             <div style={{ padding: '20px' }}>
               <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text, marginBottom: 10 }}>
                 ¿Qué desea descargar?
+              </div>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted, marginBottom: 8, letterSpacing: '0.4px' }}>
+                INFORME (resumen + pestaña por ítem)
               </div>
               <label
                 style={{
@@ -5414,6 +5425,7 @@ async function restaurar(id) {
                   border: `2px solid ${exportPresupuestoModo === 'obra_ejecutada' ? t.primary : t.border}`,
                   background: exportPresupuestoModo === 'obra_ejecutada' ? `${t.primary}12` : t.bg,
                   cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                  marginBottom: 14,
                 }}
               >
                 <input
@@ -5429,6 +5441,67 @@ async function restaurar(id) {
                   <div style={{ fontWeight: 800, color: t.text }}>b) Obra ejecutada</div>
                   <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
                     Mismo alcance que la grilla con filtros activos (tipo Obra Ejecutada). Para solo aprobados por Interventoría, añada el filtro «Estado interventoría = Aprobado» antes de exportar.
+                  </div>
+                </div>
+              </label>
+
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted, marginBottom: 8, letterSpacing: '0.4px' }}>
+                CRUDO (base completa, una sola pestaña)
+              </div>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: `2px solid ${exportPresupuestoModo === 'presupuesto_obra_crudo' ? t.primary : t.border}`,
+                  background: exportPresupuestoModo === 'presupuesto_obra_crudo' ? `${t.primary}12` : t.bg,
+                  cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                  marginBottom: 10,
+                }}
+              >
+                <input
+                  type="radio"
+                  name="exportPresupuestoModo"
+                  value="presupuesto_obra_crudo"
+                  checked={exportPresupuestoModo === 'presupuesto_obra_crudo'}
+                  onChange={() => setExportPresupuestoModo('presupuesto_obra_crudo')}
+                  disabled={exportPresupuestoBusy}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <div style={{ fontWeight: 800, color: t.text }}>c) Presupuesto de obra — crudo</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                    Descarga todos los registros con todas las columnas de la base en una sola pestaña (sin separar por ítem).
+                  </div>
+                </div>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: `2px solid ${exportPresupuestoModo === 'obra_ejecutada_crudo' ? t.primary : t.border}`,
+                  background: exportPresupuestoModo === 'obra_ejecutada_crudo' ? `${t.primary}12` : t.bg,
+                  cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="exportPresupuestoModo"
+                  value="obra_ejecutada_crudo"
+                  checked={exportPresupuestoModo === 'obra_ejecutada_crudo'}
+                  onChange={() => setExportPresupuestoModo('obra_ejecutada_crudo')}
+                  disabled={exportPresupuestoBusy}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <div style={{ fontWeight: 800, color: t.text }}>d) Obra ejecutada — crudo</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                    Igual que el crudo anterior, filtrado por tipo Obra Ejecutada y los filtros activos de la grilla.
                   </div>
                 </div>
               </label>

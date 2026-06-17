@@ -545,6 +545,8 @@ const DET_HEADERS = [
   'Calzada',
   'Abscisa Inicial',
   'Abscisa Final',
+  'Nodo Inicial',
+  'Nodo Final',
   'Longitud (Área/Long/Nodo)',
   'Ancho',
   'Espesor',
@@ -553,6 +555,10 @@ const DET_HEADERS = [
   'Observación',
 ]
 const TOTAL_COLS_DET = DET_HEADERS.length
+const COL_AREA_LONG = DET_HEADERS.indexOf('Longitud (Área/Long/Nodo)') + 1
+const COL_ANCHO = DET_HEADERS.indexOf('Ancho') + 1
+const COL_ESPESOR = DET_HEADERS.indexOf('Espesor') + 1
+const COL_CANT_TOTAL = DET_HEADERS.indexOf('Cant. Total') + 1
 
 function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoImageId, claraLogoImageId) {
   const baseName = safeSheetName(`${itemInfo.item || 'Item'}_${idx + 1}`, `Item_${idx + 1}`)
@@ -596,6 +602,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       reg.calzada,
       reg.abs_inicio,
       reg.abs_final,
+      reg.no_inicio,
+      reg.no_final,
       reg.area_long_nod,
       reg.ancho,
       reg.espesor,
@@ -603,10 +611,10 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       formatValidacionDepInt(reg),
       reg.observacion,
     ])
-    estiloCantidad(r.getCell(7))
-    estiloCantidad(r.getCell(8))
-    estiloCantidad(r.getCell(9))
-    estiloCantidad(r.getCell(10))
+    estiloCantidad(r.getCell(COL_AREA_LONG))
+    estiloCantidad(r.getCell(COL_ANCHO))
+    estiloCantidad(r.getCell(COL_ESPESOR))
+    estiloCantidad(r.getCell(COL_CANT_TOTAL))
     estiloFilaDatos(r, TOTAL_COLS_DET)
   }
 
@@ -617,13 +625,15 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     cantTotalRow = lastDetRow + 1
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
-    ws.getCell(cantTotalRow, 10).value = { formula: `SUM(J${firstDetRow}:J${lastDetRow})` }
+    ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
+      formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDetRow}:${colToLetter(COL_CANT_TOTAL)}${lastDetRow})`,
+    }
     ws.getCell(cantTotalRow, 1).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
     ws.getCell(cantTotalRow, 1).fill = PASTEL_TOTAL
-    estiloCantidad(ws.getCell(cantTotalRow, 10))
-    ws.getCell(cantTotalRow, 10).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(cantTotalRow, 10).fill = PASTEL_TOTAL
-    completarFormulasTotales(ws, enc.totalsSummaryRow, null, firstDetRow, lastDetRow, 5, null, 10)
+    estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
+    ws.getCell(cantTotalRow, COL_CANT_TOTAL).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
+    ws.getCell(cantTotalRow, COL_CANT_TOTAL).fill = PASTEL_TOTAL
+    completarFormulasTotales(ws, enc.totalsSummaryRow, null, firstDetRow, lastDetRow, 5, null, COL_CANT_TOTAL)
     aplicarBordesTabla(ws, tableRow, cantTotalRow, TOTAL_COLS_DET)
   }
 
@@ -687,7 +697,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
     if (ref?.cantTotalRow) {
       r.getCell(6).value = {
-        formula: `${sheetFormulaRef(ref.sheetName)}!J${ref.cantTotalRow}`,
+        formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
       }
     } else {
       r.getCell(6).value = 0
@@ -714,6 +724,66 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
 
   ajustarAnchos(wsRes, tableHeaderRow, totalColsResumen)
   return wsRes
+}
+
+/**
+ * @param {object} payload respuesta POST /presupuesto/{id}/exportar-informe (formato=crudo)
+ * @param {object|null} metaContrato GET /contratos/{id}
+ * @param {number|string} contratoId
+ */
+export async function downloadPresupuestoCrudoExcel(payload, metaContrato, contratoId, filename) {
+  const columnas = Array.isArray(payload?.columnas) ? payload.columnas : []
+  const filas = Array.isArray(payload?.filas) ? payload.filas : []
+  if (!columnas.length && filas.length) {
+    columnas.push(...Object.keys(filas[0]))
+  }
+  const modoLabel = payload?.modo_label || 'Exportación cruda'
+  const generatedAt = new Date()
+  const meta = metaContrato || {}
+
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'ClaraCore · Presupuesto'
+
+  const ws = wb.addWorksheet('Datos crudos', { views: [{ state: 'frozen', ySplit: 1, showGridLines: true }] })
+  aplicarPaginaHorizontal(ws)
+
+  ws.addRow(columnas)
+  estiloFilaHeader(ws.getRow(1), columnas.length)
+
+  for (const row of filas) {
+    const vals = columnas.map((col) => {
+      const v = row?.[col]
+      if v == null) return ''
+      if (typeof v === 'object') return JSON.stringify(v)
+      return v
+    })
+    const r = ws.addRow(vals)
+    estiloFilaDatos(r, columnas.length)
+  }
+
+  columnas.forEach((col, idx) => {
+    const colNum = idx + 1
+    let maxLen = String(col).length
+    for (const row of filas.slice(0, 200)) {
+      const s = row?.[col] == null ? '' : String(row[col])
+      maxLen = Math.max(maxLen, Math.min(s.length, 48))
+    }
+    ws.getColumn(colNum).width = Math.min(Math.max(maxLen + 2, 10), 42)
+  })
+
+  const buffer = await wb.xlsx.writeBuffer()
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const slug = String(payload?.modo || 'crudo').replace(/[^\w.-]+/g, '_')
+  a.download = filename || `presupuesto_${slug}_${contratoId ?? 'NA'}_${generatedAt.toISOString().slice(0, 10)}.xlsx`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 /**

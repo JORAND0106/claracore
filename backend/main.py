@@ -858,8 +858,8 @@ class PresupuestoRow(BaseModel):
     y_label: Optional[float] = None
 
 class ExportarPresupuestoInformeBody(BaseModel):
-    """Cuerpo POST exportación Excel presupuesto (resumen + soporte por ítem)."""
-    modo: str  # presupuesto_obra | obra_ejecutada
+    """Cuerpo POST exportación Excel presupuesto (informe por ítem o crudo)."""
+    modo: str  # presupuesto_obra | obra_ejecutada | presupuesto_obra_crudo | obra_ejecutada_crudo
     capitulo: Optional[str] = None
     capitulos: Optional[List[str]] = None
     item: Optional[str] = None
@@ -7369,10 +7369,95 @@ def get_items_presupuesto(
 
 _PRESUPUESTO_EXPORT_SELECT = (
     "capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
-    "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, area_long_nod, ancho, espesor, "
+    "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
+    "area_long_nod, ancho, espesor, "
     "revisado, pre_interv_estado, pre_interv_por, validado_por, "
     "observacion, observacion_externa, tipo_ejecucion"
 )
+
+_PRESUPUESTO_EXPORT_MODOS = (
+    "presupuesto_obra",
+    "obra_ejecutada",
+    "presupuesto_obra_crudo",
+    "obra_ejecutada_crudo",
+)
+
+
+def _presupuesto_export_es_crudo(modo: str) -> bool:
+    return str(modo or "").strip().lower().endswith("_crudo")
+
+
+def _presupuesto_export_tipo_por_modo(modo: str) -> str:
+    m = str(modo or "").strip().lower()
+    if m.startswith("obra_ejecutada"):
+        return "Obra Ejecutada"
+    return "Presupuesto de Obra"
+
+
+def _presupuesto_fetch_export_rows_crudo(
+    contrato_id: int, body: ExportarPresupuestoInformeBody, current_user
+) -> List[dict]:
+    """Todas las columnas de presupuesto (exportación cruda, una sola pestaña)."""
+    modo = (body.modo or "").strip().lower()
+    body_tipo = (body.tipo_ejecucion or "").strip()
+    tipo = body_tipo or _presupuesto_export_tipo_por_modo(modo)
+
+    def _q_base():
+        q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
+        if body.papelera:
+            q = q.eq("dado_de_baja", True)
+        else:
+            q = q.eq("dado_de_baja", False)
+        q = _presupuesto_q_tipo_ejecucion(q, tipo)
+        q = _presupuesto_q_estructura(
+            q,
+            capitulo=body.capitulo,
+            capitulos=body.capitulos,
+            item=body.item,
+            items=body.items,
+            tramo=body.tramo,
+            tramos=body.tramos,
+            calzada=body.calzada,
+            calzadas=body.calzadas,
+            competencia=body.competencia,
+            competencias=body.competencias,
+            und=body.und,
+            unds=body.unds,
+        )
+        q = _presupuesto_q_filtros_ubicacion(
+            q,
+            nodo_inicio=body.nodo_inicio,
+            nodo_final=body.nodo_final,
+            buscar=body.buscar,
+            id_pol=body.id_pol,
+            pk_criterio=body.pk_criterio,
+            texto=body.texto,
+            abs_desde=body.abs_desde,
+            abs_hasta=body.abs_hasta,
+            revisado=body.revisado,
+            pre_interv_estado=body.pre_interv_estado,
+            sellado=body.sellado,
+            vlr_unitario_desde=body.vlr_unitario_desde,
+            vlr_unitario_hasta=body.vlr_unitario_hasta,
+            cant_total_desde=body.cant_total_desde,
+            cant_total_hasta=body.cant_total_hasta,
+            costo_directo_desde=body.costo_directo_desde,
+            costo_directo_hasta=body.costo_directo_hasta,
+        )
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        return q.order("capitulo").order("item").order("pk_id")
+
+    PAGE = 1000
+    all_rows: List[dict] = []
+    off = 0
+    while True:
+        batch = _q_base().order("id").range(off, off + PAGE - 1).execute().data or []
+        all_rows.extend(batch)
+        if len(batch) < PAGE:
+            break
+        off += PAGE
+    return all_rows
 
 
 def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoInformeBody, current_user) -> List[dict]:
@@ -7490,15 +7575,47 @@ def exportar_presupuesto_informe(
     current_user=Depends(get_current_user),
 ):
     """
-    Datos para Excel de presupuesto: pestaña resumen + soporte por ítem.
-    Usa los mismos filtros del cuerpo (capítulo, tipo_ejecucion, revisado, etc.) que GET /presupuesto.
-    modo solo define la etiqueta del informe (presupuesto_obra | obra_ejecutada).
+    Datos para Excel de presupuesto: informe (resumen + soporte por ítem) o crudo (una pestaña).
+    Usa los mismos filtros del cuerpo que GET /presupuesto.
     """
     modo = (body.modo or "").strip().lower()
-    if modo not in ("presupuesto_obra", "obra_ejecutada"):
-        raise HTTPException(status_code=422, detail="modo debe ser presupuesto_obra u obra_ejecutada")
+    if modo not in _PRESUPUESTO_EXPORT_MODOS:
+        raise HTTPException(
+            status_code=422,
+            detail="modo debe ser presupuesto_obra, obra_ejecutada, presupuesto_obra_crudo u obra_ejecutada_crudo",
+        )
+
+    es_crudo = _presupuesto_export_es_crudo(modo)
+    tipo_modo = _presupuesto_export_tipo_por_modo(modo)
+    if not (body.tipo_ejecucion or "").strip():
+        body = body.model_copy(update={"tipo_ejecucion": tipo_modo})
 
     vid = (body.version_id or "").strip() or None
+    if es_crudo and vid:
+        raise HTTPException(status_code=422, detail="La exportación cruda no admite version_id")
+
+    if es_crudo:
+        rows = _presupuesto_fetch_export_rows_crudo(contrato_id, body, current_user)
+        columnas: List[str] = []
+        if rows:
+            columnas = list(rows[0].keys())
+        te = (body.tipo_ejecucion or "").strip()
+        if modo.startswith("obra_ejecutada") or te == "Obra Ejecutada":
+            modo_label = "Obra ejecutada — crudo"
+        else:
+            modo_label = "Presupuesto de obra — crudo"
+        return {
+            "formato": "crudo",
+            "modo": modo,
+            "modo_label": modo_label,
+            "version_id": None,
+            "columnas": columnas,
+            "filas": rows,
+            "total_registros": len(rows),
+            "resumen": [],
+            "items": [],
+        }
+
     if vid:
         rows = _presupuesto_version_fetch_export_rows(contrato_id, vid, current_user)
     else:
@@ -7563,6 +7680,8 @@ def exportar_presupuesto_informe(
             "calzada": r.get("calzada") or "",
             "abs_inicio": r.get("abs_inicio"),
             "abs_final": r.get("abs_final"),
+            "no_inicio": r.get("no_inicio"),
+            "no_final": r.get("no_final"),
             "area_long_nod": r.get("area_long_nod"),
             "ancho": r.get("ancho"),
             "espesor": r.get("espesor"),
@@ -7593,7 +7712,7 @@ def exportar_presupuesto_informe(
         items_out.append(items_map[k])
 
     te = (body.tipo_ejecucion or "").strip()
-    if modo == "obra_ejecutada" or te == "Obra Ejecutada":
+    if modo.startswith("obra_ejecutada") or te == "Obra Ejecutada":
         modo_label = "Obra ejecutada"
     else:
         modo_label = "Presupuesto de obra"
@@ -7610,6 +7729,7 @@ def exportar_presupuesto_informe(
         if vrow:
             modo_label = f"Versión {vrow[0].get('etiqueta') or vrow[0].get('numero_version')} · {modo_label}"
     return {
+        "formato": "informe",
         "modo": modo,
         "modo_label": modo_label,
         "version_id": vid,
