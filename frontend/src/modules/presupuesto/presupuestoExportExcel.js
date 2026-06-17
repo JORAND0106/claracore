@@ -753,7 +753,7 @@ export async function downloadPresupuestoCrudoExcel(payload, metaContrato, contr
   for (const row of filas) {
     const vals = columnas.map((col) => {
       const v = row?.[col]
-      if v == null) return ''
+      if (v == null) return ''
       if (typeof v === 'object') return JSON.stringify(v)
       return v
     })
