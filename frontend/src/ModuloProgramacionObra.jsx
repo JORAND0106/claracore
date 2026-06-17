@@ -9,6 +9,14 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
+import {
+  getProgObraVistaCache,
+  invalidateProgObraVistaCache,
+  progObraMapaCacheKey,
+  progObraTramosCacheKey,
+  progObraVersionesCacheKey,
+  setProgObraVistaCache,
+} from './cache/progObraVistaCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import ProgObraProgramacionModal from './ProgObraProgramacionModal'
 import { openAdminListadoPrecios, permisoEditarListadoPrecios } from './openAdminListadoPrecios'
@@ -1051,8 +1059,11 @@ export default function ModuloProgramacionObra({
         ),
       ])
       if (seq !== mapaFetchSeqRef.current) return m
-      setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
+      const mapa = m && typeof m === 'object' ? m : { pk: [], meta: {} }
+      setMapaResp(mapa)
       applyVersionesPayload(v, ensureVersionRow)
+      setProgObraVistaCache(progObraMapaCacheKey(cid), mapa)
+      if (v) setProgObraVistaCache(progObraVersionesCacheKey(cid), v)
       return m
     },
     [cid, token, API, applyVersionesPayload],
@@ -1128,8 +1139,9 @@ export default function ModuloProgramacionObra({
 
   const refreshMapaImmediate = useCallback(async () => {
     cancelScheduledMapRefresh()
+    if (cid) invalidateProgObraVistaCache(cid)
     return refreshMapaYVersiones()
-  }, [refreshMapaYVersiones, cancelScheduledMapRefresh])
+  }, [refreshMapaYVersiones, cancelScheduledMapRefresh, cid])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -1140,6 +1152,23 @@ export default function ModuloProgramacionObra({
     }
     let cancel = false
     const seq = ++mapaFetchSeqRef.current
+    const mapaCached = getProgObraVistaCache(progObraMapaCacheKey(cid))
+    const versionesCached = getProgObraVistaCache(progObraVersionesCacheKey(cid))
+    if (mapaCached) setMapaResp(mapaCached)
+    if (versionesCached) applyVersionesPayload(versionesCached)
+    if (mapaCached && versionesCached) {
+      setPlano((prev) => (prev === undefined ? { type: 'FeatureCollection', features: [] } : prev))
+      getContratoPlanoGeojson(API, cid, token)
+        .then((d) => {
+          if (cancel || seq !== mapaFetchSeqRef.current) return
+          const raw = d?.plano_geojson ?? null
+          setPlano(normalizePlanoGeojson(raw))
+        })
+        .catch((e) => {
+          if (!cancel) setErr(e?.message || 'Error de red')
+        })
+      return () => { cancel = true }
+    }
       setPlano(undefined)
       setErr('')
       setVersionVigenteId(null)
@@ -1159,8 +1188,11 @@ export default function ModuloProgramacionObra({
         if (cancel || seq !== mapaFetchSeqRef.current) return
         const raw = c?.plano_geojson ?? null
         setPlano(normalizePlanoGeojson(raw))
-        setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
+        const mapa = m && typeof m === 'object' ? m : { pk: [], meta: {} }
+        setMapaResp(mapa)
         applyVersionesPayload(v)
+        setProgObraVistaCache(progObraMapaCacheKey(cid), mapa)
+        if (v) setProgObraVistaCache(progObraVersionesCacheKey(cid), v)
       })
       .catch((e) => {
         if (!cancel) setErr(e?.message || 'Error de red')
@@ -1177,9 +1209,15 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
+    const cached = getProgObraVistaCache(progObraTramosCacheKey(cid))
+    if (cached) setTramos(Array.isArray(cached) ? cached : [])
     fetchTramos(API, cid, token)
       .then((d) => {
-        if (!cancel) setTramos(Array.isArray(d) ? d : [])
+        if (!cancel) {
+          const rows = Array.isArray(d) ? d : []
+          setTramos(rows)
+          setProgObraVistaCache(progObraTramosCacheKey(cid), rows)
+        }
       })
       .catch(() => {
         if (!cancel) setTramos([])

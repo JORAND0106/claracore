@@ -77,6 +77,23 @@ import {
   guardarSicoeFiltroSesion,
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
+import {
+  invalidateSicoeVistaCache,
+  sicoeClearNavegacion,
+  sicoeGetVistaCache,
+  sicoePopNavegacion,
+  sicoeSetVistaCache,
+} from './cache/sicoeVistaCache'
+import {
+  dashCapFinCacheKey,
+  dashDrillItemsCacheKey,
+  dashPkidColoresCacheKey,
+  dashResumenCacheKey,
+  dashTablaCacheKey,
+  getDashVistaCache,
+  invalidateDashboardVistaCache,
+  setDashVistaCache,
+} from './cache/dashboardVistaCache'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import { permisosProgramacionObra } from './progObraPermisos'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
@@ -6224,6 +6241,7 @@ function ModuloSicoeObra({
   /** Evita que una respuesta antigua de red sobrescriba grilla/panel (p. ej. tras «Volver»). */
   /** Una sola secuencia por operación Buscar: grilla y panel negro comparten el mismo id. */
   const sicoeOperacionSeqRef = useRef(0)
+  const sicoeRestaurandoVistaRef = useRef(false)
   const sicoeBusquedaPaginaSeqRef = useRef(0)
   const sicoeRefrescoEnCursoRef = useRef(false)
   /** Cancela GET /buscar y /analisis obsoletos al navegar el panel o relanzar búsqueda. */
@@ -6629,7 +6647,7 @@ function ModuloSicoeObra({
       }
       setBusquedaAmplia(false)
       setCargando(false)
-      return
+      return null
     }
 
     // Helper: leer de IndexedDB
@@ -6644,20 +6662,21 @@ function ModuloSicoeObra({
       setOffsetActual(nuevoOffset + 50)
       setBusquedaRealizada(true)
       setBusquedaAmplia(false)
+      return { lista, hayMas: hay_mas, offset: nuevoOffset + 50, cacheable: nuevoOffset === 0 }
     }
 
     // Sin red (o modo offline manual) → IndexedDB directo (sin seq check: offline no tiene race de red)
     if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
       setCargando(true)
       try {
-        await usarIndexedDB()
+        return await usarIndexedDB()
       } catch(e) {
         console.warn('[Offline] buscarReportes local falló:', e)
         setReportes([])
+        return null
       } finally {
         setCargando(false)
       }
-      return
     }
 
     const seq = opSeqParam ?? (nuevoOffset === 0 ? ++sicoeOperacionSeqRef.current : ++sicoeBusquedaPaginaSeqRef.current)
@@ -6666,6 +6685,7 @@ function ModuloSicoeObra({
       Object.values(nuevosFiltros).every(v => v === '' || v == null || v === false)
     if (esBusquedaAmplia) setBusquedaAmplia(true)
     else setBusquedaAmplia(false)
+    let resultado = null
     try {
       const params = new URLSearchParams()
       sicoeAppendParamsBusquedaActivos(params, capas)
@@ -6687,11 +6707,11 @@ function ModuloSicoeObra({
 
       const data = await fetchPage(nuevoOffset)
       const seqVigente = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
-      if (!seqVigente) return
+      if (!seqVigente) return null
       const lista = Array.isArray(data.reportes) ? data.reportes : []
       // Antes: con validación se traían TODAS las páginas en serie (N×50 request) y bloqueaba la UI 10–60+ s.
       // El análisis KPI sigue yendo a /sicoe-obra/.../analisis (mismo criterio). La grilla pagina con «Cargar 50 más».
-      if (!seqVigente) return
+      if (!seqVigente) return null
       if (nuevoOffset === 0) {
         setReportes(lista)
       } else {
@@ -6699,9 +6719,15 @@ function ModuloSicoeObra({
       }
       setHayMas(!!data.hay_mas)
       setOffsetActual(nuevoOffset + PAGE_SIZE)
-      if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return
-      if (opSeqParam == null && seq !== sicoeBusquedaPaginaSeqRef.current) return
+      if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return null
+      if (opSeqParam == null && seq !== sicoeBusquedaPaginaSeqRef.current) return null
       setBusquedaRealizada(true)
+      resultado = {
+        lista,
+        hayMas: !!data.hay_mas,
+        offset: nuevoOffset + PAGE_SIZE,
+        cacheable: nuevoOffset === 0,
+      }
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {
         const rep = lista[0]
@@ -6713,7 +6739,7 @@ function ModuloSicoeObra({
           signal: abortSignal,
         })
         const detalle = await r2.json()
-        if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return
+        if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return resultado
         if (detalle?.id) {
           const regs = Array.isArray(detalle.registros) ? detalle.registros : []
           const regMatch = sicoeBuscarRegistroPorNumeroFiltro(regs, nuevosFiltros.numero_registro)
@@ -6725,17 +6751,18 @@ function ModuloSicoeObra({
         }
       }
     } catch(e) {
-      if (e?.name === 'AbortError') return
+      if (e?.name === 'AbortError') return null
       // Red caída → fallback a IndexedDB si hay cache
       const seqVigenteFin = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
       if (isOfflineReady && seqVigenteFin) {
-        try { await usarIndexedDB() } catch { setReportes([]) }
+        try { return await usarIndexedDB() } catch { setReportes([]) }
       }
     }
     finally {
       const seqVigenteFin = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
       if (seqVigenteFin) setCargando(false)
     }
+    return resultado
   }
 
   const ejecutarRefrescoSicoe = async (capasEfectivas) => {
@@ -6885,7 +6912,7 @@ function ModuloSicoeObra({
         setAnalisis(null)
         setCargandoAnalisis(false)
       }
-      return
+      return null
     }
     if (seq === sicoeOperacionSeqRef.current) setAnalisis(null)
     setCargandoAnalisis(true)
@@ -6901,13 +6928,14 @@ function ModuloSicoeObra({
         } else {
           setAnalisis(null)
         }
+        return data?.grupos?.length ? data : null
       } catch(e) {
         console.warn('[cargarAnalisis offline] ERROR:', e)
         setAnalisis(null)
+        return null
       } finally {
         setCargandoAnalisis(false)
       }
-      return
     }
 
     try {
@@ -6923,18 +6951,38 @@ function ModuloSicoeObra({
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         if (seq === sicoeOperacionSeqRef.current) setAnalisis(null)
-        return
+        return null
       }
-      if (seq !== sicoeOperacionSeqRef.current) return
+      if (seq !== sicoeOperacionSeqRef.current) return null
       if (data && Array.isArray(data.grupos)) setAnalisis(data)
       else setAnalisis(null)
+      return data && Array.isArray(data.grupos) ? data : null
     } catch(e) {
-      if (e?.name === 'AbortError') return
+      if (e?.name === 'AbortError') return null
       if (seq === sicoeOperacionSeqRef.current) setAnalisis(null)
+      return null
     } finally {
       if (seq === sicoeOperacionSeqRef.current) setCargandoAnalisis(false)
     }
   }
+
+  const sicoeBundleDesdeRefs = useCallback((nf, opts = {}) => {
+    const { clearItems = false, clearPanelChecks = false } = opts
+    return sicoeBundleFromAppState({
+      filtros: nf,
+      itemsChips: clearItems ? [] : itemsFiltroChipsRef.current,
+      itemsOp: itemsFiltroOpRef.current,
+      sicoeFiltroObs: sicoeFiltroObsRef.current,
+      sicoeFiltroNodo: sicoeFiltroNodoRef.current,
+      capasValidacion: capasSicoeRef.current ?? [],
+      capasValidacionOp: capasValidacionOpRef.current ?? 'and',
+      panelCapitulos: clearPanelChecks ? [] : sicoePanelCapitulosRef.current,
+      panelActasRpo: clearPanelChecks ? [] : sicoePanelActasRpoRef.current,
+    })
+  }, [])
+
+  const guardarSicoeVistaTrasBusquedaRef = useRef(null)
+  const restaurarSicoeDesdeEntradaRef = useRef(null)
 
   /**
    * Grilla + panel en paralelo: antes iban en serie (T_buscar + T_analisis), hasta varios minutos sin feedback útil.
@@ -6950,10 +6998,13 @@ function ModuloSicoeObra({
     const opSeq = ++sicoeOperacionSeqRef.current
     sicoeBusquedaEnCursoRef.current = true
     try {
-      await Promise.all([
+      const [repResult, analResult] = await Promise.all([
         buscarReportes(f, 0, capas, capasOpParam, opSeq, ac.signal),
         cargarAnalisis(f, capas, capasOpParam, opSeq, ac.signal),
       ])
+      if (opSeq === sicoeOperacionSeqRef.current) {
+        guardarSicoeVistaTrasBusquedaRef.current?.(f, repResult, analResult)
+      }
     } catch (e) {
       if (e?.name !== 'AbortError') throw e
     } finally {
@@ -6999,6 +7050,42 @@ function ModuloSicoeObra({
       void ejecutarBusquedaSicoeCompleta(f, bundle.capasValidacion, bundle.capasValidacionOp)
     }
   }, [contrato_id])
+
+  const restaurarSicoeDesdeEntrada = useCallback((entrada) => {
+    if (!entrada?.bundle) return false
+    sicoeRestaurandoVistaRef.current = true
+    try {
+      aplicarSicoeFiltroBundle(entrada.bundle, false)
+      setReportes(Array.isArray(entrada.reportes) ? entrada.reportes : [])
+      setAnalisis(entrada.analisis ?? null)
+      setHayMas(!!entrada.hayMas)
+      setOffsetActual(entrada.offsetActual ?? 0)
+      setBusquedaRealizada(entrada.busquedaRealizada !== false)
+      setCargando(false)
+      setCargandoAnalisis(false)
+      setPanelExpandido(true)
+      return true
+    } finally {
+      sicoeRestaurandoVistaRef.current = false
+    }
+  }, [aplicarSicoeFiltroBundle])
+
+  const guardarSicoeVistaTrasBusqueda = useCallback((f, repResult, analResult) => {
+    if (!contrato_id || sicoeRestaurandoVistaRef.current || efectivoOfflineRef.current) return
+    if (!repResult?.cacheable) return
+    const bundle = sicoeBundleDesdeRefs(f)
+    sicoeSetVistaCache(contrato_id, {
+      bundle,
+      reportes: repResult.lista ?? [],
+      analisis: analResult ?? null,
+      hayMas: !!repResult.hayMas,
+      offsetActual: repResult.offset ?? 50,
+      busquedaRealizada: true,
+    })
+  }, [contrato_id, sicoeBundleDesdeRefs])
+
+  guardarSicoeVistaTrasBusquedaRef.current = guardarSicoeVistaTrasBusqueda
+  restaurarSicoeDesdeEntradaRef.current = restaurarSicoeDesdeEntrada
 
   const limpiarChecksPanelSicoe = useCallback(() => {
     sicoePanelChecksRef.current = new Set()
@@ -7257,7 +7344,11 @@ function ModuloSicoeObra({
     const saved = cargarSicoeFiltroSesion(contrato_id)
     if (!saved) return
     aplicarSicoeFiltroBundle(saved, false)
-  }, [contrato_id, aplicarSicoeFiltroBundle])
+    if (sicoeBundleTieneCriteriosUsuario(saved)) {
+      const cached = sicoeGetVistaCache(contrato_id, saved)
+      if (cached) restaurarSicoeDesdeEntrada(cached)
+    }
+  }, [contrato_id, aplicarSicoeFiltroBundle, restaurarSicoeDesdeEntrada])
 
   const SICOE_AUTO_BUSQUEDA_DEBOUNCE_MS = 480
 
@@ -7279,8 +7370,13 @@ function ModuloSicoeObra({
       setCargandoAnalisis(false)
       return
     }
+    if (!efectivoOfflineRef.current && contrato_id) {
+      const bundle = sicoeBundleDesdeRefs(f)
+      const cached = sicoeGetVistaCache(contrato_id, bundle)
+      if (cached && restaurarSicoeDesdeEntrada(cached)) return
+    }
     void ejecutarBusquedaSicoeCompleta(f, capas, capasOpOverride)
-  }, [nivelInfo.puedeValidar, nivelInfo.puedeEditar, nivelInfo.nivelValidacion])
+  }, [nivelInfo.puedeValidar, nivelInfo.puedeEditar, nivelInfo.nivelValidacion, contrato_id, sicoeBundleDesdeRefs, restaurarSicoeDesdeEntrada])
 
   const sicoeProgramarBusquedaAuto = useCallback(() => {
     if (sicoeAutoBusquedaTimerRef.current) clearTimeout(sicoeAutoBusquedaTimerRef.current)
@@ -7437,6 +7533,7 @@ function ModuloSicoeObra({
       if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope || data.omitidos_topografia || data.excluidos_objeto_pago_sub) {
         window.alert(msgOk)
       }
+      invalidateSicoeVistaCache(contrato_id)
       await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
     } catch (e) {
       setMsgMasivoFiltro(`Error: ${e?.message || String(e)}`)
@@ -7564,6 +7661,7 @@ function ModuloSicoeObra({
       setMsgReversionCantidades(msgOk)
       if (omitidosTotal) window.alert(msgOk)
       setModalReversionCantidades(null)
+      invalidateSicoeVistaCache(contrato_id)
       await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
     } catch (e) {
       const raw = e?.message || String(e)
@@ -7852,6 +7950,9 @@ function ModuloSicoeObra({
   /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
   const volverPanelAnterior = () => {
     if (cargando || cargandoAnalisis) return
+    const prevStack = sicoePopNavegacion(contrato_id)
+    if (prevStack && restaurarSicoeDesdeEntradaRef.current?.(prevStack)) return
+
     const itemT = String(filtros.item || '').trim()
     const capT = String(filtros.capitulo || '').trim()
     const modo = analisis?.modo
@@ -7877,6 +7978,9 @@ function ModuloSicoeObra({
       retroceder = true
     }
     if (!retroceder) return
+    const targetBundle = sicoeBundleDesdeRefs(nf, { clearItems: true, clearPanelChecks: true })
+    const cached = sicoeGetVistaCache(contrato_id, targetBundle)
+    if (cached && restaurarSicoeDesdeEntradaRef.current?.(cached)) return
     aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
   }
   const puedeVolverPanel = !!(
@@ -8242,6 +8346,8 @@ function ModuloSicoeObra({
     setFiltros(filtrosVacios)
     sicoeFSicoeRef.current = sicoeFSicoeVacios()
     limpiarSicoeFiltroSesion(contrato_id)
+    invalidateSicoeVistaCache(contrato_id)
+    sicoeClearNavegacion(contrato_id)
     setReportes([])
     setAnalisis(null)
     setFiltroItemList([])
@@ -9809,6 +9915,7 @@ function ModuloSicoeObra({
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
           onRefrescarListadoSicoe={() => {
+            invalidateSicoeVistaCache(contrato_id)
             void ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
           }}
         />
@@ -9823,7 +9930,12 @@ function ModuloSicoeObra({
           isOnline={isOnline}
           isOfflineReady={isOfflineReady}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
-          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0, capasValidacion) }}
+          onGuardado={() => {
+            setModalNuevoReporte(false)
+            setReporteEditando(null)
+            invalidateSicoeVistaCache(contrato_id)
+            buscarReportes(filtros, 0, capasValidacion)
+          }}
         />
       )}
 
@@ -13758,7 +13870,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     dashTablaCache.current = {}
     pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
     dashDrillFetchSeqRef.current += 1
-  }, [])
+    if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
+  }, [contratoIdDash])
 
   const dashDrillCacheKey = useCallback(
     (...parts) => `${contratoIdDash}|${dashVistaParam}|${parts.join('|')}`,
@@ -13948,8 +14061,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setPopupPkid(null)
   }, [contratoIdDash])
 
-  const cargarDashboardResumen = useCallback(async () => {
+  const cargarDashboardResumen = useCallback(async (opts = {}) => {
     if (!contratoIdDash || !dashModuloActivo) return
+    const cacheKey = dashResumenCacheKey(contratoIdDash, dashVistaParam)
+    if (!opts.force) {
+      const cached = getDashVistaCache(cacheKey)
+      if (cached) {
+        setKpiCobro(cached.kpiCobro)
+        setKpiPpto(cached.kpiPpto)
+        setDashResumenUpdatedAt(cached.ts || Date.now())
+        return
+      }
+    }
     setDashKpiLoading(true)
     setDashKpiError(null)
     const cid = contratoIdDash
@@ -13970,7 +14093,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       if (!d) return
       setKpiCobro(d)
       const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
-      setKpiPpto({
+      const kpiPpto = {
         costo_total: d.total_presupuesto ?? 0,
         por_capitulo: capSrc.map((c) => ({
           capitulo: c.capitulo,
@@ -13978,8 +14101,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           registros: c.registros ?? 0,
         })),
         vista: d.vista,
-      })
-      setDashResumenUpdatedAt(Date.now())
+      }
+      setKpiPpto(kpiPpto)
+      const ts = Date.now()
+      setDashResumenUpdatedAt(ts)
+      setDashVistaCache(cacheKey, { kpiCobro: d, kpiPpto, ts })
     } catch (err) {
       setDashKpiError(err?.message || 'No se pudo cargar el resumen')
     } finally {
@@ -13987,8 +14113,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
 
-  const cargarDashCapFin = useCallback(async () => {
+  const cargarDashCapFin = useCallback(async (opts = {}) => {
     if (!contratoIdDash || !dashModuloActivo) return
+    const cacheKey = dashCapFinCacheKey(contratoIdDash, dashVistaParam)
+    if (!opts.force) {
+      const cached = getDashVistaCache(cacheKey)
+      if (cached) {
+        setDashCapFin(cached.data)
+        setDashResumenUpdatedAt(cached.ts || Date.now())
+        return
+      }
+    }
     setDashCapFinLoading(true)
     setDashCapFinError(null)
     const cid = contratoIdDash
@@ -14007,7 +14142,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       }
       const d = await r.json()
       setDashCapFin(d)
-      setDashResumenUpdatedAt(Date.now())
+      const ts = Date.now()
+      setDashResumenUpdatedAt(ts)
+      setDashVistaCache(cacheKey, { data: d, ts })
     } catch (err) {
       setDashCapFinError(err?.message || 'No se pudo cargar el panorama por capítulo')
     } finally {
@@ -15799,7 +15936,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               }}>
                 <button
                   type="button"
-                  onClick={() => { void cargarDashboardResumen(); void cargarDashCapFin() }}
+                  onClick={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
                   disabled={dashRefreshBusy}
                   title="Actualizar resumen"
                   style={{
@@ -15832,7 +15969,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   du={du}
                   dashInfoColor={dashInfoColor}
                   dashKpiLoading={dashRefreshBusy}
-                  onRefresh={() => { void cargarDashboardResumen(); void cargarDashCapFin() }}
+                  onRefresh={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
                 />
                 {usuario?._contratos?.length > 1 ? (
                   <select

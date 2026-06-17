@@ -255,3 +255,18 @@ def test_gerencial_item_es_aiu_fallback_capitulo_ensayos():
     idx2 = {("7_cap", "7.02"): "IVA"}
     assert not m._gerencial_item_es_aiu("7_cap", "7.02", "7. PLUVIAL", idx2)
     assert m._gerencial_item_es_iva("7_cap", "7.02", "7. PLUVIAL", idx2)
+
+
+def test_xlsx_resumen_split_items_por_bloque(monkeypatch):
+    monkeypatch.setattr(
+        m,
+        "_listado_precios_tipo_calculo_index",
+        lambda cid: {
+            ("7.PLUVIAL", "7.01"): "AIU",
+            ("7.PLUVIAL", "7.02"): "IVA",
+        },
+    )
+    items = [{"item": "7.01"}, {"item": "7.02"}, {"item": "7.03"}]
+    aiu, iva = m._xlsx_resumen_items_por_bloque(items, 1, "7. PLUVIAL")
+    assert [r["item"] for r in aiu] == ["7.01", "7.03"]
+    assert [r["item"] for r in iva] == ["7.02"]

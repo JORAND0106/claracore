@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:cache": "node --test src/cache/vistaCache.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",

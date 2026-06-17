@@ -23515,6 +23515,225 @@ def _xlsx_cc_cost_sum_formula(r: int, vista: str, cost_cols: Tuple[int, int, int
     return f"=IF({s}=0,{cob}{r},{s})"
 
 
+def _xlsx_resumen_items_por_bloque(
+    items: List[dict], contrato_id: int, cap_raw: str
+) -> Tuple[List[dict], List[dict]]:
+    """Separa ítems del capítulo en bloque AIU (obra) e IVA (ensayos/sondeos)."""
+    cap_key = _dash_norm_capitulo_key_py(cap_raw)
+    tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
+    aiu: List[dict] = []
+    iva: List[dict] = []
+    for row in items:
+        ik = _dash_norm_item_key_py(row.get("item"))
+        if _gerencial_item_bloque_precio(cap_key, ik, cap_raw, tipo_idx) == "iva":
+            iva.append(row)
+        else:
+            aiu.append(row)
+    return aiu, iva
+
+
+def _xlsx_write_resumen_ejecutivo_cuadro(
+    ws,
+    *,
+    start_row: int,
+    cuadro_titulo: str,
+    total_label: str,
+    items: List[dict],
+    vista: str,
+    tipo_label: str,
+    ncols: int,
+    col: Dict[str, int],
+    fill_titulo,
+    fill_hdr,
+    fill_tot,
+    fill_zebra,
+    fill_white,
+    border_tbl,
+    al_center,
+    al_right,
+    al_left,
+    al_left_top,
+    row_h_info: float,
+    row_h_data: float,
+    hdr_visible: List[Tuple[int, str]],
+    hdr_hidden: List[Tuple[int, str]],
+    empty_msg: str,
+) -> int:
+    """Escribe un cuadro (título + tabla + total) con contorno doble. Devuelve última fila del cuadro."""
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    C_NUM = col["num"]
+    C_ITEM = col["item"]
+    C_DESC = col["desc"]
+    C_UND = col["und"]
+    C_NR_Q, C_NR_C = col["nr_q"], col["nr_c"]
+    C_P_Q, C_P_C = col["p_q"], col["p_c"]
+    C_R_Q, C_R_C = col["r_q"], col["r_c"]
+    C_A_Q, C_A_C = col["a_q"], col["a_c"]
+    C_CC_Q, C_CC_C = col["cc_q"], col["cc_c"]
+    C_CO_Q, C_CO_C = col["co_q"], col["co_c"]
+    C_DQ, C_DC = col["dq"], col["dc"]
+    qty_cols = (C_NR_Q, C_P_Q, C_R_Q, C_A_Q)
+    cost_cols = (C_NR_C, C_P_C, C_R_C, C_A_C)
+    L = get_column_letter
+
+    titulo_row = start_row
+    ws.merge_cells(start_row=titulo_row, start_column=1, end_row=titulo_row, end_column=ncols)
+    tcell = ws.cell(row=titulo_row, column=1, value=cuadro_titulo)
+    tcell.fill = fill_titulo
+    tcell.font = Font(bold=True, color="FFFFFF", size=11)
+    tcell.alignment = al_center
+    ws.row_dimensions[titulo_row].height = row_h_info
+
+    hr = titulo_row + 1
+    for ccol, label in hdr_visible + hdr_hidden:
+        cell = ws.cell(row=hr, column=ccol, value=label)
+        cell.fill = fill_hdr
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.alignment = (
+            al_center
+            if ccol in (C_NUM, C_UND, C_CC_Q, C_CC_C, C_CO_Q, C_CO_C, C_DQ, C_DC)
+            else (al_left if ccol == C_DESC else al_right)
+        )
+        cell.border = border_tbl
+    ws.row_dimensions[hr].height = row_h_info
+
+    ri = hr + 1
+    first_data = ri
+    last_data = ri - 1
+    if not items:
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=ncols)
+        c0 = ws.cell(row=ri, column=1, value=empty_msg)
+        c0.font = Font(italic=True, color="666666")
+        c0.alignment = al_center
+        ri += 1
+    else:
+        for idx, row in enumerate(items, start=1):
+            cant_nr = round(float(row.get("cant_nr") or 0), 4)
+            cost_nr = round(float(row.get("costo_nr") or 0), 0)
+            cant_p = round(float(row.get("cant_p") or 0), 4)
+            cost_p = round(float(row.get("costo_p") or 0), 0)
+            cant_r = round(float(row.get("cant_r") or 0), 4)
+            cost_r = round(float(row.get("costo_r") or 0), 0)
+            cant_a = round(float(row.get("cant_a") or 0), 4)
+            cost_a = round(float(row.get("costo_a") or 0), 0)
+            cant_cob = round(float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0), 4)
+            cost_cob = round(float(row.get("costo_cobrado") or row.get("cobrado") or 0), 0)
+
+            ws.cell(row=ri, column=C_NUM, value=idx).alignment = al_center
+            ws.cell(row=ri, column=C_ITEM, value=row.get("item") or "").alignment = al_left
+            dcell = ws.cell(row=ri, column=C_DESC, value=(row.get("descripcion") or "").strip())
+            dcell.alignment = al_left_top
+            ws.cell(row=ri, column=C_UND, value=(row.get("unidad") or row.get("und") or "")).alignment = al_center
+
+            for ccol, val in (
+                (C_NR_Q, cant_nr),
+                (C_NR_C, cost_nr),
+                (C_P_Q, cant_p),
+                (C_P_C, cost_p),
+                (C_R_Q, cant_r),
+                (C_R_C, cost_r),
+                (C_A_Q, cant_a),
+                (C_A_C, cost_a),
+            ):
+                cell = ws.cell(row=ri, column=ccol, value=val)
+                cell.number_format = _XLSX_FMT_CANT if ccol in qty_cols else _XLSX_FMT_COP
+                cell.alignment = al_right
+
+            ccq = ws.cell(row=ri, column=C_CC_Q, value=_xlsx_cc_sum_formula(ri, vista, qty_cols, C_CO_Q))
+            ccq.number_format = _XLSX_FMT_CANT
+            ccq.alignment = al_right
+            ccc = ws.cell(row=ri, column=C_CC_C, value=_xlsx_cc_cost_sum_formula(ri, vista, cost_cols, C_CO_C))
+            ccc.number_format = _XLSX_FMT_COP
+            ccc.alignment = al_right
+
+            coq = ws.cell(row=ri, column=C_CO_Q, value=cant_cob)
+            coq.number_format = _XLSX_FMT_CANT
+            coq.alignment = al_right
+            coc = ws.cell(row=ri, column=C_CO_C, value=cost_cob)
+            coc.number_format = _XLSX_FMT_COP
+            coc.alignment = al_right
+
+            dq = ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
+            dq.number_format = _XLSX_FMT_CANT
+            dq.alignment = al_right
+            dc = ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
+            dc.number_format = _XLSX_FMT_COP
+            dc.alignment = al_right
+
+            zfill = fill_zebra if idx % 2 else fill_white
+            for c in range(1, ncols + 1):
+                cell = ws.cell(row=ri, column=c)
+                cell.border = border_tbl
+                cell.fill = zfill
+                if c in (C_ITEM, C_DESC):
+                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
+                elif c in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
+                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
+                elif c == C_DC:
+                    delta_v = float(row.get("delta_costo") or 0)
+                    cell.font = Font(
+                        bold=True,
+                        size=10,
+                        color="DC2626" if delta_v < -0.5 else _CC_XLSX_DARK,
+                    )
+                elif c == C_DQ:
+                    delta_q = float(row.get("delta_cant") or 0)
+                    cell.font = Font(
+                        bold=True,
+                        size=10,
+                        color="DC2626" if delta_q < -0.5 else _CC_XLSX_DARK,
+                    )
+
+            ws.row_dimensions[ri].height = _xlsx_estimate_row_height_pt(
+                ws, ri, [C_DESC], min_height=row_h_data, font_size=10
+            )
+            ri += 1
+        last_data = ri - 1
+
+    if items:
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=C_UND)
+        ws.cell(row=ri, column=1, value=total_label).font = Font(bold=True, color="FFFFFF")
+        ws.cell(row=ri, column=1).alignment = al_left
+        ws.row_dimensions[ri].height = row_h_data
+
+        for ccol in (C_NR_Q, C_NR_C, C_P_Q, C_P_C, C_R_Q, C_R_C, C_A_Q, C_A_C):
+            cell = ws.cell(
+                row=ri,
+                column=ccol,
+                value=f"=SUM({L(ccol)}{first_data}:{L(ccol)}{last_data})",
+            )
+            cell.number_format = _XLSX_FMT_CANT if ccol in qty_cols else _XLSX_FMT_COP
+            cell.alignment = al_right
+
+        for ccol in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
+            cell = ws.cell(
+                row=ri,
+                column=ccol,
+                value=f"=SUM({L(ccol)}{first_data}:{L(ccol)}{last_data})",
+            )
+            cell.number_format = _XLSX_FMT_CANT if ccol in (C_CC_Q, C_CO_Q) else _XLSX_FMT_COP
+            cell.alignment = al_right
+
+        ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
+        ws.cell(row=ri, column=C_DQ).number_format = _XLSX_FMT_CANT
+        ws.cell(row=ri, column=C_DQ).alignment = al_right
+        ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
+        ws.cell(row=ri, column=C_DC).number_format = _XLSX_FMT_COP
+        ws.cell(row=ri, column=C_DC).alignment = al_right
+
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=ri, column=c)
+            cell.fill = fill_tot
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.border = border_tbl
+
+    table_last_row = ri if items else max(hr, ri - 1)
+    _xlsx_apply_outer_double_border(ws, titulo_row, table_last_row, 1, ncols)
+    return table_last_row
+
+
 def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     contrato_id: int,
     capitulo: str,
@@ -23522,7 +23741,7 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     current_user=None,
     item_filtro: Optional[str] = None,
 ) -> Tuple[bytes, str]:
-    """Resumen ejecutivo por capítulo: misma tabla que el popup del dashboard (con NR·P·R·A ocultas)."""
+    """Resumen ejecutivo por capítulo: dos cuadros (AIU e IVA) en una sola hoja."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -23535,6 +23754,7 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     )
     items = _drill_agg_by_item(contrato_id, cap_raw, item_filtro, vista, current_user)
     items = sorted(items, key=lambda r: (_dash_norm_item_key_py(r.get("item")), str(r.get("item") or "")))
+    items_aiu, items_iva = _xlsx_resumen_items_por_bloque(items, contrato_id, cap_raw)
 
     C_NUM, C_ITEM, C_DESC, C_UND = 1, 2, 3, 4
     C_NR_Q, C_NR_C = 5, 6
@@ -23545,6 +23765,13 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     C_CO_Q, C_CO_C = 15, 16
     C_DQ, C_DC = 17, 18
     NCOLS = 18
+    col_map = {
+        "num": C_NUM, "item": C_ITEM, "desc": C_DESC, "und": C_UND,
+        "nr_q": C_NR_Q, "nr_c": C_NR_C, "p_q": C_P_Q, "p_c": C_P_C,
+        "r_q": C_R_Q, "r_c": C_R_C, "a_q": C_A_Q, "a_c": C_A_C,
+        "cc_q": C_CC_Q, "cc_c": C_CC_C, "co_q": C_CO_Q, "co_c": C_CO_C,
+        "dq": C_DQ, "dc": C_DC,
+    }
 
     meta = _xlsx_load_contrato_export_meta(contrato_id)
     version_lbl = _contrato_presupuesto_version_label(contrato_id)
@@ -23558,10 +23785,12 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     )
     subtitulo = (
         f"Cant Final y Costo Directo Final = ClaraCore ({cc_sum_label}) · "
-        f"vista: {tipo_label} · {len(items)} ítem(s)"
+        f"vista: {tipo_label} · {len(items)} ítem(s) · cuadros AIU e IVA"
     )
 
     fill_hdr = PatternFill("solid", fgColor="4472C4")
+    fill_titulo_aiu = PatternFill("solid", fgColor="4472C4")
+    fill_titulo_iva = PatternFill("solid", fgColor="7C3AED")
     fill_tot = PatternFill("solid", fgColor="111827")
     fill_zebra = PatternFill("solid", fgColor="F8FAFC")
     fill_white = PatternFill("solid", fgColor="FFFFFF")
@@ -23591,7 +23820,7 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     ws.column_dimensions[get_column_letter(C_DQ)].width = 12
     ws.column_dimensions[get_column_letter(C_DC)].width = 16
 
-    hr = _xlsx_apply_informe_header(
+    content_start = _xlsx_apply_informe_header(
         ws,
         titulo=titulo,
         ncols=NCOLS,
@@ -23602,6 +23831,9 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
         subtitulo_tabla=subtitulo,
         label_merge_end=C_UND,
     )
+
+    for c in range(C_NR_Q, C_A_C + 1):
+        ws.column_dimensions[get_column_letter(c)].hidden = True
 
     hdr_visible = [
         (C_NUM, "#"),
@@ -23625,165 +23857,54 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
         (C_A_Q, "Cant A"),
         (C_A_C, "$ A"),
     ]
-    for col, label in hdr_visible + hdr_hidden:
-        cell = ws.cell(row=hr, column=col, value=label)
-        cell.fill = fill_hdr
-        cell.font = Font(bold=True, color="FFFFFF", size=10)
-        cell.alignment = (
-            al_center
-            if col in (C_NUM, C_UND, C_CC_Q, C_CC_C, C_CO_Q, C_CO_C, C_DQ, C_DC)
-            else (al_left if col == C_DESC else al_right)
-        )
-        cell.border = border_tbl
-    ws.row_dimensions[hr].height = _ROW_H_INFO
+    cuadro_kw = dict(
+        vista=vista,
+        tipo_label=tipo_label,
+        ncols=NCOLS,
+        col=col_map,
+        fill_hdr=fill_hdr,
+        fill_tot=fill_tot,
+        fill_zebra=fill_zebra,
+        fill_white=fill_white,
+        border_tbl=border_tbl,
+        al_center=al_center,
+        al_right=al_right,
+        al_left=al_left,
+        al_left_top=al_left_top,
+        row_h_info=_ROW_H_INFO,
+        row_h_data=_ROW_H_DATA,
+        hdr_visible=hdr_visible,
+        hdr_hidden=hdr_hidden,
+    )
 
-    for c in range(C_NR_Q, C_A_C + 1):
-        ws.column_dimensions[get_column_letter(c)].hidden = True
+    last_cuadro = _xlsx_write_resumen_ejecutivo_cuadro(
+        ws,
+        start_row=content_start,
+        cuadro_titulo=f"OBRA — AIU ({len(items_aiu)} ítem(s))",
+        total_label="TOTAL OBRA (AIU)",
+        items=items_aiu,
+        fill_titulo=fill_titulo_aiu,
+        empty_msg=f"Sin ítems AIU en este capítulo ({tipo_label}).",
+        **cuadro_kw,
+    )
+    last_cuadro = _xlsx_write_resumen_ejecutivo_cuadro(
+        ws,
+        start_row=last_cuadro + 3,
+        cuadro_titulo=f"ENSAYOS / SONDEOS — IVA ({len(items_iva)} ítem(s))",
+        total_label="TOTAL IVA",
+        items=items_iva,
+        fill_titulo=fill_titulo_iva,
+        empty_msg=f"Sin ítems IVA en este capítulo ({tipo_label}).",
+        **cuadro_kw,
+    )
 
-    qty_cols = (C_NR_Q, C_P_Q, C_R_Q, C_A_Q)
-    cost_cols = (C_NR_C, C_P_C, C_R_C, C_A_C)
+    note_row = last_cuadro + 2
     L = get_column_letter
-
-    ri = hr + 1
-    first_data = ri
-    last_data = ri - 1
-    if not items:
-        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=NCOLS)
-        c0 = ws.cell(row=ri, column=1, value=f"Sin ítems en este capítulo ({tipo_label}).")
-        c0.font = Font(italic=True, color="666666")
-        c0.alignment = al_center
-        ri += 1
-    else:
-        for idx, row in enumerate(items, start=1):
-            cant_nr = round(float(row.get("cant_nr") or 0), 4)
-            cost_nr = round(float(row.get("costo_nr") or 0), 0)
-            cant_p = round(float(row.get("cant_p") or 0), 4)
-            cost_p = round(float(row.get("costo_p") or 0), 0)
-            cant_r = round(float(row.get("cant_r") or 0), 4)
-            cost_r = round(float(row.get("costo_r") or 0), 0)
-            cant_a = round(float(row.get("cant_a") or 0), 4)
-            cost_a = round(float(row.get("costo_a") or 0), 0)
-            cant_cob = round(float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0), 4)
-            cost_cob = round(float(row.get("costo_cobrado") or row.get("cobrado") or 0), 0)
-
-            ws.cell(row=ri, column=C_NUM, value=idx).alignment = al_center
-            ws.cell(row=ri, column=C_ITEM, value=row.get("item") or "").alignment = al_left
-            dcell = ws.cell(row=ri, column=C_DESC, value=(row.get("descripcion") or "").strip())
-            dcell.alignment = al_left_top
-            ws.cell(row=ri, column=C_UND, value=(row.get("unidad") or row.get("und") or "")).alignment = al_center
-
-            for col, val in (
-                (C_NR_Q, cant_nr),
-                (C_NR_C, cost_nr),
-                (C_P_Q, cant_p),
-                (C_P_C, cost_p),
-                (C_R_Q, cant_r),
-                (C_R_C, cost_r),
-                (C_A_Q, cant_a),
-                (C_A_C, cost_a),
-            ):
-                cell = ws.cell(row=ri, column=col, value=val)
-                cell.number_format = _XLSX_FMT_CANT if col in qty_cols else _XLSX_FMT_COP
-                cell.alignment = al_right
-
-            ccq = ws.cell(row=ri, column=C_CC_Q, value=_xlsx_cc_sum_formula(ri, vista, qty_cols, C_CO_Q))
-            ccq.number_format = _XLSX_FMT_CANT
-            ccq.alignment = al_right
-            ccc = ws.cell(row=ri, column=C_CC_C, value=_xlsx_cc_cost_sum_formula(ri, vista, cost_cols, C_CO_C))
-            ccc.number_format = _XLSX_FMT_COP
-            ccc.alignment = al_right
-
-            coq = ws.cell(row=ri, column=C_CO_Q, value=cant_cob)
-            coq.number_format = _XLSX_FMT_CANT
-            coq.alignment = al_right
-            coc = ws.cell(row=ri, column=C_CO_C, value=cost_cob)
-            coc.number_format = _XLSX_FMT_COP
-            coc.alignment = al_right
-
-            dq = ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
-            dq.number_format = _XLSX_FMT_CANT
-            dq.alignment = al_right
-            dc = ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
-            dc.number_format = _XLSX_FMT_COP
-            dc.alignment = al_right
-
-            zfill = fill_zebra if idx % 2 else fill_white
-            for c in range(1, NCOLS + 1):
-                cell = ws.cell(row=ri, column=c)
-                cell.border = border_tbl
-                cell.fill = zfill
-                if c in (C_ITEM, C_DESC):
-                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
-                elif c in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
-                    cell.font = Font(size=10, color=_CC_XLSX_DARK)
-                elif c == C_DC:
-                    delta_v = float(row.get("delta_costo") or 0)
-                    cell.font = Font(
-                        bold=True,
-                        size=10,
-                        color="DC2626" if delta_v < -0.5 else _CC_XLSX_DARK,
-                    )
-                elif c == C_DQ:
-                    delta_q = float(row.get("delta_cant") or 0)
-                    cell.font = Font(
-                        bold=True,
-                        size=10,
-                        color="DC2626" if delta_q < -0.5 else _CC_XLSX_DARK,
-                    )
-
-            ws.row_dimensions[ri].height = _xlsx_estimate_row_height_pt(
-                ws, ri, [C_DESC], min_height=_ROW_H_DATA, font_size=10
-            )
-            ri += 1
-        last_data = ri - 1
-
-    if items:
-        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=C_UND)
-        ws.cell(row=ri, column=1, value="TOTAL CAPÍTULO").font = Font(bold=True, color="FFFFFF")
-        ws.cell(row=ri, column=1).alignment = al_left
-        ws.row_dimensions[ri].height = _ROW_H_DATA
-
-        for col in (C_NR_Q, C_NR_C, C_P_Q, C_P_C, C_R_Q, C_R_C, C_A_Q, C_A_C):
-            cell = ws.cell(
-                row=ri,
-                column=col,
-                value=f"=SUM({L(col)}{first_data}:{L(col)}{last_data})",
-            )
-            cell.number_format = _XLSX_FMT_CANT if col in qty_cols else _XLSX_FMT_COP
-            cell.alignment = al_right
-
-        for col in (C_CC_Q, C_CC_C, C_CO_Q, C_CO_C):
-            cell = ws.cell(
-                row=ri,
-                column=col,
-                value=f"=SUM({L(col)}{first_data}:{L(col)}{last_data})",
-            )
-            cell.number_format = _XLSX_FMT_CANT if col in (C_CC_Q, C_CO_Q) else _XLSX_FMT_COP
-            cell.alignment = al_right
-
-        ws.cell(row=ri, column=C_DQ, value=f"={L(C_CC_Q)}{ri}-{L(C_CO_Q)}{ri}")
-        ws.cell(row=ri, column=C_DQ).number_format = _XLSX_FMT_CANT
-        ws.cell(row=ri, column=C_DQ).alignment = al_right
-        ws.cell(row=ri, column=C_DC, value=f"={L(C_CC_C)}{ri}-{L(C_CO_C)}{ri}")
-        ws.cell(row=ri, column=C_DC).number_format = _XLSX_FMT_COP
-        ws.cell(row=ri, column=C_DC).alignment = al_right
-
-        for c in range(1, NCOLS + 1):
-            cell = ws.cell(row=ri, column=c)
-            cell.fill = fill_tot
-            cell.font = Font(bold=True, color="FFFFFF", size=10)
-            cell.border = border_tbl
-        note_row = ri + 2
-    else:
-        note_row = ri + 1
-
-    table_last_row = (ri if items else max(hr, ri - 1))
-    _xlsx_apply_outer_double_border(ws, hr, table_last_row, 1, NCOLS)
-
     ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=NCOLS)
     nota = (
         f"Cant Final y Costo Directo Final = ClaraCore ({cc_sum_label}); "
         "desglose en columnas NR·P·R·A (ocultas). "
+        "Cuadro superior: ítems AIU · cuadro inferior: ítems IVA. "
         "Sin fila en Obra Ejecutada → CC = cobrado y Δ = 0."
     )
     ws.cell(row=note_row, column=1, value=nota).font = Font(size=8, color="64748B", italic=True)
@@ -23799,6 +23920,7 @@ def _build_dashboard_capitulo_resumen_ejecutivo_xlsx(
     ws.cell(row=footer_row, column=1).alignment = al_center
 
     ws.print_area = f"A1:{L(NCOLS)}{footer_row}"
+    ws.page_setup.fitToHeight = 1
     try:
         from openpyxl.worksheet.header_footer import HeaderFooterItem
 
