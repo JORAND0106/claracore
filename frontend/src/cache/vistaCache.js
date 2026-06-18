@@ -180,3 +180,19 @@ export function hashVistaPayload(payload) {
 export function _vistaCacheMemorySize() {
   return memory.size
 }
+
+/** Hay entradas vigentes en memoria o sessionStorage (para aviso antes de F5). */
+export function vistaCacheHasActiveEntries() {
+  for (const entry of memory.values()) {
+    if (entryVigente(entry, entry?.ttl)) return true
+  }
+  try {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const sk = sessionStorage.key(i)
+      if (!sk || !sk.startsWith(SESSION_PREFIX)) continue
+      const entry = readSessionEntry(sk.slice(SESSION_PREFIX.length))
+      if (entryVigente(entry, entry?.ttl)) return true
+    }
+  } catch { /* ignore */ }
+  return false
+}

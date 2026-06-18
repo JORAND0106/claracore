@@ -8,6 +8,7 @@ import { Plus, Upload } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
+import { useModulo } from './context/ModuloContext'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import {
   getProgObraVistaCache,
@@ -1144,6 +1145,17 @@ export default function ModuloProgramacionObra({
     if (cid) invalidateProgObraVistaCache(cid)
     return refreshMapaYVersiones()
   }, [refreshMapaYVersiones, cancelScheduledMapRefresh, cid])
+
+  const { setModuloRefresh, clearModuloRefresh } = useModulo()
+  useEffect(() => {
+    setModuloRefresh({
+      label: 'Programación',
+      fn: () => refreshMapaImmediate(),
+      disabled: false,
+      busy: false,
+    })
+    return clearModuloRefresh
+  }, [setModuloRefresh, clearModuloRefresh, refreshMapaImmediate])
 
   useEffect(() => {
     if (!cid || !token) {

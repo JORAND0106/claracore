@@ -14,6 +14,7 @@ import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
+import PptoExportExcelModal from './PptoExportExcelModal'
 import {
   esDesarrolladorPresupuesto,
   esRolContratistaDepuracion,
@@ -29,6 +30,7 @@ import {
 import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
+import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
@@ -240,22 +242,18 @@ function fObraItemsLista(f) {
 const PPTO_TIPO_EJECUCION_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_EJECUCION_OBRA = 'Obra Ejecutada'
 
+function pptoExportTipoDesdeVista(tipoEjecucion) {
+  return (tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT) === PPTO_TIPO_EJECUCION_OBRA
+    ? 'obra_ejecutada'
+    : 'presupuesto_obra'
+}
+
 function pptoExportModoFromSeleccion(formato, tipo) {
   const esObra = tipo === 'obra_ejecutada'
   if (formato === 'crudo') return esObra ? 'obra_ejecutada_crudo' : 'presupuesto_obra_crudo'
   return esObra ? 'obra_ejecutada' : 'presupuesto_obra'
 }
 
-const PPTO_EXPORT_DESC = {
-  informe: {
-    presupuesto_obra: 'Resumen ejecutivo + una pestaña por ítem con soporte de cantidades. Costo directo = cantidad × valor unitario.',
-    obra_ejecutada: 'Informe de Obra Ejecutada con el alcance y filtros activos de la grilla.',
-  },
-  crudo: {
-    presupuesto_obra: 'Base completa en una sola pestaña: todos los registros y columnas, sin separar por ítem.',
-    obra_ejecutada: 'Igual que el crudo anterior, filtrado por tipo Obra Ejecutada.',
-  },
-}
 const pptoVistaLsKey = (contratoId) => `clara_dash_vista_${contratoId}`
 
 function pptoCtxFiltro(drillRef, capExpandidoRef) {
@@ -412,7 +410,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalHilo,           setModalHilo]           = useState(null) // {registroId, tipo, data}
   const [exportPresupuestoOpen, setExportPresupuestoOpen] = useState(false)
   const [exportPresupuestoFormato, setExportPresupuestoFormato] = useState('informe')
-  const [exportPresupuestoTipo, setExportPresupuestoTipo] = useState('presupuesto_obra')
   const [exportPresupuestoBusy, setExportPresupuestoBusy] = useState(false)
   const [exportPresupuestoError, setExportPresupuestoError] = useState(null)
   const [versionesPresupuesto, setVersionesPresupuesto] = useState([])
@@ -1151,9 +1148,7 @@ useEffect(() => {
     if (!contratoId) return
     setExportPresupuestoOpen(true)
     setExportPresupuestoError(null)
-    const te = fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
     setExportPresupuestoFormato('informe')
-    setExportPresupuestoTipo(te === PPTO_TIPO_EJECUCION_OBRA ? 'obra_ejecutada' : 'presupuesto_obra')
     setExportMetaContrato(null)
     setExportEstimado({ cargando: true, registros: null, items: null, alcance: 'Calculando alcance…', esGrande: false })
     try {
@@ -1234,8 +1229,9 @@ useEffect(() => {
       if (!criterioVistaActivo(fObraRef.current || fObra, ctx)) {
         throw new Error('Pulse Buscar (o cambie el toggle) antes de exportar.')
       }
-      const modo = pptoExportModoFromSeleccion(exportPresupuestoFormato, exportPresupuestoTipo)
-      const tipoExport = exportPresupuestoTipo === 'obra_ejecutada'
+      const exportTipo = pptoExportTipoDesdeVista(fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion)
+      const modo = pptoExportModoFromSeleccion(exportPresupuestoFormato, exportTipo)
+      const tipoExport = exportTipo === 'obra_ejecutada'
         ? PPTO_TIPO_EJECUCION_OBRA
         : PPTO_TIPO_EJECUCION_DEFAULT
       const esCrudo = exportPresupuestoFormato === 'crudo'
@@ -1286,11 +1282,10 @@ useEffect(() => {
     exportMetaContrato,
     exportPresupuestoBusy,
     exportPresupuestoFormato,
-    exportPresupuestoTipo,
+    fObra,
     token,
     drill,
     capExpandido,
-    fObra,
     usuario?.logo_contratista,
   ])
 
@@ -1637,6 +1632,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     await cargarCapitulos({ silent: true })
   }
   recargarCapActualRef.current = recargarCapActual
+
+  const { setModuloRefresh, clearModuloRefresh } = useModulo()
+  useEffect(() => {
+    setModuloRefresh({
+      label: 'Presupuesto',
+      fn: () => recargarCapActualRef.current?.(drill.length === 0),
+      disabled: loading || buscandoFiltroObra,
+      busy: loading || buscandoFiltroObra,
+    })
+    return clearModuloRefresh
+  }, [setModuloRefresh, clearModuloRefresh, drill.length, loading, buscandoFiltroObra])
 
   const ejecutarBulkPresupuestoSicoeCadDirecto = useCallback(async (items, { mode = 'append', sicoeEnviados } = {}) => {
     const tok = getToken()
@@ -5497,218 +5503,24 @@ async function restaurar(id) {
         )
       })()}
 
-      {!verPapelera && exportPresupuestoOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            background: 'rgba(0,0,0,0.65)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-          onClick={() => !exportPresupuestoBusy && setExportPresupuestoOpen(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              background: t.bgCard,
-              borderRadius: 14,
-              border: `1px solid ${t.border}`,
-              boxShadow: '0 28px 90px rgba(0,0,0,0.55)',
-              overflow: 'hidden',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                padding: '14px 18px',
-                borderBottom: `1px solid ${t.border}`,
-                background: '#0F1923',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-              }}
-            >
-              <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#fff' }}>📥 Exportar Excel</div>
-              <button
-                type="button"
-                onClick={() => !exportPresupuestoBusy && setExportPresupuestoOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 'var(--cc-title)' }}
-                aria-label="Cerrar"
-              >
-                ✕
-              </button>
-            </div>
-            <div style={{ padding: '16px 18px 18px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  padding: 3,
-                  borderRadius: 10,
-                  background: t.bg,
-                  border: `1px solid ${t.border}`,
-                  marginBottom: 12,
-                }}
-              >
-                {[
-                  { id: 'informe', label: 'Informe' },
-                  { id: 'crudo', label: 'Crudo' },
-                ].map(({ id, label }) => {
-                  const active = exportPresupuestoFormato === id
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      disabled={exportPresupuestoBusy}
-                      onClick={() => setExportPresupuestoFormato(id)}
-                      style={{
-                        flex: 1,
-                        border: 'none',
-                        borderRadius: 8,
-                        padding: '8px 10px',
-                        fontSize: 'var(--cc-sm)',
-                        fontWeight: active ? 800 : 600,
-                        color: active ? '#fff' : t.textMuted,
-                        background: active ? t.primary : 'transparent',
-                        cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
-                        transition: 'background 0.15s, color 0.15s',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {[
-                  { id: 'presupuesto_obra', label: 'Presupuesto de obra' },
-                  { id: 'obra_ejecutada', label: 'Obra ejecutada' },
-                ].map(({ id, label }) => {
-                  const active = exportPresupuestoTipo === id
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      disabled={exportPresupuestoBusy}
-                      onClick={() => setExportPresupuestoTipo(id)}
-                      style={{
-                        flex: 1,
-                        border: `1.5px solid ${active ? t.primary : t.border}`,
-                        borderRadius: 8,
-                        padding: '7px 8px',
-                        fontSize: 'var(--cc-caption)',
-                        fontWeight: active ? 800 : 600,
-                        color: active ? t.primary : t.textMuted,
-                        background: active ? `${t.primary}14` : t.bgCard,
-                        cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
-                        lineHeight: 1.25,
-                      }}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  background: t.bg,
-                  border: `1px solid ${t.border}`,
-                  fontSize: 'var(--cc-sm)',
-                  color: t.textMuted,
-                  lineHeight: 1.45,
-                }}
-              >
-                {PPTO_EXPORT_DESC[exportPresupuestoFormato]?.[exportPresupuestoTipo] || '—'}
-                {exportPresupuestoFormato === 'informe' && exportPresupuestoTipo === 'obra_ejecutada' && (
-                  <span style={{ display: 'block', marginTop: 6, fontSize: 'var(--cc-caption)' }}>
-                    Para solo aprobados por Interventoría, filtre «Estado interventoría = Aprobado» antes de exportar.
-                  </span>
-                )}
-              </div>
-
-              <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '12px 0 0', lineHeight: 1.4 }}>
-                Alcance: <strong style={{ color: t.text }}>{exportEstimado.alcance || '—'}</strong>
-              </p>
-              {exportEstimado.cargando && (
-                <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '8px 0 0' }}>Calculando tamaño de la descarga…</p>
-              )}
-              {exportEstimado.esGrande && !exportEstimado.cargando && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    padding: '12px 14px',
-                    borderRadius: 10,
-                    background: '#FEF3C7',
-                    border: '1px solid #F59E0B',
-                    color: '#92400E',
-                    fontSize: 'var(--cc-sm)',
-                    lineHeight: 1.45,
-                  }}
-                >
-                  <strong>⏳ Descarga que puede demorar</strong>
-                  <div style={{ marginTop: 4 }}>
-                    El volumen es grande ({exportEstimado.registros != null ? `${exportEstimado.registros.toLocaleString('es-CO')} registros` : 'muchos registros'}).
-                    La generación del Excel puede tardar varios minutos. Para una descarga más rápida, filtre por capítulo o ítem con «+ Filtro» antes de exportar.
-                  </div>
-                </div>
-              )}
-              {!exportEstimado.esGrande && !exportEstimado.cargando && exportEstimado.registros != null && (
-                <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '8px 0 0', lineHeight: 1.4 }}>
-                  Tip: agregue filtros de capítulo o ítem con «+ Filtro» y ejecute Buscar para exportar solo ese alcance.
-                </p>
-              )}
-              {exportPresupuestoError && (
-                <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: '#FEE2E2', color: '#B91C1C', fontSize: 'var(--cc-sm)' }}>
-                  {exportPresupuestoError}
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
-                <button
-                  type="button"
-                  onClick={() => setExportPresupuestoOpen(false)}
-                  disabled={exportPresupuestoBusy}
-                  style={{
-                    background: 'transparent',
-                    border: `1px solid ${t.border}`,
-                    borderRadius: 8,
-                    padding: '8px 16px',
-                    color: t.textMuted,
-                    fontSize: 'var(--cc-sm)',
-                    cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void descargarPresupuestoExcel()}
-                  disabled={exportPresupuestoBusy}
-                  style={{
-                    background: exportPresupuestoBusy ? '#94a3b8' : t.primary,
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '8px 18px',
-                    fontSize: 'var(--cc-sm)',
-                    fontWeight: 700,
-                    cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
-                  }}
-                >
-                  {exportPresupuestoBusy ? '⏳ Generando…' : '⬇ Descargar Excel'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {!verPapelera && (
+        <PptoExportExcelModal
+          open={exportPresupuestoOpen}
+          onClose={() => !exportPresupuestoBusy && setExportPresupuestoOpen(false)}
+          t={t}
+          busy={exportPresupuestoBusy}
+          error={exportPresupuestoError}
+          formato={exportPresupuestoFormato}
+          onFormatoChange={setExportPresupuestoFormato}
+          vistaLabel={
+            pptoExportTipoDesdeVista(fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion) === 'obra_ejecutada'
+              ? PPTO_TIPO_EJECUCION_OBRA
+              : PPTO_TIPO_EJECUCION_DEFAULT
+          }
+          exportTipoVista={pptoExportTipoDesdeVista(fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion)}
+          estimado={exportEstimado}
+          onDownload={descargarPresupuestoExcel}
+        />
       )}
 
       {!verPapelera && (

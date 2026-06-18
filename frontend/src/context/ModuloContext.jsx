@@ -2,45 +2,58 @@
  * ModuloContext — publica el módulo activo de ClaraCore para que AVI
  * lo consuma sin necesidad de prop-drilling a través del árbol de Dashboard.
  *
- * Valores que el contexto puede publicar:
- *   inicio | dashboard | cobro | presupuesto | sicoe | informes |
- *   almacen | programacion_obra | plano_semaforo | guias | sst |
- *   ensayos | auditor_sst | admin | listado_precios | notificaciones | general
- *
- * Responsabilidad del emisor (Dashboard en App.jsx):
- *   - Llamar setModuloActivo(slug) cada vez que cambia moduloActivo local.
- *   - Llamar setModuloActivo("admin") cuando showAdmin pasa a true.
- *   - Llamar setModuloActivo("cobro") cuando el panelFoco activo o dashTab
- *     corresponde a la vista de cobro dentro del Dashboard.
- *   - Llamar setModuloActivo(moduloActivo) cuando showAdmin vuelve a false.
+ * También expone `moduloRefresh` para que RefreshCacheGuard pueda invocar
+ * el botón «Actualizar» del módulo visible sin recargar la página.
  */
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 const ModuloContext = createContext({
   moduloActivo: 'general',
   setModuloActivo: () => {},
+  moduloRefresh: null,
+  setModuloRefresh: () => {},
+  clearModuloRefresh: () => {},
 })
 
-/**
- * ModuloProvider — envuelve el árbol de la app autenticada.
- * Debe montarse como ancestro de Dashboard y de AVI.
- */
 export function ModuloProvider({ children }) {
   const [moduloActivo, setModuloActivo] = useState('general')
+  const [moduloRefresh, setModuloRefreshState] = useState(null)
+
+  const setModuloRefresh = useCallback((meta) => {
+    if (!meta || typeof meta.fn !== 'function') {
+      setModuloRefreshState(null)
+      return
+    }
+    setModuloRefreshState({
+      label: String(meta.label || 'módulo'),
+      fn: meta.fn,
+      disabled: !!meta.disabled,
+      busy: !!meta.busy,
+    })
+  }, [])
+
+  const clearModuloRefresh = useCallback(() => {
+    setModuloRefreshState(null)
+  }, [])
+
+  const value = useMemo(
+    () => ({
+      moduloActivo,
+      setModuloActivo,
+      moduloRefresh,
+      setModuloRefresh,
+      clearModuloRefresh,
+    }),
+    [moduloActivo, moduloRefresh, setModuloRefresh, clearModuloRefresh],
+  )
 
   return (
-    <ModuloContext.Provider value={{ moduloActivo, setModuloActivo }}>
+    <ModuloContext.Provider value={value}>
       {children}
     </ModuloContext.Provider>
   )
 }
 
-/**
- * useModulo — hook de consumo. Lanza si se usa fuera de ModuloProvider.
- *
- * Ejemplo de uso en AVI.jsx:
- *   const { moduloActivo } = useModulo()
- */
 export function useModulo() {
   const ctx = useContext(ModuloContext)
   if (!ctx) throw new Error('useModulo debe usarse dentro de <ModuloProvider>')

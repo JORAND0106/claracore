@@ -106,6 +106,7 @@ import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiB
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
 import CcConfirmModal from './components/CcConfirmModal'
+import RefreshCacheGuard from './components/RefreshCacheGuard'
 import { supabase } from './supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from './realtimeUtils'
 import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
@@ -3209,12 +3210,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {(editableCampos || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario) && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
           <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
+          <div
+            style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+          >
             {/* Capítulo */}
             <div>
               <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
+                onMouseDown={e => e.stopPropagation()}
                 onKeyDown={e => e.stopPropagation()}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
@@ -3232,6 +3238,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 disabled={!editableCampos}
                 placeholder="— Todas —"
                 allowEmpty
+                opciones={competenciasApi.length > 0 ? competencias : undefined}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box' }}
               />
             </div>
@@ -6111,6 +6118,7 @@ function ModuloSicoeObra({
 }) {
   const API_URL = API_BASE
   const contrato_id = usuario?.contrato_id
+  const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const {
     efectivoOffline,
     isOfflineReady,
@@ -6820,6 +6828,24 @@ function ModuloSicoeObra({
       sicoeRefrescoEnCursoRef.current = false
     }
   }
+
+  useEffect(() => {
+    setModuloRefresh({
+      label: 'SICOE',
+      fn: () => refrescarVistaSicoeObra(),
+      disabled: cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion),
+      busy: cargandoAnalisis || cargando,
+    })
+    return clearModuloRefresh
+  }, [
+    setModuloRefresh,
+    clearModuloRefresh,
+    refrescarVistaSicoeObra,
+    cargandoAnalisis,
+    cargando,
+    filtros,
+    capasValidacion,
+  ])
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
 
@@ -13817,7 +13843,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }, [])
 
   // ── Clara (AVI): publica módulo activo al context ───────────────────────────
-  const { setModuloActivo: _setCtxModulo } = useModulo()
+  const { setModuloActivo: _setCtxModulo, setModuloRefresh, clearModuloRefresh } = useModulo()
   useEffect(() => {
     if (showAdmin) { _setCtxModulo('admin'); return }
     _setCtxModulo(moduloActivo === 'dashboard' ? 'cobro' : moduloActivo)
@@ -14190,6 +14216,31 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       setDashCapFinLoading(false)
     }
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
+
+  useEffect(() => {
+    if (moduloActivo !== 'dashboard') return undefined
+    const busy = dashKpiLoading || dashCapFinLoading
+    setModuloRefresh({
+      label: 'Dashboard',
+      fn: async () => {
+        await Promise.all([
+          cargarDashboardResumen({ force: true }),
+          cargarDashCapFin({ force: true }),
+        ])
+      },
+      disabled: busy,
+      busy,
+    })
+    return clearModuloRefresh
+  }, [
+    moduloActivo,
+    dashKpiLoading,
+    dashCapFinLoading,
+    cargarDashboardResumen,
+    cargarDashCapFin,
+    setModuloRefresh,
+    clearModuloRefresh,
+  ])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
@@ -19360,6 +19411,7 @@ if (contratos.length > 1) {
           </p>
         </CcConfirmModal>
       )}
+      <RefreshCacheGuard theme={t} active={!!usuario?.contrato_id} />
       {bannerMsg && (
         <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight + apiBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--cc-sm)', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
           <span>⚡ {bannerMsg}</span>

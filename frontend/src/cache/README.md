@@ -89,7 +89,12 @@ npm run test:cache
 - Cambios **backend**: `.\db` solo si hay cambios en API Python.
 - SQL Supabase: Editor SQL / migraciones; no requiere `df` ni `db`.
 
-## Fase 2 (opcional)
+## Aviso al recargar (F5)
+
+- Con sesión y contrato activo, `RefreshCacheGuard` intercepta **F5**, **Ctrl+R** y **Ctrl+F5** y muestra modal ClaraCore.
+- El **botón de recarga del navegador** dispara el diálogo nativo del browser (`beforeunload`); el texto personalizado no es posible por política de seguridad.
+- Recomienda usar **🔄 Actualizar** del módulo en lugar de recargar la página.
+
 
 - Header `X-Data-Version` por contrato para invalidación cruzada sin TTL.
 - `WEB_CONCURRENCY=2` en Azure App Settings del backend.
