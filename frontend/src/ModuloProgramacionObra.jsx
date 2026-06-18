@@ -12,6 +12,8 @@ import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import {
   getProgObraVistaCache,
   invalidateProgObraVistaCache,
+  progObraActividadesCacheKey,
+  progObraEstructuraCacheKey,
   progObraMapaCacheKey,
   progObraTramosCacheKey,
   progObraVersionesCacheKey,
@@ -1977,14 +1979,20 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
-    setLoadEstructura(true)
+    const eKey = progObraEstructuraCacheKey(cid, pkForData, pptoVersionVigenteId || '')
+    const cached = getProgObraVistaCache(eKey)
+    if (cached) setProgEstructura(cached)
+    setLoadEstructura(!cached)
+    if (cached) return () => { cancel = true }
     setProgEstructura({ capitulos: [] })
     const q = new URLSearchParams({ pk_id: pkForData })
     if (pptoVersionVigenteId) q.set('version_ppto_id', String(pptoVersionVigenteId))
     fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [] }))
       .then((d) => {
-        if (!cancel) setProgEstructura(d && typeof d === 'object' ? d : { capitulos: [] })
+        const payload = d && typeof d === 'object' ? d : { capitulos: [] }
+        if (!cancel) setProgEstructura(payload)
+        setProgObraVistaCache(eKey, payload)
       })
       .catch(() => {
         if (!cancel) setProgEstructura({ capitulos: [] })
@@ -2059,12 +2067,21 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
+    const aKey = progObraActividadesCacheKey(cid, versionIdForData, pkForData, modalSessionId || '')
+    const cached = getProgObraVistaCache(aKey)
+    if (cached) {
+      setActData(cached)
+      setLoadAct(false)
+      return () => { cancel = true }
+    }
     setLoadAct(true)
     const q = new URLSearchParams({ version_id: String(versionIdForData), pk_id: pkForData })
     fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }))
       .then((d) => {
-        if (!cancel) setActData(d && typeof d === 'object' ? d : { capitulos: [], actividades: [] })
+        const payload = d && typeof d === 'object' ? d : { capitulos: [], actividades: [] }
+        if (!cancel) setActData(payload)
+        setProgObraVistaCache(aKey, payload)
       })
       .catch(() => {
         if (!cancel) setActData({ capitulos: [], actividades: [] })

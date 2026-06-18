@@ -90,8 +90,10 @@ import {
   dashPkidColoresCacheKey,
   dashResumenCacheKey,
   dashTablaCacheKey,
+  getDashCachedPayload,
   getDashVistaCache,
   invalidateDashboardVistaCache,
+  setDashCachedPayload,
   setDashVistaCache,
 } from './cache/dashboardVistaCache'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -6278,8 +6280,8 @@ function ModuloSicoeObra({
   /** Misma resolución de acta RPO que la matriz del dashboard (vigente / acta explícita). */
   const [sicoeMatrizSync, setSicoeMatrizSync] = useState(null)
   const sicoeActaAutoOnceRef = useRef(false)
-  /** Una vez por contrato: capa N{nivel} + No Revisado para validadores al entrar. */
-  const sicoeCapasAutoValidacionOnceRef = useRef(false)
+  /** Una vez por contrato: init filtros (validador limpio + capa, o restaurar sesión). */
+  const sicoeInitContratoFiltrosOnceRef = useRef(false)
 
   useEffect(() => {
     if (!contrato_id) return
@@ -6562,7 +6564,7 @@ function ModuloSicoeObra({
 
   useEffect(() => {
     sicoeActaAutoOnceRef.current = false
-    sicoeCapasAutoValidacionOnceRef.current = false
+    sicoeInitContratoFiltrosOnceRef.current = false
   }, [contrato_id])
 
   useEffect(() => {
@@ -7343,6 +7345,56 @@ function ModuloSicoeObra({
     setBusquedaRealizada(false)
     setHayMas(false)
     setOffsetActual(0)
+  }, [contrato_id])
+
+  /** Validadores: pila limpia + capa N{nivel} «No Revisado» + buscar. Resto: sesión previa. */
+  useEffect(() => {
+    if (!contrato_id || sicoeInitContratoFiltrosOnceRef.current) return
+    if (
+      nivelesContrato?.contrato_id == null
+      || String(nivelesContrato.contrato_id) !== String(contrato_id)
+    ) return
+
+    sicoeInitContratoFiltrosOnceRef.current = true
+    const capasIni = capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
+
+    if (capasIni.length > 0) {
+      limpiarChecksPanelSicoe()
+      limpiarSicoeFiltroSesion(contrato_id)
+      invalidateSicoeVistaCache(contrato_id)
+      sicoeClearNavegacion(contrato_id)
+      sicoeFiltroObsRef.current = ''
+      sicoeFiltroNodoRef.current = ''
+      setSicoeFiltroObs('')
+      setSicoeFiltroNodo('')
+      setItemsFiltroChips([])
+      itemsFiltroChipsRef.current = []
+      setItemsFiltroOp('and')
+      itemsFiltroOpRef.current = 'and'
+      sicoePanelCapitulosRef.current = []
+      sicoePanelActasRpoRef.current = []
+      setSicoePanelCapitulos([])
+      setSicoePanelActasRpo([])
+      sicoeFSicoeRef.current = sicoeFSicoeVacios()
+      const fVacios = sicoeFSicoeToFiltros(sicoeFSicoeRef.current)
+      setFiltros(fVacios)
+      filtrosSicoeRef.current = fVacios
+
+      const snap = sicoeBundleFromAppState({
+        filtros: fVacios,
+        itemsChips: [],
+        itemsOp: 'and',
+        sicoeFiltroObs: '',
+        sicoeFiltroNodo: '',
+        capasValidacion: capasIni,
+        capasValidacionOp: 'and',
+        panelCapitulos: [],
+        panelActasRpo: [],
+      })
+      aplicarSicoeFiltroBundle(snap, true)
+      return
+    }
+
     const saved = cargarSicoeFiltroSesion(contrato_id)
     if (!saved) return
     aplicarSicoeFiltroBundle(saved, false)
@@ -7350,33 +7402,14 @@ function ModuloSicoeObra({
       const cached = sicoeGetVistaCache(contrato_id, saved)
       if (cached) restaurarSicoeDesdeEntrada(cached)
     }
-  }, [contrato_id, aplicarSicoeFiltroBundle, restaurarSicoeDesdeEntrada])
-
-  /** Validadores: al abrir el contrato, pre-cargar su nivel + «No Revisado» y lanzar búsqueda. */
-  useEffect(() => {
-    if (!contrato_id || sicoeCapasAutoValidacionOnceRef.current) return
-    if (
-      nivelesContrato?.contrato_id == null
-      || String(nivelesContrato.contrato_id) !== String(contrato_id)
-    ) return
-
-    const capasIni = capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
-    sicoeCapasAutoValidacionOnceRef.current = true
-    if (!capasIni.length || capasSicoeRef.current.length > 0) return
-
-    const snap = sicoeBundleFromAppState({
-      filtros: filtrosSicoeRef.current,
-      itemsChips: itemsFiltroChipsRef.current,
-      itemsOp: itemsFiltroOpRef.current,
-      sicoeFiltroObs: sicoeFiltroObsRef.current,
-      sicoeFiltroNodo: sicoeFiltroNodoRef.current,
-      capasValidacion: capasIni,
-      capasValidacionOp: 'and',
-      panelCapitulos: sicoePanelCapitulosRef.current,
-      panelActasRpo: sicoePanelActasRpoRef.current,
-    })
-    aplicarSicoeFiltroBundle(snap, true)
-  }, [contrato_id, nivelesContrato, usuario, aplicarSicoeFiltroBundle])
+  }, [
+    contrato_id,
+    nivelesContrato,
+    usuario,
+    aplicarSicoeFiltroBundle,
+    restaurarSicoeDesdeEntrada,
+    limpiarChecksPanelSicoe,
+  ])
 
   const SICOE_AUTO_BUSQUEDA_DEBOUNCE_MS = 480
 
@@ -7849,25 +7882,24 @@ function ModuloSicoeObra({
     })
   }, [])
 
-  const refrescarSicoeObraCompleto = useCallback(() => {
+  /** Realtime grilla: solo cabeceras de reporte; sin /analisis ni so_registros (evita tormenta por foto/validación). */
+  const refrescarSicoeGrillaRealtime = useCallback(() => {
     if (sicoeRefrescoEnCursoRef.current || sicoeBusquedaEnCursoRef.current) return
+    if (sicoeRealtimeReporteDetalleIdRef.current) return
+    if (!busquedaRealizadaRef.current) return
     const f = filtrosSicoeRef.current
     const cap = capasSicoeRef.current
     const opSeq = ++sicoeOperacionSeqRef.current
-    void Promise.all([
-      buscarReportesSicoeRef.current?.(f, 0, cap, undefined, opSeq),
-      cargarAnalisisSicoeRef.current?.(f, cap, capasValidacionOpRef.current, opSeq),
-    ]).catch(() => {})
+    void buscarReportesSicoeRef.current?.(f, 0, cap, undefined, opSeq)
     void refrescarMatrizDashboardRef.current?.()
-    refrescarDetalleReporteAbierto()
-  }, [refrescarDetalleReporteAbierto])
+  }, [])
 
-  /** Canal 1 — grilla: so_reportes (MV vm_sicoe_grilla se refresca por trigger; API lee la MV) */
+  /** Canal 1 — grilla: so_reportes (MV refrescada por cron; sin escuchar so_registros aquí) */
   useEffect(() => {
     if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
     const cid = String(contrato_id)
     const filt = `contrato_id=eq.${cid}`
-    const debouncer = createRealtimeDebouncer(refrescarSicoeObraCompleto)
+    const debouncer = createRealtimeDebouncer(refrescarSicoeGrillaRealtime)
     const channel = supabase
       .channel(`sicoe-grilla-${cid}`)
       .on(
@@ -7875,17 +7907,12 @@ function ModuloSicoeObra({
         { event: '*', schema: 'public', table: 'so_reportes', filter: filt },
         () => debouncer.schedule(),
       )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
-        () => debouncer.schedule(),
-      )
       .subscribe()
     return () => {
       debouncer.dispose()
       void supabase.removeChannel(channel)
     }
-  }, [contrato_id, efectivoOffline, refrescarSicoeObraCompleto])
+  }, [contrato_id, efectivoOffline, refrescarSicoeGrillaRealtime])
 
   /** Canal 2 — detalle: so_registros del reporte abierto; parchea fila sin recargar carpeta entera */
   useEffect(() => {
@@ -13831,15 +13858,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [actaFiltroMatriz, setActaFiltroMatriz] = useState('vigente')
   /** Actas del contrato (misma fuente que módulo actas): RPO + nombre asignado para el dropdown de la matriz */
   const [actasListaMatriz, setActasListaMatriz] = useState([])
-  const dashDrillCache = useRef({})   // caché ítems: { '${contrato}|${cap}': { data, ts } }
-  const dashTablaCache = useRef({})   // caché tabla: { '${contrato}|cap|item': { data, ts } }
-  /** GET /sicoe-obra/.../dashboard-pkid-colores — evita ráfagas contra Supabase (vía API). */
-  const pkidColoresCache = useRef({ data: null, timestamp: 0, contratoId: null, filterKey: '' })
+  const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
   const pkidColoresFetchRef = useRef(null)
   const dashExportInFlightRef = useRef(false)
   const [miniMapaColoresLoad, setMiniMapaColoresLoad] = useState(false)
-  const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
-  const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
+  const DASH_CACHE_TTL = 5 * 60 * 1000    // alineado con VISTA_CACHE_TTL.dashboard
   const DASH_DRILL_TIMEOUT_MS = 180 * 1000  // alineado con timeout Gunicorn (300s) y capítulos grandes
   const [popupCapitulo, setPopupCapitulo] = useState(false)
   const popupCapituloRef = useRef(false)
@@ -13894,15 +13917,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }, [usuario])
 
   const limpiarCachesDashVista = useCallback(() => {
-    dashDrillCache.current = {}
-    dashTablaCache.current = {}
-    pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
     dashDrillFetchSeqRef.current += 1
     if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
   }, [contratoIdDash])
 
   const dashDrillCacheKey = useCallback(
-    (...parts) => `${contratoIdDash}|${dashVistaParam}|${parts.join('|')}`,
+    (capPart, itemPart = '') => {
+      if (!contratoIdDash) return ''
+      const cap = String(capPart ?? '').trim()
+      const item = String(itemPart ?? '').trim()
+      if (item) return dashTablaCacheKey(contratoIdDash, dashVistaParam, cap, item)
+      return dashDrillItemsCacheKey(contratoIdDash, dashVistaParam, cap)
+    },
     [contratoIdDash, dashVistaParam],
   )
 
@@ -13955,23 +13981,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }, [dashVistaEjecucion, dashTab])
 
-  const PKID_COLORES_TTL_MS = 300000
-
   const fetchDashboardPkidColoresCached = useCallback(
     async (contratoId, params, setColores, opts = {}) => {
       if (!contratoId) return
       const filterKey =
         params && typeof params.toString === 'function' ? String(params.toString()) : ''
-      const ahora = Date.now()
-      const cache = pkidColoresCache.current
-      if (
-        !opts.force &&
-        cache.data != null &&
-        cache.contratoId === contratoId &&
-        cache.filterKey === filterKey &&
-        ahora - cache.timestamp < PKID_COLORES_TTL_MS
-      ) {
-        setColores(cache.data)
+      const cacheKey = dashPkidColoresCacheKey(contratoId, filterKey)
+      const cached = !opts.force ? getDashCachedPayload(cacheKey) : null
+      if (cached?.data != null) {
+        setColores(cached.data)
         setMiniMapaColoresLoad(false)
         return
       }
@@ -13989,12 +14007,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         if (ac.signal.aborted) return
         const data = res.ok ? await res.json().catch(() => null) : null
         if (data && typeof data === 'object') {
-          pkidColoresCache.current = {
-            data,
-            timestamp: Date.now(),
-            contratoId,
-            filterKey,
-          }
+          setDashCachedPayload(cacheKey, data)
           setColores(data)
         }
       } catch (err) {
@@ -14069,9 +14082,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   useEffect(() => {
     if (!contratoIdDash) return
-    dashDrillCache.current = {}
-    dashTablaCache.current = {}
-    pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
+    invalidateDashboardVistaCache(contratoIdDash)
     dashDrillFetchSeqRef.current += 1
     setKpiPpto(null)
     setKpiCobro(null)
@@ -14318,7 +14329,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const ck = dashNormCapituloKey(raw)
     if (!raw || ck === 'Sin capítulo') return
     const cacheKey = contratoIdDash ? dashDrillCacheKey(dashDrillCapCachePart(raw)) : null
-    const cached = cacheKey ? dashDrillCache.current[cacheKey] : null
+    const cached = cacheKey ? getDashCachedPayload(cacheKey) : null
     const cachedFinOk = cached?.data?.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_cant != null)
     setDashDrillPag(0)
     setDashDrillColExp({ cc: false, ccCost: false })
@@ -14362,19 +14373,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       pkidColoresFetchRef.current = null
       const fetchSeq = ++dashDrillFetchSeqRef.current
       const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor), drill[1]?.valor || '')
-      const cached = dashTablaCache.current[cacheKey]
+      const cached = getDashCachedPayload(cacheKey)
       const ahora = Date.now()
       const tablaUrl = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`
       const syncMapaFromTabla = (tablaData) => {
         const colores = pkidTablaRowsToColores(tablaData?.rows)
         setMiniMapaColores(colores)
         setMiniMapaColoresLoad(false)
-        pkidColoresCache.current = {
-          data: colores,
-          timestamp: Date.now(),
-          contratoId: contratoIdDash,
-          filterKey: params.toString(),
-        }
+        setDashCachedPayload(dashPkidColoresCacheKey(contratoIdDash, params.toString()), colores)
       }
       const fetchTablaJson = async (signal) => {
         const res = await fetch(tablaUrl, {
@@ -14395,7 +14401,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       }
       const cachedPkFinOk = cached?.data?.rows?.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_costo != null)
         && cached?.data?.meta?.pk_cc_coherente_item === true
-      if (cached && cachedPkFinOk && (ahora - cached.ts) < CACHE_TTL && cached.data?.rows?.length > 0) {
+      if (cached && cachedPkFinOk && (ahora - cached.ts) < DASH_CACHE_TTL && cached.data?.rows?.length > 0) {
         setDashTabla(cached.data)
         setDashTablaLoad(false)
         syncMapaFromTabla(cached.data)
@@ -14405,7 +14411,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           .then((data) => {
             if (fetchSeq !== dashDrillFetchSeqRef.current) return
             if (data?.rows?.length) {
-              dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+              setDashCachedPayload(cacheKey, data)
               setDashTabla(data)
               syncMapaFromTabla(data)
             }
@@ -14422,7 +14428,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         const data = await fetchTablaJson(ac.signal)
         if (fetchSeq !== dashDrillFetchSeqRef.current) return
         if (data?.rows?.length) {
-          dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+          setDashCachedPayload(cacheKey, data)
           setDashTabla(data)
           syncMapaFromTabla(data)
         } else {
@@ -14445,7 +14451,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setDashTabla(null)
     const fetchSeq = ++dashDrillFetchSeqRef.current
     const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor))
-    const cached = dashDrillCache.current[cacheKey]
+    const cached = getDashCachedPayload(cacheKey)
     const ahora = Date.now()
     const drillUrl = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`
     const fetchDrillJson = async (signal) => {
@@ -14467,7 +14473,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         throw new Error('Respuesta inválida del servidor')
       }
     }
-    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data) && cached.data.length > 0
+    if (cached && (ahora - cached.ts) < DASH_CACHE_TTL && Array.isArray(cached.data) && cached.data.length > 0
         && cached.data.some(r => r && r.tiene_ppto_obra_ejecutada != null && r.total_claracore_cant != null)) {
       setDashData(cached.data)
       setDashLoading(false)
@@ -14479,7 +14485,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           if (fetchSeq !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
           if (!Array.isArray(lista) || lista.length === 0) return
-          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+          setDashCachedPayload(cacheKey, lista)
           setDashData(lista)
         })
         .catch(() => {})
@@ -14496,7 +14502,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       if (fetchSeq !== dashDrillFetchSeqRef.current) return
       const lista = mapDrillCapituloItems(data)
       if (Array.isArray(lista) && lista.length > 0) {
-        dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+        setDashCachedPayload(cacheKey, lista)
         setDashData(lista)
         setDashDrillError(null)
       } else if (Array.isArray(lista)) {
@@ -14538,7 +14544,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (seqAtStart !== dashDrillFetchSeqRef.current) return
-          if (data) dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+          if (data) setDashCachedPayload(cacheKey, data)
         })
         .catch(() => {})
     } else if (drill.length === 1) {
@@ -14549,7 +14555,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           if (seqAtStart !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
           if (!Array.isArray(lista) || lista.length === 0) return
-          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+          setDashCachedPayload(cacheKey, lista)
         })
         .catch(() => {})
     }
@@ -14850,9 +14856,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       setNavRegistroId(null)
       setNavRegistroNumero(null)
       setNotifNavegar(null)
-      pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
-      dashDrillCache.current = {}
-      dashTablaCache.current = {}
+      if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
       dashDrillFetchSeqRef.current += 1
     }
     prevContratoDashRef.current = contratoIdDash
@@ -15076,8 +15080,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           : prev
       )
       await refrescarBibliotecaBalanceCantidades(m.cap)
-      dashTablaCache.current = {}
-      dashDrillCache.current = {}
+      if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
       const first = creados[0]
       if (first?.id) {
         const rdet = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${first.id}`, {

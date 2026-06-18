@@ -27,12 +27,27 @@ export function dashPkidColoresCacheKey(contratoId, filterKey) {
   return buildVistaCacheKey(MODULO, contratoId, 'pkid_colores', filterKey)
 }
 
+export function getDashVistaCacheEntry(key) {
+  return getVistaCache(key, { modulo: MODULO })
+}
+
 export function getDashVistaCache(key) {
-  return getVistaCache(key, { modulo: MODULO })?.data ?? null
+  return getDashVistaCacheEntry(key)?.data ?? null
+}
+
+/** Formato { data, ts } compatible con caché drill/tabla previa. */
+export function getDashCachedPayload(key) {
+  const entry = getDashVistaCacheEntry(key)
+  if (!entry?.data) return null
+  return { data: entry.data, ts: entry.ts ?? 0 }
 }
 
 export function setDashVistaCache(key, data) {
   setVistaCache(key, data, { modulo: MODULO })
+}
+
+export function setDashCachedPayload(key, data) {
+  setDashVistaCache(key, data)
 }
 
 export function invalidateDashboardVistaCache(contratoId) {

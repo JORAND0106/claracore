@@ -854,7 +854,10 @@ useEffect(() => {
     puedeTabEditarMasiva || puedeTabDepuracionMasiva || puedeTabInterventoriaMasiva
   const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
-  const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
+  const _pptoCachePorCap = useRef({})    // { [cacheKey]: { data, ts, total } }
+  const _pptoPanelCacheRef = useRef({})   // { [panelKey]: { filas, capitulosResumen, total, ts } }
+  const _pptoCapitulosListaCacheRef = useRef({}) // { [key]: { list, ts } }
+  const panelFilasServidorRef = useRef(null)
   const _lastWriteAtRef  = useRef(0)     // timestamp de la última escritura; suprime polling 6 s post-write
 
   function registrarUndoPresupuesto(label, ids) {
@@ -919,6 +922,8 @@ useEffect(() => {
   const invalidarCachePresupuestoContrato = () => {
     _pptoCacheRef.current = null
     _pptoCachePorCap.current = {}
+    _pptoPanelCacheRef.current = {}
+    _pptoCapitulosListaCacheRef.current = {}
     if (contratoId) invalidateVistaModulo('presupuesto', contratoId)
   }
   /** Stack de vistas (grilla + filtros) para Atrás sin refetch. */
@@ -981,6 +986,20 @@ useEffect(() => {
     }
   }
 
+  function pptoCapitulosListaCacheKey(f, ctx) {
+    const p = pptoBuildPresupuestoSearchParams(f, ctx, {})
+    return `cap_list|${p.toString()}`
+  }
+
+  function pptoPanelCacheKey(f, ctx, nivel, capituloDrill = '') {
+    const p = pptoBuildPanelValidacionParams(f, ctx, {
+      verPapelera,
+      nivel,
+      capituloDrill,
+    })
+    return `panel|${p.toString()}`
+  }
+
   function pptoPushVistaNavegacion() {
     const snap = {
       fObra: { ...(fObraRef.current || {}) },
@@ -990,6 +1009,10 @@ useEffect(() => {
       busquedaServidorActiva: busquedaServidorActivaRef.current,
       capActivo,
       cacheKey: pptoGridCacheKey(fObraRef.current, drill),
+      panelFilasServidor: Array.isArray(panelFilasServidor) ? panelFilasServidor : null,
+      capitulosResumenPanel: Array.isArray(capitulosResumen) && capitulosResumen.length
+        ? [...capitulosResumen]
+        : null,
     }
     const stack = pptoDrillStackRef.current
     const top = stack[stack.length - 1]
@@ -1016,6 +1039,13 @@ useEffect(() => {
     const rows = Array.isArray(snap.registros) ? snap.registros : []
     setRegistros(rows)
     setConteoFiltro(snap.conteoFiltro ?? null)
+    if (Array.isArray(snap.panelFilasServidor)) {
+      setPanelFilasServidor(snap.panelFilasServidor)
+      panelFilasServidorRef.current = snap.panelFilasServidor
+    }
+    if (Array.isArray(snap.capitulosResumenPanel)) {
+      setCapitulosResumen(snap.capitulosResumenPanel)
+    }
     const cacheKey = snap.cacheKey || pptoGridCacheKey(f, snap.drill)
     pptoCargaRef.current = {
       key: cacheKey,
@@ -1371,6 +1401,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   async function cargarCapitulos(opts = {}) {
     const silent = !!opts.silent
     if (!contratoId) return
+    const f = fObraRef.current || fObra
+    const ctx = pptoCtxFiltro(drill, capExpandido)
+    const cacheKey = pptoCapitulosListaCacheKey(f, ctx)
+    if (!opts.force) {
+      const cached = _pptoCapitulosListaCacheRef.current[cacheKey]
+      if (cached && Date.now() - cached.ts < pptoCacheTtlEfectivo() && Array.isArray(cached.list)) {
+        setCapitulosResumen(cached.list)
+        return
+      }
+    }
     const seq = ++capitulosFetchRef.current
     if (!silent) setLoadingCapitulos(true)
     try {
@@ -1386,7 +1426,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (seq !== capitulosFetchRef.current) return
       if (res.ok) {
         const list = await res.json()
-        setCapitulosResumen(Array.isArray(list) ? [...list].sort(cmpCapituloLabel) : list)
+        const sorted = Array.isArray(list) ? [...list].sort(cmpCapituloLabel) : list
+        setCapitulosResumen(sorted)
+        _pptoCapitulosListaCacheRef.current[cacheKey] = { list: sorted, ts: Date.now() }
       }
     } catch { /* silencio */ } finally {
       if (seq === capitulosFetchRef.current && !silent) setLoadingCapitulos(false)
@@ -1559,9 +1601,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     // Suprimir polling durante la recarga para que el cargaId no sea invalidado por el tick
     _lastWriteAtRef.current = Date.now()
     if (limpiarTodo) {
-      _pptoCachePorCap.current = {}
-      if (contratoId) invalidateVistaModulo('presupuesto', contratoId)
-      _pptoCacheRef.current = null
+      invalidarCachePresupuestoContrato()
       setRegistros([])
       setDrill([])
       setUbicacionTramo('')
@@ -1817,6 +1857,22 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   async function cargarPanelValidacionServidor(f, ctx, { nivel = 'capitulo', capituloDrill = '' } = {}) {
+    const panelKey = pptoPanelCacheKey(f, ctx, nivel, capituloDrill)
+    const cachedPanel = _pptoPanelCacheRef.current[panelKey]
+    if (cachedPanel && (Date.now() - cachedPanel.ts) < pptoCacheTtlEfectivo()) {
+      setPanelFilasServidor(cachedPanel.filas)
+      panelFilasServidorRef.current = cachedPanel.filas
+      if (typeof cachedPanel.total === 'number') setConteoFiltro(cachedPanel.total)
+      if (Array.isArray(cachedPanel.capitulosResumen) && cachedPanel.capitulosResumen.length) {
+        setCapitulosResumen(cachedPanel.capitulosResumen)
+      }
+      return {
+        filas: cachedPanel.filas,
+        total_registros: cachedPanel.total,
+        nivel,
+        fuente: 'cache',
+      }
+    }
     const pPanel = pptoBuildPanelValidacionParams(f, ctx, {
       verPapelera,
       nivel,
@@ -1825,10 +1881,19 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const data = await fetchPptoPanelValidacion(API, token, contratoId, pPanel)
     const filas = Array.isArray(data?.filas) ? data.filas : []
     setPanelFilasServidor(filas)
+    panelFilasServidorRef.current = filas
     const total = typeof data?.total_registros === 'number' ? data.total_registros : null
     if (total != null) setConteoFiltro(total)
+    let capResumen = null
     if ((nivel || data?.nivel || 'capitulo') === 'capitulo' && filas.length) {
-      setCapitulosResumen(capitulosResumenDesdePanelFilas(filas))
+      capResumen = capitulosResumenDesdePanelFilas(filas)
+      setCapitulosResumen(capResumen)
+    }
+    _pptoPanelCacheRef.current[panelKey] = {
+      filas,
+      capitulosResumen: capResumen,
+      total,
+      ts: Date.now(),
     }
     if (data?.fuente === 'legacy') {
       setAvisoSistema({
@@ -1890,8 +1955,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         setRegistros([])
         setSeleccionados(new Set())
         setVisibleRegistrosCount(50)
-        _pptoCachePorCap.current = {}
-        if (contratoId) invalidateVistaModulo('presupuesto', contratoId)
+        invalidarCachePresupuestoContrato()
         pptoDrillStackRef.current = []
         pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
         busquedaServidorActivaRef.current = true
@@ -2042,11 +2106,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       panelDrillRestoreRef.current = null
     }
     if (prev && pptoRestaurarVistaSnap(prev)) {
-      try {
-        const ctx = pptoCtxFiltro(prev.drill || [], capExpandido)
-        await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
-        setPanelBusquedaSeq((n) => n + 1)
-      } catch { /* panel opcional al volver */ }
+      if (!Array.isArray(prev.panelFilasServidor)) {
+        try {
+          const ctx = pptoCtxFiltro(prev.drill || [], capExpandido)
+          await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
+        } catch { /* panel opcional al volver */ }
+      }
+      setPanelBusquedaSeq((n) => n + 1)
       return
     }
 
@@ -2134,8 +2200,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     busquedaServidorActivaRef.current = false
     setBusquedaServidorActiva(false)
     cargaPptoIdRef.current += 1
-    _pptoCachePorCap.current = {}
-    _pptoCacheRef.current = null
+    invalidarCachePresupuestoContrato()
     pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
     setConteoFiltro(null)
     setRegistros([])
@@ -2222,8 +2287,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setSeleccionados(new Set())
     setItemBusqueda(''); setItemNavIdx(-1)
     setOpcionesUbicacion({ tramos: [], calzadas: [] })
-    _pptoCachePorCap.current = {}
-    _pptoCacheRef.current = null
+    invalidarCachePresupuestoContrato()
     pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
     skipDebounceFiltrosRef.current = true
     void cargarCapitulos()
