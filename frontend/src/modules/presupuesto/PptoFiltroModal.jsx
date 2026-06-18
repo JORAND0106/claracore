@@ -37,6 +37,7 @@ export default function PptoFiltroModal({
   onBuscar,
   onLimpiarAplicado,
   listadoPrecios = [],
+  registrosGrilla = [],
   tramoOptions = [],
   calzadaOptions = [],
   semaforo = [],
@@ -71,8 +72,11 @@ export default function PptoFiltroModal({
 
   const cascadeKey = useMemo(() => {
     const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || '')
-    return [capSingle, draftF.tramo || '', draftF.calzada || ''].join('|')
-  }, [draftF.cap, draftF.caps, draftF.tramo, draftF.calzada])
+    const compSingle = draftF.competencias?.length === 1
+      ? draftF.competencias[0]
+      : (draftF.competencia || '')
+    return [capSingle, compSingle, draftF.tramo || '', draftF.calzada || ''].join('|')
+  }, [draftF.cap, draftF.caps, draftF.competencia, draftF.competencias, draftF.tramo, draftF.calzada])
 
   useEffect(() => {
     if (!open || !contratoId || !token) return
@@ -87,7 +91,7 @@ export default function PptoFiltroModal({
       })
         .then((data) => { if (!cancelled) setOpciones(data || {}) })
         .catch(() => {})
-    }, cascadeKey === '||' ? 0 : 320)
+    }, cascadeKey === '|||' ? 0 : 320)
     return () => {
       cancelled = true
       clearTimeout(timer)
@@ -97,16 +101,47 @@ export default function PptoFiltroModal({
   const opcionesConItems = useMemo(() => {
     const base = opciones || {}
     const capsSel = draftF.caps?.length ? draftF.caps : (draftF.cap ? [draftF.cap] : [])
-    const fromLp = (listadoPrecios || [])
-      .filter((p) => !capsSel.length || capsSel.includes(p.capitulo))
-      .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
-      .filter((o) => o.item)
-      .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
+    const compSel = draftF.competencias?.length === 1
+      ? draftF.competencias[0]
+      : (draftF.competencia || '')
+    const compsSel = draftF.competencias?.length
+      ? draftF.competencias
+      : (compSel ? [compSel] : [])
+
+    const itemsFromGrilla = () => {
+      if (!capsSel.length || !(registrosGrilla || []).length) return []
+      const seen = new Map()
+      for (const r of registrosGrilla) {
+        const cap = String(r.capitulo ?? '').trim()
+        const item = String(r.item ?? '').trim()
+        const comp = String(r.competencia ?? '').trim()
+        if (!item || !capsSel.includes(cap)) continue
+        if (compsSel.length && !compsSel.includes(comp)) continue
+        if (!seen.has(item)) {
+          seen.set(item, String(r.descripcion ?? r.item_descripcion ?? '').trim())
+        }
+      }
+      return [...seen.entries()]
+        .map(([item, descripcion]) => ({ item, descripcion }))
+        .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
+    }
+
+    const fromLp = capsSel.length
+      ? (listadoPrecios || [])
+        .filter((p) => capsSel.includes(p.capitulo))
+        .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
+        .filter((o) => o.item)
+        .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
+      : []
+
+    const itemsGrilla = itemsFromGrilla()
+    const items_opciones = itemsGrilla.length ? itemsGrilla : fromLp
+
     const capitulos = base.capitulos?.length
       ? base.capitulos
       : [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
-    return { ...base, capitulos, items_opciones: fromLp, items: [] }
-  }, [opciones, listadoPrecios, draftF.cap, draftF.caps])
+    return { ...base, capitulos, items_opciones, items: [] }
+  }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias])
 
   const opcionesResueltas = useMemo(
     () => ({

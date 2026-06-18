@@ -923,6 +923,81 @@ useEffect(() => {
     _pptoCapitulosListaCacheRef.current = {}
     if (contratoId) invalidateVistaModulo('presupuesto', contratoId)
   }
+  const invalidarCachePanelPresupuesto = () => {
+    _pptoPanelCacheRef.current = {}
+    _pptoCapitulosListaCacheRef.current = {}
+  }
+
+  function pptoCacheEntryCompleta(entry) {
+    if (!entry || !Array.isArray(entry.data)) return false
+    if (typeof entry.total !== 'number' || entry.data.length < entry.total) return false
+    return (Date.now() - entry.ts) < pptoCacheTtlEfectivo()
+  }
+
+  function pptoFiltrarFilasCliente(rows, f, drillArr) {
+    if (!Array.isArray(rows) || !rows.length) return []
+    const caps = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
+    const items = pptoFiltroValoresLista(pptoFiltroDef('item'), f)
+    const comps = pptoFiltroValoresLista(pptoFiltroDef('competencia'), f)
+    const capDrill = (drillArr || []).find((d) => d.campo === 'capitulo')?.valor
+    const itemDrill = (drillArr || []).find((d) => d.campo === 'item')?.valor
+    const itemsDrill = (drillArr || []).find((d) => d.campo === 'items')?.valor
+
+    return rows.filter((r) => {
+      const cap = String(r.capitulo ?? '').trim()
+      const item = String(r.item ?? '').trim()
+      const comp = String(r.competencia ?? '').trim()
+      if (capDrill && cap !== String(capDrill).trim()) return false
+      if (caps.length && !caps.includes(cap)) return false
+      if (itemDrill && item !== String(itemDrill).trim()) return false
+      if (itemsDrill?.length && !itemsDrill.map(String).includes(item)) return false
+      if (items.length && !items.includes(item)) return false
+      if (comps.length && !comps.includes(comp)) return false
+      return true
+    })
+  }
+
+  /** Cache exacta o derivada filtrando un volcado completo ya en memoria (p. ej. 43k). */
+  function pptoBuscarCacheGrilla(f, drillArr, leg = {}) {
+    const targetKey = pptoGridCacheKey(f, drillArr, leg)
+    const exact = pptoLeerCacheGrid(targetKey)
+    if (exact) {
+      return { data: exact.data, total: exact.total, cacheKey: targetKey, derivado: false }
+    }
+    let mejor = null
+    for (const entry of Object.values(_pptoCachePorCap.current)) {
+      if (!pptoCacheEntryCompleta(entry)) continue
+      const filtered = pptoFiltrarFilasCliente(entry.data, f, drillArr)
+      if (!filtered.length) continue
+      if (!mejor || entry.data.length > mejor.entry.data.length) {
+        mejor = { entry, filtered }
+      }
+    }
+    if (!mejor) return null
+    return {
+      data: mejor.filtered,
+      total: mejor.filtered.length,
+      cacheKey: targetKey,
+      derivado: true,
+    }
+  }
+
+  function pptoAplicarHitCacheGrilla(hit, f, drillArr) {
+    if (!hit) return false
+    setConteoFiltro(hit.total)
+    setRegistros(hit.data)
+    setVisibleRegistrosCount(50)
+    pptoCargaRef.current = {
+      key: hit.cacheKey,
+      nextOffset: hit.data.length,
+      hasMore: false,
+      total: hit.total,
+    }
+    pptoGuardarEnCacheGrid(hit.cacheKey, hit.data, hit.total)
+    busquedaServidorActivaRef.current = true
+    setBusquedaServidorActiva(true)
+    return true
+  }
   /** Stack de vistas (grilla + filtros) para Atrás sin refetch. */
   const pptoDrillStackRef = useRef([])
 
@@ -933,7 +1008,19 @@ useEffect(() => {
     const itemsD = d.find((x) => x.campo === 'items')
     const ff = f || {}
     const itemsLista = fObraItemsLista(ff)
-    const capKey = String(leg.capOverride ?? capD?.valor ?? ff.cap ?? '*').trim() || '*'
+    const capVals = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), ff)
+    let capKey = '*'
+    if (leg.capOverride != null && String(leg.capOverride).trim()) {
+      capKey = String(leg.capOverride).trim()
+    } else if (capD?.valor) {
+      capKey = String(capD.valor).trim()
+    } else if (capVals.length) {
+      capKey = capVals.slice().sort().join('\x1f')
+    } else if (ff.cap) {
+      capKey = String(ff.cap).trim()
+    }
+    const compVals = pptoFiltroValoresLista(pptoFiltroDef('competencia'), ff)
+    const compKey = compVals.length ? compVals.slice().sort().join('\x1f') : ''
     let itemKey = ''
     if (leg.item != null && String(leg.item).trim()) {
       itemKey = String(leg.item).trim()
@@ -953,6 +1040,7 @@ useEffect(() => {
     return [
       capKey,
       itemKey,
+      compKey,
       leg.ubicacionTramo ?? ubicacionTramo,
       leg.ubicacionCalzada ?? ubicacionCalzada,
       leg.filtroEstado ?? filtroEstado,
@@ -1913,7 +2001,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   async function aplicarFiltroObraConF(fIn, opts = {}) {
-    const cargarGrilla = opts.cargarGrilla === true
+    const cargarGrilla = opts.cargarGrilla !== false
     const limpiarNavegacion = opts.limpiarNavegacion === true
     const pushNavegacionAntes = opts.pushNavegacionAntes === true
     if (!contratoId) return
@@ -1958,12 +2046,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (!cargarGrilla) {
         await panelPromise
         if (cargaId !== cargaPptoIdRef.current) return
-        setRegistros([])
-        setSeleccionados(new Set())
-        setVisibleRegistrosCount(50)
-        invalidarCachePresupuestoContrato()
+        invalidarCachePanelPresupuesto()
         pptoDrillStackRef.current = []
-        pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
         busquedaServidorActivaRef.current = true
         setBusquedaServidorActiva(true)
         setPanelBusquedaSeq((n) => n + 1)
@@ -1977,25 +2061,43 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return
       }
 
-      const p = pptoBuildPresupuestoSearchParams(f, ctxBusqueda, { verPapelera })
+      const hitGrid = pptoBuscarCacheGrilla(f, d)
       const [_, gridResult] = await Promise.all([
         panelPromise,
-        fetchPresupuestoPaginasCompletas(p, (partial) => {
-          if (cargaId !== cargaPptoIdRef.current) return
-          setRegistros(partial)
-        }, {
-          avisarCargaGrande: true,
-          onTotalConocido: (n) => {
-            if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
-          },
-        }),
+        hitGrid
+          ? Promise.resolve({ rows: hitGrid.data, total: hitGrid.total, cancelado: false, desdeCache: true, hitGrid })
+          : (async () => {
+            const p = pptoBuildPresupuestoSearchParams(f, ctxBusqueda, { verPapelera })
+            return fetchPresupuestoPaginasCompletas(p, (partial) => {
+              if (cargaId !== cargaPptoIdRef.current) return
+              setRegistros(partial)
+            }, {
+              avisarCargaGrande: true,
+              onTotalConocido: (n) => {
+                if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
+              },
+            }).then((r) => ({ ...r, desdeCache: false }))
+          })(),
       ])
-      const { rows, total, cancelado } = gridResult
+      const { rows, total, cancelado, desdeCache, hitGrid: hitAplicar } = gridResult
       if (cargaId !== cargaPptoIdRef.current) return
       if (cancelado) {
         setRegistros([])
         busquedaServidorActivaRef.current = true
         setBusquedaServidorActiva(true)
+        return
+      }
+      if (desdeCache && hitAplicar) {
+        pptoAplicarHitCacheGrilla(hitAplicar, f, d)
+        pptoPushVistaNavegacion()
+        setPanelBusquedaSeq((n) => n + 1)
+        panelDrillRestoreRef.current = null
+        skipDebounceFiltrosRef.current = true
+        guardarFiltroSesion(contratoId, {
+          f,
+          activeKeys: pptoFiltrosActivosKeys(f, []),
+          searched: true,
+        })
         return
       }
       setConteoFiltro(total)
@@ -2096,6 +2198,27 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         mensaje: err?.message || 'No se pudo cargar ítems del capítulo.',
         tipo: 'warn',
       })
+    }
+    const dCap = [{ campo: 'capitulo', valor: cap }]
+    const hit = pptoBuscarCacheGrilla(next, dCap)
+    if (hit) {
+      pptoAplicarHitCacheGrilla(hit, next, dCap)
+    } else if (registrosRef.current.length > 0) {
+      const filtered = pptoFiltrarFilasCliente(registrosRef.current, next, dCap)
+      if (filtered.length) {
+        const cacheKey = pptoGridCacheKey(next, dCap)
+        setConteoFiltro(filtered.length)
+        setRegistros(filtered)
+        pptoCargaRef.current = {
+          key: cacheKey,
+          nextOffset: filtered.length,
+          hasMore: false,
+          total: filtered.length,
+        }
+        pptoGuardarEnCacheGrid(cacheKey, filtered, filtered.length)
+        busquedaServidorActivaRef.current = true
+        setBusquedaServidorActiva(true)
+      }
     }
     window.setTimeout(() => {
       pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -2223,7 +2346,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const fSoloTipo = { ...fNorm, cap: '', caps: [], item: '', items: [] }
       setFObra(fSoloTipo)
       fObraRef.current = fSoloTipo
-      await aplicarFiltroObraConF(fSoloTipo)
+      await aplicarFiltroObraConF(fSoloTipo, { cargarGrilla: false })
       return
     }
     await aplicarFiltroObraConF(fNorm)
@@ -5549,6 +5672,7 @@ async function restaurar(id) {
           }}
           onLimpiar={limpiarFiltroObra}
           listadoPrecios={listadoPrecios}
+          registrosGrilla={registros}
           onRestablecerPksItem={restablecerPksVistaItem}
           onRevisorTramos={abrirRevisorTramosObra}
           tramoOptions={opcionesUbicacion.tramos}

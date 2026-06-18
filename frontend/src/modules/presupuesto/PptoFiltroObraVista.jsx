@@ -40,6 +40,7 @@ export default function PptoFiltroObraVista({
   tramoOptions: _tramoOptions,
   calzadaOptions: _calzadaOptions,
   listadoPrecios = [],
+  registrosGrilla = [],
 }) {
   const [modalFiltrosOpen, setModalFiltrosOpen] = useState(false)
   const [mapaOpen, setMapaOpen] = useState(false)
@@ -270,6 +271,7 @@ export default function PptoFiltroObraVista({
         }}
         onLimpiarAplicado={onLimpiar}
         listadoPrecios={listadoPrecios}
+        registrosGrilla={registrosGrilla}
         tramoOptions={_tramoOptions}
         calzadaOptions={_calzadaOptions}
         semaforo={semaforo}
