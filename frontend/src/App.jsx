@@ -78,6 +78,12 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import {
+  fetchSicoeListadoPreciosCached,
+  fetchSicoeNodosCached,
+  fetchSicoePkIdsCached,
+  fetchSicoePlantillasCached,
+} from './modules/sicoe-obra/sicoeCatalogoCache'
+import {
   invalidateSicoeVistaCache,
   sicoeClearNavegacion,
   sicoeGetVistaCache,
@@ -2085,6 +2091,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   esDeveloper = false, puedeEliminarRegistroReporte = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null,
   onOptimisticRegistroPatch = null,
   nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(),
+  pkIdsContrato = null,
   /** Tras guardar dimensiones/costo: vuelve a cargar la grilla de reportes (costo_directo_validación) sin cerrar la carpeta. */
   onRefrescarListadoSicoe = null,
 }) {
@@ -2241,19 +2248,25 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   useEffect(() => {
     if (!esLocMultiple || !contrato_id) return
-    fetch(`${API}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => setPkIdsHoja(Array.isArray(d) ? d : []))
-      .catch(() => setPkIdsHoja([]))
-  }, [esLocMultiple, contrato_id, API, hdrs])
+    if (Array.isArray(pkIdsContrato)) {
+      setPkIdsHoja(pkIdsContrato)
+      return
+    }
+    let cancelled = false
+    fetchSicoePkIdsCached(API, contrato_id, getToken())
+      .then((d) => { if (!cancelled) setPkIdsHoja(d) })
+      .catch(() => { if (!cancelled) setPkIdsHoja([]) })
+    return () => { cancelled = true }
+  }, [esLocMultiple, contrato_id, pkIdsContrato, API])
 
   useEffect(() => {
     if (!esLocMultiple || !contrato_id || !capituloHoja) { setNodosHoja([]); return }
-    fetch(`${API}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(capituloHoja)}`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => setNodosHoja(Array.isArray(d) ? d : []))
-      .catch(() => setNodosHoja([]))
-  }, [esLocMultiple, contrato_id, capituloHoja, API, hdrs])
+    let cancelled = false
+    fetchSicoeNodosCached(API, contrato_id, capituloHoja, getToken())
+      .then((d) => { if (!cancelled) setNodosHoja(d) })
+      .catch(() => { if (!cancelled) setNodosHoja([]) })
+    return () => { cancelled = true }
+  }, [esLocMultiple, contrato_id, capituloHoja, API])
 
   useEffect(() => {
     if (!soloCorteNivel3 || !reporte.subcontratista_id) {
@@ -2324,7 +2337,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
       return na - nb
     })
-    const loadCaps = fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
+    const authH = { Authorization: `Bearer ${getToken()}` }
+    const loadCaps = fetch(`${API}/listado-precios/${contrato_id}`, { headers: authH })
       .then(r => (r.ok ? r.json() : []))
       .then(d => {
         if (!Array.isArray(d)) return
@@ -2332,26 +2346,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         setListaCapitulos(sortCaps(caps))
       })
       .catch(() =>
-        fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+        fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: authH })
           .then(r => (r.ok ? r.json() : []))
           .then(d => { if (Array.isArray(d)) setListaCapitulos(sortCaps(d.map(c => c.capitulo || c).filter(Boolean))) })
           .catch(() => {})
       )
-    const loadComp = fetch(`${API}/contratos/${contrato_id}/competencias`, { headers: hdrs })
+    const loadComp = fetch(`${API}/contratos/${contrato_id}/competencias`, { headers: authH })
       .then(r => (r.ok ? r.json() : null))
       .then(d => setCompetenciasApi(Array.isArray(d?.competencias) ? d.competencias : []))
       .catch(() => setCompetenciasApi([]))
     void Promise.all([loadCaps, loadComp])
-  }, [contrato_id, hdrs, API])
+  }, [contrato_id, API])
 
   // Ítems del capítulo seleccionado
   useEffect(() => {
     if (!contrato_id || !capituloHoja) { setTodosLosItems([]); setItemsLista([]); return }
-    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => { if (Array.isArray(d)) setTodosLosItems(d) })
-      .catch(() => setTodosLosItems([]))
-  }, [capituloHoja, contrato_id, hdrs, API])
+    let cancelled = false
+    fetchSicoeListadoPreciosCached(API, contrato_id, capituloHoja, '', getToken())
+      .then((d) => { if (!cancelled) setTodosLosItems(d) })
+      .catch(() => { if (!cancelled) setTodosLosItems([]) })
+    return () => { cancelled = true }
+  }, [capituloHoja, contrato_id, API])
 
   useEffect(() => {
     return () => {
@@ -4104,10 +4119,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   useEffect(() => {
     if (!contrato_id) return
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then((r) => r.json())
-      .then((d) => setListaPkIds(Array.isArray(d) ? d : []))
-      .catch(() => setListaPkIds([]))
+    let cancelled = false
+    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
+      .then((d) => { if (!cancelled) setListaPkIds(d) })
+      .catch(() => { if (!cancelled) setListaPkIds([]) })
+    return () => { cancelled = true }
   }, [contrato_id, API_URL])
 
   const pkTextoPlano = String(
@@ -4133,11 +4149,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setNodosPortada([])
       return
     }
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(reporte.capitulo)}`, { headers: hdrs })
-      .then((r) => r.json())
-      .then((d) => setNodosPortada(Array.isArray(d) ? d : []))
-      .catch(() => setNodosPortada([]))
-  }, [esLocMultipleReporte, contrato_id, reporte?.capitulo, hdrs, API_URL])
+    let cancelled = false
+    fetchSicoeNodosCached(API_URL, contrato_id, reporte.capitulo, getToken())
+      .then((d) => { if (!cancelled) setNodosPortada(d) })
+      .catch(() => { if (!cancelled) setNodosPortada([]) })
+    return () => { cancelled = true }
+  }, [esLocMultipleReporte, contrato_id, reporte?.capitulo, API_URL])
 
   const marcadoresLocMultiple = useMemo(() => {
     if (!esLocMultipleReporte) return []
@@ -4451,7 +4468,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()),
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()),
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs }).then(r => r.json()),
-          fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs }).then(r => r.json()),
+          fetchSicoePkIdsCached(API_URL, contrato_id, getToken()),
         ])
         setListaSubs(Array.isArray(subs) ? subs : [])
         setListaInsp(Array.isArray(insp) ? insp : [])
@@ -5651,6 +5668,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
                           hdrs={hdrs}
+                          pkIdsContrato={listaPkIds}
                           esDeveloper={esDeveloper}
                           puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
                           onDevEliminarRegistro={devEliminarRegistro}
@@ -5795,6 +5813,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
                           hdrs={hdrs}
+                          pkIdsContrato={listaPkIds}
                           esDeveloper={esDeveloper}
                           puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
                           onDevEliminarRegistro={devEliminarRegistro}
@@ -6293,10 +6312,8 @@ function ModuloSicoeObra({
 
   useEffect(() => {
     if (!contrato_id) return
-    const hdrs = { Authorization: `Bearer ${getToken()}` }
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then(r => r.json())
-      .then(d => setSicoePkList(Array.isArray(d) ? d : []))
+    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
+      .then((d) => setSicoePkList(d))
       .catch(() => setSicoePkList([]))
     getContratoPlanoGeojson(API_URL, contrato_id, getToken())
       .then((d) => {
@@ -10999,8 +11016,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           setCapitulos(sorted.map(c => ({ capitulo: c })))
         }
       })
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
+    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
+      .then((d) => setPkIds(d))
 // Precargar borrador si existe
     if (reporteInicial) {
       setTipoLocalizacion(reporteInicial.tipo_localizacion || 'unica')
@@ -11058,12 +11075,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   useEffect(() => {
     if (!capituloSel) { setNodos([]); return }
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(capituloSel)}`, { headers: hdrs })
-      .then(r => r.json()).then(d => setNodos(Array.isArray(d) ? d : []))
-    // Cargar plantillas del capítulo
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/plantillas?capitulo=${encodeURIComponent(capituloSel)}`, { headers: hdrs })
-      .then(r => r.json()).then(d => setPlantillas(Array.isArray(d) ? d : []))
-  }, [capituloSel])
+    let cancelled = false
+    fetchSicoeNodosCached(API_URL, contrato_id, capituloSel, getToken())
+      .then((d) => { if (!cancelled) setNodos(d) })
+      .catch(() => { if (!cancelled) setNodos([]) })
+    fetchSicoePlantillasCached(API_URL, contrato_id, capituloSel, getToken())
+      .then((d) => { if (!cancelled) setPlantillas(d) })
+      .catch(() => { if (!cancelled) setPlantillas([]) })
+    return () => { cancelled = true }
+  }, [capituloSel, contrato_id, API_URL])
 
   const selPkId = (pk) => {
     setPkSeleccionado(pk)

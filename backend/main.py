@@ -11730,12 +11730,20 @@ def offline_pack(
 
 @app.get("/sicoe-obra/{contrato_id}/pk-ids")
 def listar_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    cache_key = ("pk-ids", int(contrato_id))
+    cached = _sicoe_catalogo_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     def _q():
         return supabase.table("pk_ids")\
             .select("*")\
             .eq("contrato_id", contrato_id)\
             .order("pk_id").execute().data
-    return supabase_execute(_q)
+    out = supabase_execute(_q)
+    _sicoe_catalogo_cache_set(cache_key, out)
+    return out
 
 @app.get("/sicoe-obra/{contrato_id}/subcontratistas-activos")
 def listar_subcontratistas_activos(contrato_id: int, current_user=Depends(get_current_user)):
@@ -11824,22 +11832,54 @@ def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)
         sig = max(piso, m_tab + 1, rsv + 1)
     return {"siguiente": sig}
 
+_SICOE_CATALOGO_CACHE: Dict[tuple, Tuple[float, Any]] = {}
+_SICOE_CATALOGO_CACHE_TTL = 120.0
+
+
+def _sicoe_catalogo_cache_get(key: tuple) -> Optional[Any]:
+    row = _SICOE_CATALOGO_CACHE.get(key)
+    if not row:
+        return None
+    exp, data = row
+    if exp < time.time():
+        _SICOE_CATALOGO_CACHE.pop(key, None)
+        return None
+    return data
+
+
+def _sicoe_catalogo_cache_set(key: tuple, data: Any) -> None:
+    _SICOE_CATALOGO_CACHE[key] = (time.time() + _SICOE_CATALOGO_CACHE_TTL, data)
+    if len(_SICOE_CATALOGO_CACHE) > 500:
+        now = time.time()
+        for k in [k for k, (e, _) in _SICOE_CATALOGO_CACHE.items() if e < now]:
+            _SICOE_CATALOGO_CACHE.pop(k, None)
+
+
 @app.get("/sicoe-obra/{contrato_id}/nodos")
 def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    cap_key = (capitulo or "").strip()
+    cache_key = ("nodos", int(contrato_id), cap_key)
+    cached = _sicoe_catalogo_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     def _q():
         q = supabase.table("presupuesto")\
             .select("no_inicio, no_final")\
             .eq("contrato_id", contrato_id)\
             .eq("dado_de_baja", False)
-        if capitulo:
-            q = q.eq("capitulo", capitulo)
+        if cap_key:
+            q = q.eq("capitulo", cap_key)
         return q.execute().data
     rows = supabase_execute(_q)
     nodos = set()
     for r in rows:
         if r.get("no_inicio"): nodos.add(r["no_inicio"])
         if r.get("no_final"): nodos.add(r["no_final"])
-    return sorted(list(nodos))
+    out = sorted(list(nodos))
+    _sicoe_catalogo_cache_set(cache_key, out)
+    return out
 
 class ReporteCreate(BaseModel):
     descripcion_actividad: str
