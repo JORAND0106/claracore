@@ -6829,24 +6829,6 @@ function ModuloSicoeObra({
     }
   }
 
-  useEffect(() => {
-    setModuloRefresh({
-      label: 'SICOE',
-      fn: () => refrescarVistaSicoeObra(),
-      disabled: cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion),
-      busy: cargandoAnalisis || cargando,
-    })
-    return clearModuloRefresh
-  }, [
-    setModuloRefresh,
-    clearModuloRefresh,
-    refrescarVistaSicoeObra,
-    cargandoAnalisis,
-    cargando,
-    filtros,
-    capasValidacion,
-  ])
-
   const fmtPesos = v => formatCOP(Number(v) || 0)
 
   const verEco = nivelInfo.verValoresEconomicos
@@ -7326,6 +7308,24 @@ function ModuloSicoeObra({
   capasValidacionOpRef.current = capasValidacionOp
   const itemsFiltroOpRef = useRef('and')
   itemsFiltroOpRef.current = itemsFiltroOp
+
+  useEffect(() => {
+    setModuloRefresh({
+      label: 'SICOE',
+      fn: () => refrescarVistaSicoeObra(),
+      disabled: cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion),
+      busy: cargandoAnalisis || cargando,
+    })
+    return clearModuloRefresh
+  }, [
+    setModuloRefresh,
+    clearModuloRefresh,
+    refrescarVistaSicoeObra,
+    cargandoAnalisis,
+    cargando,
+    filtros,
+    capasValidacion,
+  ])
 
   const sicoeBundleAplicado = useMemo(
     () => sicoeBundleFromAppState({
