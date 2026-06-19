@@ -3779,6 +3779,33 @@ async function restaurar(id) {
         const estFin   = tramoSelec ? calcEstrella(regsNodoFin) : 'vacia'
         const estTramo = tramoSelec ? calcEstrella(regsTramo)   : 'vacia'
 
+        const tramoIdxActual = tramoSelec
+          ? tramosUnicos.findIndex(
+              (tr) => tr.no_inicio === tramoSelec.no_inicio && tr.no_final === tramoSelec.no_final,
+            )
+          : -1
+        const tramoNavBtn = (disabled) => ({
+          background: disabled ? t.bg : t.bgCard,
+          border: `1px solid ${disabled ? t.border : t.primary + '55'}`,
+          borderRadius: '8px',
+          padding: '5px 12px',
+          fontSize: 'var(--cc-sm)',
+          fontWeight: 600,
+          cursor: disabled ? 'default' : 'pointer',
+          color: disabled ? t.textMuted : t.primary,
+          opacity: disabled ? 0.45 : 1,
+          transition: 'opacity .15s, border-color .15s',
+          whiteSpace: 'nowrap',
+        })
+        const irTramoRelativo = (delta) => {
+          if (tramoIdxActual < 0) return
+          const dest = tramosUnicos[tramoIdxActual + delta]
+          if (!dest) return
+          setModoSeleccionClon(false)
+          setClonBase(null)
+          setTramoSelec(dest)
+        }
+
         const TAB_LABELS = ['📋 Info Tramo', '🔵 Nodo Inicio', '🔴 Nodo Fin', '📏 Tramo']
 
         // Renderiza filas de ítems con semáforo
@@ -4064,12 +4091,66 @@ async function restaurar(id) {
                     <button onClick={() => setModoSeleccionClon(false)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.primary, fontWeight:'800', fontSize:'var(--cc-label)' }}>Cancelar</button>
                   </div>
                 )}
-                {/* Botón volver */}
-                <button onClick={() => { setTramoSelec(null); cargarRegistros(verPapelera, true) }}
-                  style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px',
-                    padding:'5px 12px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted, marginBottom:'14px' }}>
-                  ← Volver a tramos
-                </button>
+                {/* Navegación entre tramos */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    marginBottom: '14px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => { setTramoSelec(null); cargarRegistros(verPapelera, true) }}
+                    style={{
+                      background: 'transparent',
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '7px',
+                      padding: '5px 12px',
+                      fontSize: 'var(--cc-sm)',
+                      cursor: 'pointer',
+                      color: t.textMuted,
+                    }}
+                  >
+                    ← Volver a tramos
+                  </button>
+                  {tramosUnicos.length > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        type="button"
+                        disabled={tramoIdxActual <= 0}
+                        onClick={() => irTramoRelativo(-1)}
+                        title="Tramo anterior"
+                        style={tramoNavBtn(tramoIdxActual <= 0)}
+                      >
+                        ‹ Anterior
+                      </button>
+                      <span
+                        style={{
+                          fontSize: 'var(--cc-caption)',
+                          color: t.textMuted,
+                          fontWeight: 700,
+                          minWidth: '52px',
+                          textAlign: 'center',
+                        }}
+                      >
+                        {tramoIdxActual >= 0 ? `${tramoIdxActual + 1} / ${tramosUnicos.length}` : '—'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={tramoIdxActual < 0 || tramoIdxActual >= tramosUnicos.length - 1}
+                        onClick={() => irTramoRelativo(1)}
+                        title="Tramo siguiente"
+                        style={tramoNavBtn(tramoIdxActual < 0 || tramoIdxActual >= tramosUnicos.length - 1)}
+                      >
+                        Siguiente ›
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Estrellas resumen */}
                 <div style={{ display:'flex', gap:'16px', alignItems:'center', background:t.bg,

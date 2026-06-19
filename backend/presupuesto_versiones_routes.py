@@ -25,6 +25,7 @@ from presupuesto_versiones_service import (
 )
 
 from presupuesto_helpers import (
+    _es_rol_interventoria_ppto,
     _presupuesto_aplica_filtro_interventoria,
     _presupuesto_q_filtros_ubicacion,
 )
@@ -62,7 +63,7 @@ def _assert_rol_contratista(current_user):
 def _assert_rol_interventoria(current_user):
     if _es_admin_o_desarrollador(current_user):
         return
-    if not _presupuesto_aplica_filtro_interventoria(current_user):
+    if not _es_rol_interventoria_ppto(current_user):
         raise HTTPException(
             status_code=403,
             detail="Solo la interventoría puede aprobar/sellar o rechazar la versión.",

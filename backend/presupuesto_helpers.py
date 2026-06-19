@@ -1,9 +1,15 @@
 """Helpers de consulta/filtro de presupuesto (sin dependencia de main.py)."""
 from __future__ import annotations
 
+import unicodedata
 from typing import List, Optional
 
 from fastapi import HTTPException
+
+
+def _norm_rol_presupuesto(txt: Optional[str]) -> str:
+    s = unicodedata.normalize("NFD", (txt or "").strip().lower())
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
 def _so_reg_filtro_abs_solape(q, abs_inicio: Optional[float], abs_final: Optional[float]):
@@ -41,15 +47,29 @@ def presupuesto_oficial_version_id(sb, contrato_id) -> Optional[str]:
     return str(rows[0]["id"]) if rows else None
 
 
-def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
-    """Perfiles Interventoría solo ven cantidades ya depuradas por contratista (costos u obra)."""
-    rol = (current_user.get("rol_nombre") or "").strip().lower()
+def _es_rol_interventoria_ppto(current_user) -> bool:
+    """Perfiles Interventoría (validar, sellar versión, etc.)."""
+    rol = _norm_rol_presupuesto(current_user.get("rol_nombre"))
     if rol in ("administrador", "desarrollador"):
         return False
-    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+    cargo = _norm_rol_presupuesto(current_user.get("cargo_nombre"))
     if cargo == "desarrollador":
         return False
-    return rol in ("interventoría", "interventoria", "operativo interventoria")
+    if rol in ("interventoria", "operativo interventoria"):
+        return True
+    if "intervent" in rol and "gerencial" in rol:
+        return True
+    return False
+
+
+def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
+    """Filtro de listados por depuración contratista (pre_interv_estado).
+
+    Devuelve siempre False: Interventoría ve las mismas cantidades que Contratista.
+    La restricción operativa queda en validación (_pre_interv_liberado / bulk-estado),
+    no ocultando filas en grilla, panel, conteo ni exportación.
+    """
+    return False
 
 
 def _presupuesto_q_in_str_field(q, col: str, single: Optional[str], multi: Optional[List[str]] = None, *, max_items: int = 200):

@@ -1,7 +1,9 @@
 /**
  * Roles y capa depuración → interventoría (presupuesto).
- * Alineado con backend: presupuesto_helpers._presupuesto_aplica_filtro_interventoria,
+ * Alineado con backend: presupuesto_helpers._es_rol_interventoria_ppto,
  * main._pre_interv_liberado, bulk-estado.
+ * Listados: Interventoría ve las mismas filas que Contratista; la depuración
+ * solo bloquea validación Interventoría, no visibilidad.
  */
 
 export function normRolPresupuesto(txt) {
@@ -51,12 +53,7 @@ export function preIntervLiberadoParaInterventoria(row) {
   return s === 'Aprobado'
 }
 
-export function usuarioAplicaFiltroInterventoriaEnListado(usuario) {
-  if (esDesarrolladorPresupuesto(usuario)) return false
-  const rol = normRolPresupuesto(usuario?.rol_nombre || usuario?.rol || '')
-  return (
-    rol === 'interventoria'
-    || rol === 'interventoria'
-    || rol === 'operativo interventoria'
-  )
+/** Siempre false: el backend ya no oculta filas por rol Interventoría. */
+export function usuarioAplicaFiltroInterventoriaEnListado() {
+  return false
 }
