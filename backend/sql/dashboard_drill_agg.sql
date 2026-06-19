@@ -11,6 +11,17 @@ DROP FUNCTION IF EXISTS public.dashboard_drill_items_agg(bigint, text, text);
 DROP FUNCTION IF EXISTS public.dashboard_pkid_tabla_agg(bigint, text, text);
 DROP FUNCTION IF EXISTS public.dashboard_pkid_tabla_agg(bigint, text, text, text);
 
+CREATE OR REPLACE FUNCTION public.dash_costo_agregado(p_cant numeric, p_vu numeric)
+RETURNS numeric
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE
+    WHEN COALESCE(p_cant, 0) = 0 OR COALESCE(p_vu, 0) = 0 THEN 0::numeric
+    ELSE round(COALESCE(p_cant, 0) * COALESCE(p_vu, 0), 0)
+  END;
+$$;
+
 CREATE OR REPLACE FUNCTION public._dash_norm_item_key(txt text)
 RETURNS text
 LANGUAGE sql
@@ -136,7 +147,8 @@ regs AS (
         ELSE r.capitulo::text
       END
     ) AS cap,
-    r.costo_directo::numeric AS cd,
+    public._dash_norm_item_key(r.item_numero) AS it,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
     r.cantidad_total::numeric AS cq,
     public._dash_matriz_nivel_max_estado(
       p_campo_nivel_max,
@@ -153,20 +165,12 @@ regs AS (
   FROM public.so_registros r
   WHERE r.contrato_id = p_contrato_id
 ),
-obra AS (
+sicoe_item AS (
   SELECT
     cap,
-    SUM(cd) FILTER (WHERE nmax = 'Aprobado') AS ap_c,
+    it,
+    MAX(vu) AS vu,
     SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
-    SUM(cd) FILTER (
-      WHERE has_item
-        AND public._dash_prereqs_activos_aprobados_norm(
-          p_niveles_activos,
-          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
-          n1, n2, n3, n4, n5, n6
-        )
-        AND nmax = 'No Revisado'
-    ) AS nr_c,
     SUM(cq) FILTER (
       WHERE has_item
         AND public._dash_prereqs_activos_aprobados_norm(
@@ -177,22 +181,20 @@ obra AS (
         AND nmax = 'No Revisado'
     ) AS nr_q
   FROM regs
+  WHERE it IS NOT NULL
+  GROUP BY cap, it
+),
+obra AS (
+  SELECT
+    cap,
+    SUM(public.dash_costo_agregado(ap_q, vu)) AS ap_c,
+    SUM(ap_q) AS ap_q,
+    SUM(public.dash_costo_agregado(nr_q, vu)) AS nr_c,
+    SUM(nr_q) AS nr_q
+  FROM sicoe_item
   GROUP BY cap
 ),
-ppto_tot AS (
-  SELECT
-    public._dash_norm_capitulo_key(
-      CASE
-        WHEN v.capitulo IS NULL OR btrim(v.capitulo::text) = '' THEN 'Sin capítulo'
-        ELSE v.capitulo::text
-      END
-    ) AS cap,
-    SUM(COALESCE(v.presupuesto, 0)::numeric) AS pres
-  FROM public.vista_ppto_por_capitulo v
-  WHERE v.contrato_id = p_contrato_id
-  GROUP BY 1
-),
-ppto_split AS (
+ppto_items AS (
   SELECT
     public._dash_norm_capitulo_key(
       CASE
@@ -200,24 +202,29 @@ ppto_split AS (
         ELSE p.capitulo::text
       END
     ) AS cap,
-    SUM(
-      CASE WHEN public._norm_estado_matriz(p.revisado) = 'Aprobado' THEN COALESCE(p.costo_directo, 0)::numeric ELSE 0 END
-    ) AS pap,
-    SUM(
-      CASE WHEN public._norm_estado_matriz(p.revisado) <> 'Aprobado' THEN COALESCE(p.costo_directo, 0)::numeric ELSE 0 END
-    ) AS pnr
+    public._dash_norm_item_key(p.item) AS it,
+    MAX(COALESCE(p.vlr_unitario, 0)::numeric) AS vu,
+    SUM(CASE WHEN public._norm_estado_matriz(p.revisado) = 'Aprobado' THEN COALESCE(p.cant_total, 0)::numeric ELSE 0 END) AS cant_ap,
+    SUM(CASE WHEN public._norm_estado_matriz(p.revisado) <> 'Aprobado' THEN COALESCE(p.cant_total, 0)::numeric ELSE 0 END) AS cant_nr
   FROM public.presupuesto p
   WHERE p.contrato_id = p_contrato_id
     AND COALESCE(p.dado_de_baja, false) = false
-  GROUP BY 1
+    AND public._dash_norm_item_key(p.item) IS NOT NULL
+  GROUP BY 1, 2
+),
+ppto_split AS (
+  SELECT
+    cap,
+    SUM(public.dash_costo_agregado(cant_ap, vu)) AS pap,
+    SUM(public.dash_costo_agregado(cant_nr, vu)) AS pnr,
+    SUM(public.dash_costo_agregado(cant_ap + cant_nr, vu)) AS pres
+  FROM ppto_items
+  GROUP BY cap
 ),
 all_caps AS (
-  SELECT v.cap
-  FROM ppto_tot v
+  SELECT cap FROM ppto_split
   UNION
   SELECT o.cap FROM obra o
-  UNION
-  SELECT s.cap FROM ppto_split s
 )
 -- Sub-SELECT: si all_caps está vacío, jsonb_agg sobre 0 filas devuelve NULL en una fila → COALESCE → '[]'.
 -- Sin este envoltorio, FROM vacío hace que la función no devuelva fila y PostgREST recibe NULL (ítems no cargan).
@@ -227,15 +234,15 @@ SELECT COALESCE(
       jsonb_build_object(
         'nombre', c.cap,
         'descripcion', '',
-        'presupuesto', round(COALESCE(pt.pres, 0), 2),
-        'cobrado', round(COALESCE(ob.ap_c, 0), 2),
-        'presupuesto_aprobado_n3', round(COALESCE(ps.pap, 0), 2),
-        'presupuesto_no_revisado_n3', round(COALESCE(ps.pnr, 0), 2),
-        'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 2),
-        'delta', round(COALESCE(pt.pres, 0) - COALESCE(ob.ap_c, 0), 2),
+        'presupuesto', round(COALESCE(ps.pres, 0), 0),
+        'cobrado', round(COALESCE(ob.ap_c, 0), 0),
+        'presupuesto_aprobado_n3', round(COALESCE(ps.pap, 0), 0),
+        'presupuesto_no_revisado_n3', round(COALESCE(ps.pnr, 0), 0),
+        'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 0),
+        'delta', round(COALESCE(ps.pres, 0) - COALESCE(ob.ap_c, 0), 0),
         'pct',
         CASE
-          WHEN COALESCE(pt.pres, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / pt.pres * 100, 1)
+          WHEN COALESCE(ps.pres, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / ps.pres * 100, 1)
           ELSE 0
         END,
         'cant_ppto', 0,
@@ -246,7 +253,6 @@ SELECT COALESCE(
     )
     FROM all_caps c
     LEFT JOIN obra ob ON ob.cap = c.cap
-    LEFT JOIN ppto_tot pt ON pt.cap = c.cap
     LEFT JOIN ppto_split ps ON ps.cap = c.cap
   ),
   '[]'::jsonb
@@ -269,14 +275,10 @@ cm AS (SELECT public._dash_norm_capitulo_key(p_capitulo) AS cap),
 ppto AS (
   SELECT
     public._dash_norm_item_key(p.item) AS it,
-    SUM(COALESCE(p.costo_directo, 0)::numeric) AS p_cost,
     SUM(COALESCE(p.cant_total, 0)::numeric) AS p_cant,
-    SUM(
-      CASE WHEN public._norm_estado_matriz(p.revisado) = 'Aprobado' THEN COALESCE(p.costo_directo, 0)::numeric ELSE 0 END
-    ) AS pap,
-    SUM(
-      CASE WHEN public._norm_estado_matriz(p.revisado) <> 'Aprobado' THEN COALESCE(p.costo_directo, 0)::numeric ELSE 0 END
-    ) AS pnr,
+    MAX(COALESCE(p.vlr_unitario, 0)::numeric) AS vu,
+    SUM(CASE WHEN public._norm_estado_matriz(p.revisado) = 'Aprobado' THEN COALESCE(p.cant_total, 0)::numeric ELSE 0 END) AS cant_ap,
+    SUM(CASE WHEN public._norm_estado_matriz(p.revisado) <> 'Aprobado' THEN COALESCE(p.cant_total, 0)::numeric ELSE 0 END) AS cant_nr,
     MAX(CASE WHEN p.descripcion IS NOT NULL AND btrim(p.descripcion::text) <> '' THEN p.descripcion::text END) AS descripcion
   FROM public.presupuesto p, cm
   WHERE p.contrato_id = p_contrato_id
@@ -285,10 +287,20 @@ ppto AS (
     AND public._dash_norm_item_key(p.item) IS NOT NULL
   GROUP BY 1
 ),
+ppto_cost AS (
+  SELECT
+    it,
+    p_cant,
+    descripcion,
+    public.dash_costo_agregado(p_cant, vu) AS p_cost,
+    public.dash_costo_agregado(cant_ap, vu) AS pap,
+    public.dash_costo_agregado(cant_nr, vu) AS pnr
+  FROM ppto
+),
 regs AS (
   SELECT
     public._dash_norm_item_key(r.item_numero) AS it,
-    r.costo_directo::numeric AS cd,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
     r.cantidad_total::numeric AS cq,
     public._dash_matriz_nivel_max_estado(
       p_campo_nivel_max,
@@ -308,16 +320,19 @@ regs AS (
 obra AS (
   SELECT
     it,
-    SUM(cd) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_c,
+    public.dash_costo_agregado(SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado'), MAX(vu)) AS ap_c,
     SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_q,
-    SUM(cd) FILTER (
-      WHERE it IS NOT NULL
-        AND public._dash_prereqs_activos_aprobados_norm(
-          p_niveles_activos,
-          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
-          n1, n2, n3, n4, n5, n6
-        )
-        AND nmax = 'No Revisado'
+    public.dash_costo_agregado(
+      SUM(cq) FILTER (
+        WHERE it IS NOT NULL
+          AND public._dash_prereqs_activos_aprobados_norm(
+            p_niveles_activos,
+            public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+            n1, n2, n3, n4, n5, n6
+          )
+          AND nmax = 'No Revisado'
+      ),
+      MAX(vu)
     ) AS nr_c,
     SUM(cq) FILTER (
       WHERE it IS NOT NULL
@@ -362,7 +377,7 @@ SELECT COALESCE(
       ORDER BY ai.it
     )
     FROM all_items ai
-    LEFT JOIN ppto pt ON pt.it = ai.it
+    LEFT JOIN ppto_cost pt ON pt.it = ai.it
     LEFT JOIN obra ob ON ob.it = ai.it
   ),
   '[]'::jsonb
@@ -387,7 +402,7 @@ pk_line AS (
   SELECT
     COALESCE(NULLIF(btrim(p.pk_id::text), ''), '(sin pk)') AS pk_disp,
     p.cant_total::numeric AS cq,
-    p.costo_directo::numeric AS cd,
+    COALESCE(p.vlr_unitario, 0)::numeric AS vu,
     public._norm_estado_matriz(p.revisado) AS rev_n,
     p.revisado,
     p.descripcion
@@ -403,35 +418,28 @@ pk_line AS (
 pk_ppto AS (
   SELECT
     pk_disp,
+    MAX(vu) AS vu,
     SUM(cq) FILTER (WHERE rev_n = 'Aprobado') AS p_ap_q,
-    SUM(cd) FILTER (WHERE rev_n = 'Aprobado') AS p_ap_c,
     SUM(cq) FILTER (WHERE rev_n = 'Pendiente') AS p_pd_q,
-    SUM(cd) FILTER (WHERE rev_n = 'Pendiente') AS p_pd_c,
     SUM(cq) FILTER (WHERE rev_n = 'Rechazado') AS p_rj_q,
-    SUM(cd) FILTER (WHERE rev_n = 'Rechazado') AS p_rj_c,
     SUM(cq) FILTER (
       WHERE rev_n IS DISTINCT FROM 'Aprobado'
         AND rev_n IS DISTINCT FROM 'Pendiente'
         AND rev_n IS DISTINCT FROM 'Rechazado'
     ) AS p_nr_q,
-    SUM(cd) FILTER (
-      WHERE rev_n IS DISTINCT FROM 'Aprobado'
-        AND rev_n IS DISTINCT FROM 'Pendiente'
-        AND rev_n IS DISTINCT FROM 'Rechazado'
-    ) AS p_nr_c,
     MAX(CASE WHEN descripcion IS NOT NULL AND btrim(descripcion::text) <> '' THEN descripcion::text END) AS descl
   FROM pk_line
   GROUP BY pk_disp
 ),
--- Revisado dominante: el de la línea de mayor costo (igual que Python).
+-- Revisado dominante: el de la línea de mayor cantidad (igual espíritu que Python).
 pk_rev AS (
   SELECT pk_disp, public._norm_estado_matriz(revisado) AS rev_dom
   FROM (
     SELECT
       pk_disp,
       revisado,
-      cd,
-      row_number() OVER (PARTITION BY pk_disp ORDER BY cd DESC NULLS LAST) AS rn
+      cq,
+      row_number() OVER (PARTITION BY pk_disp ORDER BY cq DESC NULLS LAST) AS rn
     FROM pk_line
   ) s
   WHERE rn = 1
@@ -439,7 +447,7 @@ pk_rev AS (
 regs AS (
   SELECT
     COALESCE(NULLIF(btrim(pk.pk_id::text), ''), '(sin pk)') AS pk_disp,
-    r.costo_directo::numeric AS cd,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
     r.cantidad_total::numeric AS cq,
     public._dash_matriz_nivel_max_estado(
       p_campo_nivel_max,
@@ -477,15 +485,10 @@ cola AS (
 obra_pk AS (
   SELECT
     pk_disp,
-    SUM(cd) FILTER (WHERE nmax = 'Aprobado') AS ap_c,
+    MAX(vu) AS vu,
     SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
-    SUM(cd) FILTER (WHERE in_cola AND nmax = 'Pendiente') AS pe_c,
     SUM(cq) FILTER (WHERE in_cola AND nmax = 'Pendiente') AS pe_q,
-    SUM(cd) FILTER (WHERE in_cola AND nmax = 'Rechazado') AS rej_c,
     SUM(cq) FILTER (WHERE in_cola AND nmax = 'Rechazado') AS rej_q,
-    SUM(cd) FILTER (
-      WHERE in_cola AND nmax IS DISTINCT FROM 'Pendiente' AND nmax IS DISTINCT FROM 'Rechazado'
-    ) AS nr_c,
     SUM(cq) FILTER (
       WHERE in_cola AND nmax IS DISTINCT FROM 'Pendiente' AND nmax IS DISTINCT FROM 'Rechazado'
     ) AS nr_q
@@ -504,32 +507,33 @@ out_rows AS (
       COALESCE(pp.p_ap_q, 0) + COALESCE(pp.p_nr_q, 0) + COALESCE(pp.p_pd_q, 0) + COALESCE(pp.p_rj_q, 0),
       2
     ) AS cant_ppto,
-    round(
-      COALESCE(pp.p_ap_c, 0) + COALESCE(pp.p_nr_c, 0) + COALESCE(pp.p_pd_c, 0) + COALESCE(pp.p_rj_c, 0),
-      0
+    public.dash_costo_agregado(
+      COALESCE(pp.p_ap_q, 0) + COALESCE(pp.p_nr_q, 0) + COALESCE(pp.p_pd_q, 0) + COALESCE(pp.p_rj_q, 0),
+      COALESCE(pp.vu, 0)
     ) AS costo_ppto,
     round(COALESCE(pp.p_ap_q, 0), 2) AS cant_ppto_aprobado_n3,
-    round(COALESCE(pp.p_ap_c, 0), 0) AS costo_ppto_aprobado_n3,
+    public.dash_costo_agregado(COALESCE(pp.p_ap_q, 0), COALESCE(pp.vu, 0)) AS costo_ppto_aprobado_n3,
     round(COALESCE(pp.p_nr_q, 0), 2) AS cant_ppto_estado_no_revisado,
-    round(COALESCE(pp.p_nr_c, 0), 0) AS costo_ppto_estado_no_revisado,
+    public.dash_costo_agregado(COALESCE(pp.p_nr_q, 0), COALESCE(pp.vu, 0)) AS costo_ppto_estado_no_revisado,
     round(COALESCE(pp.p_pd_q, 0), 2) AS cant_ppto_estado_pendiente,
-    round(COALESCE(pp.p_pd_c, 0), 0) AS costo_ppto_estado_pendiente,
+    public.dash_costo_agregado(COALESCE(pp.p_pd_q, 0), COALESCE(pp.vu, 0)) AS costo_ppto_estado_pendiente,
     round(COALESCE(pp.p_rj_q, 0), 2) AS cant_ppto_estado_rechazado,
-    round(COALESCE(pp.p_rj_c, 0), 0) AS costo_ppto_estado_rechazado,
+    public.dash_costo_agregado(COALESCE(pp.p_rj_q, 0), COALESCE(pp.vu, 0)) AS costo_ppto_estado_rechazado,
     round(COALESCE(o.ap_q, 0), 2) AS cant_sicoe_aprobado,
-    round(COALESCE(o.ap_c, 0), 0) AS costo_sicoe_aprobado,
+    public.dash_costo_agregado(COALESCE(o.ap_q, 0), COALESCE(o.vu, 0)) AS costo_sicoe_aprobado,
     round(COALESCE(o.nr_q, 0), 2) AS cant_sicoe_no_revisado,
-    round(COALESCE(o.nr_c, 0), 0) AS costo_sicoe_no_revisado,
+    public.dash_costo_agregado(COALESCE(o.nr_q, 0), COALESCE(o.vu, 0)) AS costo_sicoe_no_revisado,
     round(COALESCE(o.pe_q, 0), 2) AS cant_sicoe_pendiente,
-    round(COALESCE(o.pe_c, 0), 0) AS costo_sicoe_pendiente,
+    public.dash_costo_agregado(COALESCE(o.pe_q, 0), COALESCE(o.vu, 0)) AS costo_sicoe_pendiente,
     round(COALESCE(o.rej_q, 0), 2) AS cant_sicoe_rechazado,
-    round(COALESCE(o.rej_c, 0), 0) AS costo_sicoe_rechazado,
+    public.dash_costo_agregado(COALESCE(o.rej_q, 0), COALESCE(o.vu, 0)) AS costo_sicoe_rechazado,
     round(COALESCE(o.ap_q, 0), 2) AS cant_sicoe,
-    round(COALESCE(o.ap_c, 0), 0) AS costo_sicoe,
+    public.dash_costo_agregado(COALESCE(o.ap_q, 0), COALESCE(o.vu, 0)) AS costo_sicoe,
     0.0::numeric AS cant_facturado,
     0.0::numeric AS costo_facturado,
     round(COALESCE(pp.p_ap_q, 0) - COALESCE(o.ap_q, 0), 2) AS delta_cant,
-    round(COALESCE(pp.p_ap_c, 0) - COALESCE(o.ap_c, 0), 0) AS delta_costo,
+    public.dash_costo_agregado(COALESCE(pp.p_ap_q, 0), COALESCE(pp.vu, 0))
+      - public.dash_costo_agregado(COALESCE(o.ap_q, 0), COALESCE(o.vu, 0)) AS delta_costo,
     COALESCE(pp.descl, '') AS descripcion,
     COALESCE(rv.rev_dom::text, 'No Revisado') AS revisado
   FROM keys k

@@ -14,7 +14,8 @@ SELECT
   r.acta_rpo_id,
   r.capitulo,
   r.item_numero,
-  r.costo_directo,
+  r.cantidad_total,
+  r.vlr_unitario,
   r.nivel1_estado,
   r.nivel2_estado,
   r.nivel3_estado,
@@ -57,7 +58,10 @@ WITH scaffold AS (
 ),
 base AS (
   SELECT
-    COALESCE(r.costo_directo, 0)::numeric AS cd,
+    COALESCE(r.cantidad_total, 0)::numeric AS cq,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
+    public._dash_norm_item_key(r.item_numero) AS it,
+    public._dash_norm_capitulo_key(r.capitulo) AS cap_k,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
     public._norm_estado_matriz(r.nivel3_estado) AS n3,
@@ -73,32 +77,53 @@ base AS (
   FROM public.vista_so_registros_matriz_validacion r
   WHERE r.contrato_id = p_contrato_id
     AND (p_acta_id IS NULL OR r.acta_rpo_id = p_acta_id)
+    AND public._dash_norm_item_key(r.item_numero) IS NOT NULL
 ),
--- Regla en cascada (coherente con validación en API):
--- · Inspector (N1): todos los ítems del acta; solo estados de nivel1 (no mezclar pendiente por ítem/sub_estado aquí).
--- · Residente (N2): solo filas con N1 = Aprobado; sobre ese subconjunto, estados de nivel2.
--- · Interventoría (N3): solo filas con N1 = Aprobado y N2 = Aprobado; sobre ese subconjunto, estados de nivel3.
--- · Pendiente ítem (sub_estado): solo cuenta con N1 = Aprobado (no forma parte del bucket "Pendiente" del inspector).
+item_buckets AS (
+  SELECT
+    bloque,
+    cap_k,
+    it,
+    MAX(vu) AS vu,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_int,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_res,
+    SUM(CASE WHEN n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_ins,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_int,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_res,
+    SUM(CASE WHEN n1 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_ins,
+    SUM(CASE WHEN sub_pend AND n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_pend_item_res,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_int,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_res,
+    SUM(CASE WHEN n1 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_ins,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_int,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_res,
+    SUM(CASE WHEN n1 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_ins,
+    SUM(cq) AS q_hab_ins,
+    SUM(CASE WHEN n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_hab_res,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cq ELSE 0 END) AS q_hab_int
+  FROM base
+  GROUP BY bloque, cap_k, it
+),
 main AS (
   SELECT
     bloque,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_interventoria,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_residente,
-    SUM(CASE WHEN n1 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_inspector,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_interventoria,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_residente,
-    SUM(CASE WHEN n1 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_inspector,
-    SUM(CASE WHEN sub_pend AND n1 = 'Aprobado' THEN cd ELSE 0 END) AS pendiente_item_residente,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_interventoria,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_residente,
-    SUM(CASE WHEN n1 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_inspector,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_interventoria,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_residente,
-    SUM(CASE WHEN n1 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_inspector,
-    SUM(cd) AS habilitado_inspector,
-    SUM(CASE WHEN n1 = 'Aprobado' THEN cd ELSE 0 END) AS habilitado_residente,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cd ELSE 0 END) AS habilitado_interventoria
-  FROM base
+    SUM(public.dash_costo_agregado(q_apr_int, vu)) AS aprobado_interventoria,
+    SUM(public.dash_costo_agregado(q_apr_res, vu)) AS aprobado_residente,
+    SUM(public.dash_costo_agregado(q_apr_ins, vu)) AS aprobado_inspector,
+    SUM(public.dash_costo_agregado(q_pend_int, vu)) AS pendiente_interventoria,
+    SUM(public.dash_costo_agregado(q_pend_res, vu)) AS pendiente_residente,
+    SUM(public.dash_costo_agregado(q_pend_ins, vu)) AS pendiente_inspector,
+    SUM(public.dash_costo_agregado(q_pend_item_res, vu)) AS pendiente_item_residente,
+    SUM(public.dash_costo_agregado(q_nr_int, vu)) AS no_revisado_interventoria,
+    SUM(public.dash_costo_agregado(q_nr_res, vu)) AS no_revisado_residente,
+    SUM(public.dash_costo_agregado(q_nr_ins, vu)) AS no_revisado_inspector,
+    SUM(public.dash_costo_agregado(q_rej_int, vu)) AS rechazado_interventoria,
+    SUM(public.dash_costo_agregado(q_rej_res, vu)) AS rechazado_residente,
+    SUM(public.dash_costo_agregado(q_rej_ins, vu)) AS rechazado_inspector,
+    SUM(public.dash_costo_agregado(q_hab_ins, vu)) AS habilitado_inspector,
+    SUM(public.dash_costo_agregado(q_hab_res, vu)) AS habilitado_residente,
+    SUM(public.dash_costo_agregado(q_hab_int, vu)) AS habilitado_interventoria
+  FROM item_buckets
   GROUP BY bloque
 ),
 main_full AS (
@@ -123,29 +148,49 @@ main_full AS (
   FROM scaffold s
   LEFT JOIN main m ON m.bloque = s.bloque
 ),
-otras AS (
+otras_base AS (
   SELECT
+    COALESCE(r.cantidad_total, 0)::numeric AS cq,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
+    public._dash_norm_item_key(r.item_numero) AS it,
+    public._dash_norm_capitulo_key(r.capitulo) AS cap_k,
+    public._norm_estado_matriz(r.nivel1_estado) AS n1,
+    public._norm_estado_matriz(r.nivel2_estado) AS n2,
+    public._norm_estado_matriz(r.nivel3_estado) AS n3,
     CASE
       WHEN upper(trim(COALESCE(r.capitulo, ''))) LIKE '14.%' OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '15.%'
         OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '%ENSAYO%'
         OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '%SONDEO%'
       THEN 'ensayos'
       ELSE 'obra'
-    END AS bloque,
-    SUM(CASE
-      WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
-        AND public._norm_estado_matriz(r.nivel2_estado) = 'Aprobado'
-        AND public._norm_estado_matriz(r.nivel3_estado) = 'Pendiente'
-      THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_interventoria,
-    SUM(CASE
-      WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
-        AND public._norm_estado_matriz(r.nivel2_estado) = 'Pendiente'
-      THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_residente,
-    SUM(CASE WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Pendiente' THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_inspector
+    END AS bloque
   FROM public.vista_so_registros_matriz_validacion r
   WHERE r.contrato_id = p_contrato_id
     AND p_acta_id IS NOT NULL
     AND (r.acta_rpo_id IS NULL OR r.acta_rpo_id <> p_acta_id)
+    AND public._dash_norm_item_key(r.item_numero) IS NOT NULL
+),
+otras_item AS (
+  SELECT
+    bloque,
+    cap_k,
+    it,
+    MAX(vu) AS vu,
+    SUM(CASE
+      WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cq ELSE 0 END) AS q_int,
+    SUM(CASE
+      WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cq ELSE 0 END) AS q_res,
+    SUM(CASE WHEN n1 = 'Pendiente' THEN cq ELSE 0 END) AS q_ins
+  FROM otras_base
+  GROUP BY bloque, cap_k, it
+),
+otras AS (
+  SELECT
+    bloque,
+    SUM(public.dash_costo_agregado(q_int, vu)) AS otras_interventoria,
+    SUM(public.dash_costo_agregado(q_res, vu)) AS otras_residente,
+    SUM(public.dash_costo_agregado(q_ins, vu)) AS otras_inspector
+  FROM otras_item
   GROUP BY 1
 ),
 otras_full AS (

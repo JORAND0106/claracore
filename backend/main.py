@@ -6524,11 +6524,11 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
             if _dash_norm_item_key_py(r.get("item_numero")) != it_key:
                 continue
             cant_cobro += float(r.get("cantidad_total") or 0)
-            costo_cobro += float(r.get("costo_directo") or 0)
         if len(batch) < 1000:
             break
         off_cb += 1000
-    costo_ppto  = round(cant_ppto * vlr_unitario)
+    costo_cobro = round(cant_cobro * vlr_unitario, 0) if cant_cobro and vlr_unitario else 0.0
+    costo_ppto  = round(cant_ppto * vlr_unitario, 0) if cant_ppto and vlr_unitario else 0.0
     liq_q = supabase.table("presupuesto").select("cant_total").eq("contrato_id", contrato_id).eq("item", item_numero).eq("tipo_ejecucion", "Obra Ejecutada").eq("dado_de_baja", False)
     if capitulo:
         liq_q = liq_q.eq("capitulo", capitulo)
@@ -20017,6 +20017,14 @@ from dashboard_presupuesto_vista import (
     scan_presupuesto_vista,
     sicoe_registro_en_vista,
 )
+from dashboard_costo_agregado import (
+    costo_agregado_cant_vu,
+    gerencial_ppto_finalize_item,
+    gerencial_ppto_ingest_row,
+    rollup_gerencial_ppto_por_capitulo,
+    sicoe_finalize_costs,
+    vu_item_rows,
+)
 
 LIQ_SUPERCOBRO_COP = 20_000_000.0
 
@@ -20346,7 +20354,7 @@ def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dic
             return (
                 supabase.table("so_registros")
                 .select(
-                    "capitulo, costo_directo, cantidad_total, item_numero, "
+                    "capitulo, cantidad_total, vlr_unitario, item_numero, "
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
@@ -20372,18 +20380,20 @@ def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dic
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cd = float(reg.get("costo_directo") or 0)
             cq = float(reg.get("cantidad_total") or 0)
+            vu = float(reg.get("vlr_unitario") or 0)
+            if vu > float(sicoe_by_item[k].get("_vu") or 0):
+                sicoe_by_item[k]["_vu"] = vu
             nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
             if nfin == "Aprobado":
-                sicoe_by_item[k]["ap_c"] += cd
                 sicoe_by_item[k]["ap_q"] += cq
             elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
-                sicoe_by_item[k]["nr_c"] += cd
                 sicoe_by_item[k]["nr_q"] += cq
         if len(batch) < 1000:
             break
         off += 1000
+    for sg in sicoe_by_item.values():
+        sicoe_finalize_costs(sg)
     _dash_agg_cache_set("sicoe_by_item", contrato_id, sicoe_by_item)
     return sicoe_by_item
 
@@ -20419,14 +20429,14 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cd = float(reg.get("costo_directo") or 0)
             cq = float(reg.get("cantidad_total") or 0)
+            vu = float(reg.get("vlr_unitario") or 0)
+            if vu > float(sicoe_by_item[k].get("_vu") or 0):
+                sicoe_by_item[k]["_vu"] = vu
             nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
             if nfin == "Aprobado":
-                sicoe_by_item[k]["ap_c"] += cd
                 sicoe_by_item[k]["ap_q"] += cq
             elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
-                sicoe_by_item[k]["nr_c"] += cd
                 sicoe_by_item[k]["nr_q"] += cq
 
     def _scan_pages(use_cap_filter: bool) -> None:
@@ -20436,7 +20446,7 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                 q = (
                     supabase.table("so_registros")
                     .select(
-                        "capitulo, costo_directo, cantidad_total, item_numero, "
+                        "capitulo, cantidad_total, vlr_unitario, item_numero, "
                         f"{SICOE_SELECT_NIVELES_ESTADO}"
                     )
                     .eq("contrato_id", contrato_id)
@@ -20452,6 +20462,8 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
             off += 1000
 
     _scan_pages(use_cap_filter=True)
+    for sg in sicoe_by_item.values():
+        sicoe_finalize_costs(sg)
     if not sicoe_by_item:
         full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
         if full is not None:
@@ -20814,12 +20826,12 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
         if rows_it:
             est, unidad = _ppto_metricas_por_estado(rows_it)
             p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
-            p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
+            p_cost = costo_agregado_cant_vu(p_cant, vu_item_rows(rows_it))
             desc = next((str(x.get("descripcion") or "").strip() for x in rows_it if x.get("descripcion")), "")
             estado = _drill_item_estado_fields(est, unidad, {})
             r.update(estado)
             r["cant_ppto"] = round(p_cant, 3)
-            r["presupuesto"] = round(p_cost, 2)
+            r["presupuesto"] = round(p_cost, 0)
             r["tiene_ppto_obra_ejecutada"] = True
             if desc and not str(r.get("descripcion") or "").strip():
                 r["descripcion"] = desc
@@ -21630,8 +21642,8 @@ def _ppto_drill_rows_for_vista(
     for k in sorted(ppto_by.keys(), key=lambda x: str(x)):
         rows_it = ppto_by[k]
         est, unidad = _ppto_metricas_por_estado(rows_it)
-        p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
         p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
+        p_cost = costo_agregado_cant_vu(p_cant, vu_item_rows(rows_it))
         revsplit = _ppto_costo_por_revisado(rows_it)
         pap = float(revsplit.get("Aprobado") or 0)
         pnr = (
@@ -21647,12 +21659,12 @@ def _ppto_drill_rows_for_vista(
                 "item": k,
                 "nombre": k,
                 "descripcion": desc,
-                "presupuesto": round(p_cost, 2),
-                "presupuesto_aprobado_n3": round(pap, 2),
-                "presupuesto_no_revisado_n3": round(pnr, 2),
+                "presupuesto": round(p_cost, 0),
+                "presupuesto_aprobado_n3": round(pap, 0),
+                "presupuesto_no_revisado_n3": round(pnr, 0),
                 "cant_ppto": round(p_cant, 3),
                 "cant_ppto_claracore": round(cc_cant, 3),
-                "costo_ppto_claracore": round(cc_cost, 2),
+                "costo_ppto_claracore": round(cc_cost, 0),
                 **estado_fields,
             }
         )
@@ -21842,11 +21854,34 @@ def _dashboard_matriz_validacion_por_niveles(
     n_min = na[0]
     n_pend_item = 2 if 2 in na else (na[1] if len(na) > 1 else n_min)
 
+    item_vu: Dict[Tuple[str, str, str], float] = {}
+    item_qty: Dict[Tuple[str, str, str], Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))
+    otras_qty: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+
+    def _fila_estado(est: str) -> str:
+        if est == "Aprobado":
+            return "aprobado"
+        if est == "Pendiente":
+            return "pendiente"
+        if est == "Rechazado":
+            return "rechazado"
+        return "no_revisado"
+
+    def _item_key(reg, bloque: str) -> Tuple[str, str, str]:
+        return (
+            bloque,
+            _dash_norm_capitulo_key_py(reg.get("capitulo")),
+            _dash_norm_item_key_py(reg.get("item_numero")) or "",
+        )
+
+    def _acc_qty(M_bucket: Tuple[str, str], key: Tuple[str, str, str], cq: float) -> None:
+        item_qty[key][M_bucket] += cq
+
     off = 0
     while True:
         def _batch(o=off):
             q = supabase.table("so_registros").select(
-                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
+                f"cantidad_total,vlr_unitario,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
                 "capitulo,acta_rpo_id,item_numero"
             ).eq("contrato_id", contrato_id)
             if acta_id_filtro is not None:
@@ -21857,23 +21892,28 @@ def _dashboard_matriz_validacion_por_niveles(
         for reg in batch:
             if not (reg.get("item_numero") or "").strip():
                 continue
-            cd = float(reg.get("costo_directo") or 0)
+            cq = float(reg.get("cantidad_total") or 0)
+            vu = float(reg.get("vlr_unitario") or 0)
             sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
             sub_raw = str(reg.get("sub_estado") or "").strip().lower()
             bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-            M = ens_m if bloque == "ensayos" else obra_m
+            ikey = _item_key(reg, bloque)
+            if vu > item_vu.get(ikey, 0):
+                item_vu[ikey] = vu
 
             for n in na:
                 col = _matriz_col_nivel(n)
                 if n == n_min:
-                    _matriz_acc_por_estado(M, _matriz_estado_en_nivel(reg, n), col, cd)
-                    M["habilitado"][col] += cd
+                    est = _matriz_estado_en_nivel(reg, n)
+                    _acc_qty((_fila_estado(est), col), ikey, cq)
+                    _acc_qty(("habilitado", col), ikey, cq)
                 elif _matriz_prereqs_aprobados(reg, na, n):
-                    _matriz_acc_por_estado(M, _matriz_estado_en_nivel(reg, n), col, cd)
-                    M["habilitado"][col] += cd
+                    est = _matriz_estado_en_nivel(reg, n)
+                    _acc_qty((_fila_estado(est), col), ikey, cq)
+                    _acc_qty(("habilitado", col), ikey, cq)
 
             if (sub_raw == "pendiente" or sub_n == "Pendiente") and _matriz_prereqs_aprobados(reg, na, n_pend_item):
-                M["pendiente_item"][_matriz_col_nivel(n_pend_item)] += cd
+                _acc_qty(("pendiente_item", _matriz_col_nivel(n_pend_item)), ikey, cq)
 
         if len(batch) < 1000:
             break
@@ -21884,7 +21924,7 @@ def _dashboard_matriz_validacion_por_niveles(
         while True:
             def _bo(o=off):
                 q = supabase.table("so_registros").select(
-                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
+                    f"cantidad_total,vlr_unitario,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
                 ).eq("contrato_id", contrato_id)
                 return q.order("id").range(o, o + 999).execute().data
 
@@ -21895,17 +21935,35 @@ def _dashboard_matriz_validacion_por_niveles(
                 aid = reg.get("acta_rpo_id")
                 if aid is not None and aid == acta_id_filtro:
                     continue
-                cd = float(reg.get("costo_directo") or 0)
+                cq = float(reg.get("cantidad_total") or 0)
+                vu = float(reg.get("vlr_unitario") or 0)
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-                Ox = ens_m if bloque == "ensayos" else obra_m
+                ikey = _item_key(reg, bloque)
+                if vu > item_vu.get(ikey, 0):
+                    item_vu[ikey] = vu
                 for n in na:
                     if not _matriz_prereqs_aprobados(reg, na, n):
                         continue
                     if _matriz_estado_en_nivel(reg, n) == "Pendiente":
-                        Ox["otras_actas"][_matriz_col_nivel(n)] += cd
+                        col = _matriz_col_nivel(n)
+                        otras_qty[ikey][col] += cq
             if len(batch) < 1000:
                 break
             off += 1000
+
+    for ikey, buckets in item_qty.items():
+        bloque = ikey[0]
+        M = ens_m if bloque == "ensayos" else obra_m
+        vu = item_vu.get(ikey, 0)
+        for (section, col), qty in buckets.items():
+            M[section][col] += costo_agregado_cant_vu(qty, vu)
+
+    for ikey, cols in otras_qty.items():
+        bloque = ikey[0]
+        Ox = ens_m if bloque == "ensayos" else obra_m
+        vu = item_vu.get(ikey, 0)
+        for col, qty in cols.items():
+            Ox["otras_actas"][col] += costo_agregado_cant_vu(qty, vu)
 
     def round_block(m):
         out = {}
@@ -22401,14 +22459,48 @@ def _ppto_rows_capitulo_tipo(
 
 
 def _ppto_costo_por_revisado(rows_item: List[dict]) -> Dict[str, float]:
-    out = {"Aprobado": 0.0, "Pendiente": 0.0, "Rechazado": 0.0, "No Revisado": 0.0}
+    cant: Dict[str, float] = {"Aprobado": 0.0, "Pendiente": 0.0, "Rechazado": 0.0, "No Revisado": 0.0}
     for r in rows_item:
-        cost = float(r.get("costo_directo") or 0)
+        c = float(r.get("cant_total") or 0)
         rv = _matriz_validacion_norm_estado(r.get("revisado"))
-        if rv not in out:
+        if rv not in cant:
             rv = "No Revisado"
-        out[rv] += cost
-    return out
+        cant[rv] += c
+    vu = vu_item_rows(rows_item)
+    return {k: costo_agregado_cant_vu(v, vu) for k, v in cant.items()}
+
+
+def _agg_ppto_costo_filas(rows: List[dict]) -> Tuple[float, float]:
+    """(cantidad, costo) agregados por ítem: Σcant×VU con un redondeo por ítem."""
+    if not rows:
+        return 0.0, 0.0
+    by_item: Dict[str, List[dict]] = defaultdict(list)
+    for r in rows:
+        ik = _dash_norm_item_key_py(r.get("item")) or "__"
+        by_item[ik].append(r)
+    total_q = 0.0
+    total_c = 0.0
+    for item_rows in by_item.values():
+        q = sum(float(x.get("cant_total") or 0) for x in item_rows)
+        total_q += q
+        total_c += costo_agregado_cant_vu(q, vu_item_rows(item_rows))
+    return total_q, total_c
+
+
+def _agg_sicoe_costo_filas(rows: List[dict]) -> Tuple[float, float]:
+    """(cantidad, costo) SICOE agregados por ítem."""
+    if not rows:
+        return 0.0, 0.0
+    by_item: Dict[str, Dict[str, float]] = defaultdict(lambda: {"q": 0.0, "vu": 0.0})
+    for r in rows:
+        ik = _dash_norm_item_key_py(r.get("item_numero") or r.get("item")) or "__"
+        by_item[ik]["q"] += float(r.get("cantidad_total") or r.get("cantidad") or 0)
+        vu = float(r.get("vlr_unitario") or 0)
+        if vu > by_item[ik]["vu"]:
+            by_item[ik]["vu"] = vu
+    total_q = sum(d["q"] for d in by_item.values())
+    total_c = sum(costo_agregado_cant_vu(d["q"], d["vu"]) for d in by_item.values())
+    return total_q, total_c
 
 
 def _xlsx_safe_sheet_name(name: str, fallback: str = "Hoja") -> str:
@@ -23049,8 +23141,7 @@ def _gerencial_ppto_split_por_capitulo(
     if tipo_idx is None:
         tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
-    agg: Dict[str, Dict[str, Any]] = {}
-    allowed: Set[Tuple[str, str]] = set()
+    items_raw: Dict[Tuple[str, str], Dict[str, Any]] = {}
     off = 0
     while True:
 
@@ -23058,7 +23149,7 @@ def _gerencial_ppto_split_por_capitulo(
             if oficial_vid:
                 q = (
                     supabase.table("presupuesto_version_items")
-                    .select("capitulo, item, costo_directo, revisado")
+                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("version_id", oficial_vid)
@@ -23066,7 +23157,7 @@ def _gerencial_ppto_split_por_capitulo(
             else:
                 q = (
                     supabase.table("presupuesto")
-                    .select("capitulo, item, costo_directo, revisado")
+                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("tipo_ejecucion", tipo)
@@ -23077,28 +23168,18 @@ def _gerencial_ppto_split_por_capitulo(
 
         batch = supabase_execute(_b) or []
         for r in batch:
-            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
-            ik = _dash_norm_item_key_py(r.get("item"))
-            cap_disp = _dash_norm_cap(r.get("capitulo"))
-            cost = float(r.get("costo_directo") or 0)
-            rev = _matriz_validacion_norm_estado(r.get("revisado"))
-            d = agg.get(ck)
-            if d is None:
-                d = {"display": cap_disp, "ap": 0.0, "pe": 0.0, "re": 0.0, "nr": 0.0}
-                agg[ck] = d
-            if rev == "Aprobado":
-                d["ap"] += cost
-            elif rev == "Pendiente":
-                d["pe"] += cost
-            elif rev == "Rechazado":
-                d["re"] += cost
-            else:
-                d["nr"] += cost
-            if ik:
-                allowed.add((ck, ik))
+            gerencial_ppto_ingest_row(
+                items_raw,
+                r,
+                rev_map_fn=_matriz_validacion_norm_estado,
+                cap_key_fn=_dash_norm_capitulo_key_py,
+                item_key_fn=_dash_norm_item_key_py,
+                cap_display_fn=_dash_norm_cap,
+            )
         if len(batch) < 1000:
             break
         off += 1000
+    agg, allowed = rollup_gerencial_ppto_por_capitulo(items_raw)
     return agg, allowed
 
 
@@ -23113,7 +23194,7 @@ def _gerencial_ppto_items(
         else None
     )
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
-    agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    items_raw: Dict[Tuple[str, str], Dict[str, Any]] = {}
     off = 0
     while True:
 
@@ -23121,7 +23202,7 @@ def _gerencial_ppto_items(
             if oficial_vid:
                 q = (
                     supabase.table("presupuesto_version_items")
-                    .select("capitulo, item, costo_directo, revisado")
+                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("version_id", oficial_vid)
@@ -23129,7 +23210,7 @@ def _gerencial_ppto_items(
             else:
                 q = (
                     supabase.table("presupuesto")
-                    .select("capitulo, item, costo_directo, revisado")
+                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("tipo_ejecucion", tipo)
@@ -23140,35 +23221,18 @@ def _gerencial_ppto_items(
 
         batch = supabase_execute(_b) or []
         for r in batch:
-            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
-            ik = _dash_norm_item_key_py(r.get("item"))
-            if not ik:
-                continue
-            k = (ck, ik)
-            d = agg.get(k)
-            if d is None:
-                d = {
-                    "cap_display": _dash_norm_cap(r.get("capitulo")),
-                    "ap": 0.0,
-                    "pe": 0.0,
-                    "re": 0.0,
-                    "nr": 0.0,
-                }
-                agg[k] = d
-            cost = float(r.get("costo_directo") or 0)
-            rev = _matriz_validacion_norm_estado(r.get("revisado"))
-            if rev == "Aprobado":
-                d["ap"] += cost
-            elif rev == "Pendiente":
-                d["pe"] += cost
-            elif rev == "Rechazado":
-                d["re"] += cost
-            else:
-                d["nr"] += cost
+            gerencial_ppto_ingest_row(
+                items_raw,
+                r,
+                rev_map_fn=_matriz_validacion_norm_estado,
+                cap_key_fn=_dash_norm_capitulo_key_py,
+                item_key_fn=_dash_norm_item_key_py,
+                cap_display_fn=_dash_norm_cap,
+            )
         if len(batch) < 1000:
             break
         off += 1000
-    return agg
+    return {k: gerencial_ppto_finalize_item(dict(v)) for k, v in items_raw.items()}
 
 
 def _gerencial_ppto_items_obra_ejecutada(
@@ -24726,34 +24790,17 @@ def dashboard_pkid_detalle_obra(
 
         facturacion = []
 
-        def _sum(lst, kc, kv):
-            return sum(float(x.get(kv) or 0) for x in lst)
+        cant_ap, cost_ap = _agg_sicoe_costo_filas(sicoe_aprobado)
 
-        cant_ap = _sum(sicoe_aprobado, "", "cantidad")
-        cost_ap = _sum(sicoe_aprobado, "", "costo_directo")
+        cant_nr_p, cost_nr_p = _agg_ppto_costo_filas(ppto_no_revisado)
+        cant_pd_p, cost_pd_p = _agg_ppto_costo_filas(ppto_pendiente)
+        cant_rj_p, cost_rj_p = _agg_ppto_costo_filas(ppto_rechazado)
 
-        def _sum_ppto(lst):
-            cq = sum(float(x.get("cant_total") or 0) for x in lst)
-            ks = sum(float(x.get("costo_directo") or 0) for x in lst)
-            return cq, ks
-
-        cant_nr_p, cost_nr_p = _sum_ppto(ppto_no_revisado)
-        cant_pd_p, cost_pd_p = _sum_ppto(ppto_pendiente)
-        cant_rj_p, cost_rj_p = _sum_ppto(ppto_rechazado)
-
-        cant_ppto = sum(float(r.get("cant_total") or 0) for r in ppto)
-        costo_ppto = sum(float(r.get("costo_directo") or 0) for r in ppto)
-        cant_ppto_ap = cost_ppto_ap = 0.0
-        cant_ppto_nap = cost_ppto_nap = 0.0
-        for r in ppto:
-            c = float(r.get("cant_total") or 0)
-            co = float(r.get("costo_directo") or 0)
-            if _matriz_validacion_norm_estado(r.get("revisado")) == "Aprobado":
-                cant_ppto_ap += c
-                cost_ppto_ap += co
-            else:
-                cant_ppto_nap += c
-                cost_ppto_nap += co
+        cant_ppto, costo_ppto = _agg_ppto_costo_filas(ppto)
+        cant_ppto_ap, cost_ppto_ap = _agg_ppto_costo_filas(ppto_aprobado)
+        cant_ppto_nap, cost_ppto_nap = _agg_ppto_costo_filas(
+            ppto_no_revisado + ppto_pendiente + ppto_rechazado
+        )
 
         return {
             "vista": parse_dash_vista(vista),

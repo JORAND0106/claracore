@@ -15,6 +15,15 @@ from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
     presupuesto_oficial_version_id,
 )
+from dashboard_costo_agregado import (
+    costo_agregado_cant_vu,
+    ingest_ppto_resumen_row,
+    ppto_claracore_cant_costo,
+    ppto_costo_por_estado,
+    rollup_ppto_por_capitulo,
+    rollup_resumen_item_agg,
+    vu_item_rows,
+)
 
 DASH_VISTA_PRESUPUESTO_OBRA = "presupuesto_obra"
 DASH_VISTA_OBRA_EJECUTADA = "obra_ejecutada"
@@ -101,29 +110,14 @@ def norm_estado_revisado(v: Any) -> str:
 
 
 def _ppto_metricas_por_estado(rows_it: List[dict]) -> Tuple[Dict[str, Dict[str, float]], str]:
-    """Cantidad y costo directo por estado de revisado (NR | P | R | A) + unidad."""
-    est: Dict[str, Dict[str, float]] = {
-        "NR": {"cant": 0.0, "costo": 0.0},
-        "P": {"cant": 0.0, "costo": 0.0},
-        "R": {"cant": 0.0, "costo": 0.0},
-        "A": {"cant": 0.0, "costo": 0.0},
-    }
-    rev_map = {
-        "No Revisado": "NR",
-        "Pendiente": "P",
-        "Rechazado": "R",
-        "Aprobado": "A",
-    }
+    """Cantidad y costo agregado por estado (NR | P | R | A) + unidad."""
+    est = ppto_costo_por_estado(rows_it, norm_estado_revisado)
     und = ""
     for x in rows_it or []:
-        rev = norm_estado_revisado(x.get("revisado"))
-        k = rev_map.get(rev, "NR")
-        est[k]["cant"] += float(x.get("cant_total") or 0)
-        est[k]["costo"] += float(x.get("costo_directo") or 0)
-        if not und:
-            u = str(x.get("und") or "").strip()
-            if u:
-                und = u
+        u = str(x.get("und") or "").strip()
+        if u:
+            und = u
+            break
     return est, und
 
 
@@ -135,34 +129,23 @@ def _drill_item_estado_fields(est: Dict[str, Dict[str, float]], unidad: str, sg:
     return {
         "unidad": unidad,
         "cant_nr": round(est["NR"]["cant"], 3),
-        "costo_nr": round(est["NR"]["costo"], 2),
+        "costo_nr": round(est["NR"]["costo"], 0),
         "cant_p": round(est["P"]["cant"], 3),
-        "costo_p": round(est["P"]["costo"], 2),
+        "costo_p": round(est["P"]["costo"], 0),
         "cant_r": round(est["R"]["cant"], 3),
-        "costo_r": round(est["R"]["costo"], 2),
+        "costo_r": round(est["R"]["costo"], 0),
         "cant_a": round(est["A"]["cant"], 3),
-        "costo_a": round(est["A"]["costo"], 2),
+        "costo_a": round(est["A"]["costo"], 0),
         "total_claracore_cant": round(total_q, 3),
-        "total_claracore_costo": round(total_c, 2),
+        "total_claracore_costo": round(total_c, 0),
         "cant_cobrado": round(cob_q, 3),
-        "costo_cobrado": round(cob_c, 2),
+        "costo_cobrado": round(cob_c, 0),
     }
 
 
 def _ppto_claracore_split(rows_it: List[dict]) -> Tuple[float, float]:
-    """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado.
-
-    Excluye Pendiente y Rechazado. Base única para los informes (ejecutivo/completo):
-    cantidad ClaraCore = cantidad total − pendiente − rechazado.
-    """
-    cant = 0.0
-    cost = 0.0
-    for x in rows_it or []:
-        rev = norm_estado_revisado(x.get("revisado"))
-        if rev in ("Aprobado", "No Revisado"):
-            cant += float(x.get("cant_total") or 0)
-            cost += float(x.get("costo_directo") or 0)
-    return cant, cost
+    """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado."""
+    return ppto_claracore_cant_costo(rows_it, norm_estado_revisado)
 
 
 def norm_item_key(s: Optional[str]) -> str:
@@ -403,9 +386,6 @@ def _apply_interventoria_filter(q, current_user):
 def _ingest_presupuesto_row(
     r: dict,
     *,
-    ppto_ap_c: Dict[str, float],
-    ppto_nr_c: Dict[str, float],
-    ppto_total_c: Dict[str, float],
     ppto_by_item: Optional[Dict[ItemKey, List[dict]]],
     ppto_keys: Optional[Set[ItemKey]],
 ) -> None:
@@ -414,14 +394,14 @@ def _ingest_presupuesto_row(
     if not ik:
         return
     cap_disp = norm_capitulo_display(r.get("capitulo"))
-    cost = float(r.get("costo_directo") or 0)
     rev = norm_estado_revisado(r.get("revisado"))
     row = {
         "item": ik,
         "descripcion": r.get("descripcion") or "",
         "capitulo": cap_disp,
         "cant_total": float(r.get("cant_total") or 0),
-        "costo_directo": cost,
+        "costo_directo": float(r.get("costo_directo") or 0),
+        "vlr_unitario": float(r.get("vlr_unitario") or 0),
         "revisado": rev,
         "pk_id": r.get("pk_id"),
         "und": (r.get("und") or "").strip(),
@@ -430,11 +410,6 @@ def _ingest_presupuesto_row(
         ppto_by_item[(ck, ik)].append(row)
     if ppto_keys is not None:
         ppto_keys.add((ck, ik))
-    ppto_total_c[cap_disp] += cost
-    if rev == "Aprobado":
-        ppto_ap_c[cap_disp] += cost
-    else:
-        ppto_nr_c[cap_disp] += cost
 
 
 def _scan_live_presupuesto(
@@ -453,8 +428,13 @@ def _scan_live_presupuesto(
     ppto_total_c: Dict[str, float] = defaultdict(float)
     ppto_by_item: Optional[Dict[ItemKey, List[dict]]] = None if resumen_only else defaultdict(list)
     ppto_keys: Optional[Set[ItemKey]] = set() if track_keys else None
+    resumen_item_agg: Dict[ItemKey, Dict[str, float]] = {}
     cap_db = resolve_capitulo_db(sb, contrato_id, capitulo or "", tipo_ejecucion=tipo_ejecucion) if capitulo else ""
-    cols = "capitulo, costo_directo, revisado" if resumen_only else "capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und"
+    cols = (
+        "capitulo, item, cant_total, vlr_unitario, costo_directo, revisado"
+        if resumen_only
+        else "capitulo, item, descripcion, cant_total, vlr_unitario, costo_directo, revisado, pk_id, und"
+    )
     # Fuente OFICIAL: si hay una versión sellada vigente (solo aplica a Presupuesto
     # de Obra), el dashboard lee de su snapshot inmutable, no del borrador vivo.
     # Sin versión sellada → None → fallback al vivo (comportamiento actual).
@@ -489,20 +469,16 @@ def _scan_live_presupuesto(
             if capitulo and not _capitulo_keys_match(r.get("capitulo"), capitulo):
                 continue
             if resumen_only:
-                cap_disp = norm_capitulo_display(r.get("capitulo"))
-                cost = float(r.get("costo_directo") or 0)
-                rev = norm_estado_revisado(r.get("revisado"))
-                ppto_total_c[cap_disp] += cost
-                if rev == "Aprobado":
-                    ppto_ap_c[cap_disp] += cost
-                else:
-                    ppto_nr_c[cap_disp] += cost
+                ingest_ppto_resumen_row(
+                    resumen_item_agg,
+                    r,
+                    cap_key_fn=norm_capitulo_key,
+                    item_key_fn=norm_item_key,
+                    rev_map_fn=norm_estado_revisado,
+                )
             else:
                 _ingest_presupuesto_row(
                     r,
-                    ppto_ap_c=ppto_ap_c,
-                    ppto_nr_c=ppto_nr_c,
-                    ppto_total_c=ppto_total_c,
                     ppto_by_item=ppto_by_item,
                     ppto_keys=ppto_keys,
                 )
@@ -510,8 +486,15 @@ def _scan_live_presupuesto(
             break
         off += 1000
 
+    if resumen_only:
+        ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(resumen_item_agg)
+    elif ppto_by_item:
+        ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_ppto_por_capitulo(
+            dict(ppto_by_item), norm_estado_revisado, norm_capitulo_display
+        )
+
     por_capitulo = [
-        {"capitulo": cap, "costo": round(v, 2), "registros": 0}
+        {"capitulo": cap, "costo": round(v, 0), "registros": 0}
         for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
     ]
     costo_total = sum(ppto_total_c.values())
@@ -523,56 +506,37 @@ def _scan_live_presupuesto(
         "ppto_by_item": dict(ppto_by_item or {}),
         "allowed_sicoe_keys": allowed,
         "por_capitulo_list": por_capitulo,
-        "costo_total": round(costo_total, 2),
+        "costo_total": round(costo_total, 0),
     }
 
 
 def _scan_version_items(sb, contrato_id: int, version_id: str) -> Dict[str, Any]:
-    ppto_ap_c: Dict[str, float] = defaultdict(float)
-    ppto_nr_c: Dict[str, float] = defaultdict(float)
-    ppto_total_c: Dict[str, float] = defaultdict(float)
     ppto_by_item: Dict[ItemKey, List[dict]] = defaultdict(list)
     off = 0
     while True:
         q = (
             sb.table("presupuesto_version_items")
-            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und")
+            .select("capitulo, item, descripcion, cant_total, vlr_unitario, costo_directo, revisado, pk_id, und")
             .eq("version_id", version_id)
             .eq("contrato_id", int(contrato_id))
             .eq("dado_de_baja", False)
         )
         batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
-            ck = norm_capitulo_key(r.get("capitulo"))
-            ik = norm_item_key(r.get("item"))
-            if not ik:
-                continue
-            cap_disp = norm_capitulo_display(r.get("capitulo"))
-            cost = float(r.get("costo_directo") or 0)
-            rev = norm_estado_revisado(r.get("revisado"))
-            ppto_by_item[(ck, ik)].append(
-                {
-                    "item": ik,
-                    "descripcion": r.get("descripcion") or "",
-                    "capitulo": cap_disp,
-                    "cant_total": float(r.get("cant_total") or 0),
-                    "costo_directo": cost,
-                    "revisado": rev,
-                    "pk_id": r.get("pk_id"),
-                    "und": (r.get("und") or "").strip(),
-                }
+            _ingest_presupuesto_row(
+                r,
+                ppto_by_item=ppto_by_item,
+                ppto_keys=None,
             )
-            ppto_total_c[cap_disp] += cost
-            if rev == "Aprobado":
-                ppto_ap_c[cap_disp] += cost
-            else:
-                ppto_nr_c[cap_disp] += cost
         if len(batch) < 1000:
             break
         off += 1000
 
+    ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_ppto_por_capitulo(
+        dict(ppto_by_item), norm_estado_revisado, norm_capitulo_display
+    )
     por_capitulo = [
-        {"capitulo": cap, "costo": round(v, 2), "registros": 0}
+        {"capitulo": cap, "costo": round(v, 0), "registros": 0}
         for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
     ]
     costo_total = sum(ppto_total_c.values())
@@ -583,7 +547,7 @@ def _scan_version_items(sb, contrato_id: int, version_id: str) -> Dict[str, Any]
         "ppto_by_item": dict(ppto_by_item),
         "allowed_sicoe_keys": None,
         "por_capitulo_list": por_capitulo,
-        "costo_total": round(costo_total, 2),
+        "costo_total": round(costo_total, 0),
     }
 
 
@@ -616,15 +580,12 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
     cap_raw = (capitulo or "").strip()
     if not cap_raw:
         return _empty_scan()
-    ppto_ap_c: Dict[str, float] = defaultdict(float)
-    ppto_nr_c: Dict[str, float] = defaultdict(float)
-    ppto_total_c: Dict[str, float] = defaultdict(float)
     ppto_by_item: Dict[ItemKey, List[dict]] = defaultdict(list)
     off = 0
     while True:
         q = (
             sb.table("presupuesto_version_items")
-            .select("capitulo, item, descripcion, cant_total, costo_directo, revisado, pk_id, und")
+            .select("capitulo, item, descripcion, cant_total, vlr_unitario, costo_directo, revisado, pk_id, und")
             .eq("version_id", version_id)
             .eq("contrato_id", int(contrato_id))
             .eq("capitulo", cap_raw)
@@ -632,35 +593,19 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
         )
         batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
-            ck = norm_capitulo_key(r.get("capitulo"))
-            ik = norm_item_key(r.get("item"))
-            if not ik:
-                continue
-            cap_disp = norm_capitulo_display(r.get("capitulo"))
-            cost = float(r.get("costo_directo") or 0)
-            rev = norm_estado_revisado(r.get("revisado"))
-            ppto_by_item[(ck, ik)].append(
-                {
-                    "item": ik,
-                    "descripcion": r.get("descripcion") or "",
-                    "capitulo": cap_disp,
-                    "cant_total": float(r.get("cant_total") or 0),
-                    "costo_directo": cost,
-                    "revisado": rev,
-                    "pk_id": r.get("pk_id"),
-                    "und": (r.get("und") or "").strip(),
-                }
+            _ingest_presupuesto_row(
+                r,
+                ppto_by_item=ppto_by_item,
+                ppto_keys=None,
             )
-            ppto_total_c[cap_disp] += cost
-            if rev == "Aprobado":
-                ppto_ap_c[cap_disp] += cost
-            else:
-                ppto_nr_c[cap_disp] += cost
         if len(batch) < 1000:
             break
         off += 1000
+    ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_ppto_por_capitulo(
+        dict(ppto_by_item), norm_estado_revisado, norm_capitulo_display
+    )
     por_capitulo = [
-        {"capitulo": cap, "costo": round(v, 2), "registros": 0}
+        {"capitulo": cap, "costo": round(v, 0), "registros": 0}
         for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
     ]
     return {
@@ -670,7 +615,7 @@ def _scan_version_items_capitulo(sb, contrato_id: int, version_id: str, capitulo
         "ppto_by_item": dict(ppto_by_item),
         "allowed_sicoe_keys": None,
         "por_capitulo_list": por_capitulo,
-        "costo_total": round(sum(ppto_total_c.values()), 2),
+        "costo_total": round(sum(ppto_total_c.values()), 0),
     }
 
 
@@ -709,7 +654,7 @@ def scan_presupuesto_capitulo_vista(
 def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[str, Any]:
     """
     Totales del módulo Presupuesto alineados con auditoría SQL:
-    SUM(costo_directo) WHERE dado_de_baja=false, sin filtrar tipo_ejecucion.
+    agregación cant×V.U. por ítem, un redondeo; sin filtrar tipo_ejecucion.
     Usado en KPI y gráfico «Presupuesto por Capítulo» del dashboard.
     """
     key = f"{int(contrato_id)}|bruto|{'1' if _presupuesto_aplica_filtro_interventoria(current_user) else '0'}"
@@ -719,34 +664,32 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
         if cached and now - cached[0] < _SCAN_CACHE_TTL_SEC:
             return cached[1]
 
-    ppto_ap_c: Dict[str, float] = defaultdict(float)
-    ppto_nr_c: Dict[str, float] = defaultdict(float)
-    ppto_total_c: Dict[str, float] = defaultdict(float)
+    resumen_item_agg: Dict[ItemKey, Dict[str, float]] = {}
     off = 0
     while True:
         q = (
             sb.table("presupuesto")
-            .select("capitulo, costo_directo, revisado")
+            .select("capitulo, item, cant_total, vlr_unitario, revisado")
             .eq("contrato_id", int(contrato_id))
             .eq("dado_de_baja", False)
         )
         q = _apply_interventoria_filter(q, current_user)
         batch = q.order("id").range(off, off + 999).execute().data or []
         for r in batch:
-            cap_disp = norm_capitulo_display(r.get("capitulo"))
-            cost = float(r.get("costo_directo") or 0)
-            rev = norm_estado_revisado(r.get("revisado"))
-            ppto_total_c[cap_disp] += cost
-            if rev == "Aprobado":
-                ppto_ap_c[cap_disp] += cost
-            else:
-                ppto_nr_c[cap_disp] += cost
+            ingest_ppto_resumen_row(
+                resumen_item_agg,
+                r,
+                cap_key_fn=norm_capitulo_key,
+                item_key_fn=norm_item_key,
+                rev_map_fn=norm_estado_revisado,
+            )
         if len(batch) < 1000:
             break
         off += 1000
 
+    ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(resumen_item_agg)
     por_capitulo = [
-        {"capitulo": cap, "costo": round(v, 2), "registros": 0}
+        {"capitulo": cap, "costo": round(v, 0), "registros": 0}
         for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
     ]
     costo_total = sum(ppto_total_c.values())
@@ -755,7 +698,7 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
         "ppto_nr_c": dict(ppto_nr_c),
         "ppto_total_c": dict(ppto_total_c),
         "por_capitulo_list": por_capitulo,
-        "costo_total": round(costo_total, 2),
+        "costo_total": round(costo_total, 0),
     }
     with _SCAN_CACHE_LOCK:
         _SCAN_CACHE[key] = (now, result)
@@ -881,12 +824,12 @@ def rebuild_comparativo_capitulos(
                 "capitulo": label,
                 "nombre": label,
                 "descripcion": "",
-                "presupuesto": round(pt, 2),
-                "cobrado": round(apc, 2),
-                "presupuesto_aprobado_n3": round(pap, 2),
-                "presupuesto_no_revisado_n3": round(pnr, 2),
-                "sicoe_no_revisado_n3": round(nrc, 2),
-                "delta": round(pt - apc, 2),
+                "presupuesto": round(pt, 0),
+                "cobrado": round(apc, 0),
+                "presupuesto_aprobado_n3": round(pap, 0),
+                "presupuesto_no_revisado_n3": round(pnr, 0),
+                "sicoe_no_revisado_n3": round(nrc, 0),
+                "delta": round(pt - apc, 0),
                 "pct": round(apc / pt * 100, 1) if pt else 0,
                 "cant_ppto": 0,
                 "cant_sicoe_aprobado": round(float(sic_ap_q_m.get(nk, 0)), 3),
@@ -923,8 +866,9 @@ def drill_items_capitulo_vista(
     for k in sorted(keys, key=lambda x: str(x[1])):
         rows_it = ppto_by.get(k, [])
         est, unidad = _ppto_metricas_por_estado(rows_it)
-        p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
         p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
+        vu = vu_item_rows(rows_it)
+        p_cost = costo_agregado_cant_vu(p_cant, vu)
         pap = est["A"]["costo"]
         pnr = est["NR"]["costo"] + est["P"]["costo"] + est["R"]["costo"]
         cc_cant, cc_cost = _ppto_claracore_split(rows_it)
@@ -938,16 +882,16 @@ def drill_items_capitulo_vista(
                 "item": k[1],
                 "nombre": k[1],
                 "descripcion": desc,
-                "presupuesto": round(pp_show, 2),
-                "cobrado": round(apc, 2),
-                "presupuesto_aprobado_n3": round(pap, 2),
-                "presupuesto_no_revisado_n3": round(pnr, 2),
-                "sicoe_no_revisado_n3": round(float(sg.get("nr_c") or 0), 2),
-                "delta": round(pp_show - apc, 2),
+                "presupuesto": round(pp_show, 0),
+                "cobrado": round(apc, 0),
+                "presupuesto_aprobado_n3": round(pap, 0),
+                "presupuesto_no_revisado_n3": round(pnr, 0),
+                "sicoe_no_revisado_n3": round(float(sg.get("nr_c") or 0), 0),
+                "delta": round(pp_show - apc, 0),
                 "pct": round(apc / pp_show * 100, 1) if pp_show else 0,
                 "cant_ppto": round(p_cant, 3),
                 "cant_ppto_claracore": round(cc_cant, 3),
-                "costo_ppto_claracore": round(cc_cost, 2),
+                "costo_ppto_claracore": round(cc_cost, 0),
                 "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
                 "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
                 "tiene_ppto_obra_ejecutada": bool(rows_it),
@@ -977,7 +921,7 @@ def liquidacion_items_vista(
     while True:
         batch = (
             sb.table("so_registros")
-            .select("capitulo, item_numero, cantidad_total, costo_directo")
+            .select("capitulo, item_numero, cantidad_total, vlr_unitario")
             .eq("contrato_id", int(contrato_id))
             .order("id")
             .range(off, off + 999)
@@ -998,12 +942,14 @@ def liquidacion_items_vista(
             if k not in sic:
                 sic[k] = {
                     "cant": 0.0,
-                    "cost": 0.0,
+                    "_vu": 0.0,
                     "cap_raw": (r.get("capitulo") or "").strip() or ck_cap,
                     "item_raw": (r.get("item_numero") or "").strip() or ik,
                 }
             sic[k]["cant"] += float(r.get("cantidad_total") or 0)
-            sic[k]["cost"] += float(r.get("costo_directo") or 0)
+            vu = float(r.get("vlr_unitario") or 0)
+            if vu > float(sic[k].get("_vu") or 0):
+                sic[k]["_vu"] = vu
         if len(batch) < 1000:
             break
         off += 1000
@@ -1013,14 +959,14 @@ def liquidacion_items_vista(
     item_rows: List[Dict[str, Any]] = []
     for k in sorted(keys_all, key=lambda x: (x[0], x[1])):
         meta_rows = ppto_by.get(k, [])
-        sg = sic.get(k, {"cant": 0.0, "cost": 0.0, "cap_raw": k[0], "item_raw": k[1]})
+        sg = sic.get(k, {"cant": 0.0, "_vu": 0.0, "cap_raw": k[0], "item_raw": k[1]})
         cant_cob = float(sg["cant"])
-        cob = float(sg["cost"])
+        cob = costo_agregado_cant_vu(cant_cob, float(sg.get("_vu") or 0))
         cap_raw = meta_rows[0].get("capitulo") if meta_rows else sg.get("cap_raw") or k[0]
         item_raw = meta_rows[0].get("item") if meta_rows else sg.get("item_raw") or k[1]
         desc = next((str(mr["descripcion"])[:400] for mr in meta_rows if mr.get("descripcion")), "")
         cant_re = sum(float(m.get("cant_total") or 0) for m in meta_rows)
-        rec = sum(float(m.get("costo_directo") or 0) for m in meta_rows)
+        rec = costo_agregado_cant_vu(cant_re, vu_item_rows(meta_rows))
         delta_cant = cant_re - cant_cob
         delta_cost = rec - cob
         pct = 999.0 if cob and rec > cob else (round(cob / rec * 100, 1) if rec else 0.0)
