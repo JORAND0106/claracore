@@ -1,13 +1,41 @@
 -- Agregación en base de datos para /sicoe-obra/.../dashboard-matriz-validacion (rendimiento ~segundos).
--- Ejecutar en Supabase SQL Editor (o psql) una vez.
+--
+-- DESPLIEGUE (Supabase SQL Editor): ejecutar TODO este archivo de una vez.
+-- Es idempotente: se puede re-ejecutar tras cambios. El editor puede avisar que se
+-- eliminarán funciones/vista al inicio; es normal: se recrean al final del mismo script.
+--
+-- Errores frecuentes si falta contexto:
+--   42P16  → vista con columnas distintas (p. ej. costo_directo vs cantidad_total)
+--   42703  → referencia SQL incorrecta en CTE (corregido en cfg_min)
+--   42883  → falta dash_costo_agregado (incluida abajo, idempotente)
 --
 -- Regla de negocio (cascada): N1 clasifica todo el acta; N2 solo filas con N1=Aprobado; N3 solo con N1 y N2=Aprobado.
--- Pendiente por ítem (sub_estado) solo con N1=Aprobado y va a la fila «pendiente_item», no al pendiente del inspector.
---
--- Patrón vista_dashboard_* (como vista_dashboard_resumen): exponer solo columnas que usa la matriz
--- para que el planificador lea menos ancho de fila y pueda usar índices de forma más eficiente.
+-- Fila «pendiente_item»: estado Pendiente en el nivel mínimo activo del contrato (columna nivel{n_min}), no sub_estado.
 
-CREATE OR REPLACE VIEW public.vista_so_registros_matriz_validacion
+-- ── Prerequisito: costo agregado cant×VU (también en dashboard_costo_agregado.sql) ──
+CREATE OR REPLACE FUNCTION public.dash_costo_agregado(p_cant numeric, p_vu numeric)
+RETURNS numeric
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE
+    WHEN COALESCE(p_cant, 0) = 0 OR COALESCE(p_vu, 0) = 0 THEN 0::numeric
+    ELSE round(COALESCE(p_cant, 0) * COALESCE(p_vu, 0), 0)
+  END;
+$$;
+
+COMMENT ON FUNCTION public.dash_costo_agregado(numeric, numeric) IS
+  'Costo agregado dashboard: round(cant×VU, 0). No usar SUM(costo_directo) para totales.';
+
+GRANT EXECUTE ON FUNCTION public.dash_costo_agregado(numeric, numeric) TO authenticated, service_role, anon;
+
+-- ── Recrear vista y funciones matriz (orden explícito, sin CASCADE) ──
+DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_vigente_bundle(bigint);
+DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_agg(bigint, bigint, text);
+DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_agg(bigint, bigint);
+DROP VIEW IF EXISTS public.vista_so_registros_matriz_validacion;
+
+CREATE VIEW public.vista_so_registros_matriz_validacion
 WITH (security_invoker = true) AS
 SELECT
   r.contrato_id,
@@ -19,6 +47,9 @@ SELECT
   r.nivel1_estado,
   r.nivel2_estado,
   r.nivel3_estado,
+  r.nivel4_estado,
+  r.nivel5_estado,
+  r.nivel6_estado,
   r.sub_estado
 FROM public.so_registros r
 WHERE COALESCE(TRIM(r.item_numero), '') <> '';
@@ -56,6 +87,18 @@ AS $BODY$
 WITH scaffold AS (
   SELECT unnest(ARRAY['obra', 'ensayos']) AS bloque
 ),
+cfg AS (
+  SELECT COALESCE(
+    (SELECT c.niveles_activos::bigint[] FROM public.contrato_niveles_validacion c WHERE c.contrato_id = p_contrato_id),
+    ARRAY[1::bigint, 2::bigint, 3::bigint]
+  ) AS na
+),
+cfg_min AS (
+  SELECT
+    c.na,
+    (SELECT min(u::smallint) FROM unnest(c.na) AS u(u)) AS n_min
+  FROM cfg c
+),
 base AS (
   SELECT
     COALESCE(r.cantidad_total, 0)::numeric AS cq,
@@ -65,7 +108,9 @@ base AS (
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
     public._norm_estado_matriz(r.nivel3_estado) AS n3,
-    LOWER(TRIM(COALESCE(r.sub_estado, ''))) = 'pendiente' AS sub_pend,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6,
     CASE
       WHEN upper(trim(COALESCE(r.capitulo, ''))) LIKE '14.%' OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '15.%'
         OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '%ENSAYO%'
@@ -91,7 +136,15 @@ item_buckets AS (
     SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_int,
     SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_res,
     SUM(CASE WHEN n1 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_ins,
-    SUM(CASE WHEN sub_pend AND n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_pend_item_res,
+    SUM(CASE
+      WHEN (SELECT n_min FROM cfg_min) = 1 AND n1 = 'Pendiente' THEN cq
+      WHEN (SELECT n_min FROM cfg_min) = 2 AND n2 = 'Pendiente' THEN cq
+      WHEN (SELECT n_min FROM cfg_min) = 3 AND n3 = 'Pendiente' THEN cq
+      WHEN (SELECT n_min FROM cfg_min) = 4 AND n4 = 'Pendiente' THEN cq
+      WHEN (SELECT n_min FROM cfg_min) = 5 AND n5 = 'Pendiente' THEN cq
+      WHEN (SELECT n_min FROM cfg_min) = 6 AND n6 = 'Pendiente' THEN cq
+      ELSE 0
+    END) AS q_pend_item_nmin,
     SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_int,
     SUM(CASE WHEN n1 = 'Aprobado' AND n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_res,
     SUM(CASE WHEN n1 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_ins,
@@ -113,7 +166,7 @@ main AS (
     SUM(public.dash_costo_agregado(q_pend_int, vu)) AS pendiente_interventoria,
     SUM(public.dash_costo_agregado(q_pend_res, vu)) AS pendiente_residente,
     SUM(public.dash_costo_agregado(q_pend_ins, vu)) AS pendiente_inspector,
-    SUM(public.dash_costo_agregado(q_pend_item_res, vu)) AS pendiente_item_residente,
+    SUM(public.dash_costo_agregado(q_pend_item_nmin, vu)) AS pendiente_item_nmin,
     SUM(public.dash_costo_agregado(q_nr_int, vu)) AS no_revisado_interventoria,
     SUM(public.dash_costo_agregado(q_nr_res, vu)) AS no_revisado_residente,
     SUM(public.dash_costo_agregado(q_nr_ins, vu)) AS no_revisado_inspector,
@@ -135,7 +188,7 @@ main_full AS (
     COALESCE(m.pendiente_interventoria, 0) AS pendiente_interventoria,
     COALESCE(m.pendiente_residente, 0) AS pendiente_residente,
     COALESCE(m.pendiente_inspector, 0) AS pendiente_inspector,
-    COALESCE(m.pendiente_item_residente, 0) AS pendiente_item_residente,
+    COALESCE(m.pendiente_item_nmin, 0) AS pendiente_item_nmin,
     COALESCE(m.no_revisado_interventoria, 0) AS no_revisado_interventoria,
     COALESCE(m.no_revisado_residente, 0) AS no_revisado_residente,
     COALESCE(m.no_revisado_inspector, 0) AS no_revisado_inspector,
@@ -215,10 +268,14 @@ bloque_json AS (
         'residente', round(m.pendiente_residente::numeric, 0),
         'inspector', round(m.pendiente_inspector::numeric, 0)
       ),
-      'pendiente_item', jsonb_build_object(
-        'interventoria', 0,
-        'residente', round(m.pendiente_item_residente::numeric, 0),
-        'inspector', 0
+      'pendiente_item', (
+        SELECT jsonb_set(
+          '{}'::jsonb,
+          ARRAY['nivel' || cm.n_min::text],
+          to_jsonb(round(m.pendiente_item_nmin::numeric, 0)),
+          true
+        )
+        FROM cfg_min cm
       ),
       'no_revisado', jsonb_build_object(
         'interventoria', round(m.no_revisado_interventoria::numeric, 0),
@@ -251,7 +308,7 @@ SELECT jsonb_build_object(
 $BODY$;
 
 COMMENT ON FUNCTION public.dashboard_matriz_validacion_agg(bigint, bigint) IS
-  'Matriz validación SICOE: acta filtrada por p_acta_id; N2/N3 en cascada (N2 solo si N1 aprobado; N3 solo si N1 y N2 aprobados).';
+  'Matriz validación SICOE: acta filtrada por p_acta_id; cascada por niveles activos; pendiente_item en nivel{n_min} del contrato.';
 
 -- Una sola llamada: resuelve acta RPO vigente en BD + agrega (evita 2 round-trips desde el API).
 CREATE OR REPLACE FUNCTION public.dashboard_matriz_validacion_vigente_bundle(p_contrato_id bigint)

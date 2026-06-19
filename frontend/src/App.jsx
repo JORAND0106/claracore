@@ -1506,11 +1506,12 @@ const SICOE_NIVELES_CONTRATO_DEFAULT = () => ({
   })),
 })
 
-/** Título de columna matriz «Validación por rol» (Dashboard) desde GET niveles-validacion. */
-function matrizValorNivel(cols, nivelNum) {
+/** Valor columna matriz por nivel. Con strictNivel=true solo claves nivel{N} (sin legacy inspector/residente). */
+function matrizValorNivel(cols, nivelNum, strictNivel = false) {
   if (!cols || typeof cols !== 'object') return 0
   const k = `nivel${nivelNum}`
   if (cols[k] != null && cols[k] !== '') return cols[k]
+  if (strictNivel) return 0
   const legacy = { 1: 'inspector', 2: 'residente', 3: 'interventoria', 4: 'interventoria', 5: 'interventoria', 6: 'interventoria' }
   const leg = legacy[Number(nivelNum)]
   return leg && cols[leg] != null ? cols[leg] : 0
@@ -16412,10 +16413,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
                       : [1, 2, 3])
                   const colsMatriz = [...naMat].sort((a, b) => b - a)
+                  const nMinMat = naMat[0] ?? 1
                   const filas = [
                     { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
                     { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
-                    { key: 'pendiente_item', label: 'PENDIENTES: ITEM PENDIENTE', bg: '#DBEAFE', dark: false },
+                    { key: 'pendiente_item', label: `PENDIENTE N${nMinMat}`, bg: '#DBEAFE', dark: false },
                     { key: 'no_revisado', label: 'NO REVISADOS', bg: '#E9D5FF', dark: false },
                     { key: 'rechazado', label: 'RECHAZADOS', bg: '#FECACA', dark: false },
                     { key: 'habilitado', label: 'HABILITADO VALIDACIÓN', bg: '#374151', dark: true },
@@ -16465,7 +16467,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                     <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:`${du.rowLabel}px` }}>{row.label}</td>
                                     {colsMatriz.map((n) => (
                                       <td key={n} style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>
-                                        {fmtD(matrizValorNivel(d, n))}
+                                        {fmtD(matrizValorNivel(d, n, row.key === 'pendiente_item'))}
                                       </td>
                                     ))}
                                   </tr>

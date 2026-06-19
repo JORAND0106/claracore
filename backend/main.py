@@ -3289,14 +3289,18 @@ def _sicoe_reporte_ids_abs_solapa_registros(
     return out
 
 
-def _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q):
+def _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id: Optional[int] = None, niveles_activos: Optional[List[int]] = None):
     """
-    Alineado con dashboard «PENDIENTES: ITEM PENDIENTE»: línea con ítem asignado,
-    nivel1_estado Aprobado y sub_estado pendiente (costo en columna residente de la matriz).
+    Alineado con dashboard «PENDIENTE N{n_min}»: línea con ítem asignado y
+    nivel{n_min}_estado = Pendiente (n_min = mínimo nivel activo del contrato).
     """
     q = _so_reg_item_asignado(q)
-    q = q.eq("nivel1_estado", "Aprobado")
-    return q.in_("sub_estado", ["Pendiente", "pendiente", "PENDIENTE"])
+    na = sorted({int(x) for x in (niveles_activos or (_get_niveles_activos_contrato(contrato_id) if contrato_id else [1, 2, 3])) if 1 <= int(x) <= 6}) or [1, 2, 3]
+    n_min = na[0]
+    campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(n_min)
+    if campo:
+        q = q.in_(campo, ["Pendiente", "pendiente", "PENDIENTE"])
+    return q
 
 
 def _sicoe_parse_filtros_fecha_usuario(
@@ -3463,7 +3467,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     elif _estado_filtro_es_sin_asignar_item(estado):
         q = _so_reg_sin_item_asignado(q)
     if pendiente_item:
-        q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+        q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
     if registro_id_in is not None:
         if len(registro_id_in) == 0:
             q = q.eq("id", -1)
@@ -12389,7 +12393,7 @@ def buscar_reportes_obra(
                 if _estado_filtro_es_sin_asignar_item(estado):
                     q = _so_reg_sin_item_asignado(q)
                 if pendiente_item:
-                    q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+                    q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
                 return q
 
             reg_estados = []
@@ -13393,7 +13397,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
             q = _so_reg_sin_item_asignado(q)
 
         if body.pendiente_item:
-            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
 
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
             if capas_exp_export and not _defer_capas_or_export:
@@ -13760,7 +13764,7 @@ def exportar_registros_sicoe(
             q = _so_reg_sin_item_asignado(q)
 
         if body.pendiente_item:
-            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
 
         # Validación: capas en AND en SQL, salvo OR con varias capas (filtro en memoria al final)
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
@@ -14299,7 +14303,7 @@ def analisis_registros_obra(
             if _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_sin_item_asignado(q)
             if pendiente_item:
-                q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+                q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
             if _rev_modo_ana:
                 q = _so_reg_q_aplicar_filtro_reversion(q, _rev_modo_ana)
             if _filtro_fu_reg:
@@ -19323,7 +19327,7 @@ def _dashboard_matriz_vigente_cached(contrato_id: int, campo_max: str) -> Any:
     def _rpc():
         return supabase.rpc(
             "dashboard_matriz_validacion_vigente_bundle",
-            {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
+            {"p_contrato_id": contrato_id},
         ).execute().data
 
     result = supabase_execute(_rpc, retries=1)
@@ -21816,28 +21820,60 @@ def _matriz_legacy_bloque_a_niveles(bloque: dict, niveles_activos: List[int]) ->
     na = sorted({int(x) for x in niveles_activos if 1 <= int(x) <= 6}) or [1, 2, 3]
     if not bloque or not isinstance(bloque, dict):
         return _matriz_validacion_empty(na)
-    sample = bloque.get("aprobado") if isinstance(bloque.get("aprobado"), dict) else {}
-    if any(str(k).startswith("nivel") for k in sample.keys()):
-        out = _matriz_validacion_empty(na)
-        for fila in out:
-            src = bloque.get(fila) if isinstance(bloque.get(fila), dict) else {}
-            for n in na:
-                col = _matriz_col_nivel(n)
-                out[fila][col] = float(src.get(col) or 0)
-        return out
     legacy_map = {1: "inspector", 2: "residente"}
     nmax = max(na)
     out = _matriz_validacion_empty(na)
     for fila in out:
         src = bloque.get(fila) if isinstance(bloque.get(fila), dict) else {}
+        use_nivel_keys = any(str(k).startswith("nivel") for k in src.keys())
         for n in na:
             col = _matriz_col_nivel(n)
-            if n == nmax:
-                leg = "interventoria"
+            if use_nivel_keys:
+                out[fila][col] = float(src.get(col) or 0)
             else:
-                leg = legacy_map.get(n, "interventoria")
-            out[fila][col] = float(src.get(leg) or src.get(col) or 0)
+                if n == nmax:
+                    leg = "interventoria"
+                else:
+                    leg = legacy_map.get(n, "interventoria")
+                out[fila][col] = float(src.get(leg) or src.get(col) or 0)
     return out
+
+
+def _matriz_enforce_pendiente_item_n_min(bloque: dict, niveles_activos: List[int]) -> dict:
+    """pendiente_item solo en nivel{n_min}; descarta legacy residente→N2 y sub_estado."""
+    na = sorted({int(x) for x in niveles_activos if 1 <= int(x) <= 6}) or [1, 2, 3]
+    if not bloque or not isinstance(bloque, dict):
+        return _matriz_validacion_empty(na)
+    n_min = na[0]
+    col_min = _matriz_col_nivel(n_min)
+    src_pi = bloque.get("pendiente_item") if isinstance(bloque.get("pendiente_item"), dict) else {}
+    pi = {_matriz_col_nivel(n): 0.0 for n in na}
+    pi[col_min] = float(src_pi.get(col_min) or 0)
+    out = dict(bloque)
+    out["pendiente_item"] = pi
+    return out
+
+
+def _matriz_finalizar_bloque(bloque: Optional[dict], niveles_activos: List[int], *, desde_sql_legacy: bool) -> dict:
+    na = sorted({int(x) for x in niveles_activos if 1 <= int(x) <= 6}) or [1, 2, 3]
+    if desde_sql_legacy:
+        b = _matriz_legacy_bloque_a_niveles(bloque, na)
+    elif bloque and isinstance(bloque, dict):
+        b = bloque
+    else:
+        b = _matriz_validacion_empty(na)
+    return _matriz_enforce_pendiente_item_n_min(b, na)
+
+
+def _matriz_finalizar_payload(payload: dict, niveles_activos: List[int], *, desde_sql_legacy: bool) -> dict:
+    return {
+        "obra_ejecutada_directo_sin_aiu": _matriz_finalizar_bloque(
+            payload.get("obra_ejecutada_directo_sin_aiu"), niveles_activos, desde_sql_legacy=desde_sql_legacy
+        ),
+        "ensayos_sondeos_directo_sin_iva": _matriz_finalizar_bloque(
+            payload.get("ensayos_sondeos_directo_sin_iva"), niveles_activos, desde_sql_legacy=desde_sql_legacy
+        ),
+    }
 
 
 def _dashboard_matriz_validacion_por_niveles(
@@ -21852,7 +21888,6 @@ def _dashboard_matriz_validacion_por_niveles(
     obra_m = _matriz_validacion_empty(na)
     ens_m = _matriz_validacion_empty(na)
     n_min = na[0]
-    n_pend_item = 2 if 2 in na else (na[1] if len(na) > 1 else n_min)
 
     item_vu: Dict[Tuple[str, str, str], float] = {}
     item_qty: Dict[Tuple[str, str, str], Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))
@@ -21894,8 +21929,6 @@ def _dashboard_matriz_validacion_por_niveles(
                 continue
             cq = float(reg.get("cantidad_total") or 0)
             vu = float(reg.get("vlr_unitario") or 0)
-            sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
-            sub_raw = str(reg.get("sub_estado") or "").strip().lower()
             bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
             ikey = _item_key(reg, bloque)
             if vu > item_vu.get(ikey, 0):
@@ -21912,8 +21945,8 @@ def _dashboard_matriz_validacion_por_niveles(
                     _acc_qty((_fila_estado(est), col), ikey, cq)
                     _acc_qty(("habilitado", col), ikey, cq)
 
-            if (sub_raw == "pendiente" or sub_n == "Pendiente") and _matriz_prereqs_aprobados(reg, na, n_pend_item):
-                _acc_qty(("pendiente_item", _matriz_col_nivel(n_pend_item)), ikey, cq)
+            if _matriz_estado_en_nivel(reg, n_min) == "Pendiente":
+                _acc_qty(("pendiente_item", _matriz_col_nivel(n_min)), ikey, cq)
 
         if len(batch) < 1000:
             break
@@ -22023,9 +22056,10 @@ def dashboard_matriz_validacion_obra(
         acta_rpo_resp: Optional[int] = None
         vig = None
         payload: dict = {}
+        payload_desde_sql = False
         niveles_activos = _get_niveles_activos_contrato(contrato_id)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
-        usar_sql_legacy = sorted(niveles_activos) == [1, 2, 3]
+        usar_sql_matriz = sorted(niveles_activos) == [1, 2, 3]
 
         def _parse_rpc_matrix_raw(raw):
             if raw is None:
@@ -22056,17 +22090,20 @@ def dashboard_matriz_validacion_obra(
             acta_id_filtro = supabase_execute(_aid)
             acta_rpo_resp = int(acta_rpo) if acta_rpo is not None else None
         else:
-            # Acta vigente: preferir RPC único (resuelve acta + agrega en BD; menos latencia).
+            # Acta vigente: RPC SQL solo si niveles clásicos [1,2,3]; si no, Python (niveles dinámicos).
             bundle_meta = None
-            try:
-                raw_bundle, _cache_hit = _fetch_dashboard_matriz_vigente_bundle(contrato_id, campo_max)
-                pay = _parse_rpc_matrix_raw(raw_bundle)
-                vm = pay.get("_vigente") if isinstance(pay, dict) else None
-                if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
-                    bundle_meta = vm
-                    payload = {k: v for k, v in pay.items() if k != "_vigente"}
-            except Exception:
-                payload = {}
+            if usar_sql_matriz:
+                try:
+                    raw_bundle, _cache_hit = _fetch_dashboard_matriz_vigente_bundle(contrato_id, campo_max)
+                    pay = _parse_rpc_matrix_raw(raw_bundle)
+                    vm = pay.get("_vigente") if isinstance(pay, dict) else None
+                    if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
+                        bundle_meta = vm
+                        payload = {k: v for k, v in pay.items() if k != "_vigente"}
+                        payload_desde_sql = True
+                except Exception:
+                    payload = {}
+                    payload_desde_sql = False
 
             if bundle_meta is not None:
                 aid = bundle_meta.get("acta_id")
@@ -22107,36 +22144,23 @@ def dashboard_matriz_validacion_obra(
                     acta_id_filtro = None
 
         if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
-            if usar_sql_legacy:
+            if usar_sql_matriz:
                 try:
                     def _rpc():
                         return supabase.rpc(
                             "dashboard_matriz_validacion_agg",
-                            {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro, "p_campo_nivel_max": campo_max},
+                            {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro},
                         ).execute().data
                     payload = _parse_rpc_matrix_raw(supabase_execute(_rpc))
+                    payload_desde_sql = bool(payload)
                 except Exception:
                     payload = {}
+                    payload_desde_sql = False
             if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
                 payload = _dashboard_matriz_validacion_por_niveles(contrato_id, acta_id_filtro, niveles_activos)
-            else:
-                payload = {
-                    "obra_ejecutada_directo_sin_aiu": _matriz_legacy_bloque_a_niveles(
-                        payload.get("obra_ejecutada_directo_sin_aiu"), niveles_activos
-                    ),
-                    "ensayos_sondeos_directo_sin_iva": _matriz_legacy_bloque_a_niveles(
-                        payload.get("ensayos_sondeos_directo_sin_iva"), niveles_activos
-                    ),
-                }
-        else:
-            payload = {
-                "obra_ejecutada_directo_sin_aiu": _matriz_legacy_bloque_a_niveles(
-                    payload.get("obra_ejecutada_directo_sin_aiu"), niveles_activos
-                ),
-                "ensayos_sondeos_directo_sin_iva": _matriz_legacy_bloque_a_niveles(
-                    payload.get("ensayos_sondeos_directo_sin_iva"), niveles_activos
-                ),
-            }
+                payload_desde_sql = False
+
+        payload = _matriz_finalizar_payload(payload, niveles_activos, desde_sql_legacy=payload_desde_sql)
 
         def _acta_vigente_public(v):
             if not v:
