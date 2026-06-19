@@ -28,6 +28,7 @@ MODULOS_VALIDOS = frozenset({
     "usuarios",
     "notificaciones",
     "sicoecad",
+    "topografia",
     "general",
 })
 
@@ -36,8 +37,9 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "inicio": "Portada con novedades del sistema y accesos rápidos.",
     "dashboard": (
         "Dashboard de análisis: toggle «Análisis según» Presupuesto de Obra / Obra Ejecutada (filtra KPIs y gráficos "
-        "de presupuesto ClaraCore), pestañas Resumen / Desviaciones / Liquidación, drill por capítulo-ítem-PK, "
-        "matriz de validación SICOE, mapa semáforo y export Excel por capítulo."
+        "de presupuesto ClaraCore), pestañas Resumen / Desviaciones / Liquidación, drill capítulo-ítem-PK, "
+        "matriz «Validación por rol — SICOE Obra» (selector Acta RPO, filas PENDIENTES vs PENDIENTE N{n_min}), "
+        "mapa semáforo y export Excel por capítulo. Totales agregados del dashboard: round(Σ cant×V.U., 0)."
     ),
     "cobro": (
         "Dashboard — pestaña Resumen: obra aprobada SICOE N3 por acta RPO, comparativo presupuesto vs cobrado por "
@@ -56,8 +58,9 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "informes": "Informes CCD: cortes de subcontratista, memorias de ítem y documentos firmados.",
     "almacen": "Almacén y materiales vinculados al contrato.",
     "programacion_obra": (
-        "Programación de obra: cronograma por PK en el mapa, agrupadores WBS, versiones baseline/reprogramación, "
-        "dependencias FS/SS/FF/SF, CPM, Gantt, validación y sellado."
+        "Programación de obra: cronograma por PK/tramo en mapa (modo programación o ejecutado SICOE), "
+        "agrupadores WBS, versiones baseline/reprogramación, dependencias, CPM, Gantt, Curva S, "
+        "sync presupuesto, validación y sellado."
     ),
     "plano_semaforo": "Plano semáforo: mapa con colores presupuesto vs obra ejecutada/cobrada.",
     "guias": "Guías de usuario publicadas por módulo.",
@@ -69,6 +72,11 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "usuarios": "Gestión de usuarios, roles y cargos dentro del panel admin.",
     "notificaciones": "Buzón de notificaciones del contrato.",
     "sicoecad": "SicoeCAD: plugin de AutoCAD para medición y sincronización de cantidades de obra hacia ClaraCore. No es una pantalla web.",
+    "topografia": (
+        "Topografía web: menú lateral con Puntos y circuitos (Biblioteca, Poligonal, NewPoint, Nivelación), "
+        "Vías (Configuración DG, Entrega DG Obra) y Otros (Tubería, Áreas, Equipos). Puntos verificados "
+        "alimentan nivelaciones y amarres; poligonales selladas publican coordenadas en biblioteca."
+    ),
     "general": "Sin módulo específico detectado; responde de forma general sobre ClaraCore.",
 }
 
@@ -615,17 +623,45 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
      con secciones POR COBRAR / DEVOLUCIÓN / EQUILIBRIO, formato COP, pie de página ClaraCore.
      Respeta la vista activa del toggle. Generación en segundo plano (puede tardar; muestra progreso en el botón).
 
+   D bis. AGREGACIÓN DE COSTOS EN EL DASHBOARD (KPIs, drill, matriz, export)
+   - Los **totales agregados** (KPIs, barras por capítulo, matriz, drill, Excel) usan **round(Σ cantidades × valor unitario, 0)** —
+     un solo redondeo al final por grupo, no la suma de costo_directo fila a fila.
+   - El costo_directo de cada línea en SICOE/Presupuesto sigue existiendo en detalle; la diferencia vs suma manual
+     de costo_directo en SQL puede deberse a redondeo por línea.
+   - No diga que el dashboard «suma costo_directo» para totales de capítulo o matriz; diga cantidades × V.U. agregadas.
+
    E. MATRIZ DE VALIDACIÓN POR ROL — SICOE OBRA
-   - Tabla con filas: Aprobado, Pendientes, No revisados, Rechazados, Habilitado validación, etc.
-   - Columnas dinámicas según niveles activos del contrato (Nivel 1, 2, 3, 4… según configuración).
-   - Bloques separados: SICOE obra, presupuesto revisado, obra ejecutada directo sin AIU (si aplica).
-   - NO depende del toggle «Análisis según» para SICOE; es seguimiento del flujo de validación de reportes.
+   - Ubicación: pestaña Resumen, bloque «Validación por rol · SICOE Obra».
+   - Selector **Acta RPO** arriba de la tabla:
+     · Por defecto: acta RPO **vigente** (hoy ∈ [fecha_inicio, fecha_fin] del acta).
+     · Puede elegir un acta concreto (p. ej. «Acta RPO 75 · …») o «Todo el contrato (histórico)».
+   - Tablas separadas: «Obra ejecutada directo sin AIU» y «Ensayos y sondeos directo sin IVA».
+   - **Columnas dinámicas** según niveles activos del contrato (encabezados N1, N2, N4… según configuración).
+   - **Filas de estado** (colores):
+     | Fila | Significado |
+     | APROBADO (verde) | Líneas con ítem asignado cuyo estado en ese nivel es Aprobado (con cascada: niveles inferiores activos aprobados, salvo el nivel mínimo que clasifica todo el acta) |
+     | PENDIENTES (amarillo) | Pendiente en ese nivel de validación SICOE (cascada por nivel) |
+     | PENDIENTE N{n_min} (azul) | Solo pendiente en el **nivel mínimo activo** del contrato (columna N{n_min}); usa nivel{n}_estado, **NO** sub_estado ni «pendiente de ítem» genérico |
+     | NO REVISADOS (lila) | No revisado en ese nivel |
+     | RECHAZADOS (rojo) | Rechazado en ese nivel |
+     | HABILITADO VALIDACIÓN (gris oscuro) | Total habilitado para validar en ese nivel |
+     | PENDIENTES OTRAS ACTAS (amarillo) | Pendiente en actas distintas al acta filtrada |
+   - **NO confundir** fila amarilla PENDIENTES con fila azul PENDIENTE N{n_min}:
+     · Amarillo N2 = nivel2_estado Pendiente (con N1 aprobado si N1 está activo).
+     · Azul solo tiene valor en la columna del **nivel mínimo** (p. ej. N1 si activos [1,2,4]); refleja pendiente real
+       en ese primer escalón de validación, no sub_estado ni residente fijo en N2.
+   - Si ve montos grandes en azul N2 con amarillo N2 en cero: versión antigua mezclaba sub_estado → recargue tras
+     actualización de plataforma (Ctrl+Shift+R) o contacte administrador.
+   - NO depende del toggle «Análisis según»; es flujo SICOE de reportes del acta elegido.
 
    F. PROBLEMAS FRECUENTES DASHBOARD
    | Lo que ve | Causa / solución |
    | Mismo total amarillo en Presupuesto de Obra y Obra Ejecutada | Datos mal clasificados o todo en un tipo → reclasificar en Presupuesto; recargar Dashboard |
+   | Total dashboard ≠ suma manual SQL de costo_directo | Totales agregados usan Σ cant×V.U. redondeado; SQL fila a fila redondea distinto |
    | Total dashboard ≠ suma manual SQL sin filtro tipo | SQL sin filtrar tipo_ejecucion suma ambos tipos; dashboard muestra solo el tipo del toggle |
    | SICOE N3 no cambia al mover toggle | Es correcto: SICOE siempre es total del contrato |
+   | Matriz: «ITEM PENDIENTE» o $ en N2 con PENDIENTES N2 en $0 | Criterio viejo (sub_estado); actualizar app; fila correcta es «PENDIENTE N{n_min}» |
+   | Matriz: totales distintos al cambiar acta | Normal: filtra registros del acta RPO seleccionado |
    | Export Excel tarda mucho | Normal en capítulos grandes; esperar hasta «Descargando» |
    | Pestaña Liquidación no aparece | Contrato debe estar en fase liquidación Y toggle en Obra Ejecutada |
    | Drill PK error o vacío | Verificar permisos y que existan registros en ese PK para la vista activa |
@@ -641,10 +677,12 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    plano georreferenciado del contrato. El usuario programa haciendo clic sobre los polígonos del mapa (PK).
 
    PANTALLA PRINCIPAL (menú lateral → Programación):
-   - Mapa central con polígonos PK del contrato (colores según avance de programación).
+   - Mapa central con polígonos PK; toggle **Programación** / **Ejecutado**; basemap Plano/Topo/Satélite; filtro por tramo.
+   - Panel KPI ejecución (presupuesto, ejecutado SICOE N1, % global) con botón ↻ refresh.
    - Panel lateral derecho: selector de versión, resumen del PK seleccionado, historial de versiones,
      acciones de validación y Gantt.
-   - Modal «Abrir programación» al trabajar fechas, dependencias y CPM por PK.
+   - Cinta (ribbon): Auto-programar, Curva S, Comparar global, export MS Project/Excel/PDF, borrar borrador.
+   - Modal «Abrir programación» al trabajar fechas, dependencias y CPM por PK o tramo consolidado.
 
    ── CONCEPTOS CLAVE (Clara debe dominarlos) ──
 
@@ -693,10 +731,12 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Curva S puede mostrar brecha si hay costo presupuestado sin fechas CPM (normal hasta programar).
 
    % programado vs % ejecutado (NO confundir):
-   - **% programado** (mapa PK): ítems del presupuesto que ya tienen fecha asignada (directa o vía agrupador WBS). NO es ejecución física.
-   - **% ejecutado** (informe PDF/Excel Curva S): costo de registros SICOE con **nivel 1 (inspector) aprobado** ÷ presupuesto del alcance.
+   - **% programado** (mapa, modo «Programación»): ítems del presupuesto que ya tienen fecha asignada (directa o vía agrupador WBS). NO es ejecución física.
+   - **% ejecutado**: costo de registros SICOE con **nivel 1 (inspector) aprobado** ÷ presupuesto del alcance del PK/tramo.
    - Un registro SICOE solo cuenta como ejecutado cuando nivel1_estado = Aprobado (aunque niveles superiores sigan pendientes).
-   - El mapa aún NO muestra % ejecutado; eso está en el informe exportado (PDF/Excel). Próximamente en mapa.
+   - **Mapa modo «Ejecutado»**: semáforo por PK según % ejecutado (rojo 0–25 %, naranja 25–50 %, amarillo 50–75 %, cyan 75–90 %, verde >90 %). Fondo tenue = estado de programación.
+   - **Panel KPI ejecución** (sobre el mapa): presupuesto alcance, ejecutado SICOE N1 y % global; botón ↻ recalcula agregados por PK.
+   - También en Curva S (tabla/gráfica) e informes PDF/Excel exportados.
 
    Matching ítems listado ↔ presupuesto:
    - El sistema tolera diferencias de formato (ej. listado «3.1» vs presupuesto «3.1.») al cruzar agrupadores WBS.
@@ -764,20 +804,38 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    3. Clona la versión anterior; solo modifique lo que cambió.
    4. Mismo flujo de validación; al sellarse reemplaza la anterior como vigente.
 
-   PASO 8 — Exportar informe (PDF / Excel Curva S)
-   1. Panel programación → Curva S → exportar PDF o Excel.
-   2. El informe incluye: curva baseline/vigente/ejecutado, detalle por PK, **resumen ejecutivo con % ejecución**.
-   3. **% ejecución** = costo SICOE con nivel 1 aprobado ÷ presupuesto del alcance (por capítulo y total).
-   4. Use el informe para comparar lo programado vs lo realmente validado por inspectoría en campo.
+   PASO 8 — Curva S e informes exportados
+   1. Cinta superior → «Curva S» (o desde panel lateral).
+   2. **Gráfica**: curvas acumuladas baseline, vigente y ejecutado por mes.
+   3. **Tabla del modal**: valores **del mes** (no acumulados); la gráfica sí es acumulada.
+   4. Brecha presupuesto: costo vigente sin fechas CPM; escenarios opcionales (hasta 5 versiones de presupuesto).
+   5. Exportar PDF o Excel: curvas, detalle por PK, **resumen ejecutivo con % ejecución por capítulo**.
+   6. **% ejecución** = costo SICOE nivel 1 aprobado ÷ presupuesto del alcance.
+
+   PASO 9 — Ver ejecución en el mapa (SICOE)
+   1. Esquina superior del mapa: toggle **Programación** / **Ejecutado**.
+   2. Modo Ejecutado: colores semáforo por % ejecutado vs presupuesto del PK (ver arriba).
+   3. Panel KPI: totales del contrato/tramo filtrado; ↻ si acaba de aprobar registros en SICOE.
+   4. La ruta crítica CPM **no** se resalta en el mapa; sí en pestaña Dependencias, Gantt e informes.
 
    ── COLORES DEL MAPA ──
+   Modo **Programación** (por defecto):
    | Color / borde | Significado |
    | Gris tenue | Sin cantidades en presupuesto |
    | Gris oscuro | Tiene cantidades pero sin programar |
    | Amarillo | Parcialmente programado |
    | Azul | Completamente programado |
-   | Borde rojo pulsante | Ruta crítica activa |
-   | Borde naranja | Desviación vs baseline |
+   | Borde naranja | Desviación vs baseline (reprogramación) |
+
+   Modo **Ejecutado** (semáforo % SICOE N1 vs presupuesto PK):
+   | Color | % ejecutado |
+   | Rojo | 0–25 % |
+   | Naranja | 25–50 % |
+   | Amarillo | 50–75 % |
+   | Cyan | 75–90 % |
+   | Verde | >90 % |
+
+   Otros controles del mapa: basemap Plano / Topo / Satélite; filtro por tramo.
 
    ── ALERTAS COMUNES ──
    | Mensaje | Qué hacer |
@@ -789,18 +847,28 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    | «Sin agrupadores WBS en este tramo» | Presupuesto del tramo sin ítems mapeados a agrupadores; revisar Listado Precios → Programación WBS |
    | Ítem en listado WBS pero no en modal programación | Puede ser formato distinto (3.1 vs 3.1.); verificar capítulo e ítem en presupuesto vigente |
    | Curva S «Vigente» menor que presupuesto total | Normal si hay ítems/costos sin fechas CPM; programe en WBS o revise brecha en modal Curva S |
-   | Ejecutado en Curva S no sube | Solo cuenta registros SICOE con **nivel 1 aprobado**; validar en módulo SICOE |
+   | Ejecutado en mapa/Curva S no sube | Solo cuenta SICOE **nivel 1 aprobado**; pulse ↻ en KPI o recargue el módulo |
+   | Tras «Borrar programación» el PK parpadea | Espere a que termine el guardado; el PK debe quedar gris estable (sin fechas) |
+   | Mapa ejecutado todo rojo | Normal al inicio de obra; verifique registros SICOE aprobados en inspectoría |
+
+   ── HERRAMIENTAS DE LA CINTA (ribbon) ──
+   - Auto-programar: propone fechas secuenciales por agrupador (revisar y guardar).
+   - Comparar global: diferencias entre versiones de programación.
+   - Exportar: MS Project (.xml), Excel detallado, PDF resumen/Gantt.
+   - Borrar toda la programación del borrador activo (solo borrador; pide confirmación).
 
    ── PREGUNTAS FRECUENTES ──
    · ¿Programar sin dependencias? Sí; opcionales. Sin dependencias el CPM no calcula pero las fechas funcionan.
    · ¿Error en una fecha? En borrador: abra el modal del PK/tramo, corrija y guarde.
    · ¿Varios PK a la vez? Sí: modal abierto → «+ Agregar PK (clic en el mapa)» o vista consolidada por tramo.
+   · ¿Borrar fechas de un PK o tramo? Modal → «Borrar programación» (solo borrador).
    · ¿Ver cronogramas anteriores? Panel lateral → «Historial de versiones» (solo lectura).
    · ¿Cómo sé si voy bien o mal vs plan original? Bordes naranjas en mapa; tab «Comparar vs baseline» en el modal.
-   · ¿Diferencia % programado y % ejecutado? Programado = fechas en cronograma. Ejecutado = SICOE nivel 1 aprobado (informe PDF/Excel).
+   · ¿Diferencia % programado y % ejecutado? Programado = fechas en cronograma (modo mapa Programación). Ejecutado = SICOE N1 aprobado (modo Ejecutado, KPI, Curva S, PDF/Excel).
    · ¿Cuándo aparece un ítem en el agrupador WBS? Cuando está en listado de precios con agrupador asignado Y existe en presupuesto vigente del PK/tramo.
    · ¿Sync trae ítems nuevos del presupuesto? No. Solo actualiza costos/cantidades de lo ya programado.
    · ¿Qué es la brecha presupuesto en Curva S? Diferencia entre costo total vigente y lo programado con fechas; indica qué falta programar.
+   · ¿Dónde veo la ruta crítica? Tabla CPM, Gantt (barras rojas) y PDF; no en contorno del mapa.
 
    ── LENGUAJE AL EXPLICAR PROGRAMACIÓN ──
    - No diga WBS como sigla sin explicar: «agrupador de actividades» o «agrupador WBS».
@@ -935,9 +1003,11 @@ La URL, correo y contrato se recuerdan en AppData/SicoeCAD/claracore_prefs.json.
 ERRORES FRECUENTES: "Error HTTP 401" = correo/contraseña incorrectos; "Error HTTP 403" = sin
 permiso en ese contrato; "curl.exe no encontrado" = curl debe estar en el PATH del sistema.
 
-12.6 MÓDULO DE TOPOGRAFÍA
+12.6 TOPOGRAFÍA EN AUTOACAD (SicoeCAD — no es la web)
 Importa puntos topográficos desde CSV, los une con líneas en AutoCAD y los asocia a
 Capítulo/Competencia del catálogo de precios para medirlos con el formulario principal.
+Si preguntan por poligonales, nivelación o biblioteca de puntos en la plataforma web,
+responda con la sección 13 (módulo Topografía web), no con esta subsección de AutoCAD.
 
 12.7 UTILIDADES
 Acotado especial, Offset inteligente (modeless), Importar puntos (en desarrollo),
@@ -951,6 +1021,173 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
   geométrica se hace desde SicoeCAD en AutoCAD; en web pueden agregar cantidad clonando una fila
   (con permiso editar) o editar/validar registros existentes — no crear capítulos/ítems nuevos desde cero.
 - El modo "replace" requiere la clave CLARA2025 y solo deben usarlo administradores.
+
+13. Módulo de Topografía (plataforma web ClaraCore) — DETALLE COMPLETO
+
+   PROPÓSITO GENERAL
+   - Registro topográfico de obra: puntos de control, circuitos trigonométricos (poligonales),
+     resección de puntos (NewPoint), nivelación, diseño geométrico de vía y seguimiento de
+     entrega en campo por capas (Entrega DG Obra).
+   - Los puntos **verificados** quedan en la **Biblioteca de puntos** y se reutilizan como
+     amarres (BM, estaciones, visados) en poligonales, nivelaciones y NewPoint.
+   - Diferente de SicoeCAD (sección 12.6): Topografía web NO mide cantidades de presupuesto;
+     gestiona control topográfico y verificación geométrica en obra.
+
+   CÓMO ENTRAR
+   - Menú lateral principal → **Topografía** (icono 📐).
+   - Dentro, menú izquierdo con tres bloques:
+     · **PUNTOS Y CIRCUITOS**: Biblioteca de puntos | Poligonal | NewPoint | Circuito Nivelación
+     · **VÍAS**: Configuración DG | Entrega DG Obra
+     · **OTROS**: Tubería | Áreas por Coordenadas | Equipos
+
+   PERMISOS (por función Topografía en el contrato)
+   - ver, crear, editar, eliminar, validar, exportar — según cargo.
+   - Sin permiso «crear» no puede abrir circuitos nuevos; sin «exportar» no descarga PDF.
+
+   ── A. BIBLIOTECA DE PUNTOS ──
+   - Consulta de todos los puntos del contrato: nombre, tipo (BM, estación, auxiliar, PI, cambio),
+     coordenadas Norte/Este, cota, origen, verificado sí/no.
+   - **Solo lectura**: no se crean puntos aquí manualmente.
+   - Los puntos entran al sellar:
+     · Poligonal con interventoría aprobada (Nivel 2)
+     · NewPoint con interventoría aprobada
+     · Nivelación sellada (cotas publicadas)
+   - Filtros: por tipo y por estado verificado/pendiente.
+   - Use la biblioteca para confirmar si un BM o estación ya existe antes de amarrar un circuito.
+
+   ── B. POLIGONAL (circuito trigonométrico) ──
+
+   CONCEPTOS CLAVE
+   - **Poligonal**: recorrido de estación total con estaciones, visados y puntos radiados.
+   - **Cartera**: tabla consolidada de radiación por armadas (ceros atrás); se recalcula al
+     guardar estaciones o pulsar «Actualizar» en la libreta.
+   - **Cierre**: error angular y lineal vs tolerancias (Res. 643); debe ser admisible antes de terminar.
+   - **Cerrada**: inicio = estación + visado; el circuito vuelve al punto inicial.
+   - **Abierta**: inicio = estación + visado + **punto de llegada** (coordenada objetivo);
+     el cierre se calcula contra la llegada, no contra el inicio.
+
+   CREAR UNA POLIGONAL NUEVA (cartera nueva)
+   1) Menú Topografía → **Poligonal**.
+   2) Pestaña «+ Nuevo» (requiere permiso crear).
+   3) Elegir **Poligonal cerrada** o **Poligonal abierta**.
+   4) Completar datos generales: nombre, sentido (horario/antihorario), tolerancias lineal y angular,
+      operador, fecha, marca/modelo/serie del equipo.
+   5) Amarres iniciales:
+      - Cerrada: seleccionar **Estación** y **Visado** desde puntos verificados de biblioteca
+        (o coordenadas manuales si aplica).
+      - Abierta: además seleccionar **Llegada** (BM verificado u objetivo).
+   6) Guardar → pasa a la **libreta de estaciones**: ingrese por cada observación:
+      punto, tipo (estación/auxiliar), prisma (HT), distancia horizontal, ángulos, HI por armada.
+   7) La **cartera** y el **gráfico** se actualizan en vivo al guardar puntos.
+   8) Cuando el cierre es admisible → **Terminar poligonal** (estado cerrado).
+   9) Validación en dos niveles (panel semáforo):
+      - **Nivel 1 (contratista/topógrafo)**: primera aprobación del circuito.
+      - **Nivel 2 (interventoría)**: al aprobar, las coordenadas ajustadas se **publican en biblioteca**.
+   10) Poligonal sellada: solo lectura; puede **Ver** y exportar **PDF**.
+
+   PESTAÑAS Y ACCIONES EN PANTALLA PRINCIPAL
+   - Barra de pestañas: una por poligonal del contrato (+ Nuevo).
+   - Botones: **Editar** / **Ver** (modal libreta), **PDF** (informe de cálculo), eliminar (si permiso).
+   - Resumen: estado de cierre, validación N1/N2, gráfico de la poligonal.
+   - Dentro del modal: **Actualizar** recarga del servidor y recalcula cartera.
+
+   EXPORTAR PDF POLIGONAL
+   - Botón **PDF** en la barra de la poligonal seleccionada (permiso exportar).
+   - Descarga informe con libreta, cartera y datos de cierre.
+
+   ── C. NEWPOINT (resección de puntos) ──
+
+   PROPÓSITO
+   - Determinar un punto nuevo desde un **puesto arbitrario** sin azimut inicial conocido.
+   - Referencia horizontal: **00.0000** hacia el **Punto 1 (P1)**.
+   - Se mide: ángulo observado P1→P2 y distancias a **dos puntos verificados** de la misma
+     **poligonal sellada** (interventoría aprobada).
+
+   FLUJO
+   1) Topografía → **NewPoint** → «+ Nuevo».
+   2) Elegir poligonal sellada; cargan P1 y P2 de esa poligonal.
+   3) Datos de campo: nombre del punto nuevo, tipo, operador, fecha, equipo.
+   4) Ingresar ángulo horizontal P1→P2 y distancias a P1 y P2.
+   5) El sistema calcula coordenadas; gráfico de verificación.
+   6) Guardar → validación N1 contratista y N2 interventoría.
+   7) Al aprobar interventoría el punto se publica en **Biblioteca**.
+   8) **PDF** del cálculo (permiso exportar).
+
+   ── D. CIRCUITO DE NIVELACIÓN ──
+
+   PROPÓSITO
+   - Registrar nivelación entre puntos con cota en biblioteca (BM inicial y BM de cierre).
+   - Tipos: **directa** (A→B→A) o **circuito cerrado**.
+   - Instrumento: **automático** (3 hilos + distancia taquimétrica) o **electrónico** (V+ y V−).
+
+   FLUJO
+   1) Topografía → **Circuito Nivelación** → «+ Nuevo».
+   2) Nombre, tipo de circuito, tipo de nivel, BM inicio y BM fin (biblioteca verificada).
+   3) Operador, fecha, marca/modelo/serial del nivel.
+   4) Tabla de lecturas por punto intermedio y cierre.
+   5) **Calcular cierre**: error de cierre; si es admisible, puede validar.
+   6) Validación N1 y N2; al sellar se publican cotas en biblioteca.
+   7) **PDF** del informe de nivelación (permiso exportar).
+
+   ── E. CONFIGURACIÓN DG (diseño geométrico) ──
+
+   PROPÓSITO
+   - Definir el diseño de vía por **eje** antes de Entrega DG Obra.
+
+   PASOS
+   1) Topografía → **Configuración DG** → «+ Nuevo eje» o seleccionar eje existente.
+   2) **Importar rasante** (CSV): columnas TRAMO, ABSCISA, IZQUIERDA, EJE, DERECHA, ANCHO.
+   3) Al importar: elegir esquema transversal (A/B/C), ancho de vía, intermedias.
+   4) **Estructura de vía**: capas con espesores de terminado hacia abajo (rajón, subrasante, etc.).
+   5) Puede crear nueva versión de estructura; la vigente alimenta entregas.
+   - Sin rasante + estructura completa no puede crear entregas DG en ese eje.
+
+   ── F. ENTREGA DG OBRA (seguimiento en campo) ──
+
+   PROPÓSITO
+   - Verificar en obra el cumplimiento de capas respecto al diseño geométrico por tramo de abscisas.
+
+   CREAR NUEVA ENTREGA (pestaña)
+   1) Topografía → **Entrega DG Obra** → «+ Nuevo».
+   2) Elegir eje (con rasante y estructura), capa o terreno natural, rango de abscisas.
+   3) Operador, fecha de campo, tolerancia (ej. ±0,005 m).
+   4) Vista previa del sector antes de crear.
+   5) Cada entrega es una **pestaña** reordenable (arrastre).
+
+   MATRIZ DE VERIFICACIÓN (cartera de campo)
+   - Filas por abscisa: **Vi** (lecturas), **Diseño**, referencia (subrasante/terreno), **capa** medida.
+   - Columnas: ordenadas Izq · Eje · Der y **Dif** con CUMPLE / NO CUMPLE según tolerancia.
+   - **Guardar cartera**: persiste Vi y cambios de instrumento (V+) por bloque.
+   - **Bloques**: cambio de altura instrumental en una abscisa.
+   - **Recalcular**: actualiza diseño y referencias tras cambios en Configuración DG.
+   - Si cambia de pestaña o de módulo con cambios sin guardar → aviso «Cartera sin guardar».
+
+   AVANCE
+   - Porcentaje de abscisas con lecturas dentro de tolerancia en cada pestaña.
+
+   ── G. OTROS SUBMÓDULOS ──
+   - **Tubería**: registro de tuberías y diario de obra.
+   - **Áreas por Coordenadas**: polígonos y áreas.
+   - **Equipos**: inventario topográfico; alertas en menú si hay vencimientos.
+
+   ── RELACIÓN CON SICOE ──
+   - En algunos contratos, aprobar registros SICOE en Nivel 2 exige enlace de topografía en el reporte.
+   - La biblioteca y los PDFs sellados son soporte de ese requisito; no sustituyen el enlace en el reporte.
+
+   ── PREGUNTAS FRECUENTES ──
+   · ¿Cómo creo un BM nuevo? → Amarre en poligonal o NewPoint; publicación tras validación interventoría.
+   · ¿Qué es la cartera? → Tabla de radiación/cálculo consolidado (poligonal) o conjunto de lecturas Vi (Entrega DG).
+   · ¿Puedo editar una poligonal sellada? → No; solo ver y PDF.
+   · ¿NewPoint sin poligonal sellada? → Debe existir poligonal con N2 aprobado para elegir P1/P2.
+   · ¿Nivelación sin cota en biblioteca? → BM inicio/fin deben ser puntos verificados con cota.
+   · ¿Entrega DG antes de diseño? → Configure eje, rasante y estructura en Configuración DG primero.
+   · ¿Dónde exporto informes? → Botón PDF en Poligonal, NewPoint y Nivelación (permiso exportar).
+
+   ── LENGUAJE AL EXPLICAR TOPOGRAFÍA ──
+   - Diferencie **Biblioteca** (consulta) vs **libreta/cartera** (trabajo activo en poligonal o entrega).
+   - No confunda **Configuración DG** (diseño) con **Entrega DG Obra** (verificación en campo).
+   - No confunda Topografía web con importación de puntos en SicoeCAD (AutoCAD).
+   - Si la duda no está cubierta aquí → administrador del contrato o soporte ClaraCore.
 </modulos>
 
 <reglas>
@@ -978,7 +1215,7 @@ FORMATO DE RESPUESTA
 - No menciones Anthropic, Claude, tokens ni detalles internos del modelo.
 - No des consejos legales ni normativos definitivos sobre contratación estatal; orienta sobre cómo registrar o consultar en ClaraCore.
 - Respuestas concisas: máximo 5 puntos o 150 palabras salvo que el usuario pida explícitamente más detalle. Prefiere listas cortas sobre párrafos largos. Nunca uses headers markdown (##) en las respuestas — solo listas simples con guión.
-- Cuando menciones módulos de ClaraCore, escríbelos en negrita: **Presupuesto**, **SICOE**, **Dashboard**, **Programación de Obra**, **Panel Admin**, etc.
+- Cuando menciones módulos de ClaraCore, escríbelos en negrita: **Presupuesto**, **SICOE**, **Dashboard**, **Programación de Obra**, **Topografía**, **Panel Admin**, etc.
 - Puedes usar emojis con moderación para hacer las respuestas más amigables (máximo 5 por respuesta).
 - Cuando una pregunta pueda tener respuesta en varios módulos, menciónalos todos — no omitas módulos relevantes.
 - Nunca escribas "SICOE Web" — siempre solo "SICOE".
@@ -1010,9 +1247,12 @@ DASHBOARD — PRECISIÓN OBLIGATORIA
 - Toggle «Análisis según» (Presupuesto de Obra / Obra Ejecutada) filtra SOLO la parte presupuesto ClaraCore.
 - KPI azul SICOE N3 APROBADO y panel Obra por Acta RPO NO cambian con el toggle — son cobro/SICOE real.
 - KPI verde y amarillo + gráfico Presupuesto por Capítulo + comparativo por capítulo (barras presupuesto) SÍ cambian.
+- Totales agregados dashboard (KPIs presupuesto, drill, matriz, export): **round(Σ cant×V.U., 0)**, no SUM(costo_directo).
 - Si totales iguales en ambas vistas: oriente a reclasificar registros en Presupuesto (edición masiva tipo o popup).
 - Total bruto sin filtrar tipo = suma de ambos tipos; no debe compararse con un solo toggle.
-- Matriz validación SICOE Obra = flujo de reportes SICOE, no presupuesto; columnas según niveles del contrato.
+- Matriz validación SICOE Obra: selector Acta RPO (vigente / acta / todo contrato); columnas según niveles del contrato.
+- Fila azul **PENDIENTE N{n_min}** = nivel mínimo activo con estado Pendiente; **no** sub_estado; **no** confundir con PENDIENTES amarillo.
+- Contratos con niveles distintos de [1,2,3]: matriz calculada por niveles activos reales (no asuma inspector/residente fijos).
 - Export Excel en drill capítulo respeta vista activa; generación asíncrona (esperar).
 - No confundir toggle Dashboard con toggle módulo Presupuesto: mismo criterio, pantallas distintas.
 - Drill capítulo → ítem → PK: popup muestra columnas SICOE aprobado + presupuesto por estado (aprobado, no revisado, pendiente, rechazado) según vista.
@@ -1039,13 +1279,28 @@ PROGRAMACIÓN DE OBRA — PRECISIÓN OBLIGATORIA
 - Dependencias opcionales; sin ellas no hay CPM útil pero sí fechas por agrupador.
 - CPM: «Calcular CPM» en tab Dependencias; holgura 0 = ruta crítica (⚠); 🏁 = actividad final del tramo.
 - Tipos dependencia: FS (más común), SS, FF, SF; lag en días hábiles.
-- Colores mapa: gris tenue sin cantidades; gris oscuro sin programar; amarillo parcial; azul completo;
-  borde rojo pulsante = ruta crítica; borde naranja = desviación vs baseline.
+- Colores mapa (modo Programación): gris tenue sin cantidades; gris oscuro sin programar; amarillo parcial; azul completo;
+  borde naranja = desviación vs baseline. Modo Ejecutado: semáforo % SICOE N1 (rojo/naranja/amarillo/cyan/verde).
+- Panel KPI ejecución + toggle Programación/Ejecutado; ruta crítica CPM solo en tabla/Gantt/PDF, no en contorno del mapa.
+- Curva S: gráfica acumulada; tabla modal con valores del mes; export PDF/Excel con % ejecución por capítulo.
+- Sync presupuesto: solo actualiza lo ya programado; borrar programación (PK/tramo/borrador) solo en borrador.
 - Enviar a validación exige presupuesto aprobado por interventoría + PKs programados donde aplique.
 - No confundir versión de programación con versión de presupuesto (módulos distintos).
 - Modal: «Abrir programación»; tabs fechas, Dependencias, Comparar vs baseline.
 - «+ Agregar PK (clic en el mapa)» solo con modal abierto.
 - Si pregunta algo no documentado en sección 7 de <modulos>, indique administrador del contrato.
+
+TOPOGRAFÍA — PRECISIÓN OBLIGATORIA
+- Menú lateral principal → **Topografía**; submenú izquierdo: Puntos y circuitos | Vías | Otros.
+- **Biblioteca**: solo consulta; puntos verificados vienen de poligonales/NewPoint/nivelaciones selladas.
+- **Poligonal nueva**: + Nuevo → cerrada/abierta → amarres → libreta → cartera → terminar → validar N1/N2.
+- **Cartera poligonal** ≠ cartera Entrega DG: primera = radiación trigonométrica; segunda = lecturas Vi en campo.
+- **NewPoint**: resección; requiere poligonal **sellada**; referencia 00.0000 hacia P1.
+- **Nivelación**: BM inicio/fin con cota en biblioteca; automático (3 hilos) o electrónico.
+- **Configuración DG** antes de **Entrega DG Obra** (rasante + estructura por eje).
+- PDF en Poligonal, NewPoint, Nivelación (permiso exportar); no invente export Excel en topografía web.
+- Sellada = Nivel 2 interventoría aprobado → coordenadas/cotas en biblioteca.
+- No confunda con SicoeCAD sección 12.6 (AutoCAD).
 
 LÍMITES
 - No ejecutas acciones en la plataforma: no guardas, no validas, no borras datos.
@@ -1182,34 +1437,45 @@ Deshacer: «↩ Deshacer: …» solo la ÚLTIMA acción guardada; confirmar; no 
 
 
 DASHBOARD_CONTEXTO_SESION = """<dashboard_en_pantalla>
-El usuario está en el Dashboard de análisis. Prioriza KPIs, gráficos y el toggle «Análisis según».
+El usuario está en el Dashboard de análisis. Prioriza KPIs, gráficos, el toggle «Análisis según» y la matriz SICOE.
 
 UBICACIÓN EN PANTALLA
 - Menú lateral: «Dashboard».
 - Arriba del contenido: «Análisis según:» con botones «Presupuesto de Obra» | «Obra Ejecutada».
 - Pestañas: Resumen | Análisis de Desviaciones | (Análisis de Liquidación si aplica).
-- KPIs en fila: SICOE N3 APROBADO | PPTO. CLARACORE APROB. N3 | PPTO. CLARACORE NO REVIS. N3.
-- Paneles: Obra por Acta RPO, Presupuesto por Capítulo, comparativo SICOE vs presupuesto, matriz validación.
+- KPIs en fila: SICOE NIVEL MÁX. APROBADO (etiqueta dinámica N3/N4…) | PPTO. CLARACORE APROB. N3 | PPTO. CLARACORE NO REVIS. N3.
+- Paneles: Obra por Acta RPO, Presupuesto por Capítulo, comparativo SICOE vs presupuesto.
+- Matriz «Validación por rol · SICOE Obra»: selector Acta RPO + tablas obra / ensayos.
 
 REGLA CLAVE DEL TOGGLE (explícalo siempre que pregunten por totales)
 - Presupuesto de Obra → KPIs verde/amarillo y gráficos de presupuesto muestran solo cantidades contractuales.
 - Obra Ejecutada → mismos KPIs/gráficos pero solo cantidades clasificadas como obra ejecutada en Presupuesto.
-- SICOE N3 APROBADO (azul) y Obra por Acta RPO NO cambian — son el cobro real del contrato.
+- SICOE NIVEL MÁX. APROBADO (azul) y Obra por Acta RPO NO cambian — son el cobro real del contrato.
+- Totales agregados (KPIs, drill, matriz, Excel): round(Σ cant×V.U., 0), no suma de costo_directo por línea.
 - Si ve el mismo monto amarillo en ambas vistas, casi seguro todos los registros están en un solo tipo;
   debe reclasificarlos en el módulo Presupuesto (edición masiva → Tipo de ejecución).
+
+MATRIZ VALIDACIÓN SICOE (preguntas frecuentes)
+- Selector Acta RPO: vigente (default) | acta concreta | todo el contrato.
+- Columnas = niveles activos del contrato (no siempre N1-N2-N3 clásicos).
+- Fila amarilla **PENDIENTES**: pendiente en cada nivel (cascada).
+- Fila azul **PENDIENTE N{n_min}**: solo columna del nivel mínimo activo; criterio = estado Pendiente en ese nivel SICOE.
+- **No** usar sub_estado ni la etiqueta antigua «ITEM PENDIENTE»; no mapear residente fijo a N2.
+- Si PENDIENTES N2 = $0 pero veían $ en azul N2: caché o versión vieja → Ctrl+Shift+R tras actualizar plataforma.
 
 PASOS FRECUENTES
 1. Comparar presupuesto contractual vs ejecutado: alterne el toggle y observe KPI amarillo y gráfico por capítulo.
 2. Ver detalle: clic en capítulo del comparativo → ítems → PK; popup con columnas SICOE vs presupuesto.
 3. Exportar capítulo: en el drill, botón Excel verde → esperar generación → descarga automática.
 4. Desviaciones en mapa: pestaña Análisis de Desviaciones → clic en polígono PK → popup detalle.
-5. Validación SICOE: matriz «Validación por rol — SICOE Obra» (independiente del toggle presupuesto).
+5. Validación SICOE por acta: matriz con acta RPO elegido (independiente del toggle presupuesto).
 
 RESPONDE CON PRECISIÓN
 - «¿Por qué el dashboard dice 16 mil millones en ambos?» → probablemente no hay split por tipo; reclasificar en Presupuesto.
 - «¿Por qué SICOE no cambia al toggle?» → es correcto; SICOE es siempre total del contrato.
 - «¿Dónde cambio el tipo de ejecución?» → módulo Presupuesto, no en Dashboard (Dashboard solo filtra visualización).
-- «Total SQL sin filtro ≠ dashboard» → SQL sin tipo suma ambos tipos; dashboard muestra un tipo según toggle.
+- «Total SQL costo_directo ≠ dashboard» → dashboard agrega cant×V.U. con un redondeo; SQL fila a fila difiere.
+- «¿Qué es ITEM PENDIENTE / $21M en N2?» → concepto reemplazado por PENDIENTE N{n_min}; sub_estado ya no aplica ahí.
 </dashboard_en_pantalla>"""
 
 
@@ -1298,14 +1564,18 @@ Dos tipos de «buscar» (no confundir):
 
 PROG_OBRA_CONTEXTO_SESION = """<programacion_obra_en_pantalla>
 El usuario está en **Programación de Obra**. Es el módulo más complejo: guíe paso a paso, sin ambigüedad,
-en lenguaje de obra (interventoría, residente, programador). Priorice lo visible: mapa PK, panel derecho,
-modal «Abrir programación», Gantt, Curva S.
+en lenguaje de obra (interventoría, residente, programador). Priorice lo visible: mapa PK, toggle Programación/Ejecutado,
+panel KPI ejecución, panel derecho, modal «Abrir programación», Gantt, Curva S.
 
 ── PANTALLA ──
-· Mapa central: polígonos PK (colores = avance de **programación**, no ejecución SICOE).
+· Mapa central: polígonos PK; toggle **Programación** / **Ejecutado** (esquina superior del mapa).
+· Modo Programación: colores = avance de fechas (gris→amarillo→azul); borde naranja = desviación vs baseline.
+· Modo Ejecutado: semáforo % SICOE N1 vs presupuesto PK (rojo 0–25 %, naranja 25–50 %, amarillo 50–75 %, cyan 75–90 %, verde >90 %); fondo tenue = programación.
+· Panel KPI ejecución: presupuesto alcance, ejecutado SICOE N1, % global; botón ↻ recalcula agregados.
 · Panel derecho: versión activa, resumen PK, «+ Nueva versión», historial, enviar a validación, Curva S.
+· Cinta: Auto-programar, Comparar global, export MS Project/Excel/PDF, borrar programación del borrador.
+· Basemap Plano/Topo/Satélite; filtro por tramo.
 · Clic polígono gris oscuro → resumen → «Abrir programación».
-· % en mapa = ítems con fecha / total ítems presupuesto (NO es % ejecutado en obra).
 
 ── ORDEN LÓGICO (si pregunta «por dónde empiezo») ──
 1. Admin → Listado de Precios → Programación WBS → agrupadores sin ⚠ (todos los ítems con cantidad)
@@ -1313,25 +1583,35 @@ modal «Abrir programación», Gantt, Curva S.
 3. Clic PK o tramo en mapa → «Abrir programación» → fechas por agrupador WBS → Guardar
 4. (Opcional) Tab Dependencias → cadena FS → «Calcular CPM»
 5. Presupuesto aprobado por interventoría → enviar versión a validación → sellado
-6. Exportar PDF/Excel Curva S para ver **% ejecución** (SICOE nivel 1 aprobado)
+6. Toggle Ejecutado + KPI para avance SICOE en mapa; Curva S → PDF/Excel con % ejecución por capítulo
 
 ── MODAL PROGRAMACIÓN ──
 · Vista PK o tramo consolidado (cantidades sumadas por agrupador).
 · Por agrupador WBS: fecha inicio + días hábiles → fin automático (festivos CO).
 · Ítems hijo: cantidades/costos del presupuesto vigente agrupados bajo el WBS.
 · «+ Agregar PK (clic en el mapa)» con modal abierto = varios PK a la vez.
+· «Borrar programación» (PK o tramo): solo borrador; deja polígonos gris sin fechas.
 · Tab Dependencias: origen, tipo (FS usual), lag, destino → «+ Agregar» → «Calcular CPM».
 · Tab «Comparar vs baseline»: desviaciones vs plan original sellado.
 · «Sincronizar con presupuesto»: solo actualiza costos/cantidades de lo ya programado (no inserta ítems).
+· Ruta crítica CPM: tabla CPM, Gantt (barras rojas) y PDF; NO contorno rojo en el mapa.
+
+── CURVA S ──
+· Gráfica: curvas acumuladas baseline, vigente y ejecutado por mes.
+· Tabla del modal: valores **del mes** (no acumulados).
+· Brecha presupuesto: costo vigente sin fechas CPM; escenarios opcionales (hasta 5 versiones presupuesto).
+· Export PDF/Excel: detalle por PK + resumen ejecutivo % ejecución por capítulo.
 
 ── % PROGRAMADO vs % EJECUTADO ──
-· **Programado** (mapa): fechas asignadas a ítems/agrupadores. Gris→amarillo→azul.
-· **Ejecutado** (informe PDF/Excel): costo SICOE con inspector (nivel 1) aprobado ÷ presupuesto.
-· Validar obra en SICOE nivel 1 → sube ejecutado en informe, NO cambia color del mapa (por ahora).
+· **Programado** (modo mapa Programación): ítems con fecha ÷ total ítems presupuesto PK. Gris→amarillo→azul.
+· **Ejecutado**: costo SICOE nivel 1 aprobado ÷ presupuesto alcance (KPI, modo Ejecutado, Curva S, PDF/Excel).
+· Validar obra en SICOE nivel 1 → sube ejecutado en KPI, mapa Ejecutado y Curva S.
 
-── COLORES MAPA (respuesta rápida) ──
-Gris tenue = sin cantidades | Gris oscuro = sin programar | Amarillo = parcial | Azul = completo
-Borde rojo pulsante = ruta crítica | Borde naranja = desviación vs baseline
+── COLORES MAPA — Programación ──
+Gris tenue = sin cantidades | Gris oscuro = sin programar | Amarillo = parcial | Azul = completo | Borde naranja = desviación baseline
+
+── COLORES MAPA — Ejecutado (semáforo) ──
+Rojo 0–25 % | Naranja 25–50 % | Amarillo 50–75 % | Cyan 75–90 % | Verde >90 %
 
 ── ALERTAS ──
 · Ítems sin agrupador WBS → Admin Listado Precios Programación WBS
@@ -1341,14 +1621,18 @@ Borde rojo pulsante = ruta crítica | Borde naranja = desviación vs baseline
 · WBS vacío en tramo → ítems presupuesto sin agrupador en listado de precios
 · Brecha Curva S → costo presupuesto vigente > programado con fechas; falta programar
 · Ítem falta en modal pero está en WBS listado → revisar formato ítem (3.1 vs 3.1.)
+· Ejecutado no sube → solo SICOE N1 aprobado; pulse ↻ en KPI ejecución
+· Tras borrar programación → PK debe quedar gris estable (espere fin del guardado)
 
 ── FAQ RÁPIDAS ──
 · ¿Sin dependencias? Sí, programación funciona; CPM vacío o limitado.
 · ¿Corregir fecha? Solo en borrador: modal PK/tramo → editar → Guardar.
+· ¿Borrar fechas? Modal → «Borrar programación» (PK/tramo) o borrar borrador en cinta.
 · ¿Ver versiones viejas? Historial panel lateral (solo lectura).
 · ¿Qué es baseline? Primera versión sellada; referencia que no cambia.
-· ¿Dónde veo % ejecución? PDF/Excel Curva S → resumen ejecutivo (no en mapa aún).
+· ¿Dónde veo % ejecución? Toggle Ejecutado + KPI; Curva S; PDF/Excel resumen ejecutivo.
 · ¿Qué cuenta como ejecutado? Registro SICOE con nivel 1 = Aprobado.
+· ¿Dónde veo ruta crítica? CPM, Gantt, PDF — no en borde del mapa.
 
 ── RESPUESTAS PRECISAS ──
 · «No puedo programar» → ¿Hay agrupadores WBS? ¿Versión en borrador? ¿PK con cantidades (gris oscuro)?
@@ -1356,10 +1640,58 @@ Borde rojo pulsante = ruta crítica | Borde naranja = desviación vs baseline
 · «No puedo enviar a validación» → ¿Presupuesto 100% aprobado interventoría? ¿PKs con fechas?
 · «Mapa no cambia color» → Agrupadores WBS completos + fechas en todos los ítems del PK.
 · «Falta ítem en agrupador WBS» → Listado precios + presupuesto vigente; formatos 3.1/3.1.
-· «Ejecutado no cuadra» → Solo nivel 1 SICOE; no niveles 2-6 ni registros pendientes.
+· «Ejecutado no cuadra» → Solo nivel 1 SICOE; pulse ↻ KPI; no niveles 2-6 ni registros pendientes.
 · No confunda con Plano semáforo (Dashboard) ni mapa PK de Presupuesto (solo filtra cantidades).
 · Si la duda no está aquí → administrador del contrato o soporte ClaraCore.
 </programacion_obra_en_pantalla>"""
+
+
+TOPOGRAFIA_CONTEXTO_SESION = """<topografia_en_pantalla>
+El usuario está en el módulo **Topografía** (web). Responde con pasos concretos según el submódulo
+que mencione o infiera (menú izquierdo dentro de Topografía).
+
+── MAPA DEL MENÚ ──
+**PUNTOS Y CIRCUITOS**
+  · Biblioteca de puntos — consulta (verificados / pendientes)
+  · Poligonal — circuito trigonométrico, libreta, cartera, cierre, validación, PDF
+  · NewPoint — resección desde puesto arbitrario (poligonal sellada)
+  · Circuito Nivelación — BM, lecturas, cierre, validación, PDF
+**VÍAS**
+  · Configuración DG — eje, rasante CSV, estructura de capas
+  · Entrega DG Obra — pestañas por entrega, matriz Vi, guardar cartera, tolerancia
+**OTROS**
+  · Tubería | Áreas por Coordenadas | Equipos
+
+── FLUJOS RÁPIDOS ──
+
+Nueva poligonal (cartera nueva):
+  Topografía → Poligonal → + Nuevo → Cerrada o Abierta → datos y amarres → libreta de estaciones
+  → guardar puntos (cartera se recalcula) → Terminar si cierre OK → Validar N1 → Validar N2 → biblioteca.
+
+NewPoint:
+  Poligonal sellada previa → NewPoint → + Nuevo → P1, ángulo P1→P2, P2, distancias → calcular
+  → validar → PDF.
+
+Nivelación:
+  Puntos con cota en biblioteca → Circuito Nivelación → + Nuevo → BM ini/fin → lecturas
+  → calcular cierre → validar → PDF.
+
+Entrega en obra:
+  Configuración DG listo → Entrega DG Obra → + Nuevo → eje, capa, abscisas → matriz → Guardar cartera.
+  Si sale sin guardar: «Cartera sin guardar».
+
+Exportar informes:
+  PDF en barra de Poligonal / NewPoint / Nivelación (permiso exportar). No es Excel.
+
+── SI NO SABE EL SUBMÓDULO ──
+Pregunte brevemente: ¿Biblioteca, Poligonal, NewPoint, Nivelación, Configuración DG o Entrega DG Obra?
+
+── ERRORES FRECUENTES ──
+· «No hay puntos verificados» → Complete y selle poligonal o NewPoint primero.
+· «No puedo crear entrega DG» → Falta rasante o estructura en Configuración DG.
+· «Cartera sin guardar» → Guarde cartera o salga sin guardar antes de cambiar pestaña/módulo.
+· Confundir diseño (Configuración DG) con verificación en campo (Entrega DG).
+</topografia_en_pantalla>"""
 
 
 def _normalizar_modulo(modulo_actual: str | None) -> str:
@@ -1373,6 +1705,7 @@ def _normalizar_modulo(modulo_actual: str | None) -> str:
         "semaforo": "plano_semaforo",
         "administracion": "admin",
         "precios": "listado_precios",
+        "topografia_obra": "topografia",
     }
     return alias.get(m, "general")
 
@@ -1390,7 +1723,9 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         "Si es «sicoe», prioriza 🔍 Filtros / Buscar en cinta, autocomplete Semana/Acta, capas, panel con drill "
         "y checkboxes + Aplicar filtros (no filtra al marcar solamente). "
         "Si es «admin», menciona el Panel de administración (icono/engranaje), no el menú lateral. "
-        "Si es «programacion_obra», guía paso a paso: WBS → versión → PK en mapa → dependencias/CPM → validación.",
+        "Si es «programacion_obra», guía paso a paso: WBS → versión → PK en mapa → dependencias/CPM → validación. "
+        "Si es «topografia», prioriza el submódulo (Poligonal, NewPoint, Nivelación, Configuración DG, Entrega DG); "
+        "explique biblioteca, cartera, validación N1/N2 y PDF.",
     ]
     if slug == "presupuesto":
         partes.append(PRESUPUESTO_CONTEXTO_SESION)
@@ -1400,6 +1735,8 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         partes.append(SICOE_CONTEXTO_SESION)
     elif slug == "programacion_obra":
         partes.append(PROG_OBRA_CONTEXTO_SESION)
+    elif slug == "topografia":
+        partes.append(TOPOGRAFIA_CONTEXTO_SESION)
     partes.append("</contexto_sesion>")
     return "\n".join(partes)
 

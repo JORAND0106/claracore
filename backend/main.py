@@ -17540,7 +17540,7 @@ def _acta_rpo_id_matriz_dashboard_default(contrato_id: int) -> Optional[int]:
     """
     Acta por defecto del GET dashboard-matriz-validacion (sin acta_rpo, todo_contrato=false):
     bundle vigente o acta RPO cuyo período contiene hoy.
-    Usado para alinear el filtro pendiente_item con la fila PENDIENTES: ITEM PENDIENTE.
+    Usado para alinear el filtro pendiente_item con la fila «PENDIENTE N{n_min}» de la matriz dashboard.
     """
     try:
         campo_max = _get_nivel_maximo_contrato(contrato_id)
