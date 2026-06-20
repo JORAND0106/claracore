@@ -12,7 +12,7 @@
  *   ModuloContext — frontend/src/context/ModuloContext.jsx
  *   apiBase.js    — API_BASE
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { createPortal } from 'react-dom'
 import { Bot, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
@@ -87,9 +87,20 @@ function parseMarkdown(texto) {
   return elements
 }
 
+// ── Contexto (botón en header + panel global) ─────────────────────────────────
+
+const AviContext = createContext(null)
+
+/** Botón de Clara para la barra superior (entre usuario y notificaciones). */
+export function AVITriggerButton({ t }) {
+  const ctx = useContext(AviContext)
+  if (!ctx) return null
+  return ctx.renderTrigger(t)
+}
+
 // ── Componente ────────────────────────────────────────────────────────────────
 
-export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
+export default function AVI({ usuario, fontSize: _fontSize = 'normal', children }) {
   const { moduloActivo } = useModulo()
 
   // Estado del panel
@@ -133,10 +144,6 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
         0%, 80%, 100% { opacity: 0.25; transform: translateY(0);    }
         40%            { opacity: 1;    transform: translateY(-4px); }
       }
-      @keyframes _avi_fab_float {
-        0%, 100% { transform: translateY(0); }
-        50%      { transform: translateY(-5px); }
-      }
       ._avi_dot {
         display: inline-block; width: 6px; height: 6px;
         border-radius: 50%; background: #999; margin: 0 2px;
@@ -144,14 +151,22 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
       }
       ._avi_dot:nth-child(2) { animation-delay: 0.18s; }
       ._avi_dot:nth-child(3) { animation-delay: 0.36s; }
-      .cc-avi-fab {
-        position: fixed !important;
-        z-index: 100050;
+      .cc-avi-trigger {
+        position: relative;
         pointer-events: auto;
-        animation: _avi_fab_float 3.2s ease-in-out infinite;
+        flex-shrink: 0;
       }
-      .cc-avi-fab--pressed { animation: none !important; }
-      .cc-avi-fab--panel-open { animation: none !important; }
+      .cc-avi-trigger-btn {
+        animation: _avi_trigger_float 3.6s ease-in-out infinite;
+      }
+      .cc-avi-trigger-btn--pressed,
+      .cc-avi-trigger-btn--open {
+        animation: none !important;
+      }
+      @keyframes _avi_trigger_float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-3px); }
+      }
     `
     document.head.appendChild(s)
   }, [])
@@ -414,89 +429,101 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
 
   const puedEnviar = (input.trim().length > 0 || !!imagenBase64) && !enviando
 
-  const fabRight = abierto ? Math.min(panelAncho + 16, typeof window !== 'undefined' ? window.innerWidth - 80 : panelAncho + 16) : 24
-  const fabBottom = 'max(24px, env(safe-area-inset-bottom, 0px))'
+  const renderTrigger = useCallback((t) => {
+    const title = abierto ? 'Cerrar chat con Clara' : 'Abrir asistente Clara — ayuda con ClaraCore'
+    const primary = t?.primary || '#0077B6'
+    const bg = t?.bgCard || t?.bg || '#f3f4f6'
+    const textColor = t?.text || '#1e293b'
+    const borderColor = abierto ? '#00B4C6' : primary
 
-  // ── Render (portal: flotante sobre toda la app, sin quedar preso al layout) ──
-  const ui = (
-    <>
-      {/* ── Botón flotante ──────────────────────────────────────────────────── */}
-      <button
-        type="button"
-        className={`cc-avi-fab${fabPressed ? ' cc-avi-fab--pressed' : ''}${abierto ? ' cc-avi-fab--panel-open' : ''}`}
-        onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
-        onMouseDown={() => setFabPressed(true)}
-        onMouseUp={() => setFabPressed(false)}
-        aria-label={abierto ? 'Cerrar chat con Clara' : 'Abrir chat con Clara'}
-        aria-expanded={abierto}
-        style={{
-          bottom: fabBottom,
-          right: `${fabRight}px`,
-          width: '58px',
-          height: '58px',
-          borderRadius: '50%',
-          background: 'linear-gradient(145deg, #0077B6 0%, #00B4C6 100%)',
-          border: 'none',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: fabPressed
-            ? '0 2px 10px rgba(0,50,90,0.35), 0 0 0 2px rgba(0,180,198,0.25)'
-            : '0 8px 28px rgba(0,50,90,0.42), 0 0 32px rgba(0,180,198,0.38)',
-          transform: fabPressed ? 'scale(0.94)' : undefined,
-          transition: 'right 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.18s ease, box-shadow 0.18s ease',
-          flexShrink: 0,
-        }}
-        onMouseLeave={() => setFabPressed(false)}
-      >
-        <span aria-hidden style={{ position: 'relative', width: '40px', height: '40px', display: 'block' }}>
-          <svg width="40" height="40" viewBox="0 0 40 40" style={{ display: 'block' }}>
-            <defs>
-              <clipPath id="aviFabLogoClip">
-                <circle cx="20" cy="20" r="18" />
-              </clipPath>
-            </defs>
-            <image
-              href="/favicon.png?v=3"
-              x="2"
-              y="2"
-              width="36"
-              height="36"
-              clipPath="url(#aviFabLogoClip)"
-              preserveAspectRatio="xMidYMid slice"
-            />
-          </svg>
-          <span
-            style={{
-              position: 'absolute', bottom: '-1px', right: '-1px',
-              width: '18px', height: '18px', borderRadius: '50%',
-              background: '#00B4C6',
-              border: '2px solid #fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 1px 4px rgba(0,50,90,0.35)',
-              pointerEvents: 'none',
-            }}
-          >
-            <i className="ti ti-robot" style={{ fontSize: '14px', color: '#fff', lineHeight: 1 }} />
+    return (
+      <div className="cc-avi-trigger" style={{ position: 'relative' }}>
+        <button
+          type="button"
+          className={`cc-avi-trigger-btn${fabPressed ? ' cc-avi-trigger-btn--pressed' : ''}${abierto ? ' cc-avi-trigger-btn--open' : ''}`}
+          onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
+          onMouseDown={() => setFabPressed(true)}
+          onMouseUp={() => setFabPressed(false)}
+          onMouseLeave={() => setFabPressed(false)}
+          aria-label={title}
+          aria-expanded={abierto}
+          title={title}
+          style={{
+            background: bg,
+            color: textColor,
+            border: `2px solid ${borderColor}`,
+            borderRadius: '999px',
+            padding: '6px 16px 6px 8px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            minHeight: '36px',
+            fontSize: 'var(--cc-sm)',
+            fontWeight: '700',
+            letterSpacing: '0.02em',
+            lineHeight: 1.1,
+            whiteSpace: 'nowrap',
+            transform: fabPressed ? 'scale(0.98) translateY(1px)' : undefined,
+            transition: 'transform 0.12s ease, box-shadow 0.2s ease, border-color 0.15s ease',
+            boxShadow: abierto
+              ? `0 8px 22px rgba(0,119,182,0.2), 0 4px 10px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.65)`
+              : `0 6px 18px rgba(0,0,0,0.1), 0 3px 8px rgba(0,119,182,0.14), inset 0 1px 0 rgba(255,255,255,0.55)`,
+          }}
+        >
+          <span aria-hidden style={{ position: 'relative', width: '26px', height: '26px', display: 'block', flexShrink: 0 }}>
+            <svg width="26" height="26" viewBox="0 0 40 40" style={{ display: 'block' }}>
+              <defs>
+                <clipPath id="aviHeaderLogoClip">
+                  <circle cx="20" cy="20" r="18" />
+                </clipPath>
+              </defs>
+              <image
+                href="/favicon.png?v=3"
+                x="2"
+                y="2"
+                width="36"
+                height="36"
+                clipPath="url(#aviHeaderLogoClip)"
+                preserveAspectRatio="xMidYMid slice"
+              />
+            </svg>
+            <span
+              style={{
+                position: 'absolute', bottom: '-2px', right: '-3px',
+                width: '13px', height: '13px', borderRadius: '50%',
+                background: '#00B4C6',
+                border: '1.5px solid #fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 1px 3px rgba(0,50,90,0.35)',
+                pointerEvents: 'none',
+              }}
+            >
+              <i className="ti ti-robot" style={{ fontSize: '9px', color: '#fff', lineHeight: 1 }} />
+            </span>
           </span>
-        </span>
+          <span>Asistente</span>
+        </button>
         {badgeVisible && !abierto && (
           <span style={{
-            position: 'absolute', top: '-2px', right: '-2px',
-            width: '20px', height: '20px', borderRadius: '50%',
-            background: '#E53E3E', color: '#fff', fontSize: 'var(--cc-caption)',
+            position: 'absolute', top: '-3px', right: '-3px',
+            width: '16px', height: '16px', borderRadius: '50%',
+            background: '#E53E3E', color: '#fff', fontSize: '10px',
             fontWeight: '700', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', border: '2.5px solid #fff',
+            justifyContent: 'center', border: '2px solid #fff',
             lineHeight: 1, pointerEvents: 'none',
-            boxShadow: '0 2px 8px rgba(229,62,62,0.45)',
+            boxShadow: '0 1px 6px rgba(229,62,62,0.45)',
           }}>
             1
           </span>
         )}
-      </button>
+      </div>
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abierto, fabPressed, badgeVisible, handleAbrirPanel, handleCerrarPanel])
 
-      {/* ── Panel lateral deslizante ─────────────────────────────────────────── */}
+  const panel = (
       <div
         role="complementary"
         aria-label="Clara — Asistente ClaraCore"
@@ -829,10 +856,14 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
         )}
         </div>
       </div>
-    </>
   )
 
-  if (!usuario) return null
-  if (typeof document === 'undefined') return ui
-  return createPortal(ui, document.body)
+  if (!usuario) return children ?? null
+
+  return (
+    <AviContext.Provider value={{ renderTrigger }}>
+      {children}
+      {typeof document !== 'undefined' ? createPortal(panel, document.body) : panel}
+    </AviContext.Provider>
+  )
 }

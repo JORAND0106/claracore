@@ -66,7 +66,7 @@ const PASOS = [
           proyecto.
         </li>
         <li>
-          <strong>En el mapa:</strong> borde rojo pulsante = ese sector tiene actividades en ruta crítica.
+          <strong>En Gantt y tabla CPM:</strong> barras o filas en rojo = actividades en ruta crítica (no se resalta en el contorno del mapa).
         </li>
       </ul>
     ),
@@ -410,7 +410,7 @@ export default function ProgObraDepAyuda({ open, onClose, t }) {
           <AccordionItem id="ruta" title="¿Qué es la Ruta Crítica?" openId={openId} onToggle={handleToggle} t={t}>
             <p style={{ margin: 0 }}>
               La secuencia de actividades que determina la duración mínima del proyecto. Cualquier retraso en la ruta
-              crítica retrasa toda la obra. En el Gantt y el mapa se resalta en rojo.
+              crítica retrasa toda la obra. En el Gantt y la tabla CPM se resalta en rojo.
             </p>
           </AccordionItem>
 

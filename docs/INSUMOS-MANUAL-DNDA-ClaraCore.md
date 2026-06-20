@@ -204,12 +204,15 @@
   - **Satélite:** `mapbox://styles/mapbox/satellite-streets-v12` + **terreno DEM** Mapbox (`mapbox-terrain-dem-v1`, exageración 1.5). En modos no satélite se retira el terreno para evitar conflictos.
 - **Plano del contrato:** GeoJSON obtenido con caché (`getContratoPlanoGeojson`) y **sanitizado** (`sanitizePlanoFeatureCollection`) antes de pintar.
 - **Polígonos de programación:** capas `prog-fill` y `prog-line` sobre fuente GeoJSON enriquecida con propiedades `prog_fill`, `prog_op`, `prog_line` derivadas del estado por PK.
-- **Colores por estado** (`prog_pk_estado` / función `colorForEstado`):
+- **Colores por estado** (`prog_pk_estado` / función `colorForEstado`) — modo **Programación**:
   - `sin_cantidad`: relleno `#94a3b8`, borde `#64748b`, opacidad baja (PK sin ítems activos de presupuesto poligonal).
   - `sin_iniciar`: `#888780`.
   - `en_progreso`: `#EF9F27`.
-  - `completa`: `#1D9E75`.
-- **Leyenda** fija alineada con `MAPA_LEYENDA_ESTADOS` (etiqueta + descripción + color).
+  - `completa`: `#2563EB` (azul).
+  - Desviación vs baseline: borde naranja (`#f97316`) cuando aplica reprogramación.
+- **Modo Ejecutado** (toggle mapa): capa semáforo por `% ejecutado` vs presupuesto PK (`colorForEjecutadoPct`): rojo 0–25 %, naranja 25–50 %, amarillo 50–75 %, cyan 75–90 %, verde >90 %; fondo tenue del estado de programación.
+- **Panel KPI ejecución** (N1 SICOE): presupuesto alcance, ejecutado, % global; refresh vía `GET/POST .../ejecucion/*` y cache `prog_pk_ejecutado`.
+- **Leyenda** dinámica según modo (`MAPA_LEYENDA_ESTADOS` / `MAPA_LEYENDA_EJECUTADO`).
 - **Interacción:** clic en polígono selecciona PK; cursor puntero en hover; enlaces de atribución Mapbox abren en nueva pestaña.
 - **Props de permiso:** `puedeEditar`, `puedeCrear`, `puedeValidar` desde matriz de cargo (ver `prog_obra_permissions.py`).
 
@@ -240,7 +243,8 @@
 
 #### 1.8.5 API (`/prog-obra/...`)
 
-- `GET .../mapa` — filas RPC `prog_mapa_pk_estados` + meta vigente/borrador.
+- `GET .../mapa` — filas RPC `prog_mapa_pk_estados` enriquecidas con ejecutado + meta vigente/borrador.
+- `GET .../ejecucion/resumen`, `POST .../ejecucion/refresh` — KPI y recálculo cache `prog_pk_ejecutado`.
 - `GET/POST/DELETE .../versiones`, `GET .../versiones/{id}/validaciones`, `POST .../enviar-validacion`, `POST .../validar`.
 - `GET .../actividades`, `POST .../capitulo`, `POST .../actividad`, `POST .../herencia`, `POST .../actividades/{id}/recalcular-fin`, `POST .../validar-segmentos`.
 - `GET .../calcular-fin` — utilidad de fecha fin desde inicio + días hábiles.
@@ -450,7 +454,7 @@
 ### 3.3 Sistema de colores y semáforos
 
 - Estados SICOE en validación: paleta centralizada (`COLOR_ESTADO` — verdes, ámbar, rojos, púrpura para ReversionN3, etc.).
-- Programación de obra en mapa: gris claro (sin cantidad), gris (sin iniciar), naranja (en progreso), verde (completa).
+- Programación de obra en mapa (modo Programación): gris claro (sin cantidad), gris (sin iniciar), ámbar (en progreso), azul (completa); borde naranja = desviación baseline. Modo Ejecutado: semáforo rojo→verde por % SICOE N1.
 - Temas **light / dark / rest** con tokens coherentes (`AdminPanel` documenta alineación con `App.jsx`).
 
 ### 3.4 Mapas interactivos
@@ -484,7 +488,7 @@
 4. **Enviar a validación:** estado `en_validacion`, cola `prog_validaciones` en pendiente por cada nivel configurado (≥2).
 5. Validadores con permiso **validar** y nivel SICOE coincidente aprueban en orden; la última aprobación **sellada** versión y fija vigente en contrato.
 6. **Rechazo:** observación obligatoria → vuelve a **borrador** + notificación al creador.
-7. **Mapa:** RPC + GeoJSON muestran estados de la **versión vigente sellada** y meta de borrador para trabajo en curso.
+7. **Mapa:** toggle Programación/Ejecutado; RPC + GeoJSON con estados del borrador activo (o vigente si no hay borrador); capa ejecutado desde cache `prog_pk_ejecutado`; Curva S e informes PDF/Excel con % ejecución por capítulo.
 
 ### 4.3 Flujo de presupuesto
 
