@@ -393,7 +393,7 @@ def _handle_inline_action_callback(
 
     if on_action:
         try:
-            on_action(notificacion_id)
+            on_action(notificacion_id, callback_query)
         except Exception:
             _log.exception(
                 "callback %s falló para notificacion_id=%s (Telegram ya actualizado)",

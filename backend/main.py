@@ -10281,6 +10281,157 @@ _SUGERENCIA_ANOTADA_MENSAJE = (
     "💡 Tu sugerencia fue recibida y anotada. ¡Gracias! "
     "Las mejores ideas vienen de quienes usan la plataforma todos los días."
 )
+_SOPORTE_BOGOTA = pytz.timezone("America/Bogota")
+
+
+def _soporte_es_error(row: dict) -> bool:
+    asunto = (row.get("asunto") or "").strip()
+    mensaje = row.get("mensaje") or ""
+    return asunto.startswith("[Error]") or "── Reporte de error ──" in mensaje
+
+
+def _soporte_es_sugerencia(row: dict) -> bool:
+    asunto = (row.get("asunto") or "").strip()
+    mensaje = row.get("mensaje") or ""
+    return asunto.startswith("[Mejora]") or "── Sugerencia de mejora ──" in mensaje
+
+
+def _soporte_tipo_reporte(row: dict) -> str:
+    if _soporte_es_error(row):
+        return "error"
+    if _soporte_es_sugerencia(row):
+        return "sugerencia"
+    return "otro"
+
+
+def _soporte_parse_urgencia(mensaje: str) -> Optional[str]:
+    if not mensaje:
+        return None
+    for line in mensaje.splitlines():
+        s = line.strip()
+        if s.startswith("Criticidad:"):
+            return s[11:].strip() or None
+        if s.startswith("Urgencia:"):
+            return s[9:].strip() or None
+    return None
+
+
+def _soporte_descripcion_resumen(mensaje: str, max_len: int = 220) -> str:
+    if not mensaje:
+        return ""
+    if "── Reporte de error ──" in mensaje:
+        m = re.search(r"Descripción:\s*\n([\s\S]+?)(?:\n\n|\Z)", mensaje)
+        text = (m.group(1).strip() if m else mensaje).replace("\n", " ")
+    elif "── Sugerencia de mejora ──" in mensaje:
+        _, _, body = mensaje.partition("── Sugerencia de mejora ──")
+        text = body.strip().replace("\n", " ")
+    else:
+        text = mensaje.strip().replace("\n", " ")
+    if len(text) > max_len:
+        return text[: max_len - 1] + "…"
+    return text
+
+
+def _parse_ts_bogota(iso_val) -> Optional[datetime]:
+    if iso_val is None or iso_val == "":
+        return None
+    try:
+        s = str(iso_val).strip().replace(" ", "T")
+        if not re.search(r"[Zz]|[+-]\d{2}:", s):
+            s += "Z"
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_SOPORTE_BOGOTA)
+    except Exception:
+        return None
+
+
+def _es_hoy_bogota(iso_val) -> bool:
+    dt = _parse_ts_bogota(iso_val)
+    if not dt:
+        return False
+    return dt.date() == datetime.now(_SOPORTE_BOGOTA).date()
+
+
+def _registrar_gestion_soporte(
+    notificacion_soporte_id: int,
+    estado: str,
+    origen: str,
+    por_nombre: str,
+) -> bool:
+    """Actualiza fila SOPORTE. Retorna False si no existe o ya fue gestionada."""
+    try:
+        rows = (
+            supabase.table("notificaciones")
+            .select("id, soporte_estado, tipo")
+            .eq("id", notificacion_soporte_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows or (rows[0].get("tipo") or "").upper() != "SOPORTE":
+            return False
+        if rows[0].get("soporte_estado"):
+            return False
+        now = datetime.now(_SOPORTE_BOGOTA)
+        supabase.table("notificaciones").update(
+            {
+                "soporte_estado": estado,
+                "soporte_gestionado_at": now.isoformat(),
+                "soporte_gestionado_por_nombre": (por_nombre or "Usuario").strip() or "Usuario",
+                "soporte_gestion_origen": origen,
+            }
+        ).eq("id", notificacion_soporte_id).execute()
+        return True
+    except Exception as e:
+        _log_api.exception(
+            "registrar_gestion_soporte falló id=%s: %s",
+            notificacion_soporte_id,
+            e,
+        )
+        return False
+
+
+def _nombre_desde_telegram_callback(callback_query: Optional[dict]) -> str:
+    u = (callback_query or {}).get("from") or {}
+    parts = [u.get("first_name"), u.get("last_name")]
+    name = " ".join(p for p in parts if p).strip()
+    if name:
+        return name
+    un = (u.get("username") or "").strip()
+    return f"@{un}" if un else "Telegram"
+
+
+def _on_telegram_gestionado(notif_id: int, callback_query: Optional[dict] = None) -> None:
+    nombre = _nombre_desde_telegram_callback(callback_query)
+    if _registrar_gestion_soporte(notif_id, "gestionado", "telegram", nombre):
+        _notificar_usuario_reporte_atendido(notif_id)
+
+
+def _on_telegram_anotado(notif_id: int, callback_query: Optional[dict] = None) -> None:
+    nombre = _nombre_desde_telegram_callback(callback_query)
+    if _registrar_gestion_soporte(notif_id, "anotado", "telegram", nombre):
+        _notificar_usuario_sugerencia_anotada(notif_id)
+
+
+def _serializar_reporte_soporte(row: dict) -> dict:
+    mensaje = row.get("mensaje") or ""
+    return {
+        "id": row.get("id"),
+        "asunto": row.get("asunto"),
+        "created_at": row.get("created_at"),
+        "remitente_nombre": row.get("remitente_nombre"),
+        "modulo": row.get("modulo"),
+        "contrato_id": row.get("contrato_id"),
+        "soporte_estado": row.get("soporte_estado"),
+        "soporte_gestionado_at": row.get("soporte_gestionado_at"),
+        "soporte_gestionado_por_nombre": row.get("soporte_gestionado_por_nombre"),
+        "soporte_gestion_origen": row.get("soporte_gestion_origen"),
+        "tipo_reporte": _soporte_tipo_reporte(row),
+        "urgencia": _soporte_parse_urgencia(mensaje),
+        "descripcion_resumen": _soporte_descripcion_resumen(mensaje),
+    }
 
 
 def _notificar_usuario_reporte_atendido(notificacion_soporte_id: int) -> None:
@@ -10667,6 +10818,140 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
         return result.data[0] if result.data else {}
 
 
+class SoporteGestionBody(BaseModel):
+    accion: str  # gestionado | anotado
+
+
+@app.get("/admin/soporte")
+def admin_soporte_list(
+    filtro: str = Query("todos"),
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Panel de soporte: KPIs y listado de reportes SOPORTE (solo Desarrollador)."""
+    del current_user
+    filtro_norm = (filtro or "todos").strip().lower()
+    rows = (
+        supabase.table("notificaciones")
+        .select(
+            "id, created_at, asunto, mensaje, remitente_nombre, modulo, contrato_id, "
+            "soporte_estado, soporte_gestionado_at, soporte_gestionado_por_nombre, soporte_gestion_origen"
+        )
+        .eq("tipo", "SOPORTE")
+        .order("created_at", desc=True)
+        .limit(500)
+        .execute()
+        .data
+        or []
+    )
+
+    kpis = {
+        "pendientes": 0,
+        "errores_hoy": 0,
+        "sugerencias": 0,
+        "gestionados": 0,
+    }
+    for row in rows:
+        pendiente = not row.get("soporte_estado")
+        es_error = _soporte_es_error(row)
+        es_sug = _soporte_es_sugerencia(row)
+        if pendiente:
+            kpis["pendientes"] += 1
+        if row.get("soporte_estado"):
+            kpis["gestionados"] += 1
+        if es_error and _es_hoy_bogota(row.get("created_at")):
+            kpis["errores_hoy"] += 1
+        if es_sug and pendiente:
+            kpis["sugerencias"] += 1
+
+    filtrados = []
+    for row in rows:
+        item = _serializar_reporte_soporte(row)
+        t = item["tipo_reporte"]
+        gest = bool(item.get("soporte_estado"))
+        if filtro_norm == "errores" and t != "error":
+            continue
+        if filtro_norm == "sugerencias" and t != "sugerencia":
+            continue
+        if filtro_norm == "gestionados" and not gest:
+            continue
+        filtrados.append(item)
+
+    filtrados.sort(
+        key=lambda x: (
+            1 if x.get("soporte_estado") else 0,
+            -( _parse_ts_bogota(x.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc) ).timestamp(),
+        )
+    )
+
+    return {"kpis": kpis, "reportes": filtrados}
+
+
+@app.put("/admin/soporte/{notif_id}/gestionar")
+def admin_soporte_gestionar(
+    notif_id: int,
+    body: SoporteGestionBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Marca un reporte SOPORTE como gestionado o anotado desde el panel admin."""
+    accion = (body.accion or "").strip().lower()
+    if accion not in ("gestionado", "anotado"):
+        raise HTTPException(status_code=400, detail="accion debe ser gestionado o anotado")
+
+    rows = (
+        supabase.table("notificaciones")
+        .select(
+            "id, tipo, asunto, mensaje, soporte_estado, remitente_id, destinatario_id, "
+            "contrato_id, modulo, created_at, remitente_nombre, soporte_gestionado_at, "
+            "soporte_gestionado_por_nombre, soporte_gestion_origen"
+        )
+        .eq("id", notif_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows or (rows[0].get("tipo") or "").upper() != "SOPORTE":
+        raise HTTPException(status_code=404, detail="Reporte SOPORTE no encontrado")
+
+    row = rows[0]
+    if row.get("soporte_estado"):
+        return {"ok": True, "ya_gestionado": True, "reporte": _serializar_reporte_soporte(row)}
+
+    tipo_rep = _soporte_tipo_reporte(row)
+    if accion == "gestionado" and tipo_rep != "error":
+        raise HTTPException(status_code=400, detail="Solo los errores se marcan como gestionados")
+    if accion == "anotado" and tipo_rep != "sugerencia":
+        raise HTTPException(status_code=400, detail="Solo las sugerencias se marcan como anotadas")
+
+    nombre = _remitente_nombre_from_user(current_user)
+    if not _registrar_gestion_soporte(notif_id, accion, "claracore", nombre):
+        raise HTTPException(status_code=409, detail="No se pudo registrar la gestión")
+
+    if accion == "gestionado":
+        try:
+            _notificar_usuario_reporte_atendido(notif_id)
+        except Exception:
+            _log_api.exception("admin soporte: fallo notificación SISTEMA gestionado id=%s", notif_id)
+    else:
+        try:
+            _notificar_usuario_sugerencia_anotada(notif_id)
+        except Exception:
+            _log_api.exception("admin soporte: fallo notificación SISTEMA anotado id=%s", notif_id)
+
+    updated = (
+        supabase.table("notificaciones")
+        .select(
+            "id, created_at, asunto, mensaje, remitente_nombre, modulo, contrato_id, "
+            "soporte_estado, soporte_gestionado_at, soporte_gestionado_por_nombre, soporte_gestion_origen"
+        )
+        .eq("id", notif_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    rep = _serializar_reporte_soporte(updated[0]) if updated else None
+    return {"ok": True, "reporte": rep}
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     """Recibe actualizaciones de Telegram (callback del botón Gestionado)."""
@@ -10676,8 +10961,8 @@ async def telegram_webhook(request: Request):
         return {"ok": True}
     return handle_telegram_webhook_update(
         update,
-        on_reporte_gestionado=_notificar_usuario_reporte_atendido,
-        on_sugerencia_anotada=_notificar_usuario_sugerencia_anotada,
+        on_reporte_gestionado=_on_telegram_gestionado,
+        on_sugerencia_anotada=_on_telegram_anotado,
     )
 
 
