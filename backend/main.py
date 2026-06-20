@@ -10998,6 +10998,11 @@ def admin_soporte_gestionar(
     return {"ok": True, "reporte": rep}
 
 
+def _eliminar_hijas_notificacion_padre(notif_id: int) -> None:
+    """Elimina respuestas/hijas con padre_id apuntando al reporte antes de borrar el padre."""
+    supabase.table("notificaciones").delete().eq("padre_id", notif_id).execute()
+
+
 @app.delete("/admin/soporte/limpiar")
 def admin_soporte_limpiar(
     pestana: str = Query(..., description="pendientes | gestionados"),
@@ -11015,6 +11020,8 @@ def admin_soporte_limpiar(
         q = q.not_.is_("soporte_estado", "null")
     rows = q.execute().data or []
     ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    for nid in ids:
+        _eliminar_hijas_notificacion_padre(nid)
     if ids:
         supabase.table("notificaciones").delete().in_("id", ids).execute()
     return {"ok": True, "eliminados": len(ids)}
@@ -11037,6 +11044,7 @@ def admin_soporte_eliminar(
     )
     if not rows or (rows[0].get("tipo") or "").upper() != "SOPORTE":
         raise HTTPException(status_code=404, detail="Reporte SOPORTE no encontrado")
+    _eliminar_hijas_notificacion_padre(notif_id)
     supabase.table("notificaciones").delete().eq("id", notif_id).execute()
     return {"ok": True, "id": notif_id}
 
