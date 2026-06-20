@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>b637f477-676a-4678-872a-37c3e48ef583</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"fdb07a6f2bf5f0f95fc284bcb5785fe0345e0b53","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"feat: sistema de reporte de errores con integracin Telegram"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-20T02:38:23.1776485Z</lastSuccessEndTime>
+  <receivedTime>2026-06-20T02:37:26.2706944Z</receivedTime>
+  <startTime>2026-06-20T02:37:27.8388117Z</startTime>
+  <endTime>2026-06-20T02:38:23.1776485Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>a8bc03100345</containerId>
+  <buildSummary />
+</deployment>

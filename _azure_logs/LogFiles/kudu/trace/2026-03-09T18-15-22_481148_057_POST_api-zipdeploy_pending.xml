@@ -1,0 +1,16 @@
+<step title="Incoming Request" date="2026-03-09T18:15:22.987" instance="481148" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="770,1,18" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="12928" x-ms-client-request-id="e4f30c1f-1be3-11f1-b434-f42679360b77" x-ms-artifact-checksum="3f2735ea5c24bfe5d64a4e04f329c7622eb7631bc3fa832c8f9a3f75567cd365" X-ARR-LOG-ID="e4f30c1f-1be3-11f1-b434-f42679360b77" CLIENT-IP="181.237.247.162:63384" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="181.237.247.162" X-Client-Port="63384" >
+  <step title="Cleanup Xml Logs" date="2026-03-09T18:15:22.990" /><!-- duration: 6ms -->
+  <step title="ZipPushDeploy" date="2026-03-09T18:15:23.010" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-03-09T18:15:23.017" /><!-- duration: 3ms -->
+    <step title="Starting PushDeployAsync" date="2026-03-09T18:15:23.026" /><!-- duration: 2ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/de1ae35c-f61a-483b-b454-f776bb8f5434.zip" date="2026-03-09T18:15:23.039" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/de1ae35c-f61a-483b-b454-f776bb8f5434.zip" date="2026-03-09T18:15:23.042" /><!-- duration: 5ms -->
+    </step><!-- duration: 37ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-03-09T18:15:23.080" >
+      <step title="Start deployment in the background" date="2026-03-09T18:15:23.090" >
+        <step title="Acquiring Deployment Lock" date="2026-03-09T18:15:23.097" /><!-- duration: 2ms -->
+        <step title="Acquired Deployment Lock" date="2026-03-09T18:15:23.139" /><!-- duration: 3ms -->
+      </step><!-- duration: 132ms -->
+    </step><!-- duration: 150ms -->
+    <step title="Outgoing response" date="2026-03-09T18:15:23.235" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+  </step><!-- duration: 232ms -->

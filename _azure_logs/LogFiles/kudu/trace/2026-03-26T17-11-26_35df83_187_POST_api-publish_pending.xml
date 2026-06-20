@@ -1,0 +1,33 @@
+<step title="Incoming Request" date="2026-03-26T17:11:26.355" instance="35df83" url="/api/publish?type=zip" method="POST" type="request" pid="768,1,57" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=35df836a77fcbc396a057482468e7fe70ce2faa2e8bc896a0c5bb6f040a54069; ARRAffinitySameSite=35df836a77fcbc396a057482468e7fe70ce2faa2e8bc896a0c5bb6f040a54069" Content-Length="6661171" x-ms-client-request-id="c677e14b-2936-11f1-b1ca-f42679360b77" x-ms-artifact-checksum="d50b2be1840447dd0932bc7c097e291935eca3ed2e74b7361a29bcf3429167fa" X-ARR-LOG-ID="c677e14b-2936-11f1-b1ca-f42679360b77" CLIENT-IP="186.30.58.167:63618" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip" X-Client-IP="186.30.58.167" X-Client-Port="63618" >
+  <step title="Cleanup Xml Logs" date="2026-03-26T17:11:26.473" >
+    <step title="Cleanup Infos" date="2026-03-26T17:11:26.612" totalFiles="1148" totalCleanup="988" /><!-- duration: 19ms -->
+  </step><!-- duration: 159ms -->
+  <step title="OneDeploy" date="2026-03-26T17:11:26.671" >
+    <step title="Starting PushDeployAsync" date="2026-03-26T17:11:26.699" /><!-- duration: 1ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/98d9306a-a54b-4755-8eec-f60f3dc20765.zip" date="2026-03-26T17:11:26.777" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/98d9306a-a54b-4755-8eec-f60f3dc20765.zip" date="2026-03-26T17:11:26.838" /><!-- duration: 20ms -->
+    </step><!-- duration: 1956ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-03-26T17:11:28.774" >
+      <step title="Attempting to fetch target branch HEAD" date="2026-03-26T17:11:28.835" /><!-- duration: 18ms -->
+      <step title="Acquiring Deployment Lock" date="2026-03-26T17:11:28.893" /><!-- duration: 20ms -->
+      <step title="Acquired Deployment Lock" date="2026-03-26T17:11:29.006" /><!-- duration: 19ms -->
+      <step title="Performing fetch based deployment" date="2026-03-26T17:11:29.045" >
+        <step title="Creating temporary deployment" date="2026-03-26T17:11:29.074" /><!-- duration: 206ms -->
+        <step title="Releasing Deployment Lock" date="2026-03-26T17:11:31.128" /><!-- duration: 29ms -->
+        <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/98d9306a-a54b-4755-8eec-f60f3dc20765.zip (6.35 MB) to /tmp/zipdeploy/extracted" date="2026-03-26T17:11:31.277" >
+          <step title="ChmodRecursive Process exited with total time taken in ms: 380" date="2026-03-26T17:11:32.903" /><!-- duration: 2ms -->
+        </step><!-- duration: 1667ms -->
+        <step title="None repository commit" date="2026-03-26T17:11:32.964" >
+          <step title="Commit id: e571efbb-287b-4a9e-b0b3-27b9edc926f2" date="2026-03-26T17:11:32.966" Message="OneDeploy" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 8ms -->
+        </step><!-- duration: 41ms -->
+        <step title="Deployment timer started" date="2026-03-26T17:11:35.017" >
+          <step title="DeploymentManager.Deploy(id:e571efbb-287b-4a9e-b0b3-27b9edc926f2)" date="2026-03-26T17:11:35.027" >
+            <step title="Collecting changeset information" date="2026-03-26T17:11:35.106" /><!-- duration: 219ms -->
+            <step title="Updating submodules" date="2026-03-26T17:11:35.336" /><!-- duration: 1463ms -->
+            <step title="Determining deployment builder" date="2026-03-26T17:11:37.452" >
+              <step title="Builder is OryxBuilder" date="2026-03-26T17:11:37.543" /><!-- duration: 9ms -->
+            </step><!-- duration: 102ms -->
+            <step title="PreDeployment: context.CleanOutputPath False" date="2026-03-26T17:11:37.722" >
+              <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-03-26T17:11:37.959" >
+                <step title="Building" date="2026-03-26T17:11:38.307" >
+                  <step title="Executing external process" date="2026-03-26T17:11:39.222" type="process" path="bash" arguments="-c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8de8b5abd7dc3ca --compress-destination-dir | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" 

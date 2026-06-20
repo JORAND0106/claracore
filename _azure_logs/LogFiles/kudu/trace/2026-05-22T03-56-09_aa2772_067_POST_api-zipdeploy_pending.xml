@@ -1,0 +1,15 @@
+<step title="Incoming Request" date="2026-05-22T03:56:09.835" instance="aa2772" url="/api/zipdeploy?isAsync=true&amp;deployer=GITHUB_ZIP_DEPLOY&amp;message=%7B%22type%22%3A%22deployment%22%2C%22sha%22%3A%223fdf0d05f6e31a030990044e134969cce0e57382%22%2C%22repoName%22%3A%22JORAND0106%2Fclaracore%22%2C%22actor%22%3A%22JORAND0106%22%2C%22slotName%22%3A%22production%22%2C%22commitMessage%22%3A%22programacion%20y%20Clara%20SicoeCAD%22%7D" method="POST" type="request" pid="833,1,38" Host="claracore-backend.scm.azurewebsites.net" User-Agent="GITHUBACTIONS_DeployWebAppToAzure_1e92034db786e7fc714ae16c8c9c25db6cea8fcfa5bae24fd96969504638db35_v2.2.19" Authorization="Bas..." Content-Type="application/octet-stream" Cookie="ARRAffinity=aa2772837ad65944b0ff7af5e63b1b996ed64b4083c908a290c63e625fba0670;Path=/;HttpOnly;Secure;Domain=claracore-backend.scm.azurewebsites.net; ARRAffinitySameSite=aa2772837ad65944b0ff7af5e63b1b996ed64b4083c908a290c63e625fba0670;Path=/;HttpOnly;SameSite=None;Secure;Domain=claracore-backend.scm.azurewebsites.net" Transfer-Encoding="chunked" X-ARR-LOG-ID="f1387051-d4c6-4515-9c31-d49c31bd9775" CLIENT-IP="135.232.200.17:24448" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true&amp;deployer=GITHUB_ZIP_DEPLOY&amp;message=%7B%22type%22%3A%22deployment%22%2C%22sha%22%3A%223fdf0d05f6e31a030990044e134969cce0e57382%22%2C%22repoName%22%3A%22JORAND0106%2Fclaracore%22%2C%22actor%22%3A%22JORAND0106%22%2C%22slotName%22%3A%22production%22%2C%22commitMessage%22%3A%22programacion%20y%20Clara%20SicoeCAD%22%7D" X-Client-IP="135.232.200.17" X-Client-Port="24448" >
+  <step title="ZipPushDeploy" date="2026-05-22T03:56:09.857" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-05-22T03:56:09.878" /><!-- duration: 9ms -->
+    <step title="Starting PushDeployAsync" date="2026-05-22T03:56:09.899" /><!-- duration: 15ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/028d22d4-8bbf-4d35-ba66-1f3f1abc40b6.zip" date="2026-05-22T03:56:09.944" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/028d22d4-8bbf-4d35-ba66-1f3f1abc40b6.zip" date="2026-05-22T03:56:09.951" /><!-- duration: 8ms -->
+    </step><!-- duration: 595ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-05-22T03:56:10.557" >
+      <step title="Start deployment in the background" date="2026-05-22T03:56:10.579" >
+        <step title="Acquiring Deployment Lock" date="2026-05-22T03:56:10.596" /><!-- duration: 7ms -->
+        <step title="Acquired Deployment Lock" date="2026-05-22T03:56:10.747" /><!-- duration: 7ms -->
+      </step><!-- duration: 334ms -->
+    </step><!-- duration: 365ms -->
+    <step title="Outgoing response" date="2026-05-22T03:56:10.936" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 7ms -->
+  </step><!-- duration: 1094ms -->

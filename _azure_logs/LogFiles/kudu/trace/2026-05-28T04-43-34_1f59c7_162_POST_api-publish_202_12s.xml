@@ -1,0 +1,13 @@
+<step title="Incoming Request" date="2026-05-28T04:43:34.925" instance="1f59c7" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="831,1,16" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=1f59c7ffa6e80f5f777a9c0071ff09284286cf38d310240f10dc22c7224c2744; ARRAffinitySameSite=1f59c7ffa6e80f5f777a9c0071ff09284286cf38d310240f10dc22c7224c2744" Content-Length="10025996" x-ms-client-request-id="c052262f-5a4f-11f1-a949-f42679360b77" X-ARR-LOG-ID="c052262f-5a4f-11f1-a949-f42679360b77" CLIENT-IP="167.0.117.113:59035" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="167.0.117.113" X-Client-Port="59035" >
+  <step title="OneDeploy" date="2026-05-28T04:43:34.940" >
+    <step title="Starting PushDeployAsync" date="2026-05-28T04:43:34.956" /><!-- duration: 10ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/ff6dd589-dbc7-4152-83d4-c570b1507a2f.zip" date="2026-05-28T04:43:34.990" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/ff6dd589-dbc7-4152-83d4-c570b1507a2f.zip" date="2026-05-28T04:43:35.027" /><!-- duration: 10ms -->
+    </step><!-- duration: 11618ms -->
+    <step title="Start deployment in the background" date="2026-05-28T04:43:46.640" >
+      <step title="Acquiring Deployment Lock" date="2026-05-28T04:43:46.660" /><!-- duration: 8ms -->
+      <step title="Acquired Deployment Lock" date="2026-05-28T04:43:46.731" /><!-- duration: 8ms -->
+    </step><!-- duration: 249ms -->
+  </step><!-- duration: 11956ms -->
+  <step title="Outgoing response" date="2026-05-28T04:43:46.905" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 8ms -->
+</step><!-- duration: 11995ms -->

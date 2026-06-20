@@ -1,0 +1,15 @@
+<step title="Incoming Request" date="2026-06-20T02:38:34.067" instance="e0772a" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="831,1,77" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=e0772aa93abc4e78e8dcd7c8eeae8924c613d060574c15f0d2e9c6917e6e4157; ARRAffinitySameSite=e0772aa93abc4e78e8dcd7c8eeae8924c613d060574c15f0d2e9c6917e6e4157" Content-Length="10313575" x-ms-client-request-id="17d533c5-6c51-11f1-9aaf-f42679360b77" X-ARR-LOG-ID="17d533c5-6c51-11f1-9aaf-f42679360b77" CLIENT-IP="167.0.122.152:50946" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="167.0.122.152" X-Client-Port="50946" >
+  <step title="OneDeploy" date="2026-06-20T02:38:34.121" >
+    <step title="Starting PushDeployAsync" date="2026-06-20T02:38:34.148" /><!-- duration: 21ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/0daaff40-d284-4c08-9c40-ac3eab9bf1ab.zip" date="2026-06-20T02:38:34.186" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/0daaff40-d284-4c08-9c40-ac3eab9bf1ab.zip" date="2026-06-20T02:38:34.193" /><!-- duration: 6ms -->
+      <step title="Writing zip file to /tmp/zipdeploy/0daaff40-d284-4c08-9c40-ac3eab9bf1ab.zip" date="2026-06-20T02:38:34.228" /><!-- duration: 14608ms -->
+    </step><!-- duration: 14662ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-06-20T02:38:48.865" >
+      <step title="Start deployment in the background" date="2026-06-20T02:38:48.886" >
+        <step title="Acquiring Deployment Lock" date="2026-06-20T02:38:48.907" /><!-- duration: 6ms -->
+        <step title="Acquired Deployment Lock" date="2026-06-20T02:38:48.966" /><!-- duration: 7ms -->
+      </step><!-- duration: 202ms -->
+    </step><!-- duration: 236ms -->
+    <step title="Outgoing response" date="2026-06-20T02:38:49.108" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 7ms -->
+  </step><!-- duration: 15001ms -->

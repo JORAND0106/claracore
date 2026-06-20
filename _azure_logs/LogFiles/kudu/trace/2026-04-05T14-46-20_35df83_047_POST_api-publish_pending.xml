@@ -1,0 +1,59 @@
+<step title="Incoming Request" date="2026-04-05T14:46:20.505" instance="35df83" url="/api/publish?type=zip" method="POST" type="request" pid="770,1,51" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=35df836a77fcbc396a057482468e7fe70ce2faa2e8bc896a0c5bb6f040a54069; ARRAffinitySameSite=35df836a77fcbc396a057482468e7fe70ce2faa2e8bc896a0c5bb6f040a54069" Content-Length="6668666" x-ms-client-request-id="26f13959-30fe-11f1-b44b-f42679360b77" x-ms-artifact-checksum="89983595df7dd576c75e750fa612ba3eaf05c56c20a6c3fed6ec36fc748f3004" X-ARR-LOG-ID="26f13959-30fe-11f1-b44b-f42679360b77" CLIENT-IP="190.254.132.102:56822" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip" X-Client-IP="190.254.132.102" X-Client-Port="56822" >
+  <step title="Cleanup Xml Logs" date="2026-04-05T14:46:20.507" >
+    <step title="Cleanup Infos" date="2026-04-05T14:46:20.859" totalFiles="1247" totalCleanup="1087" /><!-- duration: 20ms -->
+  </step><!-- duration: 382ms -->
+  <step title="OneDeploy" date="2026-04-05T14:46:21.009" >
+    <step title="Starting PushDeployAsync" date="2026-04-05T14:46:21.106" /><!-- duration: 50ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/6d478e8c-073f-42e6-bfe8-a141350a675d.zip" date="2026-04-05T14:46:21.226" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/6d478e8c-073f-42e6-bfe8-a141350a675d.zip" date="2026-04-05T14:46:21.255" /><!-- duration: 10ms -->
+    </step><!-- duration: 17343ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-04-05T14:46:38.581" >
+      <step title="Attempting to fetch target branch HEAD" date="2026-04-05T14:46:38.614" /><!-- duration: 2ms -->
+      <step title="Acquiring Deployment Lock" date="2026-04-05T14:46:38.620" /><!-- duration: 10ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-05T14:46:38.672" /><!-- duration: 10ms -->
+      <step title="Performing fetch based deployment" date="2026-04-05T14:46:38.694" >
+        <step title="Creating temporary deployment" date="2026-04-05T14:46:38.698" /><!-- duration: 88ms -->
+        <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/6d478e8c-073f-42e6-bfe8-a141350a675d.zip (6.36 MB) to /tmp/zipdeploy/extracted" date="2026-04-05T14:46:40.061" /><!-- duration: 5ms -->
+          <step title="ChmodRecursive Process exited with total time taken in ms: 166" date="2026-04-05T14:46:40.710" /><!-- duration: 13ms -->
+        </step><!-- duration: 673ms -->
+        <step title="None repository commit" date="2026-04-05T14:46:40.739" >
+          <step title="Commit id: b460ebfd-13ce-4a91-a989-bebaa6c8f537" date="2026-04-05T14:46:40.742" Message="OneDeploy" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 2ms -->
+        </step><!-- duration: 7ms -->
+        <step title="Deployment timer started" date="2026-04-05T14:46:42.757" >
+          <step title="DeploymentManager.Deploy(id:b460ebfd-13ce-4a91-a989-bebaa6c8f537)" date="2026-04-05T14:46:42.764" >
+            <step title="Collecting changeset information" date="2026-04-05T14:46:42.777" /><!-- duration: 110ms -->
+            <step title="Updating submodules" date="2026-04-05T14:46:42.892" /><!-- duration: 1205ms -->
+            <step title="Determining deployment builder" date="2026-04-05T14:46:44.414" >
+              <step title="Builder is OryxBuilder" date="2026-04-05T14:46:44.424" /><!-- duration: 6ms -->
+            </step><!-- duration: 20ms -->
+            <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-05T14:46:44.508" >
+              <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-05T14:46:44.726" >
+                <step title="Building" date="2026-04-05T14:46:44.915" >
+                  <step title="Executing external process" date="2026-04-05T14:46:45.445" type="process" path="bash" arguments="-c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8de9322281d5db0 --compress-destination-dir | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" >
+                    <step title="Error occurred" date="2026-04-05T14:48:05.417" type="error" text="GetParentProcessLinux (19719) failed.: Could not find a part of the path &apos;/proc/19719/stat&apos;." stackTrace="   at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64&amp; fileLength, UnixFileMode&amp; filePermissions, Boolean failForSymlink, Boolean&amp; wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.StreamReader.ValidateArgsAndOpenPath(String path, Encoding encoding, Int32 bufferSize)
+   at System.IO.File.ReadLines(String path)
+   at Kudu.Core.Infrastructure.ProcessExtensions.GetParentProcessLinux(Process process, ITracer tracer) in /tmp/KuduLite/Kudu.Core/Infrastructure/ProcessExtensions.cs:line 155" /><!-- duration: 59ms -->
+                    <step title="Cpu: build.sh(19628,0.070s)+oryx(19606,5.170s)+tee(19607,0.000s)+bash(19605,0.000s)=total(5.240s)" date="2026-04-05T14:48:06.382" /><!-- duration: 30ms -->
+                    <step title="bash: no io activity for 61s, prev-cpu=-1.000s, current-cpu=5.240s" date="2026-04-05T14:48:06.543" /><!-- duration: 80ms -->
+                  </step><!-- duration: 145306ms -->
+                  <step title="Using PythonDeploymentLogParser" date="2026-04-05T14:49:12.236" /><!-- duration: 7ms -->
+                  <step title="Modified file to trigger a restart of the app container." date="2026-04-05T14:49:15.529" /><!-- duration: 3ms -->
+                  <step title="Skip function trigger and logicapp sync because function is not enabled." date="2026-04-05T14:49:15.536" /><!-- duration: 10ms -->
+                  <step title="Purge deployment items" date="2026-04-05T14:49:18.972" >
+                    <step title="Remove dad1e09a-, Success, received at 04/04/2026 16:16:27" date="2026-04-05T14:49:19.268" /><!-- duration: 12ms -->
+                  </step><!-- duration: 346ms -->
+                </step><!-- duration: 154623ms -->
+              </step><!-- duration: 154841ms -->
+              <step title="Cleaning up temp files" date="2026-04-05T14:49:19.599" /><!-- duration: 4118ms -->
+              <step title="Cleaning up temp files" date="2026-04-05T14:49:23.859" /><!-- duration: 642ms -->
+              <step title="Reloading status file with latest updates" date="2026-04-05T14:49:24.802" >
+                <step title="WebHooksManager.PublishEventAsync: PostDeployment" date="2026-04-05T14:49:24.830" /><!-- duration: 153ms -->
+              </step><!-- duration: 193ms -->
+              <step title="Cleaning up temporary deployment - fetch deployment was successful" date="2026-04-05T14:49:25.003" /><!-- duration: 12ms -->
+            </step><!-- duration: 160729ms -->
+          </step><!-- duration: 162520ms -->
+          <step title="Outgoing response" date="2026-04-05T14:49:25.318" type="response" statusCode="200" statusText="OK" /><!-- duration: 18ms -->
+        </step><!-- duration: 162600ms -->

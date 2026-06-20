@@ -1,0 +1,8 @@
+<step title="Incoming Request" date="2026-03-26T15:50:22.993" instance="35df83" url="/logstream" method="GET" type="request" pid="768,1,55" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="identity" Authorization="Bea..." x-ms-client-request-id="79ace678-292b-11f1-a471-f42679360b77" X-ARR-LOG-ID="79ace678-292b-11f1-a471-f42679360b77" CLIENT-IP="186.30.58.167:62015" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/logstream" X-Client-IP="186.30.58.167" X-Client-Port="62015" >
+  <step title="Cleanup Xml Logs" date="2026-03-26T15:50:22.994" >
+    <step title="Cleanup Infos" date="2026-03-26T15:50:23.047" totalFiles="1134" totalCleanup="974" /><!-- duration: 9ms -->
+  </step><!-- duration: 63ms -->
+  <step title="LogStreamHandlerMiddleware.Invoke" date="2026-03-26T15:50:23.163" /><!-- duration: 9671ms -->
+  <step title="Error occurred" date="2026-03-26T15:53:32.832" type="error" text="LogStreamManager: ProcessRequest end" /><!-- duration: 2ms -->
+  <step title="Outgoing response" date="2026-03-26T15:53:32.847" type="response" statusCode="200" statusText="OK" /><!-- duration: 1ms -->
+</step><!-- duration: 189856ms -->

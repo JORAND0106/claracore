@@ -1,0 +1,21 @@
+<step title="Incoming Request" date="2026-03-21T16:33:57.424" instance="bda878" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="770,1,29" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="1682781" x-ms-client-request-id="b505ebe5-2543-11f1-ae0b-f42679360b77" x-ms-artifact-checksum="51fc13fcbd3c449886a1f9320eaa493cb89cf8844f33d1489ebdf2829db2f7b6" X-ARR-LOG-ID="b505ebe5-2543-11f1-ae0b-f42679360b77" CLIENT-IP="190.254.132.102:52444" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="190.254.132.102" X-Client-Port="52444" >
+  <step title="Cleanup Xml Logs" date="2026-03-21T16:33:57.431" >
+    <step title="Cleanup Infos" date="2026-03-21T16:33:57.453" totalFiles="925" totalCleanup="765" /><!-- duration: 11ms -->
+  </step><!-- duration: 36ms -->
+  <step title="ZipPushDeploy" date="2026-03-21T16:33:57.549" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-03-21T16:33:57.556" /><!-- duration: 2ms -->
+    <step title="None repository commit" date="2026-03-21T16:33:57.573" >
+      <step title="Commit id: 3db6256a-031c-48f7-afdc-8672043d72cd" date="2026-03-21T16:33:57.576" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 2ms -->
+    </step><!-- duration: 7ms -->
+    <step title="Starting PushDeployAsync" date="2026-03-21T16:33:57.583" /><!-- duration: 2ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/71304194-b254-4b15-8c88-4cc0f4789fa7.zip" date="2026-03-21T16:33:57.618" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/71304194-b254-4b15-8c88-4cc0f4789fa7.zip" date="2026-03-21T16:33:57.626" /><!-- duration: 3ms -->
+    </step><!-- duration: 551ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-03-21T16:33:58.173" >
+      <step title="Start deployment in the background" date="2026-03-21T16:33:58.185" >
+        <step title="Acquiring Deployment Lock" date="2026-03-21T16:33:58.198" /><!-- duration: 3ms -->
+        <step title="Acquired Deployment Lock" date="2026-03-21T16:33:58.298" /><!-- duration: 4ms -->
+      </step><!-- duration: 243ms -->
+    </step><!-- duration: 265ms -->
+    <step title="Outgoing response" date="2026-03-21T16:33:58.445" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 4ms -->
+  </step><!-- duration: 903ms -->

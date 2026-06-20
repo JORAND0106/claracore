@@ -1,0 +1,6 @@
+<step title="Incoming Request" date="2026-03-24T03:08:35.423" instance="e3848c" url="/dump" method="GET" type="request" pid="768,1,32" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="identity" Authorization="Bea..." x-ms-client-request-id="bb1c9cf9-272e-11f1-9f95-f42679360b77" X-ARR-LOG-ID="bb1c9cf9-272e-11f1-9f95-f42679360b77" CLIENT-IP="190.254.132.102:56918" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/dump" X-Client-IP="190.254.132.102" X-Client-Port="56918" >
+  <step title="Cleanup Xml Logs" date="2026-03-24T03:08:35.431" >
+    <step title="Cleanup Infos" date="2026-03-24T03:08:35.450" totalFiles="1043" totalCleanup="883" /><!-- duration: 5ms -->
+  </step><!-- duration: 26ms -->
+  <step title="Outgoing response" date="2026-03-24T03:09:04.792" type="response" statusCode="200" statusText="OK" /><!-- duration: 4ms -->
+</step><!-- duration: 29379ms -->

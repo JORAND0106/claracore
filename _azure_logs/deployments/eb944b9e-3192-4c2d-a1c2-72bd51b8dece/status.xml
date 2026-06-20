@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>eb944b9e-3192-4c2d-a1c2-72bd51b8dece</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"f625468bd76e0da341cc75e7b8f7e1ad134e6e29","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"soporte telegram"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-20T02:42:32.405741Z</lastSuccessEndTime>
+  <receivedTime>2026-06-20T02:41:50.1695067Z</receivedTime>
+  <startTime>2026-06-20T02:41:51.7299888Z</startTime>
+  <endTime>2026-06-20T02:42:32.405741Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>a8bc03100345</containerId>
+  <buildSummary />
+</deployment>

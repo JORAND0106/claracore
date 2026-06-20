@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>b7fb2bf9-e552-4eff-a159-76164cb9339c</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"1fbaed68c91aabe2ed2fafcbacc6fd9689f16cd9","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"boton tramos y correccion dashboard"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-19T15:53:58.6506697Z</lastSuccessEndTime>
+  <receivedTime>2026-06-19T15:53:15.0726902Z</receivedTime>
+  <startTime>2026-06-19T15:53:16.660518Z</startTime>
+  <endTime>2026-06-19T15:53:58.6506697Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>68dee8cf3856</containerId>
+  <buildSummary />
+</deployment>

@@ -1,0 +1,55 @@
+2026-04-20T14:54:17  Fetching changes.
+2026-04-20T14:54:18    Starting  LocalZipHandler
+2026-04-20T14:54:18    Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/734fbe9a-ed6e-457a-8209-e862707b71b4.zip (6.72 MB) to /tmp/zipdeploy/extracted
+2026-04-20T14:54:22  Updating submodules.
+2026-04-20T14:54:22  Preparing deployment for commit id 'a47fc48b-f'.
+2026-04-20T14:54:22  PreDeployment: context.CleanOutputPath False
+2026-04-20T14:54:23  PreDeployment: context.OutputPath /home/site/wwwroot
+2026-04-20T14:54:23  Repository path is /tmp/zipdeploy/extracted
+2026-04-20T14:54:23  Running oryx build...
+2026-04-20T14:54:23    Command: oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8de9eecb55ae3ca --compress-destination-dir | tee /tmp/oryx-build.log
+2026-04-20T14:54:25    Operation performed by Microsoft Oryx, https://github.com/Microsoft/Oryx
+2026-04-20T14:54:25    You can report issues at https://github.com/Microsoft/Oryx/issues
+2026-04-20T14:54:25    
+2026-04-20T14:54:25    Oryx Version: 0.2.20260204.1+0fdbe200b286be083841ff7fa201c6c2316dc6b9, Commit: 0fdbe200b286be083841ff7fa201c6c2316dc6b9, ReleaseTagName: 20260204.1
+2026-04-20T14:54:25    
+2026-04-20T14:54:25    Build Operation ID: b9cefe58dc991b76
+2026-04-20T14:54:25    Repository Commit : a47fc48b-f37b-49d3-adfd-d037beada8c9
+2026-04-20T14:54:25    OS Type           : bullseye
+2026-04-20T14:54:25    Image Type        : githubactions
+2026-04-20T14:54:25    
+2026-04-20T14:54:25    Primary SDK Storage URL: https://oryx-cdn.microsoft.io
+2026-04-20T14:54:25    Backup SDK Storage URL: 
+2026-04-20T14:54:25    Detecting platforms...
+2026-04-20T14:54:25    External SDK provider is enabled.
+2026-04-20T14:54:26    Requesting metadata for platform python from external SDK provider
+2026-04-20T14:54:27    Requesting metadata for platform python from external SDK provider
+2026-04-20T14:54:27    Detected following platforms:
+2026-04-20T14:54:27      python: 3.10.20
+2026-04-20T14:54:27    
+2026-04-20T14:54:27    Using intermediate directory '/tmp/8de9eecb55ae3ca'.
+2026-04-20T14:54:27    
+2026-04-20T14:54:28    Copying files to the intermediate directory...
+2026-04-20T14:54:28    Copying files to intermediate directory done in 1 sec(s).
+2026-04-20T14:54:28    
+2026-04-20T14:54:28    Source directory     : /tmp/8de9eecb55ae3ca
+2026-04-20T14:54:28    Destination directory: /home/site/wwwroot
+2026-04-20T14:54:28    
+2026-04-20T14:54:28    Running build script snippets...
+2026-04-20T14:54:28    Python Version: /tmp/oryx/platforms/python/3.10.20/bin/python3.10
+2026-04-20T14:54:28    Creating directory for command manifest file if it does not exist
+2026-04-20T14:54:28    Removing existing manifest file
+2026-04-20T14:54:28    Python Virtual Environment: antenv
+2026-04-20T14:54:28    Creating virtual environment...
+2026-04-20T14:54:29    Executing: /tmp/oryx/platforms/python/3.10.20/bin/python3.10 -m venv antenv --copies --system-site-packages
+2026-04-20T14:54:53    Activating virtual environment...
+2026-04-20T14:54:54    Fast build is enabled
+2026-04-20T14:54:54    Installing uv...
+2026-04-20T14:55:05    Collecting uv
+2026-04-20T14:55:06      Using cached uv-0.11.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (24.9 MB)
+2026-04-20T14:55:07    Installing collected packages: uv
+2026-04-20T14:55:11    Successfully installed uv-0.11.7
+2026-04-20T14:55:12    
+2026-04-20T14:55:12    [notice] A new release of pip is available: 23.0.1 -> 26.0.1
+2026-04-20T14:55:12    [notice] To update, run: pip install --upgrade pip
+2026-04-20T14:55:14    Running uv pip install...

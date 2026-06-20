@@ -1,0 +1,7 @@
+<step title="Incoming Request" date="2026-04-23T02:50:28.354" instance="8cf090" url="/diagnostics/runtime" method="GET" type="request" pid="768,1,36" Host="claracore-backend.scm.azurewebsites.net" User-Agent="GITHUBACTIONS_DeployWebAppToAzure_1e92034db786e7fc714ae16c8c9c25db6cea8fcfa5bae24fd96969504638db35_2.2.18" Authorization="Bas..." Content-Type="application/json; charset=utf-8" Content-Length="0" X-ARR-LOG-ID="fc408fdc-f307-47da-9070-343ad879cf6a" CLIENT-IP="57.151.138.244:41016" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/diagnostics/runtime" X-Client-IP="57.151.138.244" X-Client-Port="41016" >
+  <step title="Cleanup Xml Logs" date="2026-04-23T02:50:28.360" >
+    <step title="Cleanup Infos" date="2026-04-23T02:50:28.426" totalFiles="1711" totalCleanup="1551" /><!-- duration: 14ms -->
+  </step><!-- duration: 87ms -->
+  <step title="RuntimeController.GetRuntimeVersions" date="2026-04-23T02:50:28.456" /><!-- duration: 9ms -->
+  <step title="Outgoing response" date="2026-04-23T02:50:28.474" type="response" statusCode="200" statusText="OK" /><!-- duration: 6ms -->
+</step><!-- duration: 133ms -->

@@ -1,0 +1,14 @@
+<step title="Incoming Request" date="2026-05-19T15:25:52.982" instance="aa2772" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="835,1,59" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=aa2772837ad65944b0ff7af5e63b1b996ed64b4083c908a290c63e625fba0670; ARRAffinitySameSite=aa2772837ad65944b0ff7af5e63b1b996ed64b4083c908a290c63e625fba0670" Content-Length="9837718" x-ms-client-request-id="fd87e6f4-5396-11f1-83e2-f42679360b77" X-ARR-LOG-ID="fd87e6f4-5396-11f1-83e2-f42679360b77" CLIENT-IP="167.0.117.113:59578" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="167.0.117.113" X-Client-Port="59578" >
+  <step title="OneDeploy" date="2026-05-19T15:25:53.000" >
+    <step title="Starting PushDeployAsync" date="2026-05-19T15:25:53.024" /><!-- duration: 17ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/d677023f-218e-4abd-9806-e836d317b539.zip" date="2026-05-19T15:25:53.072" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/d677023f-218e-4abd-9806-e836d317b539.zip" date="2026-05-19T15:25:53.079" /><!-- duration: 9ms -->
+    </step><!-- duration: 5172ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-05-19T15:25:58.287" >
+      <step title="Start deployment in the background" date="2026-05-19T15:25:58.313" >
+        <step title="Acquiring Deployment Lock" date="2026-05-19T15:25:58.343" /><!-- duration: 7ms -->
+        <step title="Acquired Deployment Lock" date="2026-05-19T15:25:58.411" /><!-- duration: 8ms -->
+      </step><!-- duration: 277ms -->
+    </step><!-- duration: 313ms -->
+    <step title="Outgoing response" date="2026-05-19T15:25:58.658" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 41ms -->
+  </step><!-- duration: 5706ms -->

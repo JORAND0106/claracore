@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>659e0015-cf56-4fb8-990f-7c2fe3c7a2ac</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"25ef2c140648f1c7b7ef47f6ae33d67a9f82f867","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"gestion respuesta telegram2"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-20T20:41:12.9184342Z</lastSuccessEndTime>
+  <receivedTime>2026-06-20T20:40:30.8328256Z</receivedTime>
+  <startTime>2026-06-20T20:40:32.520162Z</startTime>
+  <endTime>2026-06-20T20:41:12.9184342Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>a8bc03100345</containerId>
+  <buildSummary />
+</deployment>

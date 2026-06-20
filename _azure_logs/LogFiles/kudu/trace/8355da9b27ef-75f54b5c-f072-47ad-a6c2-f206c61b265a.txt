@@ -1,0 +1,65 @@
+2026-05-16T00:09:38              Error occurred, type: error, text: Could not find a part of the path '/home/site/deployments/622fa10f-09ea-4eaf-913a-f9f6421b825d/log.log'., stackTrace:    at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64& fileLength, UnixFileMode& filePermissions, Boolean failForSymlink, Boolean& wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.Abstractions.FileWrapper.Open(String path, FileMode mode, FileAccess access, FileShare share)
+   at Kudu.Core.Deployment.StructuredTextDocument`1.Write(T value, Int32 depth) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextDocument.cs:line 51
+   at Kudu.Core.Deployment.StructuredTextLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:line 60
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.DeploymentManager.PreDeployment(DeploymentContext context) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 875
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 764
+2026-05-16T00:09:41              Error occurred, type: error, text: Could not find a part of the path '/home/site/deployments/622fa10f-09ea-4eaf-913a-f9f6421b825d/log.log'., stackTrace:    at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64& fileLength, UnixFileMode& filePermissions, Boolean failForSymlink, Boolean& wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.Abstractions.FileWrapper.Open(String path, FileMode mode, FileAccess access, FileShare share)
+   at Kudu.Core.Deployment.StructuredTextDocument`1.Write(T value, Int32 depth) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextDocument.cs:line 51
+   at Kudu.Core.Deployment.StructuredTextLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:line 60
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.DeploymentManager.PreDeployment(DeploymentContext context) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 875
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 764
+   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 266
+2026-05-16T00:09:41            Error occurred, type: error, text: Could not find a part of the path '/home/site/deployments/622fa10f-09ea-4eaf-913a-f9f6421b825d/log.log'., stackTrace:    at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64& fileLength, UnixFileMode& filePermissions, Boolean failForSymlink, Boolean& wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.Abstractions.FileWrapper.Open(String path, FileMode mode, FileAccess access, FileShare share)
+   at Kudu.Core.Deployment.StructuredTextDocument`1.Write(T value, Int32 depth) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextDocument.cs:line 51
+   at Kudu.Core.Deployment.StructuredTextLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:line 60
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.DeploymentManager.PreDeployment(DeploymentContext context) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 875
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 764
+   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 266
+2026-05-16T00:09:43        Error occurred, type: error, text: Deployment failed, stackTrace:    at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 307
+   at Kudu.Core.Deployment.FetchDeploymentManager.PerformDeployment(DeploymentInfoBase deploymentInfo, IDisposable tempDeployment, ChangeSet tempChangeSet, DeployStatusApiResult updateStatusObj) in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 230
+   at Kudu.Core.Deployment.FetchDeploymentManager.<>c__DisplayClass17_0.<<FetchDeploy>b__0>d.MoveNext() in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 131
+--- End of stack trace from previous location ---
+   at Kudu.Core.Deployment.FetchDeploymentManager.FetchDeploy(DeploymentInfoBase deployInfo, Boolean asyncRequested, Uri requestUri, String targetBranch) in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 124
+   at Kudu.Services.Deployment.PushDeploymentController.PushDeployAsync(ArtifactDeploymentInfo deploymentInfo, Boolean isAsync, HttpContext context, JObject requestJson) in /tmp/KuduLite/Kudu.Services/Deployment/PushDeploymentController.cs:line 804
+   at Kudu.Services.Deployment.PushDeploymentController.OneDeploy(String type, Boolean async, String path, Nullable`1 restart, Nullable`1 clean, Boolean ignoreStack, Boolean trackDeploymentProgress, Boolean trackStatus, Boolean reset) in /tmp/KuduLite/Kudu.Services/Deployment/PushDeploymentController.cs:line 624
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Builder.RouterMiddleware.Invoke(HttpContext httpContext)
+   at Kudu.Services.Web.Startup.<>c.<<Configure>b__11_7>d.MoveNext() in /tmp/KuduLite/Kudu.Services.Web/Startup.cs:line 428
+--- End of stack trace from previous location ---
+   at Kudu.Services.Web.Tracing.TraceMiddleware.Invoke(HttpContext context) in /tmp/KuduLite/Kudu.Services.Web/Tracing/TraceMiddleware.cs:line 101, innerText: Could not find a part of the path '/home/site/deployments/622fa10f-09ea-4eaf-913a-f9f6421b825d/log.log'., innerStackTrace:    at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64& fileLength, UnixFileMode& filePermissions, Boolean failForSymlink, Boolean& wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.Abstractions.FileWrapper.Open(String path, FileMode mode, FileAccess access, FileShare share)
+   at Kudu.Core.Deployment.StructuredTextDocument`1.Write(T value, Int32 depth) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextDocument.cs:line 51
+   at Kudu.Core.Deployment.StructuredTextLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:line 60
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.CascadeLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/CascadeLogger.cs:line 16
+   at Kudu.Core.Deployment.DeploymentManager.PreDeployment(DeploymentContext context) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 875
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 764
+   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 266

@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>81d3e524-3726-42dc-8a93-37bc45a26e9c</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"bb2283c1587ab26607db5e5feeefa1c12b9bf60e","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"chore: eliminar endpoint temporal test-telegram"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-20T02:55:23.8408311Z</lastSuccessEndTime>
+  <receivedTime>2026-06-20T02:54:39.8367378Z</receivedTime>
+  <startTime>2026-06-20T02:54:41.5010951Z</startTime>
+  <endTime>2026-06-20T02:55:23.8408311Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>a8bc03100345</containerId>
+  <buildSummary />
+</deployment>

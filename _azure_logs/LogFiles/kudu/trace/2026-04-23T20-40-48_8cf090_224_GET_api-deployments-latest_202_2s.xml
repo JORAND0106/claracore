@@ -1,0 +1,11 @@
+<step title="Incoming Request" date="2026-04-23T20:40:48.655" instance="8cf090" url="/api/deployments/latest?deployer=GITHUB_ZIP_DEPLOY&amp;time=2026-04-23_20-39-55Z" method="GET" type="request" pid="768,1,74" Host="claracore-backend.scm.azurewebsites.net" User-Agent="GITHUBACTIONS_DeployWebAppToAzure_1e92034db786e7fc714ae16c8c9c25db6cea8fcfa5bae24fd96969504638db35_2.2.18" Authorization="Bas..." Content-Type="application/json; charset=utf-8" Cookie="ARRAffinity=8cf0902abe489870c880990eb74e1dc9ddde8dbd2accf3d856c20ea2709e4cdf;Path=/;HttpOnly;Secure;Domain=claracore-backend.scm.azurewebsites.net; ARRAffinitySameSite=8cf0902abe489870c880990eb74e1dc9ddde8dbd2accf3d856c20ea2709e4cdf;Path=/;HttpOnly;SameSite=None;Secure;Domain=claracore-backend.scm.azurewebsites.net" Content-Length="0" X-ARR-LOG-ID="b81305b9-c4f4-4bb2-9698-ae26f9f84893" CLIENT-IP="128.24.161.37:55338" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/deployments/latest?deployer=GITHUB_ZIP_DEPLOY&amp;time=2026-04-23_20-39-55Z" X-Client-IP="128.24.161.37" X-Client-Port="55338" >
+  <step title="Cleanup Xml Logs" date="2026-04-23T20:40:48.666" >
+    <step title="Cleanup Infos" date="2026-04-23T20:40:48.858" totalFiles="1788" totalCleanup="1628" /><!-- duration: 29ms -->
+  </step><!-- duration: 233ms -->
+  <step title="DeploymentService.GetResult" date="2026-04-23T20:40:48.926" >
+    <step title="DeploymentService.GetLatestDeployment" date="2026-04-23T20:40:48.940" >
+      <step title="DeploymentManager.GetResults" date="2026-04-23T20:40:48.957" /><!-- duration: 1684ms -->
+    </step><!-- duration: 1727ms -->
+  </step><!-- duration: 1747ms -->
+  <step title="Outgoing response" date="2026-04-23T20:40:50.681" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 7ms -->
+</step><!-- duration: 2039ms -->

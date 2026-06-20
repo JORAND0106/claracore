@@ -1,0 +1,6 @@
+2026-05-15T23:54:22  Fetching changes.
+2026-05-15T23:54:22    Starting  LocalZipHandler
+2026-05-15T23:54:22    Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/45a09e39-07e3-4a8d-baeb-66d28ff5d935.zip (10.01 MB) to /tmp/zipdeploy/extracted
+2026-05-15T23:54:27  Updating submodules.
+2026-05-15T23:54:31  Preparing deployment for commit id '622fa10f-0'.
+2026-05-16T00:09:40  Deployment Failed. deployer = OneDeploy deploymentPath = OneDeploy

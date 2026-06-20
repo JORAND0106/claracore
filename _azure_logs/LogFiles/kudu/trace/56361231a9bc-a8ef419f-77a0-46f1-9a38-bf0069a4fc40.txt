@@ -1,0 +1,1 @@
+2026-03-08T23:16:40  Startup Request, url: /api/webjobs/?api-version=2018-11-01, method: GET, type: request, pid: 767,1,3, SCM_DO_BUILD_DURING_DEPLOYMENT: True, ScmType: None

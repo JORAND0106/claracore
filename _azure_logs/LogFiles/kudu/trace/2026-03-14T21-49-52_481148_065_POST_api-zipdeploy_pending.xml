@@ -1,0 +1,18 @@
+<step title="Incoming Request" date="2026-03-14T21:49:52.809" instance="481148" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="768,1,36" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="19242" x-ms-client-request-id="abff9fd2-1fef-11f1-a68d-f42679360b77" x-ms-artifact-checksum="f6fb4ab7491f7ca3412b91f98d121fb47fc95cf1cc1c89cac9c06e434207445b" X-ARR-LOG-ID="abff9fd2-1fef-11f1-a68d-f42679360b77" CLIENT-IP="186.99.154.134:53282" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="186.99.154.134" X-Client-Port="53282" >
+  <step title="Cleanup Xml Logs" date="2026-03-14T21:49:52.815" >
+    <step title="Cleanup Infos" date="2026-03-14T21:49:52.834" totalFiles="504" totalCleanup="344" /><!-- duration: 9ms -->
+  </step><!-- duration: 33ms -->
+  <step title="ZipPushDeploy" date="2026-03-14T21:49:52.920" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-03-14T21:49:52.930" /><!-- duration: 2ms -->
+    <step title="Starting PushDeployAsync" date="2026-03-14T21:49:52.937" /><!-- duration: 2ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/f7ff285b-07e6-4a90-baa9-fd1fc6651e9a.zip" date="2026-03-14T21:49:52.955" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/f7ff285b-07e6-4a90-baa9-fd1fc6651e9a.zip" date="2026-03-14T21:49:52.957" /><!-- duration: 3ms -->
+    </step><!-- duration: 64ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-03-14T21:49:53.022" >
+      <step title="Start deployment in the background" date="2026-03-14T21:49:53.031" >
+        <step title="Acquiring Deployment Lock" date="2026-03-14T21:49:53.039" /><!-- duration: 3ms -->
+        <step title="Acquired Deployment Lock" date="2026-03-14T21:49:53.082" /><!-- duration: 2ms -->
+      </step><!-- duration: 161ms -->
+    </step><!-- duration: 190ms -->
+    <step title="Outgoing response" date="2026-03-14T21:49:53.216" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 2ms -->
+  </step><!-- duration: 301ms -->

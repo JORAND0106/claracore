@@ -1,0 +1,208 @@
+2026-04-20T20:15:39  Fetching changes.
+2026-04-20T20:15:39    Starting  LocalZipHandler
+2026-04-20T20:15:39    Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/fa954b8d-ba0d-4a8e-bd32-726fd061b57d.zip (13.43 MB) to /tmp/zipdeploy/extracted
+2026-04-20T20:15:43  Updating submodules.
+2026-04-20T20:15:44  Preparing deployment for commit id '61ff81f4-4'.
+2026-04-20T20:15:44  PreDeployment: context.CleanOutputPath False
+2026-04-20T20:15:45  PreDeployment: context.OutputPath /home/site/wwwroot
+2026-04-20T20:15:45  Repository path is /tmp/zipdeploy/extracted
+2026-04-20T20:15:45  Running oryx build...
+2026-04-20T20:15:45    Command: oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8de9f199a41946d --compress-destination-dir | tee /tmp/oryx-build.log
+2026-04-20T20:15:48    Operation performed by Microsoft Oryx, https://github.com/Microsoft/Oryx
+2026-04-20T20:15:48    You can report issues at https://github.com/Microsoft/Oryx/issues
+2026-04-20T20:15:48    
+2026-04-20T20:15:48    Oryx Version: 0.2.20260204.1+0fdbe200b286be083841ff7fa201c6c2316dc6b9, Commit: 0fdbe200b286be083841ff7fa201c6c2316dc6b9, ReleaseTagName: 20260204.1
+2026-04-20T20:15:48    
+2026-04-20T20:15:48    Build Operation ID: 902d6fe47de66c27
+2026-04-20T20:15:48    Repository Commit : 61ff81f4-4b14-443f-a7c1-4d9aa489851e
+2026-04-20T20:15:48    OS Type           : bullseye
+2026-04-20T20:15:49    Image Type        : githubactions
+2026-04-20T20:15:49    
+2026-04-20T20:15:49    Primary SDK Storage URL: https://oryx-cdn.microsoft.io
+2026-04-20T20:15:49    Backup SDK Storage URL: 
+2026-04-20T20:15:49    Detecting platforms...
+2026-04-20T20:15:49    External SDK provider is enabled.
+2026-04-20T20:15:49    Requesting metadata for platform python from external SDK provider
+2026-04-20T20:15:50    Requesting metadata for platform python from external SDK provider
+2026-04-20T20:15:50    Detected following platforms:
+2026-04-20T20:15:50      python: 3.10.20
+2026-04-20T20:15:50    Requesting metadata for platform python from external SDK provider
+2026-04-20T20:15:52    Version '3.10.20' of platform 'python' is not installed. Generating script to install it...
+2026-04-20T20:15:53    
+2026-04-20T20:15:53    Using intermediate directory '/tmp/8de9f199a41946d'.
+2026-04-20T20:15:53    
+2026-04-20T20:15:53    Copying files to the intermediate directory...
+2026-04-20T20:15:53    Copying files to intermediate directory done in 0 sec(s).
+2026-04-20T20:15:53    
+2026-04-20T20:15:53    Source directory     : /tmp/8de9f199a41946d
+2026-04-20T20:15:53    Destination directory: /home/site/wwwroot
+2026-04-20T20:15:54    
+2026-04-20T20:15:54    Installing platform...
+2026-04-20T20:15:54    
+2026-04-20T20:15:54    Downloading and extracting 'python' version '3.10.20' to '/tmp/oryx/platforms/python/3.10.20'...
+2026-04-20T20:15:54    Detected image debian flavor: bullseye.
+2026-04-20T20:15:54    Skipping download of python version 3.10.20 as it is available in external sdk provider cache...
+2026-04-20T20:15:54    Extracting contents...
+2026-04-20T20:16:06    Successfully extracted python version 3.10.20 from external sdk provider cache...
+2026-04-20T20:16:06    
+2026-04-20T20:16:06    image detector file exists, platform is python..
+2026-04-20T20:16:06    OS detector file exists, OS is bullseye..
+2026-04-20T20:16:06    Platform installation done in 13 sec(s).
+2026-04-20T20:16:06    Running build script snippets...
+2026-04-20T20:16:06    Python Version: /tmp/oryx/platforms/python/3.10.20/bin/python3.10
+2026-04-20T20:16:06    Creating directory for command manifest file if it does not exist
+2026-04-20T20:16:06    Removing existing manifest file
+2026-04-20T20:16:07    Python Virtual Environment: antenv
+2026-04-20T20:16:07    Creating virtual environment...
+2026-04-20T20:16:07    Executing: /tmp/oryx/platforms/python/3.10.20/bin/python3.10 -m venv antenv --copies --system-site-packages
+2026-04-20T20:16:25    Activating virtual environment...
+2026-04-20T20:16:25    Fast build is enabled
+2026-04-20T20:16:25    Installing uv...
+2026-04-20T20:16:29    Collecting uv
+2026-04-20T20:16:29      Using cached uv-0.11.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (24.9 MB)
+2026-04-20T20:16:30    Installing collected packages: uv
+2026-04-20T20:16:32    Successfully installed uv-0.11.7
+2026-04-20T20:16:33    
+2026-04-20T20:16:33    [notice] A new release of pip is available: 23.0.1 -> 26.0.1
+2026-04-20T20:16:33    [notice] To update, run: pip install --upgrade pip
+2026-04-20T20:16:34    Running uv pip install...
+2026-04-20T20:17:36    Using Python 3.10.20 environment at: antenv
+2026-04-20T20:17:36    Resolved 89 packages in 2.14s
+2026-04-20T20:17:36    Downloading zstandard (5.3MiB)
+2026-04-20T20:17:36    Downloading pydantic-core (2.0MiB)
+2026-04-20T20:17:36    Downloading pygments (1.2MiB)
+2026-04-20T20:17:36    Downloading lxml (5.0MiB)
+2026-04-20T20:17:36    Downloading pillow (6.7MiB)
+2026-04-20T20:17:36    Downloading cryptography (4.2MiB)
+2026-04-20T20:17:36    Downloading pyroaring (2.0MiB)
+2026-04-20T20:17:36    Downloading reportlab (1.9MiB)
+2026-04-20T20:17:36     Downloaded pydantic-core
+2026-04-20T20:17:36     Downloaded pyroaring
+2026-04-20T20:17:37     Downloaded zstandard
+2026-04-20T20:17:37     Downloaded pillow
+2026-04-20T20:17:37     Downloaded cryptography
+2026-04-20T20:17:37     Downloaded lxml
+2026-04-20T20:17:37       Building pycairo==1.29.0
+2026-04-20T20:17:37     Downloaded reportlab
+2026-04-20T20:17:37     Downloaded pygments
+2026-04-20T20:17:37          Built pycairo==1.29.0
+2026-04-20T20:17:37    Prepared 89 packages in 29.27s
+2026-04-20T20:17:37    Installed 89 packages in 525ms
+2026-04-20T20:17:37    Bytecode compiled 3611 files in 29.47s
+2026-04-20T20:17:37     + annotated-doc==0.0.4
+2026-04-20T20:17:37     + annotated-types==0.7.0
+2026-04-20T20:17:37     + anyio==4.13.0
+2026-04-20T20:17:37     + arabic-reshaper==3.0.0
+2026-04-20T20:17:37     + asn1crypto==1.5.1
+2026-04-20T20:17:37     + bcrypt==3.2.2
+2026-04-20T20:17:37     + cachetools==6.2.6
+2026-04-20T20:17:37     + certifi==2026.2.25
+2026-04-20T20:17:38     + cffi==2.0.0
+2026-04-20T20:17:38     + charset-normalizer==3.4.7
+2026-04-20T20:17:38     + click==8.3.2
+2026-04-20T20:17:38     + cloudinary==1.44.2
+2026-04-20T20:17:38     + cryptography==46.0.7
+2026-04-20T20:17:38     + cssselect2==0.9.0
+2026-04-20T20:17:38     + deprecation==2.1.0
+2026-04-20T20:17:38     + ecdsa==0.19.2
+2026-04-20T20:17:38     + et-xmlfile==2.0.0
+2026-04-20T20:17:38     + exceptiongroup==1.3.1
+2026-04-20T20:17:38     + fastapi==0.136.0
+2026-04-20T20:17:38     + freetype-py==2.5.1
+2026-04-20T20:17:38     + fsspec==2026.3.0
+2026-04-20T20:17:38     + gunicorn==25.3.0
+2026-04-20T20:17:38     + h11==0.16.0
+2026-04-20T20:17:38     + h2==4.3.0
+2026-04-20T20:17:38     + hpack==4.1.0
+2026-04-20T20:17:38     + html5lib==1.1
+2026-04-20T20:17:38     + httpcore==1.0.9
+2026-04-20T20:17:39     + httpx==0.28.1
+2026-04-20T20:17:39     + hyperframe==6.1.0
+2026-04-20T20:17:39     + idna==3.11
+2026-04-20T20:17:39     + lxml==6.1.0
+2026-04-20T20:17:39     + markdown-it-py==4.0.0
+2026-04-20T20:17:39     + mdurl==0.1.2
+2026-04-20T20:17:39     + mmh3==5.2.1
+2026-04-20T20:17:39     + multidict==6.7.1
+2026-04-20T20:17:39     + openpyxl==3.1.5
+2026-04-20T20:17:39     + oscrypto==1.3.0
+2026-04-20T20:17:39     + packaging==26.1
+2026-04-20T20:17:39     + passlib==1.7.4
+2026-04-20T20:17:39     + pillow==12.2.0
+2026-04-20T20:17:39     + postgrest==2.28.3
+2026-04-20T20:17:39     + propcache==0.4.1
+2026-04-20T20:17:39     + pyasn1==0.6.3
+2026-04-20T20:17:39     + pycairo==1.29.0
+2026-04-20T20:17:39     + pycparser==3.0
+2026-04-20T20:17:39     + pydantic==2.13.3
+2026-04-20T20:17:39     + pydantic-core==2.46.3
+2026-04-20T20:17:40     + pygments==2.20.0
+2026-04-20T20:17:40     + pyhanko==0.34.1
+2026-04-20T20:17:40     + pyhanko-certvalidator==0.30.2
+2026-04-20T20:17:40     + pyiceberg==0.11.1
+2026-04-20T20:17:40     + pyjwt==2.12.1
+2026-04-20T20:17:40     + pyparsing==3.3.2
+2026-04-20T20:17:40     + pypdf==6.10.2
+2026-04-20T20:17:40     + pyroaring==1.0.4
+2026-04-20T20:17:40     + python-bidi==0.6.7
+2026-04-20T20:17:40     + python-dateutil==2.9.0.post0
+2026-04-20T20:17:40     + python-dotenv==1.2.2
+2026-04-20T20:17:40     + python-jose==3.5.0
+2026-04-20T20:17:40     + python-multipart==0.0.26
+2026-04-20T20:17:40     + pyyaml==6.0.3
+2026-04-20T20:17:40     + realtime==2.28.3
+2026-04-20T20:17:40     + reportlab==4.4.10
+2026-04-20T20:17:40     + requests==2.33.1
+2026-04-20T20:17:41     + rich==14.3.4
+2026-04-20T20:17:41     + rlpycairo==0.4.0
+2026-04-20T20:17:41     + rsa==4.9.1
+2026-04-20T20:17:41     + six==1.17.0
+2026-04-20T20:17:41     + starlette==1.0.0
+2026-04-20T20:17:41     + storage3==2.28.3
+2026-04-20T20:17:41     + strenum==0.4.15
+2026-04-20T20:17:41     + strictyaml==1.7.3
+2026-04-20T20:17:41     + supabase==2.28.3
+2026-04-20T20:17:41     + supabase-auth==2.28.3
+2026-04-20T20:17:41     + supabase-functions==2.28.3
+2026-04-20T20:17:41     + svglib==1.6.0
+2026-04-20T20:17:42     + tenacity==9.1.4
+2026-04-20T20:17:42     + tinycss2==1.5.1
+2026-04-20T20:17:42     + typing-extensions==4.15.0
+2026-04-20T20:17:42     + typing-inspection==0.4.2
+2026-04-20T20:17:42     + tzlocal==5.3.1
+2026-04-20T20:17:42     + uritools==6.0.1
+2026-04-20T20:17:42     + urllib3==2.6.3
+2026-04-20T20:17:42     + uvicorn==0.44.0
+2026-04-20T20:17:42     + webencodings==0.5.1
+2026-04-20T20:17:42     + websockets==15.0.1
+2026-04-20T20:17:42     + xhtml2pdf==0.2.17
+2026-04-20T20:17:42     + yarl==1.23.0
+2026-04-20T20:17:42     + zstandard==0.25.0
+2026-04-20T20:17:42    uv pip install done in 72 sec(s).
+2026-04-20T20:17:42    Not a vso image, so not writing build commands
+2026-04-20T20:17:42    Build script snippets done in 90 sec(s).
+2026-04-20T20:17:43    Preparing output...
+2026-04-20T20:17:43    Compressing source directory directly to destination (optimized path)...
+2026-04-20T20:17:43    Using zstd for compression
+2026-04-20T20:17:47    Copied the compressed output to '/home/site/wwwroot'
+2026-04-20T20:17:47    Direct compression with zstd done in 11 sec(s).
+2026-04-20T20:17:47    
+2026-04-20T20:17:47    Removing existing manifest file
+2026-04-20T20:17:47    Creating a manifest file...
+2026-04-20T20:17:47    Manifest file created.
+2026-04-20T20:17:47    Copying .ostype to manifest output directory.
+2026-04-20T20:17:47    
+2026-04-20T20:17:47    Total execution done in 114 sec(s).
+2026-04-20T20:17:48  Running post deployment command(s)...
+2026-04-20T20:17:48  
+2026-04-20T20:17:49  Generating summary of Oryx build
+2026-04-20T20:17:49  Parsing the build logs
+2026-04-20T20:17:49  Found 0 issue(s)
+2026-04-20T20:17:49  
+2026-04-20T20:17:50  Build Summary :
+2026-04-20T20:17:50  ===============
+2026-04-20T20:17:50  Errors (0)
+2026-04-20T20:17:50  Warnings (0)
+2026-04-20T20:17:50  
+2026-04-20T20:17:51  Triggering container recycle for OneDeploy by adding/updating restartTrigger.txt to the site root path
+2026-04-20T20:17:51  Deployment successful. deployer = OneDeploy deploymentPath = OneDeploy

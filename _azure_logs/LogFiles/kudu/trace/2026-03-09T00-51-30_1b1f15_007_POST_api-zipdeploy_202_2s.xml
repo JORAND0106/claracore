@@ -1,0 +1,15 @@
+<step title="Incoming Request" date="2026-03-09T00:51:30.324" instance="1b1f15" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="768,1,24" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="10917" x-ms-client-request-id="0dd82119-1b52-11f1-b166-f42679360b77" x-ms-artifact-checksum="d243fbb89620e32ffbb77bd1547478847e011df5433938bdf47f144aa7c84413" X-ARR-LOG-ID="0dd82119-1b52-11f1-b166-f42679360b77" CLIENT-IP="181.237.247.162:65003" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="181.237.247.162" X-Client-Port="65003" >
+  <step title="Cleanup Xml Logs" date="2026-03-09T00:51:30.327" /><!-- duration: 6ms -->
+  <step title="ZipPushDeploy" date="2026-03-09T00:51:30.370" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-03-09T00:51:30.377" /><!-- duration: 3ms -->
+    <step title="Starting PushDeployAsync" date="2026-03-09T00:51:30.387" /><!-- duration: 3ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/30e71ad2-f927-4163-8108-eca4aef13af9.zip" date="2026-03-09T00:51:30.396" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/30e71ad2-f927-4163-8108-eca4aef13af9.zip" date="2026-03-09T00:51:30.516" /><!-- duration: 5ms -->
+    </step><!-- duration: 1710ms -->
+    <step title="Start deployment in the background" date="2026-03-09T00:51:32.131" >
+      <step title="Acquiring Deployment Lock" date="2026-03-09T00:51:32.144" /><!-- duration: 3ms -->
+      <step title="Acquired Deployment Lock" date="2026-03-09T00:51:32.183" /><!-- duration: 4ms -->
+    </step><!-- duration: 161ms -->
+  </step><!-- duration: 1927ms -->
+  <step title="Outgoing response" date="2026-03-09T00:51:32.304" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 1986ms -->

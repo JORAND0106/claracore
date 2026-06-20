@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>73cbc9ff-937f-4dda-80ad-9f4c2df2de08</id>
+  <author>N/A</author>
+  <deployer>GITHUB_ZIP_DEPLOY</deployer>
+  <authorEmail>N/A</authorEmail>
+  <message>{"type":"deployment","sha":"01d1d6aee962e7b585544e96050e8f068b976650","repoName":"JORAND0106/claracore","actor":"JORAND0106","slotName":"production","commitMessage":"correccion recarga cache - formulario asignar item5"}</message>
+  <progress></progress>
+  <status>Success</status>
+  <statusText></statusText>
+  <lastSuccessEndTime>2026-06-19T02:59:06.9413805Z</lastSuccessEndTime>
+  <receivedTime>2026-06-19T02:58:21.6888197Z</receivedTime>
+  <startTime>2026-06-19T02:58:23.2321714Z</startTime>
+  <endTime>2026-06-19T02:59:06.9413805Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>True</is_readonly>
+  <containerId>68dee8cf3856</containerId>
+  <buildSummary />
+</deployment>

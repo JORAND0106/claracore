@@ -1,0 +1,48 @@
+<step title="Incoming Request" date="2026-04-30T18:30:24.422" instance="8cf090" url="/api/publish?type=zip" method="POST" type="request" pid="831,1,73" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=8cf0902abe489870c880990eb74e1dc9ddde8dbd2accf3d856c20ea2709e4cdf; ARRAffinitySameSite=8cf0902abe489870c880990eb74e1dc9ddde8dbd2accf3d856c20ea2709e4cdf" Content-Length="15111623" x-ms-client-request-id="9dbc368d-44c2-11f1-ada0-f42679360b77" x-ms-artifact-checksum="604f8d0c8c4354a3adfef40e7edc50d135cfe26a4bc0b6f83555f4aaaa54f5ce" X-ARR-LOG-ID="9dbc368d-44c2-11f1-ada0-f42679360b77" CLIENT-IP="186.113.83.80:59088" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip" X-Client-IP="186.113.83.80" X-Client-Port="59088" >
+  <step title="OneDeploy" date="2026-04-30T18:30:24.473" >
+    <step title="Starting PushDeployAsync" date="2026-04-30T18:30:24.506" /><!-- duration: 11ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/88f16707-d66e-4f60-ab0b-524905b6d66f.zip" date="2026-04-30T18:30:24.536" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/88f16707-d66e-4f60-ab0b-524905b6d66f.zip" date="2026-04-30T18:30:24.543" /><!-- duration: 10ms -->
+    </step><!-- duration: 1773ms -->
+    <step title="Removing previous build artifact&apos;s manifest file" date="2026-04-30T18:30:26.327" >
+      <step title="Attempting to fetch target branch HEAD" date="2026-04-30T18:30:26.346" /><!-- duration: 7ms -->
+      <step title="Acquiring Deployment Lock" date="2026-04-30T18:30:26.362" /><!-- duration: 9ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-30T18:30:26.445" /><!-- duration: 7ms -->
+      <step title="Performing fetch based deployment" date="2026-04-30T18:30:26.466" >
+        <step title="Creating temporary deployment" date="2026-04-30T18:30:26.473" /><!-- duration: 132ms -->
+        <step title="Releasing Deployment Lock" date="2026-04-30T18:30:27.831" /><!-- duration: 16ms -->
+        <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/88f16707-d66e-4f60-ab0b-524905b6d66f.zip (14.41 MB) to /tmp/zipdeploy/extracted" date="2026-04-30T18:30:27.915" >
+          <step title="ChmodRecursive Process exited with total time taken in ms: 58" date="2026-04-30T18:30:28.376" /><!-- duration: 21ms -->
+        </step><!-- duration: 495ms -->
+        <step title="None repository commit" date="2026-04-30T18:30:28.421" >
+          <step title="Commit id: 9dc5b953-a984-4ad3-9bf5-ae694337da88" date="2026-04-30T18:30:28.427" Message="OneDeploy" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 7ms -->
+        </step><!-- duration: 19ms -->
+        <step title="Deployment timer started" date="2026-04-30T18:30:30.449" >
+          <step title="DeploymentManager.Deploy(id:9dc5b953-a984-4ad3-9bf5-ae694337da88)" date="2026-04-30T18:30:30.474" >
+            <step title="Collecting changeset information" date="2026-04-30T18:30:30.507" /><!-- duration: 213ms -->
+            <step title="Updating submodules" date="2026-04-30T18:30:30.748" /><!-- duration: 1299ms -->
+            <step title="Determining deployment builder" date="2026-04-30T18:30:32.420" >
+              <step title="Builder is OryxBuilder" date="2026-04-30T18:30:32.437" /><!-- duration: 7ms -->
+            </step><!-- duration: 32ms -->
+            <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-30T18:30:32.529" >
+              <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-30T18:30:32.751" >
+                <step title="Building" date="2026-04-30T18:30:32.962" >
+                  <step title="Executing external process" date="2026-04-30T18:30:33.679" type="process" path="bash" arguments="-c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8dea6e6902a9481 --compress-destination-dir | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" /><!-- duration: 65693ms -->
+                  <step title="Using PythonDeploymentLogParser" date="2026-04-30T18:31:40.058" /><!-- duration: 12ms -->
+                  <step title="Modified file to trigger a restart of the app container." date="2026-04-30T18:31:42.722" /><!-- duration: 28ms -->
+                  <step title="Skip function trigger and logicapp sync because function is not enabled." date="2026-04-30T18:31:42.762" /><!-- duration: 12ms -->
+                  <step title="Purge deployment items" date="2026-04-30T18:31:45.050" >
+                    <step title="Remove ef729288-, Success, received at 04/28/2026 20:08:27" date="2026-04-30T18:31:45.343" /><!-- duration: 20ms -->
+                  </step><!-- duration: 333ms -->
+                </step><!-- duration: 72696ms -->
+              </step><!-- duration: 72935ms -->
+              <step title="Cleaning up temp files" date="2026-04-30T18:31:45.716" /><!-- duration: 1227ms -->
+              <step title="Cleaning up temp files" date="2026-04-30T18:31:46.972" /><!-- duration: 545ms -->
+              <step title="Reloading status file with latest updates" date="2026-04-30T18:31:47.638" >
+                <step title="WebHooksManager.PublishEventAsync: PostDeployment" date="2026-04-30T18:31:47.665" /><!-- duration: 91ms -->
+              </step><!-- duration: 130ms -->
+              <step title="Cleaning up temporary deployment - fetch deployment was successful" date="2026-04-30T18:31:47.784" /><!-- duration: 23ms -->
+            </step><!-- duration: 75488ms -->
+          </step><!-- duration: 77576ms -->
+          <step title="Outgoing response" date="2026-04-30T18:31:48.088" type="response" statusCode="200" statusText="OK" /><!-- duration: 13ms -->
+        </step><!-- duration: 77679ms -->

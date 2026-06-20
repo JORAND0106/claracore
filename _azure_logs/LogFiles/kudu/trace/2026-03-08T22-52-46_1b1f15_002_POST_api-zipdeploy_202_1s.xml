@@ -1,0 +1,17 @@
+<step title="Incoming Request" date="2026-03-08T22:52:46.139" instance="1b1f15" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="767,1,5" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="10608" x-ms-client-request-id="5497f897-1b41-11f1-92dd-f42679360b77" x-ms-artifact-checksum="64e5b8dfc1fc53aeabff844b74090184333bee8946b63e7e68b09d016e52cbf5" X-ARR-LOG-ID="5497f897-1b41-11f1-92dd-f42679360b77" CLIENT-IP="181.237.247.162:53292" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="181.237.247.162" X-Client-Port="53292" >
+  <step title="ZipPushDeploy" date="2026-03-08T22:52:46.356" >
+    <step title="ZipDeploy. Extract zip. Remote build." date="2026-03-08T22:52:46.361" /><!-- duration: 3ms -->
+    <step title="None repository commit" date="2026-03-08T22:52:46.368" >
+      <step title="Commit id: ef09cc33-1af2-4243-a21f-7c8d0565ff9a" date="2026-03-08T22:52:46.370" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 2ms -->
+    </step><!-- duration: 7ms -->
+    <step title="Starting PushDeployAsync" date="2026-03-08T22:52:46.377" /><!-- duration: 2ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/29506096-d05b-40a7-bcb1-bc236b71fefb.zip" date="2026-03-08T22:52:46.389" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/29506096-d05b-40a7-bcb1-bc236b71fefb.zip" date="2026-03-08T22:52:46.392" /><!-- duration: 2ms -->
+    </step><!-- duration: 17ms -->
+    <step title="Start deployment in the background" date="2026-03-08T22:52:46.416" >
+      <step title="Acquiring Deployment Lock" date="2026-03-08T22:52:46.442" /><!-- duration: 3ms -->
+      <step title="Acquired Deployment Lock" date="2026-03-08T22:52:46.526" /><!-- duration: 33ms -->
+    </step><!-- duration: 281ms -->
+  </step><!-- duration: 346ms -->
+  <step title="Outgoing response" date="2026-03-08T22:52:46.710" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 2ms -->
+</step><!-- duration: 575ms -->

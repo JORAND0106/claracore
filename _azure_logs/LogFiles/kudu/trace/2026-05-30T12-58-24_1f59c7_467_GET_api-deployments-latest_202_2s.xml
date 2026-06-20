@@ -1,0 +1,8 @@
+<step title="Incoming Request" date="2026-05-30T12:58:24.293" instance="1f59c7" url="/api/deployments/latest" method="GET" type="request" pid="831,1,79" Accept="*/*" Host="claracore-backend.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." x-ms-client-request-id="21c15221-5c27-11f1-9eec-f42679360b77" X-ARR-LOG-ID="21c15221-5c27-11f1-9eec-f42679360b77" CLIENT-IP="167.0.117.113:63593" X-SITE-DEPLOYMENT-ID="claracore-backend" WAS-DEFAULT-HOSTNAME="claracore-backend.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/deployments/latest" X-Client-IP="167.0.117.113" X-Client-Port="63593" >
+  <step title="DeploymentService.GetResult" date="2026-05-30T12:58:24.317" >
+    <step title="DeploymentService.GetLatestDeployment" date="2026-05-30T12:58:24.326" >
+      <step title="DeploymentManager.GetResults" date="2026-05-30T12:58:24.344" /><!-- duration: 1540ms -->
+    </step><!-- duration: 1579ms -->
+  </step><!-- duration: 1605ms -->
+  <step title="Outgoing response" date="2026-05-30T12:58:25.936" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 19ms -->
+</step><!-- duration: 1678ms -->

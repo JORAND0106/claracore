@@ -1,0 +1,35 @@
+<step title="BackgroundTrace" date="2026-03-23T00:24:16.906" instance="bda878" url="/api/zipdeploy" method="POST" >
+  <step title="Creating temporary deployment - FetchDeploymentManager" date="2026-03-23T00:24:16.964" /><!-- duration: 3ms -->
+  <step title="Creating temporary deployment" date="2026-03-23T00:24:16.970" /><!-- duration: 82ms -->
+  <step title="Performing fetch based deployment" date="2026-03-23T00:24:17.082" >
+    <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/2eeb366f-cc7d-4876-846f-ec1295f10078.zip (1.61 MB) to /tmp/zipdeploy/extracted" date="2026-03-23T00:24:18.340" >
+      <step title="ChmodRecursive Process exited with total time taken in ms: 42" date="2026-03-23T00:24:18.512" /><!-- duration: 3ms -->
+    </step><!-- duration: 177ms -->
+    <step title="Deployment timer started" date="2026-03-23T00:24:20.529" >
+      <step title="DeploymentManager.Deploy(id:a2cef21b-4c9c-49eb-8cf6-331b3eb97b53)" date="2026-03-23T00:24:20.536" >
+        <step title="Collecting changeset information" date="2026-03-23T00:24:20.546" /><!-- duration: 152ms -->
+        <step title="Updating submodules" date="2026-03-23T00:24:20.705" /><!-- duration: 1157ms -->
+        <step title="Determining deployment builder" date="2026-03-23T00:24:22.422" >
+          <step title="Builder is OryxBuilder" date="2026-03-23T00:24:22.432" /><!-- duration: 2ms -->
+        </step><!-- duration: 16ms -->
+        <step title="PreDeployment: context.CleanOutputPath False" date="2026-03-23T00:24:22.524" >
+          <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-03-23T00:24:22.707" >
+            <step title="Building" date="2026-03-23T00:24:22.897" >
+              <step title="Executing external process" date="2026-03-23T00:24:23.388" type="process" path="bash" arguments="-c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform python --platform-version 3.10 -p virtualenv_name=antenv --log-file /tmp/build-debug.log  -i /tmp/8de8872881ce3d1 --compress-destination-dir | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" /><!-- duration: 59760ms -->
+              <step title="Using PythonDeploymentLogParser" date="2026-03-23T00:25:23.718" /><!-- duration: 3ms -->
+              <step title="Triggering recycle (preview mode disabled)." date="2026-03-23T00:25:25.795" /><!-- duration: 8ms -->
+              <step title="Modified file to trigger a restart of the app container." date="2026-03-23T00:25:25.867" /><!-- duration: 3ms -->
+              <step title="Skip function trigger and logicapp sync because function is not enabled." date="2026-03-23T00:25:25.878" /><!-- duration: 8ms -->
+              <step title="Purge deployment items" date="2026-03-23T00:25:27.690" >
+                <step title="Remove c130ef0d-, Success, received at 03/22/2026 17:18:15" date="2026-03-23T00:25:27.765" /><!-- duration: 3ms -->
+              </step><!-- duration: 80ms -->
+            </step><!-- duration: 64995ms -->
+          </step><!-- duration: 65189ms -->
+          <step title="Cleaning up temp files" date="2026-03-23T00:25:27.898" /><!-- duration: 418ms -->
+          <step title="Cleaning up temp files" date="2026-03-23T00:25:28.319" /><!-- duration: 505ms -->
+          <step title="Reloading status file with latest updates" date="2026-03-23T00:25:28.868" >
+            <step title="WebHooksManager.PublishEventAsync: PostDeployment" date="2026-03-23T00:25:28.871" /><!-- duration: 230ms -->
+          </step><!-- duration: 236ms -->
+          <step title="Cleaning up temporary deployment - fetch deployment was successful" date="2026-03-23T00:25:29.357" /><!-- duration: 11ms -->
+        </step><!-- duration: 66938ms -->
+      </step><!-- duration: 68978ms -->
