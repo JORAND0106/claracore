@@ -356,9 +356,10 @@ export function ReporteErroresBtn({ t, usuario, token }) {
     ).catch(() => null)
     if (!r?.ok) return
     const data = await r.json()
-    const devs = (Array.isArray(data) ? data : []).filter(
-      (d) => (d.cargo || '').trim().toLowerCase() === 'desarrollador',
-    )
+    const norm = (txt) => String(txt || '').trim().toLowerCase()
+    const esDesarrollador = (d) =>
+      norm(d.cargo) === 'desarrollador' || norm(d.rol) === 'desarrollador'
+    const devs = (Array.isArray(data) ? data : []).filter(esDesarrollador)
     const uid = usuario?.id
     const otro = devs.find((d) => d.id !== uid)
     setDestDevId((otro || devs[0])?.id ?? null)
@@ -782,7 +783,10 @@ export function ReporteErroresBtn({ t, usuario, token }) {
               </div>
 
               <div style={{ marginBottom: 20 }}>
-                <label style={{ ...labelStyle, color: t.textMuted }}>Criticidad</label>
+                <label style={{ ...labelStyle, color: t.textMuted }}>Urgencia</label>
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
+                  ¿Qué tan pronto lo necesitas?
+                </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   {REPORTE_CRITICIDAD.map((c, i) => (
                     <CriticidadEmoji

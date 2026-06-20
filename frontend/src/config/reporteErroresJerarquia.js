@@ -14,7 +14,7 @@ export const REPORTE_ERRORES_JERARQUIA = {
     label: 'Inicio',
     ubicaciones: {
       barra_clima: {
-        label: 'Barra de clima',
+        label: "Barra de clima",
         sectores: {
           clima_bogota: 'Panel clima Bogotá / oficina',
           clima_obra: 'Panel clima zona de obra',
@@ -653,11 +653,11 @@ export const REPORTE_ERRORES_JERARQUIA = {
 }
 
 export const REPORTE_CRITICIDAD = [
-  { key: 1, emoji: '😡', color: '#DC2626', label: 'Crítico — bloquea mi trabajo' },
-  { key: 2, emoji: '😟', color: '#EA580C', label: 'Alto — dificulta seriamente mi trabajo' },
-  { key: 3, emoji: '😐', color: '#CA8A04', label: 'Medio — puedo sortearlo con esfuerzo' },
-  { key: 4, emoji: '🙂', color: '#65A30D', label: 'Bajo — molestia menor' },
-  { key: 5, emoji: '😊', color: '#16A34A', label: 'Leve — puedo seguir trabajando' },
+  { key: 1, emoji: '🔥', color: '#DC2626', label: '¡Ya! — Bloqueado, no puedo continuar' },
+  { key: 2, emoji: '🌡️', color: '#EA580C', label: 'Muy pronto — Me dificulta trabajar' },
+  { key: 3, emoji: '☀️', color: '#CA8A04', label: 'Hoy — Puedo sortearlo con esfuerzo' },
+  { key: 4, emoji: '🌤️', color: '#65A30D', label: 'Esta semana — Molestia menor' },
+  { key: 5, emoji: '❄️', color: '#0EA5E9', label: 'Cuando puedas — Puedo seguir trabajando' },
 ]
 
 /** Mapeo ModuloContext → clave del menú lateral (dashboard se publica como cobro). */

@@ -1,8 +1,18 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Stop-Process -Id (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
+try {
+    $listen8000Early = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    if ($null -ne $listen8000Early) {
+        foreach ($conn in @($listen8000Early)) {
+            $procId = [int]$conn.OwningProcess
+            if ($procId -gt 0) {
+                Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Start-Sleep -Seconds 2
+    }
+} catch { }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root "backend"

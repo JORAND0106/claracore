@@ -2046,7 +2046,7 @@ app.include_router(filtros_plantillas_router)
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
 
-from telegram_service import send_telegram_message, telegram_configured, try_send_soporte_telegram
+from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -10270,6 +10270,85 @@ def admin_inicio_novedad_mejorar_texto(
 # NOTIFICACIONES
 # ─────────────────────────────────────────────
 
+_REPORTE_ATENDIDO_ASUNTO = "Reporte atendido ✅"
+_REPORTE_ATENDIDO_MENSAJE = (
+    "🛟 Tu reporte fue recibido y atendido. Gracias por tomarte el tiempo de reportarlo — "
+    "cada observación nos ayuda a hacer ClaraCore mejor para todos. "
+    "¡Seguimos construyendo juntos!"
+)
+
+
+def _notificar_usuario_reporte_atendido(notificacion_soporte_id: int) -> None:
+    """Inserta notificación SISTEMA al usuario que reportó. Errores solo se registran."""
+    try:
+        rows = (
+            supabase.table("notificaciones")
+            .select("id, remitente_id, destinatario_id, contrato_id, modulo, tipo")
+            .eq("id", notificacion_soporte_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            _log_api.warning(
+                "reporte atendido: notificación SOPORTE %s no encontrada",
+                notificacion_soporte_id,
+            )
+            return
+        orig = rows[0]
+        if (orig.get("tipo") or "").upper() != "SOPORTE":
+            _log_api.warning(
+                "reporte atendido: id %s no es tipo SOPORTE",
+                notificacion_soporte_id,
+            )
+            return
+        reporter_id = orig.get("remitente_id")
+        if not reporter_id:
+            _log_api.warning(
+                "reporte atendido: SOPORTE %s sin remitente_id",
+                notificacion_soporte_id,
+            )
+            return
+        reporter_id = int(reporter_id)
+        dev_id = orig.get("destinatario_id")
+        contrato_id = orig.get("contrato_id")
+        modulo = orig.get("modulo")
+
+        dup = (
+            supabase.table("notificaciones")
+            .select("id")
+            .eq("tipo", "SISTEMA")
+            .eq("destinatario_id", reporter_id)
+            .eq("entidad_tipo", "notificacion")
+            .eq("entidad_id", str(notificacion_soporte_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+        if dup:
+            return
+
+        row = {
+            "remitente_id": int(dev_id) if dev_id else None,
+            "remitente_nombre": "ClaraCore",
+            "destinatario_id": reporter_id,
+            "asunto": _REPORTE_ATENDIDO_ASUNTO,
+            "mensaje": _REPORTE_ATENDIDO_MENSAJE,
+            "tipo": "SISTEMA",
+            "modulo": modulo,
+            "contrato_id": contrato_id,
+            "entidad_tipo": "notificacion",
+            "entidad_id": str(notificacion_soporte_id),
+        }
+        supabase.table("notificaciones").insert(row).execute()
+    except Exception as e:
+        _log_api.exception(
+            "reporte atendido: fallo al notificar usuario (SOPORTE id=%s): %s",
+            notificacion_soporte_id,
+            e,
+        )
+
+
 def _remitente_nombre_from_user(current_user) -> str:
     return (current_user.get("nombre") or current_user.get("email") or "").strip() or "Usuario"
 
@@ -10495,11 +10574,13 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
                         contrato_lbl = str(crow[0]["numero"])
                     else:
                         contrato_lbl = str(rcid)
+                notif_id = result.data[0].get("id") if result.data else None
                 try_send_soporte_telegram(
                     usuario_nombre=nombre,
                     contrato=contrato_lbl,
                     mensaje=body.mensaje,
                     modulo=body.modulo,
+                    notificacion_id=notif_id,
                 )
             except Exception:
                 pass
@@ -10508,6 +10589,20 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
             str(result.data[0]["id"]) if result.data else None,
             {"asunto": body.asunto, "destinatario_id": body.destinatario_id, "tipo": body.tipo})
         return result.data[0] if result.data else {}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Recibe actualizaciones de Telegram (callback del botón Gestionado)."""
+    try:
+        update = await request.json()
+    except Exception:
+        return {"ok": True}
+    return handle_telegram_webhook_update(
+        update,
+        on_reporte_gestionado=_notificar_usuario_reporte_atendido,
+    )
+
 
 @app.get("/notificaciones/recibidas")
 def get_notificaciones_recibidas(
@@ -10636,28 +10731,54 @@ def get_usuarios_destinatarios(
 
     def _rows_to_out(rows: list) -> list:
         cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+        roles = {r["id"]: r["nombre"] for r in (supabase.table("roles").select("id, nombre").execute().data or [])}
         return [
-            {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
+            {
+                "id": r["id"],
+                "nombre": f"{r['nombre']} {r.get('apellidos','')}",
+                "cargo": cargos.get(r.get("cargo_id"), ""),
+                "rol": roles.get(r.get("rol_id"), ""),
+            }
             for r in (rows or []) if r.get("id") is not None and r["id"] != uid
         ]
 
-    if not scope:
+    by_id = {}
+    if scope:
+        scope_l = list(scope)
+        r1 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id, rol_id").eq("activo", True).in_("contrato_id", scope_l).execute().data or []
+        for r in r1:
+            by_id[r["id"]] = r
+        uc = supabase.table("usuario_contratos").select("usuario_id").in_("contrato_id", scope_l).execute().data or []
+        extra_ids = list({int(x["usuario_id"]) for x in uc if x.get("usuario_id") is not None} - {uid})
+        if extra_ids:
+            chunk = 120
+            for i in range(0, len(extra_ids), chunk):
+                part = extra_ids[i : i + chunk]
+                r2 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id, rol_id").eq("activo", True).in_("id", part).execute().data or []
+                for r in r2:
+                    by_id[r["id"]] = r
+
+    dev_cargo_ids = [
+        c["id"]
+        for c in (supabase.table("cargos").select("id, nombre").execute().data or [])
+        if (c.get("nombre") or "").strip().lower() == "desarrollador"
+    ]
+    if dev_cargo_ids:
+        r_dev = (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos, cargo_id, rol_id")
+            .eq("activo", True)
+            .in_("cargo_id", dev_cargo_ids)
+            .execute()
+            .data
+            or []
+        )
+        for r in r_dev:
+            by_id[r["id"]] = r
+
+    if not by_id:
         return []
 
-    scope_l = list(scope)
-    by_id = {}
-    r1 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).in_("contrato_id", scope_l).execute().data or []
-    for r in r1:
-        by_id[r["id"]] = r
-    uc = supabase.table("usuario_contratos").select("usuario_id").in_("contrato_id", scope_l).execute().data or []
-    extra_ids = list({int(x["usuario_id"]) for x in uc if x.get("usuario_id") is not None} - {uid})
-    if extra_ids:
-        chunk = 120
-        for i in range(0, len(extra_ids), chunk):
-            part = extra_ids[i : i + chunk]
-            r2 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).in_("id", part).execute().data or []
-            for r in r2:
-                by_id[r["id"]] = r
     out = _rows_to_out(list(by_id.values()))
     out.sort(key=lambda x: (x.get("nombre") or "").lower())
     return out
