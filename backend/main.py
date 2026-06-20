@@ -187,7 +187,7 @@ def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
             return True
     return False
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 _MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", _MAINTENANCE_SECRET)
 _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", str(_MAINTENANCE_DEFAULT_SECONDS)))
 
@@ -2045,6 +2045,8 @@ app.include_router(filtros_plantillas_router)
 
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
+
+from telegram_service import send_telegram_message, telegram_configured, try_send_soporte_telegram
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -4166,6 +4168,53 @@ def healthz():
         "acta_cierre_defer_mover": True,
         "acta_mover_residuales_lote": True,
     }
+
+
+@app.get("/test-telegram")
+def test_telegram_connection():
+    """Temporal: verifica conexión ClaraCore → Telegram."""
+    import sys
+
+    sys.stderr.write("[test-telegram] FIRST LINE — handler reached\n")
+    sys.stderr.flush()
+    print("[test-telegram] FIRST LINE — handler reached (stdout)", flush=True)
+    logging.getLogger("uvicorn.error").warning("[test-telegram] FIRST LINE — handler reached (logger)")
+
+    from dotenv import load_dotenv
+
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(_env_path, override=True)
+
+    _token = os.environ.get("TELEGRAM_BOT_TOKEN", "NO ENCONTRADO")
+    _chat = os.environ.get("TELEGRAM_CHAT_ID", "NO ENCONTRADO")
+    print(f"[test-telegram] .env path: {_env_path}", flush=True)
+    print(f"[test-telegram] .env exists: {os.path.isfile(_env_path)}", flush=True)
+    print(f"[test-telegram] TELEGRAM_BOT_TOKEN={_token}", flush=True)
+    print(f"[test-telegram] TELEGRAM_CHAT_ID={_chat}", flush=True)
+
+    _debug = {
+        "handler": "test_telegram_connection_v6",
+        "env_path": _env_path,
+        "env_exists": os.path.isfile(_env_path),
+        "TELEGRAM_BOT_TOKEN": _token,
+        "TELEGRAM_CHAT_ID": _chat,
+        "telegram_configured": telegram_configured(),
+    }
+
+    if not telegram_configured():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)",
+                "_debug": _debug,
+            },
+        )
+
+    ok = send_telegram_message("✅ Conexión ClaraCore → Telegram funcionando")
+    if not ok:
+        raise HTTPException(status_code=502, detail="No se pudo enviar el mensaje a Telegram")
+    return {"ok": True, "mensaje": "✅ Conexión ClaraCore → Telegram funcionando", "_debug": _debug}
+
 
 @app.get("/cargos")
 def listar_cargos():
@@ -10475,6 +10524,31 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
                     .eq("id", body.padre_id) \
                     .execute()
             except: pass
+
+        if body.tipo == "SOPORTE":
+            try:
+                contrato_lbl = "—"
+                if rcid is not None:
+                    crow = (
+                        supabase.table("contratos")
+                        .select("numero")
+                        .eq("id", rcid)
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                    if crow and crow[0].get("numero"):
+                        contrato_lbl = str(crow[0]["numero"])
+                    else:
+                        contrato_lbl = str(rcid)
+                try_send_soporte_telegram(
+                    usuario_nombre=nombre,
+                    contrato=contrato_lbl,
+                    mensaje=body.mensaje,
+                    modulo=body.modulo,
+                )
+            except Exception:
+                pass
 
         registrar_log(current_user, "ENVIAR", "NOTIFICACIONES", "notificacion",
             str(result.data[0]["id"]) if result.data else None,

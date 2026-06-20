@@ -1,6 +1,9 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+Stop-Process -Id (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
@@ -21,15 +24,45 @@ try {
     Start-Sleep -Milliseconds 500
 } catch { }
 
+# Exportar backend/.env al proceso de uvicorn (sin depender de python-dotenv en runtime).
+$envFilePath = Join-Path $backendDir ".env"
+$envBootstrap = @()
+if (Test-Path -LiteralPath $envFilePath) {
+    Write-Host "Cargando variables de entorno desde backend\.env..." -ForegroundColor DarkGray
+    foreach ($rawLine in Get-Content -LiteralPath $envFilePath -Encoding UTF8) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#")) { continue }
+        $eqIdx = $line.IndexOf("=")
+        if ($eqIdx -lt 1) { continue }
+        $name = $line.Substring(0, $eqIdx).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { continue }
+        $value = $line.Substring($eqIdx + 1).Trim()
+        if ($value.Length -ge 2) {
+            $quote = $value[0]
+            if (($quote -eq '"' -or $quote -eq "'") -and $value[-1] -eq $quote) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        $valueEsc = $value -replace "'", "''"
+        $envBootstrap += ('$env:{0} = ''{1}''' -f $name, $valueEsc)
+    }
+} else {
+    Write-Host "AVISO: no se encontro backend\.env - uvicorn arrancara sin variables locales." -ForegroundColor DarkYellow
+}
+
 # OneDrive suele impedir que --reload detecte cambios; el polling evita servir código viejo sin rutas nuevas.
 # --timeout-graceful-shutdown: si hay peticiones largas (dashboard-resumen, drill), el reload no queda colgado
 #   en «Waiting for connections to close» hasta que cierres manualmente las ventanas.
 # --reload-delay: agrupa cambios seguidos en .py (evita reinicios en cadena mientras Cursor guarda).
 Write-Host "Arrancando backend (FastAPI :8000)..." -ForegroundColor DarkGray
+$backendCommand = ($envBootstrap + @(
+    '$env:WATCHFILES_FORCE_POLLING = "1"',
+    'python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000 --reload-delay 2 --timeout-graceful-shutdown 8'
+)) -join '; '
 Start-Process -FilePath "powershell" -WorkingDirectory $backendDir -ArgumentList @(
     "-NoExit",
     "-Command",
-    '$env:WATCHFILES_FORCE_POLLING = "1"; python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000 --reload-delay 2 --timeout-graceful-shutdown 8'
+    $backendCommand
 ) | Out-Null
 
 Write-Host "Esperando backend en :8000 (hasta 45 s)..." -ForegroundColor DarkGray

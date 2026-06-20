@@ -125,7 +125,8 @@ import {
   MAPBOX_ABSCISA_TEXT_FIELD,
 } from './mapboxPlanoLabels'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
-import AVI from './components/AVI/AVI'
+import AVI, { AVITriggerButton } from './components/AVI/AVI'
+import { ReporteErroresBtn } from './components/ReporteErroresModal'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -15635,6 +15636,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <AVITriggerButton t={t} />
           <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} />
           <div style={{ display:'flex', gap:'2px', alignItems:'center', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 6px' }}>
             {[['pequena','A',11],['normal','A',14],['grande','A',17]].map(([key, lbl, sz]) => (
@@ -15689,6 +15691,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 )}
               </span>
             </button>
+            <ReporteErroresBtn t={t} usuario={usuario} token={getToken()} />
             <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
@@ -19506,14 +19509,15 @@ if (contratos.length > 1) {
           </div>
         </div>
       )}
-      <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
-        onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
-        onCambiarContrato={cambiarContratoActivo}
-        topOffset={totalTopOffset}
-        fontSize={fontSize} onFontSize={cambiarFuente}
-        onOpenPerfil={() => setPerfilModalAbierto(true)}
-      />
-      <AVI usuario={usuario} fontSize={fontSize} />
+      <AVI usuario={usuario} fontSize={fontSize}>
+        <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
+          onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
+          onCambiarContrato={cambiarContratoActivo}
+          topOffset={totalTopOffset}
+          fontSize={fontSize} onFontSize={cambiarFuente}
+          onOpenPerfil={() => setPerfilModalAbierto(true)}
+        />
+      </AVI>
     </>
     </ModuloProvider>
     )
