@@ -127,6 +127,7 @@ import {
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
+import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -15692,6 +15693,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </span>
             </button>
             <ReporteErroresBtn t={t} usuario={usuario} token={getToken()} />
+            <PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} />
             <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
