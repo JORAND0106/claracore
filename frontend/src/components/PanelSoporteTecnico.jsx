@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Headset } from 'lucide-react'
+import { Headset, Trash2 } from 'lucide-react'
 import { API_BASE } from '../apiBase'
 
 function formatFechaLogBogota(iso) {
@@ -47,31 +47,42 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
   const [pendientesCount, setPendientesCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [accionId, setAccionId] = useState(null)
+  const [eliminandoId, setEliminandoId] = useState(null)
+  const [limpiando, setLimpiando] = useState(false)
 
-  const h = { Authorization: `Bearer ${token}` }
+  const authHeaders = useCallback(
+    () => ({ Authorization: `Bearer ${token}` }),
+    [token],
+  )
 
   const cargarPendientes = useCallback(async () => {
-    const r = await fetch(`${API_BASE}/admin/soporte?filtro=todos`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API_BASE}/admin/soporte?filtro=todos`, { headers: authHeaders() }).catch(() => null)
     if (!r?.ok) return
     const data = await r.json()
     setPendientesCount(data?.kpis?.pendientes ?? 0)
     const lista = (data?.reportes || []).filter((x) => !x.soporte_estado)
     setPendientes(lista)
-  }, [token])
+  }, [authHeaders])
 
   const cargarGestionados = useCallback(async () => {
-    const r = await fetch(`${API_BASE}/admin/soporte?filtro=gestionados`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API_BASE}/admin/soporte?filtro=gestionados`, { headers: authHeaders() }).catch(() => null)
     if (!r?.ok) return
     const data = await r.json()
     setGestionados(data?.reportes || [])
-  }, [token])
+  }, [authHeaders])
 
   const cargarCount = useCallback(async () => {
-    const r = await fetch(`${API_BASE}/admin/soporte?filtro=todos`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API_BASE}/admin/soporte?filtro=todos`, { headers: authHeaders() }).catch(() => null)
     if (!r?.ok) return
     const data = await r.json()
     setPendientesCount(data?.kpis?.pendientes ?? 0)
-  }, [token])
+  }, [authHeaders])
+
+  const refrescarTodo = useCallback(async () => {
+    await cargarPendientes()
+    await cargarGestionados()
+    await cargarCount()
+  }, [cargarPendientes, cargarGestionados, cargarCount])
 
   const cargarTab = useCallback(async () => {
     setLoading(true)
@@ -114,7 +125,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
     try {
       const r = await fetch(`${API_BASE}/admin/soporte/${id}/gestionar`, {
         method: 'PUT',
-        headers: { ...h, 'Content-Type': 'application/json' },
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ accion }),
       })
       if (!r.ok) {
@@ -122,11 +133,53 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
         alert(err?.detail || 'No se pudo actualizar el reporte')
         return
       }
-      await cargarPendientes()
-      if (tab === 'gestionados') await cargarGestionados()
-      await cargarCount()
+      await refrescarTodo()
     } finally {
       setAccionId(null)
+    }
+  }
+
+  const eliminar = async (id) => {
+    setEliminandoId(id)
+    try {
+      const r = await fetch(`${API_BASE}/admin/soporte/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}))
+        alert(err?.detail || 'No se pudo eliminar el reporte')
+        return
+      }
+      await refrescarTodo()
+    } finally {
+      setEliminandoId(null)
+    }
+  }
+
+  const limpiarTodo = async () => {
+    const items = tab === 'pendientes' ? pendientes : gestionados
+    const n = items.length
+    if (!n) return
+    const msg =
+      tab === 'pendientes'
+        ? `¿Eliminar los ${n} reportes pendientes? Esta acción no se puede deshacer.`
+        : `¿Eliminar los ${n} reportes gestionados? Esta acción no se puede deshacer.`
+    if (!window.confirm(msg)) return
+    setLimpiando(true)
+    try {
+      const r = await fetch(`${API_BASE}/admin/soporte/limpiar?pestana=${encodeURIComponent(tab)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}))
+        alert(err?.detail || 'No se pudo limpiar los reportes')
+        return
+      }
+      await refrescarTodo()
+    } finally {
+      setLimpiando(false)
     }
   }
 
@@ -238,27 +291,48 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: '8px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <Headset size={20} strokeWidth={2} color={t.primary} aria-hidden />
               <div style={{ fontSize: 'var(--cc-md)', fontWeight: '700', color: t.text }}>
                 Soporte técnico
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setAbierto(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                fontSize: 'var(--cc-lg)',
-                cursor: 'pointer',
-                color: t.textMuted,
-              }}
-            >
-              ✕
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={limpiarTodo}
+                disabled={limpiando || !lista.length}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${lista.length ? '#DC2626' : t.border}`,
+                  borderRadius: '8px',
+                  padding: '4px 10px',
+                  fontSize: 'var(--cc-label)',
+                  fontWeight: '600',
+                  cursor: limpiando || !lista.length ? 'not-allowed' : 'pointer',
+                  color: lista.length ? '#DC2626' : t.textMuted,
+                  opacity: limpiando ? 0.7 : 1,
+                }}
+              >
+                {limpiando ? 'Limpiando…' : 'Limpiar todo'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAbierto(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: 'var(--cc-lg)',
+                  cursor: 'pointer',
+                  color: t.textMuted,
+                }}
+              >
+                ✕
+              </button>
+            </div>
           </div>
 
           <div
@@ -289,6 +363,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
                 const icono = esError ? '🛟' : esSug ? '💡' : '📩'
                 const gestionado = !!r.soporte_estado
                 const busy = accionId === r.id
+                const borrando = eliminandoId === r.id
 
                 return (
                   <div
@@ -305,18 +380,40 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                       <span style={{ fontSize: 'var(--cc-lg)', lineHeight: 1, flexShrink: 0 }}>{icono}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontSize: 'var(--cc-sm)',
-                            fontWeight: '700',
-                            color: t.text,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            marginBottom: '4px',
-                          }}
-                        >
-                          {r.asunto || 'Sin asunto'}
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                          <div
+                            style={{
+                              fontSize: 'var(--cc-sm)',
+                              fontWeight: '700',
+                              color: t.text,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              marginBottom: '4px',
+                              flex: 1,
+                              minWidth: 0,
+                            }}
+                          >
+                            {r.asunto || 'Sin asunto'}
+                          </div>
+                          <button
+                            type="button"
+                            title="Eliminar reporte"
+                            disabled={borrando || busy}
+                            onClick={() => eliminar(r.id)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              padding: '2px',
+                              cursor: borrando || busy ? 'wait' : 'pointer',
+                              color: t.textMuted,
+                              flexShrink: 0,
+                              lineHeight: 0,
+                              opacity: borrando ? 0.5 : 1,
+                            }}
+                          >
+                            <Trash2 size={15} strokeWidth={2} aria-hidden />
+                          </button>
                         </div>
                         <div
                           style={{
@@ -345,7 +442,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
                         {!gestionado && (esError || esSug) && (
                           <button
                             type="button"
-                            disabled={busy}
+                            disabled={busy || borrando}
                             onClick={() => marcar(r.id, esError ? 'gestionado' : 'anotado')}
                             style={{
                               marginTop: '8px',
@@ -356,7 +453,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
                               padding: '5px 12px',
                               fontSize: 'var(--cc-label)',
                               fontWeight: '700',
-                              cursor: busy ? 'wait' : 'pointer',
+                              cursor: busy || borrando ? 'wait' : 'pointer',
                               opacity: busy ? 0.7 : 1,
                             }}
                           >

@@ -13210,6 +13210,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 
   const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
   const h = { Authorization: `Bearer ${token}` }
+  const excluirSoporte = (lista) =>
+    (Array.isArray(lista) ? lista : []).filter((n) => (n.tipo || '').toUpperCase() !== 'SOPORTE')
 
   const cargarCount = async () => {
     if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
@@ -13225,13 +13227,13 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     p.set('limit', '100')
     const q = p.toString()
     const r = await fetch(`${API}/notificaciones/recibidas${q ? `?${q}` : ''}`, { headers: h }).catch(() => null)
-    if (r?.ok) setRecibidos(await r.json())
+    if (r?.ok) setRecibidos(excluirSoporte(await r.json()))
   }
 
   const cargarEnviados = async () => {
     if (contratoCtx == null || contratoCtx === '') { setEnviados([]); return }
     const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: h }).catch(() => null)
-    if (r?.ok) setEnviados(await r.json())
+    if (r?.ok) setEnviados(excluirSoporte(await r.json()))
   }
 
   const cargarDestinatarios = async () => {
@@ -13298,9 +13300,10 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }, [abierto, contratoCtx, filtroRecibidos])
 
   async function abrirHilo(notif) {
+    if ((notif?.tipo || '').toUpperCase() === 'SOPORTE') return
     setHiloActivo(notif); setHiloLoading(true); setHilo([])
     const r = await fetch(`${API}/notificaciones/${notif.id}/hilo`, { headers: h }).catch(() => null)
-    if (r?.ok) { const d = await r.json(); setHilo(d.hilo || []) }
+    if (r?.ok) { const d = await r.json(); setHilo(excluirSoporte(d.hilo || [])) }
     setHiloLoading(false)
     cargarCount(); cargarRecibidos()
   }

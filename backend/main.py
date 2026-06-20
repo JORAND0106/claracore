@@ -10657,12 +10657,19 @@ def _filtro_query_notif_contrato_o_nulo(q, contrato_id: Optional[int]):
 
 def _filtro_notif_visible_buzon_recibidas(q):
     """Excluye mensajes que el destinatario ocultó de su buzón."""
-    return q.or_("oculto_destinatario.eq.false,oculto_destinatario.is.null")
+    q = q.or_("oculto_destinatario.eq.false,oculto_destinatario.is.null")
+    return _filtro_notif_excluir_soporte(q)
 
 
 def _filtro_notif_visible_buzon_enviadas(q):
     """Excluye mensajes que el remitente ocultó de su bandeja de enviados."""
-    return q.or_("oculto_remitente.eq.false,oculto_remitente.is.null")
+    q = q.or_("oculto_remitente.eq.false,oculto_remitente.is.null")
+    return _filtro_notif_excluir_soporte(q)
+
+
+def _filtro_notif_excluir_soporte(q):
+    """El buzón solo muestra MENSAJE_DIRECTO, BROADCAST y SISTEMA (no reportes SOPORTE)."""
+    return q.neq("tipo", "SOPORTE")
 
 
 def _push_notif_validacion_sicoe_destinatarios(
@@ -10952,6 +10959,49 @@ def admin_soporte_gestionar(
     return {"ok": True, "reporte": rep}
 
 
+@app.delete("/admin/soporte/limpiar")
+def admin_soporte_limpiar(
+    pestana: str = Query(..., description="pendientes | gestionados"),
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Elimina todos los reportes SOPORTE de la pestaña indicada (solo Desarrollador)."""
+    del current_user
+    pest = (pestana or "").strip().lower()
+    if pest not in ("pendientes", "gestionados"):
+        raise HTTPException(status_code=400, detail="pestana debe ser pendientes o gestionados")
+    q = supabase.table("notificaciones").select("id").eq("tipo", "SOPORTE")
+    if pest == "pendientes":
+        q = q.is_("soporte_estado", "null")
+    else:
+        q = q.not_.is_("soporte_estado", "null")
+    rows = q.execute().data or []
+    ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    if ids:
+        supabase.table("notificaciones").delete().in_("id", ids).execute()
+    return {"ok": True, "eliminados": len(ids)}
+
+
+@app.delete("/admin/soporte/{notif_id}")
+def admin_soporte_eliminar(
+    notif_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Elimina un reporte SOPORTE de notificaciones (solo Desarrollador)."""
+    del current_user
+    rows = (
+        supabase.table("notificaciones")
+        .select("id, tipo")
+        .eq("id", notif_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows or (rows[0].get("tipo") or "").upper() != "SOPORTE":
+        raise HTTPException(status_code=404, detail="Reporte SOPORTE no encontrado")
+    supabase.table("notificaciones").delete().eq("id", notif_id).execute()
+    return {"ok": True, "id": notif_id}
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     """Recibe actualizaciones de Telegram (callback del botón Gestionado)."""
@@ -11026,17 +11076,23 @@ def get_hilo(notif_id: int, current_user=Depends(get_current_user)):
     """Devuelve el hilo completo de una notificación (padre + respuestas)."""
     # Primero encontrar el padre raíz
     notif = supabase.table("notificaciones").select("*").eq("id", notif_id).execute().data
-    if not notif: raise HTTPException(status_code=404, detail="No encontrada")
+    if not notif:
+        raise HTTPException(status_code=404, detail="No encontrada")
+    if (notif[0].get("tipo") or "").upper() == "SOPORTE":
+        raise HTTPException(status_code=404, detail="No encontrada")
     padre_id = notif[0].get("padre_id") or notif_id
+    padre = supabase.table("notificaciones").select("*").eq("id", padre_id).execute().data
+    if not padre or (padre[0].get("tipo") or "").upper() == "SOPORTE":
+        raise HTTPException(status_code=404, detail="No encontrada")
     # Marcar como leída
     uid = int(current_user.get("sub", 0))
     supabase.table("notificaciones").update({"leido": True, "leido_at": datetime.utcnow().isoformat()}) \
         .eq("id", notif_id).eq("destinatario_id", uid).execute()
     # Traer padre + todas las respuestas
-    padre = supabase.table("notificaciones").select("*").eq("id", padre_id).execute().data
     respuestas = supabase.table("notificaciones").select("*") \
         .eq("padre_id", padre_id).order("created_at").execute().data
-    return {"hilo": padre + respuestas}
+    hilo = [m for m in (padre + respuestas) if (m.get("tipo") or "").upper() != "SOPORTE"]
+    return {"hilo": hilo}
 
 @app.put("/notificaciones/{notif_id}/leida")
 def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
