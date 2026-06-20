@@ -19,6 +19,8 @@ _log = logging.getLogger("uvicorn.error")
 _BOGOTA = pytz.timezone("America/Bogota")
 _GESTIONADO_PREFIX = "gestionado:"
 _GESTIONADO_MARKER = "✅ Gestionado —"
+_ANOTADO_PREFIX = "anotado:"
+_ANOTADO_MARKER = "💡 Anotado —"
 
 
 def telegram_configured() -> bool:
@@ -40,17 +42,37 @@ def _format_fecha_hora() -> str:
     return datetime.now(_BOGOTA).strftime("%d/%m/%Y %H:%M (Colombia)")
 
 
-def _gestionado_callback_data(notificacion_id: int) -> str:
-    return f"{_GESTIONADO_PREFIX}{int(notificacion_id)}"
+def _modulo_display(modulo: Optional[str]) -> str:
+    if not modulo or not str(modulo).strip():
+        return "—"
+    m = str(modulo).strip()
+    if m.upper() == "OTRO":
+        return "Otro"
+    return m.replace("_", " ").title()
 
 
-def _gestionado_inline_keyboard(notificacion_id: int) -> Dict[str, Any]:
+def _inline_callback_data(prefix: str, notificacion_id: int) -> str:
+    return f"{prefix}{int(notificacion_id)}"
+
+
+def _inline_keyboard(notificacion_id: int, button: str) -> Dict[str, Any]:
+    if button == "anotado":
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "💡 Anotado",
+                        "callback_data": _inline_callback_data(_ANOTADO_PREFIX, notificacion_id),
+                    }
+                ]
+            ]
+        }
     return {
         "inline_keyboard": [
             [
                 {
                     "text": "✅ Gestionado",
-                    "callback_data": _gestionado_callback_data(notificacion_id),
+                    "callback_data": _inline_callback_data(_GESTIONADO_PREFIX, notificacion_id),
                 }
             ]
         ]
@@ -84,9 +106,10 @@ def send_telegram_message(
     text: str,
     *,
     notificacion_id: Optional[int] = None,
+    button: str = "gestionado",
     chat_id: Optional[str] = None,
 ) -> bool:
-    """Envía un mensaje de texto al chat configurado (opcionalmente con botón Gestionado)."""
+    """Envía un mensaje de texto al chat configurado (opcionalmente con botón inline)."""
     cid = (chat_id or _default_chat_id()).strip()
     if not cid:
         _log.warning("Telegram no configurado (TELEGRAM_CHAT_ID)")
@@ -98,7 +121,7 @@ def send_telegram_message(
         "disable_web_page_preview": True,
     }
     if notificacion_id is not None:
-        payload["reply_markup"] = _gestionado_inline_keyboard(notificacion_id)
+        payload["reply_markup"] = _inline_keyboard(notificacion_id, button)
 
     return _telegram_api("sendMessage", payload) is not None
 
@@ -160,6 +183,34 @@ def parse_error_report_mensaje(mensaje: str) -> Optional[Dict[str, Any]]:
     return fields
 
 
+def parse_mejora_mensaje(mensaje: str) -> Optional[str]:
+    """Extrae el texto de una sugerencia de mejora del mensaje estructurado del formulario."""
+    if not mensaje or "── Sugerencia de mejora ──" not in mensaje:
+        return None
+    _, _, body = mensaje.partition("── Sugerencia de mejora ──")
+    text = body.strip()
+    return text or None
+
+
+def format_mejora_message(
+    *,
+    usuario_nombre: str,
+    contrato: str,
+    modulo: str,
+    sugerencia: str,
+    fecha_hora: Optional[str] = None,
+) -> str:
+    fecha = fecha_hora or _format_fecha_hora()
+    return (
+        "💡 Nueva sugerencia de mejora — ClaraCore\n\n"
+        f"👤 Usuario: {usuario_nombre}\n"
+        f"🏢 Contrato: {contrato}\n"
+        f"📍 Módulo: {modulo}\n\n"
+        f"💬 Sugerencia:\n{sugerencia.strip()}\n\n"
+        f"🕐 {fecha}"
+    )
+
+
 def send_error_report_to_telegram(
     *,
     usuario_nombre: str,
@@ -182,7 +233,24 @@ def send_error_report_to_telegram(
         criticidad=criticidad,
         imagen_adjunta=imagen_adjunta,
     )
-    return send_telegram_message(text, notificacion_id=notificacion_id)
+    return send_telegram_message(text, notificacion_id=notificacion_id, button="gestionado")
+
+
+def send_mejora_to_telegram(
+    *,
+    usuario_nombre: str,
+    contrato: str,
+    modulo: str,
+    sugerencia: str,
+    notificacion_id: Optional[int] = None,
+) -> bool:
+    text = format_mejora_message(
+        usuario_nombre=usuario_nombre,
+        contrato=contrato,
+        modulo=_modulo_display(modulo),
+        sugerencia=sugerencia,
+    )
+    return send_telegram_message(text, notificacion_id=notificacion_id, button="anotado")
 
 
 def try_send_soporte_telegram(
@@ -213,8 +281,16 @@ def try_send_soporte_telegram(
                 imagen_adjunta=bool(parsed.get("imagen_adjunta")),
                 notificacion_id=notificacion_id,
             )
+        elif (sugerencia := parse_mejora_mensaje(mensaje)):
+            ok = send_mejora_to_telegram(
+                usuario_nombre=usuario_nombre or "Usuario",
+                contrato=contrato or "—",
+                modulo=modulo or "—",
+                sugerencia=sugerencia,
+                notificacion_id=notificacion_id,
+            )
         else:
-            mod_txt = modulo or "—"
+            mod_txt = _modulo_display(modulo)
             text = (
                 "📩 Nuevo mensaje de soporte — ClaraCore\n\n"
                 f"👤 Usuario: {usuario_nombre or 'Usuario'}\n"
@@ -223,7 +299,7 @@ def try_send_soporte_telegram(
                 f"{mensaje.strip()}\n\n"
                 f"🕐 {_format_fecha_hora()}"
             )
-            ok = send_telegram_message(text, notificacion_id=notificacion_id)
+            ok = send_telegram_message(text, notificacion_id=notificacion_id, button="gestionado")
         return ok
     except Exception:
         _log.exception("try_send_soporte_telegram falló")
@@ -237,18 +313,19 @@ def _answer_callback_query(callback_query_id: str, text: str) -> None:
     )
 
 
-def _mensaje_ya_gestionado(text: str) -> bool:
-    return _GESTIONADO_MARKER in (text or "")
+def _mensaje_ya_marcado(text: str, marker: str) -> bool:
+    return marker in (text or "")
 
 
-def _marcar_mensaje_gestionado_en_telegram(
+def _actualizar_mensaje_telegram(
     *,
     chat_id: int,
     message_id: int,
     original_text: str,
+    marker: str,
 ) -> bool:
     fecha = _format_fecha_hora()
-    new_text = f"{original_text.rstrip()}\n\n{_GESTIONADO_MARKER} {fecha}"
+    new_text = f"{original_text.rstrip()}\n\n{marker} {fecha}"
     result = _telegram_api(
         "editMessageText",
         {
@@ -262,20 +339,26 @@ def _marcar_mensaje_gestionado_en_telegram(
     return result is not None
 
 
-def _handle_gestionado_callback(
+def _handle_inline_action_callback(
     callback_query: Dict[str, Any],
-    on_reporte_gestionado: Optional[Callable[[int], None]] = None,
+    *,
+    prefix: str,
+    marker: str,
+    ya_marcado_msg: str,
+    ok_msg: str,
+    invalid_id_msg: str,
+    on_action: Optional[Callable[[int], None]] = None,
 ) -> bool:
     data = (callback_query.get("data") or "").strip()
-    if not data.startswith(_GESTIONADO_PREFIX):
+    if not data.startswith(prefix):
         return False
 
     try:
-        notificacion_id = int(data[len(_GESTIONADO_PREFIX):])
+        notificacion_id = int(data[len(prefix):])
     except ValueError:
         cq_id = callback_query.get("id")
         if cq_id:
-            _answer_callback_query(cq_id, "Identificador de reporte inválido.")
+            _answer_callback_query(cq_id, invalid_id_msg)
         return True
 
     message = callback_query.get("message") or {}
@@ -290,39 +373,72 @@ def _handle_gestionado_callback(
             _answer_callback_query(cq_id, "No se pudo actualizar el mensaje.")
         return True
 
-    if _mensaje_ya_gestionado(original_text):
+    if _mensaje_ya_marcado(original_text, marker):
         if cq_id:
-            _answer_callback_query(cq_id, "Este reporte ya fue marcado como gestionado.")
+            _answer_callback_query(cq_id, ya_marcado_msg)
         return True
 
-    ok = _marcar_mensaje_gestionado_en_telegram(
+    ok = _actualizar_mensaje_telegram(
         chat_id=int(chat_id),
         message_id=int(message_id),
         original_text=original_text,
+        marker=marker,
     )
     if cq_id:
         if ok:
-            _answer_callback_query(cq_id, "Reporte marcado como gestionado.")
+            _answer_callback_query(cq_id, ok_msg)
         else:
             _answer_callback_query(cq_id, "No se pudo actualizar el mensaje en Telegram.")
             return True
 
-    if on_reporte_gestionado:
+    if on_action:
         try:
-            on_reporte_gestionado(notificacion_id)
+            on_action(notificacion_id)
         except Exception:
             _log.exception(
-                "on_reporte_gestionado falló para notificacion_id=%s (Telegram ya actualizado)",
+                "callback %s falló para notificacion_id=%s (Telegram ya actualizado)",
+                prefix,
                 notificacion_id,
             )
 
     return True
 
 
+def _handle_gestionado_callback(
+    callback_query: Dict[str, Any],
+    on_reporte_gestionado: Optional[Callable[[int], None]] = None,
+) -> bool:
+    return _handle_inline_action_callback(
+        callback_query,
+        prefix=_GESTIONADO_PREFIX,
+        marker=_GESTIONADO_MARKER,
+        ya_marcado_msg="Este reporte ya fue marcado como gestionado.",
+        ok_msg="Reporte marcado como gestionado.",
+        invalid_id_msg="Identificador de reporte inválido.",
+        on_action=on_reporte_gestionado,
+    )
+
+
+def _handle_anotado_callback(
+    callback_query: Dict[str, Any],
+    on_sugerencia_anotada: Optional[Callable[[int], None]] = None,
+) -> bool:
+    return _handle_inline_action_callback(
+        callback_query,
+        prefix=_ANOTADO_PREFIX,
+        marker=_ANOTADO_MARKER,
+        ya_marcado_msg="Esta sugerencia ya fue marcada como anotada.",
+        ok_msg="Sugerencia marcada como anotada.",
+        invalid_id_msg="Identificador de sugerencia inválido.",
+        on_action=on_sugerencia_anotada,
+    )
+
+
 def handle_telegram_webhook_update(
     update: Dict[str, Any],
     *,
     on_reporte_gestionado: Optional[Callable[[int], None]] = None,
+    on_sugerencia_anotada: Optional[Callable[[int], None]] = None,
 ) -> Dict[str, Any]:
     """Procesa una actualización de Telegram (webhook)."""
     if not isinstance(update, dict):
@@ -330,6 +446,7 @@ def handle_telegram_webhook_update(
 
     callback_query = update.get("callback_query")
     if callback_query:
-        _handle_gestionado_callback(callback_query, on_reporte_gestionado)
+        if not _handle_gestionado_callback(callback_query, on_reporte_gestionado):
+            _handle_anotado_callback(callback_query, on_sugerencia_anotada)
 
     return {"ok": True}

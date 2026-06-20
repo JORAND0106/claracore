@@ -10276,6 +10276,11 @@ _REPORTE_ATENDIDO_MENSAJE = (
     "cada observación nos ayuda a hacer ClaraCore mejor para todos. "
     "¡Seguimos construyendo juntos!"
 )
+_SUGERENCIA_ANOTADA_ASUNTO = "Sugerencia anotada 💡"
+_SUGERENCIA_ANOTADA_MENSAJE = (
+    "💡 Tu sugerencia fue recibida y anotada. ¡Gracias! "
+    "Las mejores ideas vienen de quienes usan la plataforma todos los días."
+)
 
 
 def _notificar_usuario_reporte_atendido(notificacion_soporte_id: int) -> None:
@@ -10344,6 +10349,77 @@ def _notificar_usuario_reporte_atendido(notificacion_soporte_id: int) -> None:
     except Exception as e:
         _log_api.exception(
             "reporte atendido: fallo al notificar usuario (SOPORTE id=%s): %s",
+            notificacion_soporte_id,
+            e,
+        )
+
+
+def _notificar_usuario_sugerencia_anotada(notificacion_soporte_id: int) -> None:
+    """Inserta notificación SISTEMA al usuario que sugirió la mejora. Errores solo se registran."""
+    try:
+        rows = (
+            supabase.table("notificaciones")
+            .select("id, remitente_id, destinatario_id, contrato_id, modulo, tipo")
+            .eq("id", notificacion_soporte_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            _log_api.warning(
+                "sugerencia anotada: notificación SOPORTE %s no encontrada",
+                notificacion_soporte_id,
+            )
+            return
+        orig = rows[0]
+        if (orig.get("tipo") or "").upper() != "SOPORTE":
+            _log_api.warning(
+                "sugerencia anotada: id %s no es tipo SOPORTE",
+                notificacion_soporte_id,
+            )
+            return
+        reporter_id = orig.get("remitente_id")
+        if not reporter_id:
+            _log_api.warning(
+                "sugerencia anotada: SOPORTE %s sin remitente_id",
+                notificacion_soporte_id,
+            )
+            return
+        reporter_id = int(reporter_id)
+        dev_id = orig.get("destinatario_id")
+        contrato_id = orig.get("contrato_id")
+        modulo = orig.get("modulo")
+
+        dup = (
+            supabase.table("notificaciones")
+            .select("id")
+            .eq("tipo", "SISTEMA")
+            .eq("destinatario_id", reporter_id)
+            .eq("entidad_tipo", "notificacion")
+            .eq("entidad_id", str(notificacion_soporte_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+        if dup:
+            return
+
+        row = {
+            "remitente_id": int(dev_id) if dev_id else None,
+            "remitente_nombre": "ClaraCore",
+            "destinatario_id": reporter_id,
+            "asunto": _SUGERENCIA_ANOTADA_ASUNTO,
+            "mensaje": _SUGERENCIA_ANOTADA_MENSAJE,
+            "tipo": "SISTEMA",
+            "modulo": modulo,
+            "contrato_id": contrato_id,
+            "entidad_tipo": "notificacion",
+            "entidad_id": str(notificacion_soporte_id),
+        }
+        supabase.table("notificaciones").insert(row).execute()
+    except Exception as e:
+        _log_api.exception(
+            "sugerencia anotada: fallo al notificar usuario (SOPORTE id=%s): %s",
             notificacion_soporte_id,
             e,
         )
@@ -10601,6 +10677,7 @@ async def telegram_webhook(request: Request):
     return handle_telegram_webhook_update(
         update,
         on_reporte_gestionado=_notificar_usuario_reporte_atendido,
+        on_sugerencia_anotada=_notificar_usuario_sugerencia_anotada,
     )
 
 
