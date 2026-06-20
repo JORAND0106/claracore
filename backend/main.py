@@ -4170,52 +4170,6 @@ def healthz():
     }
 
 
-@app.get("/test-telegram")
-def test_telegram_connection():
-    """Temporal: verifica conexión ClaraCore → Telegram."""
-    import sys
-
-    sys.stderr.write("[test-telegram] FIRST LINE — handler reached\n")
-    sys.stderr.flush()
-    print("[test-telegram] FIRST LINE — handler reached (stdout)", flush=True)
-    logging.getLogger("uvicorn.error").warning("[test-telegram] FIRST LINE — handler reached (logger)")
-
-    from dotenv import load_dotenv
-
-    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    load_dotenv(_env_path, override=True)
-
-    _token = os.environ.get("TELEGRAM_BOT_TOKEN", "NO ENCONTRADO")
-    _chat = os.environ.get("TELEGRAM_CHAT_ID", "NO ENCONTRADO")
-    print(f"[test-telegram] .env path: {_env_path}", flush=True)
-    print(f"[test-telegram] .env exists: {os.path.isfile(_env_path)}", flush=True)
-    print(f"[test-telegram] TELEGRAM_BOT_TOKEN={_token}", flush=True)
-    print(f"[test-telegram] TELEGRAM_CHAT_ID={_chat}", flush=True)
-
-    _debug = {
-        "handler": "test_telegram_connection_v6",
-        "env_path": _env_path,
-        "env_exists": os.path.isfile(_env_path),
-        "TELEGRAM_BOT_TOKEN": _token,
-        "TELEGRAM_CHAT_ID": _chat,
-        "telegram_configured": telegram_configured(),
-    }
-
-    if not telegram_configured():
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": "Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)",
-                "_debug": _debug,
-            },
-        )
-
-    ok = send_telegram_message("✅ Conexión ClaraCore → Telegram funcionando")
-    if not ok:
-        raise HTTPException(status_code=502, detail="No se pudo enviar el mensaje a Telegram")
-    return {"ok": True, "mensaje": "✅ Conexión ClaraCore → Telegram funcionando", "_debug": _debug}
-
-
 @app.get("/cargos")
 def listar_cargos():
     return supabase.table("cargos").select("*").order("nombre").execute().data
