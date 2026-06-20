@@ -10415,14 +10415,51 @@ def _on_telegram_anotado(notif_id: int, callback_query: Optional[dict] = None) -
         _notificar_usuario_sugerencia_anotada(notif_id)
 
 
+def _soporte_parse_campo_line(mensaje: str, prefix: str) -> Optional[str]:
+    if not mensaje:
+        return None
+    for line in mensaje.splitlines():
+        s = line.strip()
+        if s.startswith(prefix):
+            return s[len(prefix) :].strip() or None
+    return None
+
+
+def _soporte_parse_imagen_adjunta(mensaje: str) -> Optional[bool]:
+    if not mensaje:
+        return None
+    for line in mensaje.splitlines():
+        s = line.strip()
+        if s.startswith("Imagen adjunta:"):
+            v = s[15:].strip().lower()
+            return v.startswith("sí") or v.startswith("si")
+    return None
+
+
+def _soporte_parse_descripcion_completa(mensaje: str) -> str:
+    if not mensaje:
+        return ""
+    if "── Reporte de error ──" in mensaje:
+        m = re.search(r"Descripción:\s*\n([\s\S]+?)(?:\n\n|\Z)", mensaje)
+        return (m.group(1).strip() if m else mensaje.strip())
+    if "── Sugerencia de mejora ──" in mensaje:
+        _, _, body = mensaje.partition("── Sugerencia de mejora ──")
+        return body.strip()
+    return mensaje.strip()
+
+
 def _serializar_reporte_soporte(row: dict) -> dict:
     mensaje = row.get("mensaje") or ""
+    modulo_msg = _soporte_parse_campo_line(mensaje, "Módulo:")
     return {
         "id": row.get("id"),
         "asunto": row.get("asunto"),
+        "mensaje": mensaje,
         "created_at": row.get("created_at"),
         "remitente_nombre": row.get("remitente_nombre"),
-        "modulo": row.get("modulo"),
+        "modulo": modulo_msg or row.get("modulo"),
+        "ubicacion": _soporte_parse_campo_line(mensaje, "Ubicación:"),
+        "sector": _soporte_parse_campo_line(mensaje, "Sector:"),
         "contrato_id": row.get("contrato_id"),
         "soporte_estado": row.get("soporte_estado"),
         "soporte_gestionado_at": row.get("soporte_gestionado_at"),
@@ -10430,7 +10467,9 @@ def _serializar_reporte_soporte(row: dict) -> dict:
         "soporte_gestion_origen": row.get("soporte_gestion_origen"),
         "tipo_reporte": _soporte_tipo_reporte(row),
         "urgencia": _soporte_parse_urgencia(mensaje),
+        "imagen_adjunta": _soporte_parse_imagen_adjunta(mensaje),
         "descripcion_resumen": _soporte_descripcion_resumen(mensaje),
+        "descripcion_completa": _soporte_parse_descripcion_completa(mensaje),
     }
 
 
@@ -10924,7 +10963,7 @@ def admin_soporte_gestionar(
         return {"ok": True, "ya_gestionado": True, "reporte": _serializar_reporte_soporte(row)}
 
     tipo_rep = _soporte_tipo_reporte(row)
-    if accion == "gestionado" and tipo_rep != "error":
+    if accion == "gestionado" and tipo_rep not in ("error", "otro"):
         raise HTTPException(status_code=400, detail="Solo los errores se marcan como gestionados")
     if accion == "anotado" and tipo_rep != "sugerencia":
         raise HTTPException(status_code=400, detail="Solo las sugerencias se marcan como anotadas")
