@@ -17375,6 +17375,7 @@ class RegistroLineaNuevoReporte(BaseModel):
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
+    graficos_historial: Optional[List[Dict[str, Any]]] = None
     pk_id_id: Optional[int] = None
     civ: Optional[str] = None
     tramo: Optional[str] = None

@@ -60,3 +60,61 @@ export function agregarEntradaGraficoHistorial(hist, entrada) {
   const base = Array.isArray(hist) ? hist.filter((x) => x && x.url !== entrada.url) : []
   return [...base, entrada]
 }
+
+/** Huella de localización para agrupar registros en lotes al reabrir borradores. */
+export function sicoeLocFingerprint(r) {
+  return [
+    r?.pk_id_id ?? r?.pkSeleccionado?.id ?? '',
+    r?.abs_inicio ?? '',
+    r?.abs_final ?? '',
+    r?.nodo_ini ?? '',
+    r?.nodo_fin ?? '',
+    r?.coord_lat ?? '',
+    r?.coord_lng ?? '',
+  ].join('|')
+}
+
+/** Asigna loteLocIdx inferido por localización distinta (modo multiple). */
+export function inferLoteLocIdxEnRegistros(regs) {
+  const seen = new Map()
+  let next = 0
+  return (regs || []).map((r) => {
+    const k = sicoeLocFingerprint(r)
+    if (!seen.has(k)) seen.set(k, next++)
+    return { ...r, loteLocIdx: seen.get(k) }
+  })
+}
+
+/** Mapa loteLocIdx → historial de gráficos (desde registros ya guardados). */
+export function graficosPorLoteFromRegistros(regs) {
+  /** @type {Record<number, SicoeGraficoEntrada[]>} */
+  const map = {}
+  for (const r of regs || []) {
+    const idx = r.loteLocIdx ?? 0
+    const hist = listaGraficosRegistro(r)
+    if (!hist.length) continue
+    const prev = map[idx] || []
+    if (hist.length >= prev.length) map[idx] = hist
+  }
+  return map
+}
+
+/** Campos grafico_* listos para API a partir del historial del lote del registro. */
+export function graficosPayloadDesdeHistorial(hist) {
+  const lista = Array.isArray(hist) ? hist.filter((x) => x && x.url) : []
+  if (!lista.length) {
+    return {
+      grafico_url: null,
+      grafico_numero: null,
+      grafico_descripcion: null,
+      graficos_historial: null,
+    }
+  }
+  const ult = lista[lista.length - 1]
+  return {
+    grafico_url: ult.url,
+    grafico_numero: ult.numero ?? null,
+    grafico_descripcion: 'Gráfico del registro',
+    graficos_historial: lista,
+  }
+}

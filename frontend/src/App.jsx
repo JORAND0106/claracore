@@ -57,7 +57,11 @@ import {
   agregarEntradaGraficoHistorial,
   etiquetaOrigenGrafico,
   fmtFechaGrafico,
+  inferLoteLocIdxEnRegistros,
+  graficosPorLoteFromRegistros,
+  graficosPayloadDesdeHistorial,
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
+import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -10934,8 +10938,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   // Datos TAB 3 - Registros
   const [registros, setRegistros] = useState([])
   const [modalRegistro, setModalRegistro] = useState(null)
-  const [reporteGraficoUrl, setReporteGraficoUrl] = useState(null)
-  const [reporteGraficoNumero, setReporteGraficoNumero] = useState(null)
+  /** Gráficos por lote de localización (clave 0 = única o lote 1). Se copian a cada registro al guardar. */
+  const [graficosPorLote, setGraficosPorLote] = useState({ 0: [] })
   const [modalGaleria, setModalGaleria] = useState(false)
   const [modalGaleriaGrafico, setModalGaleriaGrafico] = useState(false)
   const [galeriaFechaDesde, setGaleriaFechaDesde] = useState('')
@@ -10951,6 +10955,28 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
   const puedeEliminarBorradorReporte = esUsuarioDesarrollador(usuario) || !!(permisoReporteCantidades(usuario)?.eliminar)
+
+  const loteGrafKey = () => (tipoLocalizacion === 'multiple' ? loteLocIdxActual : 0)
+  const graficosLoteActual = graficosPorLote[loteGrafKey()] || []
+  const numLotesLoc = useMemo(() => {
+    const maxReg = registros.reduce((m, r) => Math.max(m, r.loteLocIdx ?? 0), 0)
+    return Math.max(maxReg, loteLocIdxActual) + 1
+  }, [registros, loteLocIdxActual])
+
+  const registroTieneGraficos = (reg) => (graficosPorLote[tipoLocalizacion === 'multiple' ? (reg.loteLocIdx ?? 0) : 0] || []).length > 0
+
+  const cambiarLoteActivo = (idx) => {
+    setLoteLocIdxActual(idx)
+    const muestra = registros.find((r) => (r.loteLocIdx ?? 0) === idx)
+    if (muestra) setLocLoteActual(sicoeLocFromRegistro(muestra, pkIds))
+  }
+
+  const payloadGraficosRegistro = (reg) => {
+    const key = tipoLocalizacion === 'multiple' ? (reg.loteLocIdx ?? 0) : 0
+    const hist = graficosPorLote[key] || []
+    if (hist.length) return graficosPayloadDesdeHistorial(hist)
+    return graficosPayloadDesdeHistorial(listaGraficosRegistro(reg))
+  }
 
   const tienePlanoMapa = useMemo(() => {
     const g = planoGeojsonContrato
@@ -11060,26 +11086,30 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
           }).catch(() => {})
       }
-      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
-        id: r.id != null ? r.id : null,
-        numero_registro: r.numero_registro != null ? r.numero_registro : null,
-        nombre: r.nombre || '', descripcion: r.descripcion || '',
-        longitud: r.longitud !== undefined && r.longitud !== null ? String(r.longitud) : '',
-        ancho: r.ancho !== undefined && r.ancho !== null ? String(r.ancho) : '',
-        espesor: r.espesor !== undefined && r.espesor !== null ? String(r.espesor) : '',
-        cantidad: r.cantidad !== undefined && r.cantidad !== null ? String(r.cantidad) : '',
-        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
-        observacion: (r.observacion != null && String(r.observacion).trim() !== '') ? r.observacion : (r.descripcion || ''),
-        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
-        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url,
-        ...sicoeLocFromRegistro(r, pkIds),
-      })))
-      {
-        const regs = reporteInicial.registros || []
-        const g0 = regs.find((r) => r.grafico_url)
-        if (g0) {
-          setReporteGraficoUrl(g0.grafico_url)
-          setReporteGraficoNumero(g0.grafico_numero)
+      if (reporteInicial.registros?.length) {
+        const esMultIni = (reporteInicial.tipo_localizacion || 'unica') === 'multiple'
+        let mappedRegs = reporteInicial.registros.map(r => ({
+          id: r.id != null ? r.id : null,
+          numero_registro: r.numero_registro != null ? r.numero_registro : null,
+          nombre: r.nombre || '', descripcion: r.descripcion || '',
+          longitud: r.longitud !== undefined && r.longitud !== null ? String(r.longitud) : '',
+          ancho: r.ancho !== undefined && r.ancho !== null ? String(r.ancho) : '',
+          espesor: r.espesor !== undefined && r.espesor !== null ? String(r.espesor) : '',
+          cantidad: r.cantidad !== undefined && r.cantidad !== null ? String(r.cantidad) : '',
+          cantidad_total: r.cantidad_total, unidad: r.unidad || '',
+          observacion: (r.observacion != null && String(r.observacion).trim() !== '') ? r.observacion : (r.descripcion || ''),
+          foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
+          grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url,
+          graficos_historial: parseGraficosHistorial(r),
+          ...sicoeLocFromRegistro(r, pkIds),
+        }))
+        if (esMultIni) mappedRegs = inferLoteLocIdxEnRegistros(mappedRegs)
+        setRegistros(mappedRegs)
+        setGraficosPorLote(graficosPorLoteFromRegistros(mappedRegs))
+        if (esMultIni && mappedRegs.length) {
+          const maxLote = mappedRegs.reduce((m, r) => Math.max(m, r.loteLocIdx ?? 0), 0)
+          setLoteLocIdxActual(maxLote)
+          setLocLoteActual(sicoeLocFromRegistro(mappedRegs.find((r) => (r.loteLocIdx ?? 0) === maxLote) || mappedRegs[0], pkIds))
         }
       }
       if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
@@ -11367,7 +11397,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     setErroresNuevoLote(el)
     if (!ok) return
     setLocLoteActual(locNuevoLoteDraft)
-    setLoteLocIdxActual((i) => i + 1)
+    const nuevoIdx = loteLocIdxActual + 1
+    setLoteLocIdxActual(nuevoIdx)
+    setGraficosPorLote((prev) => ({ ...prev, [nuevoIdx]: prev[nuevoIdx] || [] }))
     setModalNuevoLoteLoc(false)
   }
 
@@ -11460,7 +11492,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             cantidad: sicoeNumCampoOmitNull(reg.cantidad),
             unidad: reg.unidad, observacion: reg.observacion,
             foto_url: reg.foto_url, foto_numero: reg.foto_numero,
-            grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero,
+            ...payloadGraficosRegistro(reg),
           })
         }
         await enqueueMutation({
@@ -11475,7 +11507,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             cantidad: sicoeNumCampoOmitNull(r.cantidad),
             unidad: r.unidad, observacion: r.observacion,
             foto_url: r.foto_url, foto_numero: r.foto_numero,
-            grafico_url: r.grafico_url, grafico_numero: r.grafico_numero,
+            ...payloadGraficosRegistro(r),
             ...(esMult ? localizacionToApiFields(r) : localizacionToApiFields(locReporteActual())),
           }))},
           localData: reporteLocal,
@@ -11563,9 +11595,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           cantidad_total: reg.cantidad_total,
           unidad: reg.unidad, observacion: reg.observacion,
           foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
-          grafico_url: reg.grafico_url || reporteGraficoUrl || null,
-          grafico_numero: reg.grafico_numero ?? reporteGraficoNumero ?? null,
-          grafico_descripcion: reg.grafico_descripcion || (reporteGraficoUrl ? 'Gráfico del reporte' : null),
+          ...payloadGraficosRegistro(reg),
           ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
         }))
       }
@@ -11946,45 +11976,41 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 borderRadius:'8px', padding:'10px', fontSize:'var(--cc-sm)', cursor:'pointer', width:'100%'
               }}>+ Agregar actividad</button>
 
-              {/* Gráfico único del reporte */}
-              <div style={{ marginTop:'8px', padding:'16px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>
-                    📐 GRÁFICO DEL REPORTE
-                    {reporteGraficoNumero && <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(reporteGraficoNumero).padStart(4,'0')}</span>}
-                  </label>
-                  <span style={{ fontSize:'var(--cc-label)', color:'#F59E0B' }}>Opcional — obligatorio en validación</span>
+              {tipoLocalizacion === 'multiple' && numLotesLoc > 1 && (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', marginBottom:'4px' }}>
+                  {Array.from({ length: numLotesLoc }).map((_, i) => {
+                    const nReg = registros.filter((r) => (r.loteLocIdx ?? 0) === i).length
+                    const nGraf = (graficosPorLote[i] || []).length
+                    const activo = loteLocIdxActual === i
+                    return (
+                      <button key={i} type="button" onClick={() => cambiarLoteActivo(i)} style={{
+                        padding:'6px 12px', borderRadius:'8px', cursor:'pointer', fontSize:'var(--cc-label)', fontWeight:700,
+                        border:`1px solid ${activo ? t.primary : t.border}`,
+                        background: activo ? t.primary + '18' : t.bg,
+                        color: activo ? t.primary : t.textMuted,
+                      }}>
+                        Lote #{i + 1} · {nReg} reg.{nGraf ? ` · ${nGraf} gráf.` : ''}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'8px' }}>
-                  💡 Un solo gráfico aplica para todas las actividades de este reporte.
-                </div>
-                {reporteGraficoUrl && (
-                  <img src={reporteGraficoUrl} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'200px', objectFit:'cover' }} />
-                )}
-                <button onClick={() => setModalGaleriaGrafico(true)} style={{
-                  background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                  borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', marginBottom:'6px'
-                }}>🖼️ Usar gráfico de galería</button>
-                <input type='file' accept='image/*' onChange={async e => {
-                  const file = e.target.files[0]; if (!file) return
-                  try {
-                    const prepared = await prepararImagenParaUpload(file)
-                    const fd = new FormData(); fd.append('file', prepared)
-                    const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs })
-                    const numR = await sicoeFetchJsonOThrow(resN)
-                    const numero = sicoeNumeroDesdeNextApi(numR)
-                    if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
-                    fd.append('numero', String(numero))
-                    fd.append('descripcion', `Grafico-Reporte-${numero}`)
-                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
-                    const data = await sicoeFetchJsonOThrow(r)
-                    setReporteGraficoUrl(data.url)
-                    setReporteGraficoNumero(data.numero ?? numero)
-                  } catch(err) { alert('Error subiendo gráfico: ' + (err?.message || String(err))) }
-                  e.target.value = ''
-                }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
-                {reporteGraficoUrl && <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Gráfico #{String(reporteGraficoNumero).padStart(4,'0')} cargado</div>}
-              </div>
+              )}
+
+              <SicoeGraficosWizardPanel
+                t={t}
+                API_URL={API_URL}
+                contrato_id={contrato_id}
+                hdrs={hdrs}
+                graficos={graficosLoteActual}
+                onGraficosChange={(arr) => setGraficosPorLote((prev) => ({ ...prev, [loteGrafKey()]: arr }))}
+                titulo={tipoLocalizacion === 'multiple'
+                  ? `Gráficos del lote #${loteLocIdxActual + 1}`
+                  : 'Gráficos del registro'}
+                subtitulo={tipoLocalizacion === 'multiple'
+                  ? `Se asignan a los ${registrosEnLoteActual().length} registro(s) de esta localización. Puede adjuntar varios; en cada registro verá un carrusel.`
+                  : 'Se asignan a todos los registros de este reporte. Puede adjuntar varios; en cada registro verá un carrusel.'}
+                onOpenGaleria={() => setModalGaleriaGrafico(true)}
+              />
             </div>
           )}
 
@@ -12385,8 +12411,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 tipo="grafico"
                 fechaDesde={galeriaGraficoFechaDesde} fechaHasta={galeriaGraficoFechaHasta}
                 onSelect={(url, numero) => {
-                  setReporteGraficoUrl(url)
-                  setReporteGraficoNumero(numero)
+                  const key = loteGrafKey()
+                  const entrada = {
+                    url,
+                    numero,
+                    creado_en: new Date().toISOString(),
+                    origen: 'galeria',
+                  }
+                  setGraficosPorLote((prev) => ({
+                    ...prev,
+                    [key]: agregarEntradaGraficoHistorial(prev[key] || [], entrada),
+                  }))
                   setModalGaleriaGrafico(false)
                 }}
               />
