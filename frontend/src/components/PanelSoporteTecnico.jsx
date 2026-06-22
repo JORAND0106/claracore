@@ -47,6 +47,10 @@ function esDesarrollador(usuario) {
   return usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
 }
 
+function getToken() {
+  return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+}
+
 function badgeContrato(contratoLabel, t) {
   if (!contratoLabel) return null
   return (
@@ -151,8 +155,8 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
   const [detalleActivo, setDetalleActivo] = useState(null)
 
   const authHeaders = useCallback(
-    () => ({ Authorization: `Bearer ${token}` }),
-    [token],
+    () => ({ Authorization: `Bearer ${getToken()}` }),
+    [],
   )
 
   const cargarPendientes = useCallback(async () => {

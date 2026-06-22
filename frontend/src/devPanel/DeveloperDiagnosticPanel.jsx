@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchDiagnosticSnapshot, fetchEndpointErrorDetail } from './appInsightsApi'
+import { APPINSIGHTS_FREE_TIER_GB, fetchDiagnosticSnapshot, fetchEndpointErrorDetail } from './appInsightsApi'
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 
@@ -7,6 +7,76 @@ const STATUS = {
   green: { label: 'OK', color: '#3fb950', bg: 'rgba(63,185,80,0.12)' },
   yellow: { label: 'ATENCIÓN', color: '#d29922', bg: 'rgba(210,153,34,0.12)' },
   red: { label: 'CRÍTICO', color: '#f85149', bg: 'rgba(248,81,73,0.12)' },
+}
+
+function usageMeterColor(pct) {
+  if (pct == null) return '#6e7681'
+  if (pct >= 85) return '#f85149'
+  if (pct >= 60) return '#d29922'
+  return '#3fb950'
+}
+
+function AppInsightsUsageMeter({ ingestion, loading }) {
+  const limitGb = ingestion?.limitGb ?? APPINSIGHTS_FREE_TIER_GB
+  const usedGb = ingestion?.usedGb
+  const pct = ingestion?.usagePct
+  const remainingGb = ingestion?.remainingGb
+  const barColor = usageMeterColor(pct)
+  const barWidth = pct == null ? 0 : Math.min(100, pct)
+
+  return (
+    <Section title="CONSUMO APPLICATION INSIGHTS (MES ACTUAL)" style={{ marginTop: 12 }}>
+      {loading && usedGb == null ? (
+        <span style={{ color: '#6e7681' }}>Cargando ingestión…</span>
+      ) : usedGb == null ? (
+        <span style={{ color: '#6e7681', fontSize: 11 }}>
+          No se pudo leer el volumen ingestado (tabla Usage / _BilledSize)
+        </span>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+            <div>
+              <span style={{ fontSize: 20, color: '#e6edf3', fontWeight: 700 }}>
+                {usedGb.toFixed(3)}
+              </span>
+              <span style={{ color: '#8b949e', marginLeft: 4 }}>GB ingestados</span>
+            </div>
+            <span style={{ color: '#8b949e', fontSize: 10 }}>
+              límite gratuito {limitGb} GB
+            </span>
+          </div>
+          <div
+            style={{
+              height: 10,
+              borderRadius: 5,
+              background: '#21262d',
+              overflow: 'hidden',
+              marginBottom: 8,
+            }}
+          >
+            <div
+              style={{
+                width: `${barWidth}%`,
+                height: '100%',
+                background: barColor,
+                borderRadius: 5,
+                transition: 'width 0.4s ease',
+                boxShadow: `0 0 8px ${barColor}66`,
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+            <span style={{ color: barColor, fontWeight: 600 }}>
+              {pct?.toFixed(1) ?? '—'}% del límite
+            </span>
+            <span style={{ color: '#8b949e' }}>
+              ≈ {remainingGb?.toFixed(3) ?? '—'} GB disponibles este mes
+            </span>
+          </div>
+        </>
+      )}
+    </Section>
+  )
 }
 
 function fmtTime(iso) {
@@ -196,25 +266,28 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
             marginBottom: 12,
           }}
         >
-          <Section title="ESTADO GENERAL">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: '50%',
-                  background: st.color,
-                  boxShadow: `0 0 10px ${st.color}`,
-                }}
-              />
-              <span style={{ color: st.color, fontWeight: 700 }}>{st.label}</span>
-              {data && (
-                <span style={{ color: '#8b949e', fontSize: 11 }}>
-                  tasa error {data.requests.errorRate}%
-                </span>
-              )}
-            </div>
-          </Section>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <Section title="ESTADO GENERAL">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    background: st.color,
+                    boxShadow: `0 0 10px ${st.color}`,
+                  }}
+                />
+                <span style={{ color: st.color, fontWeight: 700 }}>{st.label}</span>
+                {data && (
+                  <span style={{ color: '#8b949e', fontSize: 11 }}>
+                    tasa error {data.requests.errorRate}%
+                  </span>
+                )}
+              </div>
+            </Section>
+            <AppInsightsUsageMeter ingestion={data?.ingestion} loading={loading} />
+          </div>
 
           <Section title="REQUESTS (30 min)">
             {loading && !data ? (
@@ -244,26 +317,72 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
               <span style={{ color: '#6e7681' }}>Sin llamadas a {data.supabase.host} en 30 min</span>
             ) : (
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      background: data.supabase.ok ? '#3fb950' : '#f85149',
-                    }}
-                  />
-                  <span style={{ color: data.supabase.ok ? '#3fb950' : '#f85149', fontWeight: 600 }}>
-                    {data.supabase.ok ? 'Respondiendo' : `${data.supabase.failed} fallos`}
-                  </span>
-                </div>
-                <div style={{ color: '#8b949e', fontSize: 10 }}>
+                {data.supabase.ok ? (
+                  <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>
+                    ✅ Respondiendo normalmente
+                  </div>
+                ) : null}
+                <div style={{ color: '#8b949e', fontSize: 10, marginBottom: data.supabase.ok ? 0 : 8 }}>
                   {data.supabase.total} deps · avg {data.supabase.avgMs} ms
                 </div>
+                {!data.supabase.ok && (data.supabase.failures || []).length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {data.supabase.failures.map(f => (
+                      <div
+                        key={f.name}
+                        style={{ color: '#f85149', fontSize: 11, fontFamily: MONO, lineHeight: 1.4 }}
+                      >
+                        🔴 {f.name} — {f.failures === 1 ? '1 fallo' : `${f.failures} fallos`} ·{' '}
+                        {Math.round(f.avgMs).toLocaleString('es-CO')}ms
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
           </Section>
         </div>
+
+        <Section title="USUARIOS ACTIVOS (10 min)" style={{ marginBottom: 12 }}>
+          {loading && !data ? (
+            <span style={{ color: '#6e7681' }}>Cargando…</span>
+          ) : !data?.activeUsers?.length ? (
+            <span style={{ color: '#6e7681', fontSize: 11 }}>
+              Sin requests autenticadas con user_AuthenticatedId en los últimos 10 min
+            </span>
+          ) : (
+            <div style={{ maxHeight: 200, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ color: '#8b949e', textAlign: 'left' }}>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Usuario</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Requests</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Último endpoint</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.activeUsers.map(u => (
+                    <tr key={u.userId}>
+                      <td
+                        style={{ padding: '5px 6px', color: '#58a6ff', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={u.displayName}
+                      >
+                        {u.displayName}
+                      </td>
+                      <td style={{ padding: '5px 6px', color: '#e6edf3', fontWeight: 600 }}>{u.requestCount}</td>
+                      <td
+                        style={{ padding: '5px 6px', color: '#8b949e', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={u.lastEndpoint}
+                      >
+                        {u.lastEndpoint}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
 
         <div
           style={{

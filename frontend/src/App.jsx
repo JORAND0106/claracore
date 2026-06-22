@@ -39,7 +39,6 @@ import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
 import DevPanelTrigger from './devPanel/DevPanelTrigger'
 import DevPanelGate from './devPanel/DevPanelGate'
 import DeveloperDiagnosticPanel from './devPanel/DeveloperDiagnosticPanel'
-import { devPanelConfigured } from './devPanel/devPanelConfig'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
@@ -19654,7 +19653,7 @@ if (contratos.length > 1) {
       )}
       {modal === 'registro' && <ModalCrearCuenta t={t} onClose={() => setModal(null)} />}
       {modal === 'olvide' && <ModalOlvide t={t} onClose={() => setModal(null)} />}
-      {devPanelConfigured() && <DevPanelTrigger onClick={() => setDevPanelView('gate')} />}
+      <DevPanelTrigger onClick={() => setDevPanelView('gate')} />
       {devPanelView === 'gate' && (
         <DevPanelGate
           onUnlock={() => setDevPanelView('open')}

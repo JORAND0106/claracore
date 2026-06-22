@@ -74,6 +74,44 @@ export function parseExceptionStack(detailsRaw) {
   }
 }
 
+export const APPINSIGHTS_FREE_TIER_GB = 5
+
+const MONTHLY_INGESTION_KQL = `
+let monthStart = startofmonth(now());
+union isfuzzy=true
+    requests, exceptions, dependencies, traces, customEvents, customMetrics, pageViews, availabilityResults
+| where timestamp >= monthStart
+| summarize ingestedBytes = sum(_BilledSize)
+| extend ingestedGB = round(todouble(ingestedBytes) / pow(1024.0, 3), 3)
+`
+
+const MONTHLY_INGESTION_USAGE_KQL = `
+let monthStart = startofmonth(now());
+usage
+| where timestamp >= monthStart and isBillable == true
+| summarize ingestedMB = sum(quantity)
+| extend ingestedGB = round(todouble(ingestedMB) / 1024.0, 3)
+`
+
+async function fetchMonthlyIngestionGb() {
+  const readGb = data => {
+    const row = rows(firstTable(data))[0] || {}
+    const gb = Number(row.ingestedGB)
+    return Number.isFinite(gb) ? gb : 0
+  }
+  try {
+    const billed = readGb(await runKql(MONTHLY_INGESTION_KQL))
+    if (billed > 0) return billed
+  } catch {
+    /* fallback Usage table */
+  }
+  try {
+    return readGb(await runKql(MONTHLY_INGESTION_USAGE_KQL))
+  } catch {
+    return null
+  }
+}
+
 export async function fetchDiagnosticSnapshot() {
   const summaryQ = `
 requests
@@ -103,28 +141,57 @@ requests
 union
   (exceptions
    | where timestamp > ago(24h)
-   | project ts = timestamp, endpoint = operation_Name, msg = outerMessage, kind = "exception"),
+   | project ts = timestamp, endpoint = operation_Name, msg = outerMessage, errorKind = "exception"),
   (requests
    | where timestamp > ago(24h) and success == false
-   | project ts = timestamp, endpoint = name, msg = strcat("HTTP ", tostring(resultCode)), kind = "request")
+   | project ts = timestamp, endpoint = name, msg = strcat("HTTP ", tostring(resultCode)), errorKind = "request")
 | order by ts desc
 | take 20
 `
   const supabaseHost = (import.meta.env.VITE_SUPABASE_URL || 'supabase.co').replace(/^https?:\/\//, '').split('/')[0]
+  const supabaseFilter = `
+| where timestamp > ago(30m)
+| where target has "${supabaseHost}" or name has "${supabaseHost}" or data has "${supabaseHost}"`
   const supabaseQ = `
 dependencies
-| where timestamp > ago(30m)
-| where target has "${supabaseHost}" or name has "${supabaseHost}" or data has "${supabaseHost}"
+${supabaseFilter}
 | summarize total = count(), failed = countif(success == false), avgMs = round(avg(duration), 1)
 `
+  const supabaseFailedQ = `
+dependencies
+${supabaseFilter}
+| where success == false
+| summarize failures = count(), avgMs = round(avg(duration), 1) by name
+| order by failures desc
+| take 15
+`
+  const activeUsersQ = `
+requests
+| where timestamp > ago(10m)
+| where isnotempty(user_AuthenticatedId)
+| extend userEmail = tostring(customDimensions.["user.email"])
+| summarize
+    requestCount = count(),
+    lastEndpoint = arg_max(name, timestamp),
+    lastSeen = max(timestamp),
+    email = max(userEmail)
+  by user_AuthenticatedId
+| extend displayName = iff(isnotempty(email), email, user_AuthenticatedId)
+| order by requestCount desc
+| take 25
+`
 
-  const [summaryRes, endpointsRes, slowRes, recentRes, supabaseRes] = await Promise.all([
-    runKql(summaryQ),
-    runKql(endpointsQ),
-    runKql(slowQ),
-    runKql(recentErrorsQ),
-    runKql(supabaseQ),
-  ])
+  const [summaryRes, endpointsRes, slowRes, recentRes, supabaseRes, supabaseFailedRes, ingestedGB, activeUsersRes] =
+    await Promise.all([
+      runKql(summaryQ),
+      runKql(endpointsQ),
+      runKql(slowQ),
+      runKql(recentErrorsQ),
+      runKql(supabaseQ),
+      runKql(supabaseFailedQ),
+      fetchMonthlyIngestionGb(),
+      runKql(activeUsersQ),
+    ])
 
   const summaryRow = rows(firstTable(summaryRes))[0] || {}
   const total = Number(summaryRow.total) || 0
@@ -138,10 +205,20 @@ dependencies
   const supabaseRow = rows(firstTable(supabaseRes))[0] || {}
   const supabaseTotal = Number(supabaseRow.total) || 0
   const supabaseFailed = Number(supabaseRow.failed) || 0
+  const limitGb = APPINSIGHTS_FREE_TIER_GB
+  const usedGb = ingestedGB == null ? null : Math.max(0, ingestedGB)
+  const usagePct = usedGb == null ? null : Math.min(100, (usedGb / limitGb) * 100)
+  const remainingGb = usedGb == null ? null : Math.max(0, limitGb - usedGb)
 
   return {
     fetchedAt: new Date().toISOString(),
     status,
+    ingestion: {
+      usedGb,
+      limitGb,
+      usagePct: usagePct == null ? null : Math.round(usagePct * 10) / 10,
+      remainingGb: remainingGb == null ? null : Math.round(remainingGb * 1000) / 1000,
+    },
     requests: {
       total,
       failed,
@@ -162,7 +239,7 @@ dependencies
       timestamp: r.ts,
       endpoint: r.endpoint || '—',
       message: r.msg || '—',
-      kind: r.kind,
+      kind: r.errorKind,
     })),
     supabase: {
       total: supabaseTotal,
@@ -170,7 +247,19 @@ dependencies
       avgMs: Number(supabaseRow.avgMs) || 0,
       ok: supabaseTotal === 0 ? null : supabaseFailed === 0,
       host: supabaseHost,
+      failures: rows(firstTable(supabaseFailedRes)).map(r => ({
+        name: r.name || '(sin nombre)',
+        failures: Number(r.failures) || 0,
+        avgMs: Number(r.avgMs) || 0,
+      })),
     },
+    activeUsers: rows(firstTable(activeUsersRes)).map(r => ({
+      userId: r.user_AuthenticatedId || '',
+      displayName: r.displayName || r.email || r.user_AuthenticatedId || '—',
+      requestCount: Number(r.requestCount) || 0,
+      lastEndpoint: r.lastEndpoint || '—',
+      lastSeen: r.lastSeen,
+    })),
   }
 }
 

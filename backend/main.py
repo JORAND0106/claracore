@@ -7183,7 +7183,37 @@ def get_resumen_presupuesto(
         "vista": parse_dash_vista(vista),
     }
 
-def _presupuesto_agregar_por_capitulo(
+_ENDPOINT_CACHE_TTL_SEC = 120  # alias documental; TTL real = _DASHBOARD_RESPONSE_STALE_SEC
+
+
+def _sicoe_filtros_capitulos_distinct_rpc(
+    contrato_id: int,
+    acta_id: Optional[int],
+    semana_id: Optional[int],
+    subcontratista_id: Optional[int],
+) -> Optional[List[str]]:
+    def _rpc():
+        return supabase.rpc(
+            "sicoe_filtros_capitulos_distinct",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_acta_rpo_id": acta_id,
+                "p_semana_id": semana_id,
+                "p_subcontratista_id": subcontratista_id,
+            },
+        ).execute().data
+
+    try:
+        raw = supabase_execute(_rpc, retries=1)
+    except Exception:
+        return None
+    rows = _parse_jsonb_array_rpc(raw)
+    if rows is None:
+        return None
+    return [str(x) for x in rows if x is not None and str(x).strip()]
+
+
+def _presupuesto_agregar_por_capitulo_legacy(
     contrato_id: int,
     tipo_ejecucion: Optional[str],
     current_user,
@@ -7217,6 +7247,85 @@ def _presupuesto_agregar_por_capitulo(
     return sorted(result, key=lambda x: _orden_capitulo_presupuesto(x.get("capitulo")))
 
 
+def _parse_jsonb_array_rpc(raw) -> Optional[List[Any]]:
+    """Deserializa jsonb[] devuelto por RPC PostgREST."""
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        if not raw:
+            return []
+        if all(not isinstance(x, (dict, list)) for x in raw):
+            return raw
+        first = raw[0]
+        if isinstance(first, dict):
+            return raw
+        if isinstance(first, str):
+            try:
+                parsed = json.loads(first)
+                return parsed if isinstance(parsed, list) else None
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, list) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
+def _presupuesto_capitulos_lista_rpc(
+    contrato_id: int,
+    tipo_ejecucion: Optional[str],
+    current_user,
+) -> Optional[List[dict]]:
+    tipo = _presupuesto_resolve_tipo_ejecucion(tipo_ejecucion)
+    solo_interv = _presupuesto_aplica_filtro_interventoria(current_user)
+
+    def _rpc():
+        return supabase.rpc(
+            "presupuesto_capitulos_lista_agg",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_tipo_ejecucion": tipo,
+                "p_solo_interv_aprobado": solo_interv,
+            },
+        ).execute().data
+
+    try:
+        raw = supabase_execute(_rpc, retries=1)
+    except Exception:
+        return None
+    rows = _parse_jsonb_array_rpc(raw)
+    if rows is None:
+        return None
+    out: List[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        out.append(
+            {
+                "capitulo": r.get("capitulo") or "",
+                "costo_total": float(r.get("costo_total") or 0),
+                "total_registros": int(r.get("total_registros") or 0),
+            }
+        )
+    return sorted(out, key=lambda x: _orden_capitulo_presupuesto(x.get("capitulo")))
+
+
+def _presupuesto_agregar_por_capitulo(
+    contrato_id: int,
+    tipo_ejecucion: Optional[str],
+    current_user,
+) -> List[dict]:
+    """Totales por capítulo vía RPC SQL; fallback al scan paginado si el RPC no existe."""
+    rpc_rows = _presupuesto_capitulos_lista_rpc(contrato_id, tipo_ejecucion, current_user)
+    if rpc_rows is not None:
+        return rpc_rows
+    return _presupuesto_agregar_por_capitulo_legacy(contrato_id, tipo_ejecucion, current_user)
+
+
 @app.get("/presupuesto/{contrato_id}/capitulos-lista")
 def get_capitulos_presupuesto(
     contrato_id: int,
@@ -7225,7 +7334,15 @@ def get_capitulos_presupuesto(
 ):
     """Devuelve capítulos con costo total y total de registros. Carga rápida sin traer filas individuales."""
     _require_contract_access(current_user, contrato_id)
-    return _presupuesto_agregar_por_capitulo(contrato_id, tipo_ejecucion, current_user)
+    tipo_res = _presupuesto_resolve_tipo_ejecucion(tipo_ejecucion)
+    interv = "1" if _presupuesto_aplica_filtro_interventoria(current_user) else "0"
+    cache_key = ("presupuesto_capitulos_lista", int(contrato_id), tipo_res, interv)
+    cached = _dashboard_response_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    result = _presupuesto_agregar_por_capitulo(contrato_id, tipo_ejecucion, current_user)
+    _dashboard_response_cache_set(cache_key, result)
+    return result
 
 
 @app.get("/presupuesto/{contrato_id}/panel-validacion-interv")
@@ -15327,6 +15444,17 @@ def filtros_capitulos_reportes(
         m = re.match(r'^(\d+)', c)
         return (int(m.group(1)) if m else 9999, c)
 
+    cache_key = (
+        "sicoe_filtros_capitulos",
+        int(contrato_id),
+        acta_rpo,
+        semana,
+        subcontratista_id,
+    )
+    cached = _dashboard_response_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     # Resolver acta_id
     acta_id = None
     if acta_rpo is not None:
@@ -15340,9 +15468,11 @@ def filtros_capitulos_reportes(
                 return rows
             acta_rows = supabase_execute(_ai)
             if not acta_rows:
+                _dashboard_response_cache_set(cache_key, [])
                 return []
             acta_id = acta_rows[0]["id"]
         except Exception:
+            _dashboard_response_cache_set(cache_key, [])
             return []
 
     # Resolver semana_id
@@ -15354,12 +15484,21 @@ def filtros_capitulos_reportes(
                     .eq("contrato_id", contrato_id).eq("numero_semana", semana).execute().data
             sem_rows = supabase_execute(_si)
             if not sem_rows:
+                _dashboard_response_cache_set(cache_key, [])
                 return []
             semana_id = sem_rows[0]["id"]
         except Exception:
+            _dashboard_response_cache_set(cache_key, [])
             return []
 
-    # Capítulos únicos desde so_registros (no so_reportes: ahí capitulo puede ser CSV agregado)
+    rpc_caps = _sicoe_filtros_capitulos_distinct_rpc(
+        contrato_id, acta_id, semana_id, subcontratista_id
+    )
+    if rpc_caps is not None:
+        _dashboard_response_cache_set(cache_key, rpc_caps)
+        return rpc_caps
+
+    # Fallback: scan paginado (RPC no desplegado o error transitorio)
     try:
         _acta_id_l = acta_id
         _semana_id_l = semana_id
@@ -15383,8 +15522,11 @@ def filtros_capitulos_reportes(
             if len(batch) < 1000:
                 break
             off += 1000
-        return sorted({r["capitulo"] for r in cap_todos if r.get("capitulo")}, key=orden_cap)
+        result = sorted({r["capitulo"] for r in cap_todos if r.get("capitulo")}, key=orden_cap)
+        _dashboard_response_cache_set(cache_key, result)
+        return result
     except Exception:
+        _dashboard_response_cache_set(cache_key, [])
         return []
 
 
@@ -21035,26 +21177,29 @@ def _dash_agg_cache_set(kind: str, contrato_id: int, value: Any) -> None:
         _DASH_AGG_CACHE[key] = (time.time(), value)
 
 
-def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
+def _dashboard_scan_sicoe_by_item(
+    contrato_id: int, *, acta_id: Optional[int] = None
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Agrega SICOE por (capítulo_norm, ítem_norm) con costos/cantidades aprobados y en cola."""
-    cached = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    cache_kind = "sicoe_by_item" if acta_id is None else f"sicoe_by_item_acta_{int(acta_id)}"
+    cached = _dash_agg_cache_get(cache_kind, contrato_id)
     if cached is not None:
         return cached
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
     off = 0
     while True:
-        def _b(o=off):
-            return (
+        def _b(o=off, _aid=acta_id):
+            q = (
                 supabase.table("so_registros")
                 .select(
                     "capitulo, cantidad_total, vlr_unitario, item_numero, "
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
-                .order("id").range(o, o + 999)
-                .execute()
-                .data
             )
+            if _aid is not None:
+                q = q.eq("acta_rpo_id", int(_aid))
+            return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_b) or []
         for reg in batch:
@@ -21087,7 +21232,7 @@ def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dic
         off += 1000
     for sg in sicoe_by_item.values():
         sicoe_finalize_costs(sg)
-    _dash_agg_cache_set("sicoe_by_item", contrato_id, sicoe_by_item)
+    _dash_agg_cache_set(cache_kind, contrato_id, sicoe_by_item)
     return sicoe_by_item
 
 
@@ -22004,7 +22149,7 @@ def _dashboard_apply_vista_presupuesto(
         total_sicoe_nr = sum(sicoe_nr_c.values())
 
     scan = scan_presupuesto_vista(
-        supabase, contrato_id, vista, current_user, resumen_only=True, skip_cache=True
+        supabase, contrato_id, vista, current_user, resumen_only=True
     )
     base_comp = hit.get("comparativo_capitulos")
     if isinstance(base_comp, list) and base_comp:
@@ -22035,14 +22180,25 @@ def dashboard_resumen_obra(
     vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
     current_user=Depends(get_current_user),
 ):
+    vista_n = parse_dash_vista(vista)
+    cache_key = (
+        "dashboard_resumen_endpoint_v1",
+        int(contrato_id),
+        vista_n,
+        _dashboard_resumen_user_cache_key(current_user),
+    )
+    cached = _dashboard_response_cache_get(cache_key)
+    if cached is not None:
+        return cached
     try:
-        vista_n = parse_dash_vista(vista)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
             na = _get_niveles_activos_contrato(contrato_id)
             hit = _fetch_dashboard_resumen_sicoe_agg(contrato_id, campo_max, na)
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
-                return _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
+                result = _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
+                _dashboard_response_cache_set(cache_key, result)
+                return result
         except Exception:
             pass
 
@@ -22125,7 +22281,9 @@ def dashboard_resumen_obra(
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
         }
-        return _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
+        result = _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
+        _dashboard_response_cache_set(cache_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -23770,6 +23928,9 @@ def _export_sicoe_obra_rows_capitulo(
 
 def _listado_precios_tipo_calculo_index(contrato_id: int) -> Dict[Tuple[str, str], str]:
     """(capítulo_norm, ítem_norm) → tipo_calculo (AIU | IVA | …) del listado de precios."""
+    cached = _dash_agg_cache_get("listado_precios_tipo_idx", contrato_id)
+    if cached is not None:
+        return cached
     idx: Dict[Tuple[str, str], str] = {}
     off = 0
     while True:
@@ -23796,6 +23957,7 @@ def _listado_precios_tipo_calculo_index(contrato_id: int) -> Dict[Tuple[str, str
         if len(batch) < 1000:
             break
         off += 1000
+    _dash_agg_cache_set("listado_precios_tipo_idx", contrato_id, idx)
     return idx
 
 
@@ -24059,6 +24221,191 @@ def _gerencial_capitulos_totales(rows: List[Dict[str, Any]]) -> Dict[str, float]
     }
 
 
+def _gerencial_capitulos_data_load(
+    contrato_id: int,
+    vista: str,
+    current_user,
+    *,
+    acta_id: Optional[int] = None,
+) -> Tuple[Dict[Tuple[str, str], Dict[str, Any]], Dict[Tuple[str, str], Dict[str, Any]], Dict[Tuple[str, str], str], bool]:
+    """Una pasada: presupuesto + SICOE + listado de precios (compartido AIU/IVA)."""
+    tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
+    obra_ejecutada = parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+    ppto_items = _gerencial_ppto_items(contrato_id, vista, current_user)
+    sicoe_by: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    try:
+        if acta_id is None:
+            sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id) or {}
+        else:
+            sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id, acta_id=acta_id) or {}
+    except Exception as e:
+        print(f"gerencial sicoe falló: {type(e).__name__}: {e}", flush=True)
+    return ppto_items, sicoe_by, tipo_idx, obra_ejecutada
+
+
+def _gerencial_capitulos_data_both(
+    contrato_id: int,
+    vista: str,
+    current_user,
+    *,
+    acta_id: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Filas financieras AIU e IVA en una sola pasada de datos."""
+    ppto_items, sicoe_by, tipo_idx, obra_ejecutada = _gerencial_capitulos_data_load(
+        contrato_id, vista, current_user, acta_id=acta_id
+    )
+    rows_aiu = _gerencial_capitulos_aggregate(
+        ppto_items, sicoe_by, tipo_idx, "aiu", obra_ejecutada=obra_ejecutada
+    )
+    rows_iva = _gerencial_capitulos_aggregate(
+        ppto_items, sicoe_by, tipo_idx, "iva", obra_ejecutada=obra_ejecutada
+    )
+    return rows_aiu, rows_iva
+
+
+def _parse_dashboard_capitulos_financiero_rpc(raw) -> Optional[Dict[str, List[dict]]]:
+    if raw is None:
+        return None
+    data = raw
+    if isinstance(raw, list) and raw:
+        data = raw[0]
+    if not isinstance(data, dict):
+        return None
+    if "capitulos_aiu" not in data and len(data) == 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, dict) and "capitulos_aiu" in inner:
+            data = inner
+    if "capitulos_aiu" not in data:
+        return None
+
+    def _rows(key: str) -> List[dict]:
+        rows = data.get(key) or []
+        if not isinstance(rows, list):
+            return []
+        out: List[dict] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            cc = float(r.get("claracore") or 0)
+            cob = float(r.get("cobrado") or 0)
+            out.append(
+                {
+                    "capitulo": r.get("capitulo") or "",
+                    "claracore": round(cc, 0),
+                    "cobrado": round(cob, 0),
+                    "delta": round(float(r.get("delta") if r.get("delta") is not None else cc - cob), 0),
+                    "aprobado": round(float(r.get("aprobado") or 0), 0),
+                    "pendiente": round(float(r.get("pendiente") or 0), 0),
+                    "rechazado": round(float(r.get("rechazado") or 0), 0),
+                    "no_revisado": round(float(r.get("no_revisado") or 0), 0),
+                }
+            )
+        out.sort(
+            key=lambda row: (
+                _dash_capitulo_num_sort_key(row.get("capitulo") or ""),
+                str(row.get("capitulo") or "").lower(),
+            )
+        )
+        return out
+
+    return {"capitulos_aiu": _rows("capitulos_aiu"), "capitulos_iva": _rows("capitulos_iva")}
+
+
+def _dashboard_capitulos_financiero_rpc(
+    contrato_id: int,
+    vista: str,
+    current_user,
+    acta_id: Optional[int] = None,
+) -> Optional[Dict[str, List[dict]]]:
+    vista_n = parse_dash_vista(vista)
+    solo_interv = _presupuesto_aplica_filtro_interventoria(current_user)
+
+    def _rpc():
+        return supabase.rpc(
+            "dashboard_capitulos_financiero_agg",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_vista": vista_n,
+                "p_solo_interv_aprobado": solo_interv,
+                "p_acta_rpo_id": int(acta_id) if acta_id is not None else None,
+            },
+        ).execute().data
+
+    try:
+        raw = supabase_execute(_rpc, retries=1)
+    except Exception:
+        return None
+    return _parse_dashboard_capitulos_financiero_rpc(raw)
+
+
+def _dashboard_capitulos_financiero_build_response(
+    contrato_id: int,
+    vista_n: str,
+    rows_aiu: List[dict],
+    rows_iva: List[dict],
+) -> dict:
+    tot_aiu = _gerencial_capitulos_totales(rows_aiu)
+    tot_iva = _gerencial_capitulos_totales(rows_iva)
+    contrato_meta: Dict[str, str] = {}
+    try:
+        cr = (
+            supabase.table("contratos")
+            .select("numero, objeto, contratista")
+            .eq("id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if cr:
+            contrato_meta = {
+                "numero": (cr[0].get("numero") or "").strip(),
+                "objeto": (cr[0].get("objeto") or "").strip(),
+                "contratista": (cr[0].get("contratista") or "").strip(),
+            }
+    except Exception:
+        pass
+    return {
+        "vista": vista_n,
+        "contrato": contrato_meta,
+        "capitulos": rows_aiu,
+        "capitulos_aiu": rows_aiu,
+        "capitulos_iva": rows_iva,
+        "totales": tot_aiu,
+        "totales_aiu": tot_aiu,
+        "totales_iva": tot_iva,
+    }
+
+
+def _resolve_acta_rpo_id(contrato_id: int, acta_rpo: int) -> Optional[int]:
+    try:
+        def _ai():
+            rows = (
+                supabase.table("actas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_rpo", acta_rpo)
+                .execute()
+                .data
+            )
+            if not rows:
+                rows = (
+                    supabase.table("actas")
+                    .select("id")
+                    .eq("contrato_id", contrato_id)
+                    .eq("consecutivo", acta_rpo)
+                    .execute()
+                    .data
+                )
+            return rows
+
+        acta_rows = supabase_execute(_ai)
+        if not acta_rows:
+            return None
+        return int(acta_rows[0]["id"])
+    except Exception:
+        return None
+
+
 def _gerencial_capitulos_data_obra_ejecutada(
     contrato_id: int, current_user, *, bloque: str = "aiu"
 ) -> List[Dict[str, Any]]:
@@ -24074,14 +24421,9 @@ def _gerencial_capitulos_data(
     Presupuesto de Obra: ClaraCore = Aprobado + No Revisado.
     Obra Ejecutada: ClaraCore = todos los estados (AP+PE+RE+NR); solo-cobrado → CC := Cobrado.
     """
-    tipo_idx = _listado_precios_tipo_calculo_index(contrato_id)
-    obra_ejecutada = parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
-    ppto_items = _gerencial_ppto_items(contrato_id, vista, current_user)
-    sicoe_by: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    try:
-        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id) or {}
-    except Exception as e:
-        print(f"gerencial sicoe falló: {type(e).__name__}: {e}", flush=True)
+    ppto_items, sicoe_by, tipo_idx, obra_ejecutada = _gerencial_capitulos_data_load(
+        contrato_id, vista, current_user
+    )
     return _gerencial_capitulos_aggregate(
         ppto_items, sicoe_by, tipo_idx, bloque, obra_ejecutada=obra_ejecutada
     )
@@ -25176,53 +25518,40 @@ def dashboard_export_capitulo_download_obra(
 def dashboard_capitulos_financiero_obra(
     contrato_id: int,
     vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    acta_rpo: Optional[int] = Query(None, description="Filtra SICOE por acta RPO (opcional)"),
     current_user=Depends(get_current_user),
 ):
     """Panorama financiero por capítulo para el dashboard (misma lógica que informe gerencial)."""
     _require_contract_access(current_user, contrato_id)
     vista_n = parse_dash_vista(vista)
+    acta_id = _resolve_acta_rpo_id(contrato_id, acta_rpo) if acta_rpo is not None else None
     cache_key = (
-        "dashboard_capitulos_fin_v2",
+        "dashboard_capitulos_fin_v3",
         int(contrato_id),
         vista_n,
-        _dashboard_resumen_user_cache_key(current_user),
+        acta_rpo,
     )
     cached = _dashboard_response_cache_get(cache_key)
     if cached is not None:
         return cached
     try:
-        rows_aiu = _gerencial_capitulos_data(contrato_id, vista, current_user, bloque="aiu")
-        rows_iva = _gerencial_capitulos_data(contrato_id, vista, current_user, bloque="iva")
-        tot_aiu = _gerencial_capitulos_totales(rows_aiu)
-        tot_iva = _gerencial_capitulos_totales(rows_iva)
-        contrato_meta: Dict[str, str] = {}
-        try:
-            cr = (
-                supabase.table("contratos")
-                .select("numero, objeto, contratista")
-                .eq("id", contrato_id)
-                .limit(1)
-                .execute()
-                .data
+        rpc_hit = _dashboard_capitulos_financiero_rpc(
+            contrato_id, vista, current_user, acta_id=acta_id
+        )
+        if rpc_hit is not None:
+            out = _dashboard_capitulos_financiero_build_response(
+                contrato_id,
+                vista_n,
+                rpc_hit["capitulos_aiu"],
+                rpc_hit["capitulos_iva"],
             )
-            if cr:
-                contrato_meta = {
-                    "numero": (cr[0].get("numero") or "").strip(),
-                    "objeto": (cr[0].get("objeto") or "").strip(),
-                    "contratista": (cr[0].get("contratista") or "").strip(),
-                }
-        except Exception:
-            pass
-        out = {
-            "vista": vista_n,
-            "contrato": contrato_meta,
-            "capitulos": rows_aiu,
-            "capitulos_aiu": rows_aiu,
-            "capitulos_iva": rows_iva,
-            "totales": tot_aiu,
-            "totales_aiu": tot_aiu,
-            "totales_iva": tot_iva,
-        }
+        else:
+            rows_aiu, rows_iva = _gerencial_capitulos_data_both(
+                contrato_id, vista, current_user, acta_id=acta_id
+            )
+            out = _dashboard_capitulos_financiero_build_response(
+                contrato_id, vista_n, rows_aiu, rows_iva
+            )
         _dashboard_response_cache_set(cache_key, out)
         return out
     except Exception as e:
