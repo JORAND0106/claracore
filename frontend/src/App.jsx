@@ -36,6 +36,10 @@ import ModuloInicio from './ModuloInicio'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
+import DevPanelTrigger from './devPanel/DevPanelTrigger'
+import DevPanelGate from './devPanel/DevPanelGate'
+import DeveloperDiagnosticPanel from './devPanel/DeveloperDiagnosticPanel'
+import { devPanelConfigured } from './devPanel/devPanelConfig'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
@@ -18842,6 +18846,7 @@ export default function App() {
   })
   const [fontSize, setFontSize] = useState(() => localStorage.getItem('claracore_font_size') || 'normal')
   const [modal, setModal] = useState(null)
+  const [devPanelView, setDevPanelView] = useState(null) // null | 'gate' | 'open'
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
   })
@@ -19649,6 +19654,16 @@ if (contratos.length > 1) {
       )}
       {modal === 'registro' && <ModalCrearCuenta t={t} onClose={() => setModal(null)} />}
       {modal === 'olvide' && <ModalOlvide t={t} onClose={() => setModal(null)} />}
+      {devPanelConfigured() && <DevPanelTrigger onClick={() => setDevPanelView('gate')} />}
+      {devPanelView === 'gate' && (
+        <DevPanelGate
+          onUnlock={() => setDevPanelView('open')}
+          onClose={() => setDevPanelView(null)}
+        />
+      )}
+      {devPanelView === 'open' && (
+        <DeveloperDiagnosticPanel onClose={() => setDevPanelView(null)} />
+      )}
     </>
   )
 }

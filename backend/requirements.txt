@@ -9,6 +9,8 @@ python-dotenv
 pydantic
 openpyxl
 requests
+azure-monitor-opentelemetry>=1.6.0
+opentelemetry-instrumentation-httpx>=0.48b0
 azure-storage-blob>=12.19.0
 python-multipart
 xhtml2pdf

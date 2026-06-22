@@ -30,12 +30,15 @@ jobs:
           # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
           # Debe coincidir con .github/workflows/ en la raíz del repo: la SPA vive en frontend/, no en /src.
           app_location: "frontend"
-          api_location: ""
+          api_location: "frontend/api"
           output_location: "dist"
           ###### End of Repository/Build Configurations ######
         env:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_MAPTILER_KEY: ${{ secrets.VITE_MAPTILER_KEY }}
+          VITE_DEVELOPER_PANEL_KEY: ${{ secrets.VITE_DEVELOPER_PANEL_KEY }}
+          VITE_APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.VITE_APPLICATIONINSIGHTS_CONNECTION_STRING }}
+          VITE_APPINSIGHTS_API_KEY: ${{ secrets.VITE_APPINSIGHTS_API_KEY }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'

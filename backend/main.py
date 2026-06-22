@@ -193,6 +193,10 @@ _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", st
 
 app = FastAPI(title="ClaraCore API")
 
+from application_insights import setup_application_insights
+
+setup_application_insights(app)
+
 # Orígenes permitidos (CORS). Incluye claracore.co y localhost; CORS_EXTRA_ORIGINS=url1,url2 añade más sin redeploy.
 _cors_extra = [
     o.strip()
@@ -10448,9 +10452,67 @@ def _soporte_parse_descripcion_completa(mensaje: str) -> str:
     return mensaje.strip()
 
 
-def _serializar_reporte_soporte(row: dict) -> dict:
+def _contratos_numero_map(contrato_ids: list) -> dict:
+    """Mapa id → número de contrato para enriquecer reportes SOPORTE (vista global multi-contrato)."""
+    uniq = []
+    seen = set()
+    for raw in contrato_ids or []:
+        if raw is None:
+            continue
+        try:
+            cid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if cid in seen:
+            continue
+        seen.add(cid)
+        uniq.append(cid)
+    if not uniq:
+        return {}
+    rows = (
+        supabase.table("contratos")
+        .select("id, numero")
+        .in_("id", uniq)
+        .execute()
+        .data
+        or []
+    )
+    out = {}
+    for row in rows:
+        rid = row.get("id")
+        if rid is None:
+            continue
+        try:
+            iid = int(rid)
+        except (TypeError, ValueError):
+            continue
+        num = row.get("numero")
+        out[iid] = str(num).strip() if num not in (None, "") else str(iid)
+    return out
+
+
+def _enriquecer_reportes_soporte_contratos(items: list) -> list:
+    cmap = _contratos_numero_map([x.get("contrato_id") for x in (items or [])])
+    for item in items or []:
+        cid = item.get("contrato_id")
+        if cid is None:
+            continue
+        try:
+            iid = int(cid)
+        except (TypeError, ValueError):
+            item["contrato_numero"] = str(cid)
+            continue
+        item["contrato_numero"] = cmap.get(iid, str(iid))
+    return items
+
+
+def _serializar_reporte_soporte(row: dict, contrato_numero: Optional[str] = None) -> dict:
     mensaje = row.get("mensaje") or ""
     modulo_msg = _soporte_parse_campo_line(mensaje, "Módulo:")
+    cid = row.get("contrato_id")
+    cnum = contrato_numero
+    if cnum is None and cid is not None:
+        cnum = str(cid)
     return {
         "id": row.get("id"),
         "asunto": row.get("asunto"),
@@ -10460,7 +10522,8 @@ def _serializar_reporte_soporte(row: dict) -> dict:
         "modulo": modulo_msg or row.get("modulo"),
         "ubicacion": _soporte_parse_campo_line(mensaje, "Ubicación:"),
         "sector": _soporte_parse_campo_line(mensaje, "Sector:"),
-        "contrato_id": row.get("contrato_id"),
+        "contrato_id": cid,
+        "contrato_numero": cnum,
         "soporte_estado": row.get("soporte_estado"),
         "soporte_gestionado_at": row.get("soporte_gestionado_at"),
         "soporte_gestionado_por_nombre": row.get("soporte_gestionado_por_nombre"),
@@ -10873,7 +10936,10 @@ def admin_soporte_list(
     filtro: str = Query("todos"),
     current_user=Depends(require_solo_desarrollador),
 ):
-    """Panel de soporte: KPIs y listado de reportes SOPORTE (solo Desarrollador)."""
+    """Panel de soporte: KPIs y listado global de reportes SOPORTE (todos los contratos).
+
+    El Desarrollador ve reportes de cualquier contrato, sin importar el contrato activo en sesión.
+    """
     del current_user
     filtro_norm = (filtro or "todos").strip().lower()
     rows = (
@@ -10889,6 +10955,7 @@ def admin_soporte_list(
         .data
         or []
     )
+    contrato_nums = _contratos_numero_map([r.get("contrato_id") for r in rows])
 
     kpis = {
         "pendientes": 0,
@@ -10911,7 +10978,14 @@ def admin_soporte_list(
 
     filtrados = []
     for row in rows:
-        item = _serializar_reporte_soporte(row)
+        cid = row.get("contrato_id")
+        cnum = None
+        if cid is not None:
+            try:
+                cnum = contrato_nums.get(int(cid), str(cid))
+            except (TypeError, ValueError):
+                cnum = str(cid)
+        item = _serializar_reporte_soporte(row, contrato_numero=cnum)
         t = item["tipo_reporte"]
         gest = bool(item.get("soporte_estado"))
         if filtro_norm == "errores" and t != "error":

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Headset, Trash2 } from 'lucide-react'
-import { API_BASE } from '../apiBase'
+import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../apiBase'
+import { createRealtimeDebouncer, isEfectivoOffline } from '../realtimeUtils'
+import { supabase } from '../supabaseClient'
 
 function formatFechaLogBogota(iso) {
   if (!iso) return '—'
@@ -35,8 +37,34 @@ function tiempoRelativo(iso) {
   }
 }
 
+function etiquetaContrato(r) {
+  if (r?.contrato_numero) return String(r.contrato_numero)
+  if (r?.contrato_id != null && r?.contrato_id !== '') return String(r.contrato_id)
+  return null
+}
+
 function esDesarrollador(usuario) {
   return usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
+}
+
+function badgeContrato(contratoLabel, t) {
+  if (!contratoLabel) return null
+  return (
+    <span
+      style={{
+        fontSize: 'var(--cc-caption)',
+        fontWeight: 700,
+        padding: '1px 7px',
+        borderRadius: '20px',
+        background: `${t.primary}14`,
+        color: t.primary,
+        border: `1px solid ${t.primary}44`,
+        flexShrink: 0,
+      }}
+    >
+      Contrato {contratoLabel}
+    </span>
+  )
 }
 
 function iconoReporte(r) {
@@ -193,7 +221,36 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
     void cargarCount()
     const iv = setInterval(() => { void cargarCountRef.current?.() }, 60000)
     return () => clearInterval(iv)
-  }, [usuario, token, cargarCount])
+  }, [usuario?.id, token, cargarCount])
+
+  /** Al cambiar de contrato activo, recargar (el panel es global: todos los contratos). */
+  useEffect(() => {
+    if (!esDesarrollador(usuario) || !token) return
+    void cargarCount()
+    if (abiertoRef.current) void cargarTabRef.current?.()
+  }, [usuario?.contrato_id, token, cargarCount, cargarTab])
+
+  /** Realtime: cualquier reporte SOPORTE nuevo/actualizado, sin filtrar por contrato. */
+  useEffect(() => {
+    if (!esDesarrollador(usuario) || isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) return
+    const onFlush = () => {
+      void cargarCountRef.current?.()
+      if (abiertoRef.current) void cargarTabRef.current?.()
+    }
+    const debouncer = createRealtimeDebouncer(onFlush)
+    const channel = supabase
+      .channel('soporte-tecnico-global')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notificaciones', filter: 'tipo=eq.SOPORTE' },
+        () => debouncer.schedule(),
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [usuario?.id])
 
   useEffect(() => {
     if (!abierto || !esDesarrollador(usuario)) return
@@ -447,6 +504,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
               <span style={{ fontSize: 'var(--cc-label)', color: t.textMuted }}>
                 {tiempoRelativo(r.created_at)}
               </span>
+              {badgeContrato(etiquetaContrato(r), t)}
               {urgenciaBadge(r.urgencia)}
             </div>
             {gestionado && (
@@ -539,6 +597,9 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
               <Headset size={20} strokeWidth={2} color={t.primary} aria-hidden />
               <div style={{ fontSize: 'var(--cc-md)', fontWeight: '700', color: t.text }}>
                 Soporte técnico
+              </div>
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
+                Todos los contratos
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
@@ -701,7 +762,7 @@ export function PanelSoporteTecnico({ t, usuario, token }) {
                 <CampoDetalle label="Usuario" value={detalle.remitente_nombre} t={t} />
                 <CampoDetalle
                   label="Contrato"
-                  value={detalle.contrato_id != null ? String(detalle.contrato_id) : null}
+                  value={etiquetaContrato(detalle)}
                   t={t}
                 />
                 <CampoDetalle label="Módulo" value={detalle.modulo} t={t} />
