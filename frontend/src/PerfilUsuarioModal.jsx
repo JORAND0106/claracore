@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { prepararImagenParaUpload } from './comprimirImagen'
 
 /**
  * Modal para editar nombre, cumpleaños, foto de perfil e imagen de firma (API /usuarios/me).
@@ -55,8 +56,9 @@ export default function PerfilUsuarioModal({ t, apiBase, token, usuario, onClose
     setUploading(ruta)
     setErr(null)
     try {
+      const prepared = await prepararImagenParaUpload(file)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', prepared)
       const res = await fetch(`${apiBase}${ruta}`, { method: 'POST', headers: hdr, body: fd })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {

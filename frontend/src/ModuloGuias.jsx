@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react'
 import { API_BASE, API_FALLBACK } from './apiBase'
+import { prepararImagenParaUpload } from './comprimirImagen'
 
 const API = API_BASE
 
@@ -570,8 +571,9 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
       setUploadingBloqueIdx(idx)
       setError(null)
       try {
+        const prepared = await prepararImagenParaUpload(file)
         const fd = new FormData()
-        fd.append('file', file)
+        fd.append('file', prepared)
         const r = await fetchConFallback('/guias/imagen', {
           method: 'POST',
           headers: { Authorization: `Bearer ${auth}` },

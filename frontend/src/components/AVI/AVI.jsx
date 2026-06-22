@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom'
 import { Bot, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE } from '../../apiBase'
+import { base64DesdeDataUrl, comprimirImagenADataUrl } from '../../comprimirImagen'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -295,22 +296,28 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
   }
 
   // ── Selección de imagen ────────────────────────────────────────────────────────
+  async function aplicarImagenAdjunta(file) {
+    if (!file) return
+    setImagenError('')
+    try {
+      const dataUrl = await comprimirImagenADataUrl(file)
+      const b64 = base64DesdeDataUrl(dataUrl)
+      const approxBytes = Math.ceil(b64.length * 3 / 4)
+      if (approxBytes > MAX_IMAGEN_BYTES) {
+        setImagenError('La imagen supera 4 MB incluso comprimida. Usa una captura más pequeña.')
+        return
+      }
+      setImagenPreview(dataUrl)
+      setImagenBase64(b64)
+    } catch {
+      setImagenError('No se pudo procesar la imagen.')
+    }
+  }
+
   function handleSeleccionarImagen(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    setImagenError('')
-    if (file.size > MAX_IMAGEN_BYTES) {
-      setImagenError('La imagen supera 4 MB. Por favor usa una más pequeña.')
-      e.target.value = ''
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const dataUrl = ev.target.result
-      setImagenPreview(dataUrl)
-      setImagenBase64(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl)
-    }
-    reader.readAsDataURL(file)
+    void aplicarImagenAdjunta(file)
     e.target.value = ''
   }
 
@@ -333,19 +340,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
     if (!imageItem) return
     e.preventDefault()
     const file = imageItem.getAsFile()
-    if (!file) return
-    setImagenError('')
-    if (file.size > MAX_IMAGEN_BYTES) {
-      setImagenError('La imagen supera 4 MB. Por favor usa una más pequeña.')
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const dataUrl = ev.target.result
-      setImagenPreview(dataUrl)
-      setImagenBase64(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl)
-    }
-    reader.readAsDataURL(file)
+    void aplicarImagenAdjunta(file)
   }
 
   // ── Construir historial para la API ───────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchConFallback } from './fetchConFallback'
+import { esArchivoImagen, prepararImagenParaUpload } from './comprimirImagen'
 
 function permUsuario(u, nombreLower, campo) {
   if (!u) return false
@@ -100,7 +101,10 @@ export default function ModuloSST({ usuario, t }) {
     fd.append('entidad_id', String(sel.id))
     fd.append('mes_vigencia', upload.mes)
     if (upload.fv) fd.append('fecha_vigencia', upload.fv)
-    fd.append('file', upload.file)
+    const archivo = esArchivoImagen(upload.file)
+      ? await prepararImagenParaUpload(upload.file)
+      : upload.file
+    fd.append('file', archivo)
     const r = await fetchConFallback(`/sst/${contratoId}/documentos`, { method: 'POST', body: fd })
     if (r?._error) setMsg(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
     else { setUpload({ plantilla_id: '', mes: '', fv: '', file: null }); load(); loadChecklist(sel.tipo, sel.id) }

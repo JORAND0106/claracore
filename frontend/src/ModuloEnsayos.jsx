@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchConFallback } from './fetchConFallback'
+import { esArchivoImagen, prepararImagenParaUpload } from './comprimirImagen'
 
 function perm(usuario, nombreLower, campo) {
   if (!usuario) return false
@@ -86,7 +87,10 @@ export default function ModuloEnsayos({ usuario, t }) {
     if (regForm.laboratorio) fd.append('laboratorio', regForm.laboratorio)
     if (regForm.resultado_tipo) fd.append('resultado_tipo', regForm.resultado_tipo)
     if (regForm.resultado_valor !== '') fd.append('resultado_valor', String(regForm.resultado_valor))
-    fd.append('file', regForm.file)
+    const archivo = esArchivoImagen(regForm.file)
+      ? await prepararImagenParaUpload(regForm.file)
+      : regForm.file
+    fd.append('file', archivo)
     const r = await fetchConFallback(`/ensayos/${cid}/registros`, { method: 'POST', body: fd })
     if (r?._error) setMsg(String(r.detail))
     else { setMsg(''); load() }

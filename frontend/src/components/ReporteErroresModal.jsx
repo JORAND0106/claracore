@@ -8,6 +8,7 @@ import {
   getOpcionesUbicacion,
   resolverEtiqueta,
 } from '../config/reporteErroresJerarquia'
+import { comprimirImagenADataUrl } from '../comprimirImagen'
 import {
   construirMensajeError,
   construirMensajeMejora,
@@ -378,15 +379,15 @@ export function ReporteErroresBtn({ t, usuario, token }) {
         e.preventDefault()
         const file = item.getAsFile()
         if (!file) return
-        const reader = new FileReader()
-        reader.onload = () => {
-          setForm((f) => ({
-            ...f,
-            imagenNombre: file.name || 'captura.png',
-            imagenPreview: reader.result,
-          }))
-        }
-        reader.readAsDataURL(file)
+        void comprimirImagenADataUrl(file)
+          .then((dataUrl) => {
+            setForm((f) => ({
+              ...f,
+              imagenNombre: (file.name || 'captura').replace(/\.[^.]+$/, '') + '.jpg',
+              imagenPreview: dataUrl,
+            }))
+          })
+          .catch(() => {})
         break
       }
     }

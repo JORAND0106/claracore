@@ -10,6 +10,7 @@ import ModuloNube from "./ModuloNube";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
+import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -1160,8 +1161,9 @@ function SeccionInicioNovedades({ call, theme, token, isDeveloper, user, contrat
     const file = ev.target.files?.[0];
     if (!file) return;
     const fd = new FormData();
-    fd.append("file", file);
     try {
+      const prepared = await prepararImagenParaUpload(file);
+      fd.append("file", prepared);
       const res = await fetch(`${API_BASE}/admin/inicio/novedades/imagen`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -2410,12 +2412,18 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     };
   }
 
-  function handleLogo(campo, e) {
+  async function handleLogo(campo, e) {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => setForm(f => ({ ...f, [campo]: ev.target.result }));
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await comprimirImagenADataUrl(file);
+      setForm(f => ({ ...f, [campo]: dataUrl }));
+    } catch {
+      const reader = new FileReader();
+      reader.onload = ev => setForm(f => ({ ...f, [campo]: ev.target.result }));
+      reader.readAsDataURL(file);
+    }
+    e.target.value = "";
   }
 
   function llenarFormDesdeContrato(d) {

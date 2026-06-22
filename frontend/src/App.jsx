@@ -25,6 +25,7 @@ import {
 } from './offline/offlineRouter'
 import { db, savePendingBlob, countAllPendingBlobs } from './offline/db'
 import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offlineUtils'
+import { prepararImagenParaUpload } from './comprimirImagen'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
@@ -2432,7 +2433,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
       if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
-      const fd = new FormData(); fd.append('file', file); fd.append('numero', String(numero)); fd.append('descripcion', '')
+      const prepared = await prepararImagenParaUpload(file)
+      const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
       const rid = registro?.id
@@ -2496,7 +2498,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
       if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
-      const fd = new FormData(); fd.append('file', file); fd.append('numero', String(numero)); fd.append('descripcion', '')
+      const prepared = await prepararImagenParaUpload(file)
+      const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
       await persistirGraficoEnRegistro(res.url, res.numero ?? numero, origen)
@@ -2509,10 +2512,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     try {
       const resp = await fetch(dataUrl)
       const blob = await resp.blob()
-      const file = new File(
-        [blob],
-        `plano_reg${registro.numero_registro ?? registro.id}_${Date.now()}.jpg`,
-        { type: 'image/jpeg' },
+      const file = await prepararImagenParaUpload(
+        new File(
+          [blob],
+          `plano_reg${registro.numero_registro ?? registro.id}_${Date.now()}.jpg`,
+          { type: 'image/jpeg' },
+        ),
       )
       await subirGrafico(file, { origen: 'mapa' })
     } catch (e) {
@@ -11947,15 +11952,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 }}>🖼️ Usar gráfico de galería</button>
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
-                  const fd = new FormData(); fd.append('file', file)
                   try {
+                    const prepared = await prepararImagenParaUpload(file)
+                    const fd = new FormData(); fd.append('file', prepared)
                     const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs })
                     const numR = await sicoeFetchJsonOThrow(resN)
                     const numero = sicoeNumeroDesdeNextApi(numR)
                     if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
                     fd.append('numero', String(numero))
                     fd.append('descripcion', `Grafico-Reporte-${numero}`)
-                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: hdrs, body: fd })
+                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
                     const data = await sicoeFetchJsonOThrow(r)
                     setReporteGraficoUrl(data.url)
                     setReporteGraficoNumero(data.numero ?? numero)
@@ -12196,15 +12202,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 }}>🖼️ Usar foto de galería</button>                
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
-                  const fd = new FormData(); fd.append('file', file)
                   try {
+                    const prepared = await prepararImagenParaUpload(file)
+                    const fd = new FormData(); fd.append('file', prepared)
                     const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
                     const numR = await sicoeFetchJsonOThrow(resN)
                     const numero = sicoeNumeroDesdeNextApi(numR)
                     if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
                     fd.append('numero', String(numero))
                     fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numero}`)
-                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: hdrs, body: fd })
+                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
                     const data = await sicoeFetchJsonOThrow(r)
                     const nFoto = data.numero ?? numero
                     const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: nFoto, _fotoOk: true}; setRegistros(a)
