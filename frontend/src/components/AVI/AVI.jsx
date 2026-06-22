@@ -27,7 +27,7 @@ const PANEL_ANCHO_MIN     = 320
 const PANEL_ANCHO_MAX     = 700
 
 const BIENVENIDA_TEXTO =
-  '¡Hola! Soy Clara. Cuéntame en qué te puedo ayudar hoy con ClaraCore.'
+  '¡Hola! Soy Clara. Cuéntame en qué te puedo ayudar hoy con ClaraCore. Si encontraste un error o tienes una idea de mejora, usa el botón 🛟 en la barra superior.'
 
 function getToken() {
   return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')

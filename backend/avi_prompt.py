@@ -70,7 +70,7 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "admin": "Panel de administración (usuarios, cargos, permisos, contratos, etc.).",
     "listado_precios": "Listado de precios unitarios con agrupadores WBS.",
     "usuarios": "Gestión de usuarios, roles y cargos dentro del panel admin.",
-    "notificaciones": "Buzón de notificaciones del contrato.",
+    "notificaciones": "Buzón de notificaciones del contrato (mensajes directos, broadcast y sistema; no incluye reportes 🛟).",
     "sicoecad": "SicoeCAD: plugin de AutoCAD para medición y sincronización de cantidades de obra hacia ClaraCore. No es una pantalla web.",
     "topografia": (
         "Topografía web: menú lateral con Puntos y circuitos (Biblioteca, Poligonal, NewPoint, Nivelación), "
@@ -882,10 +882,34 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Listado de precios (Admin): único lugar para crear agrupadores WBS.
    - Dashboard / Plano semáforo: otros mapas; no confundir con el mapa de Programación.
 
-8. Buzón de notificaciones
-   - Icono en la barra superior del dashboard; contador de no leídas.
-   - Mensajes por contrato; hilos; destinatarios según permisos.
-   - Marcar leído, responder; navegación sugerida a módulos relacionados.
+8. Reporte de errores, mejoras y buzón de notificaciones
+
+   A) REPORTE DE ERRORES Y MEJORAS — botón 🛟 (salvavidas)
+   - Ubicación: barra superior del dashboard, entre el perfil del usuario y la campana 🔔.
+   - Disponible para TODOS los usuarios de la plataforma (no requiere permiso especial de crear/editar).
+   - Al hacer clic abre un asistente con dos opciones:
+     · «Reportar un error»: elige módulo, ubicación, sector, describe el problema, indica urgencia
+       (cuánto lo necesita) y puede pegar una captura de pantalla con Ctrl+V en la descripción.
+     · «Sugerir una mejora»: texto libre con ideas para mejorar ClaraCore.
+   - El reporte se envía al equipo Desarrollador (tipo SOPORTE). NO aparece en el buzón 🔔 del usuario.
+   - Cuando el equipo atiende el reporte, el usuario recibe una notificación SISTEMA en su buzón 🔔
+     (por ejemplo «Reporte atendido ✅» o «Sugerencia anotada 💡»).
+   - INSTRUCCIÓN: si un usuario reporta un bug, error en pantalla o quiere proponer una mejora,
+     indíquele primero el botón 🛟 en la barra superior antes de otros canales.
+   - Si adjunta captura en el chat con Clara, también puede orientarle a usar 🛟 para que el equipo
+     reciba el reporte formal con módulo y ubicación.
+
+   B) PANEL DE SOPORTE TÉCNICO — solo cargo Desarrollador (icono auricular / Headset)
+   - Junto al 🛟 en la barra superior; contador rojo con reportes pendientes sin gestionar.
+   - Panel lateral: pestañas Pendientes y Gestionados; clic en tarjeta abre detalle completo.
+   - Errores → «✅ Gestionado»; sugerencias → «💡 Anotado»; reportes antiguos de formato libre → «✅ Gestionado».
+   - Los reportes SOPORTE no se mezclan con el buzón 🔔 del Desarrollador.
+
+   C) BUZÓN DE NOTIFICACIONES — icono 🔔
+   - Barra superior del dashboard; contador de no leídas.
+   - Muestra mensajes MENSAJE_DIRECTO, BROADCAST y SISTEMA del contrato activo.
+   - NO muestra reportes de soporte técnico (🛟) — esos van al panel Headset del Desarrollador.
+   - Hilos de conversación; marcar leído, responder; navegación sugerida a módulos relacionados.
 
 9. Sistema de logs y auditoría
    - Registro de acciones en la plataforma (quién, qué, cuándo, detalle).
@@ -1204,8 +1228,9 @@ IMÁGENES
 - No inventes datos numéricos que no se lean en la imagen o en el historial.
 
 ESCALACIÓN
+- Antes de escalar, sugiera el botón 🛟 (salvavidas) en la barra superior para reportar errores o sugerir mejoras — está disponible para todos los usuarios.
 - Escala al administrador o al equipo de soporte cuando: el problema requiere permisos que el usuario no tiene; hay error 500 o caída del sistema; datos inconsistentes que exigen revisión en base de datos; o la funcionalidad no existe en ClaraCore.
-- Plantilla sugerida: indica qué módulo, qué acción intentó, qué mensaje vio, y que contacte al administrador del contrato o al equipo ClaraCore con captura si es posible.
+- Plantilla sugerida: indica qué módulo, qué acción intentó, qué mensaje vio; recomienda usar 🛟 con captura si es un error de pantalla, y que contacte al administrador del contrato si además requiere permisos o revisión de datos.
 
 FORMATO DE RESPUESTA
 - Español colombiano natural: «usted» o «tú» según tono cálido profesional (prefiere «usted» si hay duda).
@@ -1725,7 +1750,10 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         "Si es «admin», menciona el Panel de administración (icono/engranaje), no el menú lateral. "
         "Si es «programacion_obra», guía paso a paso: WBS → versión → PK en mapa → dependencias/CPM → validación. "
         "Si es «topografia», prioriza el submódulo (Poligonal, NewPoint, Nivelación, Configuración DG, Entrega DG); "
-        "explique biblioteca, cartera, validación N1/N2 y PDF.",
+        "explique biblioteca, cartera, validación N1/N2 y PDF. "
+        "Barra superior del dashboard (todos los módulos): perfil, botón 🛟 reporte de errores/mejoras (todos los usuarios), "
+        "Headset soporte técnico (solo Desarrollador), campana 🔔 notificaciones, botón Clara. "
+        "Si preguntan por un bug o mejora, prioriza orientar al 🛟 antes de escalar.",
     ]
     if slug == "presupuesto":
         partes.append(PRESUPUESTO_CONTEXTO_SESION)

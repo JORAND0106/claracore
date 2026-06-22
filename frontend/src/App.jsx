@@ -125,6 +125,7 @@ import {
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
 } from './mapboxPlanoLabels'
+import { crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
@@ -1031,20 +1032,24 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
   const mapRef       = useRef(null)
   const markerRef    = useRef(null)
   const modoRef      = useRef(modoEdicion)
+  const [mapError, setMapError] = useState(null)
   useEffect(() => { modoRef.current = modoEdicion }, [modoEdicion])
 
   useEffect(() => {
     if (!containerRef.current) return
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
     const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
     const cLat = hasCoords ? parseFloat(lat) : 4.71
     const cLng = hasCoords ? parseFloat(lng) : -74.07
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
+    const { map, error } = crearMapboxMapSeguro(containerRef.current, {
       style: 'mapbox://styles/mapbox/outdoors-v12',
       center: [cLng, cLat],
-      zoom: hasCoords ? 15 : 11
+      zoom: hasCoords ? 15 : 11,
     })
+    if (error || !map) {
+      setMapError(error || 'Mapa no disponible')
+      return
+    }
+    setMapError(null)
     const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
     mapRef.current = map
@@ -1066,7 +1071,7 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
     })
     return () => {
       try { unregAttrib() } catch { /* ignore */ }
-      map.remove()
+      try { map.remove() } catch { /* ignore */ }
       mapRef.current = null
       markerRef.current = null
     }
@@ -1097,6 +1102,9 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
   }, [fallbackBounds, lat, lng])
 
   const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
+  if (mapError) {
+    return <MapaNoDisponible t={t} mensaje={mapError} minHeight={340} />
+  }
   return (
     <div style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
       <div ref={containerRef} style={{ width:'100%', height:'100%', minHeight:'340px' }} />
@@ -1127,16 +1135,20 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
   const mapRef = useRef(null)
   const markersRef = useRef([])
   const planoLayerReadyRef = useRef(false)
+  const [mapError, setMapError] = useState(null)
 
   useEffect(() => {
-    if (!containerRef.current || !import.meta.env.VITE_MAPBOX_TOKEN) return
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
+    if (!containerRef.current) return
+    const { map, error } = crearMapboxMapSeguro(containerRef.current, {
       style: 'mapbox://styles/mapbox/outdoors-v12',
       center: [-74.07, 4.71],
       zoom: 11,
     })
+    if (error || !map) {
+      setMapError(error || 'Mapa no disponible')
+      return
+    }
+    setMapError(null)
     const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
     mapRef.current = map
@@ -1145,7 +1157,7 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
       try { unregAttrib() } catch { /* ignore */ }
       markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
       markersRef.current = []
-      map.remove()
+      try { map.remove() } catch { /* ignore */ }
       mapRef.current = null
       planoLayerReadyRef.current = false
     }
@@ -1233,6 +1245,9 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
   )
   const tienePlano = !!_normalizeContratoPlanoGeojson(planoGeojson)?.features?.length
   const mostrarAvisoSinPins = validos.length === 0 && !tienePlano && !fallbackBounds
+  if (mapError) {
+    return <MapaNoDisponible t={t} mensaje={mapError} minHeight={340} />
+  }
   return (
     <div style={{ position: 'relative', width: '100%', minHeight: '340px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${t.border}` }}>
       {!tieneToken ? (

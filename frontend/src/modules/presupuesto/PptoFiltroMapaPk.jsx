@@ -10,6 +10,7 @@ import {
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
 } from '../../mapboxPlanoLabels'
+import { crearMapboxMapSeguro } from '../../mapboxSafe'
 
 /** [lng, lat] WGS84 si el maestro trae coordenadas; si no, null. */
 function pickLngLat(row) {
@@ -158,15 +159,19 @@ export default function PptoFiltroMapaPk({
       const center0 =
         contrato?.centro_lat != null && contrato?.centro_lng != null ? [contrato.centro_lng, contrato.centro_lat] : [-74.0817, 4.6097]
       const isDark = typeof t?.bg === 'string' && (t.bg === '#0A1628' || t.bg.toLowerCase() === '#0a1628')
-      mapboxgl.accessToken = mbt
-      const map = new mapboxgl.Map({
-        container: mapEl,
+      const { map, error: mapErr } = crearMapboxMapSeguro(mapEl, {
         style: isDark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
         center: center0,
         zoom: 12,
         bearing: NORTH_RIGHT_BEARING,
         preserveDrawingBuffer: true,
       })
+      if (cancelled) return
+      if (mapErr || !map) {
+        mapEl.textContent = mapErr || 'Mapa no disponible (WebGL). Puede continuar sin vista de plano.'
+        mapEl.style.cssText = `padding:12px;font-size:var(--cc-sm);color:${t?.textMuted || '#64748B'};line-height:1.45;`
+        return
+      }
       try { map.doubleClickZoom.disable() } catch { /* ignore */ }
       map.getCanvas().style.touchAction = 'manipulation'
       map.addControl(new mapboxgl.NavigationControl(), 'top-right')

@@ -6,11 +6,9 @@ import {
   REPORTE_OTRO_KEY,
 } from './reporteErroresJerarquia'
 
-/** Visible si el usuario tiene permiso de crear o editar en al menos una función (o es Desarrollador). */
+/** Visible para cualquier usuario autenticado de la plataforma. */
 export function usuarioPuedeReportarErrores(usuario) {
-  const cargo = (usuario?.cargo_nombre || '').trim().toLowerCase()
-  if (cargo === 'desarrollador') return true
-  return (usuario?.permisos || []).some((p) => p.crear || p.editar)
+  return !!usuario?.id
 }
 
 /** Misma visibilidad que el menú lateral del Dashboard. */
