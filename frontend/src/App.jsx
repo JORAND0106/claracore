@@ -4557,30 +4557,58 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const guardarEdicion = async () => {
     setGuardandoEdicion(true)
     try {
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({
-          ...reporte,
-          descripcion_actividad: editDesc,
-          subcontratista_id: editSubId ? parseInt(editSubId) : null,
-          inspector_id:      editInspId ? parseInt(editInspId) : null,
-          capitulo:          editCapitulo || reporte.capitulo,
-          pk_id_id:          editPkId ? parseInt(editPkId) : (reporte.pk_id_id || null),
-          civ:               editCivLocal || reporte.civ || null,
-          tramo:             editTramoLocal || reporte.tramo || null,
-          calzada:           editCalzadaLocal || reporte.calzada || null,
-          infraestructura:   editInfraLocal || reporte.infraestructura || null,
-          abs_inicio: editAbsInicio !== '' ? parseFloat(editAbsInicio) : null,
-          abs_final:  editAbsFinal  !== '' ? parseFloat(editAbsFinal)  : null,
-          nodo_ini:   editNodoIni || null,
-          nodo_fin:   editNodoFin || null,
-          coord_lat:  editLat !== '' ? parseFloat(editLat) : null,
-          coord_lng:  editLng !== '' ? parseFloat(editLng) : null,
-        })
+      const locFields = esLocMultipleReporte ? {} : localizacionToApiFields(locPortada)
+      const payload = {
+        descripcion_actividad: (editDesc || '').trim() || reporte.descripcion_actividad,
+        subcontratista_id: editSubId ? parseInt(editSubId, 10) : null,
+        inspector_id: editInspId ? parseInt(editInspId, 10) : null,
+        capitulo: editCapitulo || reporte.capitulo,
+        tipo_localizacion: reporte.tipo_localizacion || 'unica',
+        ...locFields,
+      }
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify(payload),
       })
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try {
+          const j = await res.json()
+          msg = typeof j?.detail === 'string' ? j.detail : JSON.stringify(j?.detail || j)
+        } catch { /* cuerpo no JSON */ }
+        throw new Error(msg)
+      }
+      const updated = await res.json().catch(() => ({}))
+
+      if (!esLocMultipleReporte && Object.keys(locFields).length) {
+        const regs = registros.filter((r) => r?.id)
+        if (regs.length) {
+          const results = await Promise.all(regs.map((reg) =>
+            fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
+              method: 'PUT',
+              headers: hdrs,
+              body: JSON.stringify({
+                reporte_id: reg.reporte_id,
+                numero_registro: reg.numero_registro,
+                ...locFields,
+              }),
+            }),
+          ))
+          const fallo = results.find((r) => !r.ok)
+          if (fallo) throw new Error(`No se pudo actualizar localización en registros (HTTP ${fallo.status})`)
+          setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...locFields } : r)))
+        }
+      }
+
+      setReporte((prev) => ({ ...prev, ...updated, ...payload }))
+      setEditDesc(payload.descripcion_actividad)
+      if (!esLocMultipleReporte) setLocPortada(locPortada)
       await recargar()
       setModoEdicion(false)
-    } catch(e) {}
+    } catch (e) {
+      alert('No se pudo guardar los cambios: ' + (e?.message || String(e)))
+    }
     setGuardandoEdicion(false)
   }
 
@@ -11584,23 +11612,64 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         enlace_soporte: enlacesMerged.length ? JSON.stringify(enlacesMerged) : null,
         ...locRepApi,
       }
+      const estadoGuardar = modoEdicion
+        ? (reporteInicial?.estado || body.estado || 'Borrador')
+        : 'Sin Asignar Ítem'
       const rUpd = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, estado: 'Sin Asignar Ítem' })
+        body: JSON.stringify({ ...body, estado: estadoGuardar })
       })
       if (!rUpd.ok) throw new Error(await httpErr(rUpd))
+
+      const lineaRegistroWizard = (reg) => ({
+        nombre: reg.nombre, descripcion: reg.observacion,
+        longitud: sicoeNumCampoOmitNull(reg.longitud), ancho: sicoeNumCampoOmitNull(reg.ancho),
+        espesor: sicoeNumCampoOmitNull(reg.espesor), cantidad: sicoeNumCampoOmitNull(reg.cantidad),
+        cantidad_total: reg.cantidad_total,
+        unidad: reg.unidad, observacion: reg.observacion,
+        foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
+        ...payloadGraficosRegistro(reg),
+        ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
+      })
+
+      if (modoEdicion && registros.some((r) => r.id)) {
+        for (const reg of registros) {
+          const linePayload = lineaRegistroWizard(reg)
+          if (reg.id) {
+            const rPut = await fetch(
+              `${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`,
+              {
+                method: 'PUT',
+                headers: { ...hdrs, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  reporte_id: idParaGuardar,
+                  numero_registro: reg.numero_registro,
+                  ...linePayload,
+                }),
+              },
+            )
+            if (!rPut.ok) throw new Error(await httpErr(rPut))
+          } else {
+            const rNum = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method: 'POST', headers: hdrs })
+            const numData = await sicoeFetchJsonOThrow(rNum)
+            const numero = sicoeNumeroDesdeNextApi(numData)
+            if (numero == null) throw new Error('No se obtuvo consecutivo de registro')
+            const rPost = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
+              method: 'POST',
+              headers: { ...hdrs, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                reporte_id: idParaGuardar,
+                numero_registro: numero,
+                ...linePayload,
+              }),
+            })
+            if (!rPost.ok) throw new Error(await httpErr(rPost))
+          }
+        }
+      } else {
       // Un solo ida y vuelta: sustituye DELETE + 2N peticiones (evita "Failed to fetch" en 4G)
       const payloadReg = {
-        registros: registros.map((reg) => ({
-          nombre: reg.nombre, descripcion: reg.observacion,
-          longitud: sicoeNumCampoOmitNull(reg.longitud), ancho: sicoeNumCampoOmitNull(reg.ancho),
-          espesor: sicoeNumCampoOmitNull(reg.espesor), cantidad: sicoeNumCampoOmitNull(reg.cantidad),
-          cantidad_total: reg.cantidad_total,
-          unidad: reg.unidad, observacion: reg.observacion,
-          foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
-          ...payloadGraficosRegistro(reg),
-          ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
-        }))
+        registros: registros.map((reg) => lineaRegistroWizard(reg))
       }
       // Reintento: en móvil 4G el fetch largo a veces corta; el servidor puede haber quedado ok (idempotente: borra e inserta de nuevo)
       let rReg
@@ -11620,6 +11689,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           }
           throw err
         }
+      }
       }
       // Guardar puntos topográficos
       const puntosValidos = puntos.filter(p => p.norte || p.este)

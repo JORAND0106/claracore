@@ -445,6 +445,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   
   // ── Enlace DWG (SicoeCAD heartbeat → cola cad_queue, no ClaraLink) ───────
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
+  const [cadEjes, setCadEjes] = useState([])
+  const [cadEjesLoading, setCadEjesLoading] = useState(false)
   const dwgEnlazadoRef = useRef(false)
   const navPlanoTimerRef = useRef(null)
 
@@ -467,6 +469,24 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     }
   }, [contratoId])
 
+  const cargarCadEjes = useCallback(async () => {
+    if (!contratoId) return
+    try {
+      const tok = getToken()
+      if (!tok) return
+      setCadEjesLoading(true)
+      const r = await fetch(`${API}/cad/ejes/${contratoId}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      if (r.ok) setCadEjes(await r.json())
+      else setCadEjes([])
+    } catch {
+      setCadEjes([])
+    } finally {
+      setCadEjesLoading(false)
+    }
+  }, [contratoId])
+
   useEffect(() => {
     if (!contratoId || oculto) return
     void refrescarDwgEnlazado()
@@ -482,6 +502,15 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       window.removeEventListener('focus', onActivo)
     }
   }, [contratoId, oculto, refrescarDwgEnlazado])
+
+  useEffect(() => {
+    if (!contratoId || oculto) return
+    void cargarCadEjes()
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') void cargarCadEjes()
+    }, 15000)
+    return () => clearInterval(iv)
+  }, [contratoId, oculto, cargarCadEjes])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -5968,6 +5997,23 @@ async function restaurar(id) {
           {dwgEnlazado
             ? '🔗 DWG Enlazado — Clic en grilla navega el plano vía SicoeCAD (cola). Semáforo activo.'
             : '⛓️ Sin DWG — En SicoeCAD pulse «Sincronizar» con el mismo usuario de la web. Mientras tanto puede usar ClaraLink.'}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
+          background: t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px',
+          fontSize:'var(--cc-sm)', color: t.textMuted, flexWrap:'wrap' }}>
+          <span style={{ fontWeight:'700', color: t.text }}>📐 Ejes CAD</span>
+          {cadEjesLoading ? (
+            <span>⏳ Cargando…</span>
+          ) : cadEjes.length === 0 ? (
+            <span>Sin ejes — en AutoCAD abra <code style={{ fontSize:'var(--cc-caption)' }}>SICOECAD</code> → Cargar Eje</span>
+          ) : (
+            cadEjes.map(e => (
+              <span key={e.id} title={e.created_at ? `Creado: ${e.created_at}` : e.nombre}
+                style={{ padding:'2px 8px', borderRadius:'6px', background: t.bg, border:`1px solid ${t.border}`, color: t.text, fontWeight:'600' }}>
+                {e.nombre}
+              </span>
+            ))
+          )}
         </div>
       </div>
       {/* ── Tabla ── */}

@@ -9261,6 +9261,65 @@ def cad_procesado(op_id: int, body: CadQueueProcesado, current_user=Depends(get_
     return {"ok": True}
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CAD EJES (SicoeCAD — abscisado por contrato)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CadEjeCreate(BaseModel):
+    nombre: str
+    axis_context: dict = Field(default_factory=dict)
+
+@app.get("/cad/ejes/{contrato_id}")
+def list_cad_ejes(contrato_id: int, current_user=Depends(get_current_user)):
+    """Lista ejes CAD registrados para el contrato."""
+    try:
+        rows = (
+            supabase.table("cad_ejes")
+            .select("id, contrato_id, nombre, axis_context_json, created_at")
+            .eq("contrato_id", contrato_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error leyendo cad_ejes: {e}")
+    return rows or []
+
+@app.post("/cad/ejes/{contrato_id}")
+def create_cad_eje(contrato_id: int, body: CadEjeCreate, current_user=Depends(get_current_user)):
+    """SicoeCAD Loader registra un eje (polilínea + AxisContext)."""
+    nombre = (body.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="nombre requerido")
+    axis_ctx = body.axis_context
+    if not axis_ctx or not isinstance(axis_ctx, dict):
+        raise HTTPException(status_code=400, detail="axis_context requerido")
+    try:
+        row = (
+            supabase.table("cad_ejes")
+            .insert({
+                "contrato_id": contrato_id,
+                "nombre": nombre,
+                "axis_context_json": axis_ctx,
+            })
+            .execute()
+            .data
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error guardando eje: {e}")
+    if not row:
+        return {"ok": True, "contrato_id": contrato_id, "nombre": nombre}
+    return row[0]
+
+@app.delete("/cad/ejes/{contrato_id}/{eje_id}")
+def delete_cad_eje(contrato_id: int, eje_id: int, current_user=Depends(get_current_user)):
+    """Elimina un eje del contrato."""
+    try:
+        supabase.table("cad_ejes").delete().eq("id", eje_id).eq("contrato_id", contrato_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error eliminando eje: {e}")
+    return {"ok": True}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # COMENTARIOS
 # ═══════════════════════════════════════════════════════════════════════════════
 
