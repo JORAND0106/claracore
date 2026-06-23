@@ -12,12 +12,49 @@ ItemKey = Tuple[str, str]
 
 
 def vu_item_rows(rows: List[dict], *, field: str = "vlr_unitario") -> float:
-    """Valor unitario del ítem (primer V.U. positivo en las filas del grupo)."""
+    """Valor unitario del ítem (V.U. explícito o implícito costo_directo/cantidad)."""
     for r in rows or []:
         v = float(r.get(field) or r.get("vlr_unitario") or 0)
         if v > 0:
             return v
+    for r in rows or []:
+        cq = float(r.get("cant_total") or 0)
+        cd = float(r.get("costo_directo") or 0)
+        if cq > 0 and cd > 0:
+            return cd / cq
     return 0.0
+
+
+def resolve_item_vu(
+    rows: List[dict],
+    *,
+    listado_vu: Optional[float] = None,
+    alt_rows: Optional[List[dict]] = None,
+) -> float:
+    """V.U. del ítem: filas presupuesto → listado_precios → otro tipo (p. ej. Presupuesto de Obra)."""
+    vu = vu_item_rows(rows)
+    if vu > 0:
+        return vu
+    if listado_vu and float(listado_vu) > 0:
+        return float(listado_vu)
+    if alt_rows:
+        vu = vu_item_rows(alt_rows)
+        if vu > 0:
+            return vu
+    return 0.0
+
+
+def ppto_rows_with_resolved_vu(
+    rows: List[dict],
+    *,
+    listado_vu: Optional[float] = None,
+    alt_rows: Optional[List[dict]] = None,
+) -> List[dict]:
+    """Copia filas con vlr_unitario inyectado cuando falta en obra ejecutada."""
+    vu = resolve_item_vu(rows, listado_vu=listado_vu, alt_rows=alt_rows)
+    if vu <= 0 or vu_item_rows(rows) > 0:
+        return rows
+    return [{**r, "vlr_unitario": vu} for r in rows]
 
 
 def costo_agregado_cant_vu(cant: float, vu: float) -> float:
@@ -42,11 +79,16 @@ def ppto_costo_por_estado(rows_it: List[dict], rev_map_fn: Callable[[Any], str])
         "Aprobado": "A",
     }
     vu = vu_item_rows(rows_it)
+    costo_directo_por_est: Dict[str, float] = {k: 0.0 for k in est}
     for x in rows_it or []:
         k = rev_to_key.get(rev_map_fn(x.get("revisado")), "NR")
         est[k]["cant"] += float(x.get("cant_total") or 0)
+        costo_directo_por_est[k] += float(x.get("costo_directo") or 0)
     for k in est:
-        est[k]["costo"] = costo_agregado_cant_vu(est[k]["cant"], vu)
+        if vu > 0:
+            est[k]["costo"] = costo_agregado_cant_vu(est[k]["cant"], vu)
+        else:
+            est[k]["costo"] = float(round(costo_directo_por_est[k], 0))
     return est
 
 

@@ -20,8 +20,10 @@ from dashboard_costo_agregado import (
     ingest_ppto_resumen_row,
     ppto_claracore_cant_costo,
     ppto_costo_por_estado,
+    ppto_rows_with_resolved_vu,
     rollup_ppto_por_capitulo,
     rollup_resumen_item_agg,
+    resolve_item_vu,
     vu_item_rows,
 )
 
@@ -109,9 +111,15 @@ def norm_estado_revisado(v: Any) -> str:
     return s
 
 
-def _ppto_metricas_por_estado(rows_it: List[dict]) -> Tuple[Dict[str, Dict[str, float]], str]:
+def _ppto_metricas_por_estado(
+    rows_it: List[dict],
+    *,
+    listado_vu: Optional[float] = None,
+    alt_rows: Optional[List[dict]] = None,
+) -> Tuple[Dict[str, Dict[str, float]], str]:
     """Cantidad y costo agregado por estado (NR | P | R | A) + unidad."""
-    est = ppto_costo_por_estado(rows_it, norm_estado_revisado)
+    rows = ppto_rows_with_resolved_vu(rows_it, listado_vu=listado_vu, alt_rows=alt_rows)
+    est = ppto_costo_por_estado(rows, norm_estado_revisado)
     und = ""
     for x in rows_it or []:
         u = str(x.get("und") or "").strip()
@@ -844,6 +852,9 @@ def drill_items_capitulo_vista(
     capitulo: str,
     sicoe_by_item: Dict[ItemKey, Dict[str, Any]],
     allowed_sicoe_keys: Optional[Set[ItemKey]],
+    *,
+    listado_idx: Optional[Dict[str, dict]] = None,
+    ppto_obra_by: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
     cap_key = norm_capitulo_key(capitulo)
     ppto_by = scan.get("ppto_by_item") or {}
@@ -865,13 +876,16 @@ def drill_items_capitulo_vista(
     out = []
     for k in sorted(keys, key=lambda x: str(x[1])):
         rows_it = ppto_by.get(k, [])
-        est, unidad = _ppto_metricas_por_estado(rows_it)
-        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
-        vu = vu_item_rows(rows_it)
+        lp_vu = float((listado_idx or {}).get(k[1], {}).get("precio_unitario") or 0) or None
+        alt = (ppto_obra_by or {}).get(k[1])
+        est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu, alt_rows=alt)
+        rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
+        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
+        vu = resolve_item_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
         p_cost = costo_agregado_cant_vu(p_cant, vu)
         pap = est["A"]["costo"]
         pnr = est["NR"]["costo"] + est["P"]["costo"] + est["R"]["costo"]
-        cc_cant, cc_cost = _ppto_claracore_split(rows_it)
+        cc_cant, cc_cost = _ppto_claracore_split(rows_vu)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         sg = sicoe_by_item.get(k, {})
         apc = float(sg.get("ap_c") or 0)

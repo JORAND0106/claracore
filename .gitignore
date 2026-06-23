@@ -32,6 +32,7 @@ frontend/.env.local
 Bubble/*.ndjson
 Bubble/registros_sicoe.ndjson
 Bubble/log-error*.txt
+Bubble/SicoeCAD/
 
 # Credenciales de publicación Azure (nunca subir a Git)
 *.PublishSettings

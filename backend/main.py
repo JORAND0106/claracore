@@ -361,6 +361,13 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
     return _json_for_log({k: row.get(k) for k in keys})
 
 
+def _so_registro_normalizar_graficos_historial(data: dict) -> dict:
+    """so_registros.graficos_historial es NOT NULL; evita 23502 si el cliente envía null."""
+    if data.get("graficos_historial") is None:
+        data["graficos_historial"] = []
+    return data
+
+
 def _so_registro_validacion_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
     """Campos de validación / bloqueo para auditoría (antes-después)."""
     if not row:
@@ -16120,6 +16127,24 @@ def _listado_precios_index_por_item_norm(contrato_id: int, capitulo: str) -> Dic
     return idx
 
 
+def _capitulo_export_vu_context(
+    contrato_id: int,
+    capitulo: str,
+    vista: str,
+    current_user,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[dict]]]:
+    """Listado de precios + presupuesto de Obra (referencia V.U.) para export/drill."""
+    cap_raw = (capitulo or "").strip()
+    listado_idx = _listado_precios_index_por_item_norm(contrato_id, cap_raw)
+    ppto_obra_by: Dict[str, List[dict]] = {}
+    if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
+        for r in _ppto_rows_capitulo_tipo(contrato_id, cap_raw, TIPO_PRESUPUESTO_OBRA, current_user):
+            it = _dash_norm_item_key_py(r.get("item"))
+            if it:
+                ppto_obra_by.setdefault(it, []).append(r)
+    return listado_idx, ppto_obra_by
+
+
 def _presupuesto_listado_fallback_por_item_pk(
     contrato_id: int, capitulo: str
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
@@ -18077,6 +18102,7 @@ def reemplazar_registros_nuevo_reporte(
                 continue
             if rep.get(campo) is not None:
                 data[campo] = rep[campo]
+        _so_registro_normalizar_graficos_historial(data)
         rows_to_insert.append(data)
     _BATCH = 200
     total = 0
@@ -18227,6 +18253,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
                     data[campo] = rep[campo]
     except Exception:
         pass
+    _so_registro_normalizar_graficos_historial(data)
     def _ins():
         return supabase.table("so_registros").insert(data).execute().data
     result = supabase_execute(_ins)
@@ -20856,6 +20883,8 @@ from dashboard_costo_agregado import (
     costo_agregado_cant_vu,
     gerencial_ppto_finalize_item,
     gerencial_ppto_ingest_row,
+    ppto_rows_with_resolved_vu,
+    resolve_item_vu,
     rollup_gerencial_ppto_por_capitulo,
     sicoe_finalize_costs,
     vu_item_rows,
@@ -21645,10 +21674,17 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
     capitulo: str,
     rows: List[dict],
     current_user,
+    *,
+    listado_idx: Optional[Dict[str, dict]] = None,
+    ppto_obra_by: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
     """Obra Ejecutada: inyecta cantidades/costos NR|P|R|A desde presupuesto vivo del capítulo."""
     if not rows:
         return rows
+    if listado_idx is None or ppto_obra_by is None:
+        listado_idx, ppto_obra_by = _capitulo_export_vu_context(
+            contrato_id, capitulo, DASH_VISTA_OBRA_EJECUTADA, current_user
+        )
     ppto_by: Dict[str, List[dict]] = defaultdict(list)
     for r in _ppto_rows_capitulo_tipo(contrato_id, capitulo, TIPO_OBRA_EJECUTADA, current_user):
         it = _dash_norm_item_key_py(r.get("item"))
@@ -21662,9 +21698,12 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
         ik = _dash_norm_item_key_py(r.get("item") or r.get("nombre"))
         rows_it = ppto_by.get(ik) or []
         if rows_it:
-            est, unidad = _ppto_metricas_por_estado(rows_it)
-            p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
-            p_cost = costo_agregado_cant_vu(p_cant, vu_item_rows(rows_it))
+            lp_vu = float((listado_idx or {}).get(ik, {}).get("precio_unitario") or 0) or None
+            alt = (ppto_obra_by or {}).get(ik)
+            est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu, alt_rows=alt)
+            rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
+            p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
+            p_cost = costo_agregado_cant_vu(p_cant, resolve_item_vu(rows_it, listado_vu=lp_vu, alt_rows=alt))
             desc = next((str(x.get("descripcion") or "").strip() for x in rows_it if x.get("descripcion")), "")
             estado = _drill_item_estado_fields(est, unidad, {})
             r.update(estado)
@@ -22475,13 +22514,19 @@ def _ppto_drill_rows_for_vista(
     capitulo: str,
     vista: str,
     current_user,
+    *,
+    listado_idx: Optional[Dict[str, dict]] = None,
+    ppto_obra_by: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
     """Filas presupuesto para merge con RPC (solo columnas de vista / revisado)."""
     cap_raw = (capitulo or "").strip()
-    cap_key = _dash_norm_capitulo_key_py(cap_raw)
+    if listado_idx is None or (parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA and ppto_obra_by is None):
+        listado_idx, ppto_obra_by = _capitulo_export_vu_context(contrato_id, cap_raw, vista, current_user)
     if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
         scan = scan_presupuesto_capitulo_vista(supabase, contrato_id, cap_raw, vista, current_user)
-        return drill_items_capitulo_vista(scan, cap_raw, {}, None)
+        return drill_items_capitulo_vista(
+            scan, cap_raw, {}, None, listado_idx=listado_idx, ppto_obra_by=ppto_obra_by
+        )
 
     ppto_by: Dict[str, List[dict]] = {}
     for r in _ppto_rows_capitulo_tipo(contrato_id, cap_raw, TIPO_PRESUPUESTO_OBRA, current_user):
@@ -22492,17 +22537,19 @@ def _ppto_drill_rows_for_vista(
     rows: List[dict] = []
     for k in sorted(ppto_by.keys(), key=lambda x: str(x)):
         rows_it = ppto_by[k]
-        est, unidad = _ppto_metricas_por_estado(rows_it)
-        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
-        p_cost = costo_agregado_cant_vu(p_cant, vu_item_rows(rows_it))
-        revsplit = _ppto_costo_por_revisado(rows_it)
+        lp_vu = float((listado_idx or {}).get(k, {}).get("precio_unitario") or 0) or None
+        est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu)
+        rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu)
+        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
+        p_cost = costo_agregado_cant_vu(p_cant, resolve_item_vu(rows_it, listado_vu=lp_vu))
+        revsplit = _ppto_costo_por_revisado(rows_vu)
         pap = float(revsplit.get("Aprobado") or 0)
         pnr = (
             float(revsplit.get("No Revisado") or 0)
             + float(revsplit.get("Pendiente") or 0)
             + float(revsplit.get("Rechazado") or 0)
         )
-        cc_cant, cc_cost = _ppto_claracore_split(rows_it)
+        cc_cant, cc_cost = _ppto_claracore_split(rows_vu)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         estado_fields = _drill_item_estado_fields(est, unidad, {})
         rows.append(
@@ -22536,11 +22583,15 @@ def _drill_agg_by_item(
     cap_raw = (capitulo or "").strip()
     if not cap_raw:
         return []
+    listado_idx, ppto_obra_by = _capitulo_export_vu_context(contrato_id, cap_raw, vista, current_user)
     t0 = time.time()
     out: Optional[List[dict]] = None
     try:
         rpc_items = _rpc_drill_items_agg(contrato_id, cap_raw)
-        ppto_items = _ppto_drill_rows_for_vista(contrato_id, cap_raw, vista, current_user)
+        ppto_items = _ppto_drill_rows_for_vista(
+            contrato_id, cap_raw, vista, current_user,
+            listado_idx=listado_idx, ppto_obra_by=ppto_obra_by,
+        )
         out = _merge_drill_rpc_sicoe_vista_ppto(rpc_items, ppto_items)
         print(
             f"dashboard_drill_items RPC ok cap={cap_raw!r} rpc={len(rpc_items)} out={len(out)} "
@@ -22556,14 +22607,20 @@ def _drill_agg_by_item(
         scan = scan_presupuesto_capitulo_vista(supabase, contrato_id, cap_raw, vista, current_user)
         sicoe_by = _dashboard_scan_sicoe_by_item_capitulo(contrato_id, cap_raw)
         allowed = None if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA else scan.get("allowed_sicoe_keys")
-        out = drill_items_capitulo_vista(scan, cap_raw, sicoe_by, allowed)
+        out = drill_items_capitulo_vista(
+            scan, cap_raw, sicoe_by, allowed,
+            listado_idx=listado_idx, ppto_obra_by=ppto_obra_by,
+        )
         print(
             f"dashboard_drill_items fallback cap={cap_raw!r} out={len(out or [])} "
             f"ms={int((time.time() - t0) * 1000)}",
             flush=True,
         )
     if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA and out:
-        out = _hydrate_drill_items_ppto_obra_ejecutada(contrato_id, cap_raw, out, current_user)
+        out = _hydrate_drill_items_ppto_obra_ejecutada(
+            contrato_id, cap_raw, out, current_user,
+            listado_idx=listado_idx, ppto_obra_by=ppto_obra_by,
+        )
     finalized = _finalize_drill_items_vista(out, vista)
     return _filter_drill_item_rows(
         _enrich_drill_items_meta(contrato_id, cap_raw, finalized, current_user),
@@ -23302,7 +23359,7 @@ def _ppto_rows_capitulo_tipo(
             q = (
                 supabase.table("presupuesto")
                 .select(
-                    "id, item, descripcion, capitulo, cant_total, costo_directo, revisado, pk_id, "
+                    "id, item, descripcion, capitulo, cant_total, vlr_unitario, costo_directo, revisado, pk_id, "
                     "tipo_ejecucion, und, id_pol, no_inicio, no_final, tramo, calzada"
                 )
                 .eq("contrato_id", contrato_id)
@@ -24782,16 +24839,26 @@ def _xlsx_cc_sum_formula(r: int, vista: str, qty_cols: Tuple[int, int, int, int]
     return f"=IF({s}=0,{cob}{r},{s})"
 
 
-def _xlsx_cc_cost_sum_formula(r: int, vista: str, cost_cols: Tuple[int, int, int, int], cob_col: int) -> str:
+def _xlsx_cc_cost_sum_formula(
+    r: int,
+    vista: str,
+    qty_cols: Tuple[int, int, int, int],
+    cost_cols: Tuple[int, int, int, int],
+    cob_col: int,
+) -> str:
     from openpyxl.utils import get_column_letter
 
+    nr_q, p_q, rv_q, a_q = (get_column_letter(c) for c in qty_cols)
     nr, p, rv, a = (get_column_letter(c) for c in cost_cols)
     cob = get_column_letter(cob_col)
     if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
-        s = f"{nr}{r}+{p}{r}+{rv}{r}+{a}{r}"
+        s_q = f"{nr_q}{r}+{p_q}{r}+{rv_q}{r}+{a_q}{r}"
+        s_c = f"{nr}{r}+{p}{r}+{rv}{r}+{a}{r}"
     else:
-        s = f"{nr}{r}+{a}{r}"
-    return f"=IF({s}=0,{cob}{r},{s})"
+        s_q = f"{nr_q}{r}+{a_q}{r}"
+        s_c = f"{nr}{r}+{a}{r}"
+    # Cobrado solo si no hay desglose ClaraCore (cant ni costo); evita CC costo=0 con cant>0.
+    return f"=IF({s_c}=0,IF({s_q}=0,{cob}{r},{s_c}),{s_c})"
 
 
 def _xlsx_resumen_items_por_bloque(
@@ -24923,7 +24990,7 @@ def _xlsx_write_resumen_ejecutivo_cuadro(
             ccq = ws.cell(row=ri, column=C_CC_Q, value=_xlsx_cc_sum_formula(ri, vista, qty_cols, C_CO_Q))
             ccq.number_format = _XLSX_FMT_CANT
             ccq.alignment = al_right
-            ccc = ws.cell(row=ri, column=C_CC_C, value=_xlsx_cc_cost_sum_formula(ri, vista, cost_cols, C_CO_C))
+            ccc = ws.cell(row=ri, column=C_CC_C, value=_xlsx_cc_cost_sum_formula(ri, vista, qty_cols, cost_cols, C_CO_C))
             ccc.number_format = _XLSX_FMT_COP
             ccc.alignment = al_right
 

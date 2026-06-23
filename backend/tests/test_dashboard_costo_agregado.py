@@ -3,9 +3,12 @@ from dashboard_costo_agregado import (
     costo_agregado_cant_vu,
     ingest_ppto_resumen_row,
     ppto_costo_por_estado,
+    ppto_rows_with_resolved_vu,
     rollup_ppto_por_capitulo,
     rollup_resumen_item_agg,
+    resolve_item_vu,
     sicoe_finalize_costs,
+    vu_item_rows,
 )
 
 
@@ -24,7 +27,30 @@ def test_costo_agregado_un_solo_redondeo():
     assert agregado != sum_filas or cant_total * vu == sum_filas
 
 
-def test_ppto_por_estado_agrega_cantidades():
+def test_vu_item_rows_fallback_costo_directo():
+    rows = [{"cant_total": 10, "costo_directo": 450000, "vlr_unitario": 0}]
+    assert vu_item_rows(rows) == 45000.0
+
+
+def test_resolve_item_vu_listado_fallback():
+    rows = [{"cant_total": 1239, "costo_directo": 0, "vlr_unitario": 0}]
+    assert resolve_item_vu(rows, listado_vu=87250.0) == 87250.0
+    est = ppto_costo_por_estado(
+        ppto_rows_with_resolved_vu(rows, listado_vu=87250.0),
+        lambda x: x or "No Revisado",
+    )
+    assert est["NR"]["cant"] == 1239
+    assert est["NR"]["costo"] == round(1239 * 87250.0, 0)
+
+
+def test_ppto_costo_por_estado_sin_vu_usa_costo_directo():
+    rows = [
+        {"cant_total": 100, "costo_directo": 500000, "revisado": "No Revisado", "vlr_unitario": 0},
+        {"cant_total": 50, "costo_directo": 250000, "revisado": "No Revisado", "vlr_unitario": 0},
+    ]
+    est = ppto_costo_por_estado(rows, lambda x: x or "No Revisado")
+    assert est["NR"]["cant"] == 150
+    assert est["NR"]["costo"] == 750000
     vu = 35_162.0
     rows = [
         {"cant_total": 0.01, "vlr_unitario": vu, "revisado": "Aprobado"},

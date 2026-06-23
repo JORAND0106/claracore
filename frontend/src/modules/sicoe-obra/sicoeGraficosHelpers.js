@@ -107,7 +107,7 @@ export function graficosPayloadDesdeHistorial(hist) {
       grafico_url: null,
       grafico_numero: null,
       grafico_descripcion: null,
-      graficos_historial: null,
+      graficos_historial: [],
     }
   }
   const ult = lista[lista.length - 1]
