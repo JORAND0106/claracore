@@ -3880,7 +3880,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null, onReporteActualizado = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
@@ -4094,17 +4094,50 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [devEliminando, setDevEliminando]          = useState(false)
   const [recargando, setRecargando]                = useState(false)
   const recargarSeqRef                             = useRef(0)
+  const repoPropIdRef                              = useRef(null)
+  const repoPropCargandoRef                        = useRef(false)
 
-  // Sincronizar cuando el padre reemplaza el resumen de grilla por el detalle completo (apertura optimista)
+  const fusionarRegistrosDesdePadre = (prev, incoming) => {
+    if (!Array.isArray(incoming) || !incoming.length) return prev
+    if (!Array.isArray(prev) || !prev.length) return incoming.map((r) => ({ ...r }))
+    const byId = new Map(incoming.map((r) => [String(r.id), r]))
+    return prev.map((r) => {
+      const patch = byId.get(String(r.id))
+      return patch ? { ...r, ...patch } : r
+    })
+  }
+
+  const propagarReporteGuardado = (patch) => {
+    if (!patch || typeof patch !== 'object') return
+    setReporte((prev) => ({ ...prev, ...patch }))
+    if (typeof onReporteActualizado === 'function') onReporteActualizado(patch)
+  }
+
+  // Hidratar solo al abrir o cuando llega el detalle completo; parches del padre (realtime) no pisan cabecera editada.
   useEffect(() => {
     if (!repoProp?.id) return
-    setReporte((prev) => ({ ...prev, ...repoProp }))
-    if (Array.isArray(repoProp.registros)) {
-      setRegistros(repoProp.registros.map((row) => ({ ...row })))
+    const idChanged = repoPropIdRef.current !== repoProp.id
+    const detalleListo = repoPropCargandoRef.current && !repoProp._cargandoDetalle
+    repoPropIdRef.current = repoProp.id
+    repoPropCargandoRef.current = !!repoProp._cargandoDetalle
+
+    if (idChanged || detalleListo) {
+      setReporte({ ...repoProp })
+      if (Array.isArray(repoProp.registros)) {
+        setRegistros(repoProp.registros.map((row) => ({ ...row })))
+      }
+      if (Array.isArray(repoProp.puntos)) setPuntosEdit(repoProp.puntos.map((p) => ({ ...p })))
+      if (Object.prototype.hasOwnProperty.call(repoProp, 'enlace_soporte')) {
+        setEnlaces(parseEnlacesSoporteReporte(repoProp.enlace_soporte))
+      }
+      setEditDesc(repoProp.descripcion_actividad || '')
+      return
     }
-    if (Array.isArray(repoProp.puntos)) setPuntosEdit(repoProp.puntos.map((p) => ({ ...p })))
-    if (Object.prototype.hasOwnProperty.call(repoProp, 'enlace_soporte')) {
-      setEnlaces(parseEnlacesSoporteReporte(repoProp.enlace_soporte))
+
+    if (repoProp._cargandoDetalle) return
+
+    if (Array.isArray(repoProp.registros) && repoProp.registros.length) {
+      setRegistros((prev) => fusionarRegistrosDesdePadre(prev, repoProp.registros))
     }
   }, [repoProp])
 
@@ -4539,6 +4572,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         ))
         setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...fields } : r)))
       }
+      propagarReporteGuardado({ ...fields })
     } catch (e) {
       console.error('persistirLocalizacionPortadaUnica', e)
     }
@@ -4601,10 +4635,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         }
       }
 
-      setReporte((prev) => ({ ...prev, ...updated, ...payload }))
-      setEditDesc(payload.descripcion_actividad)
+      const merged = { ...reporte, ...updated, ...payload }
+      if (!esLocMultipleReporte && Object.keys(locFields).length) {
+        Object.assign(merged, locFields)
+      }
+
+      setReporte(merged)
+      setEditDesc(merged.descripcion_actividad || '')
       if (!esLocMultipleReporte) setLocPortada(locPortada)
-      await recargar()
+      propagarReporteGuardado(merged)
       setModoEdicion(false)
     } catch (e) {
       alert('No se pudo guardar los cambios: ' + (e?.message || String(e)))
@@ -10073,6 +10112,11 @@ function ModuloSicoeObra({
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
             void ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
+          }}
+          onReporteActualizado={(patch) => {
+            setReporteSeleccionado((prev) =>
+              prev && String(prev.id) === String(patch.id) ? { ...prev, ...patch } : prev,
+            )
           }}
         />
       )}
@@ -18742,6 +18786,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 nivelesContrato={nivelesDashContrato}
                 onClose={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
                 onActualizar={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
+                onReporteActualizado={(patch) => {
+                  setDashCarpetaReporte((prev) =>
+                    prev && String(prev.id) === String(patch.id) ? { ...prev, ...patch } : prev,
+                  )
+                }}
               />
             </OfflineProvider>
           </div>
