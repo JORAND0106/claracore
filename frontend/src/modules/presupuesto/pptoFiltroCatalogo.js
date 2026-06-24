@@ -281,6 +281,92 @@ export function pptoCriterioVistaActivo(f, ctx = {}) {
   return !!te
 }
 
+/** Estado Interventoría de una fila (NULL/vacío = No Revisado), alineado con backend/panel. */
+export function pptoEstadoRevisadoFila(row) {
+  const v = row?.revisado
+  if (v == null || String(v).trim() === '') return 'No Revisado'
+  return String(v).trim()
+}
+
+/** Estado depuración de una fila (NULL/vacío = legado / No Revisado en UI). */
+export function pptoEstadoPreIntervFila(row) {
+  const v = row?.pre_interv_estado
+  if (v == null || String(v).trim() === '') return 'No Revisado'
+  return String(v).trim()
+}
+
+export function pptoFilaCoincideRevisado(row, revisado) {
+  const f = strVal(revisado)
+  if (!f) return true
+  const est = pptoEstadoRevisadoFila(row)
+  const fl = f.toLowerCase()
+  if (fl === 'no revisado' || fl === 'no revisados') return est === 'No Revisado'
+  return est === f
+}
+
+export function pptoFilaCoincidePreInterv(row, preInterv) {
+  const f = strVal(preInterv)
+  if (!f) return true
+  const fl = f.toLowerCase()
+  if (fl === 'no revisado' || fl === '—' || fl === '-') {
+    const v = row?.pre_interv_estado
+    return v == null || String(v).trim() === ''
+  }
+  return pptoEstadoPreIntervFila(row) === f
+}
+
+export function pptoFilaCoincideSellado(row, sellado) {
+  if (sellado === true || sellado === 'true') return row?.sellado === true
+  if (sellado === false || sellado === 'false') return row?.sellado !== true
+  return true
+}
+
+/**
+ * Filtros que no pueden derivarse de un volcado más amplio en caché (validación, PK, rangos, etc.).
+ * Si están activos, la grilla debe ir al servidor o filtrar fila a fila con la misma semántica.
+ */
+export function pptoRequiereConsultaServidor(f, ctx = {}) {
+  const n = pptoFiltroNormalizar(f, ctx)
+  if (strVal(n.revisado) || strVal(n.preInterv)) return true
+  if (n.sellado === true || n.sellado === 'true' || n.sellado === false || n.sellado === 'false') return true
+  if (strVal(n.idPol) || strVal(n.pkCriterio) || strVal(n.texto)) return true
+  if (strVal(n.tramo) || (Array.isArray(n.tramos) && n.tramos.length)) return true
+  if (strVal(n.calzada) || (Array.isArray(n.calzadas) && n.calzadas.length)) return true
+  if (strVal(n.nodoI) || strVal(n.nodoF) || strVal(n.absA) || strVal(n.absB)) return true
+  if (strVal(n.und) || (Array.isArray(n.unds) && n.unds.length)) return true
+  if (n.dadoDeBaja === true || n.dadoDeBaja === 'true' || n.dadoDeBaja === false || n.dadoDeBaja === 'false') return true
+  if (strVal(n.vlrUnitarioMin) || strVal(n.vlrUnitarioMax)) return true
+  if (strVal(n.cantTotalMin) || strVal(n.cantTotalMax)) return true
+  if (strVal(n.costoDirectoMin) || strVal(n.costoDirectoMax)) return true
+  return false
+}
+
+/** ¿La fila cumple cap/ítem/competencia + validación de fObra? (caché derivada y vista grilla). */
+export function pptoFilaCoincideFObra(row, f, drillArr = []) {
+  if (!row) return false
+  const caps = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
+  const items = pptoFiltroValoresLista(pptoFiltroDef('item'), f)
+  const comps = pptoFiltroValoresLista(pptoFiltroDef('competencia'), f)
+  const capDrill = (drillArr || []).find((d) => d.campo === 'capitulo')?.valor
+  const itemDrill = (drillArr || []).find((d) => d.campo === 'item')?.valor
+  const itemsDrill = (drillArr || []).find((d) => d.campo === 'items')?.valor
+  const cap = String(row.capitulo ?? '').trim()
+  const item = String(row.item ?? '').trim()
+  const comp = String(row.competencia ?? '').trim()
+  if (capDrill && cap !== String(capDrill).trim()) return false
+  if (caps.length && !caps.includes(cap)) return false
+  if (itemDrill && item !== String(itemDrill).trim()) return false
+  if (itemsDrill?.length && !itemsDrill.map(String).includes(item)) return false
+  if (items.length && !items.includes(item)) return false
+  if (comps.length && !comps.includes(comp)) return false
+  const te = strVal(f?.tipoEjecucion)
+  if (te && String(row.tipo_ejecucion ?? '').trim() !== te) return false
+  if (!pptoFilaCoincideRevisado(row, f?.revisado)) return false
+  if (!pptoFilaCoincidePreInterv(row, f?.preInterv)) return false
+  if (!pptoFilaCoincideSellado(row, f?.sellado)) return false
+  return true
+}
+
 function appendListaParam(p, keySingular, keyPlural, singleVal, listVal) {
   const vals = (() => {
     if (Array.isArray(listVal) && listVal.length) {

@@ -31,7 +31,7 @@ import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
-import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
 import CcAvisoModal from '../../components/CcAvisoModal'
@@ -986,34 +986,17 @@ useEffect(() => {
 
   function pptoFiltrarFilasCliente(rows, f, drillArr) {
     if (!Array.isArray(rows) || !rows.length) return []
-    const caps = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
-    const items = pptoFiltroValoresLista(pptoFiltroDef('item'), f)
-    const comps = pptoFiltroValoresLista(pptoFiltroDef('competencia'), f)
-    const capDrill = (drillArr || []).find((d) => d.campo === 'capitulo')?.valor
-    const itemDrill = (drillArr || []).find((d) => d.campo === 'item')?.valor
-    const itemsDrill = (drillArr || []).find((d) => d.campo === 'items')?.valor
-
-    return rows.filter((r) => {
-      const cap = String(r.capitulo ?? '').trim()
-      const item = String(r.item ?? '').trim()
-      const comp = String(r.competencia ?? '').trim()
-      if (capDrill && cap !== String(capDrill).trim()) return false
-      if (caps.length && !caps.includes(cap)) return false
-      if (itemDrill && item !== String(itemDrill).trim()) return false
-      if (itemsDrill?.length && !itemsDrill.map(String).includes(item)) return false
-      if (items.length && !items.includes(item)) return false
-      if (comps.length && !comps.includes(comp)) return false
-      return true
-    })
+    return rows.filter((r) => pptoFilaCoincideFObra(r, f, drillArr))
   }
 
   /** Cache exacta o derivada filtrando un volcado completo ya en memoria (p. ej. 43k). */
-  function pptoBuscarCacheGrilla(f, drillArr, leg = {}) {
+  function pptoBuscarCacheGrilla(f, drillArr, leg = {}, { permitirDerivada = true } = {}) {
     const targetKey = pptoGridCacheKey(f, drillArr, leg)
     const exact = pptoLeerCacheGrid(targetKey)
     if (exact) {
       return { data: exact.data, total: exact.total, cacheKey: targetKey, derivado: false }
     }
+    if (!permitirDerivada || pptoRequiereConsultaServidor(f, { drill: drillArr })) return null
     let mejor = null
     for (const entry of Object.values(_pptoCachePorCap.current)) {
       if (!pptoCacheEntryCompleta(entry)) continue
@@ -2117,7 +2100,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return
       }
 
-      const hitGrid = pptoBuscarCacheGrilla(f, d)
+      const hitGrid = opts.skipCacheGrilla ? null : pptoBuscarCacheGrilla(f, d)
       const [_, gridResult] = await Promise.all([
         panelPromise,
         hitGrid
@@ -2362,7 +2345,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setDrill(d)
       if (cap) setCapActivo(cap)
       setVisibleRegistrosCount(80)
-      await aplicarFiltroObraConF(next, { cargarGrilla: true, pushNavegacionAntes: true })
+      await aplicarFiltroObraConF(next, { cargarGrilla: true, pushNavegacionAntes: true, skipCacheGrilla: true })
       window.setTimeout(() => {
         pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }, 200)
@@ -2753,11 +2736,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (!s) return null
       return parseFloat(String(s).replace('+', ''))
     }
+    const revFiltro = fObra.revisado || filtroEstado || ''
+    const preFiltro = fObra.preInterv || ''
     return registros.filter(r => {
       if (!drillMatch(r)) return false
       if (pkidsSeleccionados.length > 0) {
         if (!pkidsSeleccionados.includes(r.pk_id)) return false
       }
+      if (!pptoFilaCoincideRevisado(r, revFiltro)) return false
+      if (!pptoFilaCoincidePreInterv(r, preFiltro)) return false
       if (detalleConItem) return true
       if (busquedaTipo === 'tramo') {
         const v1 = busquedaV1.trim().toLowerCase()
@@ -2786,13 +2773,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         const v1 = busquedaV1.trim().toLowerCase()
         if (v1 && !(r.id_pol || r.pk_id || '').toLowerCase().includes(v1)) return false
       }
-      if (filtroEstado) {
-        const estadoReal = r.revisado || 'No Revisado'
-        if (estadoReal !== filtroEstado) return false
-      }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
 
   const chartData = useMemo(() => {
     if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {
