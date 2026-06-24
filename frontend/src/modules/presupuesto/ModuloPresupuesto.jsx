@@ -487,6 +487,27 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     }
   }, [contratoId])
 
+  const eliminarCadEje = useCallback(async (eje) => {
+    if (!contratoId || !eje?.id) return
+    if (!window.confirm(`¿Eliminar el eje «${eje.nombre}»?\n\nEsta acción no se puede deshacer.`)) return
+    try {
+      const tok = getToken()
+      if (!tok) return
+      const r = await fetch(`${API}/cad/ejes/${contratoId}/${eje.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        alert(d.detail || `Error ${r.status} al eliminar eje`)
+        return
+      }
+      setCadEjes(prev => prev.filter(x => x.id !== eje.id))
+    } catch (err) {
+      alert(err?.message || 'Error de red al eliminar eje')
+    }
+  }, [contratoId])
+
   useEffect(() => {
     if (!contratoId || oculto) return
     void refrescarDwgEnlazado()
@@ -3047,30 +3068,31 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  async function ejecutarBulkTipoEjecucion({ skipConfirm = false } = {}) {
-    if (!bulkTipoEjecucion || seleccionados.size === 0) return
-    const selIds = [...seleccionados]
+  async function ejecutarBulkTipoEjecucion({ skipConfirm = false, tipoOverride, idsOverride } = {}) {
+    const tipoAplicar = tipoOverride ?? bulkTipoEjecucion
+    const selIds = idsOverride ?? [...seleccionados]
+    if (!tipoAplicar || selIds.length === 0) return false
     if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
       alert('Hay registros sellados (aprobados por Interventoría) en la selección; no pueden modificarse.')
       return
     }
     const vistaTipo = fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
-    if (!skipConfirm && !window.confirm(`¿Cambiar tipo de ejecución a «${bulkTipoEjecucion}» en ${selIds.length} registro(s)?`)) return
+    if (!skipConfirm && !window.confirm(`¿Cambiar tipo de ejecución a «${tipoAplicar}» en ${selIds.length} registro(s)?`)) return false
     registrarUndoPresupuesto('Tipo de ejecución (selección)', selIds)
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-tipo-ejecucion`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids: selIds, tipo_ejecucion: bulkTipoEjecucion }),
+      body: JSON.stringify({ ids: selIds, tipo_ejecucion: tipoAplicar }),
     })
     setGuardandoBulk(false)
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       alert(err?.detail || 'No se pudo cambiar el tipo de ejecución.')
-      return
+      return false
     }
     const d = await res.json().catch(() => ({}))
-    const nuevoTipo = d?.tipo_ejecucion || bulkTipoEjecucion
+    const nuevoTipo = d?.tipo_ejecucion || tipoAplicar
     _lastWriteAtRef.current = Date.now()
     setBulkTipoEjecucion('')
     setSeleccionados(new Set())
@@ -3090,6 +3112,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       })
     }
     { const c = drill.find(x => x.campo === 'capitulo')?.valor; if (c) delete _pptoCachePorCap.current[c] }
+    return true
   }
 
   async function ejecutarBulkEstadoDirecto(estado) {
@@ -3121,19 +3144,23 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  async function ejecutarBulkEstado() {
-    if (!bulkEstado || seleccionados.size === 0) return
-    const selIds = [...seleccionados]
+  async function ejecutarBulkEstado(estadoOverride, { idsOverride, skipPedirComentario = false, comentario: comentarioPreset = '' } = {}) {
+    const estadoAplicado = estadoOverride ?? bulkEstado
+    const selIds = idsOverride ?? [...seleccionados]
+    if (!estadoAplicado || selIds.length === 0) return false
     if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
       alert('Hay registros sellados (aprobados por Interventoría) en la selección; no pueden modificarse.')
-      return
+      return false
     }
-    const obligatorio = bulkEstado === 'Pendiente' || bulkEstado === 'Rechazado'
-    const comentarioData = await pedirComentario('validacion', obligatorio)
-    if (comentarioData === null) return
-    const comentario = comentarioData?.mensaje || ''
-    const destinatarioId = comentarioData?.destinatarioId || null
-    const estadoAplicado = bulkEstado
+    const obligatorio = estadoAplicado === 'Pendiente' || estadoAplicado === 'Rechazado'
+    let comentario = comentarioPreset
+    let destinatarioId = null
+    if (!skipPedirComentario) {
+      const comentarioData = await pedirComentario('validacion', obligatorio)
+      if (comentarioData === null) return false
+      comentario = comentarioData?.mensaje || ''
+      destinatarioId = comentarioData?.destinatarioId || null
+    }
     registrarUndoPresupuesto('Validación Interventoría (selección)', selIds)
     // Actualización optimista inmediata
     setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, selIds, estadoAplicado)))
@@ -3148,22 +3175,34 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
       lanzarClaraLinkEstado(selIds, estadoAplicado)
+      return true
     }
+    try {
+      const d = await res.json()
+      alert(d.detail || 'No se pudo aplicar la validación de Interventoría.')
+    } catch {
+      alert('No se pudo aplicar la validación de Interventoría.')
+    }
+    return false
   }
 
-  async function ejecutarBulkPreInterv() {
-    if (!bulkPreInterv || seleccionados.size === 0) return
-    const selIds = [...seleccionados]
+  async function ejecutarBulkPreInterv(estadoOverride, { idsOverride, skipPedirComentario = false, comentario: comentarioPreset = '' } = {}) {
+    const estadoPre = estadoOverride ?? bulkPreInterv
+    const selIds = idsOverride ?? [...seleccionados]
+    if (!estadoPre || selIds.length === 0) return false
     if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
       alert('Hay registros sellados en la selección; no pueden modificarse.')
       return
     }
-    const obligatorio = bulkPreInterv === 'Pendiente' || bulkPreInterv === 'Rechazado'
-    const comentarioData = await pedirComentario('validacion', obligatorio)
-    if (comentarioData === null) return
-    const comentario = comentarioData?.mensaje || ''
-    const destinatarioId = comentarioData?.destinatarioId || null
-    const estadoPre = bulkPreInterv
+    const obligatorio = estadoPre === 'Pendiente' || estadoPre === 'Rechazado'
+    let comentario = comentarioPreset
+    let destinatarioId = null
+    if (!skipPedirComentario) {
+      const comentarioData = await pedirComentario('validacion', obligatorio)
+      if (comentarioData === null) return false
+      comentario = comentarioData?.mensaje || ''
+      destinatarioId = comentarioData?.destinatarioId || null
+    }
     registrarUndoPresupuesto('Depuración (selección)', selIds)
     // Capturar estado original para revertir si falla
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
@@ -3179,19 +3218,20 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
-    } else {
-      // Revertir al estado original
-      setRegistros(prev => prev.map(r => {
-        const orig = snapOriginal.find(x => x.id === r.id)
-        return orig ? orig : r
-      }))
-      try {
-        const d = await res.json()
-        alert(d.detail || 'No se pudo aplicar la depuración previa.')
-      } catch {
-        alert('No se pudo aplicar la depuración previa.')
-      }
+      return true
     }
+    // Revertir al estado original
+    setRegistros(prev => prev.map(r => {
+      const orig = snapOriginal.find(x => x.id === r.id)
+      return orig ? orig : r
+    }))
+    try {
+      const d = await res.json()
+      alert(d.detail || 'No se pudo aplicar la depuración previa.')
+    } catch {
+      alert('No se pudo aplicar la depuración previa.')
+    }
+    return false
   }
 
   function idsSeleccionadosEditables() {
@@ -3379,8 +3419,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return filaResumenMasivo(r, 'Tipo ejecución', ant, tipo_ejecucion + (obs ? ` · Obs: ${obs}` : ''))
     }).filter(Boolean)
 
-    flushSync(() => setBulkTipoEjecucion(tipo_ejecucion))
-    await ejecutarBulkTipoEjecucion({ skipConfirm: true })
+    const ok = await ejecutarBulkTipoEjecucion({ skipConfirm: true, tipoOverride: tipo_ejecucion, idsOverride: ids })
+    if (!ok) throw new Error('No se pudo cambiar el tipo de ejecución.')
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
   }
@@ -3397,8 +3437,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return filaResumenMasivo(r, 'Depuración', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
     }).filter(Boolean)
 
-    flushSync(() => setBulkPreInterv(estado))
-    await ejecutarBulkPreInterv()
+    const ok = await ejecutarBulkPreInterv(estado, { idsOverride: ids, skipPedirComentario: true })
+    if (!ok) throw new Error('No se pudo aplicar la depuración.')
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
   }
@@ -3425,8 +3465,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return filaResumenMasivo(r, 'Interventoría', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
     }).filter(Boolean)
 
-    flushSync(() => setBulkEstado(estado))
-    await ejecutarBulkEstado()
+    const ok = await ejecutarBulkEstado(estado, { idsOverride: ids, skipPedirComentario: true })
+    if (!ok) throw new Error('No se pudo aplicar la validación de Interventoría.')
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
   }
@@ -6009,8 +6049,13 @@ async function restaurar(id) {
           ) : (
             cadEjes.map(e => (
               <span key={e.id} title={e.created_at ? `Creado: ${e.created_at}` : e.nombre}
-                style={{ padding:'2px 8px', borderRadius:'6px', background: t.bg, border:`1px solid ${t.border}`, color: t.text, fontWeight:'600' }}>
+                style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'2px 4px 2px 8px', borderRadius:'6px', background: t.bg, border:`1px solid ${t.border}`, color: t.text, fontWeight:'600' }}>
                 {e.nombre}
+                <button type="button" title="Eliminar eje"
+                  onClick={() => void eliminarCadEje(e)}
+                  style={{ background:'transparent', border:'none', cursor:'pointer', color:'#EF4444', fontSize:'var(--cc-label)', lineHeight:1, padding:'0 4px' }}>
+                  ✕
+                </button>
               </span>
             ))
           )}

@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query, Header, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -4165,6 +4165,37 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def cors_preflight_temprano(request: Request, call_next):
+    """
+    Capa más externa: responde OPTIONS preflight antes del enrutador.
+
+    En Azure (gunicorn + muchas rutas bajo /informes) algunas peticiones OPTIONS devolvían
+    500 sin cabeceras CORS; el navegador lo reporta como «blocked by CORS policy» y el
+    módulo Informes no carga datos. Este atajo evita que el preflight llegue al router.
+    """
+    if request.method != "OPTIONS":
+        return await call_next(request)
+    origin = request.headers.get("origin")
+    if not origin or not request.headers.get("access-control-request-method"):
+        return await call_next(request)
+    if origin not in _cors_origins and not _CORS_ORIGIN_REGEX_HANDLER.match(origin):
+        return await call_next(request)
+    req_hdrs = (request.headers.get("access-control-request-headers") or "").strip()
+    allow_hdrs = req_hdrs if req_hdrs else "*"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+            "Access-Control-Allow-Headers": allow_hdrs,
+            "Access-Control-Max-Age": "600",
+            "Vary": "Origin",
+        },
+    )
+
+
 @app.get("/")
 def root():
     return {"message": "ClaraCore API funcionando"}
@@ -4178,6 +4209,7 @@ def healthz():
         "acta_cierre_v2": True,
         "acta_cierre_defer_mover": True,
         "acta_mover_residuales_lote": True,
+        "cors_asgi_wrap": True,
     }
 
 
@@ -9301,13 +9333,14 @@ def create_cad_eje(contrato_id: int, body: CadEjeCreate, current_user=Depends(ge
                 "nombre": nombre,
                 "axis_context_json": axis_ctx,
             })
+            .select("id, contrato_id, nombre, axis_context_json, created_at")
             .execute()
             .data
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error guardando eje: {e}")
     if not row:
-        return {"ok": True, "contrato_id": contrato_id, "nombre": nombre}
+        raise HTTPException(status_code=500, detail="Insert sin fila devuelta (cad_ejes)")
     return row[0]
 
 @app.delete("/cad/ejes/{contrato_id}/{eje_id}")
@@ -27028,3 +27061,46 @@ def reconciliar_acta_rpo_historico(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── CORS preflight ASGI (capa más externa que uvicorn carga) ─────────────────
+# En Azure, OPTIONS sobre rutas de APIRouter incluido (/informes, /avi, …) devolvía 500
+# sin cabeceras CORS aunque CORSMiddleware estuviera registrado; el navegador lo reporta como
+# «blocked by CORS policy». Este envoltorio responde el preflight antes del stack FastAPI.
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+class _OutermostCorsPreflightASGI:
+    def __init__(self, inner: ASGIApp) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "OPTIONS":
+            await self.inner(scope, receive, send)
+            return
+        raw_headers = scope.get("headers") or []
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in raw_headers}
+        origin = headers.get("origin")
+        if not origin or "access-control-request-method" not in headers:
+            await self.inner(scope, receive, send)
+            return
+        if origin not in _cors_origins and not _CORS_ORIGIN_REGEX_HANDLER.match(origin):
+            await self.inner(scope, receive, send)
+            return
+        req_hdrs = (headers.get("access-control-request-headers") or "").strip()
+        allow_hdrs = req_hdrs if req_hdrs else "*"
+        response = Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+                "Access-Control-Allow-Headers": allow_hdrs,
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
+        )
+        await response(scope, receive, send)
+
+
+app = _OutermostCorsPreflightASGI(app)

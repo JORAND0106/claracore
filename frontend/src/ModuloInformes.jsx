@@ -751,8 +751,12 @@ export default function ModuloInformes({
           return next
         })
       })
-      .catch(() => {
-        setError('Error cargando datos del contrato')
+      .catch((err) => {
+        const msg = String(err?.message || err || '')
+        const corsHint = /failed to fetch|cors|networkerror|network error/i.test(msg)
+          ? ' El navegador no pudo completar la petición al API (bloqueo CORS o servidor no disponible). Si el backend acaba de desplegarse, reinicie el App Service o espere unos minutos.'
+          : ''
+        setError(`Error cargando datos del contrato.${corsHint}`)
         setSubs([])
         setBiblioCcd([])
         setFirmantesCcd([])
