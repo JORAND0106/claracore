@@ -13361,7 +13361,10 @@ function MiniMapaSemaforo({
 }
 
 // ─── BUZÓN DE NOTIFICACIONES ──────────────────────────────────────────────────
-function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
+const BUZON_Z_PANEL = 11000
+const BUZON_Z_MODAL = 11001
+
+function BuzonNotificaciones({ t, usuario, onNavegar }) {
   const API = API_BASE
   const contratoCtx = usuario?.contrato_id
   const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
@@ -13375,6 +13378,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const [hiloActivo,    setHiloActivo]    = useState(null)
   const [hilo,          setHilo]          = useState([])
   const [hiloLoading,   setHiloLoading]   = useState(false)
+  const [hiloError,     setHiloError]     = useState('')
   const [mostrarNuevo,  setMostrarNuevo]  = useState(false)
   const [destinatarios, setDestinatarios] = useState([])
   const [nuevo, setNuevo] = useState({ destinatario_id: '', asunto: '', mensaje: '', tipo: 'MENSAJE_DIRECTO' })
@@ -13383,13 +13387,17 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const [respuesta,    setRespuesta]    = useState('')
 
   const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
-  const h = { Authorization: `Bearer ${token}` }
+  const authHeaders = () => {
+    const tok = getToken()
+    return tok ? { Authorization: `Bearer ${tok}` } : {}
+  }
+  const authHeadersJson = () => ({ ...authHeaders(), 'Content-Type': 'application/json' })
   const excluirSoporte = (lista) =>
     (Array.isArray(lista) ? lista : []).filter((n) => (n.tipo || '').toUpperCase() !== 'SOPORTE')
 
   const cargarCount = async () => {
     if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
-    const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
   }
 
@@ -13400,13 +13408,13 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     if (filtroRecibidos === 'no_leidas') p.set('solo_no_leidas', 'true')
     p.set('limit', '100')
     const q = p.toString()
-    const r = await fetch(`${API}/notificaciones/recibidas${q ? `?${q}` : ''}`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/recibidas${q ? `?${q}` : ''}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) setRecibidos(excluirSoporte(await r.json()))
   }
 
   const cargarEnviados = async () => {
     if (contratoCtx == null || contratoCtx === '') { setEnviados([]); return }
-    const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) setEnviados(excluirSoporte(await r.json()))
   }
 
@@ -13416,7 +13424,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     const qs = p.toString()
     const r = await fetch(
       `${API}/notificaciones/usuarios-destinatarios${qs ? `?${qs}` : ''}`,
-      { headers: h }
+      { headers: authHeaders() }
     ).catch(() => null)
     if (r?.ok) {
       const data = await r.json()
@@ -13475,11 +13483,37 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 
   async function abrirHilo(notif) {
     if ((notif?.tipo || '').toUpperCase() === 'SOPORTE') return
-    setHiloActivo(notif); setHiloLoading(true); setHilo([])
-    const r = await fetch(`${API}/notificaciones/${notif.id}/hilo`, { headers: h }).catch(() => null)
-    if (r?.ok) { const d = await r.json(); setHilo(excluirSoporte(d.hilo || [])) }
+    setHiloActivo(notif)
+    setHiloLoading(true)
+    setHilo([])
+    setHiloError('')
+    try {
+      const r = await fetch(`${API}/notificaciones/${notif.id}/hilo`, { headers: authHeaders() })
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}))
+        const detail = err?.detail
+        const msg =
+          r.status === 401
+            ? 'Tu sesión expiró. Cierra sesión e ingresa de nuevo, o recarga la página.'
+            : typeof detail === 'string'
+              ? detail
+              : `No se pudo abrir el mensaje (error ${r.status}).`
+        setHiloError(msg)
+      } else {
+        const d = await r.json()
+        const lista = excluirSoporte(d.hilo || [])
+        if (!lista.length) {
+          setHiloError('No se encontró el contenido del mensaje.')
+        } else {
+          setHilo(lista)
+        }
+      }
+    } catch {
+      setHiloError('No hubo respuesta del servidor. Verifica tu conexión e intenta de nuevo.')
+    }
     setHiloLoading(false)
-    cargarCount(); cargarRecibidos()
+    cargarCount()
+    cargarRecibidos()
   }
 
   async function enviarNuevo() {
@@ -13490,7 +13524,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
       destinatario_id: nuevo.tipo === 'BROADCAST' ? null : parseInt(nuevo.destinatario_id) || null,
       contrato_id: contratoCtx != null && contratoCtx !== '' ? parseInt(contratoCtx, 10) : null,
     }
-    await fetch(`${API}/notificaciones`, { method:'POST', headers:{...h,'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    await fetch(`${API}/notificaciones`, { method:'POST', headers: authHeadersJson(), body: JSON.stringify(body) })
     setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'MENSAJE_DIRECTO' })
     setMostrarNuevo(false); setEnviando(false)
     cargarEnviados()
@@ -13501,7 +13535,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     setRespondiendo(true)
     const padre = hilo[0]
     await fetch(`${API}/notificaciones`, {
-      method:'POST', headers:{...h,'Content-Type':'application/json'},
+      method:'POST', headers: authHeadersJson(),
       body: JSON.stringify({
         destinatario_id: padre.remitente_id === usuario.id ? padre.destinatario_id : padre.remitente_id,
         asunto: `Re: ${padre.asunto}`,
@@ -13521,8 +13555,24 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }
 
   const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
-  const TIPO_COLOR = { MENSAJE_DIRECTO:'#0077B6', BROADCAST:'#7C3AED', SISTEMA:'#10B981', SOPORTE:'#F59E0B' }
-  const TIPO_LABEL = { MENSAJE_DIRECTO:'Mensaje', BROADCAST:'Broadcast', SISTEMA:'Sistema', SOPORTE:'Soporte' }
+  const TIPO_COLOR = {
+    MENSAJE_DIRECTO: '#0077B6',
+    BROADCAST: '#7C3AED',
+    SISTEMA: '#10B981',
+    SOPORTE: '#F59E0B',
+    validacion: '#9333ea',
+    VALIDACION: '#9333ea',
+  }
+  const TIPO_LABEL = {
+    MENSAJE_DIRECTO: 'Mensaje',
+    BROADCAST: 'Broadcast',
+    SISTEMA: 'Sistema',
+    SOPORTE: 'Soporte',
+    validacion: 'Validación SICOE',
+    VALIDACION: 'Validación SICOE',
+  }
+  const tipoColor = (tipo) => TIPO_COLOR[tipo] || TIPO_COLOR[(tipo || '').toUpperCase()] || t.primary
+  const tipoLabel = (tipo) => TIPO_LABEL[tipo] || TIPO_LABEL[(tipo || '').toUpperCase()] || (tipo || 'Notificación')
 
   const seccionH = (titulo, cant, color) => (
     <div
@@ -13578,8 +13628,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
           <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
             {esRecibido ? `De: ${n.remitente_nombre}` : `Para: ${destinatarios.find(d=>d.id===n.destinatario_id)?.nombre || (n.destinatario_id ? `#${n.destinatario_id}` : 'Todos')}`}
           </span>
-          <span style={{ fontSize:'var(--cc-caption)', background: TIPO_COLOR[n.tipo]+'22', color: TIPO_COLOR[n.tipo], border:`1px solid ${TIPO_COLOR[n.tipo]}44`, borderRadius:'20px', padding:'1px 8px' }}>
-            {TIPO_LABEL[n.tipo]}
+          <span style={{ fontSize:'var(--cc-caption)', background: tipoColor(n.tipo)+'22', color: tipoColor(n.tipo), border:`1px solid ${tipoColor(n.tipo)}44`, borderRadius:'20px', padding:'1px 8px' }}>
+            {tipoLabel(n.tipo)}
           </span>
         </div>
         {n.mensaje && <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.mensaje}</div>}
@@ -13609,7 +13659,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 
       {/* Panel buzón */}
       {abierto && (
-        <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:9998, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
+        <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:BUZON_Z_PANEL, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
           {/* Header del buzón */}
           <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <div>
@@ -13718,20 +13768,24 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 
       {/* Modal hilo */}
       {hiloActivo && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={() => setHiloActivo(null)}>
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:BUZON_Z_MODAL, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => { setHiloActivo(null); setHiloError('') }}>
           <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'540px', maxWidth:'95vw', maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
               <div>
-                <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto}</div>
+                <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto || hiloActivo.asunto}</div>
                 <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'2px' }}>
-                  {hilo.length} mensaje{hilo.length !== 1 ? 's' : ''} en este hilo
+                  {hiloLoading
+                    ? 'Cargando…'
+                    : hiloError
+                      ? 'No se pudo cargar el hilo'
+                      : `${hilo.length} mensaje${hilo.length !== 1 ? 's' : ''} en este hilo`}
                 </div>
               </div>
               <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
-                {hilo[0]?.modulo && (
-                  <button onClick={() => { onNavegar(hilo[0]); setHiloActivo(null); setAbierto(false) }}
+                {(hilo[0]?.modulo || hiloActivo?.modulo) && (
+                  <button onClick={() => { onNavegar(hilo[0] || hiloActivo); setHiloActivo(null); setAbierto(false) }}
                     style={{ background:t.primary+'22', border:`1px solid ${t.primary}44`, borderRadius:'8px', padding:'5px 12px', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
                     🔍 Rastrear registro
                   </button>
@@ -13742,21 +13796,35 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'10px', marginBottom:'14px' }}>
               {hiloLoading ? (
                 <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>⏳ Cargando...</div>
-              ) : hilo.map((m, i) => {
+              ) : hiloError ? (
+                <div style={{ textAlign:'center', padding:'24px 16px', color:'#f87171', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>
+                  {hiloError}
+                  {(hiloActivo.mensaje || hiloActivo.asunto) && (
+                    <div style={{ marginTop:'16px', padding:'12px', borderRadius:'10px', background:t.bg, border:`1px solid ${t.border}`, color:t.text, textAlign:'left' }}>
+                      {hiloActivo.asunto && (
+                        <div style={{ fontWeight:'700', marginBottom:'6px' }}>{hiloActivo.asunto}</div>
+                      )}
+                      {hiloActivo.mensaje && (
+                        <div style={{ fontSize:'var(--cc-sm)', lineHeight:1.6, whiteSpace:'pre-wrap' }}>{hiloActivo.mensaje}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : hilo.map((m) => {
                 const esMio = m.remitente_id === usuario?.id
-                const color = TIPO_COLOR[m.tipo] || t.primary
                 return (
                   <div key={m.id} style={{ background: esMio ? t.primary+'11' : t.bg, border:`1px solid ${esMio ? t.primary+'33' : t.border}`, borderRadius:'10px', padding:'12px' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
                       <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
                       <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{fmtFecha(m.created_at)}</span>
                     </div>
-                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.6 }}>{m.mensaje}</div>
+                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.6, whiteSpace:'pre-wrap' }}>{m.mensaje}</div>
                   </div>
                 )
               })}
             </div>
             {/* Responder */}
+            {!hiloError && hilo.length > 0 && (
             <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px' }}>
               <div style={{ position:'relative' }}>
                 <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
@@ -13773,13 +13841,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Modal nuevo mensaje */}
       {mostrarNuevo && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:BUZON_Z_MODAL, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={() => setMostrarNuevo(false)}>
           <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'480px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
             onClick={e => e.stopPropagation()}>
@@ -15871,7 +15940,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </button>
             <ReporteErroresBtn t={t} usuario={usuario} token={getToken()} />
             <PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} />
-            <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
+            <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
                 ⚙ Admin

@@ -31,7 +31,7 @@ import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
-import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
 import CcAvisoModal from '../../components/CcAvisoModal'
@@ -1204,7 +1204,6 @@ useEffect(() => {
     const p = new URLSearchParams()
     if (ubicacionTramo) p.set('tramo', ubicacionTramo)
     if (ubicacionCalzada) p.set('calzada', ubicacionCalzada)
-    if (filtroEstado) p.set('revisado', filtroEstado)
     if (busquedaTipo === 'nodo' || busquedaTipo === 'tramo') {
       if (busquedaV1.trim()) p.set('nodo_inicio', busquedaV1.trim())
       if (busquedaV2.trim()) p.set('nodo_final', busquedaV2.trim())
@@ -1217,7 +1216,7 @@ useEffect(() => {
       p.set('buscar', busquedaV1.trim())
     }
     return p
-  }, [ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2])
+  }, [ubicacionTramo, ubicacionCalzada, busquedaTipo, busquedaV1, busquedaV2])
 
   /**
    * Misma semántica que `aplicarFiltroObraConF`: cap/ítem + SICOE Obra (pk_criterio, id_pol, tramos, etc.)
@@ -1225,10 +1224,9 @@ useEffect(() => {
    */
   const armarQueryPresupuestoServer = useCallback(() => {
     const ctx = pptoCtxFiltro(drill, capExpandido)
-    const fMerged = { ...(fObraRef.current || fObra) }
+    const fMerged = pptoFObraParaConsulta(fObraRef.current || fObra, { filtroEstado })
     if (ubicacionTramo) { fMerged.tramo = ubicacionTramo; fMerged.tramos = [] }
     if (ubicacionCalzada) { fMerged.calzada = ubicacionCalzada; fMerged.calzadas = [] }
-    if (filtroEstado) { fMerged.revisado = filtroEstado; fMerged.eje = 'interv' }
     const p = pptoBuildPresupuestoSearchParams(fMerged, ctx, { verPapelera })
     const leg = armarFiltrosUbicacionSolo()
     for (const [k, v] of leg.entries()) {
@@ -1240,14 +1238,14 @@ useEffect(() => {
   }, [armarFiltrosUbicacionSolo, drill, fObra, capExpandido, verPapelera, ubicacionTramo, ubicacionCalzada, filtroEstado])
 
   const armarPayloadExportPresupuesto = useCallback(() => {
-    const f = fObraRef.current || fObra
+    const f = pptoFObraParaConsulta(fObraRef.current || fObra, { filtroEstado })
     return pptoFObraToExportBody(f, {
       drill,
       capExpandido,
       tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT,
       verPapelera,
     })
-  }, [drill, fObra, capExpandido, verPapelera])
+  }, [drill, fObra, capExpandido, verPapelera, filtroEstado])
 
   const payloadExportAQuery = useCallback((payload) => pptoExportBodyToSearchParams(payload), [])
 
@@ -1984,7 +1982,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   function syncFObraALegacy(f) {
     setUbicacionTramo(f.tramo || '')
     setUbicacionCalzada(f.calzada || '')
-    setFiltroEstado((f.eje || 'interv') === 'interv' ? (f.revisado || '') : '')
+    setFiltroEstado(f.revisado || '')
     if (f.nodoI || f.nodoF) {
       setBusquedaTipo('nodo')
       setBusquedaV1(f.nodoI || '')
@@ -2000,10 +1998,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  async function cargarPanelValidacionServidor(f, ctx, { nivel = 'capitulo', capituloDrill = '' } = {}) {
+  async function cargarPanelValidacionServidor(f, ctx, { nivel = 'capitulo', capituloDrill = '', cargaId } = {}) {
     const panelKey = pptoPanelCacheKey(f, ctx, nivel, capituloDrill)
     const cachedPanel = _pptoPanelCacheRef.current[panelKey]
     if (cachedPanel && (Date.now() - cachedPanel.ts) < pptoCacheTtlEfectivo()) {
+      if (cargaId != null && cargaId !== cargaPptoIdRef.current) {
+        return { filas: cachedPanel.filas, total_registros: cachedPanel.total, nivel, fuente: 'cache', cancelado: true }
+      }
       setPanelFilasServidor(cachedPanel.filas)
       panelFilasServidorRef.current = cachedPanel.filas
       if (typeof cachedPanel.total === 'number') setConteoFiltro(cachedPanel.total)
@@ -2023,6 +2024,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       capituloDrill,
     })
     const data = await fetchPptoPanelValidacion(API, token, contratoId, pPanel)
+    if (cargaId != null && cargaId !== cargaPptoIdRef.current) {
+      return { ...(data || {}), cancelado: true }
+    }
     const filas = Array.isArray(data?.filas) ? data.filas : []
     setPanelFilasServidor(filas)
     panelFilasServidorRef.current = filas
@@ -2065,6 +2069,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setAvisoSistema({ titulo: 'Filtros', mensaje: 'Seleccione Presupuesto de Obra u Obra Ejecutada, o añada un filtro con + Filtro.', tipo: 'warn' })
       return
     }
+    invalidarCachePanelPresupuesto()
     setFObra(f)
     fObraRef.current = f
     setBuscandoFiltroObra(true)
@@ -2091,6 +2096,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const panelPromise = cargarPanelValidacionServidor(f, ctxBusqueda, {
         nivel: nivelPanel,
         capituloDrill: capDrillPanel,
+        cargaId,
       })
 
       if (!cargarGrilla) {
@@ -2344,6 +2350,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         ...base,
         eje: 'interv',
         revisado: estado || '',
+        preInterv: '',
         cap,
         caps: [],
         item: it,
@@ -5807,6 +5814,7 @@ async function restaurar(id) {
             setFObra((p) => {
               const next = { ...p, ...patch }
               fObraRef.current = next
+              syncFObraALegacy(next)
               return next
             })
           }}

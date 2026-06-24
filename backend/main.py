@@ -26076,6 +26076,16 @@ def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarRever
         supabase_execute(_upd)
         _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                              tipo_override="solicitud_reversion", audit_user=current_user)
+        cd = body.comentario_data or {}
+        _push_notif_validacion_sicoe_destinatarios(
+            current_user,
+            autor_id,
+            contrato_id,
+            registro_id,
+            (cd.get("asunto") or "Solicitud de reversión").strip() or "Solicitud de reversión",
+            cd.get("mensaje") or "",
+            cd,
+        )
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}

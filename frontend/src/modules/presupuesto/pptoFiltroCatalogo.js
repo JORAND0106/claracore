@@ -248,6 +248,20 @@ export function pptoFiltroNormalizar(f, ctx = {}) {
   return base
 }
 
+/**
+ * Unifica fObra con estado legacy (filtroEstado) antes de panel/grilla/export.
+ * Evita que la grilla filtre por revisado oculto mientras el panel muestra totales sin ese criterio.
+ */
+export function pptoFObraParaConsulta(f, legacy = {}) {
+  const base = { ...pptoFObraCamposVacios(), ...(f || {}) }
+  const legRev = strVal(legacy.filtroEstado)
+  if (!strVal(base.revisado) && legRev) {
+    base.revisado = legRev
+    if (!base.eje || base.eje === 'depur') base.eje = 'interv'
+  }
+  return base
+}
+
 /** ¿Hay filtros chip / panel (capítulo, ítem, tramo, etc.) además del toggle? */
 export function pptoTieneFiltrosChip(f, ctx = {}) {
   const n = pptoFiltroNormalizar(f, ctx)
@@ -295,8 +309,8 @@ export function pptoAppendFObraToSearchParams(p, f) {
   if (f.nodoF) p.set('nodo_final', String(f.nodoF).trim())
   if (f.absA) p.set('abs_desde', String(f.absA).replace(',', '.'))
   if (f.absB) p.set('abs_hasta', String(f.absB).replace(',', '.'))
-  if (f.eje === 'interv' && f.revisado) p.set('revisado', f.revisado)
-  if (f.eje === 'depur' && f.preInterv) p.set('pre_interv_estado', f.preInterv)
+  if (strVal(f.revisado)) p.set('revisado', strVal(f.revisado))
+  if (strVal(f.preInterv)) p.set('pre_interv_estado', strVal(f.preInterv))
   if (f.idPol && String(f.idPol).trim()) p.set('id_pol', String(f.idPol).trim())
   if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', String(f.pkCriterio).trim())
   if (f.texto && String(f.texto).trim()) p.set('texto', String(f.texto).trim())
@@ -336,7 +350,7 @@ export function pptoPrimerCapitulo(f, ctx = {}) {
  * @param {object} [opts] capituloOverride, itemOverride, verPapelera, tipoEjecucionDefault
  */
 export function pptoBuildPresupuestoSearchParams(f, ctx = {}, opts = {}) {
-  const n = pptoFiltroNormalizar(f, ctx)
+  const n = pptoFiltroNormalizar(pptoFObraParaConsulta(f, opts.legacy || {}), ctx)
   const fQuery = { ...n }
   const capOv = opts.capituloOverride
   if (capOv != null && String(capOv).trim()) {
@@ -418,8 +432,8 @@ export function pptoFObraToExportBody(f, ctx = {}) {
     nodo_final: String(n.nodoF || '').trim() || null,
     abs_desde: parseNum(n.absA),
     abs_hasta: parseNum(n.absB),
-    revisado: n.eje === 'interv' && n.revisado ? n.revisado : null,
-    pre_interv_estado: n.eje === 'depur' && n.preInterv ? n.preInterv : null,
+    revisado: strVal(n.revisado) || null,
+    pre_interv_estado: strVal(n.preInterv) || null,
     id_pol: String(n.idPol || '').trim() || null,
     pk_criterio: String(n.pkCriterio || '').trim() || null,
     texto: String(n.texto || '').trim() || null,
