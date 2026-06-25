@@ -34,6 +34,7 @@ from presupuesto_helpers import (
     _presupuesto_q_estructura,
     _presupuesto_q_filtros_ubicacion,
     _so_reg_filtro_abs_solape,
+    presupuesto_estados_validacion_opciones,
     presupuesto_oficial_version_id,
 )
 from presupuesto_panel_validacion import (
@@ -6987,10 +6988,8 @@ def _presupuesto_filtros_respuesta_formateada(data: dict) -> dict:
         "calzadas": sorted({str(x).strip() for x in (data.get("calzadas") or []) if str(x).strip()}),
         "competencias": sorted({str(x).strip() for x in (data.get("competencias") or []) if str(x).strip()}),
         "unds": sorted({str(x).strip() for x in (data.get("unds") or []) if str(x).strip()}),
-        "revisados": sorted({str(x).strip() for x in (data.get("revisados") or []) if str(x).strip()}),
-        "pre_interv_estados": sorted(
-            {str(x).strip() for x in (data.get("pre_interv_estados") or []) if str(x).strip()}
-        ),
+        "revisados": presupuesto_estados_validacion_opciones(data.get("revisados")),
+        "pre_interv_estados": presupuesto_estados_validacion_opciones(data.get("pre_interv_estados")),
         "sellados": sorted({bool(x) for x in (data.get("sellados") or [])}),
         "dados_de_baja": sorted({bool(x) for x in (data.get("dados_de_baja") or [])}),
         "tipos_ejecucion": tipos_ejecucion,
@@ -7027,9 +7026,11 @@ def _presupuesto_filtros_opciones_legacy(
     calzadas = sorted(set(r["calzada"] for r in rows if r.get("calzada")))
     competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
     unds = sorted(set(r["und"] for r in rows if r.get("und")))
-    revisados = sorted(set(r["revisado"] for r in rows if r.get("revisado")))
-    pre_interv = sorted(
-        set((r.get("pre_interv_estado") or "No Revisado") for r in rows)
+    revisados = presupuesto_estados_validacion_opciones(
+        r.get("revisado") for r in rows if r.get("revisado")
+    )
+    pre_interv = presupuesto_estados_validacion_opciones(
+        (r.get("pre_interv_estado") or "No Revisado") for r in rows
     )
     sellados = sorted({bool(r.get("sellado")) for r in rows})
     dados_baja = sorted({bool(r.get("dado_de_baja")) for r in rows})

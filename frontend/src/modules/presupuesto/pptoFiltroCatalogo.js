@@ -24,6 +24,9 @@ export const PPTO_FILTRO_CATEGORIAS = [
   { id: 'otros', label: 'Otros' },
 ]
 
+/** Semáforo completo — siempre disponible en filtros (aunque no exista aún en BD). */
+export const PPTO_ESTADOS_VALIDACION = ['No Revisado', 'Aprobado', 'Pendiente', 'Rechazado']
+
 /** @type {FiltroDef[]} */
 export const PPTO_FILTRO_CATALOGO = [
   { key: 'capitulo', label: 'Capítulo', tipo: 'select_multi', categoria: 'item', campoFObra: 'cap', campoFObraLista: 'caps', opcionesKey: 'capitulos' },

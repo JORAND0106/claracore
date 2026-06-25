@@ -72,6 +72,21 @@ def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
     return False
 
 
+PRESUPUESTO_ESTADOS_VALIDACION = ("No Revisado", "Aprobado", "Pendiente", "Rechazado")
+
+
+def presupuesto_estados_validacion_opciones(extra=None) -> List[str]:
+    """Lista fija para filtros UI; incluye los 4 estados aunque no existan aún en BD."""
+    canon = list(PRESUPUESTO_ESTADOS_VALIDACION)
+    seen = set(canon)
+    for x in extra or ():
+        s = str(x).strip()
+        if s and s not in seen:
+            seen.add(s)
+            canon.append(s)
+    return canon
+
+
 def _presupuesto_q_in_str_field(q, col: str, single: Optional[str], multi: Optional[List[str]] = None, *, max_items: int = 200):
     """Un valor (eq) o varios (.in_) para filtros multi-selección."""
     vals = [str(x).strip() for x in (multi or []) if str(x).strip()]

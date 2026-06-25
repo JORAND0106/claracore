@@ -11,6 +11,7 @@ import {
   pptoFiltroChipResumen,
   pptoFiltrosActivosKeys,
   pptoCmpItemNumero,
+  PPTO_ESTADOS_VALIDACION,
 } from './pptoFiltroCatalogo'
 import {
   crearFiltroPlantilla,
@@ -148,14 +149,11 @@ export default function PptoFiltroModal({
       ...opcionesConItems,
       tramos: opcionesConItems.tramos || tramoOptions || [],
       calzadas: opcionesConItems.calzadas || calzadaOptions || [],
-      revisados: opcionesConItems.revisados?.length
-        ? opcionesConItems.revisados
-        : (semaforo || []).map((o) => o.valor),
-      pre_interv_estados: opcionesConItems.pre_interv_estados?.length
-        ? opcionesConItems.pre_interv_estados
-        : (semaforo || []).map((o) => o.valor),
+      /** Catálogo fijo: la API solo devuelve valores distintos en BD (NULL no figura como «No Revisado»). */
+      revisados: [...PPTO_ESTADOS_VALIDACION],
+      pre_interv_estados: [...PPTO_ESTADOS_VALIDACION],
     }),
-    [opcionesConItems, tramoOptions, calzadaOptions, semaforo],
+    [opcionesConItems, tramoOptions, calzadaOptions],
   )
 
   const chipKeys = pptoFiltrosActivosKeys(draftF, [])
