@@ -20,6 +20,36 @@ def test_obra_ejecutada_sicoe_sin_presupuesto_iguala_claracore(monkeypatch):
     assert rows[0]["delta"] == 0
 
 
+def test_obra_ejecutada_netea_cobrado_negativo_sin_presupuesto(monkeypatch):
+    """Reversiones 'No Previsto' (cobrado negativo, sin presupuesto) deben netearse, no descartarse."""
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
+    monkeypatch.setattr(
+        m,
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
+            ("7_cap", "7.01"): {
+                "cap_display": "7. SANITARIO",
+                "ap": 1_000_000.0,
+                "pe": 0.0,
+                "re": 0.0,
+                "nr": 0.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        m,
+        "_dashboard_scan_sicoe_by_item",
+        lambda cid: {
+            ("7_cap", "7.01"): {"ap_c": 1_000_000.0, "cap_display": "7. SANITARIO"},
+            ("7_cap", "NP-166"): {"ap_c": -6_341_448.0, "cap_display": "7. SANITARIO"},
+        },
+    )
+    rows = m._gerencial_capitulos_data_obra_ejecutada(1, None)
+    assert len(rows) == 1
+    assert rows[0]["cobrado"] == 1_000_000 - 6_341_448
+    assert rows[0]["claracore"] == 1_000_000 - 6_341_448
+
+
 def test_obra_ejecutada_presupuesto_suma_todos_estados(monkeypatch):
     monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
     monkeypatch.setattr(

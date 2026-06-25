@@ -10,7 +10,7 @@ import {
   pptoFiltroDef,
   pptoFiltroChipResumen,
   pptoFiltrosActivosKeys,
-  pptoCmpItemNumero,
+  pptoMergeItemsOpciones,
   PPTO_ESTADOS_VALIDACION,
 } from './pptoFiltroCatalogo'
 import {
@@ -82,10 +82,9 @@ export default function PptoFiltroModal({
   useEffect(() => {
     if (!open || !contratoId || !token) return
     let cancelled = false
-    const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || undefined)
+    // No enviar capitulo: la cascada en servidor dejaría un solo capítulo y bloquea multi-selección.
     const timer = setTimeout(() => {
       fetchPresupuestoFiltrosOpciones(contratoId, token, {
-        capitulo: capSingle,
         tramo: draftF.tramo || undefined,
         calzada: draftF.calzada || undefined,
         tipo_ejecucion: tipoEjecucionActivo,
@@ -111,7 +110,7 @@ export default function PptoFiltroModal({
 
     const itemsFromGrilla = () => {
       if (!(registrosGrilla || []).length) return []
-      const seen = new Map()
+      const out = []
       for (const r of registrosGrilla) {
         const cap = String(r.capitulo ?? '').trim()
         const item = String(r.item ?? '').trim()
@@ -119,27 +118,21 @@ export default function PptoFiltroModal({
         if (!item) continue
         if (capsSel.length && !capsSel.includes(cap)) continue
         if (compsSel.length && !compsSel.includes(comp)) continue
-        if (!seen.has(item)) {
-          seen.set(item, String(r.descripcion ?? r.item_descripcion ?? '').trim())
-        }
+        out.push({ item, descripcion: String(r.descripcion ?? r.item_descripcion ?? '').trim() })
       }
-      return [...seen.entries()]
-        .map(([item, descripcion]) => ({ item, descripcion }))
-        .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
+      return out
     }
 
     const fromLp = (listadoPrecios || [])
       .filter((p) => !capsSel.length || capsSel.includes(p.capitulo))
       .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
       .filter((o) => o.item)
-      .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
 
-    const itemsGrilla = itemsFromGrilla()
-    const items_opciones = itemsGrilla.length ? itemsGrilla : fromLp
+    const items_opciones = pptoMergeItemsOpciones(itemsFromGrilla(), fromLp)
 
-    const capitulos = base.capitulos?.length
-      ? base.capitulos
-      : [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
+    const capitulosLp = [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
+      .sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
+    const capitulos = capitulosLp.length ? capitulosLp : (base.capitulos || [])
     return { ...base, capitulos, items_opciones, items: [] }
   }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias])
 

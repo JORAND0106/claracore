@@ -191,7 +191,9 @@ all_keys AS (
   UNION
   SELECT s.cap_k, s.it_k
   FROM sicoe_items s
-  WHERE COALESCE(s.ap_c, 0) > 0
+  -- <> 0 (no solo > 0): los registros de reversión "No Previsto" cobran cantidades
+  -- negativas; deben netearse, no descartarse (igual que el drill/Excel).
+  WHERE COALESCE(s.ap_c, 0) <> 0
 ),
 item_rows AS (
   SELECT
@@ -209,14 +211,14 @@ item_rows AS (
         COALESCE(p.ap, 0) + COALESCE(p.pe, 0) + COALESCE(p.re, 0) + COALESCE(p.nr, 0)
       WHEN p.it_k IS NOT NULL THEN
         COALESCE(p.ap, 0) + COALESCE(p.nr, 0)
-      WHEN COALESCE(s.ap_c, 0) > 0 THEN COALESCE(s.ap_c, 0)
+      WHEN COALESCE(s.ap_c, 0) <> 0 THEN COALESCE(s.ap_c, 0)
       ELSE 0::numeric
     END AS claracore
   FROM all_keys ak
   LEFT JOIN ppto_costs p ON p.cap_k = ak.cap_k AND p.it_k = ak.it_k
   LEFT JOIN sicoe_items s ON s.cap_k = ak.cap_k AND s.it_k = ak.it_k
   LEFT JOIN listado l ON l.cap_k = ak.cap_k AND l.it_k = ak.it_k
-  WHERE p.it_k IS NOT NULL OR COALESCE(s.ap_c, 0) > 0
+  WHERE p.it_k IS NOT NULL OR COALESCE(s.ap_c, 0) <> 0
 ),
 cap_agg AS (
   SELECT

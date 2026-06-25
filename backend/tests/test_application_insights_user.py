@@ -1,4 +1,5 @@
 """Telemetría App Insights: enriquecimiento de usuario autenticado."""
+import os
 from unittest.mock import MagicMock, patch
 
 import application_insights as ai
@@ -20,3 +21,10 @@ def test_enrich_skips_empty():
     with patch("opentelemetry.trace.get_current_span", return_value=span):
         ai.enrich_authenticated_user_telemetry("", "")
     span.set_attribute.assert_not_called()
+
+
+def test_register_telemetry_user_middleware_registers_on_app():
+    app = MagicMock()
+    with patch.dict(os.environ, {"SECRET_KEY": "test-secret", "ALGORITHM": "HS256"}):
+        ai.register_telemetry_user_middleware(app)
+    app.middleware.assert_called_once_with("http")

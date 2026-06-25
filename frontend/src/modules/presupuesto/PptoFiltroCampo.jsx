@@ -94,14 +94,12 @@ function ItemPickerInline({ opts, lista, onChangeLista, t, allowFreeText = false
 
   const filtrados = useMemo(() => {
     const q = busq.trim().toLowerCase()
-    const base = q
-      ? disponibles.filter(
-          (o) =>
-            o.value.toLowerCase().includes(q) ||
-            (o.descripcion || '').toLowerCase().includes(q),
-        )
-      : disponibles
-    return base.slice(0, 60)
+    if (!q) return []
+    return disponibles.filter(
+      (o) =>
+        o.value.toLowerCase().includes(q) ||
+        (o.descripcion || '').toLowerCase().includes(q),
+    )
   }, [disponibles, busq])
 
   const pick = (val) => {
@@ -132,6 +130,11 @@ function ItemPickerInline({ opts, lista, onChangeLista, t, allowFreeText = false
           }
         }}
       />
+      {!busq.trim() && lista.length === 0 && (
+        <div style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+          Escriba el número o descripción del ítem para ver opciones.
+        </div>
+      )}
       {open && filtrados.length > 0 && (
         <div
           style={{
@@ -376,14 +379,14 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
       </div>
 
       {(def.tipo === 'select_multi' || def.key === 'item') && (
-        def.key === 'item' || def.key === 'capitulo' ? (
+        def.key === 'item' ? (
           <ItemPickerInline
             opts={opts}
             lista={lista}
             onChangeLista={patchLista}
             t={t}
-            allowFreeText={def.key === 'item'}
-            placeholder={def.key === 'capitulo' ? 'Buscar capítulo…' : 'Buscar ítem…'}
+            allowFreeText
+            placeholder="Escriba para buscar ítem…"
           />
         ) : (
           <MultiSelectAdd opts={opts} lista={lista} onChangeLista={patchLista} t={t} labelFn={labelItem} />

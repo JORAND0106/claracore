@@ -24285,7 +24285,9 @@ def _gerencial_capitulos_aggregate(
     all_keys: Set[Tuple[str, str]] = set(ppto_items.keys())
     for k, sg in sicoe_by.items():
         ck, ik = k
-        if float(sg.get("ap_c") or 0) > 0 and _en_bloque(ck, ik, sg.get("cap_display")):
+        # <> 0 (no solo > 0): incluir reversiones "No Previsto" con cobrado negativo
+        # para que se neteen igual que en el drill/Excel (evita inflar el cobrado).
+        if float(sg.get("ap_c") or 0) != 0 and _en_bloque(ck, ik, sg.get("cap_display")):
             all_keys.add(k)
 
     cap_agg: Dict[str, Dict[str, Any]] = {}
@@ -24304,7 +24306,7 @@ def _gerencial_capitulos_aggregate(
             nr = float(p.get("nr") or 0)
             cc = (ap + pe + re_ + nr) if obra_ejecutada else (ap + nr)
             cap_disp = p.get("cap_display") or ck
-        elif cob > 0:
+        elif cob != 0:
             ap = pe = re_ = nr = 0.0
             cc = cob
             cap_disp = sg.get("cap_display") or ck

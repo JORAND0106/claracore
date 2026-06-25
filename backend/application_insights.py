@@ -62,20 +62,23 @@ def register_telemetry_user_middleware(app: Any) -> None:
 
     @app.middleware("http")
     async def telemetry_user_enrichment(request: Request, call_next):
+        uid = ""
+        email = None
         if request.method != "OPTIONS":
             auth = request.headers.get("authorization") or ""
             if auth.startswith("Bearer "):
                 try:
                     payload = jwt.decode(auth[7:], secret, algorithms=[algorithm])
-                    uid = payload.get("sub") or payload.get("id")
+                    uid = str(payload.get("sub") or payload.get("id") or "")
                     email = payload.get("email")
-                    if uid or email:
-                        enrich_authenticated_user_telemetry(str(uid or ""), email)
                 except JWTError:
                     pass
                 except Exception:
                     pass
-        return await call_next(request)
+        response = await call_next(request)
+        if uid or email:
+            enrich_authenticated_user_telemetry(uid, email)
+        return response
 
 
 def setup_application_insights(app: Optional[Any] = None) -> bool:
@@ -96,11 +99,10 @@ def setup_application_insights(app: Optional[Any] = None) -> bool:
         from azure.core.settings import settings
         from azure.monitor.opentelemetry import configure_azure_monitor
 
-        # FastAPI se instrumenta manualmente: main.py importa FastAPI antes de load_dotenv.
         configure_azure_monitor(
             connection_string=conn,
             enable_live_metrics=True,
-            instrumentation_options={"fastapi": {"enabled": False}},
+            instrumentation_options={"fastapi": {"enabled": True}},
         )
 
         # Azure Blob Storage y demás SDKs de Azure (dependencias salientes).
@@ -115,7 +117,6 @@ def setup_application_insights(app: Optional[Any] = None) -> bool:
             _log.warning("No se pudo instrumentar httpx: %s", exc)
 
         if app is not None:
-            instrument_fastapi_app(app)
             register_telemetry_user_middleware(app)
 
         _configured = True
@@ -124,16 +125,3 @@ def setup_application_insights(app: Optional[Any] = None) -> bool:
     except Exception as exc:
         _log.warning("Error configurando Application Insights: %s", exc)
         return False
-
-
-def instrument_fastapi_app(app: Any) -> None:
-    """Peticiones entrantes: duración, código de estado y excepciones no manejadas."""
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-        FastAPIInstrumentor.instrument_app(
-            app,
-            excluded_urls="healthz,healthcheck",
-        )
-    except Exception as exc:
-        _log.warning("No se pudo instrumentar FastAPI: %s", exc)
