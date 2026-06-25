@@ -568,6 +568,81 @@ function getToken() {
   return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
 }
 
+/** Misma ventana de inactividad que el cierre de sesión en pestaña abierta (60 min). */
+const SESSION_INACTIVITY_MS = 60 * 60 * 1000
+const SESSION_LAST_ACTIVITY_KEY = 'cc_last_activity'
+const SESSION_EXPIRED_ON_LOAD_KEY = 'cc_session_expired_on_load'
+
+function getAuthStorage() {
+  if (localStorage.getItem('cc_token')) return localStorage
+  if (sessionStorage.getItem('cc_token')) return sessionStorage
+  if (localStorage.getItem('cc_usuario')) return localStorage
+  if (sessionStorage.getItem('cc_usuario')) return sessionStorage
+  return localStorage
+}
+
+function readSessionLastActivityMs() {
+  const raw =
+    localStorage.getItem(SESSION_LAST_ACTIVITY_KEY) ||
+    sessionStorage.getItem(SESSION_LAST_ACTIVITY_KEY)
+  const n = raw != null ? Number(raw) : NaN
+  return Number.isFinite(n) ? n : null
+}
+
+function touchSessionActivity(ts = Date.now()) {
+  if (!getToken()) return
+  getAuthStorage().setItem(SESSION_LAST_ACTIVITY_KEY, String(ts))
+}
+
+function clearSessionCredentials() {
+  localStorage.removeItem('cc_token')
+  localStorage.removeItem('cc_usuario')
+  localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY)
+  sessionStorage.removeItem('cc_token')
+  sessionStorage.removeItem('cc_usuario')
+  sessionStorage.removeItem(SESSION_LAST_ACTIVITY_KEY)
+}
+
+function markSessionExpiredOnLoad() {
+  try {
+    sessionStorage.setItem(SESSION_EXPIRED_ON_LOAD_KEY, '1')
+  } catch { /* ignore */ }
+}
+
+function consumeSessionExpiredOnLoadBanner() {
+  try {
+    const v = sessionStorage.getItem(SESSION_EXPIRED_ON_LOAD_KEY)
+    sessionStorage.removeItem(SESSION_EXPIRED_ON_LOAD_KEY)
+    return v === '1'
+  } catch {
+    return false
+  }
+}
+
+function isStoredSessionInactiveExpired(limitMs = SESSION_INACTIVITY_MS) {
+  const token = getToken()
+  if (!token) return false
+  const last = readSessionLastActivityMs()
+  if (last == null) return false
+  return Date.now() - last >= limitMs
+}
+
+function restoreUsuarioFromStorage() {
+  try {
+    const raw = localStorage.getItem('cc_usuario') || sessionStorage.getItem('cc_usuario')
+    if (!raw) return null
+    if (!getToken()) return null
+    if (isStoredSessionInactiveExpired()) {
+      markSessionExpiredOnLoad()
+      clearSessionCredentials()
+      return null
+    }
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
 function TestModeBadge() {
   if (!TEST_MODE) return null
   return (
@@ -672,6 +747,7 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
       const storage = mantener ? localStorage : sessionStorage
       storage.setItem('cc_token', data.access_token)
       storage.setItem('cc_usuario', JSON.stringify(data.usuario))
+      touchSessionActivity()
       onLoginOk(data.usuario, data.access_token)
     } catch {
       setError('No se pudo conectar con el servidor')
@@ -15692,7 +15768,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
   const tienePermisoInformesCcd = esDeveloper || esAdminCargo
     || (usuario?.permisos || []).some(p =>
-      (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p.ver
+      (p.funcion_nombre || '').toLowerCase() === 'informes ccd' &&
+      (p.ver || p.validar || p.exportar)
     )
   const _permisoInformesCcdFlag = (flag) => {
     if (esDeveloper || esAdminCargo) return true
@@ -18908,7 +18985,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Informes CCD</div>
               <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
-                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Informes CCD» (acción Ver).
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Informes CCD» (acción Ver, Validar o Exportar).
               </div>
             </div>
           )
@@ -19034,9 +19111,7 @@ export default function App() {
   const [fontSize, setFontSize] = useState(() => localStorage.getItem('claracore_font_size') || 'normal')
   const [modal, setModal] = useState(null)
   const [devPanelView, setDevPanelView] = useState(null) // null | 'gate' | 'open'
-  const [usuario, setUsuario] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
-  })
+  const [usuario, setUsuario] = useState(() => restoreUsuarioFromStorage())
 
   // ── Registro del Service Worker (offline app shell) ───────────────────────
   useEffect(() => {
@@ -19093,6 +19168,12 @@ export default function App() {
   const [perfilModalAbierto, setPerfilModalAbierto] = useState(false)
   const [cumpleModalAbierto, setCumpleModalAbierto] = useState(false)
 
+  useEffect(() => {
+    if (consumeSessionExpiredOnLoadBanner()) {
+      setBannerMsg('🔒 Sesión cerrada por inactividad. Inicia sesión nuevamente.')
+    }
+  }, [])
+
   function aplicarPerfilServidor(fresh) {
     setUsuario((prev) => {
       if (!prev) return prev
@@ -19146,7 +19227,14 @@ export default function App() {
           headers: { Authorization: `Bearer ${token}` },
           ...meOpt,
         })
-        if (!res.ok || cancelled) return
+        if (!res.ok || cancelled) {
+          if (!cancelled && res.status === 401) {
+            clearSessionCredentials()
+            setUsuario(null)
+            setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
+          }
+          return
+        }
         const fresh = await res.json()
         setUsuario(prev => {
           if (!prev || cancelled) return prev
@@ -19171,26 +19259,71 @@ export default function App() {
 
   // ── Inactividad y renovación de token ───────────────────────────────────
   const usuarioRef = useRef(usuario)
-  const lastActivityRef = useRef(Date.now())
-  const INACTIVITY_LIMIT = 60 * 60 * 1000      // 60 min → cerrar sesión
+  const lastActivityRef = useRef(readSessionLastActivityMs() ?? Date.now())
+  const INACTIVITY_LIMIT = SESSION_INACTIVITY_MS
   const WARN_BEFORE     = 5  * 60 * 1000        // avisar 5 min antes
   const REFRESH_INTERVAL = 50 * 60 * 1000       // renovar token a los 50 min de actividad
+  const lastActivityPersistRef = useRef(0)
 
   useEffect(() => { usuarioRef.current = usuario }, [usuario])
 
-  // Rastrear actividad del usuario
+  // Sesiones antiguas sin marca de actividad: validar token al reabrir la app
+  useEffect(() => {
+    if (!usuario?.id || readSessionLastActivityMs() != null) return
+    const token = getToken()
+    if (!token) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${API}/usuarios/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (cancelled) return
+        if (!res.ok) {
+          clearSessionCredentials()
+          setUsuario(null)
+          setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
+          return
+        }
+        const now = Date.now()
+        lastActivityRef.current = now
+        touchSessionActivity(now)
+      } catch {
+        if (!cancelled) touchSessionActivity()
+      }
+    })()
+    return () => { cancelled = true }
+  }, [usuario?.id])
+
+  // Rastrear actividad del usuario (memoria + storage para reabrir pestaña)
   useEffect(() => {
     if (!usuario) return
-    const touch = () => { lastActivityRef.current = Date.now() }
+    const touch = () => {
+      const now = Date.now()
+      lastActivityRef.current = now
+      if (now - lastActivityPersistRef.current >= 15000) {
+        lastActivityPersistRef.current = now
+        touchSessionActivity(now)
+      }
+    }
+    touch()
+    const flush = () => touchSessionActivity(lastActivityRef.current)
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
     window.addEventListener('mousemove', touch)
     window.addEventListener('keydown', touch)
     window.addEventListener('click', touch)
     window.addEventListener('scroll', touch)
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       window.removeEventListener('mousemove', touch)
       window.removeEventListener('keydown', touch)
       window.removeEventListener('click', touch)
       window.removeEventListener('scroll', touch)
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [usuario])
 
@@ -19205,9 +19338,7 @@ export default function App() {
       // Cerrar sesión por inactividad
       if (inactivo >= INACTIVITY_LIMIT) {
         clearInterval(id)
-        const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-        storage.removeItem('cc_token')
-        storage.removeItem('cc_usuario')
+        clearSessionCredentials()
         setUsuario(null)
         setBannerMsg('🔒 Sesión cerrada por inactividad. Inicia sesión nuevamente.')
         return
@@ -19231,10 +19362,7 @@ export default function App() {
             const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
             storage.setItem('cc_token', access_token)
           } else if (refreshRes.status === 401) {
-            // Token ya venció en el servidor
-            const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-            storage.removeItem('cc_token')
-            storage.removeItem('cc_usuario')
+            clearSessionCredentials()
             setUsuario(null)
             setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
             return
@@ -19394,6 +19522,7 @@ export default function App() {
   }, [cuentaRegresiva])
 
   async function handleLoginOk(u, token) {
+    touchSessionActivity()
     try {
       const res = await fetch(`${API}/admin/usuario-contratos/${u.id}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -19485,14 +19614,13 @@ if (contratos.length > 1) {
   }
 
   async function handleLogout() {
-    const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+    const token = getToken()
     if (token) {
       try {
         await fetch(`${API}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
       } catch { /* silencioso */ }
     }
-    localStorage.removeItem('cc_token'); localStorage.removeItem('cc_usuario')
-    sessionStorage.removeItem('cc_token'); sessionStorage.removeItem('cc_usuario')
+    clearSessionCredentials()
     limpiarTodasFiltroSesionPresupuesto()
     setUsuario(null)
   }

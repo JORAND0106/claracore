@@ -687,14 +687,20 @@ export default function ModuloInformes({
     Promise.all([
       fetchConFallback(`/informes/${contratoId}/subcontratistas`, {
         headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => r.json()),
+      }).then(async (r) => (r.ok ? r.json() : [])),
       fetchConFallback(`/informes/${contratoId}/ccd/biblioteca`, {
         headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => (r.ok ? r.json() : [])),
+      }).then(async (r) => (r.ok ? r.json() : [])),
       firmantesP,
       fetchConFallback(`/informes/${contratoId}/ccd/actas-rpo`, {
         headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => (r.ok ? r.json() : [])),
+      }).then(async (r) => {
+        if (r.ok) return r.json()
+        if (r.status === 403) {
+          throw new Error('Sin permiso para listar actas RPO (Informes CCD: Ver, Validar o Exportar).')
+        }
+        throw new Error(await leerErrorRespuesta(r))
+      }),
     ])
       .then(([subData, bib, cand, act]) => {
         setSubs(Array.isArray(subData) ? subData : [])
@@ -756,7 +762,7 @@ export default function ModuloInformes({
         const corsHint = /failed to fetch|cors|networkerror|network error/i.test(msg)
           ? ' El navegador no pudo completar la petición al API (bloqueo CORS o servidor no disponible). Si el backend acaba de desplegarse, reinicie el App Service o espere unos minutos.'
           : ''
-        setError(`Error cargando datos del contrato.${corsHint}`)
+        setError(`Error cargando datos del contrato.${msg ? ` ${msg}` : ''}${corsHint}`)
         setSubs([])
         setBiblioCcd([])
         setFirmantesCcd([])

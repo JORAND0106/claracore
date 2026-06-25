@@ -140,17 +140,56 @@ _sb = _create_client(
 router = APIRouter(tags=["informes"])
 
 
-def _cargar_permisos_cargo_por_sub(uid: int) -> List[dict]:
+def _permisos_rows_cargo_contrato(cargo_id: int, contrato_id: Optional[int] = None) -> List[dict]:
+    """Misma regla que main._permisos_rows_para_cargo: filas por contrato si existen."""
+    try:
+        if contrato_id is not None:
+            scoped = (
+                _sb.table("permisos")
+                .select("*")
+                .eq("cargo_id", int(cargo_id))
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            if scoped:
+                return scoped
+        legacy = (
+            _sb.table("permisos")
+            .select("*")
+            .eq("cargo_id", int(cargo_id))
+            .is_("contrato_id", "null")
+            .execute()
+            .data
+            or []
+        )
+        if legacy:
+            return legacy
+        return (
+            _sb.table("permisos")
+            .select("*")
+            .eq("cargo_id", int(cargo_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        _log.debug("informes perms: permisos_rows_cargo_contrato: %s", e)
+        return []
+
+
+def _cargar_permisos_cargo_por_sub(uid: int, contrato_id: Optional[int] = None) -> List[dict]:
     """
     El JWT de get_current_user no incluye la matriz de permisos (solo se envía en el body del login al cliente).
-    Replica la carga de /auth/log-in para decidir acceso a Informes.
+    Replica la carga de /auth/log-in para decidir acceso a Informes (incl. permisos acotados por contrato).
     """
     if not uid:
         return []
     try:
         urows = (
             _sb.table("usuarios")
-            .select("cargo_id, subcontratista_id")
+            .select("cargo_id, subcontratista_id, contrato_id")
             .eq("id", uid)
             .limit(1)
             .execute()
@@ -166,6 +205,12 @@ def _cargar_permisos_cargo_por_sub(uid: int) -> List[dict]:
     cargo_id = urow.get("cargo_id")
     if not cargo_id:
         return []
+    cid = contrato_id
+    if cid is None and urow.get("contrato_id") is not None:
+        try:
+            cid = int(urow["contrato_id"])
+        except (TypeError, ValueError):
+            cid = None
     cargo_nombre = ""
     try:
         c = _sb.table("cargos").select("nombre").eq("id", int(cargo_id)).limit(1).execute().data
@@ -176,7 +221,7 @@ def _cargar_permisos_cargo_por_sub(uid: int) -> List[dict]:
     if cargo_nombre == "subcontratista" and not urow.get("subcontratista_id"):
         return []
     try:
-        permisos_raw = _sb.table("permisos").select("*").eq("cargo_id", cargo_id).execute().data or []
+        permisos_raw = _permisos_rows_cargo_contrato(int(cargo_id), cid)
         funciones_rows = _sb.table("funciones").select("id, nombre").execute().data or []
     except Exception as e1:
         _log.debug("informes perms: matriz: %s", e1)
@@ -188,7 +233,27 @@ def _cargar_permisos_cargo_por_sub(uid: int) -> List[dict]:
     return out or []
 
 
-def _perm_informes_ccd(user: Any, necesita: Literal["ver", "editar", "validar", "exportar"]) -> None:
+def _contrato_id_para_permisos_informes(user: dict, contrato_id: Optional[int] = None) -> Optional[int]:
+    if contrato_id is not None:
+        try:
+            return int(contrato_id)
+        except (TypeError, ValueError):
+            pass
+    raw = user.get("contrato_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _perm_informes_ccd(
+    user: Any,
+    necesita: Literal["ver", "editar", "validar", "exportar"],
+    *,
+    contrato_id: Optional[int] = None,
+) -> None:
     """
     Módulo Informes CCD / funciones: matriz «informes ccd» (ver, editar, validar, exportar).
     Desarrollador y administrador: acceso completo.
@@ -200,14 +265,13 @@ def _perm_informes_ccd(user: Any, necesita: Literal["ver", "editar", "validar", 
     except Exception:
         u = {}
     # Ver nota en _cargar_permisos_cargo_por_sub: el token JWT no trae "permisos".
-    pl = u.get("permisos")
-    if not (isinstance(pl, list) and len(pl) > 0):
-        try:
-            uid = int(str(u.get("sub") or "0").strip() or 0)
-        except (TypeError, ValueError):
-            uid = 0
-        if uid:
-            u = {**u, "permisos": _cargar_permisos_cargo_por_sub(uid)}
+    try:
+        uid = int(str(u.get("sub") or "0").strip() or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid:
+        cid = _contrato_id_para_permisos_informes(u, contrato_id)
+        u = {**u, "permisos": _cargar_permisos_cargo_por_sub(uid, cid)}
     cn = (u.get("cargo_nombre") or "").strip().lower()
     if cn in ("desarrollador", "administrador"):
         return
@@ -228,15 +292,30 @@ def _perm_informes_ccd(user: Any, necesita: Literal["ver", "editar", "validar", 
     )
 
 
-def _perm_informes_ccd_ver_o_validar(user: Any) -> None:
+def _perm_informes_ccd_ver_o_validar(user: Any, *, contrato_id: Optional[int] = None) -> None:
     """Estado de firmas registradas: «ver» o «validar» (quien firma suele tener solo validar en la matriz)."""
     try:
-        _perm_informes_ccd(user, "ver")
+        _perm_informes_ccd(user, "ver", contrato_id=contrato_id)
         return
     except HTTPException as ex:
         if ex.status_code != 403:
             raise
-    _perm_informes_ccd(user, "validar")
+    _perm_informes_ccd(user, "validar", contrato_id=contrato_id)
+
+
+def _perm_informes_ccd_lectura(user: Any, *, contrato_id: Optional[int] = None) -> None:
+    """Listados, biblioteca, actas RPO, ítems de conciliación: basta ver, validar o exportar."""
+    for accion in ("ver", "validar", "exportar"):
+        try:
+            _perm_informes_ccd(user, accion, contrato_id=contrato_id)
+            return
+        except HTTPException as ex:
+            if ex.status_code != 403:
+                raise
+    raise HTTPException(
+        403,
+        "Sin permiso de lectura en Informes (se requiere Ver, Validar o Exportar en Informes CCD).",
+    )
 
 
 # ── Biblioteca CCD (gestión documental): metadatos por código de formato ─────
@@ -1203,7 +1282,7 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
 
 @router.get("/{contrato_id}/subcontratistas")
 def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     rows = (
         _sb.table("subcontratistas")
         .select("id, razon_social, nit, nombre_contacto, telefono")
@@ -1518,7 +1597,7 @@ def listar_formatos_ccd(current_user=Depends(_get_user)):
 @router.get("/{contrato_id}/ccd/biblioteca")
 def ccd_biblioteca_contrato(contrato_id: int, current_user=Depends(_get_user)):
     """Formatos CCD con slots de firma y configuración guardada (Elaboró/Revisó) para este contrato."""
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     out: List[Dict[str, Any]] = []
     for codigo, meta in FORMATOS_CCD.items():
         cfg = _get_ccd_firma_config(contrato_id, codigo)
@@ -2066,7 +2145,7 @@ def _fetch_semanas_rows_por_ids(contrato_id: int, sem_ids: List[int]) -> List[Di
 
 @router.get("/{contrato_id}/ccd/semanas")
 def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     sem_ids = _distinct_semana_ids_nivel_max_aprobado(contrato_id)
     if not sem_ids:
         return []
@@ -2150,7 +2229,7 @@ def ccd_fo_eo_04_fotos_acta(
     current_user=Depends(_get_user),
 ):
     """Fotos/gráficos de ítems sellados por interventoría (mismos que el PDF FO-EO-04)."""
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
     if not acta_norm:
         raise HTTPException(404, "Acta no encontrada en este contrato")
@@ -2164,7 +2243,7 @@ def ccd_fo_eo_04_diagnostico(
     current_user=Depends(_get_user),
 ):
     """Diagnóstico: por qué el FO-EO-04 puede salir sin cantidades (misma regla que panel Actas)."""
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
     if not acta_norm:
         raise HTTPException(404, "Acta no encontrada en este contrato")
@@ -2220,7 +2299,7 @@ def ccd_fo_eo_04_diagnostico(
 @router.get("/{contrato_id}/ccd/actas-rpo")
 def ccd_listar_actas_rpo(contrato_id: int, current_user=Depends(_get_user)):
     """Actas de cobro RPO (excluye administrativas u otros grupos)."""
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     rows = (
         _sb.table("actas")
         .select("id, numero_rpo, consecutivo, fecha_inicio, fecha_fin")
@@ -2252,7 +2331,7 @@ def ccd_items_conciliacion_semana(contrato_id: int, semana_id: int, current_user
 
 @router.get("/{contrato_id}/ccd/conciliacion/acta/{acta_id}/items")
 def ccd_items_conciliacion_acta(contrato_id: int, acta_id: int, current_user=Depends(_get_user)):
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
