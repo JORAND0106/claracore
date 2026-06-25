@@ -83,7 +83,7 @@ function TagsLista({ lista, onRemove, t, labelFn }) {
   )
 }
 
-function ItemPickerInline({ opts, lista, onChangeLista, t }) {
+function ItemPickerInline({ opts, lista, onChangeLista, t, allowFreeText = false, placeholder = 'Buscar ítem…' }) {
   const [busq, setBusq] = useState('')
   const [open, setOpen] = useState(false)
 
@@ -118,10 +118,18 @@ function ItemPickerInline({ opts, lista, onChangeLista, t }) {
         value={busq}
         onChange={(e) => { setBusq(e.target.value); setOpen(true) }}
         onFocus={() => setOpen(true)}
-        placeholder="Buscar ítem…"
+        placeholder={placeholder}
         style={inp(t)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && filtrados[0]) { e.preventDefault(); pick(filtrados[0].value) }
+          if (e.key !== 'Enter') return
+          e.preventDefault()
+          const q = busq.trim()
+          if (filtrados[0]) pick(filtrados[0].value)
+          else if (allowFreeText && q && !lista.some((v) => pptoMatchItemNumero(v, q))) {
+            onChangeLista([...lista, q])
+            setBusq('')
+            setOpen(false)
+          }
         }}
       />
       {open && filtrados.length > 0 && (
@@ -290,11 +298,7 @@ function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
       <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
         <select
           value={pickAdd}
-          onChange={(e) => {
-            const v = e.target.value
-            setPickAdd(v)
-            if (v) agregar(v)
-          }}
+          onChange={(e) => setPickAdd(e.target.value)}
           style={{ ...inp(t), flex: 1, minWidth: 0 }}
         >
           <option value="">— Elegir y agregar —</option>
@@ -372,8 +376,15 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
       </div>
 
       {(def.tipo === 'select_multi' || def.key === 'item') && (
-        def.key === 'item' ? (
-          <ItemPickerInline opts={opts} lista={lista} onChangeLista={patchLista} t={t} />
+        def.key === 'item' || def.key === 'capitulo' ? (
+          <ItemPickerInline
+            opts={opts}
+            lista={lista}
+            onChangeLista={patchLista}
+            t={t}
+            allowFreeText={def.key === 'item'}
+            placeholder={def.key === 'capitulo' ? 'Buscar capítulo…' : 'Buscar ítem…'}
+          />
         ) : (
           <MultiSelectAdd opts={opts} lista={lista} onChangeLista={patchLista} t={t} labelFn={labelItem} />
         )

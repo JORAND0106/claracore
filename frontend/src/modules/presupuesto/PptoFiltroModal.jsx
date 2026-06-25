@@ -110,13 +110,14 @@ export default function PptoFiltroModal({
       : (compSel ? [compSel] : [])
 
     const itemsFromGrilla = () => {
-      if (!capsSel.length || !(registrosGrilla || []).length) return []
+      if (!(registrosGrilla || []).length) return []
       const seen = new Map()
       for (const r of registrosGrilla) {
         const cap = String(r.capitulo ?? '').trim()
         const item = String(r.item ?? '').trim()
         const comp = String(r.competencia ?? '').trim()
-        if (!item || !capsSel.includes(cap)) continue
+        if (!item) continue
+        if (capsSel.length && !capsSel.includes(cap)) continue
         if (compsSel.length && !compsSel.includes(comp)) continue
         if (!seen.has(item)) {
           seen.set(item, String(r.descripcion ?? r.item_descripcion ?? '').trim())
@@ -127,13 +128,11 @@ export default function PptoFiltroModal({
         .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
     }
 
-    const fromLp = capsSel.length
-      ? (listadoPrecios || [])
-        .filter((p) => capsSel.includes(p.capitulo))
-        .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
-        .filter((o) => o.item)
-        .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
-      : []
+    const fromLp = (listadoPrecios || [])
+      .filter((p) => !capsSel.length || capsSel.includes(p.capitulo))
+      .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
+      .filter((o) => o.item)
+      .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
 
     const itemsGrilla = itemsFromGrilla()
     const items_opciones = itemsGrilla.length ? itemsGrilla : fromLp

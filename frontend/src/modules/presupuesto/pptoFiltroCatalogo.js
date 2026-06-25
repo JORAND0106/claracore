@@ -330,6 +330,8 @@ export function pptoFilaCoincideSellado(row, sellado) {
  */
 export function pptoRequiereConsultaServidor(f, ctx = {}) {
   const n = pptoFiltroNormalizar(f, ctx)
+  if (pptoFiltroValoresLista(pptoFiltroDef('item'), n).length) return true
+  if (pptoFiltroValoresLista(pptoFiltroDef('capitulo'), n).length > 1) return true
   if (strVal(n.revisado) || strVal(n.preInterv)) return true
   if (n.sellado === true || n.sellado === 'true' || n.sellado === false || n.sellado === 'false') return true
   if (strVal(n.idPol) || strVal(n.pkCriterio) || strVal(n.texto)) return true
@@ -358,9 +360,9 @@ export function pptoFilaCoincideFObra(row, f, drillArr = []) {
   const comp = String(row.competencia ?? '').trim()
   if (capDrill && cap !== String(capDrill).trim()) return false
   if (caps.length && !caps.includes(cap)) return false
-  if (itemDrill && item !== String(itemDrill).trim()) return false
-  if (itemsDrill?.length && !itemsDrill.map(String).includes(item)) return false
-  if (items.length && !items.includes(item)) return false
+  if (itemDrill && !pptoMatchItemNumero(item, itemDrill)) return false
+  if (itemsDrill?.length && !itemsDrill.some((it) => pptoMatchItemNumero(item, it))) return false
+  if (items.length && !items.some((it) => pptoMatchItemNumero(item, it))) return false
   if (comps.length && !comps.includes(comp)) return false
   const te = strVal(f?.tipoEjecucion)
   if (te && String(row.tipo_ejecucion ?? '').trim() !== te) return false

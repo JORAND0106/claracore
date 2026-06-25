@@ -2842,11 +2842,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   const hayMasRegistrosVista = visibleRegistrosCount < registrosOrdenados.length
 
-  const handleCargarMasRegistrosVista = () => {
+  const handleCargarMasRegistrosVista = (increment) => {
     const el = pptoTablaScrollRef.current
     const prevH = el?.scrollHeight ?? 0
     const prevT = el?.scrollTop ?? 0
-    setVisibleRegistrosCount((c) => Math.min(c + POR_PAGINA, registrosOrdenados.length))
+    const total = registrosOrdenados.length
+    setVisibleRegistrosCount((c) => {
+      if (increment === 'all') return total
+      const add = typeof increment === 'number' && increment > 0 ? increment : POR_PAGINA
+      return Math.min(c + add, total)
+    })
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const wrap = pptoTablaScrollRef.current
@@ -6321,23 +6326,44 @@ async function restaurar(id) {
             </tbody>
           </table>
           {hayMasRegistrosVista && (
-            <div style={{ padding: '12px 16px', textAlign: 'center', borderTop: `1px solid ${t.border}` }}>
-              <button
-                type="button"
-                onClick={handleCargarMasRegistrosVista}
-                style={{
-                  background: 'transparent',
-                  border: `1px solid ${t.border}`,
-                  borderRadius: '8px',
-                  padding: '8px 18px',
-                  fontSize: 'var(--cc-sm)',
-                  fontWeight: 600,
-                  color: t.textMuted,
-                  cursor: 'pointer',
-                }}
-              >
-                Cargar 50 registros más
-              </button>
+            <div
+              style={{
+                padding: '12px 16px',
+                borderTop: `1px solid ${t.border}`,
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: 4 }}>
+                {registrosPagina.length.toLocaleString('es-CO')} / {registrosOrdenados.length.toLocaleString('es-CO')} en pantalla
+              </span>
+              {[
+                { label: 'Cargar 50 registros', inc: 50 },
+                { label: 'Cargar 100 registros', inc: 100 },
+                { label: 'Cargar todo', inc: 'all' },
+              ].map(({ label, inc }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => handleCargarMasRegistrosVista(inc)}
+                  style={{
+                    background: inc === 'all' ? t.primary + '18' : 'transparent',
+                    border: `1px solid ${inc === 'all' ? t.primary + '66' : t.border}`,
+                    borderRadius: 8,
+                    padding: '7px 14px',
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 600,
+                    color: inc === 'all' ? t.primary : t.textMuted,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           )}
         </div>
