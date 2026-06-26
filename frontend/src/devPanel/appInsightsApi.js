@@ -144,14 +144,19 @@ union
    | project ts = timestamp, endpoint = operation_Name, msg = outerMessage, errorKind = "exception"),
   (requests
    | where timestamp > ago(24h) and success == false
-   | project ts = timestamp, endpoint = name, msg = strcat("HTTP ", tostring(resultCode)), errorKind = "request")
+   | project ts = timestamp, endpoint = name, msg = strcat("HTTP ", tostring(resultCode)), errorKind = "request"),
+  (traces
+   | where timestamp > ago(24h) and severityLevel >= 3
+   | project ts = timestamp, endpoint = operation_Name, msg = message, errorKind = "trace")
 | order by ts desc
 | take 20
 `
-  const supabaseHost = (import.meta.env.VITE_SUPABASE_URL || 'supabase.co').replace(/^https?:\/\//, '').split('/')[0]
   const supabaseFilter = `
 | where timestamp > ago(30m)
-| where target has "${supabaseHost}" or name has "${supabaseHost}" or data has "${supabaseHost}"`
+| extend targetLower = tolower(tostring(target))
+| where targetLower contains "supabase"
+   or tolower(tostring(name)) contains "supabase"
+   or tolower(tostring(data)) contains "supabase"`
   const supabaseQ = `
 dependencies
 ${supabaseFilter}
@@ -168,15 +173,23 @@ ${supabaseFilter}
   const activeUsersQ = `
 requests
 | where timestamp > ago(10m)
-| where isnotempty(user_AuthenticatedId)
+| where name != "appinsights-query"
+| extend actor = case(
+    isnotempty(user_Id), tostring(user_Id),
+    isnotempty(client_IP) and client_IP != "0.0.0.0", tostring(client_IP),
+    "")
+| where isnotempty(actor)
 | extend userEmail = tostring(customDimensions.["user.email"])
 | summarize
     requestCount = count(),
     lastEndpoint = arg_max(name, timestamp),
     lastSeen = max(timestamp),
     email = max(userEmail)
-  by user_AuthenticatedId
-| extend displayName = iff(isnotempty(email), email, user_AuthenticatedId)
+  by actor
+| extend displayName = case(
+    isnotempty(email), email,
+    actor contains ".", strcat("IP ", actor),
+    actor)
 | order by requestCount desc
 | take 25
 `
@@ -246,7 +259,7 @@ requests
       failed: supabaseFailed,
       avgMs: Number(supabaseRow.avgMs) || 0,
       ok: supabaseTotal === 0 ? null : supabaseFailed === 0,
-      host: supabaseHost,
+      host: 'supabase',
       failures: rows(firstTable(supabaseFailedRes)).map(r => ({
         name: r.name || '(sin nombre)',
         failures: Number(r.failures) || 0,
@@ -254,8 +267,8 @@ requests
       })),
     },
     activeUsers: rows(firstTable(activeUsersRes)).map(r => ({
-      userId: r.user_AuthenticatedId || '',
-      displayName: r.displayName || r.email || r.user_AuthenticatedId || '—',
+      userId: r.actor || '',
+      displayName: r.displayName || r.email || r.actor || '—',
       requestCount: Number(r.requestCount) || 0,
       lastEndpoint: r.lastEndpoint || '—',
       lastSeen: r.lastSeen,

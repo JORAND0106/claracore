@@ -348,7 +348,7 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
             <span style={{ color: '#6e7681' }}>Cargando…</span>
           ) : !data?.activeUsers?.length ? (
             <span style={{ color: '#6e7681', fontSize: 11 }}>
-              Sin requests autenticadas con user_AuthenticatedId en los últimos 10 min
+              Sin actividad por user_Id o IP en los últimos 10 min
             </span>
           ) : (
             <div style={{ maxHeight: 200, overflow: 'auto' }}>
