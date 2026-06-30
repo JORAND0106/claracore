@@ -1,0 +1,21 @@
+---
+description: Ubicaciones canónicas (fuente de verdad) del plugin SicoeCAD y su Agent
+alwaysApply: true
+---
+
+# SicoeCAD — Fuentes de verdad
+
+Todo el trabajo de SicoeCAD se realiza EXCLUSIVAMENTE en estas dos rutas:
+
+| Componente | Única fuente de verdad |
+|------------|------------------------|
+| **Plugin AutoCAD** | `SicoeCAD/SicoePresupuestoNET8/` |
+| **Agent** | `SicoeCAD/SicoeCAD.Agent/` |
+
+## Reglas
+
+- TODO cambio del plugin de AutoCAD va en `SicoeCAD/SicoePresupuestoNET8/` (incluye `ClaraLink/`, `SicoePresupuestoNET8/`, `SicoePresupuestoNET8.sln`).
+- TODO cambio del Agent va en `SicoeCAD/SicoeCAD.Agent/` (incluye `src/`, `docs/`, `SicoeCAD.sln`).
+- NO modificar ninguna otra carpeta relacionada con SicoeCAD fuera de estas dos rutas. En particular, NO tocar nada bajo `Bubble/` (legacy) ni recrear `Bubble/SicoeCAD/` o `Bubble/Plugin/`.
+- `SicoeCAD/` está ignorado por git (`.gitignore` raíz). No intentar versionar ni hacer `git add` de su contenido.
+- Si una tarea parece requerir editar SicoeCAD fuera de estas rutas, detenerse y confirmarlo con el usuario antes de actuar.

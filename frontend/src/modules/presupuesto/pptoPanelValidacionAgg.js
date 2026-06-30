@@ -14,13 +14,14 @@ export function pptoNormEstadoRevisado(r) {
 }
 
 function emptyCeldas() {
-  return Object.fromEntries(PPTO_PANEL_ESTADOS.map((e) => [e.key, { count: 0, costo: 0 }]))
+  return Object.fromEntries(PPTO_PANEL_ESTADOS.map((e) => [e.key, { count: 0, costo: 0, cant: 0 }]))
 }
 
-function addCelda(celdas, estado, costo) {
-  const slot = celdas[estado] || { count: 0, costo: 0 }
+function addCelda(celdas, estado, costo, cant = 0) {
+  const slot = celdas[estado] || { count: 0, costo: 0, cant: 0 }
   slot.count += 1
   slot.costo += costo
+  slot.cant += cant
   celdas[estado] = slot
 }
 
@@ -61,10 +62,10 @@ export function pptoPanelAgruparValidacion(registros, nivel, capituloFijo = null
     const cd = Number(r.costo_directo) || 0
     const ct = Number(r.cant_total) || 0
     const est = pptoNormEstadoRevisado(r)
-    addCelda(row.celdas, est, cd)
+    addCelda(row.celdas, est, cd, ct)
     row.totalRegs += 1
     row.totalCosto += cd
-    if (nivel === 'item') row.cantTotal += ct
+    row.cantTotal += ct
   }
 
   const ordenSet = new Map((ordenCapitulos || []).map((c, i) => [String(c.capitulo ?? c), i]))
@@ -105,16 +106,48 @@ export function pptoPanelAvanceGlobal(filas) {
 }
 
 export function pptoPanelTotalesFilas(filas) {
-  const tot = { totalRegs: 0, totalCosto: 0, celdas: emptyCeldas() }
+  const tot = { totalRegs: 0, totalCosto: 0, totalCant: 0, celdas: emptyCeldas() }
   for (const g of filas || []) {
     tot.totalRegs += g.totalRegs
     tot.totalCosto += g.totalCosto
+    tot.totalCant += g.cantTotal || 0
     for (const e of PPTO_PANEL_ESTADOS) {
       const c = g.celdas[e.key]
       if (!c) continue
       tot.celdas[e.key].count += c.count
       tot.celdas[e.key].costo += c.costo
+      tot.celdas[e.key].cant += c.cant || 0
     }
   }
   return tot
+}
+
+/** Completa cant por estado desde agregado local (grilla) cuando el servidor no las trae. */
+export function pptoCompletarCantidadesFilasPanel(filasServidor, filasLocales) {
+  if (!Array.isArray(filasServidor) || !filasServidor.length) return filasServidor
+  if (!Array.isArray(filasLocales) || !filasLocales.length) return filasServidor
+  const localByKey = new Map(filasLocales.map((r) => [r.key, r]))
+  return filasServidor.map((f) => {
+    const loc = localByKey.get(f.key)
+    if (!loc) return f
+    const celdas = { ...f.celdas }
+    let patched = false
+    for (const e of PPTO_PANEL_ESTADOS) {
+      const lc = loc.celdas?.[e.key]
+      const cantLocal = Number(lc?.cant)
+      if (!Number.isFinite(cantLocal)) continue
+      const prev = celdas[e.key] || { count: 0, costo: 0, cant: 0 }
+      const cantSrv = Number(prev.cant)
+      if (cantLocal !== 0 || (prev.count > 0 && (!Number.isFinite(cantSrv) || cantSrv === 0))) {
+        celdas[e.key] = { ...prev, cant: cantLocal }
+        patched = true
+      }
+    }
+    if (!patched && !(f.cantTotal > 0) && loc.cantTotal > 0) {
+      return { ...f, celdas, cantTotal: loc.cantTotal }
+    }
+    return patched
+      ? { ...f, celdas, cantTotal: loc.cantTotal ?? f.cantTotal }
+      : f
+  })
 }

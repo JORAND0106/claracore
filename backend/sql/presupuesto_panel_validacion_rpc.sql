@@ -220,7 +220,8 @@ AS $$
         estado_norm,
         jsonb_build_object(
           'registros', registros,
-          'costo_directo', round(costo_directo::numeric, 2)
+          'costo_directo', round(costo_directo::numeric, 2),
+          'cant_total', round(cant_total::numeric, 4)
         )
       ) AS por_estado
     FROM base

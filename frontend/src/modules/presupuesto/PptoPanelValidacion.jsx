@@ -73,13 +73,20 @@ function truncarTexto(s, max = 56) {
   return `${t.slice(0, max - 1)}…`
 }
 
+function fmtCant(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v === 0) return '0'
+  return v.toLocaleString('es-CO', { maximumFractionDigits: 4 })
+}
+
 function CeldaEstado({ celda, verCostos, fmt, color, mutedColor, textColor }) {
   if (!celda || celda.count === 0) {
     return <span style={{ color: mutedColor, fontSize: 'var(--cc-caption)' }}>—</span>
   }
+  const cant = celda.cant ?? 0
   return (
     <span style={{ fontSize: 'var(--cc-caption)', lineHeight: 1.3, whiteSpace: 'nowrap' }}>
-      <span style={{ fontWeight: 700, color: textColor }}>{celda.count.toLocaleString('es-CO')} reg.</span>
+      <span style={{ fontWeight: 700, color: textColor }}>{fmtCant(cant)}</span>
       {verCostos && (
         <>
           <span style={{ color: mutedColor, margin: '0 4px' }}>|</span>
@@ -177,17 +184,25 @@ export default function PptoPanelValidacion({
     return m
   }, [listadoPrecios])
 
+  const filasLocales = useMemo(
+    () =>
+      pptoPanelAgruparValidacion(
+        registrosPanel,
+        nivel,
+        nivel === 'item' ? capSel : null,
+        capitulosResumen,
+      ),
+    [registrosPanel, nivel, capSel, capitulosResumen],
+  )
+
   const filas = useMemo(() => {
-    if (filasServidor != null && Array.isArray(filasServidor)) {
+    // Con grilla cargada, el agregado local incluye cant por estado; el servidor a veces no.
+    if (registrosPanel.length > 0) return filasLocales
+    if (filasServidor != null && Array.isArray(filasServidor) && filasServidor.length > 0) {
       return filasServidor
     }
-    return pptoPanelAgruparValidacion(
-      registrosPanel,
-      nivel,
-      nivel === 'item' ? capSel : null,
-      capitulosResumen,
-    )
-  }, [filasServidor, registrosPanel, nivel, capSel, capitulosResumen])
+    return filasLocales
+  }, [filasServidor, filasLocales, registrosPanel.length])
 
   const totales = useMemo(() => pptoPanelTotalesFilas(filas), [filas])
   const avanceGlobal = useMemo(() => pptoPanelAvanceGlobal(filas), [filas])
@@ -470,7 +485,7 @@ export default function PptoPanelValidacion({
         )}
         {busquedaActiva && (
           <span style={{ fontSize: 'var(--cc-caption)', color: 'var(--ppto-panel-muted)', textAlign: 'right' }}>
-            {totales.totalRegs.toLocaleString('es-CO')} reg.
+            {fmtCant(totales.totalCant)} cant.
             {verValoresEconomicos ? ` · ${fmt(totales.totalCosto)}` : ''}
           </span>
         )}
@@ -546,14 +561,14 @@ export default function PptoPanelValidacion({
                         <div>
                           <span style={{ color: e.color }}>●</span> {e.label}
                         </div>
-                        <div style={{ fontWeight: 500, color: 'var(--ppto-panel-muted)', fontSize: '0.92em' }}>reg. | costo</div>
+                        <div style={{ fontWeight: 500, color: 'var(--ppto-panel-muted)', fontSize: '0.92em' }}>Cant. total | costo directo</div>
                       </div>
                     </th>
                   ))}
                   <th style={{ ...th, textAlign: 'right' }}>
                     <div style={{ lineHeight: 1.25 }}>
                       <div>Total</div>
-                      <div style={{ fontWeight: 500, color: 'var(--ppto-panel-muted)', fontSize: '0.92em' }}>reg. | costo</div>
+                      <div style={{ fontWeight: 500, color: 'var(--ppto-panel-muted)', fontSize: '0.92em' }}>Cant. total | costo directo</div>
                     </div>
                   </th>
                 </tr>
@@ -664,7 +679,7 @@ export default function PptoPanelValidacion({
                           disabled={!g.celdas[e.key]?.count}
                           title={
                             g.celdas[e.key]?.count
-                              ? `Ver ${g.celdas[e.key].count.toLocaleString('es-CO')} registros «${e.label}» en la grilla`
+                              ? `Ver ${g.celdas[e.key].count.toLocaleString('es-CO')} registros «${e.label}» (${fmtCant(g.celdas[e.key].cant ?? 0)} cant.) en la grilla`
                               : undefined
                           }
                           style={{
@@ -695,7 +710,7 @@ export default function PptoPanelValidacion({
                     ))}
                     <td style={{ padding: '4px 8px', textAlign: 'right', verticalAlign: 'middle' }}>
                       <CeldaEstado
-                        celda={{ count: g.totalRegs, costo: g.totalCosto }}
+                        celda={{ count: g.totalRegs, costo: g.totalCosto, cant: g.cantTotal }}
                         verCostos={verValoresEconomicos}
                         fmt={fmt}
                         color="var(--ppto-panel-accent)"
@@ -731,7 +746,7 @@ export default function PptoPanelValidacion({
                   ))}
                   <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                     <CeldaEstado
-                      celda={{ count: totales.totalRegs, costo: totales.totalCosto }}
+                      celda={{ count: totales.totalRegs, costo: totales.totalCosto, cant: totales.totalCant }}
                       verCostos={verValoresEconomicos}
                       fmt={fmt}
                       color="var(--ppto-panel-accent)"

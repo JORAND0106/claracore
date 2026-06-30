@@ -9,6 +9,13 @@ from presupuesto_helpers import _presupuesto_aplica_filtro_interventoria
 _PPTO_PANEL_ESTADOS = ("No Revisado", "Aprobado", "Pendiente", "Rechazado")
 
 
+def _resolve_tipo_ejecucion(tipo_ejecucion: Optional[str]) -> str:
+    t = (tipo_ejecucion or "").strip()
+    if t in ("Presupuesto de Obra", "Obra Ejecutada"):
+        return t
+    return "Presupuesto de Obra"
+
+
 def _orden_capitulo(c: Optional[str]) -> tuple:
     if not c:
         return (2, 0, c or "")
@@ -124,6 +131,132 @@ def _parse_rpc_raw(raw: Any) -> dict:
     return {}
 
 
+def _norm_estado_panel(revisado: Any) -> str:
+    est = str(revisado or "").strip() or "No Revisado"
+    return est if est in _PPTO_PANEL_ESTADOS else "No Revisado"
+
+
+def _por_estado_sin_cantidad(data: dict) -> bool:
+    """True si algún estado tiene registros pero cant_total por estado es 0 o falta."""
+    for g in data.get("grupos") or []:
+        if not isinstance(g, dict):
+            continue
+        pe = g.get("por_estado")
+        if not isinstance(pe, dict):
+            continue
+        for slot in pe.values():
+            if not isinstance(slot, dict):
+                continue
+            if int(slot.get("registros") or 0) > 0 and float(slot.get("cant_total") or 0) == 0:
+                return True
+    return False
+
+
+def _fetch_panel_validacion_rows(
+    supabase,
+    contrato_id: int,
+    current_user: dict,
+    *,
+    nivel: str,
+    capitulo: Optional[str],
+    tipo_ejecucion: Optional[str],
+    filtros: dict,
+) -> List[dict]:
+    """Filas mínimas para agregar cantidades (mismos filtros que el panel)."""
+    from presupuesto_helpers import _presupuesto_q_estructura, _presupuesto_q_filtros_ubicacion
+
+    caps = filtros.get("capitulos") or []
+    items = filtros.get("items") or []
+    offset = 0
+    rows: List[dict] = []
+    while True:
+        q = supabase.table("presupuesto").select(
+            "capitulo, item, cant_total, revisado"
+        ).eq("contrato_id", int(contrato_id)).eq("dado_de_baja", False)
+        q = q.eq("tipo_ejecucion", _resolve_tipo_ejecucion(tipo_ejecucion))
+        if nivel == "item" and capitulo:
+            q = q.eq("capitulo", capitulo)
+        q = _presupuesto_q_estructura(
+            q,
+            capitulo=caps[0] if len(caps) == 1 else None,
+            capitulos=caps if len(caps) > 1 else None,
+            item=items[0] if len(items) == 1 else None,
+            items=items if len(items) > 1 else None,
+            tramo=filtros.get("tramos", [None])[0] if len(filtros.get("tramos") or []) == 1 else None,
+            tramos=filtros.get("tramos") if len(filtros.get("tramos") or []) > 1 else None,
+            calzada=filtros.get("calzadas", [None])[0] if len(filtros.get("calzadas") or []) == 1 else None,
+            calzadas=filtros.get("calzadas") if len(filtros.get("calzadas") or []) > 1 else None,
+            competencia=filtros.get("competencias", [None])[0] if len(filtros.get("competencias") or []) == 1 else None,
+            competencias=filtros.get("competencias") if len(filtros.get("competencias") or []) > 1 else None,
+            und=filtros.get("unds", [None])[0] if len(filtros.get("unds") or []) == 1 else None,
+            unds=filtros.get("unds") if len(filtros.get("unds") or []) > 1 else None,
+        )
+        q = _presupuesto_q_filtros_ubicacion(
+            q,
+            nodo_inicio=filtros.get("nodo_inicio"),
+            nodo_final=filtros.get("nodo_final"),
+            buscar=filtros.get("buscar"),
+            id_pol=filtros.get("id_pol"),
+            pk_criterio=filtros.get("pk_criterio"),
+            texto=filtros.get("texto"),
+            abs_desde=filtros.get("abs_desde"),
+            abs_hasta=filtros.get("abs_hasta"),
+            revisado=filtros.get("revisado"),
+            pre_interv_estado=filtros.get("pre_interv_estado"),
+            sellado=filtros.get("sellado"),
+            vlr_unitario_desde=filtros.get("vlr_unitario_desde"),
+            vlr_unitario_hasta=filtros.get("vlr_unitario_hasta"),
+            cant_total_desde=filtros.get("cant_total_desde"),
+            cant_total_hasta=filtros.get("cant_total_hasta"),
+            costo_directo_desde=filtros.get("costo_directo_desde"),
+            costo_directo_hasta=filtros.get("costo_directo_hasta"),
+        )
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        batch = q.range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return rows
+
+
+def _enrich_rpc_por_estado_cant(data: dict, rows: List[dict], nivel: str) -> dict:
+    """Completa cant_total en por_estado cuando la RPC desplegada es anterior."""
+    from collections import defaultdict
+
+    acc: Dict[tuple, float] = defaultdict(float)
+    nv = (nivel or data.get("nivel") or "capitulo").strip().lower()
+    for r in rows:
+        cap = str(r.get("capitulo") or "").strip() or "(sin capítulo)"
+        it = str(r.get("item") or "").strip() if nv == "item" else None
+        est = _norm_estado_panel(r.get("revisado"))
+        acc[(cap, it, est)] += float(r.get("cant_total") or 0)
+
+    for g in data.get("grupos") or []:
+        if not isinstance(g, dict):
+            continue
+        cap = str(g.get("capitulo") or "").strip() or "(sin capítulo)"
+        it = g.get("item")
+        item_str = str(it).strip() if it is not None and str(it).strip() else None
+        pe = g.get("por_estado")
+        if not isinstance(pe, dict):
+            pe = {}
+            g["por_estado"] = pe
+        for est in _PPTO_PANEL_ESTADOS:
+            cant = acc.get((cap, item_str if nv == "item" else None, est), 0.0)
+            slot = pe.get(est)
+            if isinstance(slot, dict):
+                slot["cant_total"] = round(cant, 4)
+            elif cant > 0:
+                pe[est] = {
+                    "registros": 0,
+                    "costo_directo": 0.0,
+                    "cant_total": round(cant, 4),
+                }
+    return data
+
+
 def panel_validacion_rpc_a_filas(data: dict, nivel: str, orden_capitulos: Optional[List] = None) -> List[dict]:
     """Convierte respuesta RPC al formato de filas del panel (pptoPanelValidacionAgg)."""
     nv = (nivel or data.get("nivel") or "capitulo").strip().lower()
@@ -148,7 +281,7 @@ def panel_validacion_rpc_a_filas(data: dict, nivel: str, orden_capitulos: Option
         key = f"{cap}\x1f{item_str}" if nv == "item" and item_str else cap
 
         por_estado = g.get("por_estado") or {}
-        celdas = {e: {"count": 0, "costo": 0.0} for e in _PPTO_PANEL_ESTADOS}
+        celdas = {e: {"count": 0, "costo": 0.0, "cant": 0.0} for e in _PPTO_PANEL_ESTADOS}
         for est in _PPTO_PANEL_ESTADOS:
             slot = por_estado.get(est) if isinstance(por_estado, dict) else None
             if not slot:
@@ -156,6 +289,7 @@ def panel_validacion_rpc_a_filas(data: dict, nivel: str, orden_capitulos: Option
             celdas[est] = {
                 "count": int(slot.get("registros") or 0),
                 "costo": float(slot.get("costo_directo") or 0),
+                "cant": float(slot.get("cant_total") or 0),
             }
 
         total_regs = int(g.get("total_registros") or 0)
@@ -220,13 +354,26 @@ def fetch_panel_validacion_interv(
         raw = supabase_execute(_rpc, retries=1)
         data = _parse_rpc_raw(raw)
         nv = payload["p_nivel"]
+        fuente = "rpc"
+        if _por_estado_sin_cantidad(data):
+            rows = _fetch_panel_validacion_rows(
+                supabase,
+                contrato_id,
+                current_user,
+                nivel=nv,
+                capitulo=payload["p_capitulo"],
+                tipo_ejecucion=payload["p_tipo_ejecucion"],
+                filtros=filtros or {},
+            )
+            data = _enrich_rpc_por_estado_cant(data, rows, nv)
+            fuente = "rpc+cant"
         filas = panel_validacion_rpc_a_filas(data, nv, orden_capitulos)
         return {
             "nivel": nv,
             "capitulo": data.get("capitulo"),
             "total_registros": int(data.get("total_registros") or 0),
             "filas": filas,
-            "fuente": "rpc",
+            "fuente": fuente,
         }
     except Exception as exc:
         err = str(exc).lower()
@@ -251,13 +398,6 @@ def fetch_panel_validacion_interv(
         )
 
 
-def _resolve_tipo_ejecucion(tipo_ejecucion: Optional[str]) -> str:
-    t = (tipo_ejecucion or "").strip()
-    if t in ("Presupuesto de Obra", "Obra Ejecutada"):
-        return t
-    return "Presupuesto de Obra"
-
-
 def _fetch_panel_validacion_legacy(
     supabase,
     contrato_id: int,
@@ -270,6 +410,7 @@ def _fetch_panel_validacion_legacy(
     orden_capitulos: Optional[List],
 ) -> dict:
     """Fallback paginado (lento) si la RPC no está desplegada."""
+    from collections import defaultdict
     from presupuesto_helpers import _presupuesto_q_estructura, _presupuesto_q_filtros_ubicacion
 
     caps = filtros.get("capitulos") or []
@@ -326,16 +467,13 @@ def _fetch_panel_validacion_legacy(
             break
         offset += 1000
 
-    # Agregar en memoria (misma lógica que el front)
-    from collections import defaultdict
-
     mapa: Dict[str, dict] = defaultdict(lambda: {
         "capitulo": "",
         "item": None,
         "descripcion": "",
         "und": "",
         "cant_total": 0.0,
-        "por_estado": defaultdict(lambda: {"registros": 0, "costo_directo": 0.0}),
+        "por_estado": defaultdict(lambda: {"registros": 0, "costo_directo": 0.0, "cant_total": 0.0}),
     })
     for r in rows:
         cap = str(r.get("capitulo") or "").strip() or "(sin capítulo)"
@@ -357,6 +495,7 @@ def _fetch_panel_validacion_legacy(
         g["cant_total"] += float(r.get("cant_total") or 0)
         g["por_estado"][est]["registros"] += 1
         g["por_estado"][est]["costo_directo"] += cd
+        g["por_estado"][est]["cant_total"] += float(r.get("cant_total") or 0)
 
     grupos = []
     total = 0

@@ -1115,7 +1115,7 @@ useEffect(() => {
       nivel,
       capituloDrill,
     })
-    return `panel|${p.toString()}`
+    return `panel|cantEstadoV2|${p.toString()}`
   }
 
   function pptoPushVistaNavegacion() {
