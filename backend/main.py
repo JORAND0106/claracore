@@ -26,6 +26,8 @@ import re
 import difflib
 import json
 import math
+import secrets
+import string
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
@@ -58,6 +60,8 @@ from azure_blob_storage import (
 # Clave: (contrato_id, usuario_id) → timestamp Unix. Nunca mezclar con otro usuario:
 # el badge «DWG enlazado» en la web debe ser solo para quien corre SicoeCAD con su sesión.
 _dwg_sessions: dict = {}
+# Grupos colaborativos CAD activos por contrato: contrato_id → { usuario_ids, creado_por, updated_at }
+_cad_colab_grupos: dict = {}
 # Auditoría: última carga de cantidades desde SicoeCAD (cliente) → /presupuesto/.../bulk?source=sicoe_cad
 # Notificación consumida vía GET .../sincro-sicoe-cad-auditoria; en un solo proceso de API (no multi-réplica).
 _sicoe_cad_sincro_audit: dict = {}
@@ -1007,6 +1011,18 @@ class CadQueueProcesado(BaseModel):
     rev_block_handle: Optional[str] = None   # solo para insertar_bloque
     presupuesto_id:   Optional[int] = None
 
+class CadSesionColaborativaBody(BaseModel):
+    usuario_ids: list[int] = Field(default_factory=list)
+
+class ClaracadActivacionGenerarBody(BaseModel):
+    correo: str
+
+class ClaracadActivacionValidarBody(BaseModel):
+    correo: str
+    codigo: str
+    ip: Optional[str] = None
+    equipo_info: Optional[str] = None
+
 class CobroRow(BaseModel):
     pk_id: Optional[str] = None
     acta: Optional[int] = None
@@ -1666,6 +1682,144 @@ def _cad_sesion_usuario_activa(contrato_id: int, current_user) -> bool:
     except Exception:
         pass
     return False
+
+
+def _cad_usuario_id_desde_jwt(current_user) -> int:
+    try:
+        return int(current_user.get("sub") or current_user.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _cad_usuarios_conectados_ids(contrato_id: int) -> set:
+    """Usuarios con heartbeat CAD activo (< 30 s) para el contrato."""
+    from datetime import timezone
+
+    activos: set = set()
+    now = time.time()
+    for k, ts in _dwg_sessions.items():
+        if isinstance(k, tuple) and len(k) == 2 and int(k[0]) == int(contrato_id):
+            if (now - float(ts)) < 30:
+                try:
+                    activos.add(int(k[1]))
+                except (TypeError, ValueError):
+                    pass
+    try:
+        rows = (
+            supabase.table("cad_sessions")
+            .select("usuario_id, ultimo_heartbeat")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        ) or []
+        now_utc = datetime.now(timezone.utc)
+        for r in rows:
+            try:
+                uid = int(r.get("usuario_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if uid <= 0:
+                continue
+            tstr = (r.get("ultimo_heartbeat") or "").replace("Z", "+00:00")
+            if not tstr:
+                continue
+            ultimo = datetime.fromisoformat(tstr)
+            if ultimo.tzinfo is None:
+                ultimo = ultimo.replace(tzinfo=timezone.utc)
+            if (now_utc - ultimo).total_seconds() < 30:
+                activos.add(uid)
+    except Exception:
+        pass
+    return activos
+
+
+def _cad_usuarios_conectados_detalle(contrato_id: int) -> list:
+    """Lista usuarios conectados con nombre, apellidos y cargo."""
+    activos = _cad_usuarios_conectados_ids(contrato_id)
+    if not activos:
+        return []
+    resultado = []
+    for uid in sorted(activos):
+        try:
+            urows = (
+                supabase.table("usuarios")
+                .select("id, nombre, apellidos, cargo_id")
+                .eq("id", uid)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if not urows:
+                continue
+            u = urows[0]
+            cargo_nombre = ""
+            cargo_id = u.get("cargo_id")
+            if cargo_id:
+                crows = (
+                    supabase.table("cargos")
+                    .select("nombre")
+                    .eq("id", cargo_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                if crows:
+                    cargo_nombre = (crows[0].get("nombre") or "").strip()
+            resultado.append({
+                "usuario_id": uid,
+                "nombre": (u.get("nombre") or "").strip(),
+                "apellidos": (u.get("apellidos") or "").strip(),
+                "cargo_nombre": cargo_nombre,
+            })
+        except Exception:
+            continue
+    return resultado
+
+
+def _cad_colab_grupo_de_usuario(contrato_id: int, usuario_id: int) -> Optional[list]:
+    """IDs del grupo colaborativo activo si el usuario pertenece; si no, None."""
+    try:
+        uid = int(usuario_id)
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return None
+    g = _cad_colab_grupos.get(cid)
+    if not g:
+        return None
+    miembros = g.get("usuario_ids") or frozenset()
+    if uid not in miembros:
+        return None
+    return sorted(int(x) for x in miembros)
+
+
+def _cad_replicar_op_navegacion_colaborativa(
+    contrato_id: int,
+    tipo: str,
+    payload: dict,
+    usuario_origen: int,
+) -> None:
+    """Replica highlight_registro / zoom_pkid al resto del grupo colaborativo activo."""
+    if tipo not in ("highlight_registro", "zoom_pkid"):
+        return
+    if usuario_origen <= 0:
+        return
+    grupo = _cad_colab_grupo_de_usuario(contrato_id, usuario_origen)
+    if not grupo or len(grupo) < 2:
+        return
+    base = dict(payload or {})
+    for uid in grupo:
+        if int(uid) == int(usuario_origen):
+            continue
+        pl = {**base, "usuario_id": int(uid), "colab_origen": int(usuario_origen)}
+        try:
+            supabase.table("cad_queue").insert({
+                "contrato_id": contrato_id,
+                "tipo": tipo,
+                "estado": "pendiente",
+                "payload": pl,
+            }).execute()
+        except Exception:
+            pass
 
 
 def _ppto_validar_edicion_dimensiones(contrato_id, prev_row: dict, data: dict) -> None:
@@ -9209,6 +9363,70 @@ def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
     except Exception:
         return {"enlazado": False}
 
+@app.get("/cad-queue/{contrato_id}/usuarios-conectados")
+def cad_usuarios_conectados(contrato_id: int, current_user=Depends(get_current_user)):
+    """Usuarios con heartbeat CAD activo en los últimos 30 s (mismo contrato)."""
+    return _cad_usuarios_conectados_detalle(contrato_id)
+
+
+@app.get("/cad-queue/{contrato_id}/sesion-colaborativa")
+def cad_sesion_colaborativa_estado(contrato_id: int, current_user=Depends(get_current_user)):
+    """Estado del grupo colaborativo activo para el usuario autenticado."""
+    my_uid = _cad_usuario_id_desde_jwt(current_user)
+    grupo = _cad_colab_grupo_de_usuario(contrato_id, my_uid)
+    if not grupo:
+        return {"activa": False, "usuario_ids": []}
+    return {"activa": True, "usuario_ids": grupo}
+
+
+@app.post("/cad-queue/{contrato_id}/sesion-colaborativa")
+def cad_sesion_colaborativa_iniciar(
+    contrato_id: int,
+    body: CadSesionColaborativaBody,
+    current_user=Depends(get_current_user),
+):
+    """Crea o actualiza un grupo colaborativo CAD (navegación sincronizada)."""
+    my_uid = _cad_usuario_id_desde_jwt(current_user)
+    if my_uid <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+
+    ids = sorted({int(x) for x in (body.usuario_ids or []) if int(x) > 0})
+    if my_uid not in ids:
+        ids.append(my_uid)
+        ids.sort()
+
+    if len(ids) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Seleccione al menos un compañero conectado además de usted.",
+        )
+
+    conectados = _cad_usuarios_conectados_ids(contrato_id)
+    faltantes = [uid for uid in ids if uid not in conectados]
+    if faltantes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Usuarios no conectados o sin heartbeat reciente: {faltantes}",
+        )
+
+    _cad_colab_grupos[int(contrato_id)] = {
+        "usuario_ids": frozenset(ids),
+        "creado_por": my_uid,
+        "updated_at": time.time(),
+    }
+    return {"ok": True, "activa": True, "usuario_ids": ids}
+
+
+@app.delete("/cad-queue/{contrato_id}/sesion-colaborativa")
+def cad_sesion_colaborativa_terminar(contrato_id: int, current_user=Depends(get_current_user)):
+    """Termina el grupo colaborativo activo del contrato (si el usuario participa)."""
+    my_uid = _cad_usuario_id_desde_jwt(current_user)
+    g = _cad_colab_grupos.get(int(contrato_id))
+    if g and my_uid in (g.get("usuario_ids") or frozenset()):
+        del _cad_colab_grupos[int(contrato_id)]
+    return {"ok": True, "activa": False, "usuario_ids": []}
+
+
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
     """SicoeCAD descarga las operaciones pendientes."""
@@ -9249,6 +9467,8 @@ def highlight_registro(contrato_id: int, body: dict, current_user=Depends(get_cu
         "estado":      "pendiente",
         "payload":     {**payload, "usuario_id": usuario_id},
     }).execute()
+    _cad_replicar_op_navegacion_colaborativa(
+        contrato_id, "highlight_registro", payload, usuario_id)
     return {"ok": True}
 
 @app.post("/cad-queue/{contrato_id}/zoom-pkid")
@@ -9265,18 +9485,25 @@ def zoom_pkid(contrato_id: int, pk_id: str, current_user=Depends(get_current_use
     y = r.get("y_label") or 0
     if not ent_handle and (x == 0 and y == 0):
         raise HTTPException(status_code=404, detail="Sin coordenadas para este PK_ID")
+    usuario_id = _cad_usuario_id_desde_jwt(current_user)
+    if usuario_id <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+    payload = {
+        "pk_id":      pk_id,
+        "ent_handle": ent_handle,
+        "x":          x,
+        "y":          y,
+        "radio":      30,
+        "usuario_id": usuario_id,
+    }
     supabase.table("cad_queue").insert({
         "contrato_id": contrato_id,
         "tipo": "zoom_pkid",
         "estado": "pendiente",
-        "payload": {
-            "pk_id":      pk_id,
-            "ent_handle": ent_handle,
-            "x":          x,
-            "y":          y,
-            "radio":      30
-        }
+        "payload": payload,
     }).execute()
+    _cad_replicar_op_navegacion_colaborativa(
+        contrato_id, "zoom_pkid", payload, usuario_id)
     return {"ok": True, "pk_id": pk_id}
 
 @app.put("/cad-queue/{op_id}/procesado")
@@ -9352,6 +9579,189 @@ def delete_cad_eje(contrato_id: int, eje_id: int, current_user=Depends(get_curre
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error eliminando eje: {e}")
     return {"ok": True}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLARACAD — Activaciones (instalador)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CLARACAD_CODIGO_ALFABETO = string.ascii_uppercase + string.digits
+
+
+def _claracad_normalizar_codigo(codigo: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", (codigo or "")).upper()
+
+
+def _claracad_formatear_codigo(codigo: str) -> str:
+    c = _claracad_normalizar_codigo(codigo)
+    if len(c) != 16:
+        return c
+    return f"{c[0:4]}-{c[4:8]}-{c[8:12]}-{c[12:16]}"
+
+
+def _claracad_generar_codigo_unico() -> str:
+    for _ in range(32):
+        codigo = "".join(secrets.choice(_CLARACAD_CODIGO_ALFABETO) for _ in range(16))
+        try:
+            existente = (
+                supabase.table("claracad_activaciones")
+                .select("id")
+                .eq("codigo", codigo)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if not existente:
+                return codigo
+        except Exception:
+            return codigo
+    raise HTTPException(status_code=500, detail="No se pudo generar un código único.")
+
+
+def _claracad_serializar_activacion(row: dict) -> dict:
+    codigo = row.get("codigo") or ""
+    return {
+        "id": row.get("id"),
+        "codigo": codigo,
+        "codigo_formateado": _claracad_formatear_codigo(codigo),
+        "correo_destinatario": row.get("correo_destinatario") or "",
+        "generado_por_usuario_id": row.get("generado_por_usuario_id"),
+        "generado_at": row.get("generado_at"),
+        "estado": row.get("estado") or "pendiente",
+        "activado_at": row.get("activado_at"),
+        "ip_activacion": row.get("ip_activacion"),
+        "equipo_info": row.get("equipo_info"),
+    }
+
+
+@app.post("/claracad/activaciones/generar")
+def claracad_activaciones_generar(
+    body: ClaracadActivacionGenerarBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Genera un código de activación ClaraCAD para un correo (solo Desarrollador)."""
+    correo = (body.correo or "").strip().lower()
+    if not correo or "@" not in correo:
+        raise HTTPException(status_code=400, detail="Correo destinatario inválido.")
+
+    try:
+        generador_id = int(current_user.get("sub") or 0)
+    except (TypeError, ValueError):
+        generador_id = 0
+
+    codigo = _claracad_generar_codigo_unico()
+    try:
+        row = (
+            supabase.table("claracad_activaciones")
+            .insert({
+                "codigo": codigo,
+                "correo_destinatario": correo,
+                "generado_por_usuario_id": generador_id or None,
+                "estado": "pendiente",
+            })
+            .select("*")
+            .execute()
+            .data
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error guardando activación: {e}")
+
+    if not row:
+        raise HTTPException(status_code=500, detail="Insert sin fila devuelta (claracad_activaciones).")
+
+    item = _claracad_serializar_activacion(row[0])
+    return {
+        "ok": True,
+        "codigo": item["codigo"],
+        "codigo_formateado": item["codigo_formateado"],
+        "activacion": item,
+    }
+
+
+@app.get("/claracad/activaciones")
+def claracad_activaciones_listar(current_user=Depends(require_solo_desarrollador)):
+    """Lista todos los códigos de activación ClaraCAD (solo Desarrollador)."""
+    try:
+        rows = (
+            supabase.table("claracad_activaciones")
+            .select("*")
+            .order("generado_at", desc=True)
+            .limit(500)
+            .execute()
+            .data
+        ) or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error leyendo activaciones: {e}")
+    return [_claracad_serializar_activacion(r) for r in rows]
+
+
+@app.post("/claracad/activaciones/validar")
+def claracad_activaciones_validar(body: ClaracadActivacionValidarBody):
+    """Valida correo + código antes de instalar ClaraCAD (público, sin auth)."""
+    correo = (body.correo or "").strip().lower()
+    codigo = _claracad_normalizar_codigo(body.codigo)
+    if not correo or "@" not in correo:
+        return {"ok": False, "mensaje": "Correo inválido."}
+    if len(codigo) != 16:
+        return {"ok": False, "mensaje": "Código inválido."}
+
+    try:
+        rows = (
+            supabase.table("claracad_activaciones")
+            .select("*")
+            .eq("codigo", codigo)
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+    except Exception as e:
+        return {"ok": False, "mensaje": f"Error de servidor: {e}"}
+
+    if not rows:
+        return {"ok": False, "mensaje": "Código no encontrado."}
+
+    row = rows[0]
+    correo_db = (row.get("correo_destinatario") or "").strip().lower()
+    if correo_db != correo:
+        return {"ok": False, "mensaje": "El correo no coincide con el código."}
+
+    estado = (row.get("estado") or "").strip().lower()
+    if estado == "revocado":
+        return {"ok": False, "mensaje": "Este código fue revocado."}
+    if estado == "activo":
+        return {"ok": False, "mensaje": "Este código ya fue utilizado."}
+    if estado != "pendiente":
+        return {"ok": False, "mensaje": "Código no disponible."}
+
+    ahora = datetime.utcnow().isoformat()
+    ip_act = (body.ip or "").strip()[:120] or None
+    equipo = (body.equipo_info or "").strip()[:500] or None
+    try:
+        supabase.table("claracad_activaciones").update({
+            "estado": "activo",
+            "activado_at": ahora,
+            "ip_activacion": ip_act,
+            "equipo_info": equipo,
+        }).eq("id", row["id"]).execute()
+    except Exception as e:
+        return {"ok": False, "mensaje": f"No se pudo activar: {e}"}
+
+    return {"ok": True, "codigo_formateado": _claracad_formatear_codigo(codigo)}
+
+
+@app.delete("/claracad/activaciones/{activacion_id}")
+def claracad_activaciones_revocar(
+    activacion_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Revoca un código de activación (solo Desarrollador)."""
+    try:
+        supabase.table("claracad_activaciones").update({
+            "estado": "revocado",
+        }).eq("id", activacion_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error revocando activación: {e}")
+    return {"ok": True, "id": activacion_id, "estado": "revocado"}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMENTARIOS

@@ -1856,6 +1856,168 @@ function SeccionLogs({ call, theme }) {
   )
 }
 
+// ─── Licencias ClaraCAD (solo Desarrollador) ─────────────────────────────────
+function formatCodigoClaraCAD(codigo) {
+  const s = String(codigo || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase()
+  if (s.length !== 16) return codigo || "—"
+  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}`
+}
+
+function SeccionLicenciasClaraCAD({ call, theme }) {
+  const col = C(theme)
+  const [lista, setLista] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [msg, setMsg] = useState(null)
+  const [correo, setCorreo] = useState("")
+  const [generando, setGenerando] = useState(false)
+  const [ultimoCodigo, setUltimoCodigo] = useState(null)
+
+  const cargar = useCallback(async () => {
+    setLoading(true)
+    setMsg(null)
+    try {
+      const rows = await call("GET", "/claracad/activaciones")
+      setLista(Array.isArray(rows) ? rows : [])
+    } catch (e) {
+      setMsg({ type: "err", text: e?.message || String(e) })
+      setLista([])
+    } finally {
+      setLoading(false)
+    }
+  }, [call])
+
+  useEffect(() => {
+    void cargar()
+  }, [cargar])
+
+  const generar = async () => {
+    const email = (correo || "").trim()
+    if (!email || !email.includes("@")) {
+      setMsg({ type: "warn", text: "Ingrese un correo válido." })
+      return
+    }
+    setGenerando(true)
+    setMsg(null)
+    try {
+      const j = await call("POST", "/claracad/activaciones/generar", { correo: email })
+      const fmt = j?.codigo_formateado || formatCodigoClaraCAD(j?.codigo)
+      setUltimoCodigo(fmt)
+      setCorreo("")
+      setMsg({ type: "ok", text: `Código generado: ${fmt}` })
+      await cargar()
+    } catch (e) {
+      setMsg({ type: "err", text: e?.message || String(e) })
+    } finally {
+      setGenerando(false)
+    }
+  }
+
+  const revocar = async (id) => {
+    if (!window.confirm("¿Revocar este código de activación?")) return
+    setMsg(null)
+    try {
+      await call("DELETE", `/claracad/activaciones/${id}`)
+      setMsg({ type: "ok", text: "Código revocado." })
+      await cargar()
+    } catch (e) {
+      setMsg({ type: "err", text: e?.message || String(e) })
+    }
+  }
+
+  const estadoColor = (estado) => {
+    const e = String(estado || "").toLowerCase()
+    if (e === "activo") return { bg: "#10B98122", fg: "#059669" }
+    if (e === "revocado") return { bg: "#EF444422", fg: "#DC2626" }
+    return { bg: "#F59E0B22", fg: "#D97706" }
+  }
+
+  const thS = { textAlign: "left", fontSize: 10, color: col.textMuted, textTransform: "uppercase", padding: "8px 10px", borderBottom: `1px solid ${col.borderColor}` }
+  const tdS = { fontSize: 12, padding: "8px 10px", borderBottom: `1px solid ${col.borderColor}88`, color: col.textTable, verticalAlign: "top" }
+
+  return (
+    <div style={{ padding: "8px 4px 24px", maxWidth: 1100 }}>
+      <div style={{ fontWeight: 800, fontSize: "var(--cc-h3)", color: col.textPrimary, marginBottom: 4 }}>
+        Licencias ClaraCAD
+      </div>
+      <div style={{ fontSize: 12, color: col.textMuted, marginBottom: 16, lineHeight: 1.45 }}>
+        Genere códigos de activación para el instalador ClaraCAD. Cada código es de un solo uso y queda vinculado al correo del destinatario.
+      </div>
+
+      {msg && <div style={S.alert(msg.type === "ok" ? "success" : "error")}>{msg.text}</div>}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 20, padding: 16, background: col.bgCard, border: `1px solid ${col.borderColor}`, borderRadius: 10 }}>
+        <div style={{ flex: "1 1 240px" }}>
+          <label style={{ display: "block", fontSize: 11, color: col.textMuted, marginBottom: 4 }}>Correo destinatario</label>
+          <input
+            type="email"
+            value={correo}
+            onChange={(e) => setCorreo(e.target.value)}
+            placeholder="usuario@empresa.com"
+            style={S.input}
+          />
+        </div>
+        <button type="button" onClick={() => void generar()} disabled={generando} style={S.btn("primary")}>
+          {generando ? "Generando…" : "Generar código"}
+        </button>
+        <button type="button" onClick={() => void cargar()} disabled={loading} style={S.btn("ghost")}>
+          Actualizar
+        </button>
+      </div>
+
+      {ultimoCodigo && (
+        <div style={{ marginBottom: 16, padding: 12, background: "#10B98118", border: "1px solid #10B98144", borderRadius: 8, fontSize: 13, color: col.textTable }}>
+          Último código: <strong style={{ fontFamily: "monospace", letterSpacing: "0.08em" }}>{ultimoCodigo}</strong>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: col.textMuted }}>Cargando códigos…</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                {["Correo", "Código", "Estado", "Generado", "Activado", "IP", "Equipo", ""].map((h) => (
+                  <th key={h || "acc"} style={thS}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lista.length === 0 ? (
+                <tr><td colSpan={8} style={{ ...tdS, textAlign: "center", padding: 32, color: col.textMuted }}>Sin códigos generados</td></tr>
+              ) : lista.map((row) => {
+                const ec = estadoColor(row.estado)
+                return (
+                  <tr key={row.id}>
+                    <td style={tdS}>{row.correo_destinatario}</td>
+                    <td style={{ ...tdS, fontFamily: "monospace", letterSpacing: "0.06em" }}>
+                      {row.codigo_formateado || formatCodigoClaraCAD(row.codigo)}
+                    </td>
+                    <td style={tdS}>
+                      <span style={{ background: ec.bg, color: ec.fg, padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>
+                        {row.estado}
+                      </span>
+                    </td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.generado_at ? new Date(row.generado_at).toLocaleString() : "—"}</td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.activado_at ? new Date(row.activado_at).toLocaleString() : "—"}</td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.ip_activacion || "—"}</td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }} title={row.equipo_info || ""}>{row.equipo_info || "—"}</td>
+                    <td style={tdS}>
+                      {row.estado === "pendiente" && (
+                        <button type="button" onClick={() => void revocar(row.id)} style={S.btn("danger")}>Revocar</button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Diagnóstico plataforma (solo Desarrollador) ─────────────────────────────
 function SeccionDiagnosticoPlataforma({ call, theme }) {
   const col = C(theme)
@@ -7259,6 +7421,7 @@ const ADMIN_PANEL_TABS = [
   { id: "inicio",    label: "Página de inicio", soloAdmin: true },
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   { id: "diagnostico", label: "📊 Diagnóstico plataforma", soloDeveloper: true },
+  { id: "licencias-claracad", label: "Licencias ClaraCAD", soloDeveloper: true },
 ];
 
 export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
@@ -7359,6 +7522,10 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
     diagnostico: {
       title: "Diagnóstico plataforma",
       sub: "Resumen técnico: salud de API/BD, lentitudes, errores de sistema y uso por módulo (solo Desarrollador).",
+    },
+    "licencias-claracad": {
+      title: "Licencias ClaraCAD",
+      sub: "Genere y revoque códigos de activación para el instalador del Agent de escritorio.",
     },
   };
 
@@ -7530,6 +7697,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             )}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
               {tab === "diagnostico" && <SeccionDiagnosticoPlataforma call={call} theme={activeTheme} />}
+              {tab === "licencias-claracad" && <SeccionLicenciasClaraCAD call={call} theme={activeTheme} />}
           </div>
         </div>
       </div>
