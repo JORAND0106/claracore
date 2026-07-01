@@ -3596,7 +3596,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     { valor: 'Aprobado',  color: '#16A34A', label: '🟢' },
   ]
 
-  /** Zoom + resaltado en plano. Con DWG enlazado (SicoeCAD) → cola; si no, ClaraLink (sin maximizar ni SELECT). */
+  /** Zoom + resaltado en plano vía cola del Agent (SicoeCAD). Requiere DWG enlazado (heartbeat). */
   function navegarRegistroEnPlano(registro) {
     if (!registro?.id) return
     const tieneHandle = registro.ent_handle != null && String(registro.ent_handle).trim() !== ''
@@ -3612,16 +3612,30 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   async function ejecutarNavegarRegistroEnPlano(registro, tieneHandle, tieneCoords) {
-    const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    const MSG_SIN_DWG =
+      'Para ver este registro en AutoCAD, abra el Agent ClaraCAD e inicie sesión con el mismo usuario de la web. ' +
+      'AutoCAD debe estar abierto y el DWG enlazado (indicador verde en la barra superior).'
+
     const tok = getToken()
     const cid = registro.contrato_id || contratoId
-    let usarCola = dwgEnlazadoRef.current || dwgEnlazado
-    if (!usarCola && tok) {
-      usarCola = await refrescarDwgEnlazado()
+
+    let enlazado = dwgEnlazadoRef.current || dwgEnlazado
+    if (!enlazado && tok) {
+      enlazado = await refrescarDwgEnlazado()
+    }
+
+    if (!enlazado) {
+      window.alert(MSG_SIN_DWG)
+      return
+    }
+
+    if (!tok) {
+      window.alert('Debe iniciar sesión en ClaraCore para enviar comandos a AutoCAD.')
+      return
     }
 
     const encolarHighlight = async () => {
-      if (!tok || !tieneHandle) return false
+      if (!tieneHandle) return false
       const r = await fetch(`${API}/cad-queue/${cid}/highlight-registro`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
@@ -3631,7 +3645,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
 
     const encolarPk = async () => {
-      if (!tok || !registro.pk_id) return false
+      if (!registro.pk_id) return false
       const r = await fetch(`${API}/cad-queue/${cid}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${tok}` },
@@ -3639,30 +3653,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return r.ok
     }
 
-    if (usarCola) {
-      try {
-        if (await encolarHighlight()) return
-        if (await encolarPk()) return
-      } catch { /* fallback ClaraLink */ }
+    try {
+      if (await encolarHighlight()) return
+      if (await encolarPk()) return
+      window.alert(
+        'No se pudo encolar la navegación en AutoCAD. Verifique que el registro tenga entidad enlazada (handle) o PK_ID.',
+      )
+    } catch {
+      window.alert('Error de comunicación con el servidor. Intente de nuevo.')
     }
-
-    if (esTablet) {
-      try {
-        if (await encolarHighlight()) return
-        await encolarPk()
-      } catch { /* ignore */ }
-      return
-    }
-
-    const p = new URLSearchParams()
-    if (registro.ent_handle) p.set('handle', registro.ent_handle)
-    if (registro.txt_handle) p.set('txt', registro.txt_handle)
-    if (tieneCoords) {
-      p.set('x', String(registro.x_label))
-      p.set('y', String(registro.y_label))
-    }
-    p.set('radio', '20')
-    window.location.href = `claralink://highlight?${p.toString()}`
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
@@ -6031,8 +6030,8 @@ async function restaurar(id) {
             background: dwgEnlazado ? '#16A34A' : '#EF4444',
             boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
           {dwgEnlazado
-            ? '🔗 DWG Enlazado — Clic en grilla navega el plano vía SicoeCAD (cola). Semáforo activo.'
-            : '⛓️ Sin DWG — En SicoeCAD pulse «Sincronizar» con el mismo usuario de la web. Mientras tanto puede usar ClaraLink.'}
+            ? '🔗 DWG Enlazado — Clic en grilla navega el plano vía Agent ClaraCAD (cola).'
+            : '⛓️ Sin DWG — Abra el Agent ClaraCAD e inicie sesión con el mismo usuario de la web para navegar el plano.'}
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
           background: t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px',
