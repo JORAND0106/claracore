@@ -7,10 +7,11 @@ import { pptoBuildPresupuestoSearchParams } from './pptoFiltroCatalogo'
  * @param {number} contratoId
  * @param {URLSearchParams} pQuery — mismos params que GET /presupuesto + nivel + capitulo drill
  */
-export async function fetchPptoPanelValidacion(API, token, contratoId, pQuery) {
+export async function fetchPptoPanelValidacion(API, token, contratoId, pQuery, endpoints) {
   const qs = pQuery?.toString?.() || ''
+  const base = endpoints?.panelValidacion || `${API}/presupuesto/${contratoId}/panel-validacion-interv`
   const res = await fetch(
-    `${API}/presupuesto/${contratoId}/panel-validacion-interv${qs ? `?${qs}` : ''}`,
+    `${base}${qs ? `?${qs}` : ''}`,
     { headers: { Authorization: `Bearer ${token}` } },
   )
   if (!res.ok) {

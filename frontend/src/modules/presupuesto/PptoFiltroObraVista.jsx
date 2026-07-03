@@ -37,6 +37,9 @@ export default function PptoFiltroObraVista({
   esVersionInicial = true,
   onAbrirCrearVersion,
   onAbrirPanelVersiones,
+  versionActiva = null,
+  versionVistaTemporal = false,
+  onVolverPresupuestoVivo,
   tramoOptions: _tramoOptions,
   calzadaOptions: _calzadaOptions,
   listadoPrecios = [],
@@ -116,6 +119,63 @@ export default function PptoFiltroObraVista({
 
   return (
     <>
+      {versionActiva?.id && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: '10px 14px',
+            borderRadius: 10,
+            border: versionVistaTemporal ? '2px solid #B45309' : '2px solid #2563EB',
+            background: versionVistaTemporal ? '#F59E0B14' : '#2563EB14',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            {versionVistaTemporal ? (
+              <>
+                <strong style={{ color: '#B45309' }}>👁 Vista temporal</strong>
+                <span style={{ marginLeft: 8 }}>
+                  «{versionActiva.etiqueta}»
+                  {versionActiva.numero_version != null ? ` (V${versionActiva.numero_version})` : ''}
+                </span>
+                <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
+                  Solo visible para ti · Esta no es la versión oficial
+                </span>
+              </>
+            ) : (
+              <>
+                <strong style={{ color: '#2563EB' }}>📚 Biblioteca de versión activa</strong>
+                <span style={{ marginLeft: 8 }}>
+                  Trabajando en «{versionActiva.etiqueta}»
+                  {versionActiva.numero_version != null ? ` (V${versionActiva.numero_version})` : ''}
+                </span>
+                <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
+                  Lectura y escritura en la biblioteca de esta versión — no modifica el presupuesto vivo.
+                </span>
+              </>
+            )}
+          </div>
+          {typeof onVolverPresupuestoVivo === 'function' && (
+            <button
+              type="button"
+              onClick={onVolverPresupuestoVivo}
+              style={{
+                ...btnSec,
+                background: t.bgCard,
+                border: `1px solid ${t.primary}`,
+                color: t.primary,
+                fontWeight: 800,
+              }}
+            >
+              Volver al presupuesto vivo
+            </button>
+          )}
+        </div>
+      )}
       <div
         style={{
           position: 'sticky',

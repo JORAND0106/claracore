@@ -93,6 +93,8 @@ export default function PptoVersionador({
   panelOpen,
   onPanelOpenChange,
   onVersionesReload,
+  versionActiva = null,
+  onTrabajarEnVersion,
 }) {
   const authToken = useCallback(() => tokenFresco(token), [token])
 
@@ -751,15 +753,17 @@ export default function PptoVersionador({
               ) : (
                 versionesPresupuesto.map((v) => {
                   const sel = compareSel.includes(String(v.id))
+                  const esActivaBiblioteca = versionActiva && String(versionActiva.id) === String(v.id)
                   return (
                     <div
                       key={v.id}
                       style={{
-                        border: `1px solid ${v.es_vigente ? t.primary : t.border}`,
+                        border: `2px solid ${esActivaBiblioteca ? '#2563EB' : v.es_vigente ? t.primary : t.border}`,
                         borderRadius: 10,
                         padding: 12,
                         marginBottom: 10,
-                        background: v.es_vigente ? `${t.primary}0A` : t.bg,
+                        background: esActivaBiblioteca ? '#2563EB12' : v.es_vigente ? `${t.primary}0A` : t.bg,
+                        boxShadow: esActivaBiblioteca ? '0 0 0 1px #2563EB44' : undefined,
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -806,6 +810,20 @@ export default function PptoVersionador({
                                 ★ Vigente (dashboard)
                               </span>
                             )}
+                            {esActivaBiblioteca && (
+                              <span
+                                style={{
+                                  fontSize: 'var(--cc-caption)',
+                                  fontWeight: 800,
+                                  color: '#fff',
+                                  background: '#2563EB',
+                                  borderRadius: 4,
+                                  padding: '2px 8px',
+                                }}
+                              >
+                                ✓ Viendo 👁️
+                              </span>
+                            )}
                           </div>
                           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4, lineHeight: 1.45 }}>
                             {fmtFecha(v.creada_en)} · {v.creada_por_nombre || `Usuario ${v.creada_por}`}
@@ -828,6 +846,21 @@ export default function PptoVersionador({
                         }
                         return (
                           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {typeof onTrabajarEnVersion === 'function' && !v.es_vigente && (
+                              <button
+                                type="button"
+                                onClick={() => onTrabajarEnVersion(v)}
+                                disabled={esActivaBiblioteca}
+                                style={{
+                                  ...btnBase,
+                                  background: esActivaBiblioteca ? '#2563EB22' : '#2563EB',
+                                  color: esActivaBiblioteca ? '#2563EB' : '#fff',
+                                  border: esActivaBiblioteca ? '1px solid #2563EB' : 'none',
+                                }}
+                              >
+                                {esActivaBiblioteca ? '✓ Viendo 👁️' : 'Ver 👁️'}
+                              </button>
+                            )}
                             {v.observaciones && (
                               <div
                                 style={{

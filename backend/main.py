@@ -9124,6 +9124,34 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         audit_filas.append((prev, nuevo))
     _registrar_logs_presupuesto_por_fila(current_user, "VALIDAR", audit_filas, det_bulk)
     registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id), det_bulk)
+    try:
+        from presupuesto_version_biblioteca import sincronizar_validacion_desde_presupuesto_vivo
+
+        n_sync = sincronizar_validacion_desde_presupuesto_vivo(
+            supabase,
+            contrato_id,
+            body.ids,
+            {
+                "revisado": body.revisado,
+                "validado_por": data_upd.get("validado_por"),
+                "validado_en": data_upd.get("validado_en"),
+            },
+        )
+        if n_sync:
+            logging.getLogger(__name__).info(
+                "sync validación vivo→versiones: contrato=%s ids=%s sincronizados=%s",
+                contrato_id,
+                body.ids,
+                n_sync,
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "sync validación vivo→versiones falló contrato=%s ids=%s: %s",
+            contrato_id,
+            body.ids,
+            exc,
+            exc_info=True,
+        )
     return {"actualizados": len(body.ids)}
 
 
@@ -9180,6 +9208,34 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
     registrar_log(
         current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id), det_bulk,
     )
+    try:
+        from presupuesto_version_biblioteca import sincronizar_validacion_desde_presupuesto_vivo
+
+        n_sync = sincronizar_validacion_desde_presupuesto_vivo(
+            supabase,
+            contrato_id,
+            body.ids,
+            {
+                "pre_interv_estado": body.estado,
+                "pre_interv_por": data_upd.get("pre_interv_por"),
+                "pre_interv_en": data_upd.get("pre_interv_en"),
+            },
+        )
+        if n_sync:
+            logging.getLogger(__name__).info(
+                "sync depuración vivo→versiones: contrato=%s ids=%s sincronizados=%s",
+                contrato_id,
+                body.ids,
+                n_sync,
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "sync depuración vivo→versiones falló contrato=%s ids=%s: %s",
+            contrato_id,
+            body.ids,
+            exc,
+            exc_info=True,
+        )
     return {"actualizados": len(body.ids)}
 
 
@@ -9588,6 +9644,7 @@ _CLARACAD_CODIGO_ALFABETO = string.ascii_uppercase + string.digits
 
 
 def _claracad_normalizar_codigo(codigo: str) -> str:
+    """Quita guiones/espacios y pasa a mayúsculas (XXXX-XXXX-XXXX-XXXX → 16 chars)."""
     return re.sub(r"[^A-Za-z0-9]", "", (codigo or "")).upper()
 
 
@@ -9697,11 +9754,35 @@ def claracad_activaciones_listar(current_user=Depends(require_solo_desarrollador
 @app.post("/claracad/activaciones/validar")
 def claracad_activaciones_validar(body: ClaracadActivacionValidarBody):
     """Valida correo + código antes de instalar ClaraCAD (público, sin auth)."""
-    correo = (body.correo or "").strip().lower()
-    codigo = _claracad_normalizar_codigo(body.codigo)
+    correo_raw = body.correo if body.correo is not None else ""
+    codigo_raw = body.codigo if body.codigo is not None else ""
+    _log_api.info(
+        "claracad/activaciones/validar request body correo=%r codigo=%r ip=%r equipo_info=%r",
+        correo_raw,
+        codigo_raw,
+        body.ip,
+        body.equipo_info,
+    )
+
+    correo = correo_raw.strip().lower()
+    codigo = _claracad_normalizar_codigo(codigo_raw)
+    _log_api.info(
+        "claracad/activaciones/validar normalizado correo=%r codigo=%r codigo_len=%s",
+        correo,
+        codigo,
+        len(codigo),
+    )
+
     if not correo or "@" not in correo:
+        _log_api.info("claracad/activaciones/validar rechazado: correo inválido")
         return {"ok": False, "mensaje": "Correo inválido."}
     if len(codigo) != 16:
+        _log_api.info(
+            "claracad/activaciones/validar rechazado: código inválido (raw=%r norm=%r len=%s)",
+            codigo_raw,
+            codigo,
+            len(codigo),
+        )
         return {"ok": False, "mensaje": "Código inválido."}
 
     try:
@@ -9714,22 +9795,41 @@ def claracad_activaciones_validar(body: ClaracadActivacionValidarBody):
             .data
         ) or []
     except Exception as e:
+        _log_api.warning("claracad/activaciones/validar error BD: %s", e)
         return {"ok": False, "mensaje": f"Error de servidor: {e}"}
 
     if not rows:
+        _log_api.info(
+            "claracad/activaciones/validar código no encontrado (norm=%r raw=%r)",
+            codigo,
+            codigo_raw,
+        )
         return {"ok": False, "mensaje": "Código no encontrado."}
 
     row = rows[0]
     correo_db = (row.get("correo_destinatario") or "").strip().lower()
     if correo_db != correo:
+        _log_api.info(
+            "claracad/activaciones/validar correo no coincide: recibido=%r esperado=%r codigo=%r",
+            correo,
+            correo_db,
+            codigo,
+        )
         return {"ok": False, "mensaje": "El correo no coincide con el código."}
 
     estado = (row.get("estado") or "").strip().lower()
     if estado == "revocado":
+        _log_api.info("claracad/activaciones/validar código revocado id=%s", row.get("id"))
         return {"ok": False, "mensaje": "Este código fue revocado."}
     if estado == "activo":
+        _log_api.info("claracad/activaciones/validar código ya activo id=%s", row.get("id"))
         return {"ok": False, "mensaje": "Este código ya fue utilizado."}
     if estado != "pendiente":
+        _log_api.info(
+            "claracad/activaciones/validar estado no pendiente id=%s estado=%r",
+            row.get("id"),
+            estado,
+        )
         return {"ok": False, "mensaje": "Código no disponible."}
 
     ahora = datetime.utcnow().isoformat()
@@ -9743,8 +9843,16 @@ def claracad_activaciones_validar(body: ClaracadActivacionValidarBody):
             "equipo_info": equipo,
         }).eq("id", row["id"]).execute()
     except Exception as e:
+        _log_api.warning("claracad/activaciones/validar error activando id=%s: %s", row.get("id"), e)
         return {"ok": False, "mensaje": f"No se pudo activar: {e}"}
 
+    _log_api.info(
+        "claracad/activaciones/validar ok id=%s correo=%r codigo=%r (raw=%r)",
+        row.get("id"),
+        correo,
+        codigo,
+        codigo_raw,
+    )
     return {"ok": True, "codigo_formateado": _claracad_formatear_codigo(codigo)}
 
 
@@ -16819,6 +16927,79 @@ def _sicoe_reservar_numeros_registro(contrato_id: int, nlines: int) -> List[int]
     return numeros
 
 
+# Tope p_n en public.siguiente_n_ids_pol (debe alinearse con el SQL del proyecto).
+_IDS_POL_N_MAX_RPC = 2000
+
+
+def _sicoe_reservar_ids_pol_total(contrato_id: int, total_n: int) -> List[int]:
+    """Reserva total_n sufijos ID_POL consecutivos; varias RPC si supera el tope SQL."""
+    if total_n < 1:
+        return []
+    out: List[int] = []
+    rem = total_n
+    while rem > 0:
+        chunk = min(rem, _IDS_POL_N_MAX_RPC)
+        out.extend(_sicoe_reservar_ids_pol(contrato_id, chunk))
+        rem -= chunk
+    if len(out) != total_n:
+        raise HTTPException(
+            status_code=500,
+            detail="Reserva de IDs ID_POL incompleta; reintente.",
+        )
+    return out
+
+
+def _sicoe_reservar_ids_pol(contrato_id: int, n: int) -> List[int]:
+    def _try_rpc_bloque() -> bool:
+        nonlocal numeros
+        numeros = []
+
+        def _q():
+            return supabase.rpc(
+                "siguiente_n_ids_pol", {"p_contrato_id": contrato_id, "p_n": n}
+            ).execute().data
+
+        try:
+            raw = supabase_execute(_q)
+        except Exception:
+            return False
+        if raw is None:
+            return False
+        if isinstance(raw, list):
+            if len(raw) != n:
+                return False
+            try:
+                numeros = [int(x) for x in raw]
+            except (TypeError, ValueError):
+                return False
+            return True
+        if isinstance(raw, dict):
+            for k in ("siguiente_n_ids_pol", "data", "result"):
+                if k in raw and isinstance(raw[k], list):
+                    try:
+                        arr = [int(x) for x in raw[k]]
+                    except (TypeError, ValueError):
+                        return False
+                    if len(arr) != n:
+                        return False
+                    numeros = arr
+                    return True
+        return False
+
+    numeros: List[int] = []
+    if not _try_rpc_bloque():
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo reservar IDs ID_POL en la base de datos. Verifique la migración so_id_counter.",
+        )
+    if len(set(numeros)) != len(numeros):
+        raise HTTPException(
+            status_code=500,
+            detail="IDs ID_POL duplicados al reservar; reintente.",
+        )
+    return numeros
+
+
 def _parse_numero_reporte_raw(raw) -> int:
     if raw is None:
         raise ValueError("RPC sin número de reporte")
@@ -17789,6 +17970,21 @@ def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user
         return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
     raw = supabase_execute(_q)
     return {"numero": _sicoe_normalizar_numero_rpc(raw, "número de registro")}
+
+
+class ReservarIdsPolBody(BaseModel):
+    cantidad: int = Field(..., ge=1, le=50000)
+
+
+@app.post("/sicoe-obra/{contrato_id}/reservar-ids")
+def reservar_ids_pol(
+    contrato_id: int,
+    body: ReservarIdsPolBody,
+    current_user=Depends(get_current_user),
+):
+    """Reserva atómicamente N sufijos numéricos globales para ID_POL del contrato."""
+    ids = _sicoe_reservar_ids_pol_total(contrato_id, body.cantidad)
+    return {"ids": ids, "desde": ids[0], "hasta": ids[-1]}
 
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
 async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):

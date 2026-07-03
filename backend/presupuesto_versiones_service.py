@@ -368,12 +368,14 @@ def _fetch_version_items_rows(
     tramo: Optional[str] = None,
     tramos: Optional[List[str]] = None,
     select: str = "capitulo, costo_directo, cant_total",
+    forzar_biblioteca: bool = False,
 ) -> List[dict]:
     """Filas de una versión. Si es la vigente, lee del presupuesto VIVO (su contenido
-    real); si está congelada, lee de su snapshot en presupuesto_version_items."""
+    real); si está congelada, lee de su snapshot en presupuesto_version_items.
+    Con forzar_biblioteca=True siempre lee presupuesto_version_items (modo biblioteca paralela)."""
     row = assert_version_del_contrato(sb, contrato_id, version_id)
     es_vigente = bool(row.get("es_vigente"))
-    tabla = "presupuesto" if es_vigente else "presupuesto_version_items"
+    tabla = "presupuesto_version_items" if forzar_biblioteca or not es_vigente else "presupuesto"
     rows: List[dict] = []
     offset = 0
     while True:
@@ -383,7 +385,7 @@ def _fetch_version_items_rows(
             .eq("contrato_id", contrato_id)
             .eq("dado_de_baja", False)
         )
-        if es_vigente:
+        if tabla == "presupuesto":
             q = q.eq("tipo_ejecucion", PPTO_TIPO_OBRA)
         else:
             q = q.eq("version_id", version_id)
@@ -431,6 +433,7 @@ def resumen_capitulos_version(
     contrato_id: int,
     version_id: str,
     tramo: Optional[str] = None,
+    forzar_biblioteca: bool = False,
 ) -> List[dict]:
     """Totales por capítulo (cantidad + costo directo) desde presupuesto_version_items."""
     rows = _fetch_version_items_rows(
@@ -439,6 +442,7 @@ def resumen_capitulos_version(
         version_id,
         tramo=tramo,
         select="capitulo, costo_directo, cant_total",
+        forzar_biblioteca=forzar_biblioteca,
     )
     caps: dict = {}
     for r in rows:
@@ -462,6 +466,7 @@ def items_lista_version(
     version_id: str,
     capitulo: str,
     tramo: Optional[str] = None,
+    forzar_biblioteca: bool = False,
 ) -> List[dict]:
     """Ítems agregados de un capítulo en snapshot de versión (misma forma que GET /presupuesto/.../items-lista)."""
     cap = (capitulo or "").strip()
@@ -474,6 +479,7 @@ def items_lista_version(
         capitulo=cap,
         tramo=tramo,
         select="item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado",
+        forzar_biblioteca=forzar_biblioteca,
     )
     return _aggregate_items_lista(rows)
 

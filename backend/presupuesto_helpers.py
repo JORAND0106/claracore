@@ -7,6 +7,11 @@ from typing import List, Optional
 from fastapi import HTTPException
 
 
+def _presupuesto_coerce_multi_list(val) -> List:
+    """Evita TypeError al iterar defaults FastAPI Query() cuando una ruta llama a otra."""
+    return val if isinstance(val, list) else []
+
+
 def _norm_rol_presupuesto(txt: Optional[str]) -> str:
     s = unicodedata.normalize("NFD", (txt or "").strip().lower())
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
@@ -89,7 +94,7 @@ def presupuesto_estados_validacion_opciones(extra=None) -> List[str]:
 
 def _presupuesto_q_in_str_field(q, col: str, single: Optional[str], multi: Optional[List[str]] = None, *, max_items: int = 200):
     """Un valor (eq) o varios (.in_) para filtros multi-selección."""
-    vals = [str(x).strip() for x in (multi or []) if str(x).strip()]
+    vals = [str(x).strip() for x in _presupuesto_coerce_multi_list(multi) if str(x).strip()]
     if not vals and single and str(single).strip():
         vals = [str(single).strip()]
     if not vals:
