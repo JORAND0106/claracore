@@ -86,7 +86,6 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import {
-  fetchSicoeActaRpoVigenteCached,
   fetchSicoeCapitulosCached,
   fetchSicoeCompetenciasCached,
   fetchSicoeListadoPreciosCached,
@@ -114,6 +113,7 @@ import {
   setDashVistaCache,
 } from './cache/dashboardVistaCache'
 import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
+import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
 import { permisosProgramacionObra } from './progObraPermisos'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
@@ -2749,31 +2749,33 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         }
 
         if (idItem) {
-          const actaData = await fetchSicoeActaRpoVigenteCached(API, contrato_id, getToken())
-          if (!actaData || !actaData.id) {
-            alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nRegistra el periodo Acta RPO en el sistema (gestión de actas / administración del contrato) antes de asignar ítems.')
+          if (!itemSel?.item_numero && !itemListadoId) {
+            alert('Seleccione un ítem de la lista antes de guardar.')
             return
           }
-          const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
-            method: 'PUT', headers: hdrs,
-            body: JSON.stringify({
-              item_listado_id: idItem,
-              competencia: competencia || null,
-              longitud: longN,
-              ancho: anchoN,
-              espesor: espeN,
-              cantidad: cantN,
-              cantidad_total: cantTotal,
-              observacion: observacion || null,
-              ...locApi,
-            }),
-          })
+          const asigRes = await sicoeFetchWithRetry(
+            `${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`,
+            {
+              method: 'PUT', headers: hdrs,
+              body: JSON.stringify({
+                item_listado_id: idItem,
+                competencia: competencia || null,
+                longitud: longN,
+                ancho: anchoN,
+                espesor: espeN,
+                cantidad: cantN,
+                cantidad_total: cantTotal,
+                observacion: observacion || null,
+                ...locApi,
+              }),
+            },
+          )
           if (!asigRes.ok) {
             const err = await asigRes.json().catch(() => ({}))
             throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
           }
           const asigData = await asigRes.json().catch(() => ({}))
-          if (idItem && itemSel) {
+          if (itemSel) {
             const vlr = asigData?.vlr_unitario ?? itemSel.precio_unitario ?? itemSel.vlr_unitario
             patchOptimista.capitulo = itemSel.capitulo || capituloHoja || null
             patchOptimista.competencia = competencia || itemSel.competencia || null
@@ -2788,7 +2790,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             if (asigData?.semana_id != null) patchOptimista.semana_id = asigData.semana_id
           }
         } else {
-          const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+          const dimRes = await sicoeFetchWithRetry(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
             method: 'PUT', headers: hdrs,
             body: JSON.stringify({
               reporte_id:      registro.reporte_id,
@@ -2826,7 +2828,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       if (guardadoOk) {
         setTimeout(() => setToastMsg(null), 2000)
       }
-    })
+    }, contrato_id)
   }
 
   const guardarCorte = async () => {
@@ -4534,7 +4536,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const aplicarOptimisticRegistroPatch = (registroId, patch) => {
     if (!patch || typeof patch !== 'object') return
-    setRegistros((prev) => prev.map((r) => (r.id === registroId ? { ...r, ...patch } : r)))
+    setRegistros((prev) => {
+      const next = prev.map((r) => (r.id === registroId ? { ...r, ...patch } : r))
+      if (patch.item_numero) {
+        const quedanSin = next.some((r) => !String(r.item_numero || '').trim())
+        setReporte((rep) => ({
+          ...rep,
+          estado: quedanSin ? 'Sin Asignar Ítem' : 'No Revisados',
+        }))
+      }
+      return next
+    })
   }
 
   const cargarComentariosRegistro = async (regId, rolOrigen) => {
@@ -5876,7 +5888,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={() => recargarDebounced(2500)}
+                          onItemAsignado={null}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -6021,7 +6033,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={() => recargarDebounced(2500)}
+                          onItemAsignado={null}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}

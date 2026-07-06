@@ -13518,6 +13518,18 @@ def buscar_reportes_obra(
     if not aids_linea_buscar and acta_id_para_lineas is not None:
         aids_linea_buscar = [int(acta_id_para_lineas)]
 
+    _estado_sin_asignar_item = _estado_filtro_es_sin_asignar_item(estado)
+    # Cola "Sin asignar ítem": líneas sin item_numero, NO cabecera so_reportes.estado
+    # (al asignar el 1.er ítem la cabecera pasa a "No Revisados" pero pueden quedar líneas pendientes).
+    if _estado_sin_asignar_item and not consulta_directa_identificador and reporte_ids_from_reg is None:
+        try:
+            ids_sin_item = _sicoe_collect_reporte_ids_misma_linea(contrato_id, estado=estado)
+        except HTTPException:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        if not ids_sin_item:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        reporte_ids_from_reg = list(ids_sin_item)
+
     unified_line = any([
         numero_registro is not None,
         abs_inicio is not None or abs_final is not None,
@@ -13632,7 +13644,7 @@ def buscar_reportes_obra(
             (_validacion_cualquier_nivel2_o_3(capas_v) if capas_v else False)
             or (_nivel_l is not None and _es_validacion_avanzada(_nivel_l))
         )
-        if estado and not _estado_filtro_es_reversion(estado):
+        if estado and not _estado_filtro_es_reversion(estado) and not _estado_filtro_es_sin_asignar_item(estado):
             q = _so_reportes_q_por_estado(q, estado)
         elif _hay_n23_build and ids_chunk is None:
             q = q.not_.in_("estado", list(ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA))
@@ -13686,7 +13698,7 @@ def buscar_reportes_obra(
                 numero_reporte=numero_reporte,
                 semana_id=semana_id_filtro,
                 acta_id=acta_id_filtro,
-                estado=estado,
+                estado=estado if not _estado_sin_asignar_item else None,
                 excluir_estados_avanzados=_hay_n23_vm,
                 reporte_ids=reporte_ids_from_reg,
             )
@@ -13802,6 +13814,7 @@ def buscar_reportes_obra(
         and costo_directo_desde is None
         and costo_directo_hasta is None
         and not _filtro_fu_reg
+        and not _estado_sin_asignar_item
     )
     if reporte_ids_batch:
         try:
@@ -15636,9 +15649,18 @@ def analisis_registros_obra(
     _sub_l = subcontratista_id
     _rev_modo_ana = _sicoe_reversion_modo_filtro(estado, current_user)
     reporte_ids_base = None
+    _estado_sin_asignar_ana = _estado_filtro_es_sin_asignar_item(estado)
+    if _estado_sin_asignar_ana and not consulta_directa_identificador:
+        try:
+            ids_sin_ana = _sicoe_collect_reporte_ids_misma_linea(contrato_id, estado=estado)
+            reporte_ids_base = list(ids_sin_ana) if ids_sin_ana else []
+            if not reporte_ids_base:
+                return _empty
+        except HTTPException:
+            return _empty
     has_rep_f = any([
         numero_reporte is not None,
-        bool(estado and str(estado).strip()),
+        bool(estado and str(estado).strip() and not _estado_sin_asignar_ana),
         _filtro_fu_rep,
     ])
     if has_rep_f:
@@ -19429,12 +19451,20 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd_reg)
 
+        def _quedan_sin_item():
+            return supabase.table("so_registros").select("id")\
+                .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id)\
+                .or_('item_numero.is.null,item_numero.eq.""').limit(1).execute().data
+
+        pendientes = supabase_execute(_quedan_sin_item) or []
+        nuevo_estado_rep = "Sin Asignar Ítem" if pendientes else "No Revisados"
+
         def _upd_rep():
             return supabase.table("so_reportes").update({
                 "acta_rpo_id": acta_rpo_id,
                 "corte_id":    corte_id,
                 "semana_id":   semana_id,
-                "estado":      "No Revisados",
+                "estado":      nuevo_estado_rep,
             }).eq("id", reporte_id).execute().data
         supabase_execute(_upd_rep)
 
