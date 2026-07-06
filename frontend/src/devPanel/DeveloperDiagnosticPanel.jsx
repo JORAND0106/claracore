@@ -94,6 +94,8 @@ function maxMsColor(avgMs, maxMs) {
   if (avg > 0 && max >= avg * 5) return '#d29922'
   return '#8b949e'
 }
+
+function fmtTime(iso) {
   if (!iso) return '—'
   try {
     return new Date(iso).toLocaleString('es-CO', {
