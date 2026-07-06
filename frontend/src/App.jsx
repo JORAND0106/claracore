@@ -86,6 +86,7 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import {
+  fetchSicoeCapitulosCached,
   fetchSicoeListadoPreciosCached,
   fetchSicoeNodosCached,
   fetchSicoePkIdsCached,
@@ -2440,19 +2441,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       return na - nb
     })
     const authH = { Authorization: `Bearer ${getToken()}` }
-    const loadCaps = fetch(`${API}/listado-precios/${contrato_id}`, { headers: authH })
-      .then(r => (r.ok ? r.json() : []))
-      .then(d => {
-        if (!Array.isArray(d)) return
-        const caps = [...new Set(d.map(i => i.capitulo).filter(Boolean))]
-        setListaCapitulos(sortCaps(caps))
-      })
-      .catch(() =>
-        fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: authH })
-          .then(r => (r.ok ? r.json() : []))
-          .then(d => { if (Array.isArray(d)) setListaCapitulos(sortCaps(d.map(c => c.capitulo || c).filter(Boolean))) })
-          .catch(() => {})
-      )
+    const loadCaps = fetchSicoeCapitulosCached(API, contrato_id, getToken())
+      .then((caps) => { if (caps.length) setListaCapitulos(sortCaps(caps)) })
+      .catch(() => {})
     const loadComp = fetch(`${API}/contratos/${contrato_id}/competencias`, { headers: authH })
       .then(r => (r.ok ? r.json() : null))
       .then(d => setCompetenciasApi(Array.isArray(d?.competencias) ? d.competencias : []))
@@ -2741,6 +2732,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
     }
     setGuardando(true)
+    let guardadoOk = false
     try {
       // 1. Guardar dimensiones + observacion (null en JSON = borrar en BD; el backend ya no filtra esos null)
       const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
@@ -2763,6 +2755,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
 
       // 2. Si hay ítem nuevo seleccionado, verificar acta RPO y asignar
+      let asigData = null
       if (idItem) {
         const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
         const actaData = await actaRes.json()
@@ -2779,22 +2772,53 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           const err = await asigRes.json().catch(() => ({}))
           throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
         }
+        asigData = await asigRes.json().catch(() => ({}))
       }
 
-      setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
-      try {
-        await new Promise((r) => setTimeout(r, 200))
-        setToastMsg(null)
-        const p = onItemAsignado?.()
-        if (p != null && typeof p.then === 'function') await p
-        if (typeof onRefrescarListadoSicoe === 'function') onRefrescarListadoSicoe()
-      } catch {
-        /* recargar ya mostró error si aplica */
+      const patchOptimista = {
+        longitud: longN,
+        ancho: anchoN,
+        espesor: espeN,
+        cantidad: cantN,
+        cantidad_total: cantTotal,
+        observacion: observacion || null,
+        ...(esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}),
       }
+      if (idItem && itemSel) {
+        const vlr = asigData?.vlr_unitario ?? itemSel.precio_unitario ?? itemSel.vlr_unitario
+        patchOptimista.capitulo = itemSel.capitulo || capituloHoja || null
+        patchOptimista.competencia = competencia || itemSel.competencia || null
+        patchOptimista.item_numero = itemSel.item_numero
+        patchOptimista.item_descripcion = itemSel.descripcion
+        patchOptimista.unidad = itemSel.unidad
+        patchOptimista.vlr_unitario = vlr
+        if (vlr != null && cantTotal != null) {
+          patchOptimista.costo_directo = asigData?.costo_directo ?? Math.round(cantTotal * Number(vlr))
+        }
+        if (asigData?.acta_rpo_id != null) patchOptimista.acta_rpo_id = asigData.acta_rpo_id
+        if (asigData?.semana_id != null) patchOptimista.semana_id = asigData.semana_id
+      } else if (
+        (itemSel?.item_numero || registro.item_numero) &&
+        vlrUnitario != null &&
+        !Number.isNaN(Number(vlrUnitario))
+      ) {
+        patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
+      }
+      onOptimisticRegistroPatch?.(registro.id, patchOptimista)
+
+      setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
+      guardadoOk = true
     } catch(e) {
       alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
     setGuardando(false)
+    if (guardadoOk) {
+      setTimeout(() => setToastMsg(null), 2000)
+      void Promise.resolve(onItemAsignado?.()).catch(() => {})
+      if (typeof onRefrescarListadoSicoe === 'function') {
+        setTimeout(() => { try { onRefrescarListadoSicoe() } catch { /* noop */ } }, 1200)
+      }
+    }
   }
 
   const guardarCorte = async () => {
@@ -4177,10 +4201,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!Array.isArray(incoming) || !incoming.length) return prev
     if (!Array.isArray(prev) || !prev.length) return incoming.map((r) => ({ ...r }))
     const byId = new Map(incoming.map((r) => [String(r.id), r]))
-    return prev.map((r) => {
+    const prevIds = new Set(prev.map((r) => String(r.id)))
+    const merged = prev.map((r) => {
       const patch = byId.get(String(r.id))
       return patch ? { ...r, ...patch } : r
     })
+    for (const r of incoming) {
+      if (!prevIds.has(String(r.id))) merged.push({ ...r })
+    }
+    return merged.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
   }
 
   const propagarReporteGuardado = (patch) => {
@@ -4452,18 +4481,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setRecargando(true)
     try {
       const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
+      // Siempre GET completo: la URL filtrada de la grilla omite registros sin ítem y líneas nuevas.
       const urlS = build(reporte.id)
-      const uf = typeof urlReporteDetalleFiltradoFn === 'function' ? urlReporteDetalleFiltradoFn(reporte.id) : null
-      // Un solo GET cuando hay URL filtrada: antes se hacían dos (simple con TODOS los registros + filtrado), duplicando tiempo y payload.
-      const urlPrimaria = uf && uf !== urlS ? uf : urlS
-      let res = await fetch(urlPrimaria, { headers: hdrs })
+      let res = await fetch(urlS, { headers: hdrs })
       let data = await res.json().catch(() => ({}))
       if (seq !== recargarSeqRef.current) return null
-      if ((!res.ok || !data?.id) && urlPrimaria !== urlS) {
-        if (seq !== recargarSeqRef.current) return null
-        res = await fetch(urlS, { headers: hdrs })
-        data = await res.json().catch(() => ({}))
-      }
       // Descartar si llegó una recarga más reciente mientras esperábamos
       if (seq !== recargarSeqRef.current) return null
       if (!res.ok || !data?.id) return null
@@ -4761,23 +4783,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/nuevo-registro`, { method: 'POST', headers: hdrs })
       const row = res.ok ? await res.json().catch(() => ({})) : {}
-      const data = await recargar()
-      setTabActiva('sin_asignar')
-      let expandId = row?.id
-      if ((expandId == null || expandId === '') && row?.numero_registro != null && Array.isArray(data?.registros)) {
-        const hit = data.registros.find(
-          (r) => String(r.numero_registro) === String(row.numero_registro),
-        )
-        expandId = hit?.id
-      }
-      if (expandId != null && expandId !== '') {
-        setRegistroExpandido(expandId)
-        const rid = expandId
+      if (row?.id != null) {
+        setRegistros((prev) => {
+          if (prev.some((r) => String(r.id) === String(row.id))) return prev
+          return [...prev, { ...row }].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
+        })
+        setTabActiva('sin_asignar')
+        setRegistroExpandido(row.id)
+        const rid = row.id
         const scrollTo = () =>
           document.getElementById(`registro-${rid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
         requestAnimationFrame(scrollTo)
         setTimeout(scrollTo, 450)
       }
+      void recargar()
     } catch(e) {}
     setCreandoReg(false)
   }
@@ -8191,8 +8210,7 @@ function ModuloSicoeObra({
             const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regF) : null
             merged = {
               ...data,
-              registros: df.registros,
-              puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
+              registros: data.registros,
               registros_vista_filtrada: df.registros_vista_filtrada,
               ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
             }
@@ -9869,8 +9887,7 @@ function ModuloSicoeObra({
                                 : null
                               merged = {
                                 ...data,
-                                registros: df.registros,
-                                puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
+                                registros: data.registros,
                                 registros_vista_filtrada: df.registros_vista_filtrada,
                                 ...(regMatchF ? { _autoRegistro: regMatchF.id } : {}),
                               }

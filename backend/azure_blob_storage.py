@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
@@ -15,6 +16,8 @@ _log = logging.getLogger("claracore.azure_blob")
 
 _init_lock = threading.Lock()
 _initialized = False
+_private_init_lock = threading.Lock()
+_private_initialized = False
 _blob_service: Optional[BlobServiceClient] = None
 
 
@@ -147,3 +150,90 @@ def sicoe_blob_path(contrato_id: int, subcarpeta: str, public_id: str, ext: str 
         return path_sicoe_grafico(contrato_id, int(num), ext)
     cid = int(contrato_id)
     return f"{cid}/{sub}/{pid}{ext}"
+
+
+# ── Contenedor privado (documentos contractuales; sin URLs públicas) ──────────
+
+
+def private_container_name() -> str:
+    return (os.getenv("AZURE_STORAGE_CONTAINER_PRIVADO") or "claracore-privado").strip()
+
+
+def ensure_private_container() -> None:
+    """Crea el contenedor privado si no existe. No modifica el contenedor público claracore."""
+    global _private_initialized
+    with _private_init_lock:
+        if _private_initialized:
+            return
+        client = get_blob_service_client()
+        name = private_container_name()
+        cc = client.get_container_client(name)
+        try:
+            cc.create_container()
+        except ResourceExistsError:
+            pass
+        _private_initialized = True
+
+
+def upload_blob_private(
+    blob_path: str,
+    data: bytes,
+    content_type: Optional[str] = None,
+    *,
+    overwrite: bool = False,
+) -> str:
+    """
+    Sube al contenedor privado. Devuelve la ruta del blob (no URL pública).
+    """
+    ensure_private_container()
+    path = blob_path.lstrip("/")
+    ct = (content_type or "application/octet-stream").split(";")[0].strip()
+    cc = get_blob_service_client().get_container_client(private_container_name())
+    cc.upload_blob(
+        name=path,
+        data=data,
+        overwrite=overwrite,
+        content_settings=ContentSettings(content_type=ct),
+    )
+    return path
+
+
+def download_blob_bytes_private(blob_path: str) -> bytes:
+    path = blob_path.lstrip("/")
+    cc = get_blob_service_client().get_container_client(private_container_name())
+    return cc.download_blob(path).readall()
+
+
+def delete_blob_private(blob_path: str) -> None:
+    """Elimina un blob del contenedor privado (idempotente si no existe)."""
+    path = (blob_path or "").strip().lstrip("/")
+    if not path:
+        return
+    cc = get_blob_service_client().get_container_client(private_container_name())
+    blob = cc.get_blob_client(path)
+    if blob.exists():
+        blob.delete_blob()
+
+
+def blob_exists_private(blob_path: str) -> bool:
+    path = blob_path.lstrip("/")
+    cc = get_blob_service_client().get_container_client(private_container_name())
+    return cc.get_blob_client(path).exists()
+
+
+def path_contrato_doc_generado(contrato_id: int, version_num: int) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"contratos-documentos/{int(contrato_id)}/generados/v{int(version_num):03d}_{ts}.pdf"
+
+
+def path_contrato_doc_firmado(contrato_id: int, version_num: int) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"contratos-documentos/{int(contrato_id)}/firmados/v{int(version_num):03d}_{ts}.pdf"
+
+
+def path_contrato_orden_pago(contrato_id: int, numero_corte: int) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return (
+        f"contratos-ordenes-pago/{int(contrato_id)}/"
+        f"corte-{int(numero_corte):04d}/orden_{ts}.pdf"
+    )

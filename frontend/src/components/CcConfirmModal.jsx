@@ -9,6 +9,7 @@ export default function CcConfirmModal({
   confirmar = 'Confirmar',
   cancelar = 'Cancelar',
   zIndex = 100020,
+  procesando = false,
   onConfirm,
   onCancel,
 }) {
@@ -77,6 +78,7 @@ export default function CcConfirmModal({
         >
           <button
             type="button"
+            disabled={procesando}
             onClick={onCancel}
             style={{
               background: 'transparent',
@@ -86,14 +88,19 @@ export default function CcConfirmModal({
               padding: '8px 16px',
               fontSize: 'var(--cc-sm)',
               fontWeight: 600,
-              cursor: 'pointer',
+              cursor: procesando ? 'wait' : 'pointer',
+              opacity: procesando ? 0.6 : 1,
             }}
           >
             {cancelar}
           </button>
           <button
             type="button"
-            onClick={onConfirm}
+            disabled={procesando}
+            onClick={(e) => {
+              e.stopPropagation();
+              void onConfirm?.();
+            }}
             style={{
               background: palette.accent,
               color: '#fff',
@@ -102,10 +109,11 @@ export default function CcConfirmModal({
               padding: '8px 18px',
               fontSize: 'var(--cc-sm)',
               fontWeight: 700,
-              cursor: 'pointer',
+              cursor: procesando ? 'wait' : 'pointer',
+              opacity: procesando ? 0.75 : 1,
             }}
           >
-            {confirmar}
+            {procesando ? 'Procesando…' : confirmar}
           </button>
         </div>
       </div>

@@ -11,6 +11,9 @@ import CompetenciaSelect from "./components/CompetenciaSelect";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
+import ContratoEditModal from "./ContratoEditModal";
+import { ContratoDocumentosMatriz } from "./ContratoDocumentosContractuales";
+import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -92,32 +95,6 @@ const NOVEDAD_ICONOS_CATALOGO = [
   "🚀", "📄", "🔐", "🌟", "💬", "📝", "🎯", "🔗", "☁️", "📋", "🦺", "⛑️",
   "🌍", "🚧", "📐", "🔔", "💼", "📈", "🧭", "⚙️", "🗂️", "📎", "🏁", "⭐",
 ];
-
-/** Alineado con `themes` en `App.jsx` (claro / oscuro / descanso) */
-const THEME = {
-  light: {
-    bg: "#F0F9FF", bgCard: "#FFFFFF", border: "#BAE6FD", text: "#0F2942", textMuted: "#4A7FA5", primary: "#0077B6", primaryLight: "#00B4C6",
-    shadow: "0 2px 12px rgba(0,119,182,0.10)", headerBg: "#FFFFFF", inputBg: "#F8FAFC",
-  },
-  dark: {
-    bg: "#0A1628", bgCard: "#0F2038", border: "#1E3A5F", text: "#E0F2FE", textMuted: "#7FB3D3", primary: "#00B4C6", primaryLight: "#00D4E8",
-    shadow: "0 2px 12px rgba(0,0,0,0.40)", headerBg: "#0F2038", inputBg: "#0A1628",
-  },
-  rest: {
-    bg: "#E8E0D5", bgCard: "#F2EDE4", border: "#C9B8A4", text: "#2A2318", textMuted: "#5C5346", primary: "#0E7490", primaryLight: "#14B8A6",
-    shadow: "0 2px 12px rgba(42,35,24,0.12)", headerBg: "#EDE6DC", inputBg: "#FAF6EF",
-  },
-}
-
-function tFrom(m, t) {
-  if (t && t.text) return t
-  if (m && THEME[m]) return THEME[m]
-  return THEME.light
-}
-
-function isDarkMode(m) { return m === "dark" }
-function isRestMode(m) { return m === "rest" }
-function isLightTheme(m) { return m === "light" || m === "rest" }
 
 // ─── TOKENS DE COLOR (objeto t del dashboard o clave de tema) ─────────────
 const C = (themeOrT) => {
@@ -351,6 +328,22 @@ const S = {
     color: "#2a4a54", fontSize: "var(--cc-body)",
   },
 };
+
+/** Select sincronizado con tema (claro / oscuro / descanso / automático). */
+function themedSelect(m, t, extra = {}) {
+  const tok = tFrom(m, t);
+  return {
+    background: tok.inputBg,
+    border: `1px solid ${tok.border}`,
+    borderRadius: 6,
+    color: tok.text,
+    fontSize: "var(--cc-sm)",
+    padding: "4px 8px",
+    outline: "none",
+    cursor: "pointer",
+    ...extra,
+  };
+}
 
 // ─── HOOK: llamadas a la API ───────────────────────────────────────────────
 /** Fallos de red / timeout: el navegador suele mostrar CORS aunque el origen esté permitido. Azure en frío puede tardar >1 min en la 1.ª respuesta. */
@@ -601,6 +594,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
 
   const estadoBadge = { pendiente: "#f59e0b", aprobado: "#22c55e", rechazado: "#ef4444" };
   const tdStyle = S.td(theme);
+  const sel = (extra) => themedSelect(theme, col, extra);
 
   return (
     <div>
@@ -639,14 +633,14 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
           </thead>
           <tbody>
             {usuarios.map(u => (
-              <>
-                <tr key={u.id}>
+              <Fragment key={u.id}>
+                <tr>
                   <td style={tdStyle}>
                     <div style={{ color: col.textPrimary, fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
                     <div style={{ fontSize: 11, color: col.textSecondary }}>{u.email}</div>
                   </td>
                   <td style={tdStyle}>
-                    <select style={{ ...S.select, minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || col.textTable }}
+                    <select style={sel({ minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || col.textTable })}
                       value={edits[u.id]?.estado || ""}
                       onChange={e => setEdit(u.id, "estado", e.target.value)}>
                       <option value="pendiente">🟡 Pendiente</option>
@@ -655,7 +649,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                     </select>
                   </td>
                   <td style={tdStyle}>
-                    <select style={{ ...S.select, minWidth: 140 }}
+                    <select style={sel({ minWidth: 140 })}
                       value={edits[u.id]?.cargo_id || ""}
                       onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
                       <option value="">Sin cargo</option>
@@ -663,7 +657,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                     </select>
                   </td>
                   <td style={tdStyle}>
-                    <select style={{ ...S.select, minWidth: 130 }}
+                    <select style={sel({ minWidth: 130 })}
                       value={edits[u.id]?.rol_id || ""}
                       onChange={e => setEdit(u.id, "rol_id", e.target.value)}>
                       <option value="">Sin rol</option>
@@ -671,7 +665,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                     </select>
                   </td>
                   <td style={tdStyle}>
-                    <select style={{ ...S.select, minWidth: 150 }}
+                    <select style={sel({ minWidth: 150 })}
                       value={edits[u.id]?.contrato_id || ""}
                       onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
                       <option value="">Sin contrato</option>
@@ -680,7 +674,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                   </td>
                   <td style={tdStyle}>
                     <select
-                      style={{ ...S.select, minWidth: 118 }}
+                      style={sel({ minWidth: 118 })}
                       value={edits[u.id]?.politicas_aceptadas ? "si" : "no"}
                       onChange={e => setEdit(u.id, "politicas_aceptadas", e.target.value === "si")}
                     >
@@ -708,7 +702,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                   </td>
                 </tr>
                 {expandido === u.id && (
-                  <tr key={`uc-${u.id}`}>
+                  <tr>
                     <td colSpan={7} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
                       <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
                         Contratos autorizados para {u.nombre}:
@@ -723,7 +717,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                         {(ucContratos[u.id] || []).length === 0 && <span style={{ color: col.textSecondary, fontSize: 12 }}>Sin contratos asignados</span>}
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <select style={{ ...S.select, minWidth: 180 }}
+                        <select style={sel({ minWidth: 180 })}
                           value={addingContrato[u.id] || ""}
                           onChange={e => setAddingContrato(p => ({ ...p, [u.id]: e.target.value }))}>
                           <option value="">+ Agregar contrato...</option>
@@ -744,7 +738,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                             <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
                           )}
                           <div style={{ display: "flex", gap: 8 }}>
-                            <select style={{ ...S.select, minWidth: 220 }}
+                            <select style={sel({ minWidth: 220 })}
                               value={edits[u.id]?.subcontratista_id || ""}
                               onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
                               <option value="">Sin subcontratista</option>
@@ -762,7 +756,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -870,6 +864,7 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   const [msg, setMsg] = useState(null);
   const col = C(theme);
   const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+  const sel = (extra) => themedSelect(theme, col, extra);
 
   const cargarPermisos = useCallback(async (id) => {
     if (!id || !contratoPermId) return;
@@ -962,14 +957,14 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
         {(isDev || (contratos && contratos.length > 1)) && (
           <>
             <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Contrato:</div>
-            <select style={{ ...S.select, flex: 1, maxWidth: 220 }} value={contratoPermId} onChange={e => setContratoPermId(e.target.value)}>
+            <select style={sel({ flex: 1, maxWidth: 220 })} value={contratoPermId} onChange={e => setContratoPermId(e.target.value)}>
               <option value="">-- Contrato --</option>
               {(contratos || []).map(c => <option key={c.id} value={c.id}>{c.numero || c.id}</option>)}
             </select>
           </>
         )}
         <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
-        <select style={{ ...S.select, flex: 1, maxWidth: 280 }} value={cargoId} onChange={e => setCargoId(e.target.value)}>
+        <select style={sel({ flex: 1, maxWidth: 280 })} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
           {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
@@ -2501,7 +2496,7 @@ const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
 /** GET/PUT/POST de contrato con `plano_geojson` grande (decenas de MB): el timeout por defecto del panel (~48 s) corta con "signal timed out" antes de terminar. */
 const CONTRATO_API_PLANO_TIMEOUT = { timeoutMs: 30 * 60 * 1000, maxRetries: 1 };
 
-function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
+function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false }, isDeveloper = false, token = null, theme = "dark", t = null }) {
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
     numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
@@ -2512,6 +2507,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
+  const [modalMode, setModalMode] = useState(null); // null | 'create' | 'edit'
+  const [modalInitialTab, setModalInitialTab] = useState("info");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
@@ -2521,6 +2518,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const mapRef = useRef(null);
   const planoFileInputRef = useRef(null);
   const [nivelesActivosEdit, setNivelesActivosEdit] = useState([1, 2, 3]);
+  const [vistaContratosDev, setVistaContratosDev] = useState("gestion"); // gestion | matriz-documentos
 
   /** Límites y centro en una pasada (sin arrays enormes). Math.min(...array) falla con muchos vértices (>~65k args). */
   function boundsDesdeGeojson(geojson) {
@@ -2708,8 +2706,10 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     e.target.value = "";
   }
 
-  async function iniciarEdicion(c) {
+  async function iniciarEdicion(c, { tabInicial = "info" } = {}) {
     setEditandoId(c.id);
+    setModalMode("edit");
+    setModalInitialTab(tabInicial);
     let d = c;
     try {
       const detalle = await call("GET", `/contratos/${c.id}?include_plano=1`, null, CONTRATO_API_PLANO_TIMEOUT);
@@ -2734,8 +2734,20 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     setMsg(null);
   }
 
+  function iniciarCreacion() {
+    setEditandoId(null);
+    setForm(FORM_VACIO);
+    setNivelesActivosEdit([1, 2, 3]);
+    setPlanoArchivoLabel(null);
+    if (planoFileInputRef.current) planoFileInputRef.current.value = "";
+    setModalMode("create");
+    setModalInitialTab("info");
+    setMsg(null);
+  }
+
   function cancelarEdicion() {
     setEditandoId(null);
+    setModalMode(null);
     setForm(FORM_VACIO);
     setNivelesActivosEdit([1, 2, 3]);
     setPlanoArchivoLabel(null);
@@ -2852,6 +2864,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         setMsg({ type: 'success', text: 'Contrato creado correctamente' });
         setForm(FORM_VACIO);
         setEditandoId(null);
+        setModalMode(null);
         setPlanoArchivoLabel(null);
         if (planoFileInputRef.current) planoFileInputRef.current.value = "";
       }
@@ -2896,13 +2909,18 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     }
 
     mapboxgl.accessToken = token;
+    const mapStyle = mapboxStyleForTheme(theme);
+    if (mapRef.current && mapRef.current._contratoMapStyle !== mapStyle) {
+      destruirMapaPreview();
+    }
     if (!mapRef.current) {
       mapRef.current = new mapboxgl.Map({
         container: mapContainerRef.current,
-        style: "mapbox://styles/mapbox/dark-v11",
+        style: mapStyle,
         center: [form.centro_lng || -74.08175, form.centro_lat || 4.60971],
         zoom: 11,
       });
+      mapRef.current._contratoMapStyle = mapStyle;
       mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
     }
 
@@ -2962,7 +2980,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     return () => {
       map.off("load", renderPlano);
     };
-  }, [form.plano_geojson, form.centro_lng, form.centro_lat]);
+  }, [form.plano_geojson, form.centro_lng, form.centro_lat, theme]);
 
   useEffect(() => () => {
     if (mapRef.current) {
@@ -2971,8 +2989,6 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     }
   }, []);
 
-  const inp = { width: '100%', background: '#0a1628', border: '1.5px solid #1E3A5F', borderRadius: 8, padding: '9px 12px', color: '#E0F2FE', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 12 };
-  const lbl = { fontSize: 11, fontWeight: 700, color: '#4a7a87', letterSpacing: 1, display: 'block', marginBottom: 4 };
   const _fmtCOP0 = (n) => {
     if (n == null || n === '' || !Number.isFinite(Number(n))) return '—';
     return formatCOP(n);
@@ -2997,293 +3013,107 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     return partes.join(' · ');
   }
 
+  async function abrirContratoDesdeMatriz(contratoId) {
+    const c = contratos.find((x) => Number(x.id) === Number(contratoId));
+    if (!c) {
+      setMsg({ type: "error", text: "Contrato no encontrado en la lista cargada." });
+      return;
+    }
+    setVistaContratosDev("gestion");
+    await iniciarEdicion(c, { tabInicial: "licencia" });
+    setMsg({ type: "success", text: `Contrato ${c.numero} abierto en pestaña «Contrato de licenciamiento».` });
+  }
+
+  const col = C(t || theme);
+  const tok = tFrom(theme, t);
+  const cardListBg = tok.bgCard;
+  const cardListBorder = tok.border;
+  const cardListHighlight = isDarkMode(theme)
+    ? "rgba(0,175,197,0.08)"
+    : isRestMode(theme)
+      ? "rgba(14,116,144,0.1)"
+      : "rgba(0,119,182,0.08)";
+
   return (
     <div style={{ padding: 28 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
-        {/* FORMULARIO */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5' }}>
-              {editandoId ? '✏️ Editar Contrato' : '➕ Nuevo Contrato'}
-            </div>
-            {editandoId && (
-              <button onClick={cancelarEdicion} style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 12px', color: '#8acdd8', fontSize: 12, cursor: 'pointer' }}>
-                ← Cancelar
-              </button>
-            )}
-          </div>
-          <label style={lbl}>NÚMERO DE CONTRATO *</label>
-          <input style={inp} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={e => setForm(f => ({ ...f, numero: e.target.value }))} />
-          <label style={lbl}>OBJETO DEL CONTRATO</label>
-          <input style={inp} placeholder="Descripción del objeto contractual" value={form.objeto} onChange={e => setForm(f => ({ ...f, objeto: e.target.value }))} />
-          <label style={lbl}>CONTRATISTA *</label>
-          <input style={inp} placeholder="Razón social" value={form.contratista} onChange={e => setForm(f => ({ ...f, contratista: e.target.value }))} />
-          <label style={lbl}>NIT CONTRATISTA</label>
-          <input style={inp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={e => setForm(f => ({ ...f, nit: e.target.value }))} />
-          <label style={lbl}>INTERVENTORÍA</label>
-          <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={e => setForm(f => ({ ...f, interventoria: e.target.value }))} />
-          <label style={lbl}>ENTIDAD *</label>
-          <select style={inp} value={form.entidad} onChange={e => setForm(f => ({ ...f, entidad: e.target.value, entidad_otra: e.target.value === "OTRA" ? f.entidad_otra : "" }))}>
-            <option value="">Selecciona entidad...</option>
-            {ENTIDADES.map(ent => <option key={ent} value={ent}>{ent === "OTRA" ? "OTRA... (Indique cuál)" : ent}</option>)}
-          </select>
-          {form.entidad === "OTRA" && (
-            <>
-              <label style={lbl}>¿CUÁL ENTIDAD?</label>
-              <input style={inp} placeholder="Escribe la entidad" value={form.entidad_otra} onChange={e => setForm(f => ({ ...f, entidad_otra: e.target.value }))} />
-            </>
-          )}
-          <label style={lbl}>LOGO ENTIDAD</label>
-          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
-            {form.logo_entidad ? '✅ Logo entidad cargado' : '📂 Cargar logo de entidad'}
-            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_entidad', e)} />
-          </label>
-          <label style={lbl}>CARGAR PLANO (GEOJSON)</label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-            <label style={{ display: "block", background: "#0a1628", border: "2px dashed #1E3A5F", borderRadius: 8, padding: 12, textAlign: "center", cursor: "pointer", color: "#4a7a87", fontSize: 12 }}>
-              {form.plano_geojson
-                ? (planoArchivoLabel ? `✅ ${planoArchivoLabel}` : "✅ Plano GeoJSON cargado")
-                : "📂 Elegir archivo .geojson / .json"}
-              <input ref={planoFileInputRef} type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: "none" }} onChange={handlePlanoGeojson} />
-            </label>
-            {form.plano_geojson && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                <button type="button" onClick={abrirSelectorPlanoGeojson}
-                  style={{ background: "rgba(0,175,197,0.12)", border: "1px solid rgba(0,175,197,0.45)", borderRadius: 6, padding: "6px 12px", color: "#8acdd8", fontSize: 12, cursor: "pointer" }}>
-                  📎 Reemplazar por otro archivo
-                </button>
-                <button type="button" onClick={() => {
-                  if (window.confirm("¿Quitar el plano del formulario? La previsualización se borrará. Si guardas el contrato así, quedará sin plano hasta que subas otro archivo.")) quitarPlanoGeojson();
-                }}
-                  style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.45)", borderRadius: 6, padding: "6px 12px", color: "#F87171", fontSize: 12, cursor: "pointer" }}>
-                  🗑️ Quitar plano
-                </button>
-              </div>
-            )}
-          </div>
-          {form.centro_lat != null && form.centro_lng != null && (
-            <div style={{ fontSize: 11, color: '#8acdd8', marginTop: -2, marginBottom: 12 }}>
-              Punto medio detectado: Lat {form.centro_lat} / Lng {form.centro_lng}
-            </div>
-          )}
-          {form.plano_geojson && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 10, color: '#4a7a87', letterSpacing: 0.7, marginBottom: 6 }}>PREVISUALIZACIÓN MAPBOX</div>
-              {!import.meta.env.VITE_MAPBOX_TOKEN ? (
-                <div style={{ padding: 16, borderRadius: 8, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#FCD34D', fontSize: 12, lineHeight: 1.45 }}>
-                  El GeoJSON está cargado, pero falta la variable de entorno <code style={{ color: '#FDE68A' }}>VITE_MAPBOX_TOKEN</code> en el frontend; sin token no se puede dibujar el mapa.
-                </div>
-              ) : (
-                <div ref={mapContainerRef} style={{ width: '100%', height: 220, borderRadius: 8, border: '1px solid rgba(0,175,197,0.25)', overflow: 'hidden' }} />
-              )}
-            </div>
-          )}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:0 }}>
-            <div>
-              <label style={lbl}>AIU (%)</label>
-              <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%"
-                value={form.aiu}
-                onChange={e => setForm(f => ({ ...f, aiu: e.target.value }))} />
-              {form.aiu !== '' && !isNaN(parseFloat(form.aiu)) && (
-                <div style={{ fontSize:11, color:'#00afc5', marginTop:-8, marginBottom:8 }}>
-                  = {(parseFloat(form.aiu)*100).toFixed(4).replace(/\.?0+$/,'')}%
-                </div>
-              )}
-            </div>
-            <div>
-              <label style={lbl}>IVA (%)</label>
-              <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.19 → 19%"
-                value={form.iva}
-                onChange={e => setForm(f => ({ ...f, iva: e.target.value }))} />
-              {form.iva !== '' && !isNaN(parseFloat(form.iva)) && (
-                <div style={{ fontSize:11, color:'#00afc5', marginTop:-8, marginBottom:8 }}>
-                  = {(parseFloat(form.iva)*100).toFixed(4).replace(/\.?0+$/,'')}%
-                </div>
-              )}
-            </div>
-          </div>
-          <div style={{ fontSize: 10, color: '#4a7a87', letterSpacing: 0.6, margin: '4px 0 8px' }}>VALORES CONTRATUALES (COP$)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
-            <div>
-              <label style={lbl}>VALOR COMPONENTE AMBIENTAL</label>
-              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_ambiental}
-                onChange={e => setForm(f => ({ ...f, valor_componente_ambiental: e.target.value }))} />
-            </div>
-            <div>
-              <label style={lbl}>VALOR COMPONENTE SOCIAL</label>
-              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_social}
-                onChange={e => setForm(f => ({ ...f, valor_componente_social: e.target.value }))} />
-            </div>
-            <div>
-              <label style={lbl}>VALOR COMPONENTE PMT</label>
-              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_pmt}
-                onChange={e => setForm(f => ({ ...f, valor_componente_pmt: e.target.value }))} />
-            </div>
-            <div>
-              <label style={lbl}>COSTO DIRECTO DEL CONTRATO</label>
-              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.costo_directo_contrato}
-                onChange={e => setForm(f => ({ ...f, costo_directo_contrato: e.target.value }))} />
-            </div>
-          </div>
-          <div style={{ fontSize: 10, color: '#6ac8c9', letterSpacing: 0.4, margin: '0 0 6px' }}>
-            Costos adicionales: concepto, valor mensual (COP$) y plazo en meses. El <strong>valor total</strong> del renglón es automático: redondeo a entero (0 decimales). No forman parte del cobro de precios, AIU, IVA ni listado SICOE.
-          </div>
-          {(form.costos_adicionales_lista || []).map((row, i) => {
-            const vvm = _numONull(row.valor_mensual);
-            const ttm = _numONull(row.tiempo_meses);
-            const totalCalc = (vvm != null && ttm != null) ? Math.round(vvm * ttm) : null;
-            return (
-            <div key={i} style={{ marginBottom: 10 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.1fr) 0.6fr 0.45fr 0.7fr 36px', gap: 8, alignItems: 'end' }}>
-              <div>
-                <label style={lbl}>CONCEPTO *</label>
-                <input style={inp} placeholder="Ej. servicio fijo, supervisión" value={row.concepto_contractual || ''}
-                  onChange={e => {
-                    const v = e.target.value;
-                    setForm(f => {
-                      const arr = [...(f.costos_adicionales_lista || [])];
-                      arr[i] = { ...arr[i], concepto_contractual: v };
-                      return { ...f, costos_adicionales_lista: arr };
-                    });
-                  }} />
-              </div>
-              <div>
-                <label style={lbl}>VALOR MENSUAL (COP)</label>
-                <input style={inp} type="number" step="0.01" min="0" placeholder="0"
-                  value={row.valor_mensual}
-                  onChange={e => {
-                    const v = e.target.value;
-                    setForm(f => {
-                      const arr = [...(f.costos_adicionales_lista || [])];
-                      arr[i] = { ...arr[i], valor_mensual: v };
-                      return { ...f, costos_adicionales_lista: arr };
-                    });
-                  }} />
-              </div>
-              <div>
-                <label style={lbl}>MESES</label>
-                <input style={inp} type="number" step="0.1" min="0" placeholder="0"
-                  value={row.tiempo_meses}
-                  onChange={e => {
-                    const v = e.target.value;
-                    setForm(f => {
-                      const arr = [...(f.costos_adicionales_lista || [])];
-                      arr[i] = { ...arr[i], tiempo_meses: v };
-                      return { ...f, costos_adicionales_lista: arr };
-                    });
-                  }} />
-              </div>
-              <div>
-                <label style={lbl}>COSTO ADICIONAL (CALC.)</label>
-                <div style={{ ...inp, display: 'flex', alignItems: 'center', marginBottom: 12, minHeight: 40, color: totalCalc != null ? '#a5f3fc' : '#4a7a87' }}>
-                  {totalCalc != null ? _fmtCOP0(totalCalc) : '—'}
-                </div>
-              </div>
-              <button type="button" onClick={() => {
-                setForm(f => {
-                  const arr = [...(f.costos_adicionales_lista || [])];
-                  arr.splice(i, 1);
-                  return { ...f, costos_adicionales_lista: arr };
-                });
-              }} style={{ background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.35)', color: '#f87171', borderRadius: 6, padding: '8px 0', cursor: 'pointer', fontSize: 11 }}>Quitar</button>
-            </div>
-            <div style={{ fontSize: 10, color: '#5eead4', marginTop: 4, paddingLeft: 2 }}>
-              Valor mensual: {vvm != null ? _fmtCOP0(vvm) : '—'}
-            </div>
-            </div>
-            );
-          })}
-          <button type="button" onClick={() => setForm(f => ({ ...f, costos_adicionales_lista: [...(f.costos_adicionales_lista || []), { concepto_contractual: '', valor_mensual: '', tiempo_meses: '' }] }))} style={{ background: 'rgba(0,175,197,0.2)', border: '1px solid rgba(0,175,197,0.4)', color: '#00afc5', borderRadius: 8, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', marginBottom: 12 }}>+ Agregar costo adicional</button>
-          {editandoId && (
-            <div style={{ marginTop: 8, marginBottom: 16, paddingTop: 16, borderTop: '1px solid rgba(30,58,95,0.5)' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#00afc5', marginBottom: 8 }}>Niveles de Validación SICOE</div>
-              <div style={{ fontSize: 11, color: '#4a7a87', lineHeight: 1.45, marginBottom: 12 }}>
-                Selecciona los niveles que estarán activos para este contrato. El registro se sella al aprobar el nivel más alto seleccionado.
-              </div>
-              {[1, 2, 3, 4, 5, 6].map((n) => (
-                <label
-                  key={n}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 10,
-                    cursor: 'pointer',
-                    background: '#0a1628',
-                    border: '1.5px solid #1E3A5F',
-                    borderRadius: 8,
-                    padding: '10px 12px',
-                    marginBottom: 10,
-                    color: '#E0F2FE',
-                    fontSize: 13,
-                    lineHeight: 1.35,
-                    boxSizing: 'border-box',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={nivelesActivosEdit.includes(n)}
-                    onChange={() => {
-                      setNivelesActivosEdit((prev) => {
-                        const p = Array.isArray(prev) ? prev : [];
-                        if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
-                        return [...p, n].sort((a, b) => a - b);
-                      });
-                    }}
-                    style={{
-                      width: 16,
-                      height: 16,
-                      marginTop: 2,
-                      accentColor: '#00afc5',
-                      flexShrink: 0,
-                      cursor: 'pointer',
-                    }}
-                  />
-                  <span>{SICOE_NIVELES_VALIDACION_ADMIN_LABELS[n]}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          <label style={lbl}>LOGO CONTRATISTA</label>
-          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
-            {form.logo_contratista ? '✅ Logo cargado' : '📂 Cargar logo contratista'}
-            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_contratista', e)} />
-          </label>
-          <label style={lbl}>LOGO INTERVENTORÍA</label>
-          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 16 }}>
-            {form.logo_interventoria ? '✅ Logo cargado' : '📂 Cargar logo interventoría'}
-            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_interventoria', e)} />
-          </label>
-          {msg && <div style={{ background: msg.type === 'error' ? '#2a0a0a' : '#0a2a1a', color: msg.type === 'error' ? '#f87171' : '#4ade80', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 12 }}>{msg.text}</div>}
-        {(editandoId ? perms?.editar : perms?.crear) && (
-          <button onClick={handleGuardar} disabled={saving} style={{ background: '#00afc5', border: 'none', borderRadius: 8, padding: '10px 24px', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: 13 }}>
-            {saving ? 'Guardando...' : (editandoId ? 'Actualizar Contrato' : 'Guardar Contrato')}
+      {isDeveloper && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+          {[
+            { id: "gestion", label: "Gestión de contratos" },
+            { id: "matriz-documentos", label: "Control documentos contractuales" },
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setVistaContratosDev(opt.id)}
+              style={{
+                background: vistaContratosDev === opt.id ? "rgba(0,175,197,0.2)" : "transparent",
+                border: `1px solid ${vistaContratosDev === opt.id ? "rgba(0,175,197,0.55)" : "rgba(0,175,197,0.25)"}`,
+                borderRadius: 8,
+                padding: "8px 16px",
+                color: vistaContratosDev === opt.id ? "#00afc5" : "#8acdd8",
+                fontSize: 12,
+                fontWeight: vistaContratosDev === opt.id ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isDeveloper && vistaContratosDev === "matriz-documentos" ? (
+        <ContratoDocumentosMatriz
+          call={call}
+          token={token}
+          contratos={contratos}
+          onIrAContrato={(id) => void abrirContratoDesdeMatriz(id)}
+        />
+      ) : (
+      <>
+      {msg && !modalMode && (
+        <div style={{ background: msg.type === "error" ? (isDarkMode(theme) ? "#2a0a0a" : "#FEE2E2") : (isDarkMode(theme) ? "#0a2a1a" : "#ECFDF5"), color: msg.type === "error" ? (isDarkMode(theme) ? "#f87171" : "#DC2626") : (isDarkMode(theme) ? "#4ade80" : "#047857"), borderRadius: 8, padding: "10px 14px", fontSize: "var(--cc-body)", marginBottom: 16 }}>
+          {msg.text}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ fontSize: "var(--cc-title)", fontWeight: 700, color: tok.primary }}>📋 Contratos registrados</div>
+        {perms?.crear && (
+          <button
+            type="button"
+            onClick={iniciarCreacion}
+            style={{ background: cardListHighlight, border: `1px solid ${tok.primary}88`, borderRadius: 8, padding: "8px 16px", color: tok.primary, fontWeight: 700, fontSize: "var(--cc-sm)", cursor: "pointer" }}
+          >
+            ➕ Nuevo contrato
           </button>
         )}
-        </div>
-
+      </div>
+      <div>
         {/* LISTA DE CONTRATOS */}
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>📋 Contratos registrados</div>
           {contratos.length === 0 ? (
-            <div style={{ color: '#4a7a87', fontSize: 13 }}>No hay contratos registrados</div>
+            <div style={{ color: col.textMuted, fontSize: "var(--cc-body)" }}>No hay contratos registrados</div>
           ) : contratos.map(c => {
             const resumenCtz = tasaYmontosResumenListado(c);
+            const cardSelected = modalMode === "edit" && editandoId === c.id;
             return (
-            <div key={c.id} style={{ background: editandoId === c.id ? 'rgba(0,175,197,0.08)' : '#081318', border: `1px solid ${editandoId === c.id ? 'rgba(0,175,197,0.4)' : 'rgba(0,175,197,0.15)'}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
+            <div key={c.id} style={{ background: cardSelected ? cardListHighlight : cardListBg, border: `1px solid ${cardSelected ? `${tok.primary}88` : cardListBorder}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10, cursor: perms?.editar ? 'pointer' : 'default' }}
+              onClick={perms?.editar ? () => void iniciarEdicion(c) : undefined}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
-                  <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
-                  {c.entidad && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Entidad: {c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : c.entidad}</div>}
-                  {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
+                  <div style={{ fontWeight: 700, color: tok.primary, fontSize: "var(--cc-body)" }}>{c.numero}</div>
+                  <div style={{ color: col.textSecondary, fontSize: "var(--cc-sm)", marginTop: 2 }}>{c.contratista}</div>
+                  {c.entidad && <div style={{ color: col.textMuted, fontSize: "var(--cc-caption)", marginTop: 2 }}>Entidad: {c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : c.entidad}</div>}
+                  {c.interventoria && <div style={{ color: col.textMuted, fontSize: "var(--cc-caption)", marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
                   {resumenCtz && (
-                    <div style={{ color: '#6ac8c9', fontSize: 10, marginTop: 5, lineHeight: 1.4, wordBreak: 'break-word' }} title="Datos guardados en el contrato">
+                    <div style={{ color: col.textSecondary, fontSize: "var(--cc-caption)", marginTop: 5, lineHeight: 1.4, wordBreak: 'break-word' }} title="Datos guardados en el contrato">
                       {resumenCtz}
                     </div>
                   )}
                   {/* Badge de fase */}
-                  <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : 'rgba(0,175,197,0.10)', border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : 'rgba(0,175,197,0.3)'}`, borderRadius: 20, padding: '3px 10px' }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '#F59E0B' : '#00afc5', letterSpacing: 1 }}>
+                  <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : cardListHighlight, border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : `${tok.primary}55`}`, borderRadius: 20, padding: '3px 10px' }}>
+                    <span style={{ fontSize: "var(--cc-caption)", fontWeight: 700, color: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '#F59E0B' : tok.primary, letterSpacing: 1 }}>
                       {(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '⚖️ LIQUIDACIÓN' : '📋 PRESUPUESTO'}
                     </span>
                   </div>
@@ -3296,14 +3126,14 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
                   {/* Toggle PRESUPUESTO / LIQUIDACIÓN */}
                   {perms?.editar && (
-                    <div style={{ display: 'flex', gap: 0, background: '#0a1628', border: '1px solid rgba(0,175,197,0.25)', borderRadius: 8, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', gap: 0, background: tok.inputBg, border: `1px solid ${cardListBorder}`, borderRadius: 8, overflow: 'hidden' }}>
                       {['PRESUPUESTO', 'LIQUIDACION'].map(fase => {
                         const activo = (c.fase || 'PRESUPUESTO') === fase;
-                        const col = fase === 'LIQUIDACION' ? '#F59E0B' : '#00afc5';
+                        const colFase = fase === 'LIQUIDACION' ? '#F59E0B' : tok.primary;
                         return (
                           <button key={fase} disabled={activo || togglingFase === c.id}
-                            onClick={() => toggleFase(c)}
-                            style={{ background: activo ? col + '22' : 'transparent', color: activo ? col : '#4a7a87', border: 'none', borderRight: fase === 'PRESUPUESTO' ? '1px solid rgba(0,175,197,0.2)' : 'none', padding: '5px 10px', fontSize: 10, fontWeight: activo ? 700 : 400, cursor: activo ? 'default' : 'pointer', letterSpacing: 0.5, transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
+                            onClick={(e) => { e.stopPropagation(); toggleFase(c); }}
+                            style={{ background: activo ? colFase + '22' : 'transparent', color: activo ? colFase : col.textMuted, border: 'none', borderRight: fase === 'PRESUPUESTO' ? `1px solid ${cardListBorder}` : 'none', padding: '5px 10px', fontSize: "var(--cc-caption)", fontWeight: activo ? 700 : 400, cursor: activo ? 'default' : 'pointer', letterSpacing: 0.5, transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
                             {fase === 'PRESUPUESTO' ? '📋 Presupuesto' : '⚖️ Liquidación'}
                           </button>
                         );
@@ -3315,24 +3145,26 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                     <button
                       type="button"
                       disabled={reseteandoSicoe === c.id}
-                      onClick={() => resetSicoeContadores(c)}
+                      onClick={(e) => { e.stopPropagation(); resetSicoeContadores(c); }}
                       title="Numeración SICOE desde 1 y sincronización de contadores de reportes/registros"
-                      style={{ background: 'transparent', border: '1px solid rgba(245,158,11,0.45)', borderRadius: 6, padding: '4px 10px', color: '#F59E0B', fontSize: 11, cursor: reseteandoSicoe === c.id ? 'wait' : 'pointer', whiteSpace: 'nowrap', opacity: reseteandoSicoe === c.id ? 0.65 : 1 }}
+                      style={{ background: 'transparent', border: '1px solid rgba(245,158,11,0.45)', borderRadius: 6, padding: '4px 10px', color: '#F59E0B', fontSize: "var(--cc-caption)", cursor: reseteandoSicoe === c.id ? 'wait' : 'pointer', whiteSpace: 'nowrap', opacity: reseteandoSicoe === c.id ? 0.65 : 1 }}
                     >
                       {reseteandoSicoe === c.id ? '⏳ Reseteando…' : '🔢 Reset contadores SICOE'}
                     </button>
                   )}
                   {perms?.editar && (
                     <button
-                      onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
-                      style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void iniciarEdicion(c); }}
+                      style={{ background: 'transparent', border: `1px solid ${tok.primary}55`, borderRadius: 6, padding: '4px 10px', color: tok.primary, fontSize: "var(--cc-caption)", cursor: 'pointer', whiteSpace: 'nowrap' }}
                     >
-                      {editandoId === c.id ? '✕' : '✏️ Editar'}
+                      ✏️ Abrir
                     </button>
                   )}
                   {perms?.eliminar && (
                     <button
-                      onClick={async () => {
+                      onClick={async (e) => {
+                        e.stopPropagation();
                         if (!window.confirm(`¿Eliminar contrato ${c.numero}? Esta acción no se puede deshacer.`)) return;
                         try {
                           await call("DELETE", `/contratos/${c.id}`);
@@ -3352,7 +3184,40 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           );
           })}
         </div>
-      </div>
+
+      <ContratoEditModal
+        open={!!modalMode}
+        mode={modalMode === "create" ? "create" : "edit"}
+        contratoId={editandoId}
+        contratoNumero={form.numero || contratos.find((c) => c.id === editandoId)?.numero}
+        isDeveloper={isDeveloper}
+        onClose={cancelarEdicion}
+        onGuardar={() => void handleGuardar()}
+        saving={saving}
+        msg={modalMode ? msg : null}
+        form={form}
+        setForm={setForm}
+        nivelesActivosEdit={nivelesActivosEdit}
+        setNivelesActivosEdit={setNivelesActivosEdit}
+        planoArchivoLabel={planoArchivoLabel}
+        planoFileInputRef={planoFileInputRef}
+        mapContainerRef={mapContainerRef}
+        handleLogo={handleLogo}
+        handlePlanoGeojson={handlePlanoGeojson}
+        abrirSelectorPlanoGeojson={abrirSelectorPlanoGeojson}
+        quitarPlanoGeojson={quitarPlanoGeojson}
+        ENTIDADES={ENTIDADES}
+        nivelesLabels={SICOE_NIVELES_VALIDACION_ADMIN_LABELS}
+        perms={perms}
+        numONull={_numONull}
+        call={call}
+        token={token}
+        theme={theme}
+        t={t}
+        initialTab={modalInitialTab}
+      />
+      </>
+      )}
     </div>
   );
 }
@@ -4242,7 +4107,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   // ── Estilos locales reutilizables (tema claro y descanso usan tokens; oscuro, capa fija) ─
   const labelStyle   = { fontSize: "var(--cc-caption)", color: col.textSecondary, marginBottom: 5 };
   const inputStyle   = !isDarkMode(theme) ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}` } : S.input;
-  const selectStyle  = !isDarkMode(theme) ? { ...S.select, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" } : { ...S.select, width: "100%" };
+  const selectStyle  = themedSelect(theme, tTok, { width: "100%" });
   const overlayStyle = { position: "fixed", inset: 0, zIndex: 10001, background: "rgba(5,12,18,0.92)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" };
   const modalStyle   = (w) => ({
     width: `min(${w}px,95vw)`, maxHeight: "92vh", borderRadius: 14,
@@ -4345,7 +4210,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
     <div>
       {!modoCustom ? (
-        <select style={{ ...S.select,width:"100%" }} value={UNIDADES.includes(value)?value:(value?"__prev__":"")}
+        <select style={{ ...S.select, width:"100%" }} value={UNIDADES.includes(value)?value:(value?"__prev__":"")}
           onChange={e => {
             if (e.target.value === "__custom__") { setModoCustom(true); setUCustom(""); onChange(""); }
             else if (e.target.value === "__prev__") { /* mantiene valor */ }
@@ -4455,12 +4320,12 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           <input style={{ ...S.input,padding:"6px 10px",fontSize:12,flex:"1 1 180px",maxWidth:260 }}
             placeholder="🔍 Buscar descripción o ítem..." value={filtroTexto}
             onChange={e=>setFiltroTexto(e.target.value)} />
-          <select style={{ ...S.select,minWidth:160 }} value={filtroCapitulo}
+          <select style={{ ...S.select, minWidth:160 }} value={filtroCapitulo}
             onChange={e=>setFiltroCapitulo(e.target.value)}>
             <option value="">Todos los capítulos</option>
             {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
-          <select style={{ ...S.select,minWidth:130 }} value={filtroEstado}
+          <select style={{ ...S.select, minWidth:130 }} value={filtroEstado}
             onChange={e=>setFiltroEstado(e.target.value)}>
             <option value="">Todos los estados</option>
             <option value="Aprobado">✓ Aprobado</option>
@@ -6783,7 +6648,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
 
   const labelStyle  = { fontSize:"var(--cc-caption)", color: col.textSecondary, marginBottom: 4 };
   const inputStyle  = !isDarkMode(theme) ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}` } : S.input;
-  const selectStyle = !isDarkMode(theme) ? { ...S.select, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" } : { ...S.select, width: "100%" };
+  const selectStyle = themedSelect(theme, tTok, { width: "100%" });
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
   const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isDarkMode(theme)?"#0b1920":tTok.bg,borderRadius:14,border:`1px solid ${tTok.border}`,boxShadow:isRestMode(theme)?"0 32px 56px rgba(42,35,24,0.2)":"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
   const modalHeadBgS = isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE");
@@ -7667,6 +7532,10 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} contratos={contratosVisibles} user={user} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratosVisibles} recargarContratos={cargarContratos}
+            theme={activeTheme}
+            t={t}
+            isDeveloper={isDeveloper}
+            token={token}
             perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
               (() => {
                 const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");

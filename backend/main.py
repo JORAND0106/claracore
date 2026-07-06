@@ -2212,6 +2212,12 @@ app.include_router(filtros_plantillas_router)
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
 
+from contrato_documentos_routes import router as contrato_documentos_router
+app.include_router(contrato_documentos_router)
+
+from contrato_orden_pago_routes import router as contrato_orden_pago_router
+app.include_router(contrato_orden_pago_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router

@@ -79,6 +79,20 @@ export function fetchSicoePkIdsCached(apiBase, contratoId, token) {
   })
 }
 
+export function fetchSicoeCapitulosCached(apiBase, contratoId, token) {
+  if (!apiBase || !contratoId) return Promise.resolve([])
+  const key = cacheKey(['capitulos', contratoId])
+  return cachedFetch(key, async () => {
+    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/capitulos`, { headers: authHeaders(token) })
+    if (!r.ok) return []
+    const d = await r.json()
+    if (!Array.isArray(d)) return []
+    return d
+      .map((c) => (typeof c === 'string' ? c : c?.capitulo))
+      .filter(Boolean)
+  })
+}
+
 export function fetchSicoeListadoPreciosCached(apiBase, contratoId, capitulo, q, token) {
   const cap = String(capitulo || '').trim()
   if (!apiBase || !contratoId || !cap) return Promise.resolve([])
