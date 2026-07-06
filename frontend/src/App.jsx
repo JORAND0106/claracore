@@ -4585,13 +4585,29 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!window.confirm(`¿Eliminar permanentemente el registro #${num}? Esta acción no se puede deshacer.`)) return
     setDevEliminando(true)
     try {
-      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${registroId}/dev`, { method: 'DELETE', headers: hdrs })
+      const res = await sicoeFetchWithRetry(
+        `${API_URL}/sicoe-obra/${contrato_id}/registros/${registroId}/dev`,
+        { method: 'DELETE', headers: hdrs },
+      )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         const d = err?.detail
         throw new Error(typeof d === 'string' ? d : `Error ${res.status}`)
       }
-      await recargar()
+      setRegistros((prev) => {
+        const next = prev.filter((r) => r.id !== registroId)
+        const quedanSin = next.some((r) => !String(r.item_numero || '').trim())
+        setReporte((rep) => ({
+          ...rep,
+          estado: next.length === 0 ? rep.estado : (quedanSin ? 'Sin Asignar Ítem' : 'No Revisados'),
+        }))
+        return next
+      })
+      if (registroExpandido != null && String(registroExpandido) === String(registroId)) {
+        setRegistroExpandido(null)
+      }
+      if (typeof onRefrescarListadoSicoe === 'function') onRefrescarListadoSicoe()
+      else invalidateSicoeVistaCache(contrato_id)
     } catch (e) {
       alert(e?.message || String(e))
     }

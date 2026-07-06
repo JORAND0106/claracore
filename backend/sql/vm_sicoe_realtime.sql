@@ -202,25 +202,12 @@ BEGIN
 END;
 $$;
 
+-- Triggers síncronos desactivados: cada INSERT/UPDATE/DELETE refrescaba hasta 4 MV (~3–8 s c/u).
+-- Refresco batch vía refresh_all_sicoe_materialized_views() + pg_cron (fix_performance_so_registros_fase1.sql).
 DROP TRIGGER IF EXISTS trg_refresh_grilla_reportes ON public.so_reportes;
-CREATE TRIGGER trg_refresh_grilla_reportes
-    AFTER INSERT OR UPDATE OR DELETE ON public.so_reportes
-    FOR EACH STATEMENT EXECUTE FUNCTION public.refresh_vm_sicoe_grilla();
-
 DROP TRIGGER IF EXISTS trg_refresh_grilla_registros ON public.so_registros;
-CREATE TRIGGER trg_refresh_grilla_registros
-    AFTER INSERT OR UPDATE OR DELETE ON public.so_registros
-    FOR EACH STATEMENT EXECUTE FUNCTION public.refresh_vm_sicoe_grilla();
-
 DROP TRIGGER IF EXISTS trg_refresh_registro_detalle ON public.so_registros;
-CREATE TRIGGER trg_refresh_registro_detalle
-    AFTER INSERT OR UPDATE OR DELETE ON public.so_registros
-    FOR EACH STATEMENT EXECUTE FUNCTION public.refresh_vm_sicoe_registro_detalle();
-
 DROP TRIGGER IF EXISTS trg_refresh_dashboard ON public.so_registros;
-CREATE TRIGGER trg_refresh_dashboard
-    AFTER INSERT OR UPDATE OR DELETE ON public.so_registros
-    FOR EACH STATEMENT EXECUTE FUNCTION public.refresh_vm_dashboard_resumen();
 
 -- Carga inicial
 REFRESH MATERIALIZED VIEW public.vm_sicoe_registro_detalle;
@@ -235,7 +222,7 @@ GRANT SELECT ON public.vm_dashboard_por_acta TO authenticated, service_role;
 
 -- ── 5. Realtime publication ────────────────────────────────────────────────
 -- Postgres NO admite materialized views en supabase_realtime.
--- El front escucha so_reportes / so_registros; los triggers refrescan las MV y el API lee las MV.
+-- El front escucha so_reportes / so_registros; las MV se refrescan por cron (no por trigger síncrono).
 -- Ver backend/sql/realtime_publication_tables.sql
 
 DO $$

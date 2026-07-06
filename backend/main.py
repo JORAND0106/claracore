@@ -3266,6 +3266,60 @@ def _so_reg_sin_item_asignado(q):
     return q.or_('item_numero.is.null,item_numero.eq.""')
 
 
+def _sicoe_registro_tiene_item_asignado(row: Optional[dict]) -> bool:
+    """True si la línea tiene ítem (misma regla que la UI: trim sobre item_numero)."""
+    if not row:
+        return False
+    return bool(str(row.get("item_numero") or "").strip())
+
+
+def _sicoe_reporte_ids_con_lineas_sin_item(
+    contrato_id: int,
+    restrict_to: Optional[Iterable[int]] = None,
+) -> set:
+    """IDs de reporte con al menos una línea sin ítem (post-filtro trim; no cabecera)."""
+    out: set = set()
+    restrict_list: Optional[List[int]] = None
+    if restrict_to is not None:
+        restrict_list = sorted({int(x) for x in restrict_to if x is not None})
+        if not restrict_list:
+            return out
+
+    rep_chunks: List[Optional[List[int]]]
+    if restrict_list is None:
+        rep_chunks = [None]
+    else:
+        rep_chunks = [
+            restrict_list[i : i + 500]
+            for i in range(0, len(restrict_list), 500)
+        ]
+
+    for rep_chunk in rep_chunks:
+        off = 0
+        page = 2000
+        while True:
+            def _page(o=off, rc=rep_chunk):
+                q = supabase.table("so_registros").select("reporte_id, item_numero")\
+                    .eq("contrato_id", contrato_id)
+                if rc is not None:
+                    q = q.in_("reporte_id", rc)
+                else:
+                    q = _so_reg_sin_item_asignado(q)
+                return q.order("id").range(o, o + page - 1).execute().data
+
+            batch = supabase_execute(_page) or []
+            for row in batch:
+                if _sicoe_registro_tiene_item_asignado(row):
+                    continue
+                rid = row.get("reporte_id")
+                if rid is not None:
+                    out.add(int(rid))
+            if len(batch) < page:
+                break
+            off += page
+    return out
+
+
 def _so_reg_or_pendiente_nivel(q, nivel_field: str):
     """(campo IS NULL OR campo = 'No Revisado'). PostgREST exige comillas en valores con espacio."""
     return q.or_(f'{nivel_field}.is.null,{nivel_field}.eq."No Revisado"')
@@ -13519,16 +13573,6 @@ def buscar_reportes_obra(
         aids_linea_buscar = [int(acta_id_para_lineas)]
 
     _estado_sin_asignar_item = _estado_filtro_es_sin_asignar_item(estado)
-    # Cola "Sin asignar ítem": líneas sin item_numero, NO cabecera so_reportes.estado
-    # (al asignar el 1.er ítem la cabecera pasa a "No Revisados" pero pueden quedar líneas pendientes).
-    if _estado_sin_asignar_item and not consulta_directa_identificador and reporte_ids_from_reg is None:
-        try:
-            ids_sin_item = _sicoe_collect_reporte_ids_misma_linea(contrato_id, estado=estado)
-        except HTTPException:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        if not ids_sin_item:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        reporte_ids_from_reg = list(ids_sin_item)
 
     unified_line = any([
         numero_registro is not None,
@@ -13583,11 +13627,25 @@ def buscar_reportes_obra(
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        reporte_ids_from_reg = list(ids_unif)
+        if _estado_sin_asignar_item:
+            ids_sin_trim = _sicoe_reporte_ids_con_lineas_sin_item(
+                contrato_id, restrict_to=ids_unif
+            )
+            reporte_ids_from_reg = sorted(ids_sin_trim)
+            if not reporte_ids_from_reg:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        else:
+            reporte_ids_from_reg = list(ids_unif)
         if semana_id_filtro is not None or acta_id_filtro is not None or acta_ids_panel_buscar:
             omit_header_semana_acta_en_reportes = True
         if _rev_modo is not None:
             omit_header_semana_acta_en_reportes = True
+
+    elif _estado_sin_asignar_item and not consulta_directa_identificador:
+        ids_sin_item = _sicoe_reporte_ids_con_lineas_sin_item(contrato_id)
+        if not ids_sin_item:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        reporte_ids_from_reg = sorted(ids_sin_item)
 
     if _filtro_fu_rep:
         try:
@@ -13908,7 +13966,7 @@ def buscar_reportes_obra(
                 if _estado_filtro_es_sin_asignar_item(estado):
                     reg_estados = [
                         x for x in reg_estados
-                        if not (str(x.get("item_numero") or "").strip())
+                        if not _sicoe_registro_tiene_item_asignado(x)
                     ]
                 if _defer_capas_or_grilla:
                     reg_estados = _filtrar_registros_validacion_capas_sicoe(
@@ -15651,12 +15709,9 @@ def analisis_registros_obra(
     reporte_ids_base = None
     _estado_sin_asignar_ana = _estado_filtro_es_sin_asignar_item(estado)
     if _estado_sin_asignar_ana and not consulta_directa_identificador:
-        try:
-            ids_sin_ana = _sicoe_collect_reporte_ids_misma_linea(contrato_id, estado=estado)
-            reporte_ids_base = list(ids_sin_ana) if ids_sin_ana else []
-            if not reporte_ids_base:
-                return _empty
-        except HTTPException:
+        ids_sin_ana = _sicoe_reporte_ids_con_lineas_sin_item(contrato_id)
+        reporte_ids_base = sorted(ids_sin_ana) if ids_sin_ana else []
+        if not reporte_ids_base:
             return _empty
     has_rep_f = any([
         numero_reporte is not None,
@@ -19452,11 +19507,14 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         supabase_execute(_upd_reg)
 
         def _quedan_sin_item():
-            return supabase.table("so_registros").select("id")\
+            rows = supabase.table("so_registros").select("item_numero")\
                 .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id)\
-                .or_('item_numero.is.null,item_numero.eq.""').limit(1).execute().data
+                .execute().data
 
-        pendientes = supabase_execute(_quedan_sin_item) or []
+        pendientes = [
+            r for r in (supabase_execute(_quedan_sin_item) or [])
+            if not _sicoe_registro_tiene_item_asignado(r)
+        ]
         nuevo_estado_rep = "Sin Asignar Ítem" if pendientes else "No Revisados"
 
         def _upd_rep():
