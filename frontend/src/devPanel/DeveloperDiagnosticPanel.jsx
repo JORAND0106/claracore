@@ -79,7 +79,21 @@ function AppInsightsUsageMeter({ ingestion, loading }) {
   )
 }
 
-function fmtTime(iso) {
+function fmtMs(ms) {
+  const n = Number(ms)
+  if (!Number.isFinite(n)) return '—'
+  if (n >= 1000) return `${(n / 1000).toFixed(2)} s`
+  return `${Math.round(n).toLocaleString('es-CO')} ms`
+}
+
+function maxMsColor(avgMs, maxMs) {
+  const avg = Number(avgMs) || 0
+  const max = Number(maxMs) || 0
+  if (max >= 60000) return '#f85149'
+  if (max >= 10000) return '#d29922'
+  if (avg > 0 && max >= avg * 5) return '#d29922'
+  return '#8b949e'
+}
   if (!iso) return '—'
   try {
     return new Date(iso).toLocaleString('es-CO', {
@@ -384,95 +398,107 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
           )}
         </Section>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: selectedEndpoint ? '1fr 1fr' : '1.2fr 0.8fr',
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <Section title="ENDPOINTS CON ERRORES">
-            {!data?.endpoints?.length ? (
-              <div style={{ color: '#3fb950', fontSize: 11 }}>Sin fallos en el periodo</div>
-            ) : (
-              <div style={{ maxHeight: 220, overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                  <thead>
-                    <tr style={{ color: '#8b949e', textAlign: 'left' }}>
-                      <th style={{ padding: '4px 6px', fontWeight: 500 }}>Endpoint</th>
-                      <th style={{ padding: '4px 6px', fontWeight: 500 }}>Fallos</th>
-                      <th style={{ padding: '4px 6px', fontWeight: 500 }}>%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.endpoints.map(ep => (
-                      <tr
-                        key={ep.name}
-                        onClick={() => openEndpoint(ep.name)}
-                        style={{
-                          cursor: 'pointer',
-                          background: selectedEndpoint === ep.name ? 'rgba(88,166,255,0.08)' : 'transparent',
-                        }}
-                      >
-                        <td
-                          style={{
-                            padding: '5px 6px',
-                            color: '#58a6ff',
-                            maxWidth: 280,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                          title={ep.name}
-                        >
-                          {ep.name}
-                        </td>
-                        <td style={{ padding: '5px 6px', color: '#f85149' }}>{ep.failed}</td>
-                        <td style={{ padding: '5px 6px', color: '#d29922' }}>{ep.errorPct}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Section>
-
-          <Section title="TOP 5 LENTOS (avg ms)">
-            {!data?.slowest?.length ? (
-              <span style={{ color: '#6e7681' }}>—</span>
-            ) : (
-              <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                {data.slowest.map((s, i) => (
-                  <li
-                    key={s.name}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      padding: '4px 0',
-                      borderBottom: i < 4 ? '1px solid #21262d' : 'none',
-                    }}
-                  >
-                    <span
+        <Section title="ENDPOINTS CON ERRORES" style={{ marginBottom: 12 }}>
+          {!data?.endpoints?.length ? (
+            <div style={{ color: '#3fb950', fontSize: 11 }}>Sin fallos en el periodo</div>
+          ) : (
+            <div style={{ maxHeight: 220, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ color: '#8b949e', textAlign: 'left' }}>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Endpoint</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Fallos</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.endpoints.map(ep => (
+                    <tr
+                      key={ep.name}
+                      onClick={() => openEndpoint(ep.name)}
                       style={{
-                        color: '#8b949e',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: '70%',
+                        cursor: 'pointer',
+                        background: selectedEndpoint === ep.name ? 'rgba(88,166,255,0.08)' : 'transparent',
                       }}
-                      title={s.name}
                     >
-                      {s.name}
-                    </span>
-                    <span style={{ color: '#d29922', fontWeight: 600 }}>{s.avgMs} ms</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
-        </div>
+                      <td
+                        style={{
+                          padding: '5px 6px',
+                          color: '#58a6ff',
+                          maxWidth: 280,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={ep.name}
+                      >
+                        {ep.name}
+                      </td>
+                      <td style={{ padding: '5px 6px', color: '#f85149' }}>{ep.failed}</td>
+                      <td style={{ padding: '5px 6px', color: '#d29922' }}>{ep.errorPct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+
+        <Section title="ENDPOINTS MÁS LENTOS (30 min · excl. panel)" style={{ marginBottom: 12 }}>
+          {loading && !data ? (
+            <span style={{ color: '#6e7681' }}>Cargando…</span>
+          ) : !data?.slowest?.length ? (
+            <span style={{ color: '#6e7681', fontSize: 11 }}>
+              Sin requests en la ventana (excluye auto-consultas appinsights-query)
+            </span>
+          ) : (
+            <div style={{ maxHeight: 320, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ color: '#8b949e', textAlign: 'left' }}>
+                    <th style={{ padding: '4px 6px', fontWeight: 500 }}>Endpoint</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500, width: 72 }}>Llamadas</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500, width: 88 }}>Promedio</th>
+                    <th style={{ padding: '4px 6px', fontWeight: 500, width: 88 }}>Máximo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.slowest.map(ep => (
+                    <tr key={ep.name}>
+                      <td
+                        style={{
+                          padding: '5px 6px',
+                          color: '#58a6ff',
+                          maxWidth: 420,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={ep.name}
+                      >
+                        {ep.name}
+                      </td>
+                      <td style={{ padding: '5px 6px', color: '#e6edf3' }}>{ep.calls}</td>
+                      <td style={{ padding: '5px 6px', color: '#d29922', fontWeight: 600 }}>
+                        {fmtMs(ep.avgMs)}
+                      </td>
+                      <td
+                        style={{
+                          padding: '5px 6px',
+                          color: maxMsColor(ep.avgMs, ep.maxMs),
+                          fontWeight: 600,
+                        }}
+                        title={ep.maxMs >= (ep.avgMs || 0) * 5 ? 'Pico muy por encima del promedio' : undefined}
+                      >
+                        {fmtMs(ep.maxMs)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
 
         {selectedEndpoint && (
           <Section title={`DETALLE · ${selectedEndpoint}`} style={{ marginBottom: 12 }}>

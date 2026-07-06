@@ -133,9 +133,14 @@ requests
   const slowQ = `
 requests
 | where timestamp > ago(30m)
-| summarize avgMs = round(avg(duration), 1) by name
+| where name != "appinsights-query"
+| summarize
+    calls = count(),
+    avgMs = round(avg(duration), 1),
+    maxMs = round(max(duration), 1)
+  by name
 | order by avgMs desc
-| take 5
+| take 30
 `
   const recentErrorsQ = `
 union
@@ -246,7 +251,9 @@ requests
     })),
     slowest: rows(firstTable(slowRes)).map(r => ({
       name: r.name || '(sin nombre)',
+      calls: Number(r.calls) || 0,
       avgMs: Number(r.avgMs) || 0,
+      maxMs: Number(r.maxMs) || 0,
     })),
     recentErrors: rows(firstTable(recentRes)).map(r => ({
       timestamp: r.ts,
