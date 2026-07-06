@@ -13660,6 +13660,7 @@ def buscar_reportes_obra(
     #      luego select * + join sólo para offset..offset+limit de esos IDs (~50 filas típ.).
     rows: List[Dict[str, Any]] = []
     hay_mas = False
+    _vm_grilla_usada = False
 
     _hay_n23_vm = (
         (_validacion_cualquier_nivel2_o_3(capas_v) if capas_v else False)
@@ -13703,6 +13704,8 @@ def buscar_reportes_obra(
                 for rid_one in chk:
                     if rid_one in by_id:
                         rows.append(by_id[rid_one])
+            if rows:
+                _vm_grilla_usada = True
         except Exception:
             rows = []
             hay_mas = False
@@ -13777,126 +13780,161 @@ def buscar_reportes_obra(
             pass
     # Batch-resolve per-cargo estado_max desde so_registros
     reporte_ids_batch = [r["id"] for r in rows]
+    _usar_vm_agregados_grilla = (
+        _vm_grilla_usada
+        and reporte_ids_batch
+        and not capas_v
+        and not _defer_capas_or_grilla
+        and not caps_buscar_norm
+        and not items_buscar_norm
+        and subcontratista_id is None
+        and not tramo
+        and not costado
+        and pk_id is None
+        and not q_obs_trim
+        and numero_registro is None
+        and not pendiente_item
+        and registro_ids_etiqueta is None
+        and abs_inicio is None
+        and abs_final is None
+        and cantidad_desde is None
+        and cantidad_hasta is None
+        and costo_directo_desde is None
+        and costo_directo_hasta is None
+        and not _filtro_fu_reg
+    )
     if reporte_ids_batch:
         try:
-            _rb_l = reporte_ids_batch
+            if _usar_vm_agregados_grilla:
+                vm_agg = _sicoe_vm_grilla_agregados(reporte_ids_batch)
+                for r in rows:
+                    agg = vm_agg.get(int(r["id"]), {})
+                    r["num_registros"] = int(agg.get("total_registros") or 0)
+                    if not _ocultar_costo_rep:
+                        r["costo_directo_validacion"] = round(float(agg.get("costo_directo_total") or 0), 0)
+                    r["nivel1_estados"] = []
+                    r["nivel2_estados"] = []
+                    r["nivel3_estados"] = []
+                    r["sub_estados"] = []
+            else:
+                _rb_l = reporte_ids_batch
 
-            def _reg_estados_q_base(reg_id_filter: Optional[List[int]] = None):
-                q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
-                    .in_("reporte_id", _rb_l)
-                if reg_id_filter is not None:
-                    q = q.in_("id", reg_id_filter)
+                def _reg_estados_q_base(reg_id_filter: Optional[List[int]] = None):
+                    q = supabase.table("so_registros")\
+                        .select("reporte_id, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
+                        .in_("reporte_id", _rb_l)
+                    if reg_id_filter is not None:
+                        q = q.in_("id", reg_id_filter)
 
-                if numero_registro is not None:
-                    q = q.eq("numero_registro", numero_registro)
+                    if numero_registro is not None:
+                        q = q.eq("numero_registro", numero_registro)
 
-                # Mantener coherencia con el universo filtrado de grilla/panel
-                if semana_id_filtro is not None:
-                    q = q.eq("semana_id", semana_id_filtro)
-                if aids_linea_buscar:
-                    q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_linea_buscar)
-                if caps_buscar_norm:
-                    q = _apply_capitulos_to_so_registros_q(q, caps_buscar_norm)
-                if subcontratista_id is not None:
-                    q = q.eq("subcontratista_id", subcontratista_id)
-                q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
-                if tramo:
-                    q = q.eq("tramo", tramo)
-                if costado:
-                    q = _so_reg_filtro_costado(q, costado)
-                if pk_id is not None:
-                    q = q.eq("pk_id_id", pk_id)
-                if q_observacion is not None and str(q_observacion).strip():
-                    q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
-                q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
-                if acta_id_para_lineas is not None and not _estado_filtro_es_sin_asignar_item(estado):
-                    q = _so_reg_item_asignado(q)
+                    # Mantener coherencia con el universo filtrado de grilla/panel
+                    if semana_id_filtro is not None:
+                        q = q.eq("semana_id", semana_id_filtro)
+                    if aids_linea_buscar:
+                        q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_linea_buscar)
+                    if caps_buscar_norm:
+                        q = _apply_capitulos_to_so_registros_q(q, caps_buscar_norm)
+                    if subcontratista_id is not None:
+                        q = q.eq("subcontratista_id", subcontratista_id)
+                    q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
+                    if tramo:
+                        q = q.eq("tramo", tramo)
+                    if costado:
+                        q = _so_reg_filtro_costado(q, costado)
+                    if pk_id is not None:
+                        q = q.eq("pk_id_id", pk_id)
+                    if q_observacion is not None and str(q_observacion).strip():
+                        q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
+                    q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
+                    if acta_id_para_lineas is not None and not _estado_filtro_es_sin_asignar_item(estado):
+                        q = _so_reg_item_asignado(q)
 
-                if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
-                    if not _defer_capas_or_grilla:
-                        q = _so_registros_q_y_capas_validacion(
-                            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None, contrato_id
-                        )
+                    if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
+                        if not _defer_capas_or_grilla:
+                            q = _so_registros_q_y_capas_validacion(
+                                q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None, contrato_id
+                            )
 
-                if _estado_filtro_es_sin_asignar_item(estado):
-                    q = _so_reg_sin_item_asignado(q)
-                if pendiente_item:
-                    q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
-                return q
+                    if _estado_filtro_es_sin_asignar_item(estado):
+                        q = _so_reg_sin_item_asignado(q)
+                    if pendiente_item:
+                        q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
+                    return q
 
-            reg_estados = []
-            if registro_ids_etiqueta is not None and not registro_ids_etiqueta:
                 reg_estados = []
-            elif registro_ids_etiqueta is not None:
-                for rg_chunk in _sicoe_chunks_int(sorted(registro_ids_etiqueta), 200):
-                    rc = list(rg_chunk)
+                if registro_ids_etiqueta is not None and not registro_ids_etiqueta:
+                    reg_estados = []
+                elif registro_ids_etiqueta is not None:
+                    for rg_chunk in _sicoe_chunks_int(sorted(registro_ids_etiqueta), 200):
+                        rc = list(rg_chunk)
+                        _re_off = 0
+                        _re_page = 1000
+                        while True:
+                            def _re_fetch(o=_re_off, ids=rc):
+                                return _reg_estados_q_base(ids).order("id").range(o, o + _re_page - 1).execute().data
+
+                            _batch = supabase_execute(_re_fetch)
+                            reg_estados.extend(_batch)
+                            if len(_batch) < _re_page:
+                                break
+                            _re_off += _re_page
+                else:
                     _re_off = 0
                     _re_page = 1000
                     while True:
-                        def _re_fetch(o=_re_off, ids=rc):
-                            return _reg_estados_q_base(ids).order("id").range(o, o + _re_page - 1).execute().data
+                        def _re_fetch(o=_re_off):
+                            return _reg_estados_q_base().order("id").range(o, o + _re_page - 1).execute().data
 
                         _batch = supabase_execute(_re_fetch)
                         reg_estados.extend(_batch)
                         if len(_batch) < _re_page:
                             break
                         _re_off += _re_page
-            else:
-                _re_off = 0
-                _re_page = 1000
-                while True:
-                    def _re_fetch(o=_re_off):
-                        return _reg_estados_q_base().order("id").range(o, o + _re_page - 1).execute().data
-
-                    _batch = supabase_execute(_re_fetch)
-                    reg_estados.extend(_batch)
-                    if len(_batch) < _re_page:
-                        break
-                    _re_off += _re_page
-            if _estado_filtro_es_sin_asignar_item(estado):
-                reg_estados = [
-                    x for x in reg_estados
-                    if not (str(x.get("item_numero") or "").strip())
-                ]
-            if _defer_capas_or_grilla:
-                reg_estados = _filtrar_registros_validacion_capas_sicoe(
-                    reg_estados, capas_v, None, "or", contrato_id
-                )
-            cmx_aggr = _get_nivel_maximo_contrato(contrato_id)
-            cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
-            costo_map = {}
-            for reg in reg_estados:
-                rid = reg.get("reporte_id")
-                if rid in cargo_map:
-                    cargo_map[rid]["n1"].append(reg.get("nivel1_estado") or "No Revisado")
-                    cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
-                    cargo_map[rid]["n3"].append(reg.get(cmx_aggr) or "No Revisado")
-                    cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
-                    cargo_map[rid]["count"] += 1
-                    costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
-            cap_por_rep: dict = {}
-            for reg in reg_estados:
-                rid = reg.get("reporte_id")
-                if not rid:
-                    continue
-                c = (reg.get("capitulo") or "").strip()
-                if rid not in cap_por_rep:
-                    cap_por_rep[rid] = set()
-                if c:
-                    cap_por_rep[rid].add(c)
-            for r in rows:
-                m = cargo_map.get(r["id"], {})
-                r["nivel1_estados"] = list(set(m.get("n1", [])))
-                r["nivel2_estados"] = list(set(m.get("n2", [])))
-                r["nivel3_estados"] = list(set(m.get("n3", [])))
-                r["sub_estados"]    = list(set(m.get("sub", [])))
-                r["num_registros"] = m.get("count", 0)
-                if not _ocultar_costo_rep:
-                    r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 0)
-                caps = cap_por_rep.get(r["id"], set())
-                if caps:
-                    r["capitulo"] = ", ".join(sorted(caps))
+                if _estado_filtro_es_sin_asignar_item(estado):
+                    reg_estados = [
+                        x for x in reg_estados
+                        if not (str(x.get("item_numero") or "").strip())
+                    ]
+                if _defer_capas_or_grilla:
+                    reg_estados = _filtrar_registros_validacion_capas_sicoe(
+                        reg_estados, capas_v, None, "or", contrato_id
+                    )
+                cmx_aggr = _get_nivel_maximo_contrato(contrato_id)
+                cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
+                costo_map = {}
+                for reg in reg_estados:
+                    rid = reg.get("reporte_id")
+                    if rid in cargo_map:
+                        cargo_map[rid]["n1"].append(reg.get("nivel1_estado") or "No Revisado")
+                        cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
+                        cargo_map[rid]["n3"].append(reg.get(cmx_aggr) or "No Revisado")
+                        cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
+                        cargo_map[rid]["count"] += 1
+                        costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
+                cap_por_rep: dict = {}
+                for reg in reg_estados:
+                    rid = reg.get("reporte_id")
+                    if not rid:
+                        continue
+                    c = (reg.get("capitulo") or "").strip()
+                    if rid not in cap_por_rep:
+                        cap_por_rep[rid] = set()
+                    if c:
+                        cap_por_rep[rid].add(c)
+                for r in rows:
+                    m = cargo_map.get(r["id"], {})
+                    r["nivel1_estados"] = list(set(m.get("n1", [])))
+                    r["nivel2_estados"] = list(set(m.get("n2", [])))
+                    r["nivel3_estados"] = list(set(m.get("n3", [])))
+                    r["sub_estados"]    = list(set(m.get("sub", [])))
+                    r["num_registros"] = m.get("count", 0)
+                    if not _ocultar_costo_rep:
+                        r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 0)
+                    caps = cap_por_rep.get(r["id"], set())
+                    if caps:
+                        r["capitulo"] = ", ".join(sorted(caps))
         except Exception:
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []

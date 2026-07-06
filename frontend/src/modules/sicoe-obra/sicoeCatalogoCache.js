@@ -79,6 +79,28 @@ export function fetchSicoePkIdsCached(apiBase, contratoId, token) {
   })
 }
 
+export function fetchSicoeCompetenciasCached(apiBase, contratoId, token) {
+  if (!apiBase || !contratoId) return Promise.resolve([])
+  const key = cacheKey(['competencias', contratoId])
+  return cachedFetch(key, async () => {
+    const r = await fetch(`${apiBase}/contratos/${contratoId}/competencias`, { headers: authHeaders(token) })
+    if (!r.ok) return []
+    const d = await r.json()
+    return Array.isArray(d?.competencias) ? d.competencias : []
+  })
+}
+
+export function fetchSicoeActaRpoVigenteCached(apiBase, contratoId, token) {
+  if (!apiBase || !contratoId) return Promise.resolve(null)
+  const key = cacheKey(['acta-rpo-vigente', contratoId])
+  return cachedFetch(key, async () => {
+    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/acta-rpo-vigente`, { headers: authHeaders(token) })
+    if (!r.ok) return null
+    const d = await r.json().catch(() => null)
+    return d && d.id ? d : null
+  })
+}
+
 export function fetchSicoeCapitulosCached(apiBase, contratoId, token) {
   if (!apiBase || !contratoId) return Promise.resolve([])
   const key = cacheKey(['capitulos', contratoId])

@@ -40,8 +40,9 @@ export default function CompetenciaSelect({
   }, [contratoId])
 
   useEffect(() => {
-    if (Array.isArray(opciones)) {
-      setLista(opciones)
+    if (opciones != null) {
+      setLista(Array.isArray(opciones) ? opciones : [])
+      setLoading(false)
       return
     }
     void recargarRemoto()

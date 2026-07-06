@@ -86,7 +86,9 @@ import {
   limpiarSicoeFiltroSesion,
 } from './modules/sicoe-obra/sicoeFiltroSesion'
 import {
+  fetchSicoeActaRpoVigenteCached,
   fetchSicoeCapitulosCached,
+  fetchSicoeCompetenciasCached,
   fetchSicoeListadoPreciosCached,
   fetchSicoeNodosCached,
   fetchSicoePkIdsCached,
@@ -2444,9 +2446,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     const loadCaps = fetchSicoeCapitulosCached(API, contrato_id, getToken())
       .then((caps) => { if (caps.length) setListaCapitulos(sortCaps(caps)) })
       .catch(() => {})
-    const loadComp = fetch(`${API}/contratos/${contrato_id}/competencias`, { headers: authH })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => setCompetenciasApi(Array.isArray(d?.competencias) ? d.competencias : []))
+    const loadComp = fetchSicoeCompetenciasCached(API, contrato_id, getToken())
+      .then((arr) => setCompetenciasApi(Array.isArray(arr) ? arr : []))
       .catch(() => setCompetenciasApi([]))
     void Promise.all([loadCaps, loadComp])
   }, [contrato_id, API])
@@ -2757,8 +2758,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       // 2. Si hay ítem nuevo seleccionado, verificar acta RPO y asignar
       let asigData = null
       if (idItem) {
-        const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
-        const actaData = await actaRes.json()
+        const actaData = await fetchSicoeActaRpoVigenteCached(API, contrato_id, getToken())
         if (!actaData || !actaData.id) {
           alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nRegistra el periodo Acta RPO en el sistema (gestión de actas / administración del contrato) antes de asignar ítems.')
           setGuardando(false)
@@ -2815,9 +2815,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (guardadoOk) {
       setTimeout(() => setToastMsg(null), 2000)
       void Promise.resolve(onItemAsignado?.()).catch(() => {})
-      if (typeof onRefrescarListadoSicoe === 'function') {
-        setTimeout(() => { try { onRefrescarListadoSicoe() } catch { /* noop */ } }, 1200)
-      }
     }
   }
 
@@ -3383,7 +3380,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 disabled={!editableCampos}
                 placeholder="— Todas —"
                 allowEmpty
-                opciones={competenciasApi.length > 0 ? competencias : undefined}
+                opciones={competencias}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box' }}
               />
             </div>
@@ -8200,35 +8197,9 @@ function ModuloSicoeObra({
         return
       }
       let merged = { ...data }
-      const uf = urlReporteDetalleFiltradoSiAplica(rid)
-      if (uf && uf !== urlS) {
-        try {
-          const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
-          const df = await rf.json().catch(() => ({}))
-          if (rf.ok && df?.id && Array.isArray(df.registros)) {
-            const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
-            const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regF) : null
-            merged = {
-              ...data,
-              registros: data.registros,
-              registros_vista_filtrada: df.registros_vista_filtrada,
-              ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
-            }
-          } else {
-            const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
-            const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
-            merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
-          }
-        } catch {
-          const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
-          const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
-          merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
-        }
-      } else {
-        const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
-        const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
-        merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
-      }
+      const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
+      const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
+      merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
       setReporteSeleccionado({
         ...merged,
         _cargandoDetalle: false,
@@ -9875,52 +9846,13 @@ function ModuloSicoeObra({
                           prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
                         )
                       } else {
-                        let merged = { ...data }
-                        const uf = urlReporteDetalleFiltradoSiAplica(rep.id)
-                        if (uf && uf !== urlS) {
-                          try {
-                            const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
-                            const df = await rf.json().catch(() => ({}))
-                            if (rf.ok && df?.id && Array.isArray(df.registros)) {
-                              const regMatchF = regNumBusqueda
-                                ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regNumBusqueda)
-                                : null
-                              merged = {
-                                ...data,
-                                registros: data.registros,
-                                registros_vista_filtrada: df.registros_vista_filtrada,
-                                ...(regMatchF ? { _autoRegistro: regMatchF.id } : {}),
-                              }
-                            } else {
-                              const regMatch0 = regNumBusqueda
-                                ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                                : null
-                              merged = {
-                                ...data,
-                                ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                              }
-                            }
-                          } catch {
-                            const regMatch0 = regNumBusqueda
-                              ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                              : null
-                            merged = {
-                              ...data,
-                              ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                            }
-                          }
-                        } else {
-                          const regMatch0 = regNumBusqueda
-                            ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                            : null
-                          merged = {
-                            ...data,
-                            ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                          }
-                        }
+                        const regMatch0 = regNumBusqueda
+                          ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                          : null
                         setReporteSeleccionado({
-                          ...merged,
+                          ...data,
                           _cargandoDetalle: false,
+                          ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
                         })
                       }
                     }
@@ -10204,7 +10136,6 @@ function ModuloSicoeObra({
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
-            void ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
           }}
           onReporteActualizado={(patch) => {
             setReporteSeleccionado((prev) =>
