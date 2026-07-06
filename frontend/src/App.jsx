@@ -113,7 +113,7 @@ import {
   setDashCachedPayload,
   setDashVistaCache,
 } from './cache/dashboardVistaCache'
-import ModuloProgramacionObra from './ModuloProgramacionObra'
+import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
 import { permisosProgramacionObra } from './progObraPermisos'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
@@ -2732,90 +2732,101 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         return
       }
     }
-    setGuardando(true)
-    let guardadoOk = false
-    try {
-      // 1. Guardar dimensiones + observacion (null en JSON = borrar en BD; el backend ya no filtra esos null)
-      const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({
-          reporte_id:      registro.reporte_id,
-          numero_registro: registro.numero_registro,
-          longitud:        longN,
-          ancho:           anchoN,
-          espesor:         espeN,
-          cantidad:        cantN,
-          cantidad_total:  cantTotal,
-          ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
-            ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
-            : {}),
-          observacion:     observacion || null,
-          ...(esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}),
-        })
-      })
-      if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
 
-      // 2. Si hay ítem nuevo seleccionado, verificar acta RPO y asignar
-      let asigData = null
-      if (idItem) {
-        const actaData = await fetchSicoeActaRpoVigenteCached(API, contrato_id, getToken())
-        if (!actaData || !actaData.id) {
-          alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nRegistra el periodo Acta RPO en el sistema (gestión de actas / administración del contrato) antes de asignar ítems.')
-          setGuardando(false)
-          return
+    await sicoeEncolarGuardadoReporte(registro.reporte_id, async () => {
+      setGuardando(true)
+      let guardadoOk = false
+      try {
+        const locApi = esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}
+        const patchOptimista = {
+          longitud: longN,
+          ancho: anchoN,
+          espesor: espeN,
+          cantidad: cantN,
+          cantidad_total: cantTotal,
+          observacion: observacion || null,
+          ...locApi,
         }
-        const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
-          method: 'PUT', headers: hdrs,
-          body: JSON.stringify({ item_listado_id: idItem, competencia: competencia || null })
-        })
-        if (!asigRes.ok) {
-          const err = await asigRes.json().catch(() => ({}))
-          throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
-        }
-        asigData = await asigRes.json().catch(() => ({}))
-      }
 
-      const patchOptimista = {
-        longitud: longN,
-        ancho: anchoN,
-        espesor: espeN,
-        cantidad: cantN,
-        cantidad_total: cantTotal,
-        observacion: observacion || null,
-        ...(esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}),
-      }
-      if (idItem && itemSel) {
-        const vlr = asigData?.vlr_unitario ?? itemSel.precio_unitario ?? itemSel.vlr_unitario
-        patchOptimista.capitulo = itemSel.capitulo || capituloHoja || null
-        patchOptimista.competencia = competencia || itemSel.competencia || null
-        patchOptimista.item_numero = itemSel.item_numero
-        patchOptimista.item_descripcion = itemSel.descripcion
-        patchOptimista.unidad = itemSel.unidad
-        patchOptimista.vlr_unitario = vlr
-        if (vlr != null && cantTotal != null) {
-          patchOptimista.costo_directo = asigData?.costo_directo ?? Math.round(cantTotal * Number(vlr))
+        if (idItem) {
+          const actaData = await fetchSicoeActaRpoVigenteCached(API, contrato_id, getToken())
+          if (!actaData || !actaData.id) {
+            alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nRegistra el periodo Acta RPO en el sistema (gestión de actas / administración del contrato) antes de asignar ítems.')
+            return
+          }
+          const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
+            method: 'PUT', headers: hdrs,
+            body: JSON.stringify({
+              item_listado_id: idItem,
+              competencia: competencia || null,
+              longitud: longN,
+              ancho: anchoN,
+              espesor: espeN,
+              cantidad: cantN,
+              cantidad_total: cantTotal,
+              observacion: observacion || null,
+              ...locApi,
+            }),
+          })
+          if (!asigRes.ok) {
+            const err = await asigRes.json().catch(() => ({}))
+            throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
+          }
+          const asigData = await asigRes.json().catch(() => ({}))
+          if (idItem && itemSel) {
+            const vlr = asigData?.vlr_unitario ?? itemSel.precio_unitario ?? itemSel.vlr_unitario
+            patchOptimista.capitulo = itemSel.capitulo || capituloHoja || null
+            patchOptimista.competencia = competencia || itemSel.competencia || null
+            patchOptimista.item_numero = itemSel.item_numero
+            patchOptimista.item_descripcion = itemSel.descripcion
+            patchOptimista.unidad = itemSel.unidad
+            patchOptimista.vlr_unitario = vlr
+            if (vlr != null && cantTotal != null) {
+              patchOptimista.costo_directo = asigData?.costo_directo ?? Math.round(cantTotal * Number(vlr))
+            }
+            if (asigData?.acta_rpo_id != null) patchOptimista.acta_rpo_id = asigData.acta_rpo_id
+            if (asigData?.semana_id != null) patchOptimista.semana_id = asigData.semana_id
+          }
+        } else {
+          const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+            method: 'PUT', headers: hdrs,
+            body: JSON.stringify({
+              reporte_id:      registro.reporte_id,
+              numero_registro: registro.numero_registro,
+              longitud:        longN,
+              ancho:           anchoN,
+              espesor:         espeN,
+              cantidad:        cantN,
+              cantidad_total:  cantTotal,
+              ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
+                ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
+                : {}),
+              observacion:     observacion || null,
+              ...locApi,
+            }),
+          })
+          if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
+          if (
+            (itemSel?.item_numero || registro.item_numero) &&
+            vlrUnitario != null &&
+            !Number.isNaN(Number(vlrUnitario))
+          ) {
+            patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
+          }
         }
-        if (asigData?.acta_rpo_id != null) patchOptimista.acta_rpo_id = asigData.acta_rpo_id
-        if (asigData?.semana_id != null) patchOptimista.semana_id = asigData.semana_id
-      } else if (
-        (itemSel?.item_numero || registro.item_numero) &&
-        vlrUnitario != null &&
-        !Number.isNaN(Number(vlrUnitario))
-      ) {
-        patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
-      }
-      onOptimisticRegistroPatch?.(registro.id, patchOptimista)
 
-      setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
-      guardadoOk = true
-    } catch(e) {
-      alert(`No se pudieron guardar los cambios: ${e.message}`)
-    }
-    setGuardando(false)
-    if (guardadoOk) {
-      setTimeout(() => setToastMsg(null), 2000)
-      void Promise.resolve(onItemAsignado?.()).catch(() => {})
-    }
+        onOptimisticRegistroPatch?.(registro.id, patchOptimista)
+        setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
+        guardadoOk = true
+      } catch(e) {
+        alert(`No se pudieron guardar los cambios: ${e.message}`)
+      } finally {
+        setGuardando(false)
+      }
+      if (guardadoOk) {
+        setTimeout(() => setToastMsg(null), 2000)
+      }
+    })
   }
 
   const guardarCorte = async () => {
@@ -4191,8 +4202,21 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [devEliminando, setDevEliminando]          = useState(false)
   const [recargando, setRecargando]                = useState(false)
   const recargarSeqRef                             = useRef(0)
+  const recargarDebounceRef                        = useRef(null)
   const repoPropIdRef                              = useRef(null)
   const repoPropCargandoRef                        = useRef(false)
+
+  const recargarDebounced = (delayMs = 0) => {
+    if (recargarDebounceRef.current) clearTimeout(recargarDebounceRef.current)
+    recargarDebounceRef.current = setTimeout(() => {
+      recargarDebounceRef.current = null
+      void recargar()
+    }, delayMs)
+  }
+
+  useEffect(() => () => {
+    if (recargarDebounceRef.current) clearTimeout(recargarDebounceRef.current)
+  }, [])
 
   const fusionarRegistrosDesdePadre = (prev, incoming) => {
     if (!Array.isArray(incoming) || !incoming.length) return prev
@@ -5852,7 +5876,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={recargar}
+                          onItemAsignado={() => recargarDebounced(2500)}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -5997,7 +6021,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={recargar}
+                          onItemAsignado={() => recargarDebounced(2500)}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}

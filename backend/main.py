@@ -19268,6 +19268,25 @@ def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, co
 class AsignarItemBody(BaseModel):
     item_listado_id: int
     competencia: Optional[str] = None
+    longitud: Optional[float] = None
+    ancho: Optional[float] = None
+    espesor: Optional[float] = None
+    cantidad: Optional[float] = None
+    cantidad_total: Optional[float] = None
+    observacion: Optional[str] = None
+    civ: Optional[str] = None
+    tramo: Optional[str] = None
+    infraestructura: Optional[str] = None
+    calzada: Optional[str] = None
+    ubicacion: Optional[str] = None
+    coord_lat: Optional[float] = None
+    coord_lng: Optional[float] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    nodo_ini: Optional[str] = None
+    nodo_fin: Optional[str] = None
+    margen: Optional[str] = None
+    pk_id_id: Optional[int] = None
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
@@ -19285,7 +19304,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _reg():
             return supabase.table("so_registros")\
-                .select(f"cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
+                .select(f"longitud, ancho, espesor, cantidad, cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
                 .eq("id", registro_id).single().execute().data
         registro = supabase_execute(_reg)
         if not registro:
@@ -19295,6 +19314,44 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 status_code=400,
                 detail="El registro está aprobado en el último nivel de validación: no puede reasignarse el ítem.",
             )
+
+        _pre_dim_keys = ("longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion")
+        _pre_loc_keys = (
+            "civ", "tramo", "infraestructura", "calzada", "ubicacion", "coord_lat", "coord_lng",
+            "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id",
+        )
+        pre_raw = _pydantic_dump_exclude_unset(body)
+        pre_patch = {}
+        for k in _pre_dim_keys + _pre_loc_keys:
+            if k not in pre_raw:
+                continue
+            pre_patch[k] = pre_raw[k]
+        if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad")):
+            merged_dims = {k: pre_patch.get(k, registro.get(k)) for k in ("longitud", "ancho", "espesor", "cantidad")}
+            if all(merged_dims[k] is None for k in merged_dims):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).",
+                )
+        if pre_patch:
+            for dk in ("longitud", "ancho", "espesor", "cantidad"):
+                if dk in pre_patch and pre_patch[dk] is not None:
+                    pre_patch[dk] = round(float(pre_patch[dk]), 2)
+            if "cantidad_total" in pre_patch and pre_patch["cantidad_total"] is not None:
+                pre_patch["cantidad_total"] = round(float(pre_patch["cantidad_total"]), 2)
+
+            def _upd_pre():
+                return supabase.table("so_registros").update(pre_patch)\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+
+            supabase_execute(_upd_pre)
+
+            def _reg_refresh():
+                return supabase.table("so_registros")\
+                    .select(f"cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
+                    .eq("id", registro_id).single().execute().data
+
+            registro = supabase_execute(_reg_refresh) or registro
 
         cant_total = float(registro.get("cantidad_total") or 0)
         vlr_unit   = float(item.get("precio_unitario") or 0)
