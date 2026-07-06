@@ -2434,9 +2434,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     onOptimisticRegistroPatch,
   ])
 
-  // Capítulos + catálogo de competencias al cambiar contrato
+  // Capítulos + catálogo de competencias al cambiar contrato (tras cargar detalle del reporte)
   useEffect(() => {
-    if (!contrato_id) return
+    if (!contrato_id || reporte?._cargandoDetalle) return
     const sortCaps = caps => [...caps].sort((a, b) => {
       const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
       const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
@@ -2450,7 +2450,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       .then((arr) => setCompetenciasApi(Array.isArray(arr) ? arr : []))
       .catch(() => setCompetenciasApi([]))
     void Promise.all([loadCaps, loadComp])
-  }, [contrato_id, API])
+  }, [contrato_id, API, reporte?._cargandoDetalle])
 
   // Ítems del capítulo seleccionado
   useEffect(() => {
@@ -2769,6 +2769,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ...locApi,
               }),
             },
+            4,
           )
           if (!asigRes.ok) {
             const err = await asigRes.json().catch(() => ({}))
@@ -4302,20 +4303,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const emojiPorNivelSicoe = { 1: '👷', 2: '🏗️', 3: '🏛️', 4: '📐', 5: '🏢', 6: '🛡️' }
 
   useEffect(() => {
-    if (!contrato_id) return
+    if (!contrato_id || reporte._cargandoDetalle) return
     getContratoPlanoGeojson(API_URL, contrato_id, getToken())
       .then((d) => setPlanoGeojsonPortada(d?.plano_geojson ?? null))
       .catch(() => setPlanoGeojsonPortada(null))
-  }, [contrato_id])
+  }, [contrato_id, reporte._cargandoDetalle])
 
   useEffect(() => {
-    if (!contrato_id) return
+    if (!contrato_id || reporte._cargandoDetalle) return
     let cancelled = false
     fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
       .then((d) => { if (!cancelled) setListaPkIds(d) })
       .catch(() => { if (!cancelled) setListaPkIds([]) })
     return () => { cancelled = true }
-  }, [contrato_id, API_URL])
+  }, [contrato_id, API_URL, reporte._cargandoDetalle])
 
   const pkTextoPlano = String(
     reporte?.pk_id_valor || listaPkIds.find((p) => p.id === reporte?.pk_id_id)?.pk_id || '',
@@ -6515,6 +6516,7 @@ function ModuloSicoeObra({
   const sicoeRefrescoEnCursoRef = useRef(false)
   /** Cancela GET /buscar y /analisis obsoletos al navegar el panel o relanzar búsqueda. */
   const sicoeBusquedaAbortRef = useRef(null)
+  const sicoeDetalleAbortRef = useRef(null)
   const sicoeBusquedaEnCursoRef = useRef(false)
   /** Refs para que cargarAnalisis/buscarReportes lean siempre el valor actual aunque sean closures viejas. */
   const efectivoOfflineRef = useRef(efectivoOffline)
@@ -6587,6 +6589,7 @@ function ModuloSicoeObra({
 
   useEffect(() => {
     if (!navReporteId) return
+    abortarPeticionesSicoeFondo()
     const repRow = (reportes || []).find((x) => x.id === navReporteId)
     setReporteSeleccionado(
       repRow
@@ -6594,13 +6597,21 @@ function ModuloSicoeObra({
         : { id: navReporteId, _cargandoDetalle: true, registros: [], puntos: [], _autoRegistro: navRegistroNumero }
     )
     setModalCarpeta(true)
-    const u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`
-    fetch(u, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
+    void fetchDetalleReporteSicoe(navReporteId)
       .then((data) => {
-        if (data?.id) { setReporteSeleccionado({ ...data, _cargandoDetalle: false, _autoRegistro: navRegistroNumero }) }
+        if (data?.id) {
+          setReporteSeleccionado({ ...data, _cargandoDetalle: false, _autoRegistro: navRegistroNumero })
+        } else {
+          setReporteSeleccionado((prev) =>
+            prev && prev.id === navReporteId ? { ...prev, _cargandoDetalle: false } : prev,
+          )
+        }
       })
-      .catch(() => {})
+      .catch(() => {
+        setReporteSeleccionado((prev) =>
+          prev && prev.id === navReporteId ? { ...prev, _cargandoDetalle: false } : prev,
+        )
+      })
     onNavReporteConsumed?.()
   }, [navReporteId])
 
@@ -6887,9 +6898,37 @@ function ModuloSicoeObra({
     }
   }
 
-  /** Siempre el GET canónico del reporte (carga fiable). */
+  /** Siempre el GET canónico del reporte (carga fiable; ligero=1 omite enriquecimiento pesado en backend). */
   const urlReporteDetalleSimple = (repId) =>
-    `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+    `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}?ligero=1`
+
+  const abortarPeticionesSicoeFondo = () => {
+    if (sicoeBusquedaAbortRef.current) {
+      sicoeBusquedaAbortRef.current.abort()
+      sicoeBusquedaAbortRef.current = null
+      sicoeBusquedaEnCursoRef.current = false
+    }
+  }
+
+  const fetchDetalleReporteSicoe = async (repId) => {
+    if (sicoeDetalleAbortRef.current) sicoeDetalleAbortRef.current.abort()
+    const ac = new AbortController()
+    sicoeDetalleAbortRef.current = ac
+    try {
+      const r = await fetch(urlReporteDetalleSimple(repId), {
+        headers: { Authorization: `Bearer ${getToken()}` },
+        signal: ac.signal,
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok || !data?.id) return null
+      return data
+    } catch (e) {
+      if (e?.name === 'AbortError') return null
+      throw e
+    } finally {
+      if (sicoeDetalleAbortRef.current === ac) sicoeDetalleAbortRef.current = null
+    }
+  }
 
   /** Segundo GET opcional: mismos criterios que la grilla; null si no aplica. */
   const urlReporteDetalleFiltradoSiAplica = (repId) => {
@@ -7004,17 +7043,13 @@ function ModuloSicoeObra({
         setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
         setModalCarpeta(true)
         // Detalle sin aplicar_filtros_busqueda: si no, capas/validación pueden excluir la línea y no hay _autoRegistro
-        const r2 = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, {
-          headers: { Authorization: `Bearer ${getToken()}` },
-          signal: abortSignal,
-        })
-        const detalle = await r2.json()
+        const r2 = await fetchDetalleReporteSicoe(rep.id)
         if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return resultado
-        if (detalle?.id) {
-          const regs = Array.isArray(detalle.registros) ? detalle.registros : []
+        if (r2?.id) {
+          const regs = Array.isArray(r2.registros) ? r2.registros : []
           const regMatch = sicoeBuscarRegistroPorNumeroFiltro(regs, nuevosFiltros.numero_registro)
           setReporteSeleccionado({
-            ...detalle,
+            ...r2,
             _cargandoDetalle: false,
             ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
           })
@@ -8231,6 +8266,7 @@ function ModuloSicoeObra({
     setPkMapaSubcontratistaId('')
   }
   sicoeMapaOpenReporteRef.current = async (rid) => {
+    abortarPeticionesSicoeFondo()
     const rep = (reportes || []).find((x) => x.id === rid)
     setReporteSeleccionado(
       rep
@@ -8239,22 +8275,19 @@ function ModuloSicoeObra({
     )
     setModalCarpeta(true)
     try {
-      const urlS = urlReporteDetalleSimple(rid)
-      const r = await fetch(urlS, { headers: { Authorization: `Bearer ${getToken()}` } })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok || !data?.id) {
+      const data = await fetchDetalleReporteSicoe(rid)
+      if (!data?.id) {
         setReporteSeleccionado((prev) =>
           prev && prev.id === rid ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
         )
         return
       }
-      let merged = { ...data }
       const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
       const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
-      merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
       setReporteSeleccionado({
-        ...merged,
+        ...data,
         _cargandoDetalle: false,
+        ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
       })
     } catch { /* ignore */ }
   }
@@ -9871,6 +9904,7 @@ function ModuloSicoeObra({
                   setModalNuevoReporte(true)
                 })()
               } else if (esSub || puedeVer) {
+                abortarPeticionesSicoeFondo()
                 setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
                 setModalCarpeta(true)
                 const regNumBusqueda = String(filtros.numero_registro ?? '').trim()
@@ -9890,10 +9924,8 @@ function ModuloSicoeObra({
                         ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
                       })
                     } else {
-                      const urlS = urlReporteDetalleSimple(rep.id)
-                      const r = await fetch(urlS, { headers: { Authorization: `Bearer ${getToken()}` } })
-                      const data = await r.json().catch(() => ({}))
-                      if (!r.ok || !data?.id) {
+                      const data = await fetchDetalleReporteSicoe(rep.id)
+                      if (!data?.id) {
                         setReporteSeleccionado((prev) =>
                           prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
                         )

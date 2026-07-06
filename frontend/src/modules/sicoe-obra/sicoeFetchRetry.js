@@ -7,7 +7,7 @@ export async function sicoeFetchWithRetry(url, options = {}, retries = 2) {
     } catch (err) {
       lastErr = err
       if (i < retries) {
-        await new Promise((r) => setTimeout(r, 600 * (i + 1)))
+        await new Promise((r) => setTimeout(r, 800 * (i + 1)))
       }
     }
   }

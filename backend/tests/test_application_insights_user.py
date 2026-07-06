@@ -42,7 +42,9 @@ def test_register_telemetry_user_middleware_registers_on_app():
     app.middleware.assert_called_once_with("http")
 
 
-def test_schedule_fastapi_instrumentation_registers_startup():
-    app = MagicMock()
-    ai._schedule_fastapi_instrumentation(app)
-    app.on_event.assert_called_once_with("startup")
+def test_finalize_serving_telemetry_wraps_asgi():
+    inner = MagicMock()
+    wrapped = ai.finalize_serving_telemetry(MagicMock(), inner)
+    assert wrapped is not inner
+    assert id(inner) in ai._asgi_wrapped_ids
+    assert ai.finalize_serving_telemetry(MagicMock(), inner) is wrapped

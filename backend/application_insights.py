@@ -9,7 +9,7 @@ from typing import Any, Optional
 _log = logging.getLogger("claracore.appinsights")
 
 _configured = False
-_instrumented_app_ids: set[int] = set()
+_asgi_wrapped_ids: dict[int, Any] = {}
 
 
 def _enduser_id_attribute() -> str:
@@ -103,35 +103,39 @@ def _server_request_hook(span: Any, scope: dict) -> None:
         _apply_user_attributes_to_span(span, uid, email)
 
 
-def _instrument_fastapi_app_once(app: Any) -> None:
-    """Instrumenta la instancia FastAPI concreta (no el patch global de configure_azure_monitor)."""
-    app_id = id(app)
-    if app_id in _instrumented_app_ids:
-        return
+def _wrap_serving_asgi_for_requests(serving_app: Any) -> Any:
+    """
+    Envuelve el ASGI que gunicorn sirve (main:app) para emitir spans SERVER → tabla requests.
+    FastAPIInstrumentor sobre la instancia interna no alcanza peticiones si producción
+    envuelve app en _OutermostCorsPreflightASGI antes de cargar el módulo.
+    """
+    key = id(serving_app)
+    if key in _asgi_wrapped_ids:
+        return _asgi_wrapped_ids[key]
     try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
-        FastAPIInstrumentor.instrument_app(
-            app,
+        wrapped = OpenTelemetryMiddleware(
+            serving_app,
             excluded_urls="healthz,healthcheck",
             server_request_hook=_server_request_hook,
         )
-        _instrumented_app_ids.add(app_id)
-        _log.info("FastAPI instrument_app registrado para requests entrantes en App Insights.")
+        _asgi_wrapped_ids[key] = wrapped
+        _log.info("OpenTelemetryMiddleware aplicado al ASGI de producción (requests entrantes).")
+        return wrapped
     except Exception as exc:
-        _log.warning("No se pudo instrumentar FastAPI (instrument_app): %s", exc)
+        _log.warning("No se pudo envolver ASGI para telemetría de requests: %s", exc)
+        return serving_app
 
 
-def _schedule_fastapi_instrumentation(app: Any) -> None:
+def finalize_serving_telemetry(fastapi_app: Any, serving_app: Any) -> Any:
     """
-    Diferir instrument_app al startup: main.py llama setup_application_insights antes
-    de registrar routers/middlewares y luego envuelve app en ASGI (_OutermostCorsPreflightASGI).
-    El patch global de configure_azure_monitor no cubre una instancia ya creada.
+    Invocar al final de main.py, después de construir la app y su envoltorio ASGI.
+    `fastapi_app`: instancia FastAPI (middleware de usuario).
+    `serving_app`: objeto expuesto como main:app (p. ej. _OutermostCorsPreflightASGI).
     """
-    @app.on_event("startup")
-    async def _instrument_fastapi_on_startup() -> None:
-        _instrument_fastapi_app_once(app)
-
+    del fastapi_app  # usuario ya registrado en setup_application_insights
+    return _wrap_serving_asgi_for_requests(serving_app)
 
 def register_telemetry_user_middleware(app: Any) -> None:
     """
@@ -197,7 +201,6 @@ def setup_application_insights(app: Optional[Any] = None) -> bool:
             _log.warning("No se pudo instrumentar httpx: %s", exc)
 
         if app is not None:
-            _schedule_fastapi_instrumentation(app)
             register_telemetry_user_middleware(app)
 
         _configured = True

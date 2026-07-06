@@ -16397,6 +16397,7 @@ def filtros_tramos_costados(contrato_id: int, current_user=Depends(get_current_u
 def obtener_reporte(
     contrato_id: int,
     reporte_id: int,
+    ligero: bool = Query(False, description="Omite enriquecimiento pesado (comentarios, nombres aux.) para abrir carpeta más rápido"),
     aplicar_filtros_busqueda: bool = Query(False),
     numero_reporte: Optional[int] = Query(None),
     numero_registro: Optional[int] = None,
@@ -16582,12 +16583,27 @@ def obtener_reporte(
     else:
         r["pk_id_valor"] = None
     # Si aplicar_filtros_busqueda=true, registros coinciden con la misma semántica AND que la grilla/panel.
-    _enriquecer_num_comentarios_visibles(regs_raw, current_user)
-    _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
+    if ligero:
+        for reg in regs_raw:
+            if reg.get("num_comentarios") is None:
+                reg["num_comentarios"] = 0
+            reg.setdefault("reversion_arm_n2_nombre", None)
+            reg.setdefault("reversion_arm_n3_nombre", None)
+    else:
+        _enriquecer_num_comentarios_visibles(regs_raw, current_user)
+        _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
     r["registros"] = regs_raw
     r["puntos"] = puntos_rows
     if aplicar_filtros_busqueda:
         r["registros_vista_filtrada"] = True
+
+    if ligero:
+        r.setdefault("nombre_modificador", None)
+        r.setdefault("nombre_creador", None)
+        r.setdefault("inspector_nombre", None)
+        r.setdefault("acta_rpo_numero", None)
+        r.setdefault("corte_numero", None)
+        return r
 
     # Resolver nombre del modificador
     modificado_por = r.get("modificado_por")
@@ -19416,21 +19432,9 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                     pre_patch[dk] = round(float(pre_patch[dk]), 2)
             if "cantidad_total" in pre_patch and pre_patch["cantidad_total"] is not None:
                 pre_patch["cantidad_total"] = round(float(pre_patch["cantidad_total"]), 2)
+            registro = {**registro, **pre_patch}
 
-            def _upd_pre():
-                return supabase.table("so_registros").update(pre_patch)\
-                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-
-            supabase_execute(_upd_pre)
-
-            def _reg_refresh():
-                return supabase.table("so_registros")\
-                    .select(f"cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
-                    .eq("id", registro_id).single().execute().data
-
-            registro = supabase_execute(_reg_refresh) or registro
-
-        cant_total = float(registro.get("cantidad_total") or 0)
+        cant_total = float(pre_patch.get("cantidad_total", registro.get("cantidad_total")) or 0)
         vlr_unit   = float(item.get("precio_unitario") or 0)
         cant_total = round(cant_total, 2)
         costo_dir  = round(cant_total * vlr_unit, 0)
@@ -19490,20 +19494,24 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             except:
                 semana_id = None
 
+        upd_reg_payload = {
+            **pre_patch,
+            "capitulo":         item.get("capitulo"),
+            "competencia":      body.competencia or item.get("competencia"),
+            "item_numero":      item.get("item_numero"),
+            "item_descripcion": item.get("descripcion"),
+            "vlr_unitario":     vlr_unit,
+            "cantidad_total":   cant_total,
+            "costo_directo":    costo_dir,
+            "unidad":           item.get("unidad"),
+            "semana_id":        semana_id,
+            "acta_rpo_id":      acta_rpo_id,
+            "corte_id":         corte_id,
+        }
+
         def _upd_reg():
-            return supabase.table("so_registros").update({
-                "capitulo":         item.get("capitulo"),
-                "competencia":      body.competencia or item.get("competencia"),
-                "item_numero":      item.get("item_numero"),
-                "item_descripcion": item.get("descripcion"),
-                "vlr_unitario":     vlr_unit,
-                "cantidad_total":   cant_total,
-                "costo_directo":    costo_dir,
-                "unidad":           item.get("unidad"),
-                "semana_id":        semana_id,
-                "acta_rpo_id":      acta_rpo_id,
-                "corte_id":         corte_id,
-            }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+            return supabase.table("so_registros").update(upd_reg_payload)\
+                .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd_reg)
 
         def _quedan_sin_item():
@@ -27911,4 +27919,9 @@ class _OutermostCorsPreflightASGI:
         await response(scope, receive, send)
 
 
-app = _OutermostCorsPreflightASGI(app)
+_fastapi_app = app
+app = _OutermostCorsPreflightASGI(_fastapi_app)
+
+from application_insights import finalize_serving_telemetry
+
+app = finalize_serving_telemetry(_fastapi_app, app)
