@@ -62,6 +62,11 @@ class LicenciatarioBody(BaseModel):
     direccion: Optional[str] = Field(None, max_length=500)
     email_notificaciones: Optional[str] = Field(None, max_length=200)
     identificacion_obra: Optional[str] = Field(None, max_length=500)
+    fecha_inicio_licencia: Optional[str] = Field(
+        None,
+        max_length=10,
+        description="Fecha inicio vigencia licencia (YYYY-MM-DD, Cláusula 19)",
+    )
     valor_mensual: Optional[float] = Field(None, ge=0, description="Legacy: valor digitado si no hay valor_mensual_digitado")
     valor_mensual_digitado: Optional[float] = Field(None, ge=0)
     valor_mensual_iva_incluido: bool = False

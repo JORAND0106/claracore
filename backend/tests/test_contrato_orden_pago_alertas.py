@@ -6,6 +6,7 @@ import pytest
 
 from contrato_orden_pago_service import (
     _contrato_activo_presupuesto,
+    _en_ventana_alerta_generacion_mensual,
     alertas_generacion_mensual,
     alertas_seguimiento_emitidas,
 )
@@ -17,6 +18,12 @@ def test_contrato_activo_presupuesto():
     assert _contrato_activo_presupuesto({}) is True
 
 
+def test_en_ventana_alerta_generacion_mensual_limites():
+    assert _en_ventana_alerta_generacion_mensual(date(2026, 7, 1)) is True
+    assert _en_ventana_alerta_generacion_mensual(date(2026, 7, 7)) is True
+    assert _en_ventana_alerta_generacion_mensual(date(2026, 7, 8)) is False
+
+
 def test_alertas_generacion_mensual_fuera_de_ventana(monkeypatch):
     monkeypatch.setattr(
         "contrato_orden_pago_service._bogota_today",
@@ -24,6 +31,8 @@ def test_alertas_generacion_mensual_fuera_de_ventana(monkeypatch):
     )
     result = alertas_generacion_mensual(sb=None)
     assert result["mostrar"] is False
+    assert result["en_ventana"] is False
+    assert result["zona_horaria"] == "America/Bogota"
     assert result["pendientes"] == []
 
 

@@ -22,6 +22,7 @@ const LIC_VACIO = {
   direccion: "",
   email_notificaciones: "",
   identificacion_obra: "",
+  fecha_inicio_licencia: "",
   valor_mensual: "",
   valor_mensual_iva_incluido: false,
 };
@@ -56,6 +57,9 @@ function licenciatarioAFormulario(lic, resumen, contratoNumero) {
       (lic?.identificacion_obra || "").trim() ||
       (lic?.identificacion_obra_sugerida || "").trim() ||
       numero,
+    fecha_inicio_licencia: lic?.fecha_inicio_licencia
+      ? String(lic.fecha_inicio_licencia).trim().slice(0, 10)
+      : "",
     valor_mensual: digitado != null && digitado !== "" ? String(digitado) : "",
     valor_mensual_iva_incluido: !!lic?.valor_mensual_iva_incluido,
   };
@@ -418,6 +422,7 @@ export function ContratoDocumentosPanel({
       direccion: licForm.direccion || null,
       email_notificaciones: licForm.email_notificaciones || null,
       identificacion_obra: licForm.identificacion_obra || null,
+      fecha_inicio_licencia: licForm.fecha_inicio_licencia.trim() || null,
       valor_mensual_digitado: digitado,
       valor_mensual_iva_incluido: !!licForm.valor_mensual_iva_incluido,
     };
@@ -729,6 +734,15 @@ export function ContratoDocumentosPanel({
                 <div>
                   <label style={lbl}>IDENTIFICACIÓN CONTRATO / OBRA</label>
                   <input style={inp} value={licForm.identificacion_obra} onChange={(e) => setLicForm((f) => ({ ...f, identificacion_obra: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={lbl}>FECHA INICIO LICENCIA (Cláusula 19)</label>
+                  <input
+                    style={inp}
+                    type="date"
+                    value={licForm.fecha_inicio_licencia}
+                    onChange={(e) => setLicForm((f) => ({ ...f, fecha_inicio_licencia: e.target.value }))}
+                  />
                 </div>
                 <div>
                   <label style={lbl}>VALOR MENSUAL LICENCIA (COP)</label>

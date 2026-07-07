@@ -58,6 +58,18 @@ def test_nit_claracore_en_tramite():
     assert _nit_claracore_display("901234567-8") == "901234567-8"
 
 
+def test_fecha_inicio_placeholder():
+    from contrato_documentos_pdf import _formatear_fecha_licencia_inicio
+
+    assert _formatear_fecha_licencia_inicio("2026-07-06") == "6 de julio de 2026"
+    assert _formatear_fecha_licencia_inicio(None) == "________________"
+    ctx = construir_contexto_placeholders(
+        licenciatario={"razon_social": "X", "fecha_inicio_licencia": "2026-01-15"},
+        numero_contrato="CT-1",
+    )
+    assert ctx["{{FECHA_INICIO}}"] == "15 de enero de 2026"
+
+
 def test_clausula4_sin_pesos_duplicados(monkeypatch):
     monkeypatch.delenv("CLARACORE_EMPRESA_NIT", raising=False)
     ctx = construir_contexto_placeholders(

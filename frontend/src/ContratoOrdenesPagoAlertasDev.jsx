@@ -7,16 +7,28 @@ import { buildContratoUiTheme, isDarkMode, tFrom } from "./theme/adminPanelTheme
 
 const LS_POSPONER_SEG = "cc_admin_alert_op_seg_posponer";
 const LS_POSPONER_GEN = "cc_admin_alert_op_gen_posponer";
+const BOGOTA_TZ = "America/Bogota";
 
 function bogotaTodayKey() {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
+  return new Date().toLocaleDateString("en-CA", { timeZone: BOGOTA_TZ });
+}
+
+function bogotaDayOfMonth() {
+  const parts = bogotaTodayKey().split("-");
+  return Number(parts[2]) || 0;
+}
+
+/** Primeros 7 días calendario del mes en Colombia (no hora local del navegador ni UTC). */
+function enVentanaAlertaGeneracionMensual() {
+  const d = bogotaDayOfMonth();
+  return d >= 1 && d <= 7;
 }
 
 function tomorrowBogotaKey() {
   const today = bogotaTodayKey();
   const [y, m, d] = today.split("-").map(Number);
   const next = new Date(Date.UTC(y, m - 1, d + 1, 12, 0, 0));
-  return next.toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
+  return next.toLocaleDateString("en-CA", { timeZone: BOGOTA_TZ });
 }
 
 function loadGenPospuestoHasta() {
@@ -99,7 +111,7 @@ function fmtFechaHora(iso) {
       dateStyle: "short",
       timeStyle: "short",
       hour12: true,
-      timeZone: "America/Bogota",
+      timeZone: BOGOTA_TZ,
     });
   } catch {
     return String(iso);
@@ -176,7 +188,9 @@ export function ContratoOrdenesPagoAlertasDev({
     const seg = alertas.seguimiento;
     const segVisibles = filtrarOrdenesSeguimiento(seg?.ordenes, pospuestosSeg);
     const hayGen =
-      gen?.mostrar && (gen.pendientes?.length || 0) > 0 && !genEstaPospuesto(genPospuestoHasta);
+      enVentanaAlertaGeneracionMensual() &&
+      (gen?.pendientes?.length || 0) > 0 &&
+      !genEstaPospuesto(genPospuestoHasta);
 
     if (hayGen) {
       setShowGen(true);
@@ -325,7 +339,7 @@ export function ContratoOrdenesPagoAlertasDev({
 
   return createPortal(
     <>
-      {showGen && pendientesGen.length > 0 && (
+      {showGen && enVentanaAlertaGeneracionMensual() && pendientesGen.length > 0 && (
         <div style={overlayStyle()} onClick={(e) => e.target === e.currentTarget && cerrarGeneracion()}>
           <div style={modalBox(theme, t)} onClick={(e) => e.stopPropagation()}>
             <div

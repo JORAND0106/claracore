@@ -12,8 +12,7 @@ import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
-import pytz
+from zoneinfo import ZoneInfo
 
 from azure_blob_storage import (
     download_blob_bytes_private,
@@ -52,12 +51,22 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _MAX_CORREOS_NOTIFICACION = 20
 
 
+BOGOTA_TZ = ZoneInfo("America/Bogota")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _bogota_today() -> date:
-    return datetime.now(pytz.timezone("America/Bogota")).date()
+    """Fecha calendario actual en Colombia (America/Bogota), no UTC del servidor."""
+    return datetime.now(BOGOTA_TZ).date()
+
+
+def _en_ventana_alerta_generacion_mensual(hoy: Optional[date] = None) -> bool:
+    """True en los primeros 7 días calendario del mes (zona Bogotá)."""
+    d = hoy or _bogota_today()
+    return 1 <= d.day <= 7
 
 
 def empresa_orden_pago_config() -> dict:
@@ -1127,8 +1136,14 @@ def _contrato_activo_presupuesto(contrato_row: dict) -> bool:
 def alertas_generacion_mensual(sb) -> dict:
     """Contratos con orden pendiente de generar (solo días 1–7 del mes, Bogotá)."""
     hoy = _bogota_today()
-    if hoy.day > 7:
-        return {"mostrar": False, "dia_mes": hoy.day, "pendientes": []}
+    base = {
+        "dia_mes": hoy.day,
+        "zona_horaria": "America/Bogota",
+        "fecha_referencia": hoy.isoformat(),
+        "en_ventana": _en_ventana_alerta_generacion_mensual(hoy),
+    }
+    if not base["en_ventana"]:
+        return {**base, "mostrar": False, "pendientes": []}
 
     rows = (
         sb.table("contratos")
@@ -1171,8 +1186,8 @@ def alertas_generacion_mensual(sb) -> dict:
         )
 
     return {
+        **base,
         "mostrar": len(pendientes) > 0,
-        "dia_mes": hoy.day,
         "pendientes": pendientes,
     }
 

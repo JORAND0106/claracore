@@ -21,4 +21,4 @@ Formato recomendado: PNG con fondo transparente, ancho ~400–600 px.
 
 Si se modifica el DOCX en `docs/Contrato_Licencia_Uso_ClaraCore.docx`, regenerar el `.txt` en esta carpeta extrayendo el texto con los marcadores (sin la «Nota técnica» final del borrador).
 
-Placeholders soportados: `{{NUMERO_CONTRATO}}`, `{{FECHA_GENERACION}}`, `{{CLARACORE_NIT}}`, `{{LIC_RAZON_SOCIAL}}`, `{{LIC_NIT}}`, `{{LIC_REPRESENTANTE}}`, `{{LIC_CEDULA}}`, `{{LIC_DIRECCION}}`, `{{LIC_EMAIL}}`, `{{LIC_OBRA}}`, `{{LIC_VALOR_MENSUAL}}`, `{{LIC_VALOR_MENSUAL_LETRAS}}`.
+Placeholders soportados: `{{NUMERO_CONTRATO}}`, `{{FECHA_GENERACION}}`, `{{FECHA_INICIO}}`, `{{CLARACORE_NIT}}`, `{{LIC_RAZON_SOCIAL}}`, `{{LIC_NIT}}`, `{{LIC_REPRESENTANTE}}`, `{{LIC_CEDULA}}`, `{{LIC_DIRECCION}}`, `{{LIC_EMAIL}}`, `{{LIC_OBRA}}`, `{{LIC_VALOR_MENSUAL}}`, `{{LIC_VALOR_MENSUAL_LETRAS}}`.

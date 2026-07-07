@@ -11,7 +11,7 @@ import io
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from azure_blob_storage import (
@@ -40,6 +40,7 @@ LICENCIATARIO_FIELDS = (
     "direccion",
     "email_notificaciones",
     "identificacion_obra",
+    "fecha_inicio_licencia",
     "valor_mensual",
     "valor_mensual_digitado",
     "valor_mensual_iva_incluido",
@@ -183,6 +184,7 @@ def licenciatario_desde_contrato(sb, contrato_id: int) -> dict:
         "direccion": lic.get("direccion") or "",
         "email_notificaciones": lic.get("email_notificaciones") or "",
         "identificacion_obra": lic.get("identificacion_obra") or numero,
+        "fecha_inicio_licencia": lic.get("fecha_inicio_licencia"),
         "valor_mensual": lic.get("valor_mensual"),
         "valor_mensual_digitado": lic.get("valor_mensual_digitado"),
         "valor_mensual_iva_incluido": bool(lic.get("valor_mensual_iva_incluido")),
@@ -219,10 +221,21 @@ def _validate_licenciatario_payload(data: dict, *, tasa_iva: float) -> dict:
 
     out: Dict[str, Any] = {}
     for f in LICENCIATARIO_FIELDS:
-        if f in ("valor_mensual", "valor_mensual_digitado", "valor_mensual_iva_incluido"):
+        if f in ("valor_mensual", "valor_mensual_digitado", "valor_mensual_iva_incluido", "fecha_inicio_licencia"):
             continue
         v = data.get(f)
         out[f] = (str(v).strip() if v is not None else "") or None
+
+    fecha_raw = data.get("fecha_inicio_licencia")
+    if fecha_raw is not None and str(fecha_raw).strip():
+        s = str(fecha_raw).strip()[:10]
+        try:
+            y, m, d = [int(x) for x in s.split("-")]
+            out["fecha_inicio_licencia"] = date(y, m, d).isoformat()
+        except (ValueError, TypeError) as exc:
+            raise ValueError("fecha_inicio_licencia debe ser YYYY-MM-DD") from exc
+    else:
+        out["fecha_inicio_licencia"] = None
 
     out["valor_mensual"] = float(neto) if neto is not None else None
     out["valor_mensual_digitado"] = float(digitado_f) if digitado_f is not None else None

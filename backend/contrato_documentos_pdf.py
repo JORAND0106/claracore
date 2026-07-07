@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import base64
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import pytz
@@ -225,6 +225,23 @@ def _fecha_generacion_bogota() -> str:
     return f"{now.day} de {meses[now.month - 1]} de {now.year}"
 
 
+def _formatear_fecha_licencia_inicio(val) -> str:
+    """ISO YYYY-MM-DD → «6 de julio de 2026» para Cláusula 19."""
+    if val is None or val == "":
+        return "________________"
+    s = str(val).strip()[:10]
+    try:
+        y, m, d = [int(x) for x in s.split("-")]
+        dt = date(y, m, d)
+    except (ValueError, TypeError):
+        return "________________"
+    meses = (
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    )
+    return f"{dt.day} de {meses[dt.month - 1]} de {dt.year}"
+
+
 def _nit_claracore_display(val: Optional[str]) -> str:
     """NIT del licenciante ClaraCore; vacío o placeholder inválido → «En trámite»."""
     v = (val or "").strip()
@@ -262,6 +279,7 @@ def construir_contexto_placeholders(
         "{{LIC_DIRECCION}}": _campo(licenciatario.get("direccion")),
         "{{LIC_EMAIL}}": _campo(licenciatario.get("email_notificaciones")),
         "{{LIC_OBRA}}": _campo(licenciatario.get("identificacion_obra")),
+        "{{FECHA_INICIO}}": _formatear_fecha_licencia_inicio(licenciatario.get("fecha_inicio_licencia")),
         "{{LIC_VALOR_MENSUAL}}": formato_pesos_cop(valor),
         "{{LIC_VALOR_MENSUAL_LETRAS}}": letras,
     }
