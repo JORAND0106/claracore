@@ -45,6 +45,7 @@ COBRO_CONFIG_FIELDS = (
     "autorizo_nombre",
     "autorizo_cargo",
     "correos_notificacion",
+    "email_mensaje_adicional",
 )
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -154,6 +155,7 @@ def get_cobro_config(sb, contrato_id: int) -> dict:
             "autorizo_nombre": None,
             "autorizo_cargo": None,
             "correos_notificacion": [],
+            "email_mensaje_adicional": None,
         }
     if not (cfg.get("plan_descripcion") or "").strip():
         cfg["plan_descripcion"] = default_plan_descripcion(contrato, lic)
@@ -236,12 +238,16 @@ def _validate_cobro_config_payload(data: dict, sb=None) -> dict:
         raise ValueError("dia_vencimiento debe estar entre 1 y 28")
     plan = (data.get("plan_descripcion") or "").strip() or None
     correos = _normalize_correos_notificacion(data.get("correos_notificacion"))
+    mensaje_extra = (data.get("email_mensaje_adicional") or "").strip() or None
+    if mensaje_extra and len(mensaje_extra) > 2000:
+        raise ValueError("email_mensaje_adicional no puede superar 2000 caracteres")
     base = {
         "plan_descripcion": plan,
         "tipo_periodo": tipo,
         "dia_vencimiento": dia,
         "logo_receptor": logo,
         "correos_notificacion": correos,
+        "email_mensaje_adicional": mensaje_extra,
     }
     if sb is not None:
         base.update(_resolve_autorizo_fields(sb, data))
@@ -491,7 +497,8 @@ def list_ordenes_pago(sb, contrato_id: int) -> List[dict]:
             "id, contrato_id, numero_corte, periodo_inicio, periodo_fin, "
             "fecha_emision, fecha_vencimiento, descripcion_servicio, subtotal, "
             "iva_tasa, iva_valor, total, saldo_cartera, total_a_pagar, estado, "
-            "nombre_archivo, created_at, created_by, updated_at"
+            "nombre_archivo, created_at, created_by, updated_at, "
+            "envio_estado, ultimo_envio_at, ultimo_envio_destinatarios"
         )
         .eq("contrato_id", int(contrato_id))
         .order("numero_corte", desc=True)
@@ -558,6 +565,10 @@ def resumen_ordenes_pago(sb, contrato_id: int) -> dict:
         valor_unitario=valor, iva_tasa=tasa, saldo_cartera=cartera
     ) if valor > 0 else None
     sugerencia = sugerir_periodo_corte(sb, contrato_id)
+    historial = list_ordenes_pago(sb, contrato_id)
+    envios_map = list_envios_por_ordenes(sb, contrato_id, [h["id"] for h in historial if h.get("id")])
+    for h in historial:
+        h["envios"] = envios_map.get(int(h["id"]), [])
     return {
         "contrato": {
             "id": contrato.get("id"),
@@ -571,7 +582,7 @@ def resumen_ordenes_pago(sb, contrato_id: int) -> dict:
         "montos_preview": montos,
         "saldo_cartera": cartera,
         "sugerencia_periodo": sugerencia,
-        "historial": list_ordenes_pago(sb, contrato_id),
+        "historial": historial,
         "empresa": empresa_orden_pago_config(),
         "validacion_generacion": {
             "listo": bool(
@@ -645,6 +656,7 @@ def registrar_orden_pago_generada(
         "autorizo_cargo": cfg.get("autorizo_cargo"),
         "datos_snapshot": datos_snapshot,
         "created_by": int(user_id),
+        "envio_estado": "pendiente",
     }
 
     for intento in range(3):
@@ -732,7 +744,7 @@ def generar_orden_pago(
     if not pdf_bytes:
         raise PDFOrdenPagoError("PDF vacío")
 
-    return registrar_orden_pago_generada(
+    orden = registrar_orden_pago_generada(
         sb,
         contrato_id=contrato_id,
         numero_corte=numero_corte,
@@ -749,6 +761,298 @@ def generar_orden_pago(
         user_id=user_id,
         datos_snapshot=snapshot,
     )
+
+    from contrato_orden_pago_email import asunto_orden_pago
+
+    destinatarios = destinatarios_notificacion_desde_config(cfg)
+    if not destinatarios:
+        _marcar_envio_fallido(
+            sb,
+            orden_id=int(orden["id"]),
+            contrato_id=contrato_id,
+            destinatarios=[],
+            error="No hay correos de notificación configurados.",
+            user_id=user_id,
+            asunto=None,
+        )
+        raise ValueError(
+            "Configure al menos un correo de notificación antes de generar y enviar."
+        )
+
+    try:
+        enviar_correo_orden_pago(
+            sb,
+            orden=orden,
+            contrato=contrato,
+            lic=lic,
+            cfg=cfg,
+            pdf_bytes=pdf_bytes,
+            destinatarios=destinatarios,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        err = str(exc)
+        _marcar_envio_fallido(
+            sb,
+            orden_id=int(orden["id"]),
+            contrato_id=contrato_id,
+            destinatarios=destinatarios,
+            error=err,
+            user_id=user_id,
+            asunto=asunto_orden_pago(
+                numero_contrato=(contrato.get("numero") or "").strip(),
+                numero_corte=int(orden.get("numero_corte") or numero_corte),
+                periodo_inicio=periodo_inicio,
+                periodo_fin=periodo_fin,
+            ),
+        )
+        raise ValueError(
+            f"Orden corte N.° {int(orden.get('numero_corte') or numero_corte):03d} generada, "
+            f"pero el envío por correo falló: {err}. Use «Reenviar» en el historial."
+        ) from exc
+
+    refreshed = get_orden_pago(sb, int(orden["id"]), contrato_id) or orden
+    envios = list_envios_por_ordenes(sb, contrato_id, [int(refreshed["id"])])
+    refreshed["envios"] = envios.get(int(refreshed["id"]), [])
+    return refreshed
+
+
+def destinatarios_notificacion_desde_config(cfg: dict) -> List[str]:
+    raw = cfg.get("correos_notificacion") if cfg else []
+    if not isinstance(raw, list):
+        return []
+    return _normalize_correos_notificacion(raw)
+
+
+def list_envios_por_ordenes(sb, contrato_id: int, orden_ids: List[int]) -> Dict[int, List[dict]]:
+    ids = [int(x) for x in orden_ids if x]
+    if not ids:
+        return {}
+    rows = (
+        sb.table("contrato_orden_pago_envio")
+        .select(
+            "id, orden_id, contrato_id, destinatarios, asunto, exito, error_detalle, "
+            "enviado_at, enviado_por"
+        )
+        .eq("contrato_id", int(contrato_id))
+        .in_("orden_id", ids)
+        .order("enviado_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[int, List[dict]] = {}
+    for r in rows:
+        oid = int(r["orden_id"])
+        out.setdefault(oid, []).append(r)
+    return out
+
+
+def _registrar_envio_log(
+    sb,
+    *,
+    orden_id: int,
+    contrato_id: int,
+    destinatarios: List[str],
+    asunto: Optional[str],
+    exito: bool,
+    error_detalle: Optional[str],
+    user_id: int,
+) -> dict:
+    row = {
+        "orden_id": int(orden_id),
+        "contrato_id": int(contrato_id),
+        "destinatarios": destinatarios,
+        "asunto": asunto,
+        "exito": bool(exito),
+        "error_detalle": (error_detalle or "")[:2000] or None,
+        "enviado_at": _now_iso(),
+        "enviado_por": int(user_id),
+    }
+    res = sb.table("contrato_orden_pago_envio").insert(row).execute()
+    return (res.data or [row])[0]
+
+
+def _actualizar_estado_envio_orden(
+    sb,
+    *,
+    orden_id: int,
+    contrato_id: int,
+    estado: str,
+    destinatarios: List[str],
+) -> None:
+    sb.table("contrato_orden_pago").update(
+        {
+            "envio_estado": estado,
+            "ultimo_envio_at": _now_iso(),
+            "ultimo_envio_destinatarios": destinatarios,
+            "updated_at": _now_iso(),
+        }
+    ).eq("id", int(orden_id)).eq("contrato_id", int(contrato_id)).execute()
+
+
+def _marcar_envio_fallido(
+    sb,
+    *,
+    orden_id: int,
+    contrato_id: int,
+    destinatarios: List[str],
+    error: str,
+    user_id: int,
+    asunto: Optional[str],
+) -> None:
+    _registrar_envio_log(
+        sb,
+        orden_id=orden_id,
+        contrato_id=contrato_id,
+        destinatarios=destinatarios,
+        asunto=asunto,
+        exito=False,
+        error_detalle=error,
+        user_id=user_id,
+    )
+    _actualizar_estado_envio_orden(
+        sb,
+        orden_id=orden_id,
+        contrato_id=contrato_id,
+        estado="fallido",
+        destinatarios=destinatarios,
+    )
+
+
+def enviar_correo_orden_pago(
+    sb,
+    *,
+    orden: dict,
+    contrato: dict,
+    lic: dict,
+    cfg: dict,
+    pdf_bytes: bytes,
+    destinatarios: List[str],
+    user_id: int,
+) -> dict:
+    from contrato_orden_pago_email import (
+        OrdenPagoEmailError,
+        asunto_orden_pago,
+        build_email_context,
+        cuerpo_html_orden_pago,
+        cuerpo_texto_orden_pago,
+        facturacion_smtp_configured,
+        send_orden_pago_email,
+    )
+
+    if not facturacion_smtp_configured():
+        raise OrdenPagoEmailError(
+            "SMTP de facturación no configurado en el servidor."
+        )
+
+    numero_contrato = (contrato.get("numero") or "").strip() or str(contrato.get("id"))
+    numero_corte = int(orden.get("numero_corte") or 0)
+    monto = int(round(float(orden.get("total") or orden.get("total_a_pagar") or 0)))
+    subject = asunto_orden_pago(
+        numero_contrato=numero_contrato,
+        numero_corte=numero_corte,
+        periodo_inicio=orden.get("periodo_inicio"),
+        periodo_fin=orden.get("periodo_fin"),
+    )
+    mensaje_extra = (cfg.get("email_mensaje_adicional") or "").strip() or None
+    ctx = build_email_context(
+        numero_contrato=numero_contrato,
+        numero_corte=numero_corte,
+        periodo_inicio=orden.get("periodo_inicio"),
+        periodo_fin=orden.get("periodo_fin"),
+        fecha_vencimiento=orden.get("fecha_vencimiento"),
+        monto_total=monto,
+        razon_social=(lic.get("razon_social") or "").strip(),
+        destinatario_email=", ".join(destinatarios),
+    )
+    html_body = cuerpo_html_orden_pago(ctx, mensaje_adicional=mensaje_extra)
+    text_body = cuerpo_texto_orden_pago(ctx, mensaje_adicional=mensaje_extra)
+    filename = (orden.get("nombre_archivo") or f"OrdenPago_{numero_contrato}_Corte{numero_corte:03d}.pdf").strip()
+
+    send_orden_pago_email(
+        destinatarios=destinatarios,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        pdf_bytes=pdf_bytes,
+        pdf_filename=filename,
+    )
+
+    log_row = _registrar_envio_log(
+        sb,
+        orden_id=int(orden["id"]),
+        contrato_id=int(orden["contrato_id"]),
+        destinatarios=destinatarios,
+        asunto=subject,
+        exito=True,
+        error_detalle=None,
+        user_id=user_id,
+    )
+    _actualizar_estado_envio_orden(
+        sb,
+        orden_id=int(orden["id"]),
+        contrato_id=int(orden["contrato_id"]),
+        estado="enviado",
+        destinatarios=destinatarios,
+    )
+    return log_row
+
+
+def reenviar_correo_orden_pago(
+    sb,
+    *,
+    orden_id: int,
+    contrato_id: int,
+    user_id: int,
+) -> dict:
+    orden = get_orden_pago(sb, orden_id, contrato_id)
+    if not orden:
+        raise ValueError("Orden de pago no encontrada")
+    contrato = get_contrato_orden_pago_row(sb, contrato_id)
+    lic = get_licenciatario(sb, contrato_id) or {}
+    cfg = get_cobro_config(sb, contrato_id)
+    destinatarios = destinatarios_notificacion_desde_config(cfg)
+    if not destinatarios:
+        raise ValueError("Configure al menos un correo de notificación para reenviar.")
+
+    pdf_bytes, _, _ = download_orden_pago_bytes(orden)
+
+    from contrato_orden_pago_email import asunto_orden_pago
+
+    try:
+        enviar_correo_orden_pago(
+            sb,
+            orden=orden,
+            contrato=contrato,
+            lic=lic,
+            cfg=cfg,
+            pdf_bytes=pdf_bytes,
+            destinatarios=destinatarios,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        err = str(exc)
+        _marcar_envio_fallido(
+            sb,
+            orden_id=int(orden_id),
+            contrato_id=contrato_id,
+            destinatarios=destinatarios,
+            error=err,
+            user_id=user_id,
+            asunto=asunto_orden_pago(
+                numero_contrato=(contrato.get("numero") or "").strip(),
+                numero_corte=int(orden.get("numero_corte") or 0),
+                periodo_inicio=orden.get("periodo_inicio"),
+                periodo_fin=orden.get("periodo_fin"),
+            ),
+        )
+        raise ValueError(f"No se pudo reenviar el correo: {err}") from exc
+
+    refreshed = get_orden_pago(sb, orden_id, contrato_id) or orden
+    envios = list_envios_por_ordenes(sb, contrato_id, [int(refreshed["id"])])
+    refreshed["envios"] = envios.get(int(refreshed["id"]), [])
+    return refreshed
 
 
 def eliminar_orden_pago(sb, orden_id: int, contrato_id: int) -> dict:
@@ -782,4 +1086,141 @@ def eliminar_orden_pago(sb, orden_id: int, contrato_id: int) -> dict:
         "numero_corte": numero_corte,
         "consecutivo_liberado": consecutivo_liberado,
         "proximo_numero_corte": next_numero_corte(sb, contrato_id),
+    }
+
+
+def licencia_lista_para_generar(sb, contrato_id: int) -> bool:
+    """True si el contrato tiene licenciamiento mínimo para generar orden de pago."""
+    try:
+        contrato = get_contrato_orden_pago_row(sb, contrato_id)
+        lic = get_licenciatario(sb, contrato_id)
+        if not lic:
+            return False
+        if not (lic.get("razon_social") or "").strip():
+            return False
+        if not (lic.get("nit") or "").strip():
+            return False
+        if not (contrato.get("objeto") or "").strip():
+            return False
+        valor = float(lic.get("valor_mensual") or 0)
+        return valor > 0
+    except (ValueError, TypeError):
+        return False
+
+
+def _parse_iso_dt(val) -> Optional[datetime]:
+    if val is None or val == "":
+        return None
+    s = str(val).strip().replace(" ", "T")
+    if not re.search(r"[Zz]|[+-]\d{2}", s):
+        s += "Z"
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _contrato_activo_presupuesto(contrato_row: dict) -> bool:
+    return (contrato_row.get("fase") or "PRESUPUESTO").strip().upper() == "PRESUPUESTO"
+
+
+def alertas_generacion_mensual(sb) -> dict:
+    """Contratos con orden pendiente de generar (solo días 1–7 del mes, Bogotá)."""
+    hoy = _bogota_today()
+    if hoy.day > 7:
+        return {"mostrar": False, "dia_mes": hoy.day, "pendientes": []}
+
+    rows = (
+        sb.table("contratos")
+        .select("id, numero, objeto, contratista, fase")
+        .order("numero")
+        .execute()
+        .data
+        or []
+    )
+
+    pendientes: List[dict] = []
+    for c in rows:
+        if not _contrato_activo_presupuesto(c):
+            continue
+        cid = int(c["id"])
+        if not licencia_lista_para_generar(sb, cid):
+            continue
+        sug = sugerir_periodo_corte(sb, cid)
+        pi = _parse_date(sug.get("periodo_inicio"))
+        pf = _parse_date(sug.get("periodo_fin"))
+        if not pi or not pf:
+            continue
+        if _periodo_duplicado_activo(sb, cid, pi, pf):
+            continue
+        cfg = get_cobro_config(sb, cid)
+        correos = destinatarios_notificacion_desde_config(cfg)
+        pendientes.append(
+            {
+                "contrato_id": cid,
+                "numero": (c.get("numero") or "").strip() or str(cid),
+                "nombre": (c.get("objeto") or c.get("contratista") or c.get("numero") or "").strip(),
+                "periodo_inicio": sug["periodo_inicio"],
+                "periodo_fin": sug["periodo_fin"],
+                "fecha_emision": sug["fecha_emision"],
+                "fecha_vencimiento": sug["fecha_vencimiento"],
+                "proximo_numero_corte": sug["proximo_numero_corte"],
+                "correos_configurados": correos,
+                "puede_enviar": bool(correos),
+            }
+        )
+
+    return {
+        "mostrar": len(pendientes) > 0,
+        "dia_mes": hoy.day,
+        "pendientes": pendientes,
+    }
+
+
+def alertas_seguimiento_emitidas(sb) -> dict:
+    """Órdenes emitidas enviadas hace más de 24 h sin cambio de estado."""
+    limite = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = (
+        sb.table("contrato_orden_pago")
+        .select(
+            "id, contrato_id, numero_corte, ultimo_envio_at, envio_estado, estado, "
+            "contratos(numero, objeto)"
+        )
+        .eq("estado", "emitida")
+        .eq("envio_estado", "enviado")
+        .execute()
+        .data
+        or []
+    )
+
+    ordenes: List[dict] = []
+    for r in rows:
+        enviado_at = _parse_iso_dt(r.get("ultimo_envio_at"))
+        if not enviado_at or enviado_at > limite:
+            continue
+        contrato = r.get("contratos") or {}
+        if isinstance(contrato, list):
+            contrato = contrato[0] if contrato else {}
+        ordenes.append(
+            {
+                "orden_id": int(r["id"]),
+                "contrato_id": int(r["contrato_id"]),
+                "numero_contrato": (contrato.get("numero") or "").strip() or str(r["contrato_id"]),
+                "nombre_contrato": (contrato.get("objeto") or contrato.get("numero") or "").strip(),
+                "numero_corte": int(r.get("numero_corte") or 0),
+                "ultimo_envio_at": r.get("ultimo_envio_at"),
+            }
+        )
+
+    ordenes.sort(key=lambda x: x.get("ultimo_envio_at") or "", reverse=False)
+    return {"mostrar": len(ordenes) > 0, "ordenes": ordenes}
+
+
+def resumen_alertas_ordenes_pago(sb) -> dict:
+    gen = alertas_generacion_mensual(sb)
+    seg = alertas_seguimiento_emitidas(sb)
+    return {
+        "generacion_mensual": gen,
+        "seguimiento": seg,
+        "hay_alertas": bool(gen.get("mostrar") or seg.get("mostrar")),
     }

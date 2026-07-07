@@ -25,6 +25,7 @@ const CONFIG_VACIO = {
   autorizo_nombre: "",
   autorizo_cargo: "",
   correos_notificacion: [],
+  email_mensaje_adicional: "",
 };
 
 const PERIODO_VACIO = {
@@ -136,11 +137,19 @@ function configAFormulario(cfg) {
     autorizo_nombre: cfg?.autorizo_nombre ?? "",
     autorizo_cargo: cfg?.autorizo_cargo ?? "",
     correos_notificacion: correos,
+    email_mensaje_adicional: cfg?.email_mensaje_adicional ?? "",
   };
 }
 
 function nombreUsuario(u) {
   return `${u?.nombre || ""} ${u?.apellidos || ""}`.trim() || u?.email || `Usuario #${u?.id}`;
+}
+
+function envioOrdenMeta(estado) {
+  if (estado === "enviado") return { label: "Correo enviado", color: "#10B981" };
+  if (estado === "fallido") return { label: "Envío fallido", color: "#EF4444" };
+  if (estado === "pendiente") return { label: "Envío pendiente", color: "#F59E0B" };
+  return { label: "Sin envío registrado", color: "#94a3b8" };
 }
 
 function correoValido(email) {
@@ -196,6 +205,7 @@ export function ContratoOrdenesPagoPanel({
   const [confirmGenerar, setConfirmGenerar] = useState(null);
   const [confirmEliminar, setConfirmEliminar] = useState(null);
   const [eliminando, setEliminando] = useState(false);
+  const [reenviando, setReenviando] = useState(false);
 
   const cargar = useCallback(async () => {
     if (!contratoId) return;
@@ -276,6 +286,7 @@ export function ContratoOrdenesPagoPanel({
         autorizo_nombre: cfgForm.autorizo_nombre.trim() || null,
         autorizo_cargo: cfgForm.autorizo_cargo.trim() || null,
         correos_notificacion: cfgForm.correos_notificacion,
+        email_mensaje_adicional: cfgForm.email_mensaje_adicional.trim() || null,
       };
       await call("PUT", `/admin/contratos/${contratoId}/ordenes-pago/config`, body);
       await cargar();
@@ -299,11 +310,19 @@ export function ContratoOrdenesPagoPanel({
       setMsg({ type: "error", text: "Indique período de corte y fecha de vencimiento." });
       return;
     }
+    if (!cfgForm.correos_notificacion.length) {
+      setMsg({
+        type: "error",
+        text: "Agregue al menos un correo de notificación y guarde la configuración antes de generar.",
+      });
+      return;
+    }
     setConfirmGenerar({
       periodo: { ...periodoForm },
       montos: resumen?.montos_preview,
       cartera: resumen?.saldo_cartera ?? 0,
       proximoCorte: resumen?.sugerencia_periodo?.proximo_numero_corte,
+      correos: [...cfgForm.correos_notificacion],
     });
   }
 
@@ -328,13 +347,31 @@ export function ContratoOrdenesPagoPanel({
       setMsg({
         type: "success",
         text: corte
-          ? `Orden de pago generada — corte N.° ${String(corte).padStart(3, "0")}.`
-          : "Orden de pago generada correctamente.",
+          ? `Orden corte N.° ${String(corte).padStart(3, "0")} generada y enviada por correo.`
+          : "Orden generada y enviada por correo.",
       });
     } catch (e) {
-      setMsg({ type: "error", text: e.message || "No se pudo generar la orden de pago." });
+      await cargar();
+      setMsg({ type: "error", text: e.message || "No se pudo generar y enviar la orden de pago." });
     } finally {
       setGenerando(false);
+    }
+  }
+
+  async function reenviarCorreoOrden(orden) {
+    setReenviando(true);
+    setMsg(null);
+    try {
+      await call("POST", `/admin/contratos/${contratoId}/ordenes-pago/${orden.id}/reenviar-correo`);
+      await cargar();
+      setMsg({
+        type: "success",
+        text: `Correo reenviado — corte N.° ${String(orden.numero_corte).padStart(3, "0")}.`,
+      });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "No se pudo reenviar el correo." });
+    } finally {
+      setReenviando(false);
     }
   }
 
@@ -627,9 +664,17 @@ export function ContratoOrdenesPagoPanel({
                 </div>
               ) : (
                 <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 12 }}>
-                  Sin correos registrados. Se usarán en un paso posterior para el envío automático.
+                  Agregue al menos un correo para poder generar y enviar órdenes de pago.
                 </div>
               )}
+
+              <label style={lbl}>MENSAJE ADICIONAL EN CORREO (opcional, por contrato)</label>
+              <textarea
+                style={{ ...inp, minHeight: 56, resize: "vertical", marginBottom: 12 }}
+                value={cfgForm.email_mensaje_adicional}
+                onChange={(e) => setCfgForm((f) => ({ ...f, email_mensaje_adicional: e.target.value }))}
+                placeholder="Párrafo opcional incluido en la plantilla estándar del correo de orden de pago."
+              />
 
               <button
                 type="button"
@@ -725,11 +770,11 @@ export function ContratoOrdenesPagoPanel({
                     color: "#fff",
                     fontWeight: 700,
                     cursor: generando ? "wait" : "pointer",
-                    opacity: generando || !listo ? 0.65 : 1,
+                    opacity: generando || !listo || !cfgForm.correos_notificacion.length ? 0.65 : 1,
                     fontSize: font.body,
                   }}
                 >
-                  {generando ? "Generando PDF…" : "Generar orden de pago"}
+                  {generando ? "Generando y enviando…" : "Generar y enviar"}
                 </button>
               </div>
 
@@ -774,15 +819,16 @@ export function ContratoOrdenesPagoPanel({
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: font.caption, tableLayout: "fixed" }}>
                     <colgroup>
-                      <col style={{ width: "8%" }} />
-                      <col style={{ width: "22%" }} />
-                      <col style={{ width: "14%" }} />
-                      <col style={{ width: "12%" }} />
-                      <col style={{ width: "44%" }} />
+                      <col style={{ width: "7%" }} />
+                      <col style={{ width: "16%" }} />
+                      <col style={{ width: "11%" }} />
+                      <col style={{ width: "10%" }} />
+                      <col style={{ width: "24%" }} />
+                      <col style={{ width: "32%" }} />
                     </colgroup>
                     <thead>
                       <tr>
-                        {["Corte", "Período", "Total", "Estado", "Acciones"].map((h) => (
+                        {["Corte", "Período", "Total", "Estado", "Envío correo", "Acciones"].map((h) => (
                           <th
                             key={h}
                             style={{
@@ -802,6 +848,10 @@ export function ContratoOrdenesPagoPanel({
                     <tbody>
                       {historial.map((o) => {
                         const est = estadoOrdenMeta(o.estado);
+                        const envMeta = envioOrdenMeta(o.envio_estado);
+                        const ultimoEnvioOk = (o.envios || []).find((e) => e.exito);
+                        const ultimoEnvio = (o.envios || [])[0];
+                        const puedeReenviar = o.envio_estado !== "enviado";
                         return (
                           <tr key={o.id}>
                             <td style={{ padding: "8px", color: ui.text, borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
@@ -830,8 +880,61 @@ export function ContratoOrdenesPagoPanel({
                               </span>
                             </td>
                             <td style={{ padding: "8px", borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                              <span
+                                style={{
+                                  display: "inline-block",
+                                  padding: "2px 8px",
+                                  borderRadius: 10,
+                                  fontSize: font.caption,
+                                  fontWeight: 700,
+                                  background: `${envMeta.color}22`,
+                                  color: envMeta.color,
+                                  border: `1px solid ${envMeta.color}55`,
+                                  marginBottom: 6,
+                                }}
+                              >
+                                {envMeta.label}
+                              </span>
+                              {(ultimoEnvioOk || ultimoEnvio) && (
+                                <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45 }}>
+                                  {ultimoEnvioOk ? (
+                                    <>
+                                      <div>{fmtFecha(ultimoEnvioOk.enviado_at)}</div>
+                                      <div>
+                                        {(ultimoEnvioOk.destinatarios || []).join(", ") || "—"}
+                                      </div>
+                                    </>
+                                  ) : ultimoEnvio && !ultimoEnvio.exito ? (
+                                    <>
+                                      <div>{fmtFecha(ultimoEnvio.enviado_at)}</div>
+                                      <div style={{ color: ui.errorText }}>{ultimoEnvio.error_detalle || "Error de envío"}</div>
+                                    </>
+                                  ) : null}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: "8px", borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
                               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                  {puedeReenviar && (
+                                    <button
+                                      type="button"
+                                      disabled={reenviando || eliminando}
+                                      onClick={() => void reenviarCorreoOrden(o)}
+                                      style={{
+                                        background: `${ui.warnText}18`,
+                                        border: `1px solid ${ui.warnText}55`,
+                                        borderRadius: 5,
+                                        padding: "3px 8px",
+                                        color: ui.warnText,
+                                        fontSize: font.caption,
+                                        cursor: reenviando ? "wait" : "pointer",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      Reenviar
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -926,9 +1029,9 @@ export function ContratoOrdenesPagoPanel({
       {confirmGenerar && (
         <CcConfirmModal
           theme={confirmTheme}
-          titulo="Generar orden de pago"
+          titulo="Generar y enviar orden de pago"
           tipo="info"
-          confirmar="Generar PDF"
+          confirmar="Generar y enviar"
           cancelar="Cancelar"
           procesando={generando}
           onCancel={() => {
@@ -952,6 +1055,12 @@ export function ContratoOrdenesPagoPanel({
             <p style={{ margin: "0 0 6px 0" }}>
               Vencimiento: {fmtFechaCorta(confirmGenerar.periodo.fecha_vencimiento)}
             </p>
+            {confirmGenerar.correos?.length > 0 && (
+              <p style={{ margin: "10px 0 0 0", color: confirmTheme.textMuted, fontSize: font.sm }}>
+                Se enviará el PDF a:{" "}
+                <strong style={{ color: confirmTheme.text }}>{confirmGenerar.correos.join(", ")}</strong>
+              </p>
+            )}
             {confirmGenerar.montos && (
               <p style={{ margin: "10px 0 0 0", color: confirmTheme.text }}>
                 Total a pagar (este corte):{" "}

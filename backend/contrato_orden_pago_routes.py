@@ -22,6 +22,8 @@ from contrato_orden_pago_service import (
     get_cobro_config,
     get_orden_pago,
     list_ordenes_pago,
+    reenviar_correo_orden_pago,
+    resumen_alertas_ordenes_pago,
     resumen_ordenes_pago,
     update_orden_estado,
     upsert_cobro_config,
@@ -62,6 +64,7 @@ class CobroConfigBody(BaseModel):
     autorizo_nombre: Optional[str] = Field(None, max_length=300)
     autorizo_cargo: Optional[str] = Field(None, max_length=300)
     correos_notificacion: Optional[List[str]] = Field(default_factory=list)
+    email_mensaje_adicional: Optional[str] = Field(None, max_length=2000)
 
 
 class GenerarOrdenBody(BaseModel):
@@ -74,6 +77,15 @@ class GenerarOrdenBody(BaseModel):
 
 class OrdenEstadoBody(BaseModel):
     estado: str = Field(..., min_length=1, max_length=20)
+
+
+@router.get("/admin/ordenes-pago/alertas")
+def obtener_alertas_ordenes_pago(
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Alertas Desarrollador: generación mensual (días 1–7) y seguimiento de emitidas."""
+    sb = get_supabase()
+    return resumen_alertas_ordenes_pago(sb)
 
 
 @router.get("/admin/contratos/{contrato_id}/ordenes-pago")
@@ -133,6 +145,7 @@ def generar_orden_pago_pdf(
     body: GenerarOrdenBody,
     current_user=Depends(require_solo_desarrollador),
 ):
+    """Genera la orden de pago PDF y la envía por correo a los destinatarios configurados."""
     sb = get_supabase()
     uid = _uid(current_user)
     try:
@@ -169,10 +182,45 @@ def generar_orden_pago_pdf(
         "contrato_orden_pago",
         str(orden.get("id")),
         {
-            "accion": "generar_orden_pago",
+            "accion": "generar_y_enviar_orden_pago",
             "contrato_id": contrato_id,
             "numero_corte": orden.get("numero_corte"),
             "total_a_pagar": orden.get("total_a_pagar"),
+            "envio_estado": orden.get("envio_estado"),
+        },
+    )
+    return {"ok": True, "orden": orden}
+
+
+@router.post("/admin/contratos/{contrato_id}/ordenes-pago/{orden_id}/reenviar-correo")
+def reenviar_correo_orden_pago_route(
+    contrato_id: int,
+    orden_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Reenvía por correo el PDF ya generado (sin nuevo consecutivo)."""
+    sb = get_supabase()
+    uid = _uid(current_user)
+    prev = get_orden_pago(sb, orden_id, contrato_id)
+    if not prev:
+        raise HTTPException(status_code=404, detail="Orden de pago no encontrada")
+    try:
+        orden = reenviar_correo_orden_pago(
+            sb, orden_id=orden_id, contrato_id=contrato_id, user_id=uid
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+    registrar_log(
+        _audit_user(current_user, contrato_id),
+        "EDITAR",
+        "ADMIN",
+        "contrato_orden_pago",
+        str(orden_id),
+        {
+            "accion": "reenviar_correo_orden_pago",
+            "envio_estado": orden.get("envio_estado"),
+            "destinatarios": orden.get("ultimo_envio_destinatarios"),
         },
     )
     return {"ok": True, "orden": orden}

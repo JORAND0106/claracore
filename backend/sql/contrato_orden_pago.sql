@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS public.contrato_licencia_cobro_config (
   autorizo_nombre       text,
   autorizo_cargo        text,
   correos_notificacion  jsonb NOT NULL DEFAULT '[]'::jsonb,
+  email_mensaje_adicional text,
   updated_at            timestamptz DEFAULT now(),
   updated_by            integer REFERENCES public.usuarios(id) ON DELETE SET NULL
 );
@@ -49,6 +50,9 @@ CREATE TABLE IF NOT EXISTS public.contrato_orden_pago (
   logo_receptor_ref     text,
   autorizo_nombre       text,
   autorizo_cargo        text,
+  envio_estado          text CHECK (envio_estado IS NULL OR envio_estado IN ('pendiente', 'enviado', 'fallido')),
+  ultimo_envio_at       timestamptz,
+  ultimo_envio_destinatarios jsonb,
   datos_snapshot        jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at            timestamptz NOT NULL DEFAULT now(),
   created_by            integer REFERENCES public.usuarios(id) ON DELETE SET NULL,
@@ -70,3 +74,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_contrato_orden_pago_periodo_activo
 
 COMMENT ON TABLE public.contrato_orden_pago IS
   'Historial de órdenes de pago PDF; azure_blob_path apunta a claracore-privado.';
+
+CREATE TABLE IF NOT EXISTS public.contrato_orden_pago_envio (
+  id                bigserial PRIMARY KEY,
+  orden_id          bigint NOT NULL REFERENCES public.contrato_orden_pago(id) ON DELETE CASCADE,
+  contrato_id       integer NOT NULL REFERENCES public.contratos(id) ON DELETE CASCADE,
+  destinatarios     jsonb NOT NULL DEFAULT '[]'::jsonb,
+  asunto            text,
+  exito             boolean NOT NULL DEFAULT false,
+  error_detalle     text,
+  enviado_at        timestamptz NOT NULL DEFAULT now(),
+  enviado_por       integer REFERENCES public.usuarios(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contrato_orden_pago_envio_orden
+  ON public.contrato_orden_pago_envio (orden_id, enviado_at DESC);

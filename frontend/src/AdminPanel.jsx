@@ -13,6 +13,7 @@ import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
 import ContratoEditModal from "./ContratoEditModal";
 import { ContratoDocumentosMatriz } from "./ContratoDocumentosContractuales";
+import { ContratoOrdenesPagoAlertasDev } from "./ContratoOrdenesPagoAlertasDev";
 import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
@@ -2496,7 +2497,7 @@ const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
 /** GET/PUT/POST de contrato con `plano_geojson` grande (decenas de MB): el timeout por defecto del panel (~48 s) corta con "signal timed out" antes de terminar. */
 const CONTRATO_API_PLANO_TIMEOUT = { timeoutMs: 30 * 60 * 1000, maxRetries: 1 };
 
-function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false }, isDeveloper = false, token = null, theme = "dark", t = null }) {
+function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false }, isDeveloper = false, token = null, theme = "dark", t = null, openContratoRequest = null, onOpenContratoHandled = null }) {
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
     numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
@@ -2733,6 +2734,19 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     llenarFormDesdeContrato(d);
     setMsg(null);
   }
+
+  useEffect(() => {
+    if (!openContratoRequest?.id) return;
+    const cid = Number(openContratoRequest.id);
+    if (!Number.isFinite(cid)) {
+      onOpenContratoHandled?.();
+      return;
+    }
+    const c = contratos.find((x) => Number(x.id) === cid) || { id: cid };
+    setVistaContratosDev("gestion");
+    void iniciarEdicion(c, { tabInicial: openContratoRequest.tab || "info" });
+    onOpenContratoHandled?.();
+  }, [openContratoRequest]);
 
   function iniciarCreacion() {
     setEditandoId(null);
@@ -7320,6 +7334,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
 
   const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");
+  const [openContratoRequest, setOpenContratoRequest] = useState(null);
   const [modoCantidadPrecios, setModoCantidadPrecios] = useState(() => {
     try {
       const v = sessionStorage.getItem("cc_listado_precios_modo_cantidad");
@@ -7403,6 +7418,11 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
       setContratos(await call("GET", "/contratos"));
     } catch {}
   }, [call]);
+
+  const irAlContratoOrdenesPago = useCallback((contratoId) => {
+    setTab("contratos");
+    setOpenContratoRequest({ id: Number(contratoId), tab: "ordenes", ts: Date.now() });
+  }, []);
 
   const contratosPanelFetchRef = useRef(false);
 
@@ -7536,6 +7556,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             t={t}
             isDeveloper={isDeveloper}
             token={token}
+            openContratoRequest={openContratoRequest}
+            onOpenContratoHandled={() => setOpenContratoRequest(null)}
             perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
               (() => {
                 const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");
@@ -7570,6 +7592,14 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
           </div>
         </div>
       </div>
+
+      <ContratoOrdenesPagoAlertasDev
+        call={call}
+        isDeveloper={isDeveloper}
+        theme={activeTheme}
+        t={t}
+        onIrAlContrato={irAlContratoOrdenesPago}
+      />
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap');
