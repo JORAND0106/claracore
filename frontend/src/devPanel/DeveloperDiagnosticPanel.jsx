@@ -7,7 +7,6 @@ import {
 } from './appInsightsApi'
 import {
   isBrowserTelemetryConfigured,
-  isBrowserTelemetryEnabled,
   setBrowserTelemetryEnabled,
   SUCCESS_SAMPLE_RATE,
 } from '../telemetry/browserTelemetry'
@@ -174,7 +173,7 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
   const [tab, setTab] = useState('backend')
   const [data, setData] = useState(null)
   const [frontendData, setFrontendData] = useState(null)
-  const [telemetryOn, setTelemetryOn] = useState(() => isBrowserTelemetryEnabled())
+  const [telemetryOn, setTelemetryOn] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedEndpoint, setSelectedEndpoint] = useState(null)
@@ -213,6 +212,17 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
     const iv = window.setInterval(refresh, 30_000)
     return () => window.clearInterval(iv)
   }, [refresh])
+
+  useEffect(() => {
+    setBrowserTelemetryEnabled(false)
+    return () => setBrowserTelemetryEnabled(false)
+  }, [])
+
+  function handleClose() {
+    setBrowserTelemetryEnabled(false)
+    setTelemetryOn(false)
+    onClose()
+  }
 
   async function openEndpoint(name) {
     setSelectedEndpoint(name)
@@ -301,7 +311,7 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
         </button>
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleClose}
           style={{
             background: 'transparent',
             border: '1px solid #30363d',
@@ -447,7 +457,7 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
                     </label>
                     <span style={{ color: '#6e7681', fontSize: 10, lineHeight: 1.4 }}>
                       Errores y fallos de red: 100 %. Éxitos rutinarios: ~{Math.round(SUCCESS_SAMPLE_RATE * 100)} % muestreados.
-                      Persiste en este navegador hasta desactivar.
+                      Se desactiva al cerrar el panel; actívala en cada sesión de diagnóstico.
                     </span>
                   </div>
                 )}

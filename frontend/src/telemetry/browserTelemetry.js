@@ -33,6 +33,7 @@ let errorsInstalled = false
 let originalFetch = null
 let currentView = 'landing'
 let currentUser = null
+let telemetryEnabled = false
 
 function connectionString() {
   return (import.meta.env.VITE_APPLICATIONINSIGHTS_CONNECTION_STRING || '').trim()
@@ -43,11 +44,7 @@ export function isBrowserTelemetryConfigured() {
 }
 
 export function isBrowserTelemetryEnabled() {
-  try {
-    return localStorage.getItem(TELEMETRY_ENABLED_KEY) === '1'
-  } catch {
-    return false
-  }
+  return telemetryEnabled
 }
 
 function pageContext() {
@@ -300,12 +297,7 @@ export function clearBrowserTelemetryUser() {
 }
 
 export function setBrowserTelemetryEnabled(on) {
-  try {
-    if (on) localStorage.setItem(TELEMETRY_ENABLED_KEY, '1')
-    else localStorage.removeItem(TELEMETRY_ENABLED_KEY)
-  } catch {
-    /* ignore */
-  }
+  telemetryEnabled = !!on
   if (on) {
     loadSdk()
       .then(sdk => {
@@ -324,7 +316,12 @@ export function setBrowserTelemetryEnabled(on) {
 }
 
 export function initBrowserTelemetry() {
+  try {
+    localStorage.removeItem(TELEMETRY_ENABLED_KEY)
+  } catch {
+    /* ignore clave legacy */
+  }
+  telemetryEnabled = false
   installFetchInstrument()
   installGlobalErrorHandlers()
-  if (isBrowserTelemetryEnabled()) loadSdk().catch(() => {})
 }

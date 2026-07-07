@@ -119,6 +119,7 @@ import {
 import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
 import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
 import { permisosProgramacionObra } from './progObraPermisos'
+import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import EmojiPicker from './EmojiPicker'
