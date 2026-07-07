@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -32,6 +34,56 @@ _AL_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _AL_RIGHT = Alignment(horizontal="right", vertical="center")
 _AL_LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
+_LOGO_BYTES: Optional[bytes] = None
+_LOGO_RESOLVED = False
+
+
+def _logo_claracore_bytes() -> Optional[bytes]:
+    global _LOGO_BYTES, _LOGO_RESOLVED
+    if _LOGO_RESOLVED:
+        return _LOGO_BYTES
+    _LOGO_RESOLVED = True
+    base = Path(__file__).resolve().parent / "assets"
+    for name in ("CLARA.CORE.png", "claracore-logo.png", "logo-claracore.png"):
+        path = base / name
+        if path.is_file():
+            _LOGO_BYTES = path.read_bytes()
+            return _LOGO_BYTES
+    _LOGO_BYTES = None
+    return None
+
+
+def _write_sheet_header(ws, title: str, ncols: int) -> int:
+    """Fila 1: logo ClaraCore (col A) + título. Devuelve la fila para subtítulo o tabla."""
+    ws.row_dimensions[1].height = 52
+    col_a = get_column_letter(1)
+    ws.column_dimensions[col_a].width = max(float(ws.column_dimensions[col_a].width or 0), 18)
+
+    logo_bytes = _logo_claracore_bytes()
+    if logo_bytes:
+        try:
+            img = XLImage(io.BytesIO(logo_bytes))
+            target_h = 44
+            if img.height:
+                img.width = int(img.width * (target_h / img.height))
+            img.height = target_h
+            ws.add_image(img, "A1")
+        except Exception:
+            ws.cell(row=1, column=1, value="ClaraCore")
+
+    title_col = 2 if ncols > 1 else 1
+    if ncols > 1:
+        ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=ncols)
+    cell = ws.cell(row=1, column=title_col, value=title)
+    cell.font = _FONT_TITLE
+    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    return 3
+
+
+def _write_title(ws, title: str, ncols: int) -> int:
+    """Encabezado con logo ClaraCore."""
+    return _write_sheet_header(ws, title, ncols)
+
 
 def _safe_sheet_name(name: str, fallback: str = "Hoja") -> str:
     bad = set(r'[]:*?/\\')
@@ -46,15 +98,6 @@ def _style_header_row(ws, row_idx: int, ncols: int) -> None:
         cell.font = _FONT_HDR
         cell.alignment = _AL_CENTER
         cell.border = _BORDER
-
-
-def _write_title(ws, title: str, ncols: int) -> int:
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
-    c = ws.cell(row=1, column=1, value=title)
-    c.font = _FONT_TITLE
-    c.alignment = _AL_LEFT
-    ws.row_dimensions[1].height = 24
-    return 3
 
 
 def _autosize_columns(ws, max_width: int = 42) -> None:
@@ -225,7 +268,7 @@ def _sheet_transacciones(ws, txs: List[dict], meta: dict) -> None:
 
 
 def _sheet_cierre(ws, cierre: dict) -> None:
-    ncols = 2
+    ncols = 4
     anio, mes = int(cierre.get("anio") or 0), int(cierre.get("mes") or 0)
     titulo = f"Cierre mensual — {MESES_ES[mes] if 1 <= mes <= 12 else mes} {anio}"
     row = _write_title(ws, titulo, ncols)

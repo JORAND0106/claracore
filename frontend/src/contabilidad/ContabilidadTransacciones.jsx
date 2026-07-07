@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../apiBase'
 import { contabGet, contabSend } from './contabilidadApi'
+import { compressImageForSoporte } from './contabilidadImageCompress'
+import { FieldLabel, TX_FIELD_HINTS } from './ContabilidadFieldLabel'
+import SoportePreviewModal from './SoportePreviewModal'
 import { fmtCOP } from './contabilidadUi'
 
 const EMPTY_FORM = {
@@ -30,6 +33,62 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   const [showForm, setShowForm] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState({
+    open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
+  })
+  const previewUrlRef = useRef(null)
+
+  const cerrarPreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreview({ open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null })
+  }, [])
+
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+  }, [])
+
+  const abrirPreview = async (tx) => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreview({
+      open: true,
+      loading: true,
+      error: '',
+      nombre: tx.soporte_nombre_archivo || 'Soporte',
+      mime: tx.soporte_mime_type || '',
+      blobUrl: null,
+    })
+    try {
+      const r = await fetch(`${API_BASE}/contabilidad/transacciones/${tx.id}/soporte`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!r.ok) throw new Error('No se pudo cargar el soporte')
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      previewUrlRef.current = url
+      setPreview((p) => ({
+        ...p,
+        loading: false,
+        blobUrl: url,
+        mime: tx.soporte_mime_type || blob.type || '',
+      }))
+    } catch (e) {
+      setPreview((p) => ({ ...p, loading: false, error: e.message || 'Error al cargar' }))
+    }
+  }
+
+  const descargarPreview = () => {
+    if (!preview.blobUrl || !preview.nombre) return
+    const a = document.createElement('a')
+    a.href = preview.blobUrl
+    a.download = preview.nombre
+    a.click()
+  }
 
   const catsIngreso = useMemo(() => categorias.filter((c) => c.tipo === 'ingreso'), [categorias])
   const catsEgreso = useMemo(() => categorias.filter((c) => c.tipo === 'egreso'), [categorias])
@@ -142,10 +201,11 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
 
   const subirSoporte = async (txId, file) => {
     if (!file) return
-    const fd = new FormData()
-    fd.append('archivo', file)
     setBusy(true)
     try {
+      const prepared = await compressImageForSoporte(file)
+      const fd = new FormData()
+      fd.append('archivo', prepared)
       await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
       await cargar()
     } catch (e) {
@@ -154,6 +214,15 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
       setBusy(false)
     }
   }
+
+  const Field = ({ name, label, children }) => (
+    <label>
+      <span style={lbl}>
+        <FieldLabel label={label} hint={TX_FIELD_HINTS[name]} t={t} />
+      </span>
+      {children}
+    </label>
+  )
 
   const inp = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', color: t.text, fontSize: 'var(--cc-sm)', width: '100%', boxSizing: 'border-box' }
   const lbl = { fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4, display: 'block' }
@@ -197,49 +266,50 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
         <div style={{ background: t.bgCard, border: `1px solid ${t.primary}44`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, marginBottom: 12, color: t.primary }}>{editId ? 'Editar transacción' : 'Nueva transacción'}</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            <label><span style={lbl}>Fecha</span><input type="date" style={inp} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></label>
-            <label><span style={lbl}>Tipo</span>
+            <Field name="fecha" label="Fecha"><input type="date" style={inp} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+            <Field name="tipo" label="Tipo">
               <select style={inp} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value, categoria_id: '' })}>
                 <option value="ingreso">Ingreso</option>
                 <option value="egreso">Egreso</option>
               </select>
-            </label>
-            <label><span style={lbl}>Valor bruto</span><input type="number" min="0" step="0.01" style={inp} value={form.valor_bruto} onChange={(e) => setForm({ ...form, valor_bruto: e.target.value })} /></label>
-            <label><span style={lbl}>Retención valor</span><input type="number" min="0" step="0.01" style={inp} value={form.retencion_fuente_valor} onChange={(e) => setForm({ ...form, retencion_fuente_valor: e.target.value })} /></label>
-            <label><span style={lbl}>IVA tasa</span><input type="number" min="0" step="0.0001" style={inp} value={form.iva_tasa} onChange={(e) => setForm({ ...form, iva_tasa: e.target.value })} /></label>
-            <label><span style={lbl}>IVA valor</span><input type="number" min="0" step="0.01" style={inp} value={form.iva_valor} onChange={(e) => setForm({ ...form, iva_valor: e.target.value })} /></label>
-            <label><span style={lbl}>Categoría</span>
+            </Field>
+            <Field name="valor_bruto" label="Valor bruto"><input type="number" min="0" step="0.01" style={inp} value={form.valor_bruto} onChange={(e) => setForm({ ...form, valor_bruto: e.target.value })} /></Field>
+            <Field name="retencion_fuente_valor" label="Retención valor"><input type="number" min="0" step="0.01" style={inp} value={form.retencion_fuente_valor} onChange={(e) => setForm({ ...form, retencion_fuente_valor: e.target.value })} /></Field>
+            <Field name="iva_tasa" label="IVA tasa"><input type="number" min="0" step="0.0001" style={inp} value={form.iva_tasa} onChange={(e) => setForm({ ...form, iva_tasa: e.target.value })} /></Field>
+            <Field name="iva_valor" label="IVA valor"><input type="number" min="0" step="0.01" style={inp} value={form.iva_valor} onChange={(e) => setForm({ ...form, iva_valor: e.target.value })} /></Field>
+            <Field name="categoria" label="Categoría">
               <select style={inp} value={form.categoria_id} onChange={(e) => setForm({ ...form, categoria_id: e.target.value })}>
                 <option value="">—</option>
                 {(form.tipo === 'ingreso' ? catsIngreso : catsEgreso).map((c) => (
                   <option key={c.id} value={c.id}>{c.nombre}</option>
                 ))}
               </select>
-            </label>
-            <label><span style={lbl}>Centro de costo</span>
+            </Field>
+            <Field name="centro_costo_tipo" label="Centro de costo">
               <select style={inp} value={form.centro_costo_tipo} onChange={(e) => setForm({ ...form, centro_costo_tipo: e.target.value })}>
                 <option value="empresa">Empresa general</option>
                 <option value="contrato">Contrato</option>
               </select>
-            </label>
+            </Field>
             {form.centro_costo_tipo === 'contrato' && (
-              <label><span style={lbl}>Contrato</span>
+              <Field name="contrato" label="Contrato">
                 <select style={inp} value={form.contrato_id} onChange={(e) => setForm({ ...form, contrato_id: e.target.value })}>
                   <option value="">—</option>
                   {contratos.map((c) => <option key={c.id} value={c.id}>{c.numero}</option>)}
                 </select>
-              </label>
+              </Field>
             )}
             {form.tipo === 'ingreso' && (
-              <label><span style={lbl}>Fuente ingreso</span>
+              <Field name="fuente_ingreso" label="Fuente ingreso">
                 <select style={inp} value={form.fuente_ingreso} onChange={(e) => setForm({ ...form, fuente_ingreso: e.target.value })}>
                   <option value="licenciamiento">Licenciamiento</option>
                   <option value="servicios">Servicios</option>
                 </select>
-              </label>
+              </Field>
             )}
           </div>
-          <label style={{ display: 'block', marginTop: 12 }}><span style={lbl}>Notas</span>
+          <label style={{ display: 'block', marginTop: 12 }}>
+            <span style={lbl}><FieldLabel label="Notas" hint={TX_FIELD_HINTS.notas} t={t} /></span>
             <textarea style={{ ...inp, minHeight: 60 }} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
           </label>
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -276,19 +346,9 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                     {tx.soporte_nombre_archivo ? (
                       <button
                         type="button"
+                        title="Ver soporte"
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: t.primary, padding: 0 }}
-                        onClick={async () => {
-                          const r = await fetch(`${API_BASE}/contabilidad/transacciones/${tx.id}/soporte`, {
-                            headers: { Authorization: `Bearer ${token}` },
-                          })
-                          if (!r.ok) return
-                          const b = await r.blob()
-                          const a = document.createElement('a')
-                          a.href = URL.createObjectURL(b)
-                          a.download = tx.soporte_nombre_archivo
-                          a.click()
-                          URL.revokeObjectURL(a.href)
-                        }}
+                        onClick={() => abrirPreview(tx)}
                       >📎</button>
                     ) : (
                       <label style={{ cursor: 'pointer', color: t.textMuted }}>
@@ -309,6 +369,18 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
           </table>
         </div>
       )}
+
+      <SoportePreviewModal
+        t={t}
+        open={preview.open}
+        loading={preview.loading}
+        error={preview.error}
+        nombre={preview.nombre}
+        mime={preview.mime}
+        blobUrl={preview.blobUrl}
+        onClose={cerrarPreview}
+        onDownload={descargarPreview}
+      />
     </div>
   )
 }

@@ -245,3 +245,11 @@ def path_contabilidad_soporte(transaccion_id: int, nombre_archivo: str) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "soporte").strip())[:120]
     return f"contabilidad-soportes/{int(transaccion_id)}/{ts}_{safe}"
+
+
+def path_contabilidad_documento_empresa(categoria: str, nombre_archivo: str) -> str:
+    """Documento corporativo del módulo Contabilidad (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    cat = re.sub(r"[^\w\-]", "_", (categoria or "otros").strip().lower())[:32]
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "documento").strip())[:120]
+    return f"contabilidad-documentos-empresa/{cat}/{ts}_{safe}"

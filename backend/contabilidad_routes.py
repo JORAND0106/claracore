@@ -9,10 +9,20 @@ import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from contabilidad_documentos_service import (
+    alertas_vencimiento_documentos,
+    create_documento_empresa,
+    delete_documento_empresa,
+    download_documento_empresa,
+    get_documento_empresa,
+    list_documentos_empresa,
+    replace_archivo_documento_empresa,
+    update_documento_empresa,
+)
 from contabilidad_export import build_export_xlsx
 from contabilidad_permissions import (
     require_firma_cierre,
@@ -143,6 +153,14 @@ class CierreNotasBody(BaseModel):
 
 class CierreFirmarBody(BaseModel):
     notas: Optional[str] = Field(None, max_length=8000)
+
+
+class DocumentoEmpresaUpdateBody(BaseModel):
+    categoria: Optional[str] = Field(None, pattern="^(legal|tributario|corporativo|laboral|otros)$")
+    nombre: Optional[str] = Field(None, min_length=2, max_length=200)
+    descripcion: Optional[str] = Field(None, max_length=4000)
+    fecha_documento: Optional[str] = Field(None, description="YYYY-MM-DD")
+    fecha_vencimiento: Optional[str] = Field(None, description="YYYY-MM-DD")
 
 
 @router.get("/categorias")
@@ -563,3 +581,163 @@ def exportar_contabilidad_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/documentos")
+def obtener_documentos_empresa(
+    categoria: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user=Depends(_require_ver),
+):
+    sb = get_supabase()
+    try:
+        return list_documentos_empresa(
+            sb, categoria=categoria, q=q, limit=limit, offset=offset,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/documentos/alertas-vencimiento")
+def obtener_alertas_vencimiento_documentos(
+    dias_alerta: int = Query(30, ge=1, le=365),
+    current_user=Depends(_require_ver),
+):
+    sb = get_supabase()
+    return alertas_vencimiento_documentos(sb, dias_alerta=dias_alerta)
+
+
+@router.get("/documentos/{doc_id}")
+def obtener_documento_empresa(
+    doc_id: int,
+    current_user=Depends(_require_ver),
+):
+    sb = get_supabase()
+    try:
+        return get_documento_empresa(sb, doc_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/documentos")
+async def subir_documento_empresa(
+    archivo: UploadFile = File(...),
+    categoria: str = Form(...),
+    nombre: str = Form(...),
+    descripcion: Optional[str] = Form(None),
+    fecha_documento: Optional[str] = Form(None),
+    fecha_vencimiento: Optional[str] = Form(None),
+    current_user=Depends(_require_crear),
+):
+    sb = get_supabase()
+    uid = _uid(current_user)
+    data = await archivo.read()
+    try:
+        row = create_documento_empresa(
+            sb,
+            {
+                "categoria": categoria,
+                "nombre": nombre,
+                "descripcion": descripcion,
+                "fecha_documento": fecha_documento,
+                "fecha_vencimiento": fecha_vencimiento,
+            },
+            data,
+            archivo.content_type,
+            archivo.filename or "documento",
+            uid,
+        )
+        registrar_log(
+            current_user, "CREAR", "CONTABILIDAD", "contabilidad_documento_empresa",
+            str(row.get("id")),
+            {"categoria": categoria, "nombre": nombre, "bytes": len(data)},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/documentos/{doc_id}")
+def editar_documento_empresa(
+    doc_id: int,
+    body: DocumentoEmpresaUpdateBody,
+    current_user=Depends(_require_editar),
+):
+    sb = get_supabase()
+    uid = _uid(current_user)
+    try:
+        row = update_documento_empresa(sb, doc_id, body.dict(exclude_unset=True), uid)
+        registrar_log(
+            current_user, "EDITAR", "CONTABILIDAD", "contabilidad_documento_empresa",
+            str(doc_id), body.dict(exclude_unset=True),
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/documentos/{doc_id}/archivo")
+def descargar_documento_empresa(
+    doc_id: int,
+    inline: bool = Query(True, description="True para vista previa en navegador"),
+    current_user=Depends(_require_ver),
+):
+    sb = get_supabase()
+    try:
+        data, mime, name = download_documento_empresa(sb, doc_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    dispo = "inline" if inline else "attachment"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=mime,
+        headers={"Content-Disposition": f'{dispo}; filename="{name}"'},
+    )
+
+
+@router.put("/documentos/{doc_id}/archivo")
+async def reemplazar_archivo_documento_empresa(
+    doc_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(_require_editar),
+):
+    sb = get_supabase()
+    uid = _uid(current_user)
+    data = await archivo.read()
+    try:
+        row = replace_archivo_documento_empresa(
+            sb,
+            doc_id,
+            data,
+            archivo.content_type,
+            archivo.filename or "documento",
+            uid,
+        )
+        registrar_log(
+            current_user, "REEMPLAZAR", "CONTABILIDAD", "contabilidad_documento_empresa",
+            str(doc_id),
+            {"archivo": archivo.filename, "bytes": len(data)},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/documentos/{doc_id}")
+def eliminar_documento_empresa_route(
+    doc_id: int,
+    current_user=Depends(_require_eliminar),
+):
+    sb = get_supabase()
+    uid = _uid(current_user)
+    try:
+        row = delete_documento_empresa(sb, doc_id, uid)
+        registrar_log(
+            current_user, "ELIMINAR", "CONTABILIDAD", "contabilidad_documento_empresa",
+            str(doc_id), {"nombre": row.get("nombre")},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc

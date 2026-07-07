@@ -4,10 +4,119 @@ import {
   Pie, PieChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { contabGet, contabDownloadExport } from './contabilidadApi'
+import { docCategoriaLabel, fmtFecha } from './contabilidadUi'
 
 const COLORS = ['#0077B6', '#10B981', '#F59E0B', '#7C3AED', '#EF4444', '#00B4C6']
 
-export default function ContabilidadReportes({ t, token }) {
+function AlertasDocumentosPanel({ t, alertas, onIrDocumentos }) {
+  if (!alertas) return null
+  const total = Number(alertas.total_alertas) || 0
+  if (total <= 0) return null
+
+  const vencidos = alertas.vencidos || []
+  const porVencer = alertas.por_vencer || []
+  const dias = alertas.dias_alerta || 30
+
+  const fila = (doc, color) => (
+    <div
+      key={doc.id}
+      style={{
+        display: 'flex', justifyContent: 'space-between', gap: 12,
+        padding: '8px 0', borderBottom: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600, color: t.text }}>{doc.nombre}</div>
+        <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+          {docCategoriaLabel(doc.categoria)} · vence {fmtFecha(doc.fecha_vencimiento)}
+        </div>
+      </div>
+      <div style={{ color, fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+        {doc.dias_restantes < 0
+          ? `Vencido hace ${Math.abs(doc.dias_restantes)} d`
+          : `${doc.dias_restantes} d`}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{
+      background: t.bgCard,
+      border: `1px solid ${alertas.total_vencidos > 0 ? '#EF444466' : '#F59E0B66'}`,
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+      borderLeft: `4px solid ${alertas.total_vencidos > 0 ? '#EF4444' : '#F59E0B'}`,
+    }}>
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
+        justifyContent: 'space-between', marginBottom: 12,
+      }}>
+        <div>
+          <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-md)' }}>
+            ⚠ Alertas de vencimiento documental
+          </div>
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', marginTop: 4 }}>
+            {alertas.total_vencidos > 0 && (
+              <span style={{ color: '#EF4444', fontWeight: 700, marginRight: 12 }}>
+                {alertas.total_vencidos} vencido{alertas.total_vencidos !== 1 ? 's' : ''}
+              </span>
+            )}
+            {alertas.total_por_vencer > 0 && (
+              <span style={{ color: '#F59E0B', fontWeight: 700 }}>
+                {alertas.total_por_vencer} por vencer en {dias} días
+              </span>
+            )}
+          </div>
+        </div>
+        {onIrDocumentos && (
+          <button
+            type="button"
+            onClick={onIrDocumentos}
+            style={{
+              background: 'transparent', border: `1px solid ${t.primary}`, color: t.primary,
+              borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer',
+              fontSize: 'var(--cc-sm)',
+            }}
+          >
+            Ver documentos →
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+        {vencidos.length > 0 && (
+          <div>
+            <div style={{ fontWeight: 700, color: '#EF4444', marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
+              Vencidos
+            </div>
+            {vencidos.slice(0, 8).map((doc) => fila(doc, '#EF4444'))}
+            {vencidos.length > 8 && (
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)', marginTop: 6 }}>
+                +{vencidos.length - 8} más…
+              </div>
+            )}
+          </div>
+        )}
+        {porVencer.length > 0 && (
+          <div>
+            <div style={{ fontWeight: 700, color: '#F59E0B', marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
+              Por vencer
+            </div>
+            {porVencer.slice(0, 8).map((doc) => fila(doc, '#F59E0B'))}
+            {porVencer.length > 8 && (
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)', marginTop: 6 }}>
+                +{porVencer.length - 8} más…
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
   const [anio, setAnio] = useState(new Date().getFullYear())
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -50,6 +159,7 @@ export default function ContabilidadReportes({ t, token }) {
   const centros = data?.ingresos_centro_costo?.items || []
   const cuentas = data?.cuentas_especiales?.series || []
   const ded = data?.deducciones_tributarias?.series || []
+  const alertas = data?.alertas_documentos
 
   return (
     <div>
@@ -63,6 +173,8 @@ export default function ContabilidadReportes({ t, token }) {
         <button type="button" style={{ ...btn, background: 'transparent', color: t.primary, border: `1.5px solid ${t.primary}` }} disabled={exportBusy} onClick={() => exportar('completo')}>⬇ Excel completo</button>
       </div>
       {error && <div style={{ color: '#EF4444', marginBottom: 12 }}>{error}</div>}
+
+      <AlertasDocumentosPanel t={t} alertas={alertas} onIrDocumentos={onIrDocumentos} />
 
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 12, color: t.text }}>Evolución mensual — Ingresos vs Egresos</div>

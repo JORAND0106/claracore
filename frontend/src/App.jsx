@@ -19165,6 +19165,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           onClose={() => setShowContabilidad(false)}
           esDeveloper={esDeveloper}
           esContador={esContador}
+          logoFilter={themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none'}
         />
       )}
     </div>

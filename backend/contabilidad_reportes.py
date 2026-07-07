@@ -9,6 +9,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
+from contabilidad_documentos_service import alertas_vencimiento_documentos
 from contabilidad_service import (
     CAPITALIZACION_TASA,
     _d,
@@ -385,6 +386,7 @@ def reporte_resumen_dashboard(
         "deducciones_tributarias": reporte_deducciones_tributarias(
             sb, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, anio=anio,
         ),
+        "alertas_documentos": alertas_vencimiento_documentos(sb),
     }
 
 
