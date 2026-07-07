@@ -33,6 +33,7 @@ import ModuloSST from './ModuloSST'
 import ModuloEnsayos from './ModuloEnsayos'
 import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
+import ModuloContabilidad from './ModuloContabilidad'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
@@ -14216,6 +14217,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [liqMapaPopupLoad, setLiqMapaPopupLoad] = useState(false)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
+  const [showContabilidad, setShowContabilidad] = useState(false)
   const [progRibbon, setProgRibbon] = useState(null)
 
   useEffect(() => {
@@ -14228,8 +14230,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const { setModuloActivo: _setCtxModulo, setModuloRefresh, clearModuloRefresh } = useModulo()
   useEffect(() => {
     if (showAdmin) { _setCtxModulo('admin'); return }
+    if (showContabilidad) { _setCtxModulo('contabilidad'); return }
     _setCtxModulo(moduloActivo === 'dashboard' ? 'cobro' : moduloActivo)
-  }, [moduloActivo, showAdmin])
+  }, [moduloActivo, showAdmin, showContabilidad])
 
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
   const [csvData, setCsvData] = useState(null)
@@ -15788,6 +15791,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const cargoNombreNorm = (usuario?.cargo_nombre || '').trim().toLowerCase()
   const esDeveloper = cargoNombreNorm === 'desarrollador'
+  const esContador = cargoNombreNorm === 'contador'
   const esAdminCargo = cargoNombreNorm === 'administrador'
   // Funciones que habilitan ver el panel admin (cualquier acción distinta de “todo en falso”)
   const ADMIN_FUNCIONES = ["contratos", "listado de precios", "subcontratistas", "actas"]
@@ -15798,7 +15802,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       (p) => (p.funcion_nombre || "").toLowerCase() === fn && _permisoAlgunaAccion(p)
     )
   )
-  const canAdmin = esDeveloper || esAdminCargo || tienePermisoAdmin
+  const canAdmin = !esContador && (esDeveloper || esAdminCargo || tienePermisoAdmin)
   /** Misma regla que el backend (logs / novedades): solo estos cargos publican novedades de inicio. */
   const puedePublicarNovedadesInicio = esDeveloper || esAdminCargo
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
@@ -15855,11 +15859,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeValidarTopografia = _topoPermiso('validar')
   const puedeEliminarTopografia = _topoPermiso('eliminar')
   const puedeExportarTopografia = _topoPermiso('exportar')
-  const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra
+  const tieneAccesoContabilidad = esDeveloper || esContador
+    || (usuario?.permisos || []).some(
+      (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
+    )
+  const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra && !esContador
 
   useEffect(() => {
     if (!progRibbonEnHeader) setProgRibbon(null)
   }, [progRibbonEnHeader])
+
+  useEffect(() => {
+    if (esContador && moduloActivo !== 'inicio') setModuloActivo('inicio')
+  }, [esContador, moduloActivo])
 
   const handleCambioContratoUsuario = useCallback(
     async (e) => {
@@ -16095,17 +16107,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           {/* Items del menú */}
           {[
             ['inicio',       '🏠', 'Inicio',         true],
-            ['dashboard',    '📊', 'Dashboard',      tienePermisoDashboard],
-            ['presupuesto',  '📋', 'Presupuesto',    tienePermisoPresupuesto],
-            ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
-            ['informes',     '📄', 'Informes',       tienePermisoInformesCcd],
-            ['almacen',      '🏪', 'Almacén',        true],
-            ['programacion', '📅', 'Programación',   tienePermisoProgramacionObra],
-            ['topografia',   '📐', 'Topografía',     tienePermisoTopografia],
-            ['semaforo',     '🗺️', 'Plano Semáforo', true],
-            ['sst',          '🦺', 'SST',            tieneModuloSst],
-            ['ensayos',      '🧪', 'Ensayos',        tieneModuloEnsayos],
-            ['auditor_sst',  '🛡️', 'Auditor SST',   tieneModuloAuditorSst],
+            ['dashboard',    '📊', 'Dashboard',      !esContador && tienePermisoDashboard],
+            ['presupuesto',  '📋', 'Presupuesto',    !esContador && tienePermisoPresupuesto],
+            ['sicoe_obra',   '🏗️', 'SICOE Obra',    !esContador && tienePermisoSicoeObra],
+            ['informes',     '📄', 'Informes',       !esContador && tienePermisoInformesCcd],
+            ['almacen',      '🏪', 'Almacén',        !esContador],
+            ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
+            ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
+            ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
+            ['sst',          '🦺', 'SST',            !esContador && tieneModuloSst],
+            ['ensayos',      '🧪', 'Ensayos',        !esContador && tieneModuloEnsayos],
+            ['auditor_sst',  '🛡️', 'Auditor SST',   !esContador && tieneModuloAuditorSst],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
             <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
@@ -16126,7 +16138,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Contenido principal ── */}
         <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
-        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && (
+        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && (
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
@@ -16152,7 +16164,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
 
         {moduloActivo === 'inicio' && (
-          <ModuloInicio key={`inicio-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} token={getToken()} />
+          <ModuloInicio
+            key={`inicio-${usuario?.contrato_id ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            fontSize={fontSize}
+            puedePublicarNovedades={puedePublicarNovedadesInicio}
+            token={getToken()}
+            puedeAccederContabilidad={tieneAccesoContabilidad}
+            onAbrirContabilidad={() => setShowContabilidad(true)}
+            esContador={esContador}
+          />
         )}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? formatCOP(n) : '—'
@@ -19132,6 +19154,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           onClose={() => setShowAdmin(false)}
           activeTheme={activeTheme}
           t={t}
+        />
+      )}
+
+      {showContabilidad && tieneAccesoContabilidad && (
+        <ModuloContabilidad
+          t={t}
+          token={getToken()}
+          fontSize={fontSize}
+          onClose={() => setShowContabilidad(false)}
+          esDeveloper={esDeveloper}
+          esContador={esContador}
         />
       )}
     </div>

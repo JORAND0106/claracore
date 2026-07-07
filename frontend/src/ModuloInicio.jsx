@@ -1385,7 +1385,16 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePublicarNovedades = false, token = null }) {
+export default function ModuloInicio({
+  t,
+  usuario,
+  fontSize = 'normal',
+  puedePublicarNovedades = false,
+  token = null,
+  puedeAccederContabilidad = false,
+  onAbrirContabilidad,
+  esContador = false,
+}) {
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
   const [novedadesCargando, setNovedadesCargando] = useState(true)
@@ -1434,48 +1443,95 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
   return (
     <div style={{ width: '100%', maxWidth: '1540px', margin: '0 auto', padding: '8px 0 48px', boxSizing: 'border-box' }}>
 
-      {/* ── Zona 1: clima ── */}
-      <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
+      {puedeAccederContabilidad && (
+        <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'center' }}>
+          <button
+            type="button"
+            onClick={onAbrirContabilidad}
+            style={{
+              background: t.primary,
+              color: '#fff',
+              border: 'none',
+              borderRadius: '12px',
+              padding: '16px 28px',
+              fontSize: fs.lg,
+              fontWeight: '700',
+              cursor: 'pointer',
+              boxShadow: '0 8px 24px rgba(0,119,182,0.35)',
+              transition: 'transform 0.15s, box-shadow 0.15s',
+              letterSpacing: '0.3px',
+              width: '100%',
+              maxWidth: '400px',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)'
+              e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,119,182,0.45)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)'
+              e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,119,182,0.35)'
+            }}
+          >
+            📊 Módulo de Contabilidad
+          </button>
+        </div>
+      )}
 
-      {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'flex-start',
-        gap: '12px',
-        marginBottom: '16px',
-      }}>
-        <div style={{
-          flex: '1 1 360px',
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-        }}>
+      {!esContador && (
+        <>
+          {/* ── Zona 1: clima ── */}
+          <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
+
+          {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-start',
+            gap: '12px',
+            marginBottom: '16px',
+          }}>
+            <div style={{
+              flex: '1 1 360px',
+              minWidth: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}>
+              <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
+              <BandejaNovedadesInicio
+                novedades={novedades}
+                setNovedades={setNovedades}
+                t={t}
+                fs={fs}
+                novedadesCargando={novedadesCargando}
+                token={token}
+                puedePublicarNovedades={puedePublicarNovedades}
+              />
+            </div>
+            <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+              <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
+            </div>
+          </div>
+
+          {/* ── Zona 3: ficha del contrato ── */}
+          <div style={{ marginBottom: '20px' }}>
+            <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
+          </div>
+        </>
+      )}
+
+      {esContador && (
+        <div style={{ maxWidth: '640px', margin: '0 auto 24px' }}>
           <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
-          <BandejaNovedadesInicio
-            novedades={novedades}
-            setNovedades={setNovedades}
-            t={t}
-            fs={fs}
-            novedadesCargando={novedadesCargando}
-            token={token}
-            puedePublicarNovedades={puedePublicarNovedades}
-          />
+          <p style={{ textAlign: 'center', color: t.textMuted, fontSize: fs.sm, marginTop: 16, lineHeight: 1.6 }}>
+            Accede al módulo de contabilidad para gestionar transacciones, cuentas especiales, cierres mensuales y reportes.
+          </p>
         </div>
-        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
-          <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
-        </div>
-      </div>
-
-      {/* ── Zona 3: ficha del contrato ── */}
-      <div style={{ marginBottom: '20px' }}>
-        <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
-      </div>
+      )}
 
       {/* ── Footer ── */}
       <div style={{ marginTop: '36px', textAlign: 'center', fontSize: fs.autor, color: t.textMuted, opacity: 0.5 }}>
-        ClaraCore © {new Date().getFullYear()} — Plataforma de gestión de obra
+        ClaraCore © {new Date().getFullYear()} — {esContador ? 'Contabilidad ClaraCore' : 'Plataforma de gestión de obra'}
       </div>
 
     </div>

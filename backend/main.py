@@ -2218,6 +2218,9 @@ app.include_router(contrato_documentos_router)
 from contrato_orden_pago_routes import router as contrato_orden_pago_router
 app.include_router(contrato_orden_pago_router)
 
+from contabilidad_routes import router as contabilidad_router
+app.include_router(contabilidad_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
@@ -4970,6 +4973,12 @@ def login(request: Request, body: LoginRequest):
     # C3: Subcontratista sin subcontratista asignado → sin acceso
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not usuario.get('subcontratista_id'):
         permisos = []
+    # Contador: solo módulo Contabilidad (sin módulos de obra)
+    if cargo_nombre and cargo_nombre.strip().lower() == 'contador':
+        permisos = [
+            p for p in (permisos or [])
+            if (p.get("funcion_nombre") or "").strip().lower() == "contabilidad"
+        ]
 
     registrar_log(
         {"sub": str(usuario["id"]), "nombre": nombre_completo or usuario.get("nombre", ""),
@@ -5098,6 +5107,11 @@ def get_mi_usuario(
             })
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not u.get('subcontratista_id'):
         permisos = []
+    if cargo_nombre and cargo_nombre.strip().lower() == 'contador':
+        permisos = [
+            p for p in (permisos or [])
+            if (p.get("funcion_nombre") or "").strip().lower() == "contabilidad"
+        ]
     return {
         "id": u["id"], "nombre": u["nombre"], "apellidos": u.get("apellidos"),
         "email": u["email"], "cargo_id": u.get("cargo_id"), "cargo_nombre": cargo_nombre,
