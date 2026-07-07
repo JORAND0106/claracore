@@ -183,22 +183,29 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
 
   const refresh = useCallback(async () => {
     setError('')
-    try {
-      const [backendSnap, frontendSnap] = await Promise.all([
-        fetchBackendDiagnosticSnapshot(),
-        fetchFrontendDiagnosticSnapshot(),
-      ])
-      setData(backendSnap)
-      setFrontendData(frontendSnap)
-    } catch (e) {
-      const msg = e?.message || String(e)
+    const errors = []
+    const [backendResult, frontendResult] = await Promise.allSettled([
+      fetchBackendDiagnosticSnapshot(),
+      fetchFrontendDiagnosticSnapshot(),
+    ])
+    if (backendResult.status === 'fulfilled') {
+      setData(backendResult.value)
+    } else {
+      errors.push(`Backend: ${backendResult.reason?.message || backendResult.reason}`)
+    }
+    if (frontendResult.status === 'fulfilled') {
+      setFrontendData(frontendResult.value)
+    } else {
+      errors.push(`Frontend: ${frontendResult.reason?.message || frontendResult.reason}`)
+    }
+    if (errors.length) {
+      const msg = errors.join(' · ')
       const corsHint = /failed to fetch|networkerror|cors/i.test(msg)
         ? ' Si estás en producción, la API de Application Insights puede bloquear CORS desde el navegador; prueba en local (npm run dev) o añade un proxy edge.'
         : ''
       setError(msg + corsHint)
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }, [])
 
   useEffect(() => {

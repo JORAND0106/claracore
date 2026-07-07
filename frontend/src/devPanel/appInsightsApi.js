@@ -339,7 +339,7 @@ union
    | extend endpoint = tostring(customDimensions.["api.endpoint"])
    | extend waitMs = tolong(customDimensions.["wait.ms"])
    | extend userEmail = tostring(customDimensions.["user.email"])
-   | project ts = timestamp, userId = user_Id, userEmail, page, endpoint, waitMs, msg = outerMessage, kind = "js"),
+   | project ts = timestamp, userId = user_Id, userEmail, page, endpoint, waitMs, msg = outerMessage, errorKind = "js"),
   (dependencies
    ${FRONTEND_TELEMETRY_SCOPE}
    | where timestamp > ago(24h) and success == false
@@ -347,7 +347,7 @@ union
    | extend waitMs = tolong(customDimensions.["wait.ms"])
    | extend userEmail = tostring(customDimensions.["user.email"])
    | project ts = timestamp, userId = user_Id, userEmail, page, endpoint = name,
-     waitMs, msg = coalesce(tostring(customDimensions.["error.message"]), strcat("HTTP ", tostring(resultCode))), kind = "network")
+     waitMs, msg = coalesce(tostring(customDimensions.["error.message"]), strcat("HTTP ", tostring(resultCode))), errorKind = "network")
 | order by ts desc
 | take 50
 `
@@ -410,7 +410,7 @@ ${FRONTEND_TELEMETRY_SCOPE}
       endpoint: r.endpoint || '—',
       waitMs: Number(r.waitMs) || 0,
       message: r.msg || '—',
-      kind: r.kind || 'network',
+      kind: r.errorKind || 'network',
     })),
     context: rows(firstTable(contextRes)).map(r => ({
       timestamp: r.ts,
