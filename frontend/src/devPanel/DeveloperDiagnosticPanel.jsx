@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
-import { APPINSIGHTS_FREE_TIER_GB, fetchDiagnosticSnapshot, fetchEndpointErrorDetail } from './appInsightsApi'
+import {
+  APPINSIGHTS_FREE_TIER_GB,
+  fetchBackendDiagnosticSnapshot,
+  fetchEndpointErrorDetail,
+  fetchFrontendDiagnosticSnapshot,
+} from './appInsightsApi'
+import {
+  isBrowserTelemetryConfigured,
+  isBrowserTelemetryEnabled,
+  setBrowserTelemetryEnabled,
+  SUCCESS_SAMPLE_RATE,
+} from '../telemetry/browserTelemetry'
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 
@@ -137,8 +148,33 @@ function Section({ title, children, style }) {
   )
 }
 
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        background: active ? '#21262d' : 'transparent',
+        border: `1px solid ${active ? '#58a6ff' : '#30363d'}`,
+        color: active ? '#58a6ff' : '#8b949e',
+        borderRadius: 4,
+        padding: '4px 12px',
+        fontSize: 11,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontWeight: active ? 700 : 500,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 export default function DeveloperDiagnosticPanel({ onClose }) {
+  const [tab, setTab] = useState('backend')
   const [data, setData] = useState(null)
+  const [frontendData, setFrontendData] = useState(null)
+  const [telemetryOn, setTelemetryOn] = useState(() => isBrowserTelemetryEnabled())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedEndpoint, setSelectedEndpoint] = useState(null)
@@ -148,8 +184,12 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
   const refresh = useCallback(async () => {
     setError('')
     try {
-      const snap = await fetchDiagnosticSnapshot()
-      setData(snap)
+      const [backendSnap, frontendSnap] = await Promise.all([
+        fetchBackendDiagnosticSnapshot(),
+        fetchFrontendDiagnosticSnapshot(),
+      ])
+      setData(backendSnap)
+      setFrontendData(frontendSnap)
     } catch (e) {
       const msg = e?.message || String(e)
       const corsHint = /failed to fetch|networkerror|cors/i.test(msg)
@@ -188,6 +228,15 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
   }
 
   const st = STATUS[data?.status || 'green'] || STATUS.green
+  const fst = STATUS[frontendData?.status || 'green'] || STATUS.green
+  const panelData = tab === 'backend' ? data : frontendData
+  const panelStatus = tab === 'backend' ? st : fst
+
+  function toggleTelemetry() {
+    const next = !telemetryOn
+    setTelemetryOn(next)
+    setBrowserTelemetryEnabled(next)
+  }
 
   return (
     <div
@@ -217,10 +266,14 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
         }}
       >
         <span style={{ color: '#58a6ff', fontWeight: 700, fontSize: 13 }}>ClaraCore · Diagnóstico</span>
-        <span style={{ color: '#484f58', fontSize: 10 }}>Application Insights · últimos 30 min</span>
+        <TabButton active={tab === 'backend'} onClick={() => setTab('backend')}>Backend</TabButton>
+        <TabButton active={tab === 'frontend'} onClick={() => setTab('frontend')}>Frontend</TabButton>
+        <span style={{ color: '#484f58', fontSize: 10 }}>
+          Application Insights · {tab === 'backend' ? 'servidor · 30 min' : 'navegador · 24 h errores'}
+        </span>
         <div style={{ flex: 1 }} />
-        {data?.fetchedAt && (
-          <span style={{ color: '#6e7681', fontSize: 10 }}>↻ {fmtTime(data.fetchedAt)}</span>
+        {panelData?.fetchedAt && (
+          <span style={{ color: '#6e7681', fontSize: 10 }}>↻ {fmtTime(panelData.fetchedAt)}</span>
         )}
         <button
           type="button"
@@ -283,82 +336,142 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <Section title="ESTADO GENERAL">
+            <Section title={`ESTADO GENERAL · ${tab === 'backend' ? 'BACKEND' : 'FRONTEND'}`}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span
                   style={{
                     width: 12,
                     height: 12,
                     borderRadius: '50%',
-                    background: st.color,
-                    boxShadow: `0 0 10px ${st.color}`,
+                    background: panelStatus.color,
+                    boxShadow: `0 0 10px ${panelStatus.color}`,
                   }}
                 />
-                <span style={{ color: st.color, fontWeight: 700 }}>{st.label}</span>
-                {data && (
+                <span style={{ color: panelStatus.color, fontWeight: 700 }}>{panelStatus.label}</span>
+                {tab === 'backend' && data && (
                   <span style={{ color: '#8b949e', fontSize: 11 }}>
                     tasa error {data.requests.errorRate}%
                   </span>
                 )}
+                {tab === 'frontend' && frontendData && (
+                  <span style={{ color: '#8b949e', fontSize: 11 }}>
+                    {frontendData.summary.failed} fallos · {frontendData.summary.jsErrors} JS
+                  </span>
+                )}
               </div>
             </Section>
-            <AppInsightsUsageMeter ingestion={data?.ingestion} loading={loading} />
+            <AppInsightsUsageMeter ingestion={panelData?.ingestion} loading={loading} />
           </div>
 
-          <Section title="REQUESTS (30 min)">
-            {loading && !data ? (
-              <span style={{ color: '#6e7681' }}>Cargando…</span>
-            ) : (
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                <div>
-                  <div style={{ color: '#8b949e', fontSize: 10 }}>TOTAL</div>
-                  <div style={{ fontSize: 18, color: '#e6edf3' }}>{data?.requests.total ?? '—'}</div>
-                </div>
-                <div>
-                  <div style={{ color: '#8b949e', fontSize: 10 }}>FALLIDAS</div>
-                  <div style={{ fontSize: 18, color: '#f85149' }}>{data?.requests.failed ?? '—'}</div>
-                </div>
-                <div>
-                  <div style={{ color: '#8b949e', fontSize: 10 }}>ERROR %</div>
-                  <div style={{ fontSize: 18, color: '#d29922' }}>{data?.requests.errorRate ?? '—'}%</div>
-                </div>
-              </div>
-            )}
-          </Section>
+          {tab === 'backend' ? (
+            <>
+              <Section title="REQUESTS (30 min)">
+                {loading && !data ? (
+                  <span style={{ color: '#6e7681' }}>Cargando…</span>
+                ) : (
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>TOTAL</div>
+                      <div style={{ fontSize: 18, color: '#e6edf3' }}>{data?.requests.total ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>FALLIDAS</div>
+                      <div style={{ fontSize: 18, color: '#f85149' }}>{data?.requests.failed ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>ERROR %</div>
+                      <div style={{ fontSize: 18, color: '#d29922' }}>{data?.requests.errorRate ?? '—'}%</div>
+                    </div>
+                  </div>
+                )}
+              </Section>
 
-          <Section title="SUPABASE (dependencias)">
-            {!data ? (
-              <span style={{ color: '#6e7681' }}>—</span>
-            ) : data.supabase.total === 0 ? (
-              <span style={{ color: '#6e7681' }}>Sin llamadas a {data.supabase.host} en 30 min</span>
-            ) : (
-              <div>
-                {data.supabase.ok ? (
-                  <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>
-                    ✅ Respondiendo normalmente
-                  </div>
-                ) : null}
-                <div style={{ color: '#8b949e', fontSize: 10, marginBottom: data.supabase.ok ? 0 : 8 }}>
-                  {data.supabase.total} deps · avg {data.supabase.avgMs} ms
-                </div>
-                {!data.supabase.ok && (data.supabase.failures || []).length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {data.supabase.failures.map(f => (
-                      <div
-                        key={f.name}
-                        style={{ color: '#f85149', fontSize: 11, fontFamily: MONO, lineHeight: 1.4 }}
-                      >
-                        🔴 {f.name} — {f.failures === 1 ? '1 fallo' : `${f.failures} fallos`} ·{' '}
-                        {Math.round(f.avgMs).toLocaleString('es-CO')}ms
+              <Section title="SUPABASE (dependencias)">
+                {!data ? (
+                  <span style={{ color: '#6e7681' }}>—</span>
+                ) : data.supabase.total === 0 ? (
+                  <span style={{ color: '#6e7681' }}>Sin llamadas a {data.supabase.host} en 30 min</span>
+                ) : (
+                  <div>
+                    {data.supabase.ok ? (
+                      <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>
+                        ✅ Respondiendo normalmente
                       </div>
-                    ))}
+                    ) : null}
+                    <div style={{ color: '#8b949e', fontSize: 10, marginBottom: data.supabase.ok ? 0 : 8 }}>
+                      {data.supabase.total} deps · avg {data.supabase.avgMs} ms
+                    </div>
+                    {!data.supabase.ok && (data.supabase.failures || []).length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {data.supabase.failures.map(f => (
+                          <div
+                            key={f.name}
+                            style={{ color: '#f85149', fontSize: 11, fontFamily: MONO, lineHeight: 1.4 }}
+                          >
+                            🔴 {f.name} — {f.failures === 1 ? '1 fallo' : `${f.failures} fallos`} ·{' '}
+                            {Math.round(f.avgMs).toLocaleString('es-CO')}ms
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
-            )}
-          </Section>
+                )}
+              </Section>
+            </>
+          ) : (
+            <>
+              <Section title="RECOLECCIÓN NAVEGADOR">
+                {!isBrowserTelemetryConfigured() ? (
+                  <span style={{ color: '#d29922', fontSize: 11 }}>
+                    Falta VITE_APPLICATIONINSIGHTS_CONNECTION_STRING en el build
+                  </span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={telemetryOn}
+                        onChange={toggleTelemetry}
+                        style={{ accentColor: '#58a6ff' }}
+                      />
+                      <span style={{ color: telemetryOn ? '#3fb950' : '#8b949e', fontWeight: 600 }}>
+                        {telemetryOn ? 'ACTIVA' : 'INACTIVA'}
+                      </span>
+                    </label>
+                    <span style={{ color: '#6e7681', fontSize: 10, lineHeight: 1.4 }}>
+                      Errores y fallos de red: 100 %. Éxitos rutinarios: ~{Math.round(SUCCESS_SAMPLE_RATE * 100)} % muestreados.
+                      Persiste en este navegador hasta desactivar.
+                    </span>
+                  </div>
+                )}
+              </Section>
+
+              <Section title="ACTIVIDAD NAVEGADOR (30 min)">
+                {loading && !frontendData ? (
+                  <span style={{ color: '#6e7681' }}>Cargando…</span>
+                ) : (
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>DEPS (muestreadas)</div>
+                      <div style={{ fontSize: 18, color: '#e6edf3' }}>{frontendData?.summary.total ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>FALLIDAS</div>
+                      <div style={{ fontSize: 18, color: '#f85149' }}>{frontendData?.summary.failed ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#8b949e', fontSize: 10 }}>JS SIN CAPTURAR</div>
+                      <div style={{ fontSize: 18, color: '#d29922' }}>{frontendData?.summary.jsErrors ?? '—'}</div>
+                    </div>
+                  </div>
+                )}
+              </Section>
+            </>
+          )}
         </div>
 
+        {tab === 'backend' && (
+          <>
         <Section title="USUARIOS ACTIVOS (10 min)" style={{ marginBottom: 12 }}>
           {loading && !data ? (
             <span style={{ color: '#6e7681' }}>Cargando…</span>
@@ -570,7 +683,7 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
           </Section>
         )}
 
-        <Section title="ERRORES RECIENTES (20)">
+        <Section title="ERRORES RECIENTES (20)" style={{ marginBottom: 12 }}>
           {!data?.recentErrors?.length ? (
             <span style={{ color: '#6e7681' }}>Sin errores recientes</span>
           ) : (
@@ -601,9 +714,120 @@ export default function DeveloperDiagnosticPanel({ onClose }) {
             </div>
           )}
         </Section>
+          </>
+        )}
+
+        {tab === 'frontend' && (
+          <>
+            <Section title="ERRORES NAVEGADOR (tabla · 24 h)" style={{ marginBottom: 12 }}>
+              {loading && !frontendData ? (
+                <span style={{ color: '#6e7681' }}>Cargando…</span>
+              ) : !frontendData?.errors?.length ? (
+                <span style={{ color: '#3fb950', fontSize: 11 }}>
+                  Sin errores de navegador en el periodo
+                  {!telemetryOn ? ' (recolección inactiva en este navegador)' : ''}
+                </span>
+              ) : (
+                <div style={{ maxHeight: 360, overflow: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ color: '#8b949e', textAlign: 'left' }}>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Hora</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Usuario</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Página</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Endpoint</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500, width: 72 }}>Espera</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {frontendData.errors.map((err, idx) => (
+                        <tr key={`${err.timestamp}-${idx}`} style={{ borderTop: '1px solid #21262d' }}>
+                          <td style={{ padding: '5px 6px', color: '#6e7681', whiteSpace: 'nowrap' }}>
+                            {fmtTime(err.timestamp)}
+                          </td>
+                          <td
+                            style={{ padding: '5px 6px', color: '#58a6ff', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                            title={err.userLabel}
+                          >
+                            {err.userLabel}
+                          </td>
+                          <td
+                            style={{ padding: '5px 6px', color: '#8b949e', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                            title={err.page}
+                          >
+                            {err.page}
+                          </td>
+                          <td
+                            style={{ padding: '5px 6px', color: '#c9d1d9', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                            title={err.endpoint}
+                          >
+                            {err.endpoint}
+                          </td>
+                          <td style={{ padding: '5px 6px', color: '#d29922' }}>{fmtMs(err.waitMs)}</td>
+                          <td
+                            style={{ padding: '5px 6px', color: '#ffa198', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                            title={err.message}
+                          >
+                            {err.message}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Section>
+
+            <Section title="CONTEXTO DE RED (30 min · incluye éxitos muestreados)" style={{ marginBottom: 12 }}>
+              {!frontendData?.context?.length ? (
+                <span style={{ color: '#6e7681', fontSize: 11 }}>
+                  Sin actividad de red registrada desde el navegador
+                </span>
+              ) : (
+                <div style={{ maxHeight: 280, overflow: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ color: '#8b949e', textAlign: 'left' }}>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Hora</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Usuario</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Página</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>Endpoint</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500, width: 72 }}>Espera</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500, width: 48 }}>OK</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {frontendData.context.map((row, idx) => (
+                        <tr key={`${row.timestamp}-${idx}`} style={{ borderTop: '1px solid #21262d' }}>
+                          <td style={{ padding: '5px 6px', color: '#6e7681', whiteSpace: 'nowrap' }}>
+                            {fmtTime(row.timestamp)}
+                          </td>
+                          <td style={{ padding: '5px 6px', color: '#58a6ff', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {row.userLabel}
+                          </td>
+                          <td style={{ padding: '5px 6px', color: '#8b949e', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {row.page}
+                          </td>
+                          <td style={{ padding: '5px 6px', color: '#c9d1d9', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {row.endpoint}
+                          </td>
+                          <td style={{ padding: '5px 6px', color: '#d29922' }}>{fmtMs(row.waitMs)}</td>
+                          <td style={{ padding: '5px 6px', color: row.ok ? '#3fb950' : '#f85149' }}>
+                            {row.ok ? '✓' : '✗'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Section>
+          </>
+        )}
 
         <p style={{ marginTop: 16, color: '#484f58', fontSize: 10, textAlign: 'center' }}>
-          Fuente: Azure Application Insights · independiente del backend ClaraCore · auto-refresh 30s
+          Fuente: Azure Application Insights · rol backend claracore-backend · rol frontend claracore-frontend · auto-refresh 30s
         </p>
       </div>
     </div>

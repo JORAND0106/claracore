@@ -1,9 +1,33 @@
 import {
+  FRONTEND_CLOUD_ROLE,
+  TELEMETRY_SOURCE,
+} from '../telemetry/browserTelemetry'
+import {
   APPINSIGHTS_API_KEY,
   APPINSIGHTS_APP_ID,
   APPINSIGHTS_QUERY_BASE,
   DEV_PANEL_KEY,
 } from './devPanelConfig'
+
+/** Telemetría del backend FastAPI (excluye navegador y auto-consultas del panel). */
+const BACKEND_REQUESTS_30M = `
+| where timestamp > ago(30m)
+| where name != "appinsights-query"
+| where cloud_RoleName == "claracore-backend"
+    or (isempty(cloud_RoleName) and tostring(customDimensions.["telemetry.source"]) != "${TELEMETRY_SOURCE}")
+`
+
+const BACKEND_REQUESTS_24H = `
+| where timestamp > ago(24h)
+| where name != "appinsights-query"
+| where cloud_RoleName == "claracore-backend"
+    or (isempty(cloud_RoleName) and tostring(customDimensions.["telemetry.source"]) != "${TELEMETRY_SOURCE}")
+`
+
+const FRONTEND_TELEMETRY_SCOPE = `
+| where cloud_RoleName == "${FRONTEND_CLOUD_ROLE}"
+    or tostring(customDimensions.["telemetry.source"]) == "${TELEMETRY_SOURCE}"
+`
 
 function rows(table) {
   const cols = table?.columns?.map(c => c.name) || []
@@ -113,9 +137,13 @@ async function fetchMonthlyIngestionGb() {
 }
 
 export async function fetchDiagnosticSnapshot() {
+  return fetchBackendDiagnosticSnapshot()
+}
+
+export async function fetchBackendDiagnosticSnapshot() {
   const summaryQ = `
 requests
-| where timestamp > ago(30m)
+${BACKEND_REQUESTS_30M}
 | summarize
     total = count(),
     failed = countif(success == false),
@@ -123,7 +151,7 @@ requests
 `
   const endpointsQ = `
 requests
-| where timestamp > ago(30m)
+${BACKEND_REQUESTS_30M}
 | summarize total = count(), failed = countif(success == false) by name
 | where failed > 0
 | extend errorPct = round(100.0 * failed / total, 1)
@@ -132,8 +160,7 @@ requests
 `
   const slowQ = `
 requests
-| where timestamp > ago(30m)
-| where name != "appinsights-query"
+${BACKEND_REQUESTS_30M}
 | summarize
     calls = count(),
     avgMs = round(avg(duration), 1),
@@ -146,12 +173,16 @@ requests
 union
   (exceptions
    | where timestamp > ago(24h)
+   | where cloud_RoleName == "claracore-backend" or isempty(cloud_RoleName)
+   | where tostring(customDimensions.["telemetry.source"]) != "${TELEMETRY_SOURCE}"
    | project ts = timestamp, endpoint = operation_Name, msg = outerMessage, errorKind = "exception"),
   (requests
-   | where timestamp > ago(24h) and success == false
+   ${BACKEND_REQUESTS_24H}
+   | where success == false
    | project ts = timestamp, endpoint = name, msg = strcat("HTTP ", tostring(resultCode)), errorKind = "request"),
   (traces
    | where timestamp > ago(24h) and severityLevel >= 3
+   | where cloud_RoleName == "claracore-backend" or isempty(cloud_RoleName)
    | project ts = timestamp, endpoint = operation_Name, msg = message, errorKind = "trace")
 | order by ts desc
 | take 20
@@ -179,6 +210,8 @@ ${supabaseFilter}
 requests
 | where timestamp > ago(10m)
 | where name != "appinsights-query"
+| where cloud_RoleName == "claracore-backend" or isempty(cloud_RoleName)
+| where tostring(customDimensions.["telemetry.source"]) != "${TELEMETRY_SOURCE}"
 | extend actor = case(
     isnotempty(user_Id), tostring(user_Id),
     isnotempty(client_IP) and client_IP != "0.0.0.0", tostring(client_IP),
@@ -283,11 +316,120 @@ requests
   }
 }
 
+export async function fetchFrontendDiagnosticSnapshot() {
+  const summaryQ = `
+let deps = dependencies
+${FRONTEND_TELEMETRY_SCOPE}
+| where timestamp > ago(30m)
+| summarize depTotal = count(), depFailed = countif(success == false), depAvg = avg(duration);
+let js = exceptions
+${FRONTEND_TELEMETRY_SCOPE}
+| where timestamp > ago(30m)
+| summarize jsErrors = count();
+deps
+| extend jsErrors = toscalar(js | project jsErrors)
+| project total = depTotal, failed = depFailed + jsErrors, jsErrors, avgMs = round(depAvg, 1)
+`
+  const errorsQ = `
+union
+  (exceptions
+   ${FRONTEND_TELEMETRY_SCOPE}
+   | where timestamp > ago(24h)
+   | extend page = tostring(customDimensions.["page.view"])
+   | extend endpoint = tostring(customDimensions.["api.endpoint"])
+   | extend waitMs = tolong(customDimensions.["wait.ms"])
+   | extend userEmail = tostring(customDimensions.["user.email"])
+   | project ts = timestamp, userId = user_Id, userEmail, page, endpoint, waitMs, msg = outerMessage, kind = "js"),
+  (dependencies
+   ${FRONTEND_TELEMETRY_SCOPE}
+   | where timestamp > ago(24h) and success == false
+   | extend page = tostring(customDimensions.["page.view"])
+   | extend waitMs = tolong(customDimensions.["wait.ms"])
+   | extend userEmail = tostring(customDimensions.["user.email"])
+   | project ts = timestamp, userId = user_Id, userEmail, page, endpoint = name,
+     waitMs, msg = coalesce(tostring(customDimensions.["error.message"]), strcat("HTTP ", tostring(resultCode))), kind = "network")
+| order by ts desc
+| take 50
+`
+  const contextQ = `
+dependencies
+${FRONTEND_TELEMETRY_SCOPE}
+| where timestamp > ago(30m)
+| extend page = tostring(customDimensions.["page.view"])
+| extend userEmail = tostring(customDimensions.["user.email"])
+| project ts = timestamp, userId = user_Id, userEmail, page, endpoint = name,
+  waitMs = round(duration, 1), ok = success,
+  msg = coalesce(tostring(customDimensions.["error.message"]), "OK")
+| order by ts desc
+| take 40
+`
+
+  const [summaryRes, errorsRes, contextRes, ingestedGB] = await Promise.all([
+    runKql(summaryQ),
+    runKql(errorsQ),
+    runKql(contextQ),
+    fetchMonthlyIngestionGb(),
+  ])
+
+  const summaryRow = rows(firstTable(summaryRes))[0] || {}
+  const total = Number(summaryRow.total) || 0
+  const failed = Number(summaryRow.failed) || 0
+  const jsErrors = Number(summaryRow.jsErrors) || 0
+  const errorRate = total > 0 ? (100 * failed) / total : failed > 0 ? 100 : 0
+
+  let status = 'green'
+  if (failed >= 10 || jsErrors >= 5) status = 'red'
+  else if (failed >= 3 || jsErrors >= 1) status = 'yellow'
+
+  const limitGb = APPINSIGHTS_FREE_TIER_GB
+  const usedGb = ingestedGB == null ? null : Math.max(0, ingestedGB)
+  const usagePct = usedGb == null ? null : Math.min(100, (usedGb / limitGb) * 100)
+  const remainingGb = usedGb == null ? null : Math.max(0, limitGb - usedGb)
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    status,
+    ingestion: {
+      usedGb,
+      limitGb,
+      usagePct: usagePct == null ? null : Math.round(usagePct * 10) / 10,
+      remainingGb: remainingGb == null ? null : Math.round(remainingGb * 1000) / 1000,
+    },
+    summary: {
+      total,
+      failed,
+      jsErrors,
+      errorRate: Math.round(errorRate * 10) / 10,
+      avgMs: Number(summaryRow.avgMs) || 0,
+    },
+    errors: rows(firstTable(errorsRes)).map(r => ({
+      timestamp: r.ts,
+      userId: r.userId || '',
+      userLabel: r.userEmail || r.userId || '—',
+      page: r.page || '—',
+      endpoint: r.endpoint || '—',
+      waitMs: Number(r.waitMs) || 0,
+      message: r.msg || '—',
+      kind: r.kind || 'network',
+    })),
+    context: rows(firstTable(contextRes)).map(r => ({
+      timestamp: r.ts,
+      userLabel: r.userEmail || r.userId || '—',
+      page: r.page || '—',
+      endpoint: r.endpoint || '—',
+      waitMs: Number(r.waitMs) || 0,
+      ok: r.ok === true || r.ok === 'True',
+      message: r.msg || '',
+    })),
+  }
+}
+
 export async function fetchEndpointErrorDetail(endpointName) {
   const safe = String(endpointName || '').replace(/"/g, '\\"')
   const q = `
 let lastFail = requests
 | where timestamp > ago(7d) and name == "${safe}" and success == false
+| where cloud_RoleName == "claracore-backend" or isempty(cloud_RoleName)
 | top 1 by timestamp desc
 | project operation_Id, timestamp, resultCode, url, customDimensions;
 let ex = exceptions

@@ -5,7 +5,8 @@
  * También expone `moduloRefresh` para que RefreshCacheGuard pueda invocar
  * el botón «Actualizar» del módulo visible sin recargar la página.
  */
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { setBrowserTelemetryView } from '../telemetry/browserTelemetry'
 
 const ModuloContext = createContext({
   moduloActivo: 'general',
@@ -18,6 +19,10 @@ const ModuloContext = createContext({
 export function ModuloProvider({ children }) {
   const [moduloActivo, setModuloActivo] = useState('general')
   const [moduloRefresh, setModuloRefreshState] = useState(null)
+
+  useEffect(() => {
+    setBrowserTelemetryView(moduloActivo)
+  }, [moduloActivo])
 
   const setModuloRefresh = useCallback((meta) => {
     if (!meta || typeof meta.fn !== 'function') {

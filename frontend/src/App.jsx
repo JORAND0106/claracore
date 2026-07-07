@@ -39,6 +39,10 @@ import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
 import DevPanelTrigger from './devPanel/DevPanelTrigger'
 import DevPanelGate from './devPanel/DevPanelGate'
 import DeveloperDiagnosticPanel from './devPanel/DeveloperDiagnosticPanel'
+import {
+  clearBrowserTelemetryUser,
+  setBrowserTelemetryUser,
+} from './telemetry/browserTelemetry'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
@@ -19288,6 +19292,14 @@ export default function App() {
     })()
     return () => { cancelled = true }
   }, [usuario?.id])
+
+  useEffect(() => {
+    if (usuario?.id) {
+      setBrowserTelemetryUser({ id: usuario.id, email: usuario.email })
+    } else {
+      clearBrowserTelemetryUser()
+    }
+  }, [usuario?.id, usuario?.email])
 
   // ── Inactividad y renovación de token ───────────────────────────────────
   const usuarioRef = useRef(usuario)
