@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Camera, Paperclip } from 'lucide-react'
 import { API_BASE } from '../apiBase'
 import { contabGet, contabSend } from './contabilidadApi'
-import { compressImageForSoporte } from './contabilidadImageCompress'
+import { prepareSoporteConPeso } from './contabilidadImageCompress'
 import { FieldLabel, TX_FIELD_HINTS } from './ContabilidadFieldLabel'
 import SoportePreviewModal from './SoportePreviewModal'
-import { fmtCOP } from './contabilidadUi'
+import { fmtBytes, fmtCOP, labelPesoSoporte } from './contabilidadUi'
+import { useContabilidadViewport } from './useContabilidadViewport'
 
 const EMPTY_FORM = {
   fecha: new Date().toISOString().slice(0, 10),
@@ -22,6 +24,7 @@ const EMPTY_FORM = {
 }
 
 export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
+  const { isMobile, isTablet } = useContabilidadViewport()
   const [items, setItems] = useState([])
   const [categorias, setCategorias] = useState([])
   const [contratos, setContratos] = useState([])
@@ -33,10 +36,15 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   const [showForm, setShowForm] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [soportePendiente, setSoportePendiente] = useState(null)
+  const [soporteInlineInfo, setSoporteInlineInfo] = useState('')
   const [preview, setPreview] = useState({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
   })
   const previewUrlRef = useRef(null)
+  const formRef = useRef(null)
+  const cameraRef = useRef(null)
+  const fileRef = useRef(null)
 
   const cerrarPreview = useCallback(() => {
     if (previewUrlRef.current) {
@@ -116,14 +124,30 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
 
   useEffect(() => { cargar() }, [cargar])
 
-  const abrirNueva = () => {
+  const scrollToForm = () => {
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  const abrirNueva = (tipoPreferido) => {
+    const tipo = tipoPreferido || (isMobile ? 'egreso' : 'ingreso')
+    const cats = tipo === 'egreso' ? catsEgreso : catsIngreso
     setEditId(null)
-    setForm({ ...EMPTY_FORM, categoria_id: catsIngreso[0]?.id || '' })
+    setSoportePendiente(null)
+    setForm({
+      ...EMPTY_FORM,
+      tipo,
+      categoria_id: cats[0]?.id || '',
+      iva_tasa: tipo === 'egreso' ? '0.19' : '0.19',
+    })
     setShowForm(true)
+    scrollToForm()
   }
 
   const abrirEditar = (tx) => {
     setEditId(tx.id)
+    setSoportePendiente(null)
     setForm({
       fecha: tx.fecha,
       tipo: tx.tipo,
@@ -139,6 +163,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
       notas: tx.notas || '',
     })
     setShowForm(true)
+    scrollToForm()
   }
 
   const payloadFromForm = () => ({
@@ -156,16 +181,39 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     notas: form.notas || null,
   })
 
+  const onSoporteFile = async (file) => {
+    if (!file) return
+    try {
+      const prepared = await prepareSoporteConPeso(file)
+      setSoportePendiente(prepared)
+    } catch {
+      setSoportePendiente({
+        file,
+        originalBytes: file.size,
+        compressedBytes: file.size,
+        wasCompressed: false,
+      })
+    }
+  }
+
   const guardar = async () => {
     setBusy(true)
     setError('')
     try {
+      let txId = editId
       if (editId) {
         await contabSend(`/transacciones/${editId}`, token, { method: 'PATCH', body: payloadFromForm() })
       } else {
-        await contabSend('/transacciones', token, { body: payloadFromForm() })
+        const created = await contabSend('/transacciones', token, { body: payloadFromForm() })
+        txId = created?.id
+      }
+      if (!editId && txId && soportePendiente?.file) {
+        const fd = new FormData()
+        fd.append('archivo', soportePendiente.file)
+        await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
       }
       setShowForm(false)
+      setSoportePendiente(null)
       await cargar()
     } catch (e) {
       setError(e.message)
@@ -202,12 +250,15 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   const subirSoporte = async (txId, file) => {
     if (!file) return
     setBusy(true)
+    setSoporteInlineInfo('')
     try {
-      const prepared = await compressImageForSoporte(file)
+      const prepared = await prepareSoporteConPeso(file)
+      setSoporteInlineInfo(labelPesoSoporte(prepared))
       const fd = new FormData()
-      fd.append('archivo', prepared)
+      fd.append('archivo', prepared.file)
       await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
       await cargar()
+      setSoporteInlineInfo('')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -216,7 +267,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   }
 
   const Field = ({ name, label, children }) => (
-    <label>
+    <label style={{ display: 'block' }}>
       <span style={lbl}>
         <FieldLabel label={label} hint={TX_FIELD_HINTS[name]} t={t} />
       </span>
@@ -224,32 +275,80 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     </label>
   )
 
-  const inp = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', color: t.text, fontSize: 'var(--cc-sm)', width: '100%', boxSizing: 'border-box' }
+  const touchPad = isMobile ? '12px 14px' : '8px 10px'
+  const touchMin = isMobile ? 44 : undefined
+  const inp = {
+    background: t.inputBg,
+    border: `1px solid ${t.border}`,
+    borderRadius: 8,
+    padding: touchPad,
+    color: t.text,
+    fontSize: isMobile ? '16px' : 'var(--cc-sm)',
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: touchMin,
+  }
   const lbl = { fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4, display: 'block' }
   const btn = (primary) => ({
     background: primary ? t.primary : 'transparent',
     color: primary ? '#fff' : t.primary,
     border: primary ? 'none' : `1.5px solid ${t.primary}`,
-    borderRadius: 10, padding: '8px 14px', fontWeight: 700, cursor: 'pointer', fontSize: 'var(--cc-sm)',
+    borderRadius: 10,
+    padding: isMobile ? '12px 16px' : '8px 14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontSize: 'var(--cc-sm)',
+    minHeight: touchMin,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   })
+
+  const formGridCols = isMobile
+    ? '1fr'
+    : isTablet
+      ? 'repeat(2, minmax(0, 1fr))'
+      : 'repeat(auto-fill, minmax(180px, 1fr))'
 
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16, alignItems: 'center' }}>
-        <button type="button" style={btn(true)} onClick={abrirNueva}>+ Nueva transacción</button>
-        <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)} style={{ ...inp, width: 'auto' }}>
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16, alignItems: 'center',
+        position: isMobile ? 'sticky' : 'static',
+        top: isMobile ? 0 : undefined,
+        zIndex: isMobile ? 5 : undefined,
+        background: isMobile ? t.bg : undefined,
+        paddingTop: isMobile ? 4 : 0,
+        paddingBottom: isMobile ? 8 : 0,
+      }}>
+        {isMobile ? (
+          <>
+            <button type="button" style={{ ...btn(true), flex: '1 1 160px' }} onClick={() => abrirNueva('egreso')}>
+              + Egreso rápido
+            </button>
+            <button type="button" style={{ ...btn(false), flex: '0 0 auto' }} onClick={() => abrirNueva('ingreso')}>
+              Ingreso
+            </button>
+          </>
+        ) : (
+          <button type="button" style={btn(true)} onClick={() => abrirNueva()}>+ Nueva transacción</button>
+        )}
+        <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)} style={{ ...inp, width: isMobile ? '100%' : 'auto', flex: isMobile ? '1 1 100%' : undefined }}>
           <option value="">Todos los tipos</option>
           <option value="ingreso">Ingresos</option>
           <option value="egreso">Egresos</option>
         </select>
-        <button type="button" style={btn(false)} onClick={cargar}>↻ Actualizar</button>
+        {!isMobile && (
+          <button type="button" style={btn(false)} onClick={cargar}>↻ Actualizar</button>
+        )}
       </div>
 
-      {ordenesPendientes.length > 0 && (
+      {!isMobile && ordenesPendientes.length > 0 && (
         <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, color: t.text, marginBottom: 8 }}>Órdenes facturadas sin vincular ({ordenesPendientes.length})</div>
           {ordenesPendientes.slice(0, 5).map((o) => (
-            <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)' }}>
+            <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)', flexWrap: 'wrap' }}>
               <span style={{ color: t.text }}>
                 Corte #{o.numero_corte} · {fmtCOP(o.subtotal)} + IVA {fmtCOP(o.iva_valor)}
                 {o.contrato?.numero ? ` · ${o.contrato.numero}` : ''}
@@ -263,20 +362,60 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
       {error && <div style={{ color: '#EF4444', marginBottom: 12, fontSize: 'var(--cc-sm)' }}>{error}</div>}
 
       {showForm && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.primary}44`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, color: t.primary }}>{editId ? 'Editar transacción' : 'Nueva transacción'}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            <Field name="fecha" label="Fecha"><input type="date" style={inp} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+        <div
+          ref={formRef}
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.primary}44`,
+            borderRadius: 12,
+            padding: isMobile ? 14 : 16,
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 12, color: t.primary }}>
+            {editId ? 'Editar transacción' : (isMobile && form.tipo === 'egreso' ? 'Registrar egreso' : 'Nueva transacción')}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: formGridCols, gap: 12 }}>
+            <Field name="fecha" label="Fecha">
+              <input type="date" style={inp} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            </Field>
             <Field name="tipo" label="Tipo">
-              <select style={inp} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value, categoria_id: '' })}>
+              <select
+                style={inp}
+                value={form.tipo}
+                onChange={(e) => {
+                  const tipo = e.target.value
+                  const cats = tipo === 'egreso' ? catsEgreso : catsIngreso
+                  setForm({ ...form, tipo, categoria_id: cats[0]?.id || '' })
+                }}
+              >
                 <option value="ingreso">Ingreso</option>
                 <option value="egreso">Egreso</option>
               </select>
             </Field>
-            <Field name="valor_bruto" label="Valor bruto"><input type="number" min="0" step="0.01" style={inp} value={form.valor_bruto} onChange={(e) => setForm({ ...form, valor_bruto: e.target.value })} /></Field>
-            <Field name="retencion_fuente_valor" label="Retención valor"><input type="number" min="0" step="0.01" style={inp} value={form.retencion_fuente_valor} onChange={(e) => setForm({ ...form, retencion_fuente_valor: e.target.value })} /></Field>
-            <Field name="iva_tasa" label="IVA tasa"><input type="number" min="0" step="0.0001" style={inp} value={form.iva_tasa} onChange={(e) => setForm({ ...form, iva_tasa: e.target.value })} /></Field>
-            <Field name="iva_valor" label="IVA valor"><input type="number" min="0" step="0.01" style={inp} value={form.iva_valor} onChange={(e) => setForm({ ...form, iva_valor: e.target.value })} /></Field>
+            <Field name="valor_bruto" label="Valor bruto">
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                style={inp}
+                value={form.valor_bruto}
+                onChange={(e) => setForm({ ...form, valor_bruto: e.target.value })}
+                autoFocus={isMobile && !editId}
+              />
+            </Field>
+            {(!isMobile || form.tipo === 'ingreso') && (
+              <Field name="retencion_fuente_valor" label="Retención valor">
+                <input type="number" inputMode="decimal" min="0" step="0.01" style={inp} value={form.retencion_fuente_valor} onChange={(e) => setForm({ ...form, retencion_fuente_valor: e.target.value })} />
+              </Field>
+            )}
+            <Field name="iva_tasa" label="IVA tasa">
+              <input type="number" inputMode="decimal" min="0" step="0.0001" style={inp} value={form.iva_tasa} onChange={(e) => setForm({ ...form, iva_tasa: e.target.value })} />
+            </Field>
+            <Field name="iva_valor" label="IVA valor">
+              <input type="number" inputMode="decimal" min="0" step="0.01" style={inp} value={form.iva_valor} onChange={(e) => setForm({ ...form, iva_valor: e.target.value })} />
+            </Field>
             <Field name="categoria" label="Categoría">
               <select style={inp} value={form.categoria_id} onChange={(e) => setForm({ ...form, categoria_id: e.target.value })}>
                 <option value="">—</option>
@@ -285,13 +424,15 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                 ))}
               </select>
             </Field>
-            <Field name="centro_costo_tipo" label="Centro de costo">
-              <select style={inp} value={form.centro_costo_tipo} onChange={(e) => setForm({ ...form, centro_costo_tipo: e.target.value })}>
-                <option value="empresa">Empresa general</option>
-                <option value="contrato">Contrato</option>
-              </select>
-            </Field>
-            {form.centro_costo_tipo === 'contrato' && (
+            {!isMobile && (
+              <Field name="centro_costo_tipo" label="Centro de costo">
+                <select style={inp} value={form.centro_costo_tipo} onChange={(e) => setForm({ ...form, centro_costo_tipo: e.target.value })}>
+                  <option value="empresa">Empresa general</option>
+                  <option value="contrato">Contrato</option>
+                </select>
+              </Field>
+            )}
+            {!isMobile && form.centro_costo_tipo === 'contrato' && (
               <Field name="contrato" label="Contrato">
                 <select style={inp} value={form.contrato_id} onChange={(e) => setForm({ ...form, contrato_id: e.target.value })}>
                   <option value="">—</option>
@@ -308,26 +449,179 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
               </Field>
             )}
           </div>
-          <label style={{ display: 'block', marginTop: 12 }}>
-            <span style={lbl}><FieldLabel label="Notas" hint={TX_FIELD_HINTS.notas} t={t} /></span>
-            <textarea style={{ ...inp, minHeight: 60 }} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
-          </label>
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button type="button" style={btn(true)} disabled={busy} onClick={guardar}>{editId ? 'Guardar' : 'Crear'}</button>
-            <button type="button" style={btn(false)} onClick={() => setShowForm(false)}>Cancelar</button>
+
+          {(!isMobile || form.tipo === 'ingreso') && (
+            <label style={{ display: 'block', marginTop: 12 }}>
+              <span style={lbl}><FieldLabel label="Notas" hint={TX_FIELD_HINTS.notas} t={t} /></span>
+              <textarea style={{ ...inp, minHeight: 60 }} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
+            </label>
+          )}
+
+          {!editId && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, marginBottom: 8 }}>
+                Soporte / recibo
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {isMobile && (
+                  <button
+                    type="button"
+                    style={{ ...btn(true), flex: '1 1 140px' }}
+                    onClick={() => cameraRef.current?.click()}
+                  >
+                    <Camera size={18} strokeWidth={2.2} /> Tomar foto
+                  </button>
+                )}
+                <button
+                  type="button"
+                  style={{ ...btn(false), flex: isMobile ? '1 1 140px' : undefined }}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Paperclip size={16} strokeWidth={2.2} /> {isMobile ? 'Galería / PDF' : 'Adjuntar archivo'}
+                </button>
+              </div>
+              <input
+                ref={cameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                onChange={(e) => {
+                  onSoporteFile(e.target.files?.[0])
+                  e.target.value = ''
+                }}
+              />
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,image/*"
+                hidden
+                onChange={(e) => {
+                  onSoporteFile(e.target.files?.[0])
+                  e.target.value = ''
+                }}
+              />
+              {soportePendiente?.file && (
+                <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
+                  ✓ {soportePendiente.file.name || 'Archivo listo'}
+                  {' · '}
+                  {labelPesoSoporte(soportePendiente)}
+                  {' · se subirá al guardar'}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <button type="button" style={{ ...btn(true), flex: isMobile ? '1 1 120px' : undefined }} disabled={busy} onClick={guardar}>
+              {busy ? 'Guardando…' : (editId ? 'Guardar' : 'Crear')}
+            </button>
+            <button
+              type="button"
+              style={{ ...btn(false), flex: isMobile ? '1 1 100px' : undefined }}
+              onClick={() => { setShowForm(false); setSoportePendiente(null) }}
+            >
+              Cancelar
+            </button>
           </div>
         </div>
       )}
 
       {loading ? (
         <div style={{ color: t.textMuted }}>Cargando…</div>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {soporteInlineInfo && (
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
+              Comprimiendo / subiendo… {soporteInlineInfo}
+            </div>
+          )}
+          {items.map((tx) => (
+            <div
+              key={tx.id}
+              style={{
+                background: t.bgCard,
+                border: `1px solid ${t.border}`,
+                borderRadius: 12,
+                padding: 14,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <span style={{ color: tx.tipo === 'ingreso' ? '#10B981' : '#EF4444', fontWeight: 700, textTransform: 'capitalize' }}>
+                  {tx.tipo}
+                </span>
+                <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>{tx.fecha}</span>
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: t.text, marginBottom: 4 }}>
+                {fmtCOP(tx.valor_neto)}
+              </div>
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 10 }}>
+                {tx.categoria?.nombre || '—'} · Bruto {fmtCOP(tx.valor_bruto)}
+                {tx.iva_valor ? ` · IVA ${fmtCOP(tx.iva_valor)}` : ''}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {tx.soporte_nombre_archivo ? (
+                  <button type="button" style={btn(false)} onClick={() => abrirPreview(tx)}>
+                    📎 Ver soporte
+                    {tx.soporte_tamano_bytes ? (
+                      <span style={{ marginLeft: 6, fontWeight: 500, color: t.textMuted }}>
+                        ({fmtBytes(tx.soporte_tamano_bytes)})
+                      </span>
+                    ) : null}
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" style={btn(true)} onClick={() => {
+                      const el = document.getElementById(`cam-tx-${tx.id}`)
+                      el?.click()
+                    }}>
+                      <Camera size={16} /> Foto
+                    </button>
+                    <label style={{ ...btn(false), cursor: 'pointer' }}>
+                      📤 Archivo
+                      <input
+                        type="file"
+                        accept=".pdf,image/*"
+                        hidden
+                        onChange={(e) => subirSoporte(tx.id, e.target.files?.[0])}
+                      />
+                    </label>
+                    <input
+                      id={`cam-tx-${tx.id}`}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      hidden
+                      onChange={(e) => {
+                        subirSoporte(tx.id, e.target.files?.[0])
+                        e.target.value = ''
+                      }}
+                    />
+                  </>
+                )}
+                <button type="button" style={btn(false)} onClick={() => abrirEditar(tx)}>✎</button>
+                <button type="button" style={{ ...btn(false), color: '#EF4444', borderColor: '#EF4444' }} onClick={() => anular(tx.id)}>✕</button>
+              </div>
+            </div>
+          ))}
+          {!items.length && (
+            <div style={{ padding: 28, textAlign: 'center', color: t.textMuted }}>
+              Sin transacciones. Use «Egreso rápido» para registrar el primer recibo.
+            </div>
+          )}
+        </div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {soporteInlineInfo && (
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600, marginBottom: 8 }}>
+              Comprimiendo / subiendo… {soporteInlineInfo}
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: isTablet ? 720 : undefined }}>
             <thead>
               <tr style={{ background: t.primary + '18', color: t.text }}>
                 {['Fecha', 'Tipo', 'Bruto', 'IVA', 'Neto', 'Categoría', 'Centro', 'Origen', 'Soporte', ''].map((h) => (
-                  <th key={h} style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700 }}>{h}</th>
+                  <th key={h || 'acciones'} style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700 }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -346,10 +640,20 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                     {tx.soporte_nombre_archivo ? (
                       <button
                         type="button"
-                        title="Ver soporte"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: t.primary, padding: 0 }}
+                        title={`Ver soporte${tx.soporte_tamano_bytes ? ` (${fmtBytes(tx.soporte_tamano_bytes)})` : ''}`}
+                        style={{
+                          background: 'none', border: 'none', cursor: 'pointer', color: t.primary,
+                          padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'inherit',
+                        }}
                         onClick={() => abrirPreview(tx)}
-                      >📎</button>
+                      >
+                        <span>📎</span>
+                        {tx.soporte_tamano_bytes ? (
+                          <span style={{ color: t.textMuted, fontWeight: 500, fontSize: 'var(--cc-xs)' }}>
+                            {fmtBytes(tx.soporte_tamano_bytes)}
+                          </span>
+                        ) : null}
+                      </button>
                     ) : (
                       <label style={{ cursor: 'pointer', color: t.textMuted }}>
                         📤<input type="file" accept=".pdf,image/*" hidden onChange={(e) => subirSoporte(tx.id, e.target.files?.[0])} />
@@ -357,8 +661,8 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                     )}
                   </td>
                   <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
-                    <button type="button" style={{ ...btn(false), padding: '4px 8px', marginRight: 4 }} onClick={() => abrirEditar(tx)}>✎</button>
-                    <button type="button" style={{ ...btn(false), padding: '4px 8px', color: '#EF4444', borderColor: '#EF4444' }} onClick={() => anular(tx.id)}>✕</button>
+                    <button type="button" style={{ ...btn(false), padding: '4px 8px', marginRight: 4, minHeight: undefined }} onClick={() => abrirEditar(tx)}>✎</button>
+                    <button type="button" style={{ ...btn(false), padding: '4px 8px', color: '#EF4444', borderColor: '#EF4444', minHeight: undefined }} onClick={() => anular(tx.id)}>✕</button>
                   </td>
                 </tr>
               ))}

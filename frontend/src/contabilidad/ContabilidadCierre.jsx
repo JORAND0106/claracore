@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { contabGet, contabSend, contabDownloadExport } from './contabilidadApi'
 import { fmtCOP, mesLabel } from './contabilidadUi'
+import { useContabilidadViewport } from './useContabilidadViewport'
 
 const MESES = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
 export default function ContabilidadCierre({ t, token, esContador, esDeveloper }) {
+  const { isMobile } = useContabilidadViewport()
   const [cierres, setCierres] = useState([])
   const [selId, setSelId] = useState(null)
   const [detalle, setDetalle] = useState(null)
@@ -104,32 +106,64 @@ export default function ContabilidadCierre({ t, token, esContador, esDeveloper }
     }
   }
 
-  const inp = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', color: t.text, fontSize: 'var(--cc-sm)' }
-  const btn = (p) => ({ background: p ? t.primary : 'transparent', color: p ? '#fff' : t.primary, border: p ? 'none' : `1.5px solid ${t.primary}`, borderRadius: 10, padding: '8px 14px', fontWeight: 700, cursor: 'pointer', fontSize: 'var(--cc-sm)' })
+  const touchPad = isMobile ? '12px 12px' : '8px 10px'
+  const inp = {
+    background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8,
+    padding: touchPad, color: t.text, fontSize: 'var(--cc-sm)',
+    minHeight: isMobile ? 44 : undefined,
+  }
+  const btn = (p) => ({
+    background: p ? t.primary : 'transparent',
+    color: p ? '#fff' : t.primary,
+    border: p ? 'none' : `1.5px solid ${t.primary}`,
+    borderRadius: 10,
+    padding: isMobile ? '12px 16px' : '8px 14px',
+    fontWeight: 700, cursor: 'pointer', fontSize: 'var(--cc-sm)',
+    minHeight: isMobile ? 44 : undefined,
+  })
   const puedeFirmar = esContador || esDeveloper
   const bloqueado = detalle?.estado === 'aprobado'
   const firmado = !!detalle?.firma_contenido_hash
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 16 }}>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: isMobile
+        ? '1fr'
+        : (isMobile === false ? 'minmax(200px, 240px) 1fr' : 'minmax(220px, 280px) 1fr'),
+      gap: 16,
+    }}>
       <div>
         <div style={{ fontWeight: 700, marginBottom: 8, color: t.text }}>Generar cierre</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <input type="number" style={{ ...inp, width: 80 }} value={anio} onChange={(e) => setAnio(Number(e.target.value))} />
-          <select style={inp} value={mes} onChange={(e) => setMes(Number(e.target.value))}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <input type="number" style={{ ...inp, width: 90, flex: isMobile ? '1 1 90px' : undefined }} value={anio} onChange={(e) => setAnio(Number(e.target.value))} />
+          <select style={{ ...inp, flex: 1, minWidth: 120 }} value={mes} onChange={(e) => setMes(Number(e.target.value))}>
             {MESES.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
           </select>
         </div>
-        <button type="button" style={btn(true)} disabled={busy} onClick={generar}>Generar / recalcular</button>
+        <button type="button" style={{ ...btn(true), width: isMobile ? '100%' : undefined }} disabled={busy} onClick={generar}>
+          Generar / recalcular
+        </button>
         <div style={{ marginTop: 20, fontWeight: 700, color: t.text }}>Historial</div>
         {loading ? <div style={{ color: t.textMuted, marginTop: 8 }}>…</div> : (
-          <div style={{ marginTop: 8 }}>
+          <div style={{
+            marginTop: 8,
+            display: isMobile ? 'flex' : 'block',
+            gap: isMobile ? 8 : 0,
+            overflowX: isMobile ? 'auto' : undefined,
+            WebkitOverflowScrolling: isMobile ? 'touch' : undefined,
+            paddingBottom: isMobile ? 4 : 0,
+          }}>
             {cierres.map((c) => (
               <button key={c.id} type="button" onClick={() => cargarDetalle(c.id)} style={{
-                display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: '10px 12px',
+                display: isMobile ? 'inline-block' : 'block',
+                width: isMobile ? 'auto' : '100%',
+                minWidth: isMobile ? 140 : undefined,
+                textAlign: 'left', marginBottom: isMobile ? 0 : 6, padding: '10px 12px',
                 background: selId === c.id ? t.primary + '22' : t.bgCard,
                 border: `1px solid ${selId === c.id ? t.primary : t.border}`,
                 borderRadius: 10, cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
+                flexShrink: 0,
               }}>
                 {mesLabel(c.anio, c.mes)} · <span style={{ fontWeight: 700 }}>{c.estado}</span>
                 {c.firma_contenido_hash && ' · ✓ firmado'}
@@ -142,9 +176,11 @@ export default function ContabilidadCierre({ t, token, esContador, esDeveloper }
       <div>
         {error && <div style={{ color: '#EF4444', marginBottom: 12 }}>{error}</div>}
         {!detalle ? (
-          <div style={{ color: t.textMuted, padding: 40, textAlign: 'center' }}>Selecciona o genera un cierre mensual</div>
+          <div style={{ color: t.textMuted, padding: isMobile ? 24 : 40, textAlign: 'center' }}>
+            Selecciona o genera un cierre mensual
+          </div>
         ) : (
-          <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 20 }}>
+          <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: isMobile ? 14 : 20 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.primary }}>{MESES[detalle.mes]} {detalle.anio}</div>
@@ -161,7 +197,12 @@ export default function ContabilidadCierre({ t, token, esContador, esDeveloper }
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, marginBottom: 16 }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 140 : 160}px, 1fr))`,
+              gap: 10,
+              marginBottom: 16,
+            }}>
               {[
                 ['Ingresos brutos', detalle.ingresos_brutos],
                 ['Deducciones', detalle.total_deducciones],

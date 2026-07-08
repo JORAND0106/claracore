@@ -34,6 +34,7 @@ import ModuloEnsayos from './ModuloEnsayos'
 import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
 import ModuloContabilidad from './ModuloContabilidad'
+import { BookOpen, Menu, X } from 'lucide-react'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
@@ -133,6 +134,7 @@ import RefreshCacheGuard from './components/RefreshCacheGuard'
 import { supabase } from './supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from './realtimeUtils'
 import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
+import { useClaraViewport } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import {
@@ -1672,15 +1674,56 @@ function inferirNivelValidacionPorNombreRol(rolNorm) {
   return undefined
 }
 
+/** Nivel 1–6 para filtro automático (rol_id / cargo_id / nombre). null = no aplica. */
+function sicoeNivelParaFiltroAutomatico(usuario) {
+  if (!usuario || esUsuarioDesarrollador(usuario)) return null
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
+  const ridRaw = usuario?.rol_id
+  const rid = ridRaw != null && String(ridRaw).trim() !== '' ? parseInt(String(ridRaw), 10) : NaN
+  if (Number.isFinite(rid) && Object.prototype.hasOwnProperty.call(ROL_ID_NIVEL_MAP, rid)) {
+    const mapped = ROL_ID_NIVEL_MAP[rid]
+    if (mapped === null) return null // solo comentarista
+    if (mapped != null && mapped !== 0) return mapped
+  }
+  const cargoIdNum =
+    usuario?.cargo_id != null && String(usuario.cargo_id).trim() !== ''
+      ? parseInt(String(usuario.cargo_id), 10)
+      : NaN
+  if (Number.isFinite(cargoIdNum) && CARGO_ID_NIVEL_MAP[cargoIdNum] != null) {
+    return CARGO_ID_NIVEL_MAP[cargoIdNum]
+  }
+  const inferido = inferirNivelValidacionPorNombreRol(rol)
+  if (inferido != null) return inferido
+  if (rol === 'operativo contratista') return 1
+  if (rol === 'contratista') return 2
+  if (rol === 'interventoria' || rol === 'operativo interventoria') return 4
+  return null
+}
+
+function sicoeUsuarioPuedeValidarParaFiltro(usuario, sicoeContratoId = null) {
+  if (!usuario || esUsuarioDesarrollador(usuario)) return false
+  const pContrato = permisoFuncionContrato(usuario, 'Reporte de Cantidades', sicoeContratoId)
+  if (pContrato?.validar) return true
+  const pAny = permisoReporteCantidades(usuario)
+  return !!(pAny?.validar)
+}
+
+/** Validador: su nivel + «No Revisado». Desarrollador / sin validar → sin capa automática. */
 function capasInicialesValidacionFromUser(usuario, nivelesContrato, sicoeContratoId = null) {
-  const ni = determinarNivelValidacion(usuario, sicoeContratoId)
-  const na = nivelesContrato?.niveles_activos
-  const activos =
-    Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
-  if (!ni.nivelValidacion || !ni.puedeValidar) return []
-  if (ni.nivelValidacion === 0) return []
-  if (!activos.includes(ni.nivelValidacion)) return []
-  return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
+  if (esUsuarioDesarrollador(usuario)) return []
+  const n = sicoeNivelParaFiltroAutomatico(usuario)
+  if (n == null || n < 1 || n > 6) return []
+  if (!sicoeUsuarioPuedeValidarParaFiltro(usuario, sicoeContratoId)) return []
+  const activos = sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos)
+  if (!activos.includes(n)) return []
+  return [{ nivel: n, estado: 'No Revisado' }]
 }
 
 // ─── HELPER: NIVEL DE VALIDACIÓN SICOE (permiso «validar» en Reporte de cantidades + rol_id / cargo_id / nombre).
@@ -6556,7 +6599,7 @@ function ModuloSicoeObra({
   /** Misma resolución de acta RPO que la matriz del dashboard (vigente / acta explícita). */
   const [sicoeMatrizSync, setSicoeMatrizSync] = useState(null)
   const sicoeActaAutoOnceRef = useRef(false)
-  /** Una vez por contrato: init filtros (validador limpio + capa, o restaurar sesión). */
+  /** Una vez por contrato: 'validador' | 'sesion' | false */
   const sicoeInitContratoFiltrosOnceRef = useRef(false)
 
   useEffect(() => {
@@ -7128,6 +7171,13 @@ function ModuloSicoeObra({
     }
   }
 
+  const refrescarVistaSicoeObraRef = useRef(refrescarVistaSicoeObra)
+  refrescarVistaSicoeObraRef.current = refrescarVistaSicoeObra
+  const sicoeModuloRefreshInvokerRef = useRef(null)
+  if (!sicoeModuloRefreshInvokerRef.current) {
+    sicoeModuloRefreshInvokerRef.current = () => { void refrescarVistaSicoeObraRef.current() }
+  }
+
   const fmtPesos = v => formatCOP(Number(v) || 0)
 
   const verEco = nivelInfo.verValoresEconomicos
@@ -7608,22 +7658,23 @@ function ModuloSicoeObra({
   const itemsFiltroOpRef = useRef('and')
   itemsFiltroOpRef.current = itemsFiltroOp
 
+  const sicoeModuloRefreshDisabled =
+    cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)
+  const sicoeModuloRefreshBusy = cargandoAnalisis || cargando
+
   useEffect(() => {
     setModuloRefresh({
       label: 'SICOE',
-      fn: () => refrescarVistaSicoeObra(),
-      disabled: cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion),
-      busy: cargandoAnalisis || cargando,
+      fn: sicoeModuloRefreshInvokerRef.current,
+      disabled: sicoeModuloRefreshDisabled,
+      busy: sicoeModuloRefreshBusy,
     })
     return clearModuloRefresh
   }, [
     setModuloRefresh,
     clearModuloRefresh,
-    refrescarVistaSicoeObra,
-    cargandoAnalisis,
-    cargando,
-    filtros,
-    capasValidacion,
+    sicoeModuloRefreshDisabled,
+    sicoeModuloRefreshBusy,
   ])
 
   const sicoeBundleAplicado = useMemo(
@@ -7672,18 +7723,44 @@ function ModuloSicoeObra({
     setOffsetActual(0)
   }, [contrato_id])
 
-  /** Validadores: pila limpia + capa N{nivel} «No Revisado» + buscar. Resto: sesión previa. */
+  /** Validador: si tiene nivel 1–6 → capa No Revisado + buscar (grilla + panel). */
   useEffect(() => {
-    if (!contrato_id || sicoeInitContratoFiltrosOnceRef.current) return
+    if (!contrato_id) return
     if (
       nivelesContrato?.contrato_id == null
       || String(nivelesContrato.contrato_id) !== String(contrato_id)
     ) return
+    if (esUsuarioDesarrollador(usuario)) {
+      if (sicoeInitContratoFiltrosOnceRef.current) return
+      sicoeInitContratoFiltrosOnceRef.current = 'sesion'
+      const savedDev = cargarSicoeFiltroSesion(contrato_id)
+      if (!savedDev) return
+      aplicarSicoeFiltroBundle(savedDev, false)
+      if (sicoeBundleTieneCriteriosUsuario(savedDev)) {
+        const cached = sicoeGetVistaCache(contrato_id, savedDev)
+        if (cached) restaurarSicoeDesdeEntrada(cached)
+      }
+      return
+    }
 
-    sicoeInitContratoFiltrosOnceRef.current = true
-    const capasIni = capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
+    // Nivel directo: el que ya usa la UI, o rol/cargo del usuario
+    const nInfo = Number(nivelInfo.nivelValidacion)
+    const nCom = Number(nivelInfo.nivelValidacionComentario)
+    const nRol = sicoeNivelParaFiltroAutomatico(usuario)
+    let n = null
+    if (Number.isFinite(nInfo) && nInfo >= 1 && nInfo <= 6) n = nInfo
+    else if (Number.isFinite(nCom) && nCom >= 1 && nCom <= 6) n = nCom
+    else if (nRol != null) n = Number(nRol)
+
+    const activos = sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos)
+    const capasIni =
+      n != null && activos.includes(n)
+        ? [{ nivel: n, estado: 'No Revisado' }]
+        : []
 
     if (capasIni.length > 0) {
+      if (sicoeInitContratoFiltrosOnceRef.current === 'validador') return
+      sicoeInitContratoFiltrosOnceRef.current = 'validador'
       limpiarChecksPanelSicoe()
       limpiarSicoeFiltroSesion(contrato_id)
       invalidateSicoeVistaCache(contrato_id)
@@ -7720,6 +7797,8 @@ function ModuloSicoeObra({
       return
     }
 
+    if (sicoeInitContratoFiltrosOnceRef.current) return
+    sicoeInitContratoFiltrosOnceRef.current = 'sesion'
     const saved = cargarSicoeFiltroSesion(contrato_id)
     if (!saved) return
     aplicarSicoeFiltroBundle(saved, false)
@@ -7731,6 +7810,8 @@ function ModuloSicoeObra({
     contrato_id,
     nivelesContrato,
     usuario,
+    nivelInfo.nivelValidacion,
+    nivelInfo.nivelValidacionComentario,
     aplicarSicoeFiltroBundle,
     restaurarSicoeDesdeEntrada,
     limpiarChecksPanelSicoe,
@@ -14185,6 +14266,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
+  const [isMobileHeader, setIsMobileHeader] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [tabInferior, setTabInferior] = useState('programacion')
   const [analisis, setAnalisis] = useState('financiero')
   const [dashTab, setDashTab] = useState('resumen')
@@ -14278,7 +14361,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [popupCapitulo, setPopupCapitulo] = useState(false)
   const popupCapituloRef = useRef(false)
   const [notifNavegar, setNotifNavegar] = useState(null)
-  const colsGrid = '1fr 1fr'
   const [miniMapaColores, setMiniMapaColores] = useState({})
   const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data, error?}
   const [popupLoading,   setPopupLoading]   = useState(false)
@@ -14296,6 +14378,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
   const dashModuloActivo = moduloActivo === 'dashboard'
+  const { isMobile: dashMobile, isTablet: dashTablet, isDesktop: dashDesktop } = useClaraViewport()
+  const dashColsGrid = dashMobile ? '1fr' : '1fr 1fr'
+  const colsGrid = dashColsGrid
+  const dashPanelPad = dashMobile ? '14px' : '20px'
+  const dashTouchSelect = dashMobile ? { minHeight: 44, fontSize: 'var(--cc-body)' } : {}
+  const dashTouchBtn = dashMobile ? { minHeight: 44, padding: '10px 14px' } : {}
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
   const exportModalUi = useMemo(() => {
     const cc = getClaraTypeScaleInline(fontSize)
@@ -15923,9 +16011,26 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     )
   ) : null
 
+  useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth < 768
+      setIsMobileHeader(mobile)
+      if (!mobile) setMobileNavOpen(false)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [mobileNavOpen])
+
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
-    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
+    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: isMobileHeader ? '10px 12px' : 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset, gap: 8, position: 'relative', zIndex: 40 },
     body: { padding: 'var(--cc-space-5) var(--cc-space-5)', maxWidth: '1400px', margin: '0 auto' },
     topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--cc-space-5)' },
     btnCrear: { background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: 'var(--cc-body)', fontWeight: '600', cursor: 'pointer' },
@@ -15987,20 +16092,47 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   return (
     <div style={s.app}>
       <div style={s.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: '1 1 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }}>
           <img
             src="/CLARA.CORE.png"
             alt="ClaraCore"
             className="cc-brand-logo cc-brand-logo--header"
-            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none' }}
+            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none', height: isMobileHeader ? 32 : undefined }}
           />
-          {usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
+          {!isMobileHeader && tieneAccesoContabilidad && (
+            <button
+              type="button"
+              onClick={() => setShowContabilidad(true)}
+              title="Contabilidad"
+              aria-label="Abrir módulo de Contabilidad"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                background: 'transparent',
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                padding: '6px 10px',
+                color: t.primary,
+                cursor: 'pointer',
+                flexShrink: 0,
+                lineHeight: 1,
+              }}
+            >
+              <BookOpen size={18} strokeWidth={2} aria-hidden />
+              <span className="cc-contab-header-label" style={{ fontSize: 'var(--cc-label)', fontWeight: 600 }}>
+                Contab.
+              </span>
+            </button>
+          )}
+          {!isMobileHeader && usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
             <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
-          {usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
+          {!isMobileHeader && usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
             <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
-          {progRibbonEnHeader && (
+          {!isMobileHeader && progRibbonEnHeader && (
             <>
               <div style={{ width: 1, height: 28, background: t.border, flexShrink: 0 }} aria-hidden />
               {selectorContratoHeader}
@@ -16008,7 +16140,30 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        {isMobileHeader ? (
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen((o) => !o)}
+            aria-label={mobileNavOpen ? 'Cerrar menú' : 'Abrir menú'}
+            aria-expanded={mobileNavOpen}
+            style={{
+              background: 'transparent',
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              width: 44,
+              height: 44,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: t.primary,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            {mobileNavOpen ? <X size={22} strokeWidth={2.2} aria-hidden /> : <Menu size={22} strokeWidth={2.2} aria-hidden />}
+          </button>
+        ) : (
+        <div className="cc-header-actions-desktop" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
           <AVITriggerButton t={t} />
           <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} />
           <div style={{ display:'flex', gap:'2px', alignItems:'center', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 6px' }}>
@@ -16077,18 +16232,209 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </button>
           </div>
         </div>
+        )}
       </div>
+
+      {isMobileHeader && mobileNavOpen && (
+        <>
+          <div
+            role="presentation"
+            onClick={() => setMobileNavOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 12050,
+              background: 'rgba(0,0,0,0.45)',
+            }}
+          />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menú de la plataforma"
+            style={{
+              position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 12060,
+              width: 'min(340px, 88vw)',
+              background: t.bgCard,
+              borderLeft: `1px solid ${t.border}`,
+              boxShadow: '-8px 0 32px rgba(0,0,0,0.25)',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '14px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+            }}>
+              <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)' }}>Menú</div>
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(false)}
+                aria-label="Cerrar menú"
+                style={{
+                  background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8,
+                  width: 44, height: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  color: t.text, cursor: 'pointer',
+                }}
+              >
+                <X size={22} strokeWidth={2.2} aria-hidden />
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 28px', WebkitOverflowScrolling: 'touch' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '12px', marginBottom: 14,
+                background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12,
+              }}>
+                <span style={{
+                  width: 48, height: 48, borderRadius: '50%', overflow: 'hidden', flexShrink: 0,
+                  background: t.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 'var(--cc-lg)',
+                }}>
+                  {usuario?.foto_perfil_url ? (
+                    <img src={usuario.foto_perfil_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : '👤'}
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-sm)' }}>{usuario?.nombre}</div>
+                  {usuario?.cargo_nombre && (
+                    <div style={{ color: t.textMuted, fontSize: 'var(--cc-label)', marginTop: 2 }}>{usuario.cargo_nombre}</div>
+                  )}
+                </div>
+              </div>
+
+              {!esContador && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: '0.04em' }}>CONTRATO</div>
+                  {usuario?._contratos?.length > 1 ? (
+                    <select
+                      value={usuario.contrato_id || ''}
+                      onChange={(e) => void handleCambioContratoUsuario(e)}
+                      style={{
+                        width: '100%', fontSize: '16px', background: t.bg, border: `1px solid ${t.border}`,
+                        borderRadius: 10, padding: '12px 14px', color: t.primary, fontWeight: 600,
+                        minHeight: 48, boxSizing: 'border-box',
+                      }}
+                    >
+                      {!usuario.contrato_id && <option value="">— Selecciona un contrato —</option>}
+                      {usuario._contratos.map((c) => (
+                        <option key={c.id} value={c.id}>📋 {c.numero}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{
+                      padding: '12px 14px', borderRadius: 10, border: `1px solid ${t.border}`,
+                      background: t.bg, color: t.primary, fontWeight: 600, fontSize: 'var(--cc-sm)',
+                    }}>
+                      {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {tieneAccesoContabilidad && (
+                <button
+                  type="button"
+                  onClick={() => { setShowContabilidad(true); setMobileNavOpen(false) }}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                    background: t.primary + '14', border: `1px solid ${t.primary}55`, borderRadius: 12,
+                    padding: '14px 16px', color: t.primary, fontWeight: 700, cursor: 'pointer',
+                    fontSize: 'var(--cc-sm)', marginBottom: 14, minHeight: 48, textAlign: 'left',
+                  }}
+                >
+                  <BookOpen size={20} strokeWidth={2.2} aria-hidden />
+                  Contabilidad
+                </button>
+              )}
+
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, marginBottom: 8, letterSpacing: '0.04em' }}>TEMA</div>
+                <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} style={{ width: '100%', justifyContent: 'space-between' }} />
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, marginBottom: 8, letterSpacing: '0.04em' }}>TAMAÑO DE TEXTO</div>
+                <div style={{ display: 'flex', gap: 6, background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12, padding: 6 }}>
+                  {[['pequena','A',13],['normal','A',16],['grande','A',19]].map(([key, lbl, sz]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onFontSize && onFontSize(key)}
+                      style={{
+                        flex: 1, background: fontSize === key ? t.primary : 'transparent',
+                        color: fontSize === key ? '#fff' : t.textMuted, border: 'none', borderRadius: 10,
+                        padding: '12px 8px', fontSize: `${sz}px`, cursor: 'pointer',
+                        fontWeight: fontSize === key ? 700 : 400, minHeight: 44,
+                      }}
+                    >
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+                  <span style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>Asistente AVI</span>
+                  <AVITriggerButton t={t} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+                  <span style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>Notificaciones</span>
+                  <BuzonNotificaciones key={`buzon-m-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} onNavegar={(...args) => { setMobileNavOpen(false); handleNavegar(...args) }} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { onOpenPerfil && onOpenPerfil(); setMobileNavOpen(false) }}
+                  style={{
+                    width: '100%', textAlign: 'left', background: t.bg, border: `1px solid ${t.border}`,
+                    borderRadius: 12, padding: '14px 16px', color: t.text, fontWeight: 600,
+                    cursor: 'pointer', fontSize: 'var(--cc-sm)', minHeight: 48,
+                  }}
+                >
+                  👤 Editar perfil
+                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ flex: 1 }}><ReporteErroresBtn t={t} usuario={usuario} token={getToken()} /></div>
+                  <div style={{ flex: 1 }}><PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} /></div>
+                </div>
+                {canAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowAdmin(true); setMobileNavOpen(false) }}
+                    style={{
+                      width: '100%', background: 'transparent', border: `1px solid ${t.border}`,
+                      borderRadius: 12, padding: '14px 16px', color: t.primary, fontWeight: 700,
+                      cursor: 'pointer', fontSize: 'var(--cc-sm)', minHeight: 48,
+                    }}
+                  >
+                    ⚙ Admin
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setMobileNavOpen(false); onLogout() }}
+                  style={{
+                    width: '100%', background: 'transparent', border: `1px solid ${t.border}`,
+                    borderRadius: 12, padding: '14px 16px', color: t.textMuted, fontWeight: 600,
+                    cursor: 'pointer', fontSize: 'var(--cc-sm)', minHeight: 48, marginTop: 4,
+                  }}
+                >
+                  Salir
+                </button>
+              </div>
+            </div>
+          </aside>
+        </>
+      )}
 
       <div style={{ display:'flex', minHeight:'calc(100vh - 72px)' }}>
 
         {/* ── Sidebar ── */}
-        <div style={{
+        <div className="cc-module-sidebar" style={{
           width: menuAbierto ? '220px' : '52px',
           minHeight: '100%',
           background: t.headerBg,
           borderRight: `1px solid ${t.border}`,
           transition: 'width 0.25s ease',
-          display: 'flex', flexDirection: 'column',
+          display: isMobileHeader ? 'none' : 'flex', flexDirection: 'column',
           overflow: 'hidden', flexShrink: 0,
           boxShadow: menuAbierto ? '4px 0 20px rgba(0,0,0,0.12)' : 'none',
           position: 'relative', zIndex: 10,
@@ -16137,8 +16483,50 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         </div>
 
         {/* ── Contenido principal ── */}
-        <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
-        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && (
+        <div style={{ flex:1, padding: isMobileHeader ? '12px 12px' : '20px 24px', minWidth:0, overflow:'hidden' }}>
+        {isMobileHeader && (
+          <div style={{
+            display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+            marginBottom: 12, paddingBottom: 4, scrollbarWidth: 'none',
+          }}>
+            {[
+              ['inicio', '🏠', 'Inicio', true],
+              ['dashboard', '📊', 'Dashboard', !esContador && tienePermisoDashboard],
+              ['presupuesto', '📋', 'Presupuesto', !esContador && tienePermisoPresupuesto],
+              ['sicoe_obra', '🏗️', 'SICOE', !esContador && tienePermisoSicoeObra],
+              ['informes', '📄', 'Informes', !esContador && tienePermisoInformesCcd],
+              ['almacen', '🏪', 'Almacén', !esContador],
+              ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
+              ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
+              ['semaforo', '🗺️', 'Semáforo', !esContador],
+              ['sst', '🦺', 'SST', !esContador && tieneModuloSst],
+              ['ensayos', '🧪', 'Ensayos', !esContador && tieneModuloEnsayos],
+              ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
+            ].filter(([, , , visible]) => visible).map(([key, icon, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setModuloActivo(key)}
+                style={{
+                  flex: '0 0 auto',
+                  background: moduloActivo === key ? t.primary + '22' : t.bgCard,
+                  border: `1px solid ${moduloActivo === key ? t.primary : t.border}`,
+                  borderRadius: 999,
+                  padding: '8px 12px',
+                  color: moduloActivo === key ? t.primary : t.textMuted,
+                  fontWeight: moduloActivo === key ? 700 : 500,
+                  fontSize: 'var(--cc-sm)',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  minHeight: 40,
+                }}
+              >
+                {icon} {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && !isMobileHeader && (
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
@@ -16171,8 +16559,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             fontSize={fontSize}
             puedePublicarNovedades={puedePublicarNovedadesInicio}
             token={getToken()}
-            puedeAccederContabilidad={tieneAccesoContabilidad}
-            onAbrirContabilidad={() => setShowContabilidad(true)}
             esContador={esContador}
           />
         )}
@@ -16205,8 +16591,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             rows.length === 0 && !dashCapFinLoading ? (
               <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
             ) : (
-              <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'auto', width:'100%' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:560 }}>
+              <div className="cc-dash-table-wrap" style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth: dashMobile ? 480 : 560 }}>
                   <thead>
                     <tr style={{ background:headerBg, color:'#fff', position:'sticky', top:0, zIndex:1 }}>
                       {puedeExportarDashboard ? (
@@ -16302,7 +16688,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               : []),
           ]
 
-          return <>
+          return <div className="cc-dashboard-root">
             {/* Barra única: título · vista · pestañas · actualizar · contrato */}
             <div style={{
               display: 'flex',
@@ -16349,9 +16735,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 </div>
               </div>
 
-              <span style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
+              <span className="cc-dash-toolbar-sep" style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
 
-              <span style={{ fontSize: `${du.sub}px`, fontWeight: 800, color: t.text, whiteSpace: 'nowrap', letterSpacing: '0.02em' }}>Según</span>
+              <span style={{ fontSize: `${du.sub}px`, fontWeight: 800, color: t.text, whiteSpace: dashMobile ? 'normal' : 'nowrap', letterSpacing: '0.02em' }}>Según</span>
               <div style={{ display: 'inline-flex', background: t.bgCard, border: `1px solid ${t.primary}28`, borderRadius: '9px', padding: '3px', flexShrink: 0, boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.04)' }}>
                 {[
                   ['Presupuesto de Obra', 'Presupuesto'],
@@ -16371,7 +16757,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         color: activo ? '#fff' : t.textMuted,
                         border: 'none',
                         borderRadius: '7px',
-                        padding: '6px 14px',
+                        padding: dashMobile ? '10px 14px' : '6px 14px',
+                        minHeight: dashMobile ? 44 : undefined,
                         fontSize: `${du.sub}px`,
                         fontWeight: 800,
                         cursor: 'pointer',
@@ -16385,20 +16772,22 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 })}
               </div>
 
-              <span style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
+              <span className="cc-dash-toolbar-sep" style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
 
-              <div style={{ display: 'inline-flex', gap: '5px', flexShrink: 0, background: t.bgCard, border: `1px solid ${t.primary}22`, borderRadius: '9px', padding: '3px' }}>
+              <div style={{ display: 'inline-flex', gap: '5px', flexShrink: 0, background: t.bgCard, border: `1px solid ${t.primary}22`, borderRadius: '9px', padding: '3px', flexWrap: dashMobile ? 'wrap' : 'nowrap' }}>
                 {dashTabItems.map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
                     onClick={() => setDashTab(key)}
+                    className={dashMobile ? 'cc-dash-touch-btn' : undefined}
                     style={{
                       background: dashTab === key ? t.primary : 'transparent',
                       color: dashTab === key ? '#fff' : t.textMuted,
                       border: 'none',
                       borderRadius: '7px',
-                      padding: '6px 14px',
+                      padding: dashMobile ? '10px 14px' : '6px 14px',
+                      minHeight: dashMobile ? 44 : undefined,
                       fontSize: `${du.sub}px`,
                       fontWeight: 800,
                       cursor: 'pointer',
@@ -16426,6 +16815,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               }}>
                 <button
                   type="button"
+                  className={dashMobile ? 'cc-dash-touch-btn' : undefined}
                   onClick={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
                   disabled={dashRefreshBusy}
                   title="Actualizar resumen"
@@ -16436,7 +16826,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     background: dashRefreshBusy ? t.bg : `${t.primary}12`,
                     border: `1px solid ${t.primary}44`,
                     borderRadius: 8,
-                    padding: '5px 12px',
+                    padding: dashMobile ? '10px 14px' : '5px 12px',
+                    minHeight: dashMobile ? 44 : undefined,
                     color: dashRefreshBusy ? t.textMuted : t.primary,
                     fontSize: `${du.sub}px`,
                     fontWeight: 800,
@@ -16464,6 +16855,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {usuario?._contratos?.length > 1 ? (
                   <select
                     value={usuario.contrato_id || ''}
+                    className={dashMobile ? 'cc-dash-touch-select' : undefined}
                     onChange={async (e) => {
                       const cid = parseInt(e.target.value, 10)
                       const contrato = usuario._contratos.find(c => c.id === cid)
@@ -16471,7 +16863,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       if (onCambiarContrato) await onCambiarContrato(contrato)
                       else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
                     }}
-                    style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: 'min(220px, 42vw)' }}
+                    style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: dashMobile ? '10px 12px' : '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: dashMobile ? '100%' : 'min(220px, 42vw)', ...dashTouchSelect }}
                   >
                     {!usuario.contrato_id && <option value="">Contrato…</option>}
                     {usuario._contratos.map(c => (
@@ -16506,7 +16898,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <>
             {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
+            <div style={{ display:'grid', gridTemplateColumns: dashMobile ? '1fr' : (dashTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap:'10px', marginBottom:'16px' }}>
               {(() => {
                 const kpis = [
                   {
@@ -16519,8 +16911,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   { label:'PPTO. CLARACORE APROB. NIVEL MÁX.', value: fmtD(pptoApN3), sub: 'Columna revisado = Aprobado', color:'#0f766e', icon:'✅' },
                   { label:'PPTO. CLARACORE NO REVIS. NIVEL MÁX.', value: fmtD(pptoNrN3), sub: 'Pendiente / No revisado / Rechazado', color:'#ca8a04', icon:'📋' },
                 ]
-                return kpis.map(k => (
-                  <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
+                return kpis.map((k, ki) => (
+                  <div key={k.label} className={dashTablet && !dashMobile && ki === 2 ? 'cc-dash-kpi-card-span' : undefined} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
                     <div style={{ fontSize:`${du.kpiLabel}px`, fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
                     <div style={{ fontSize:`${du.kpiValue}px`, fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.value}</div>
                     <div style={{ fontSize:`${du.kpiSub}px`, color:t.textMuted }}>{k.sub}</div>
@@ -16533,7 +16925,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease', minWidth:0 }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='cobro-acta' && {gridColumn:'1 / -1'}) }}>
+              <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow, ...(panelFoco==='cobro-acta' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -16562,8 +16954,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   const areaD = `${pathD} L${pts[pts.length-1].x.toFixed(1)},${H-PAD} L${pts[0].x.toFixed(1)},${H-PAD} Z`
                   const [hovered, setHovered] = [null, ()=>{}]
                   return (
-                    <div style={{ position:'relative' }}>
-                      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height:'160px', overflow:'visible' }}>
+                    <div className="cc-dash-chart-wrap" style={{ position:'relative' }}>
+                      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height: dashMobile ? '140px' : '160px', overflow:'visible', display:'block' }}>
                         <defs>
                           <linearGradient id="cobroGrad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor={t.primary} stopOpacity="0.4"/>
@@ -16603,7 +16995,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
 
               {/* ⬛ Panel Presupuesto por Capítulo — barras */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='ppto-capitulo' && {gridColumn:'1 / -1'}) }}>
+              <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow, ...(panelFoco==='ppto-capitulo' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -16629,7 +17021,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       const color = ['#0077B6','#00B4C6','#00A896','#028090','#05668D','#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B','#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B'][i % 15]
                       return (
                         <div key={cap.capitulo} style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                          <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width:'140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
+                          <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width: dashMobile ? '72px' : '140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
                             {cap.capitulo}
                           </div>
                           <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden', minWidth:40 }}>
@@ -16646,16 +17038,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
 
               {/* 🟢 Ppto vs Cobro + Matriz validación (SICOE / Acta RPO) */}
-              <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: panelFoco==='ppto-cobro' ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
+              <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: (dashMobile || panelFoco==='ppto-cobro') ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
               <div style={{
                 display:'flex', flexDirection:'column', gap:'16px',
-                flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)',
-                minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)',
+                flex: (dashMobile || panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)',
+                minWidth: (dashMobile || panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)',
                 boxSizing:'border-box',
               }}>
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow }}>
                 <div style={{ marginBottom:'14px' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
                     <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 Ppto vs Cobro por capítulo</div>
                     {puedeExportarDashboard && (
                       <button
@@ -16700,7 +17092,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 </div>
               </div>
 
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>🧪 Ppto vs Cobro · IVA</div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
@@ -16721,9 +17113,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
               {/* ── Drill → ahora vive en el popup ── */}
 
-              <div style={{
-                background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow,
-                flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box',
+              <div className="cc-dash-panel-card" style={{
+                background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding: dashMobile ? '14px' : '16px', boxShadow:t.shadow,
+                flex: (dashMobile || panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: (dashMobile || panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)', boxSizing:'border-box',
                 maxHeight: panelFoco==='ppto-cobro' ? 'none' : 'min(92vh, 780px)', overflowY:'auto',
               }}>
 
@@ -16832,7 +17224,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     return (
                       <div key={titulo} style={{ marginBottom:'18px' }}>
                         <div style={{ fontSize:`${du.sub}px`, fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
-                        <div style={{ overflowX:'auto' }}>
+                        <div className="cc-dash-table-wrap" style={{ overflowX:'auto' }}>
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:`${Math.max(280, 120 + colsMatriz.length * 100)}px` }}>
                             <thead>
                               <tr>
@@ -17440,10 +17832,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
                     <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
                       {[['capitulo','Capítulo'],['item','Ítem']].map(([k,l]) => (
-                        <button key={k} onClick={()=>{setAnalisisNivel(k);setAnalisisSeleccion(null)}} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                        <button key={k} onClick={()=>{setAnalisisNivel(k);setAnalisisSeleccion(null)}} className={dashMobile ? 'cc-dash-touch-btn' : undefined} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer', ...dashTouchBtn }}>{l}</button>
                       ))}
                     </div>
-                    <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none' }}>
+                    <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} className={dashMobile ? 'cc-dash-touch-select' : undefined} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none', ...dashTouchSelect }}>
                       <option value="todos">🔵 Todos los registros</option>
                       <option value="sobrecobro">🔴 Sobrecobro — Cobro &gt; PPTO</option>
                       <option value="subcobro">🟡 Subcobro — PPTO &gt; Cobro</option>
@@ -17466,11 +17858,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 </div>
 
                 {/* ── Layout 2 columnas: Mapa + KPI chips ── */}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:'14px', marginBottom:'14px', alignItems:'start' }}>
+                <div style={{
+                  display: dashDesktop ? 'grid' : 'flex',
+                  flexDirection: 'column',
+                  gridTemplateColumns: dashDesktop ? '1fr 320px' : undefined,
+                  gap:'14px',
+                  marginBottom:'14px',
+                  alignItems:'start',
+                }}>
 
                   {/* Mapa semáforo */}
-                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow, width:'100%', minWidth:0 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px', flexWrap:'wrap', gap:'8px' }}>
                       <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
                       {analisisSeleccion ? (
                         <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
@@ -17488,7 +17887,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       colores={analisisMapaColores}
                       contratoId={contratoIdDash}
                       token={getToken()}
-                      height={260}
+                      height={dashMobile ? 220 : 260}
                       bearing={270}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
                     />
@@ -17500,7 +17899,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </div>
 
                   {/* KPI chips apilados a la derecha */}
-                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                  <div className={dashTablet && !dashMobile ? 'cc-dash-kpi-chips-row' : undefined} style={{ display: dashDesktop ? 'flex' : (dashTablet ? undefined : 'flex'), flexDirection: dashDesktop ? 'column' : (dashTablet ? undefined : 'column'), gap:'10px', width: '100%' }}>
                     {[
                       {key:'sobrecobro', label:'SOBRECOBRO', count:nSobre, amount:sumSobre,  color:'#EF4444', icon:'🔴', sub:'Cobro excede el presupuesto'},
                       {key:'subcobro',   label:'SUBCOBRO',   count:nSub,   amount:sumSub,    color:'#F59E0B', icon:'🟡', sub:'Saldo PPTO sin ejecutar'},
@@ -17562,8 +17961,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       )}
                     </div>
-                    <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
-                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
+                    <div className="cc-dash-table-wrap" style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', minWidth: dashMobile ? 720 : 960 }}>
                         <thead style={{ position:'sticky', top:0, zIndex:2 }}>
                           <tr style={{ background:t.bg }}>
                             {COLS.map(col => (
@@ -17655,7 +18054,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         <button key={k} onClick={()=>{setLiqNivel(k);setLiqSeleccion(null)}} style={{ background:liqNivel===k?t.primary:'transparent', color:liqNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>{l}</button>
                       ))}
                     </div>
-                    <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none' }}>
+                    <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} className={dashMobile ? 'cc-dash-touch-select' : undefined} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none', ...dashTouchSelect }}>
                       <option value="todos">🔵 Todas las categorías</option>
                       <option value="SUPERCOBRO">🔴 Supercobro — excede +$20M</option>
                       <option value="DEVOLUCION">🟡 Por Devolución — excede hasta $20M</option>
@@ -17671,8 +18070,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 </div>
 
                 {/* Mapa + KPI chips */}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:'14px', marginBottom:'14px', alignItems:'start' }}>
-                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
+                <div style={{
+                  display: dashDesktop ? 'grid' : 'flex',
+                  flexDirection: 'column',
+                  gridTemplateColumns: dashDesktop ? '1fr 320px' : undefined,
+                  gap:'14px',
+                  marginBottom:'14px',
+                  alignItems:'start',
+                }}>
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow, width:'100%', minWidth:0 }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
                       <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>🗺️ Plano — Cobro vs Recalculado</div>
                       {liqSeleccion ? (
@@ -17684,12 +18090,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       ) : <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
                     </div>
-                    <MiniMapaSemaforo t={t} colores={liqMapaColores} contratoId={contratoIdDash} token={getToken()} height={260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
+                    <MiniMapaSemaforo t={t} colores={liqMapaColores} contratoId={contratoIdDash} token={getToken()} height={dashMobile ? 220 : 260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
                     <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
                     </div>
                   </div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                  <div className={dashTablet && !dashMobile ? 'cc-dash-kpi-chips-row' : undefined} style={{ display: dashDesktop ? 'flex' : (dashTablet ? undefined : 'flex'), flexDirection: dashDesktop ? 'column' : (dashTablet ? undefined : 'column'), gap:'10px', width:'100%' }}>
                     {[
                       {key:'SUPERCOBRO', label:'SUPERCOBRO',    count:nSuper,  amount:sumSuper,  color:'#EF4444', icon:'🔴', sub:'Cobro excede recalc en más de $20M'},
                       {key:'DEVOLUCION', label:'POR DEVOLUCIÓN',count:nDev,    amount:sumDev,    color:'#F59E0B', icon:'🟡', sub:'Excede recalc hasta $20M'},
@@ -17749,8 +18155,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       )}
                     </div>
-                    <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
-                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
+                    <div className="cc-dash-table-wrap" style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', minWidth: dashMobile ? 720 : 960 }}>
                         <thead style={{ position:'sticky', top:0, zIndex:2 }}>
                           <tr style={{ background:t.bg }}>
                             {LIQ_COLS.map(col => (
@@ -17803,7 +18209,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             })()}
             </>
             )}
-          </>
+          </div>
         })()}
 
 {/* ── Popup PK_ID Liquidación ── */}
@@ -17832,7 +18238,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
                 return (
                   <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
+                    <div style={{ display:'grid', gridTemplateColumns: dashMobile ? '1fr' : '1fr 1fr', gap:'16px' }}>
                       <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
                         <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}` }}>📋 Recalculado ({ppto?.length||0} registros)</div>
                         {ppto?.length > 0 ? (

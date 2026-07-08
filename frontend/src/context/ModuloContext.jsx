@@ -26,7 +26,7 @@ export function ModuloProvider({ children }) {
 
   const setModuloRefresh = useCallback((meta) => {
     if (!meta || typeof meta.fn !== 'function') {
-      setModuloRefreshState(null)
+      setModuloRefreshState((prev) => (prev === null ? prev : null))
       return
     }
     setModuloRefreshState({

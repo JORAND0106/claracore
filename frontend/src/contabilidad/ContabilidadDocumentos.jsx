@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE } from '../apiBase'
 import { contabGet, contabSend } from './contabilidadApi'
-import { compressImageForSoporte } from './contabilidadImageCompress'
+import { prepareSoporteConPeso } from './contabilidadImageCompress'
 import SoportePreviewModal from './SoportePreviewModal'
-import { DOC_CATEGORIAS, docCategoriaLabel, fmtBytes, fmtFecha, vencePronto, vencido } from './contabilidadUi'
+import { DOC_CATEGORIAS, docCategoriaLabel, fmtBytes, fmtFecha, labelPesoSoporte, vencePronto, vencido } from './contabilidadUi'
 
 const EMPTY_FORM = {
   categoria: 'tributario',
@@ -26,7 +26,10 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
   const [editId, setEditId] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [archivo, setArchivo] = useState(null)
+  const [archivoInfo, setArchivoInfo] = useState(null)
   const [archivoReemplazo, setArchivoReemplazo] = useState(null)
+  const [archivoReemplazoInfo, setArchivoReemplazoInfo] = useState(null)
+  const [preparandoArchivo, setPreparandoArchivo] = useState(false)
   const [docEditando, setDocEditando] = useState(null)
   const [alertas, setAlertas] = useState(null)
   const fileRef = useRef(null)
@@ -134,6 +137,7 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
   const abrirSubir = () => {
     setForm(EMPTY_FORM)
     setArchivo(null)
+    setArchivoInfo(null)
     if (fileRef.current) fileRef.current.value = ''
     setShowUpload(true)
     setShowEdit(false)
@@ -144,6 +148,7 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
     setEditId(doc.id)
     setDocEditando(doc)
     setArchivoReemplazo(null)
+    setArchivoReemplazoInfo(null)
     if (replaceFileRef.current) replaceFileRef.current.value = ''
     setForm({
       categoria: doc.categoria || 'otros',
@@ -162,17 +167,64 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
     setEditId(null)
     setDocEditando(null)
     setArchivo(null)
+    setArchivoInfo(null)
     setArchivoReemplazo(null)
+    setArchivoReemplazoInfo(null)
     if (fileRef.current) fileRef.current.value = ''
     if (replaceFileRef.current) replaceFileRef.current.value = ''
   }
 
-  const onArchivoChange = (e) => {
+  const onArchivoChange = async (e) => {
     const f = e.target.files?.[0]
-    setArchivo(f || null)
+    if (!f) {
+      setArchivo(null)
+      setArchivoInfo(null)
+      return
+    }
     if (f && !form.nombre.trim()) {
       const base = (f.name || '').replace(/\.[^.]+$/, '')
       setForm((prev) => ({ ...prev, nombre: base }))
+    }
+    setPreparandoArchivo(true)
+    try {
+      const prepared = await prepareSoporteConPeso(f)
+      setArchivo(prepared.file)
+      setArchivoInfo(prepared)
+    } catch {
+      setArchivo(f)
+      setArchivoInfo({
+        file: f,
+        originalBytes: f.size,
+        compressedBytes: f.size,
+        wasCompressed: false,
+      })
+    } finally {
+      setPreparandoArchivo(false)
+    }
+  }
+
+  const onArchivoReemplazoChange = async (e) => {
+    const f = e.target.files?.[0]
+    if (!f) {
+      setArchivoReemplazo(null)
+      setArchivoReemplazoInfo(null)
+      return
+    }
+    setPreparandoArchivo(true)
+    try {
+      const prepared = await prepareSoporteConPeso(f)
+      setArchivoReemplazo(prepared.file)
+      setArchivoReemplazoInfo(prepared)
+    } catch {
+      setArchivoReemplazo(f)
+      setArchivoReemplazoInfo({
+        file: f,
+        originalBytes: f.size,
+        compressedBytes: f.size,
+        wasCompressed: false,
+      })
+    } finally {
+      setPreparandoArchivo(false)
     }
   }
 
@@ -189,9 +241,8 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
     setBusy(true)
     setError('')
     try {
-      const compressed = await compressImageForSoporte(archivo)
       const fd = new FormData()
-      fd.append('archivo', compressed)
+      fd.append('archivo', archivo)
       fd.append('categoria', form.categoria)
       fd.append('nombre', form.nombre.trim())
       if (form.descripcion.trim()) fd.append('descripcion', form.descripcion.trim())
@@ -224,9 +275,8 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
         },
       })
       if (archivoReemplazo) {
-        const compressed = await compressImageForSoporte(archivoReemplazo)
         const fd = new FormData()
-        fd.append('archivo', compressed)
+        fd.append('archivo', archivoReemplazo)
         await contabSend(`/documentos/${editId}/archivo`, token, { method: 'PUT', formData: fd })
       }
       cerrarModales()
@@ -252,22 +302,23 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
     }
   }
 
+  const isNarrow = typeof window !== 'undefined' && window.innerWidth < 720
   const inputStyle = {
-    width: '100%', padding: '8px 10px', borderRadius: 8,
+    width: '100%', padding: isNarrow ? '12px 12px' : '8px 10px', borderRadius: 8,
     border: `1px solid ${t.border}`, background: t.bg, color: t.text,
-    fontSize: 'var(--cc-sm)', boxSizing: 'border-box',
+    fontSize: 'var(--cc-sm)', boxSizing: 'border-box', minHeight: isNarrow ? 44 : undefined,
   }
 
   const btnPrimary = {
     background: t.primary, color: '#fff', border: 'none', borderRadius: 8,
-    padding: '8px 14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
-    fontSize: 'var(--cc-sm)', opacity: busy ? 0.7 : 1,
+    padding: isNarrow ? '12px 16px' : '8px 14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
+    fontSize: 'var(--cc-sm)', opacity: busy ? 0.7 : 1, minHeight: isNarrow ? 44 : undefined,
   }
 
   const btnGhost = {
     background: 'transparent', color: t.text, border: `1px solid ${t.border}`,
-    borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer',
-    fontSize: 'var(--cc-sm)',
+    borderRadius: 8, padding: isNarrow ? '10px 12px' : '8px 14px', fontWeight: 600, cursor: 'pointer',
+    fontSize: 'var(--cc-sm)', minHeight: isNarrow ? 40 : undefined,
   }
 
   const ModalForm = ({ title, onSubmit, children, onClose }) => (
@@ -406,9 +457,12 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
                     </td>
                     <td style={{ padding: '10px 8px', color: t.textMuted }}>{fmtBytes(doc.tamano_bytes)}</td>
                     <td style={{ padding: '10px 8px' }}>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                         <button type="button" title="Vista previa" onClick={() => abrirPreview(doc)} style={btnGhost}>
                           👁
+                          <span style={{ marginLeft: 4, fontWeight: 500, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                            {fmtBytes(doc.tamano_bytes)}
+                          </span>
                         </button>
                         <button type="button" title="Descargar" onClick={() => descargarDoc(doc)} style={btnGhost}>
                           ⬇
@@ -472,7 +526,7 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
               maxLength={4000}
             />
           </Field>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 10 }}>
             <Field label="Fecha del documento">
               <input
                 type="date"
@@ -494,14 +548,20 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,image/jpeg,image/png,image/webp"
+              accept=".pdf,image/jpeg,image/png,image/webp,image/*"
+              capture="environment"
               onChange={onArchivoChange}
               style={inputStyle}
               required
             />
-            {archivo && (
+            {preparandoArchivo && !archivoInfo && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
-                {archivo.name} · {fmtBytes(archivo.size)}
+                Preparando archivo…
+              </div>
+            )}
+            {archivo && archivoInfo && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.primary, fontWeight: 600, marginTop: 4 }}>
+                {archivo.name} · {labelPesoSoporte(archivoInfo)}
               </div>
             )}
           </Field>
@@ -539,7 +599,7 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
               maxLength={4000}
             />
           </Field>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 10 }}>
             <Field label="Fecha del documento">
               <input
                 type="date"
@@ -566,13 +626,19 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
             <input
               ref={replaceFileRef}
               type="file"
-              accept=".pdf,image/jpeg,image/png,image/webp"
-              onChange={(e) => setArchivoReemplazo(e.target.files?.[0] || null)}
+              accept=".pdf,image/jpeg,image/png,image/webp,image/*"
+              capture="environment"
+              onChange={onArchivoReemplazoChange}
               style={inputStyle}
             />
-            {archivoReemplazo && (
+            {preparandoArchivo && !archivoReemplazoInfo && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
-                Nuevo: {archivoReemplazo.name} · {fmtBytes(archivoReemplazo.size)}
+                Preparando archivo…
+              </div>
+            )}
+            {archivoReemplazo && archivoReemplazoInfo && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.primary, fontWeight: 600, marginTop: 4 }}>
+                Nuevo: {archivoReemplazo.name} · {labelPesoSoporte(archivoReemplazoInfo)}
               </div>
             )}
           </Field>

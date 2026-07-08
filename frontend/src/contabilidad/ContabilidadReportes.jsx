@@ -149,9 +149,21 @@ export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
     }
   }
 
-  const inp = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', color: t.text, fontSize: 'var(--cc-sm)' }
-  const btn = { background: t.primary, color: '#fff', border: 'none', borderRadius: 10, padding: '8px 14px', fontWeight: 700, cursor: 'pointer', fontSize: 'var(--cc-sm)' }
-  const card = { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }
+  const isNarrow = typeof window !== 'undefined' && window.innerWidth < 720
+  const chartH = isNarrow ? 220 : 280
+  const chartH2 = isNarrow ? 220 : 260
+  const chartH3 = isNarrow ? 240 : 300
+  const inp = {
+    background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8,
+    padding: isNarrow ? '12px 10px' : '8px 10px', color: t.text, fontSize: 'var(--cc-sm)',
+    minHeight: isNarrow ? 44 : undefined,
+  }
+  const btn = {
+    background: t.primary, color: '#fff', border: 'none', borderRadius: 10,
+    padding: isNarrow ? '12px 14px' : '8px 14px', fontWeight: 700, cursor: 'pointer',
+    fontSize: 'var(--cc-sm)', minHeight: isNarrow ? 44 : undefined,
+  }
+  const card = { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: isNarrow ? 12 : 16, marginBottom: 16 }
 
   if (loading) return <div style={{ color: t.textMuted }}>Cargando reportes…</div>
 
@@ -178,11 +190,11 @@ export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
 
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 12, color: t.text }}>Evolución mensual — Ingresos vs Egresos</div>
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <BarChart data={evo}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
-            <XAxis dataKey="periodo_label" tick={{ fill: t.textMuted, fontSize: 11 }} />
-            <YAxis tick={{ fill: t.textMuted, fontSize: 11 }} />
+            <XAxis dataKey="periodo_label" tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 11 }} />
+            <YAxis tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 11 }} width={isNarrow ? 40 : 60} />
             <Tooltip contentStyle={{ background: t.bgCard, border: `1px solid ${t.border}` }} />
             <Legend />
             <Bar dataKey="ingresos_brutos" name="Ingresos" fill="#10B981" />
@@ -191,12 +203,12 @@ export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
         </ResponsiveContainer>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${isNarrow ? 240 : 320}px, 1fr))`, gap: 16 }}>
         <div style={card}>
           <div style={{ fontWeight: 700, marginBottom: 12, color: t.text }}>Ingresos por centro de costo</div>
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={chartH2}>
             <PieChart>
-              <Pie data={centros} dataKey="ingresos_brutos" nameKey="label" cx="50%" cy="50%" outerRadius={90} label>
+              <Pie data={centros} dataKey="ingresos_brutos" nameKey="label" cx="50%" cy="50%" outerRadius={isNarrow ? 70 : 90} label={!isNarrow}>
                 {centros.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Pie>
               <Tooltip contentStyle={{ background: t.bgCard, border: `1px solid ${t.border}` }} />
@@ -206,11 +218,11 @@ export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
 
         <div style={card}>
           <div style={{ fontWeight: 700, marginBottom: 12, color: t.text }}>Deducciones tributarias por período</div>
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={chartH2}>
             <BarChart data={ded}>
               <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
-              <XAxis dataKey="periodo" tick={{ fill: t.textMuted, fontSize: 10 }} />
-              <YAxis tick={{ fill: t.textMuted, fontSize: 11 }} />
+              <XAxis dataKey="periodo" tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 10 }} />
+              <YAxis tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 11 }} width={isNarrow ? 40 : 60} />
               <Tooltip contentStyle={{ background: t.bgCard, border: `1px solid ${t.border}` }} />
               <Legend />
               <Bar dataKey="retencion_fuente" name="Retención" stackId="a" fill="#EF4444" />
@@ -223,11 +235,11 @@ export default function ContabilidadReportes({ t, token, onIrDocumentos }) {
 
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 12, color: t.text }}>Saldo acumulado — Cuentas especiales</div>
-        <ResponsiveContainer width="100%" height={300}>
+        <ResponsiveContainer width="100%" height={chartH3}>
           <LineChart data={cuentas}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
-            <XAxis dataKey="periodo" tick={{ fill: t.textMuted, fontSize: 10 }} />
-            <YAxis tick={{ fill: t.textMuted, fontSize: 11 }} />
+            <XAxis dataKey="periodo" tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 10 }} />
+            <YAxis tick={{ fill: t.textMuted, fontSize: isNarrow ? 9 : 11 }} width={isNarrow ? 40 : 60} />
             <Tooltip contentStyle={{ background: t.bgCard, border: `1px solid ${t.border}` }} />
             <Legend />
             <Line type="monotone" dataKey="operativa" name="Operativa" stroke="#0077B6" strokeWidth={2} dot={false} />

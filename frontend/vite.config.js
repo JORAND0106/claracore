@@ -5,8 +5,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Evita ERR_CONNECTION_REFUSED al abrir 127.0.0.1 mientras Vite solo escucha en "localhost" (IPv6).
-    host: '127.0.0.1',
+    // Escucha en todas las interfaces para acceso desde otros dispositivos en la misma WiFi.
+    host: '0.0.0.0',
     port: 5173,
     strictPort: false,
     proxy: {
@@ -16,7 +16,7 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/_appinsights/, ''),
       },
       // Todas las rutas del backend (mismo origen en dev → login, SICOE, presupuesto, etc.)
-      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|subcontratistas|presupuesto|cobro|exportar|cad-queue|claracad|cad/ejes|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra|guias|sst|ensayos|nube|prog-obra|avi|topografia|filtros-plantillas|presupuesto-versiones|test-telegram)': {
+      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|subcontratistas|presupuesto|cobro|contabilidad|exportar|cad-queue|claracad|cad/ejes|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra|guias|sst|ensayos|nube|prog-obra|avi|topografia|filtros-plantillas|presupuesto-versiones|test-telegram)': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         // Lote auditoría + IA: una sola petición puede durar muchos minutos; el proxy por defecto corta y el navegador muestra "Failed to fetch".

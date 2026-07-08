@@ -426,7 +426,17 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
     }
 
     if (actaIdFiltro != null && actaIdFiltro > 0) {
-      regs = regs.filter(r => Number(r.acta_rpo_id) === actaIdFiltro)
+      const repActaById = {}
+      const todosRep = await byContrato(db.so_reportes, cid)
+      todosRep.forEach((rep) => {
+        if (rep?.id != null) repActaById[String(rep.id)] = rep.acta_rpo_id
+      })
+      regs = regs.filter((r) => {
+        const lineActa = r.acta_rpo_id
+        if (lineActa != null && lineActa !== '') return Number(lineActa) === actaIdFiltro
+        const repActa = repActaById[String(r.reporte_id)]
+        return repActa != null && Number(repActa) === actaIdFiltro
+      })
     }
     if (esEstadoReversion) {
       regs = regs.filter(

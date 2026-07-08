@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { contabGet } from './contabilidadApi'
 import { fmtCOP } from './contabilidadUi'
+import { useContabilidadViewport } from './useContabilidadViewport'
 
 export default function ContabilidadCuentas({ t, token }) {
+  const { isMobile } = useContabilidadViewport()
   const [data, setData] = useState(null)
   const [movs, setMovs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -39,18 +41,30 @@ export default function ContabilidadCuentas({ t, token }) {
       {error && <div style={{ color: '#EF4444', marginBottom: 12 }}>{error}</div>}
       {loading ? <div style={{ color: t.textMuted }}>Cargando…</div> : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, marginBottom: 20 }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 140 : 220}px, 1fr))`,
+            gap: 14,
+            marginBottom: 20,
+          }}>
             {cards.map((c) => (
-              <div key={c.key} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 16, borderTop: `4px solid ${c.color}` }}>
+              <div key={c.key} style={{
+                background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12,
+                padding: isMobile ? 12 : 16, borderTop: `4px solid ${c.color}`,
+              }}>
                 <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4 }}>{c.label}</div>
-                <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>{fmtCOP(c.value)}</div>
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 6 }}>{c.desc}</div>
+                <div style={{ fontSize: isMobile ? 'var(--cc-md)' : 'var(--cc-lg)', fontWeight: 800, color: t.text }}>
+                  {fmtCOP(c.value)}
+                </div>
+                {!isMobile && (
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 6 }}>{c.desc}</div>
+                )}
               </div>
             ))}
           </div>
           <div style={{ fontWeight: 700, color: t.text, marginBottom: 8 }}>Últimos movimientos</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+          <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: isMobile ? 480 : undefined }}>
               <thead>
                 <tr style={{ background: t.primary + '18' }}>
                   {['Fecha', 'Cuenta', 'Subcuenta', 'Monto', 'Concepto'].map((h) => (

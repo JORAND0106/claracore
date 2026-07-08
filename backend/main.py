@@ -3059,6 +3059,22 @@ def _get_prereq_nivel_activo(campo_nivel: str, contrato_id: int) -> Optional[tup
     return (campo_previo, "Aprobado")
 
 
+def _sicoe_matriz_prereqs_activos_para_campo(campo_nivel: str, contrato_id: int) -> List[tuple]:
+    """(campo, 'Aprobado') por cada nivel activo estrictamente menor (misma regla que matriz dashboard)."""
+    na = sorted(_get_niveles_activos_contrato(contrato_id))
+    n = _sicoe_nivel_num_desde_campo(campo_nivel)
+    if n is None:
+        return []
+    out: List[tuple] = []
+    for prev_n in na:
+        if prev_n >= n:
+            break
+        prev_f = NIVEL_VALIDACION_NUM_A_CAMPO.get(prev_n)
+        if prev_f:
+            out.append((prev_f, "Aprobado"))
+    return out
+
+
 def _so_registros_q_y_capas_validacion(
     q,
     capas: List[dict],
@@ -3079,15 +3095,17 @@ def _so_registros_q_y_capas_validacion(
         if not evp:
             continue
         alinea_dash = _sicoe_capa_alinea_dashboard_kpi(capa, contrato_id)
-        if contrato_id is not None:
-            try:
-                prereq = _get_prereq_nivel_activo(fld, int(contrato_id))
-            except (TypeError, ValueError):
-                prereq = None
-        else:
-            prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
-        if prereq and not alinea_dash:
-            q = q.eq(prereq[0], prereq[1])
+        if not alinea_dash:
+            if contrato_id is not None:
+                try:
+                    for prereq in _sicoe_matriz_prereqs_activos_para_campo(fld, int(contrato_id)):
+                        q = q.eq(prereq[0], prereq[1])
+                except (TypeError, ValueError):
+                    pass
+            else:
+                prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
+                if prereq:
+                    q = q.eq(prereq[0], prereq[1])
         if evp in ("No Revisado", "No Revisados"):
             q = _so_reg_or_pendiente_nivel(q, fld)
             # N1: misma lógica que "cola" N2/N3: sin ítem asignado no entra a revisión de inspector
@@ -3683,7 +3701,9 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         aids_eff = list(acta_rpo_ids) if acta_rpo_ids else []
         if not aids_eff and acta_rpo_id is not None:
             aids_eff = [int(acta_rpo_id)]
-        if aids_eff:
+        if aids_eff and contrato_id is not None:
+            q = _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), aids_eff)
+        elif aids_eff:
             q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_eff)
     if q_observacion and str(q_observacion).strip():
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
@@ -3782,6 +3802,16 @@ def _sicoe_collect_reporte_ids_misma_linea(
     aids_eff: List[int] = list(acta_rpo_ids) if acta_rpo_ids else []
     if not aids_eff and acta_rpo_id is not None:
         aids_eff = [int(acta_rpo_id)]
+    # Acta vía cabecera del reporte: evita perder líneas con acta_rpo_id NULL en so_registros.
+    if aids_eff and reporte_ids_restrict is None:
+        try:
+            rep_acta_scope = _sicoe_reporte_ids_por_acta_ids(int(contrato_id), aids_eff)
+        except (TypeError, ValueError):
+            rep_acta_scope = []
+        if not rep_acta_scope:
+            return set()
+        reporte_ids_restrict = rep_acta_scope
+        aids_eff = []
     _reg_fu: Dict[str, Any] = {}
     if filtro_fecha_usuario_registro:
         _reg_fu = {
@@ -3850,14 +3880,12 @@ def _sicoe_collect_reporte_ids_misma_linea(
     _postfiltrar_capas_norm = bool(
         capas_ok and capas_v and not _estado_filtro_omite_validacion_por_cargo(estado)
     )
-    # Solo trae las columnas nivelX_estado que el filtro de validación realmente usa
-    # (no las 6): evita inflar el payload del barrido de líneas en filtros amplios.
-    _capa_flds_postfiltro = sorted(
-        {(c.get("campo") or _capa_campo_validacion(c)) for c in (capas_v or [])} - {None}
-    ) if _postfiltrar_capas_norm else []
+    # El postfiltro usa _sicoe_registro_cumple_capa_matriz: necesita item_numero + todos los
+    # nivelX_estado (prerrequisitos). Si solo se trae la columna de la capa filtrada, el
+    # postfiltro descarta TODAS las filas → panel con datos y grilla vacía.
     _select_ids_cols = (
-        "reporte_id," + ",".join(_capa_flds_postfiltro)
-        if _capa_flds_postfiltro
+        f"reporte_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO}"
+        if _postfiltrar_capas_norm
         else "reporte_id"
     )
 
@@ -4064,16 +4092,21 @@ def _filtrar_registros_validacion_por_campo(
     reporte_row: Optional[dict] = None,
     contrato_id: Optional[int] = None,
 ) -> list:
-    """Filtra registros por campo nivelX_estado y estado UI (coherente con búsqueda Sicoe)."""
+    """Filtra registros por campo nivelX_estado y estado UI (coherente con matriz Validación por rol)."""
     if not regs or not fld or not (estado_validacion or "").strip():
         return regs
-    ev = estado_validacion.strip()
-    alinea_dash = False
+    capa = {"campo": fld, "estado": estado_validacion.strip()}
     if contrato_id is not None:
         try:
-            alinea_dash = fld == _get_nivel_maximo_contrato(int(contrato_id)) and ev == "Aprobado"
+            cid = int(contrato_id)
         except (TypeError, ValueError):
-            alinea_dash = False
+            cid = None
+    else:
+        cid = None
+    if cid is not None:
+        return [r for r in regs if _sicoe_registro_cumple_capa_matriz(r, capa, cid)]
+    ev = estado_validacion.strip()
+    alinea_dash = False
     prereq = None if alinea_dash else CARGO_NIVEL_PRERREQUISITO.get(fld)
     out: List[dict] = []
     for reg in regs:
@@ -4087,14 +4120,10 @@ def _filtrar_registros_validacion_por_campo(
             continue
         cur = reg.get(fld)
         if ev in ("No Revisado", "No Revisados"):
-            if cur is None or str(cur).strip() in ("", "No Revisado"):
+            if _matriz_validacion_norm_estado(cur) == "No Revisado":
                 out.append(reg)
-        elif alinea_dash:
-            if _matriz_validacion_norm_estado(cur) == ev:
-                out.append(reg)
-        else:
-            if _matriz_validacion_norm_estado(cur) == ev or cur == ev:
-                out.append(reg)
+        elif _matriz_validacion_norm_estado(cur) == ev or cur == ev:
+            out.append(reg)
     return out
 
 
@@ -4183,6 +4212,61 @@ def _apply_acta_rpo_ids_to_so_registros_q(q, acta_rpo_ids: List[int]):
     if len(acta_rpo_ids) == 1:
         return q.eq("acta_rpo_id", acta_rpo_ids[0])
     return q.in_("acta_rpo_id", acta_rpo_ids)
+
+
+def _sicoe_reporte_ids_por_acta_ids(contrato_id: int, acta_rpo_ids: List[int]) -> List[int]:
+    """IDs de so_reportes con acta_rpo_id en el conjunto (alcance acta vía cabecera del reporte)."""
+    if not acta_rpo_ids:
+        return []
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return []
+    aids = sorted({int(x) for x in acta_rpo_ids})
+    out: List[int] = []
+    seen: Set[int] = set()
+    for chunk in _sicoe_chunks_int(aids, 80):
+        ac = list(chunk)
+
+        def _q(c=ac):
+            return (
+                supabase.table("so_reportes")
+                .select("id")
+                .eq("contrato_id", cid)
+                .in_("acta_rpo_id", c)
+                .limit(50000)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            rid = row.get("id")
+            if rid is None:
+                continue
+            try:
+                ri = int(rid)
+            except (TypeError, ValueError):
+                continue
+            if ri not in seen:
+                seen.add(ri)
+                out.append(ri)
+    return out
+
+
+def _sicoe_registros_q_filtrar_actas_scope(q, contrato_id: int, acta_rpo_ids: List[int]):
+    """
+    Filtra líneas por acta usando cabecera del reporte (so_reportes.acta_rpo_id).
+    Muchos contratos no replican acta_rpo_id en cada so_registros; filtrar solo la columna
+    de línea deja la cola de validación vacía aunque haya cantidades pendientes.
+    """
+    if not acta_rpo_ids:
+        return q
+    rep_ids = _sicoe_reporte_ids_por_acta_ids(contrato_id, acta_rpo_ids)
+    if not rep_ids:
+        return q.eq("id", -1)
+    if len(rep_ids) == 1:
+        return q.eq("reporte_id", rep_ids[0])
+    return q.in_("reporte_id", rep_ids)
 
 
 def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
@@ -13573,14 +13657,19 @@ def buscar_reportes_obra(
     )
 
     acta_id_para_lineas = acta_id_filtro
+    # Solo «pendiente ítem» hereda acta vigente de la matriz. Filtro por capas de validación
+    # (p. ej. cola N2 «No Revisado» al entrar) debe abarcar todo el contrato salvo que el
+    # usuario elija acta/semana en el modal.
     if (
-        pendiente_item
-        and not consulta_directa_identificador
+        not consulta_directa_identificador
         and acta_id_para_lineas is None
         and semana_id_filtro is None
         and not acta_ids_panel_buscar
+        and pendiente_item
     ):
-        acta_id_para_lineas = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+        injected = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+        if injected is not None:
+            acta_id_para_lineas = injected
 
     aids_linea_buscar: List[int] = list(acta_ids_panel_buscar)
     if not aids_linea_buscar and acta_id_para_lineas is not None:
@@ -14859,6 +14948,23 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
     ):
         acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
 
+    capas_exp_export = _parse_validacion_capas_param(
+        body.validacion_capas, body.cargo_id, body.estado_validacion
+    )
+    if consulta_directa_identificador:
+        capas_exp_export = []
+    if (
+        not consulta_directa_identificador
+        and acta_id_filtro is None
+        and semana_id_filtro is None
+        and not getattr(body, "actas_filtro", None)
+        and body.acta_rpo is None
+        and capas_exp_export
+        and not _estado_filtro_omite_validacion_por_cargo(body.estado)
+        and body.pendiente_item
+    ):
+        acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+
     necesita_reporte_filter = any(
         v is not None for v in [body.numero_reporte, body.pk_id, body.estado]
     )
@@ -15225,6 +15331,23 @@ def exportar_registros_sicoe(
     ):
         acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
 
+    capas_exp_export2 = _parse_validacion_capas_param(
+        body.validacion_capas, body.cargo_id, body.estado_validacion
+    )
+    if consulta_directa_identificador:
+        capas_exp_export2 = []
+    if (
+        not consulta_directa_identificador
+        and acta_id_filtro is None
+        and semana_id_filtro is None
+        and not getattr(body, "actas_filtro", None)
+        and body.acta_rpo is None
+        and capas_exp_export2
+        and not _estado_filtro_omite_validacion_por_cargo(body.estado)
+        and body.pendiente_item
+    ):
+        acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+
     # 2) Filtros que viven en so_reportes (necesitan restricción por reporte_id)
     # abs_inicio/abs_final se aplican por solape en líneas (paso aparte, como buscar/analisis)
     necesita_reporte_filter = any(
@@ -15472,12 +15595,225 @@ def exportar_registros_sicoe(
     return registros
 
 
-def _sicoe_registro_cumple_estado_capa_ui(reg: dict, fld: str, ev: str, contrato_id: int) -> bool:
-    """Misma normalización que matriz / dashboard (_matriz_validacion_norm_estado)."""
-    cur = reg.get(fld)
+def _sicoe_filtro_validacion_requiere_acta_vigente_matriz(
+    capas: List[dict],
+    estado: Optional[str],
+    *,
+    acta_id: Optional[int] = None,
+    acta_ids_panel: Optional[List[int]] = None,
+    semana_id: Optional[int] = None,
+    consulta_directa_identificador: bool = False,
+    pendiente_item: bool = False,
+) -> bool:
+    """True si debe aplicarse acta RPO vigente (mismo default que dashboard-matriz-validacion)."""
+    if consulta_directa_identificador or pendiente_item:
+        return False
+    if acta_id is not None or acta_ids_panel:
+        return False
+    if semana_id is not None:
+        return False
+    if not capas or _estado_filtro_omite_validacion_por_cargo(estado):
+        return False
+    return True
+
+
+def _sicoe_inyectar_acta_vigente_matriz(
+    contrato_id: int,
+    capas: List[dict],
+    estado: Optional[str],
+    *,
+    acta_id: Optional[int],
+    acta_ids_panel: Optional[List[int]],
+    semana_id: Optional[int],
+    consulta_directa_identificador: bool = False,
+    pendiente_item: bool = False,
+) -> Tuple[Optional[int], bool]:
+    if not _sicoe_filtro_validacion_requiere_acta_vigente_matriz(
+        capas,
+        estado,
+        acta_id=acta_id,
+        acta_ids_panel=acta_ids_panel,
+        semana_id=semana_id,
+        consulta_directa_identificador=consulta_directa_identificador,
+        pendiente_item=pendiente_item,
+    ):
+        return acta_id, False
+    aid = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+    if aid is None:
+        return acta_id, False
+    return aid, True
+
+
+def _sicoe_usa_costo_matriz_validacion(capas: List[dict], estado: Optional[str]) -> bool:
+    return bool(capas) and not _estado_filtro_omite_validacion_por_cargo(estado)
+
+
+def _sicoe_matriz_item_key(reg: dict) -> Tuple[str, str, str]:
+    bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
+    return (
+        bloque,
+        _dash_norm_capitulo_key_py(reg.get("capitulo")),
+        _dash_norm_item_key_py(reg.get("item_numero")) or "",
+    )
+
+
+def _sicoe_build_item_vu_max_map(regs: list) -> Dict[Tuple[str, str, str], float]:
+    m: Dict[Tuple[str, str, str], float] = {}
+    for reg in regs:
+        if not (reg.get("item_numero") or "").strip():
+            continue
+        vu = float(reg.get("vlr_unitario") or 0)
+        ikey = _sicoe_matriz_item_key(reg)
+        if vu > m.get(ikey, 0):
+            m[ikey] = vu
+    return m
+
+
+def _sicoe_build_item_vu_matriz_scope(
+    contrato_id: int,
+    acta_id_filtro: Optional[int] = None,
+) -> Dict[Tuple[str, str, str], float]:
+    """
+    V.U. máximo por ítem con el mismo alcance que _dashboard_matriz_validacion_por_niveles:
+    líneas del acta filtrado + líneas de otras actas del contrato (solo para resolver V.U.).
+    """
+    item_vu: Dict[Tuple[str, str, str], float] = {}
+
+    def _acc_vu(regs: list) -> None:
+        for reg in regs:
+            if not (reg.get("item_numero") or "").strip():
+                continue
+            vu = float(reg.get("vlr_unitario") or 0)
+            ikey = _sicoe_matriz_item_key(reg)
+            if vu > item_vu.get(ikey, 0):
+                item_vu[ikey] = vu
+
+    off = 0
+    while True:
+        def _batch(o=off):
+            q = supabase.table("so_registros").select(
+                "vlr_unitario,capitulo,acta_rpo_id,item_numero"
+            ).eq("contrato_id", contrato_id)
+            if acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
+            return q.order("id").range(o, o + 999).execute().data
+
+        batch = supabase_execute(_batch) or []
+        _acc_vu(batch)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    if acta_id_filtro is not None:
+        off = 0
+        while True:
+            def _bo(o=off):
+                q = supabase.table("so_registros").select(
+                    "vlr_unitario,capitulo,acta_rpo_id,item_numero"
+                ).eq("contrato_id", contrato_id)
+                return q.order("id").range(o, o + 999).execute().data
+
+            batch = supabase_execute(_bo) or []
+            for reg in batch:
+                aid = reg.get("acta_rpo_id")
+                if aid is not None and aid == acta_id_filtro:
+                    continue
+                _acc_vu([reg])
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+    return item_vu
+
+
+def _sicoe_costo_regs_estilo_matriz(
+    regs: list,
+    vu_map: Dict[Tuple[str, str, str], float],
+) -> float:
+    """Σ por ítem: round(net_cant × V.U._matriz, 0) — coherente con Validación por rol."""
+    item_qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    for reg in regs:
+        if not (reg.get("item_numero") or "").strip():
+            continue
+        ikey = _sicoe_matriz_item_key(reg)
+        item_qty[ikey] += float(reg.get("cantidad_total") or 0)
+    return round(
+        sum(
+            costo_agregado_cant_vu(qty, vu_map.get(ikey, 0))
+            for ikey, qty in item_qty.items()
+        ),
+        0,
+    )
+
+
+def _sicoe_reg_costo_directo_matriz(reg: dict, vu_map: Dict[Tuple[str, str, str], float]) -> float:
+    if not (reg.get("item_numero") or "").strip():
+        return float(reg.get("costo_directo") or 0)
+    cq = float(reg.get("cantidad_total") or 0)
+    ikey = _sicoe_matriz_item_key(reg)
+    vu = vu_map.get(ikey, float(reg.get("vlr_unitario") or 0))
+    return costo_agregado_cant_vu(cq, vu)
+
+
+def _sicoe_matriz_valor_celda(payload: dict, fila: str, nivel: int, bloque: str = "obra") -> float:
+    key = (
+        "obra_ejecutada_directo_sin_aiu"
+        if bloque == "obra"
+        else "ensayos_sondeos_directo_sin_iva"
+    )
+    blk = payload.get(key) if isinstance(payload, dict) else None
+    row = (blk or {}).get(fila) if isinstance(blk, dict) else None
+    col = _matriz_col_nivel(nivel)
+    if not isinstance(row, dict):
+        return 0.0
+    return float(row.get(col) or 0)
+
+
+def _sicoe_registro_cumple_capa_matriz(reg: dict, capa: dict, contrato_id: int) -> bool:
+    """
+    Misma regla que dashboard Validación por rol / _dashboard_matriz_validacion_por_niveles:
+    prerrequisitos dinámicos por niveles activos del contrato y normalización de estado.
+    """
+    fld = capa.get("campo") or _capa_campo_validacion(capa)
+    ev = (capa.get("estado") or "").strip()
+    if not fld or not ev:
+        return False
+
+    alinea_dash = False
+    try:
+        alinea_dash = fld == _get_nivel_maximo_contrato(int(contrato_id)) and ev == "Aprobado"
+    except (TypeError, ValueError):
+        pass
+
+    if _es_validacion_avanzada(fld) and not alinea_dash:
+        if not (reg.get("item_numero") or "").strip():
+            return False
+
+    if fld == "nivel1_estado" and ev in ("No Revisado", "No Revisados"):
+        if not (reg.get("item_numero") or "").strip():
+            return False
+
+    na = _get_niveles_activos_contrato(contrato_id)
+    n = _sicoe_nivel_num_desde_campo(fld)
+    n_min = min(na) if na else 1
+
+    if n is not None and n > n_min and not alinea_dash:
+        if not _matriz_prereqs_aprobados(reg, na, n):
+            return False
+
+    estado_en_nivel = (
+        _matriz_estado_en_nivel(reg, n)
+        if n is not None
+        else _matriz_validacion_norm_estado(reg.get(fld))
+    )
+
     if ev in ("No Revisado", "No Revisados"):
-        return cur is None or str(cur).strip() in ("", "No Revisado")
-    return _matriz_validacion_norm_estado(cur) == ev
+        return estado_en_nivel == "No Revisado"
+    return estado_en_nivel == ev
+
+
+def _sicoe_registro_cumple_estado_capa_ui(reg: dict, fld: str, ev: str, contrato_id: int) -> bool:
+    return _sicoe_registro_cumple_capa_matriz(reg, {"campo": fld, "estado": ev}, contrato_id)
 
 
 def _sicoe_registros_postfiltro_capas_norm(regs: list, capas: List[dict], contrato_id: int) -> list:
@@ -15497,13 +15833,26 @@ def _sicoe_registros_postfiltro_capas_norm(regs: list, capas: List[dict], contra
     return out
 
 
-def _sicoe_analisis_verificacion_totales(regs: list, contrato_id: int, capas: List[dict]) -> dict:
-    """Suma línea a línea + comparación con KPI dashboard cuando aplica."""
-    suma = round(sum(float(r.get("costo_directo") or 0) for r in regs), 0)
+def _sicoe_analisis_verificacion_totales(
+    regs: list,
+    contrato_id: int,
+    capas: List[dict],
+    *,
+    acta_id_filtro: Optional[int] = None,
+    usa_costo_matriz: bool = False,
+    vu_map_matriz: Optional[Dict[Tuple[str, str, str], float]] = None,
+) -> dict:
+    """Suma línea a línea + comparación con matriz Validación por rol cuando aplica."""
+    if usa_costo_matriz and regs and vu_map_matriz is not None:
+        suma = _sicoe_costo_regs_estilo_matriz(regs, vu_map_matriz)
+        metodo = "net_cant_x_vu_matriz_por_item"
+    else:
+        suma = round(sum(float(r.get("costo_directo") or 0) for r in regs), 0)
+        metodo = "suma_linea_a_linea_por_id_unico"
     ver: dict = {
         "suma_costo_directo_registros": suma,
         "conteo_registros": len(regs),
-        "metodo": "suma_linea_a_linea_por_id_unico",
+        "metodo": metodo,
     }
     if len(capas) == 1 and _sicoe_capa_alinea_dashboard_kpi(capas[0], contrato_id):
         try:
@@ -15517,6 +15866,35 @@ def _sicoe_analisis_verificacion_totales(regs: list, contrato_id: int, capas: Li
                 ver["coherente_dashboard"] = ver["delta_vs_dashboard"] == 0
         except Exception:
             pass
+    elif len(capas) == 1:
+        capa = capas[0]
+        fld = capa.get("campo") or _capa_campo_validacion(capa)
+        ev = (capa.get("estado") or "").strip()
+        n = _sicoe_nivel_num_desde_campo(fld)
+        if fld and ev and n is not None:
+            fila_map = {
+                "Aprobado": "aprobado",
+                "Pendiente": "pendiente",
+                "Rechazado": "rechazado",
+                "No Revisado": "no_revisado",
+                "No Revisados": "no_revisado",
+            }
+            fila = fila_map.get(ev)
+            if fila:
+                try:
+                    mat = _dashboard_matriz_validacion_por_niveles(
+                        int(contrato_id), acta_id_filtro
+                    )
+                    val_obra = _sicoe_matriz_valor_celda(mat, fila, n, "obra")
+                    val_ens = _sicoe_matriz_valor_celda(mat, fila, n, "ensayos")
+                    matriz_total = round(val_obra + val_ens, 0)
+                    ver["matriz_validacion_total"] = matriz_total
+                    ver["matriz_validacion_obra"] = round(val_obra, 0)
+                    ver["matriz_validacion_ensayos"] = round(val_ens, 0)
+                    ver["delta_vs_matriz_validacion"] = round(suma - matriz_total, 0)
+                    ver["coherente_matriz_validacion"] = ver["delta_vs_matriz_validacion"] == 0
+                except Exception:
+                    pass
     return ver
 
 
@@ -15715,6 +16093,34 @@ def analisis_registros_obra(
             _val_campo_l = _c
             _val_estado_l = (_c0.get("estado") or "").strip()
 
+    _analisis_acta_vigente_auto = False
+    if (
+        acta_id is None
+        and not acta_ids_panel_ana
+        and semana_id is None
+        and pendiente_item
+    ):
+        acta_id, _analisis_acta_vigente_auto = _sicoe_inyectar_acta_vigente_matriz(
+            contrato_id,
+            capas_ana,
+            estado,
+            acta_id=acta_id,
+            acta_ids_panel=acta_ids_panel_ana,
+            semana_id=semana_id,
+            consulta_directa_identificador=consulta_directa_identificador,
+            pendiente_item=pendiente_item,
+        )
+        if _analisis_acta_vigente_auto and acta_id is not None and acta_info is None:
+            try:
+                def _ai_v():
+                    return supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                        .eq("contrato_id", contrato_id).eq("id", acta_id).limit(1).execute().data
+                ar_v = supabase_execute(_ai_v)
+                if ar_v:
+                    acta_info = ar_v[0]
+            except Exception:
+                pass
+
     # ── 4. Filtros AND a nivel so_reportes (misma idea que export / buscar grilla) ─
     # tramo/costado van en so_registros (paso 5). subcontratista_id va en registros.
     _caps_l = list(caps_ana)
@@ -15815,13 +16221,13 @@ def analisis_registros_obra(
 
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
             q = supabase.table("so_registros")\
-                .select("id, reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
+                .select("id, reporte_id, costo_directo, cantidad_total, vlr_unitario, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
                 .eq("contrato_id", contrato_id)
             q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
             if _nr is not None:
                 q = q.eq("numero_registro", _nr)
             if _aids_l:
-                q = _apply_acta_rpo_ids_to_so_registros_q(q, _aids_l)
+                q = _sicoe_registros_q_filtrar_actas_scope(q, contrato_id, _aids_l)
             if _s_l is not None:
                 q = q.eq("semana_id", _s_l)
             q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
@@ -15899,7 +16305,22 @@ def analisis_registros_obra(
     if capas_ana and registros and not _estado_filtro_omite_validacion_por_cargo(estado):
         registros = _sicoe_registros_postfiltro_capas_norm(registros, capas_ana, contrato_id)
 
-    verificacion = _sicoe_analisis_verificacion_totales(registros, contrato_id, capas_ana or [])
+    _usa_costo_matriz = False  # Totales SICOE Obra: sum(costo_directo), coherente con SQL Supabase
+    _acta_id_verif = acta_id
+    if _acta_id_verif is None and acta_ids_panel_ana:
+        _acta_id_verif = acta_ids_panel_ana[0] if len(acta_ids_panel_ana) == 1 else None
+
+    def _cd_linea(reg: dict) -> float:
+        return float(reg.get("costo_directo") or 0)
+
+    verificacion = _sicoe_analisis_verificacion_totales(
+        registros,
+        contrato_id,
+        capas_ana or [],
+        acta_id_filtro=_acta_id_verif,
+        usa_costo_matriz=False,
+        vu_map_matriz=None,
+    )
 
     # No re-filtrar por estado de so_reportes (coherente con dashboard_matriz_validacion / SQL del usuario).
 
@@ -15946,7 +16367,7 @@ def analisis_registros_obra(
         for reg in registros:
             cap = reg.get("capitulo") or "Sin capítulo"
             ee  = _estado_efectivo(reg)
-            cd  = float(reg.get("costo_directo") or 0)
+            cd  = _cd_linea(reg)
             if cap not in grupos:
                 grupos[cap] = {"label": cap, "costo_directo": 0.0,
                                "total_registros": 0, "no_revisados": 0, "no_revisados_costo": 0.0,
@@ -15964,7 +16385,7 @@ def analisis_registros_obra(
     elif modo == "capitulo_items":
         for reg in registros:
             ee  = _estado_efectivo(reg)
-            cd  = float(reg.get("costo_directo") or 0)
+            cd  = _cd_linea(reg)
             it  = reg.get("item_numero") or "Sin ítem"
             if it not in grupos:
                 grupos[it] = {
@@ -16006,7 +16427,7 @@ def analisis_registros_obra(
             except Exception: pass
         for reg in registros:
             ee   = _estado_efectivo(reg)
-            cd   = float(reg.get("costo_directo") or 0)
+            cd   = _cd_linea(reg)
             cap  = reg.get("capitulo") or "Sin capítulo"
             a_id = reg.get("acta_rpo_id")
             a    = acta_map_local.get(a_id) or {}
@@ -16127,7 +16548,7 @@ def analisis_registros_obra(
             )
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
-    tc  = round(sum(float(r.get("costo_directo") or 0) for r in registros), 0)
+    tc  = round(sum(_cd_linea(r) for r in registros), 0)
     tr  = len(registros)
     ta  = sum(g["aprobados"]       for g in grupos_list)
     tp  = sum(g["pendientes"]      for g in grupos_list)
@@ -16507,7 +16928,7 @@ def obtener_reporte(
                 return []
 
         acta_id_lineas = acta_id_filtro
-        if pendiente_item and acta_rpo is None and semana is None:
+        if acta_rpo is None and semana is None and acta_id_lineas is None and pendiente_item:
             aid_inj = _acta_rpo_id_matriz_dashboard_default(contrato_id)
             if aid_inj is not None:
                 acta_id_lineas = aid_inj
@@ -23690,6 +24111,13 @@ def _matriz_finalizar_payload(payload: dict, niveles_activos: List[int], *, desd
     }
 
 
+def _matriz_acc_cost(M: dict, section: str, col: str, cd: float) -> None:
+    """Suma costo_directo en celda (section/col) de la matriz."""
+    if section not in M or col not in M[section]:
+        return
+    M[section][col] += float(cd or 0)
+
+
 def _dashboard_matriz_validacion_por_niveles(
     contrato_id: int,
     acta_id_filtro: Optional[int],
@@ -23703,10 +24131,6 @@ def _dashboard_matriz_validacion_por_niveles(
     ens_m = _matriz_validacion_empty(na)
     n_min = na[0]
 
-    item_vu: Dict[Tuple[str, str, str], float] = {}
-    item_qty: Dict[Tuple[str, str, str], Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))
-    otras_qty: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
-
     def _fila_estado(est: str) -> str:
         if est == "Aprobado":
             return "aprobado"
@@ -23716,21 +24140,26 @@ def _dashboard_matriz_validacion_por_niveles(
             return "rechazado"
         return "no_revisado"
 
-    def _item_key(reg, bloque: str) -> Tuple[str, str, str]:
-        return (
-            bloque,
-            _dash_norm_capitulo_key_py(reg.get("capitulo")),
-            _dash_norm_item_key_py(reg.get("item_numero")) or "",
-        )
-
-    def _acc_qty(M_bucket: Tuple[str, str], key: Tuple[str, str, str], cq: float) -> None:
-        item_qty[key][M_bucket] += cq
+    def _acc_reg_en_matriz(Mroot: dict, reg: dict) -> None:
+        cd = float(reg.get("costo_directo") or 0)
+        for n in na:
+            col = _matriz_col_nivel(n)
+            if n == n_min:
+                est = _matriz_estado_en_nivel(reg, n)
+                _matriz_acc_cost(Mroot, _fila_estado(est), col, cd)
+                _matriz_acc_cost(Mroot, "habilitado", col, cd)
+            elif _matriz_prereqs_aprobados(reg, na, n):
+                est = _matriz_estado_en_nivel(reg, n)
+                _matriz_acc_cost(Mroot, _fila_estado(est), col, cd)
+                _matriz_acc_cost(Mroot, "habilitado", col, cd)
+        if _matriz_estado_en_nivel(reg, n_min) == "Pendiente":
+            _matriz_acc_cost(Mroot, "pendiente_item", _matriz_col_nivel(n_min), cd)
 
     off = 0
     while True:
         def _batch(o=off):
             q = supabase.table("so_registros").select(
-                f"cantidad_total,vlr_unitario,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
+                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
                 "capitulo,acta_rpo_id,item_numero"
             ).eq("contrato_id", contrato_id)
             if acta_id_filtro is not None:
@@ -23741,26 +24170,9 @@ def _dashboard_matriz_validacion_por_niveles(
         for reg in batch:
             if not (reg.get("item_numero") or "").strip():
                 continue
-            cq = float(reg.get("cantidad_total") or 0)
-            vu = float(reg.get("vlr_unitario") or 0)
             bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-            ikey = _item_key(reg, bloque)
-            if vu > item_vu.get(ikey, 0):
-                item_vu[ikey] = vu
-
-            for n in na:
-                col = _matriz_col_nivel(n)
-                if n == n_min:
-                    est = _matriz_estado_en_nivel(reg, n)
-                    _acc_qty((_fila_estado(est), col), ikey, cq)
-                    _acc_qty(("habilitado", col), ikey, cq)
-                elif _matriz_prereqs_aprobados(reg, na, n):
-                    est = _matriz_estado_en_nivel(reg, n)
-                    _acc_qty((_fila_estado(est), col), ikey, cq)
-                    _acc_qty(("habilitado", col), ikey, cq)
-
-            if _matriz_estado_en_nivel(reg, n_min) == "Pendiente":
-                _acc_qty(("pendiente_item", _matriz_col_nivel(n_min)), ikey, cq)
+            Mroot = ens_m if bloque == "ensayos" else obra_m
+            _acc_reg_en_matriz(Mroot, reg)
 
         if len(batch) < 1000:
             break
@@ -23771,7 +24183,7 @@ def _dashboard_matriz_validacion_por_niveles(
         while True:
             def _bo(o=off):
                 q = supabase.table("so_registros").select(
-                    f"cantidad_total,vlr_unitario,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
+                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
                 ).eq("contrato_id", contrato_id)
                 return q.order("id").range(o, o + 999).execute().data
 
@@ -23782,35 +24194,18 @@ def _dashboard_matriz_validacion_por_niveles(
                 aid = reg.get("acta_rpo_id")
                 if aid is not None and aid == acta_id_filtro:
                     continue
-                cq = float(reg.get("cantidad_total") or 0)
-                vu = float(reg.get("vlr_unitario") or 0)
+                cd = float(reg.get("costo_directo") or 0)
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-                ikey = _item_key(reg, bloque)
-                if vu > item_vu.get(ikey, 0):
-                    item_vu[ikey] = vu
+                Ox = ens_m if bloque == "ensayos" else obra_m
                 for n in na:
                     if not _matriz_prereqs_aprobados(reg, na, n):
                         continue
                     if _matriz_estado_en_nivel(reg, n) == "Pendiente":
                         col = _matriz_col_nivel(n)
-                        otras_qty[ikey][col] += cq
+                        _matriz_acc_cost(Ox, "otras_actas", col, cd)
             if len(batch) < 1000:
                 break
             off += 1000
-
-    for ikey, buckets in item_qty.items():
-        bloque = ikey[0]
-        M = ens_m if bloque == "ensayos" else obra_m
-        vu = item_vu.get(ikey, 0)
-        for (section, col), qty in buckets.items():
-            M[section][col] += costo_agregado_cant_vu(qty, vu)
-
-    for ikey, cols in otras_qty.items():
-        bloque = ikey[0]
-        Ox = ens_m if bloque == "ensayos" else obra_m
-        vu = item_vu.get(ikey, 0)
-        for col, qty in cols.items():
-            Ox["otras_actas"][col] += costo_agregado_cant_vu(qty, vu)
 
     def round_block(m):
         out = {}
@@ -23860,7 +24255,7 @@ def dashboard_matriz_validacion_obra(
     Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
     """
     try:
-        matriz_key = ("dashboard_matriz", int(contrato_id), bool(todo_contrato), acta_rpo)
+        matriz_key = ("dashboard_matriz_v2", int(contrato_id), bool(todo_contrato), acta_rpo)
         cached_matriz = _dashboard_response_cache_get(matriz_key)
         if cached_matriz is not None:
             return cached_matriz

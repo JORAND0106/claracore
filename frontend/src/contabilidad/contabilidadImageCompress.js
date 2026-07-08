@@ -81,3 +81,21 @@ export async function compressImageForSoporte(file, maxBytes = 800 * 1024) {
   const ext = outMime === 'image/jpeg' ? '.jpg' : '.png'
   return new File([blob], `${baseName}${ext}`, { type: outMime, lastModified: Date.now() })
 }
+
+/**
+ * Comprime (si aplica) y devuelve el archivo listo más pesos para mostrar al usuario.
+ * @param {File} file
+ * @param {number} [maxBytes]
+ * @returns {Promise<{ file: File, originalBytes: number, compressedBytes: number, wasCompressed: boolean }>}
+ */
+export async function prepareSoporteConPeso(file, maxBytes = 800 * 1024) {
+  const originalBytes = file?.size || 0
+  const prepared = await compressImageForSoporte(file, maxBytes)
+  const compressedBytes = prepared?.size || 0
+  return {
+    file: prepared || file,
+    originalBytes,
+    compressedBytes,
+    wasCompressed: compressedBytes > 0 && compressedBytes < originalBytes,
+  }
+}

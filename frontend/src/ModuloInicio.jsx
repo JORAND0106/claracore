@@ -5,6 +5,16 @@ import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCurada
 import { eligeSaludoInicio } from './data/saludosInicio.js'
 import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
 
+function useInicioMobile() {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return isMobile
+}
+
 const API_FRASE = `${API_BASE}/frase-del-dia`
 const SLIDER_INTERVAL_MS = 10000
 const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
@@ -1391,13 +1401,12 @@ export default function ModuloInicio({
   fontSize = 'normal',
   puedePublicarNovedades = false,
   token = null,
-  puedeAccederContabilidad = false,
-  onAbrirContabilidad,
   esContador = false,
 }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
   const [novedadesCargando, setNovedadesCargando] = useState(true)
+  const isMobile = useInicioMobile()
   const fs = useMemo(() => buildfs(fontSize), [fontSize])
 
   useEffect(() => {
@@ -1441,41 +1450,16 @@ export default function ModuloInicio({
   const contratoId = usuario?.contrato_id
 
   return (
-    <div style={{ width: '100%', maxWidth: '1540px', margin: '0 auto', padding: '8px 0 48px', boxSizing: 'border-box' }}>
-
-      {puedeAccederContabilidad && (
-        <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'center' }}>
-          <button
-            type="button"
-            onClick={onAbrirContabilidad}
-            style={{
-              background: t.primary,
-              color: '#fff',
-              border: 'none',
-              borderRadius: '12px',
-              padding: '16px 28px',
-              fontSize: fs.lg,
-              fontWeight: '700',
-              cursor: 'pointer',
-              boxShadow: '0 8px 24px rgba(0,119,182,0.35)',
-              transition: 'transform 0.15s, box-shadow 0.15s',
-              letterSpacing: '0.3px',
-              width: '100%',
-              maxWidth: '400px',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)'
-              e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,119,182,0.45)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)'
-              e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,119,182,0.35)'
-            }}
-          >
-            📊 Módulo de Contabilidad
-          </button>
-        </div>
-      )}
+    <div
+      className="cc-inicio-root"
+      style={{
+        width: '100%',
+        maxWidth: '1540px',
+        margin: '0 auto',
+        padding: isMobile ? '4px 0 32px' : '8px 0 48px',
+        boxSizing: 'border-box',
+      }}
+    >
 
       {!esContador && (
         <>
@@ -1483,19 +1467,24 @@ export default function ModuloInicio({
           <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
           {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'flex-start',
-            gap: '12px',
-            marginBottom: '16px',
-          }}>
+          <div
+            className="cc-inicio-main-grid"
+            style={{
+              display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
+              flexWrap: isMobile ? 'nowrap' : 'wrap',
+              alignItems: 'stretch',
+              gap: isMobile ? '14px' : '12px',
+              marginBottom: isMobile ? '14px' : '16px',
+            }}
+          >
             <div style={{
-              flex: '1 1 360px',
+              flex: isMobile ? '1 1 auto' : '1 1 360px',
+              width: isMobile ? '100%' : undefined,
               minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
-              gap: '12px',
+              gap: isMobile ? '14px' : '12px',
             }}>
               <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
               <BandejaNovedadesInicio
@@ -1508,29 +1497,39 @@ export default function ModuloInicio({
                 puedePublicarNovedades={puedePublicarNovedades}
               />
             </div>
-            <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+            <div style={{
+              flex: isMobile ? '1 1 auto' : '1 1 360px',
+              width: isMobile ? '100%' : undefined,
+              minWidth: 0,
+            }}>
               <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
             </div>
           </div>
 
           {/* ── Zona 3: ficha del contrato ── */}
-          <div style={{ marginBottom: '20px' }}>
+          <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
             <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
           </div>
         </>
       )}
 
       {esContador && (
-        <div style={{ maxWidth: '640px', margin: '0 auto 24px' }}>
+        <div style={{ maxWidth: '640px', margin: '0 auto 24px', padding: isMobile ? '0 4px' : 0 }}>
           <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
-          <p style={{ textAlign: 'center', color: t.textMuted, fontSize: fs.sm, marginTop: 16, lineHeight: 1.6 }}>
-            Accede al módulo de contabilidad para gestionar transacciones, cuentas especiales, cierres mensuales y reportes.
+          <p style={{
+            textAlign: 'center',
+            color: t.textMuted,
+            fontSize: isMobile ? '16px' : fs.sm,
+            marginTop: 16,
+            lineHeight: 1.6,
+          }}>
+            Abre el menú ☰ (arriba a la derecha) y toca <strong>Contabilidad</strong> para gestionar transacciones, cuentas, cierres y reportes.
           </p>
         </div>
       )}
 
       {/* ── Footer ── */}
-      <div style={{ marginTop: '36px', textAlign: 'center', fontSize: fs.autor, color: t.textMuted, opacity: 0.5 }}>
+      <div style={{ marginTop: isMobile ? '24px' : '36px', textAlign: 'center', fontSize: fs.autor, color: t.textMuted, opacity: 0.5 }}>
         ClaraCore © {new Date().getFullYear()} — {esContador ? 'Contabilidad ClaraCore' : 'Plataforma de gestión de obra'}
       </div>
 

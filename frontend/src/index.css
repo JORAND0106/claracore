@@ -31,6 +31,56 @@ img.cc-brand-logo--admin {
   margin-bottom: 6px;
 }
 
+/* Acceso Contabilidad en header: solo ícono en celular */
+.cc-contab-header-label {
+  font-size: var(--cc-label);
+  font-weight: 600;
+}
+@media (max-width: 639px) {
+  .cc-contab-header-label {
+    display: none;
+  }
+}
+
+/* ── Header / shell móvil (< 768px) ── */
+@media (max-width: 767px) {
+  img.cc-brand-logo--header {
+    max-width: min(180px, 52vw);
+    height: 32px;
+  }
+
+  .cc-app-header {
+    padding: 10px 12px !important;
+    gap: 8px;
+  }
+
+  .cc-app-main-row {
+    flex-direction: column !important;
+  }
+
+  .cc-app-content {
+    padding: 12px 12px !important;
+  }
+
+  .cc-inicio-root {
+    padding: 4px 0 40px !important;
+    max-width: 100% !important;
+  }
+
+  .cc-inicio-zona2 {
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+  }
+
+  .cc-inicio-zona2 > * {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+}
+
 /* Dashboard — select Acta RPO: contraste en modo oscuro (lista nativa del SO) */
 select.cc-dashboard-acta-select--dark {
   color-scheme: dark;
@@ -47,4 +97,65 @@ select.cc-dashboard-acta-select--light option {
 @keyframes dashRefreshSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ── Dashboard responsive ── */
+.cc-dashboard-root {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.cc-dash-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-dash-chart-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 767px) {
+  .cc-dashboard-root .cc-dash-toolbar-sep {
+    display: none;
+  }
+
+  .cc-dashboard-root .cc-dash-touch-select {
+    min-height: 44px;
+    font-size: var(--cc-body, 15px) !important;
+    padding: 10px 12px !important;
+  }
+
+  .cc-dashboard-root .cc-dash-touch-btn {
+    min-height: 44px;
+    padding: 10px 14px !important;
+  }
+
+  .cc-dashboard-root select.cc-dashboard-acta-select {
+    min-height: 44px;
+    font-size: var(--cc-body, 15px) !important;
+    padding: 10px 12px !important;
+    max-width: 100% !important;
+  }
+
+  .cc-dashboard-root .cc-dash-panel-card {
+    padding: 14px !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1024px) {
+  .cc-dash-kpi-chips-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .cc-dashboard-root .cc-dash-kpi-card-span {
+    grid-column: 1 / -1;
+  }
 }

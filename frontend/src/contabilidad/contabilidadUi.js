@@ -25,6 +25,14 @@ export const TAB_LABELS = {
   documentos: 'Documentos',
 }
 
+export const TAB_LABELS_SHORT = {
+  transacciones: 'Transacc.',
+  cuentas: 'Cuentas',
+  cierre: 'Cierre',
+  reportes: 'Reportes',
+  documentos: 'Docs',
+}
+
 export const DOC_CATEGORIAS = [
   { value: 'legal', label: 'Legal' },
   { value: 'tributario', label: 'Tributario' },
@@ -51,6 +59,17 @@ export function fmtBytes(n) {
   if (v < 1024) return `${v} B`
   if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
   return `${(v / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Texto de verificación de peso antes de subir (original vs comprimido). */
+export function labelPesoSoporte({ originalBytes, compressedBytes, wasCompressed } = {}) {
+  const orig = Number(originalBytes)
+  const comp = Number(compressedBytes)
+  if (!Number.isFinite(orig) || orig <= 0) return ''
+  if (wasCompressed || (Number.isFinite(comp) && comp > 0 && comp < orig)) {
+    return `Original ${fmtBytes(orig)} → comprimido ${fmtBytes(comp)}`
+  }
+  return `${fmtBytes(orig)}`
 }
 
 export function diasHastaVencimiento(fechaVencimiento) {

@@ -102,7 +102,7 @@ Write-Host "Backend OK. Arrancando frontend (Vite :5173)..." -ForegroundColor Da
 Start-Process -FilePath "powershell" -WorkingDirectory $frontendDir -ArgumentList @(
     "-NoExit",
     "-Command",
-    "npm run dev -- --host 127.0.0.1 --port 5173"
+    "npm run dev -- --host 0.0.0.0 --port 5173"
 ) | Out-Null
 
 $feOk = $false
