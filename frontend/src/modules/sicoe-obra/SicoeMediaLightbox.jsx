@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 /**
- * Visor fullscreen de foto/gráfico: pinch-zoom, swipe, flechas, cerrar con X o swipe-down.
+ * Visor de foto/gráfico con estilo ClaraCore: encabezado, meta del registro e imagen.
  * Solo presentación — no altera datos del registro.
  */
 export default function SicoeMediaLightbox({
@@ -10,6 +10,9 @@ export default function SicoeMediaLightbox({
   index = 0,
   onClose,
   onIndexChange,
+  t,
+  title,
+  meta = null,
 }) {
   const lista = Array.isArray(items) ? items.filter((x) => x?.url) : []
   const safeIdx = Math.min(Math.max(0, index), Math.max(0, lista.length - 1))
@@ -21,6 +24,15 @@ export default function SicoeMediaLightbox({
   const pinchRef = useRef(null)
   const panRef = useRef(null)
   const swipeRef = useRef(null)
+
+  const theme = t || {
+    bgCard: '#0F1923',
+    bg: '#15202B',
+    border: '#334155',
+    text: '#E2E8F0',
+    textMuted: '#94A3B8',
+    primary: '#0EA5A8',
+  }
 
   useEffect(() => {
     if (!open) return
@@ -91,7 +103,6 @@ export default function SicoeMediaLightbox({
       const t0 = e.touches[0]
       setTx(panRef.current.tx + (t0.clientX - panRef.current.x))
       setTy(panRef.current.ty + (t0.clientY - panRef.current.y))
-      return
     }
   }
 
@@ -123,65 +134,130 @@ export default function SicoeMediaLightbox({
     }
   }
 
+  const encabezado = title
+    || (actual.label ? String(actual.label) : null)
+    || (meta?.numero_registro != null ? `Registro #${meta.numero_registro}` : 'Visor de imagen')
+
+  const metaRows = [
+    { label: 'Ítem', value: meta?.item },
+    { label: 'Descripción', value: meta?.descripcion },
+    { label: 'Unidad', value: meta?.unidad },
+    { label: 'Vlr. unitario', value: meta?.vlrUnitario },
+  ].filter((row) => row.value != null && String(row.value).trim() !== '')
+
   return (
     <div
       className="cc-sicoe-lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label="Visor de imagen"
+      aria-label={encabezado}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      <button
-        type="button"
-        className="cc-sicoe-lightbox-close"
-        aria-label="Cerrar"
-        onClick={onClose}
+      <div
+        className="cc-sicoe-lightbox-panel"
+        style={{
+          background: theme.bgCard,
+          border: `1px solid ${theme.border}`,
+          color: theme.text,
+        }}
+        onClick={(e) => e.stopPropagation()}
       >
-        ✕
-      </button>
-
-      {lista.length > 1 && (
-        <>
-          <button
-            type="button"
-            className="cc-sicoe-lightbox-nav cc-sicoe-lightbox-prev"
-            aria-label="Anterior"
-            disabled={safeIdx <= 0}
-            onClick={() => go(-1)}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            className="cc-sicoe-lightbox-nav cc-sicoe-lightbox-next"
-            aria-label="Siguiente"
-            disabled={safeIdx >= lista.length - 1}
-            onClick={() => go(1)}
-          >
-            ›
-          </button>
-          <div className="cc-sicoe-lightbox-counter">
-            {safeIdx + 1} / {lista.length}
-            {actual.label ? ` · ${actual.label}` : ''}
-          </div>
-        </>
-      )}
-
-      <div className="cc-sicoe-lightbox-stage">
-        <img
-          src={actual.url}
-          alt={actual.label || 'Imagen'}
-          referrerPolicy="no-referrer"
-          draggable={false}
+        <div
+          className="cc-sicoe-lightbox-header"
           style={{
-            transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
-            transformOrigin: 'center center',
-            transition: pinchRef.current || panRef.current ? 'none' : 'transform 0.15s ease-out',
+            borderBottom: `1px solid ${theme.border}`,
+            background: `color-mix(in srgb, ${theme.primary} 14%, ${theme.bgCard})`,
           }}
-        />
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: theme.primary, lineHeight: 1.3 }}>
+              {encabezado}
+            </div>
+            {lista.length > 1 && (
+              <div style={{ fontSize: 'var(--cc-caption)', color: theme.textMuted, marginTop: 2 }}>
+                {safeIdx + 1} / {lista.length}
+                {actual.label ? ` · ${actual.label}` : ''}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="cc-sicoe-lightbox-close"
+            aria-label="Cerrar"
+            onClick={onClose}
+            style={{
+              background: theme.bg,
+              border: `1px solid ${theme.border}`,
+              color: theme.text,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {metaRows.length > 0 && (
+          <div
+            className="cc-sicoe-lightbox-meta"
+            style={{
+              borderBottom: `1px solid ${theme.border}`,
+              background: theme.bg,
+            }}
+          >
+            {metaRows.map((row) => (
+              <div key={row.label} className="cc-sicoe-lightbox-meta-item">
+                <span style={{ color: theme.textMuted }}>{row.label}</span>
+                <span
+                  style={{ color: theme.text }}
+                  title={String(row.value)}
+                >
+                  {row.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="cc-sicoe-lightbox-body">
+          {lista.length > 1 && (
+            <>
+              <button
+                type="button"
+                className="cc-sicoe-lightbox-nav cc-sicoe-lightbox-prev"
+                aria-label="Anterior"
+                disabled={safeIdx <= 0}
+                onClick={() => go(-1)}
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                className="cc-sicoe-lightbox-nav cc-sicoe-lightbox-next"
+                aria-label="Siguiente"
+                disabled={safeIdx >= lista.length - 1}
+                onClick={() => go(1)}
+              >
+                ›
+              </button>
+            </>
+          )}
+
+          <div className="cc-sicoe-lightbox-stage">
+            <img
+              src={actual.url}
+              alt={actual.label || 'Imagen'}
+              referrerPolicy="no-referrer"
+              draggable={false}
+              style={{
+                transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+                transformOrigin: 'center center',
+                transition: pinchRef.current || panRef.current ? 'none' : 'transform 0.15s ease-out',
+              }}
+            />
+          </div>
+        </div>
       </div>
     </div>
   )

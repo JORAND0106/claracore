@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useClaraViewport } from '../../useClaraViewport'
 import PptoFiltroMapaPk from './PptoFiltroMapaPk'
 import PptoFiltroModal from './PptoFiltroModal'
 import {
@@ -48,6 +49,8 @@ export default function PptoFiltroObraVista({
   const [modalFiltrosOpen, setModalFiltrosOpen] = useState(false)
   const [mapaOpen, setMapaOpen] = useState(false)
   const mapPkSelRef = useRef('')
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
+  const compact = vpMobile || isLandscapeMobile
 
   const tipoEjecucionActivo = f.tipoEjecucion || 'Presupuesto de Obra'
 
@@ -109,13 +112,151 @@ export default function PptoFiltroObraVista({
     background: 'transparent',
     border: `1px solid ${t.border}`,
     borderRadius: 6,
-    padding: '5px 10px',
-    fontSize: 'var(--cc-caption)',
+    padding: compact ? '10px 14px' : '5px 10px',
+    minHeight: compact ? 44 : undefined,
+    fontSize: compact ? 'var(--cc-body)' : 'var(--cc-caption)',
     fontWeight: 600,
     color: t.text,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
+    flexShrink: 0,
   }
+
+  const filtrosBtn = (
+    <button
+      type="button"
+      className={compact ? 'cc-ppto-filtros-desktop-only' : undefined}
+      onClick={() => setModalFiltrosOpen(true)}
+      style={{
+        ...btnSec,
+        background: t.primary,
+        color: '#fff',
+        border: 'none',
+        fontWeight: 700,
+        padding: compact ? '10px 14px' : '6px 14px',
+        display: compact ? 'none' : undefined,
+      }}
+    >
+      🔍 Filtros
+      {chipKeys.length > 0 ? (
+        <span style={{ marginLeft: 6, background: '#fff3', borderRadius: 10, padding: '1px 7px', fontSize: 'var(--cc-caption)' }}>
+          {chipKeys.length}
+        </span>
+      ) : null}
+    </button>
+  )
+
+  const toggleTipo = mostrarToggleTipoEjecucion && typeof onTipoEjecucionChange === 'function' ? (
+    <div
+      role="group"
+      aria-label="Tipo de ejecución"
+      className="cc-ppto-tipo-tabs"
+      style={{
+        display: 'inline-flex',
+        border: `1px solid ${t.border}`,
+        borderRadius: 6,
+        overflow: 'hidden',
+        flexShrink: 0,
+        width: compact ? '100%' : undefined,
+      }}
+    >
+      {[
+        ['Presupuesto de Obra', compact ? 'Presupuesto' : 'Presupuesto de Obra'],
+        ['Obra Ejecutada', compact ? 'Obra ejec.' : 'Obra Ejecutada'],
+      ].map(([valor, etiqueta], idx) => {
+        const activo = tipoEjecucionActivo === valor
+        return (
+          <button
+            key={valor}
+            type="button"
+            onClick={() => onTipoEjecucionChange(valor)}
+            disabled={buscando}
+            style={{
+              background: activo ? t.primary : t.bg,
+              color: activo ? '#fff' : t.textMuted,
+              border: 'none',
+              borderRight: idx === 0 ? `1px solid ${t.border}` : 'none',
+              padding: compact ? '10px 12px' : '5px 10px',
+              minHeight: compact ? 44 : undefined,
+              fontSize: compact ? 'var(--cc-sm)' : 'var(--cc-caption)',
+              fontWeight: activo ? 700 : 500,
+              cursor: buscando ? 'wait' : 'pointer',
+              whiteSpace: 'nowrap',
+              flex: compact ? 1 : undefined,
+            }}
+          >
+            {etiqueta}
+          </button>
+        )
+      })}
+    </div>
+  ) : null
+
+  const accionesSecundarias = (
+    <div
+      className="cc-ppto-filtro-actions-scroll"
+      style={{
+        marginLeft: compact ? 0 : 'auto',
+        display: 'flex',
+        flexWrap: compact ? 'nowrap' : 'wrap',
+        gap: 6,
+        alignItems: 'center',
+        overflowX: compact ? 'auto' : undefined,
+        WebkitOverflowScrolling: compact ? 'touch' : undefined,
+        width: compact ? '100%' : undefined,
+        paddingBottom: compact ? 2 : undefined,
+      }}
+    >
+      {compact && (
+        <button
+          type="button"
+          onClick={() => setMapaOpen(true)}
+          title="Plano PK"
+          style={{ ...btnSec, padding: '10px 12px' }}
+        >
+          🗺️ Plano
+        </button>
+      )}
+      {typeof onActualizar === 'function' && (
+        <button type="button" onClick={onActualizar} disabled={!!actualizarDisabled} title="Recarga capítulos y datos del filtro actual" style={{ ...btnSec, border: 'none', color: '#94a3b8', opacity: actualizarDisabled ? 0.5 : 0.92 }}>
+          🔄 Actualizar
+        </button>
+      )}
+      {typeof onExportarExcel === 'function' && (
+        <button type="button" onClick={onExportarExcel} disabled={!!exportandoExcel} style={{ ...btnSec, background: '#0077B618', borderColor: '#0077B6', color: '#0077B6', fontWeight: 700 }}>
+          {exportandoExcel ? '⏳…' : '📥 Excel'}
+        </button>
+      )}
+      {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (
+        <button type="button" onClick={onRestablecerPksItem} disabled={buscando} style={{ ...btnSec, background: '#0D948820', borderColor: '#0D9488', color: '#0D9488', fontWeight: 700 }}>
+          Ver PK
+        </button>
+      )}
+      <button type="button" onClick={onRevisorTramos} style={{ ...btnSec, background: '#0D948820', borderColor: '#0D9488', color: '#0D9488', fontWeight: 700 }}>
+        🛣️ Tramos
+      </button>
+      {mostrarVersionador && typeof onAbrirCrearVersion === 'function' && (
+        <button
+          type="button"
+          onClick={onAbrirCrearVersion}
+          style={{
+            ...btnSec,
+            background: esVersionInicial ? t.primary : `${t.primary}18`,
+            color: esVersionInicial ? '#fff' : t.primary,
+            borderColor: t.primary,
+            fontWeight: 800,
+          }}
+        >
+          {esVersionInicial ? 'Crear versión inicial' : 'Nueva versión'}
+        </button>
+      )}
+      {mostrarVersionador && typeof onAbrirPanelVersiones === 'function' && (
+        <button type="button" onClick={onAbrirPanelVersiones} style={btnSec}>
+          Versiones
+        </button>
+      )}
+    </div>
+  )
 
   return (
     <>
@@ -177,6 +318,7 @@ export default function PptoFiltroObraVista({
         </div>
       )}
       <div
+        className="cc-ppto-filtro-bar"
         style={{
           position: 'sticky',
           top: 0,
@@ -186,120 +328,35 @@ export default function PptoFiltroObraVista({
           borderRadius: 8,
           boxShadow: t.shadow,
           border: `1px solid ${t.border}`,
-          padding: '6px 10px',
+          padding: compact ? '10px 12px' : '6px 10px',
         }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, rowGap: 6 }}>
-          <button
-            type="button"
-            onClick={() => setModalFiltrosOpen(true)}
-            style={{
-              ...btnSec,
-              background: t.primary,
-              color: '#fff',
-              border: 'none',
-              fontWeight: 700,
-              padding: '6px 14px',
-            }}
-          >
-            🔍 Filtros
-            {chipKeys.length > 0 ? (
-              <span style={{ marginLeft: 6, background: '#fff3', borderRadius: 10, padding: '1px 7px', fontSize: 'var(--cc-caption)' }}>
-                {chipKeys.length}
-              </span>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setMapaOpen(true)}
-            title="Plano PK"
-            style={{ ...btnSec, padding: '5px 8px' }}
-          >
-            🗺️
-          </button>
-
-          {mostrarToggleTipoEjecucion && typeof onTipoEjecucionChange === 'function' && (
-            <div
-              role="group"
-              aria-label="Tipo de ejecución"
-              style={{ display: 'inline-flex', border: `1px solid ${t.border}`, borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}
-            >
-              {[
-                ['Presupuesto de Obra', 'Presupuesto de Obra'],
-                ['Obra Ejecutada', 'Obra Ejecutada'],
-              ].map(([valor, etiqueta], idx) => {
-                const activo = tipoEjecucionActivo === valor
-                return (
-                  <button
-                    key={valor}
-                    type="button"
-                    onClick={() => onTipoEjecucionChange(valor)}
-                    disabled={buscando}
-                    style={{
-                      background: activo ? t.primary : t.bg,
-                      color: activo ? '#fff' : t.textMuted,
-                      border: 'none',
-                      borderRight: idx === 0 ? `1px solid ${t.border}` : 'none',
-                      padding: '5px 10px',
-                      fontSize: 'var(--cc-caption)',
-                      fontWeight: activo ? 700 : 500,
-                      cursor: buscando ? 'wait' : 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {etiqueta}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
-          {barraResumen != null && (
-            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, whiteSpace: 'nowrap' }}>{barraResumen}</div>
-          )}
-
-          <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            {typeof onActualizar === 'function' && (
-              <button type="button" onClick={onActualizar} disabled={!!actualizarDisabled} title="Recarga capítulos y datos del filtro actual" style={{ ...btnSec, border: 'none', color: '#94a3b8', opacity: actualizarDisabled ? 0.5 : 0.92 }}>
-                🔄 Actualizar
-              </button>
+        {compact ? (
+          <div className="cc-ppto-filtro-bar-mobile" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {toggleTipo}
+            {barraResumen != null && (
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{barraResumen}</div>
             )}
-            {typeof onExportarExcel === 'function' && (
-              <button type="button" onClick={onExportarExcel} disabled={!!exportandoExcel} style={{ ...btnSec, background: '#0077B618', borderColor: '#0077B6', color: '#0077B6', fontWeight: 700 }}>
-                {exportandoExcel ? '⏳…' : '📥 Excel'}
-              </button>
-            )}
-            {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (
-              <button type="button" onClick={onRestablecerPksItem} disabled={buscando} style={{ ...btnSec, background: '#0D948820', borderColor: '#0D9488', color: '#0D9488', fontWeight: 700 }}>
-                Ver PK
-              </button>
-            )}
-            <button type="button" onClick={onRevisorTramos} style={{ ...btnSec, background: '#0D948820', borderColor: '#0D9488', color: '#0D9488', fontWeight: 700 }}>
-              🛣️ Tramos
-            </button>
-            {mostrarVersionador && typeof onAbrirCrearVersion === 'function' && (
-              <button
-                type="button"
-                onClick={onAbrirCrearVersion}
-                style={{
-                  ...btnSec,
-                  background: esVersionInicial ? t.primary : `${t.primary}18`,
-                  color: esVersionInicial ? '#fff' : t.primary,
-                  borderColor: t.primary,
-                  fontWeight: 800,
-                }}
-              >
-                {esVersionInicial ? 'Crear versión inicial' : 'Nueva versión'}
-              </button>
-            )}
-            {mostrarVersionador && typeof onAbrirPanelVersiones === 'function' && (
-              <button type="button" onClick={onAbrirPanelVersiones} style={btnSec}>
-                Versiones
-              </button>
-            )}
+            {accionesSecundarias}
           </div>
-        </div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, rowGap: 6 }}>
+            {filtrosBtn}
+            <button
+              type="button"
+              onClick={() => setMapaOpen(true)}
+              title="Plano PK"
+              style={{ ...btnSec, padding: '5px 8px' }}
+            >
+              🗺️
+            </button>
+            {toggleTipo}
+            {barraResumen != null && (
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, whiteSpace: 'nowrap' }}>{barraResumen}</div>
+            )}
+            {accionesSecundarias}
+          </div>
+        )}
 
         <div
           style={{
@@ -317,6 +374,58 @@ export default function PptoFiltroObraVista({
           <strong style={{ color: t.text }}>Criterios:</strong> {resumenFiltros}
         </div>
       </div>
+
+      {compact && !modalFiltrosOpen && (
+        <button
+          type="button"
+          className="cc-ppto-filtros-fab"
+          onClick={() => setModalFiltrosOpen(true)}
+          aria-label="Abrir filtros"
+          style={{
+            position: 'fixed',
+            right: 'max(14px, env(safe-area-inset-right, 0px))',
+            bottom: 'max(18px, env(safe-area-inset-bottom, 0px))',
+            zIndex: 40,
+            minWidth: 56,
+            minHeight: 56,
+            borderRadius: 28,
+            border: 'none',
+            background: t.primary,
+            color: '#fff',
+            fontWeight: 800,
+            fontSize: 'var(--cc-sm)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            padding: '0 16px',
+          }}
+        >
+          🔍 Filtros
+          {chipKeys.length > 0 ? (
+            <span
+              style={{
+                background: '#EF4444',
+                color: '#fff',
+                borderRadius: 12,
+                minWidth: 20,
+                height: 20,
+                padding: '0 6px',
+                fontSize: 11,
+                fontWeight: 800,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
+              }}
+            >
+              {chipKeys.length}
+            </span>
+          ) : null}
+        </button>
+      )}
 
       <PptoFiltroModal
         open={modalFiltrosOpen}

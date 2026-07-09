@@ -555,66 +555,8 @@ export const REPORTE_ERRORES_JERARQUIA = {
     },
   },
 
-  sst: {
-    label: 'SST',
-    ubicaciones: {
-      personal: {
-        label: 'Pestaña Personal',
-        sectores: {
-          listado: 'Listado de personal',
-          detalle: 'Detalle / checklist documental',
-          documentos: 'Documentos recientes (Abrir / Aprobar / Rechazar)',
-          subir: 'Subir documento',
-          alta: 'Alta personal / nueva plantilla',
-        },
-      },
-      maquinaria: {
-        label: 'Pestaña Maquinaria',
-        sectores: {
-          listado: 'Listado de maquinaria',
-          detalle: 'Detalle / checklist documental',
-          documentos: 'Documentos recientes',
-          subir: 'Subir documento',
-          alta: 'Alta maquinaria / nueva plantilla',
-        },
-      },
-      informe: {
-        label: 'Informe HTML (pie)',
-        sectores: {
-          enlace: 'Enlace / descarga informe por entidad',
-        },
-      },
-    },
-  },
-
-  ensayos: {
-    label: 'Ensayos',
-    ubicaciones: {
-      pip: {
-        label: 'Pestaña PIP',
-        sectores: {
-          nuevo: 'Formulario Nuevo PIP',
-          listado: 'Listado de planes PIP',
-        },
-      },
-      registros: {
-        label: 'Pestaña Registros',
-        sectores: {
-          nuevo: 'Formulario nuevo registro + certificado',
-          listado: 'Listado últimos registros (Certificado, Aprobar / Rechazar)',
-        },
-      },
-      cumplimiento: {
-        label: 'Pestaña Cumplimiento',
-        sectores: {
-          tarjetas: 'Tarjetas indicadores por PIP',
-        },
-      },
-    },
-  },
-
   auditor_sst: {
-    label: 'Auditor SST',
+    label: 'Auditor',
     ubicaciones: {
       auditar: {
         label: 'Pestaña Auditar',
@@ -671,8 +613,6 @@ export const MODULO_CTX_A_MENU = {
   programacion: 'programacion',
   topografia: 'topografia',
   semaforo: 'semaforo',
-  sst: 'sst',
-  ensayos: 'ensayos',
   auditor_sst: 'auditor_sst',
 }
 

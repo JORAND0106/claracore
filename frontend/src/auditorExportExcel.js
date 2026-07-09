@@ -294,11 +294,11 @@ export async function downloadAuditorExcelIndividual(apiResponse, rosterRow = nu
   ]
 
   const wb = new ExcelJS.Workbook()
-  wb.creator = 'ClaraCore · Auditor SST'
+  wb.creator = 'ClaraCore · Auditor'
 
   const ws = wb.addWorksheet('Checklist')
   const firstDataRow = escribirEncabezadoInforme(ws, dataHeader.length, {
-    titulo: 'Informe de auditoría SST (individual)',
+    titulo: 'Informe de auditoría (individual)',
     lineas: lineasContratoExport(exportContext || {}),
     theme,
     generatedAt: exportContext?.generatedAt || new Date(),
@@ -348,11 +348,11 @@ export async function downloadAuditorExcelLote(lote, exportContext = null, filen
   const dataHeader = ['Archivo', 'Nombre (IA)', 'Cédula (IA)', ...cols.map(labelCampo), 'Puntuación %', 'Coincide listado', 'Error', 'Resumen']
 
   const wb = new ExcelJS.Workbook()
-  wb.creator = 'ClaraCore · Auditor SST'
+  wb.creator = 'ClaraCore · Auditor'
 
   const ws = wb.addWorksheet('Checklist')
   const firstDataRow = escribirEncabezadoInforme(ws, dataHeader.length, {
-    titulo: 'Informe de auditoría SST (lote)',
+    titulo: 'Informe de auditoría (lote)',
     lineas: lineasContratoExport(exportContext || {}),
     theme,
     generatedAt: exportContext?.generatedAt || new Date(),

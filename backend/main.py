@@ -5451,9 +5451,6 @@ def listar_funciones(current_user=Depends(get_current_user)):
     requeridas = [
         {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
         {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
-        {"codigo": "SSTDOC", "nombre": "SST documental", "modulo": "SST"},
-        {"codigo": "ENSPIP", "nombre": "Ensayos PIP", "modulo": "Laboratorio"},
-        {"codigo": "NUVECC", "nombre": "Integración nube ClaraCore", "modulo": "Administración"},
         {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
         {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
     ]
@@ -12113,6 +12110,32 @@ def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
     uid = int(current_user.get("sub", 0))
     supabase.table("notificaciones").update({"leido": True, "leido_at": "now()"}) \
         .eq("id", notif_id).eq("destinatario_id", uid).execute()
+    return {"ok": True}
+
+
+@app.put("/notificaciones/{notif_id}/ocultar")
+def ocultar_notificacion_buzon(notif_id: int, current_user=Depends(get_current_user)):
+    """Oculta la notificación solo en el buzón del usuario (no borra la fila)."""
+    uid = int(current_user.get("sub", 0))
+    rows = (
+        supabase.table("notificaciones")
+        .select("id, destinatario_id, remitente_id, tipo")
+        .eq("id", notif_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows or (rows[0].get("tipo") or "").upper() == "SOPORTE":
+        raise HTTPException(status_code=404, detail="No encontrada")
+    row = rows[0]
+    patch = {}
+    if row.get("destinatario_id") == uid:
+        patch["oculto_destinatario"] = True
+    if row.get("remitente_id") == uid:
+        patch["oculto_remitente"] = True
+    if not patch:
+        raise HTTPException(status_code=403, detail="Sin permiso para ocultar esta notificación")
+    supabase.table("notificaciones").update(patch).eq("id", notif_id).execute()
     return {"ok": True}
 
 

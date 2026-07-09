@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import { OfflineProvider, useOffline } from './offline/OfflineContext'
 import {
   OfflineBanner,
@@ -29,8 +30,6 @@ import { prepararImagenParaUpload } from './comprimirImagen'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
-import ModuloSST from './ModuloSST'
-import ModuloEnsayos from './ModuloEnsayos'
 import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
 import ModuloContabilidad from './ModuloContabilidad'
@@ -72,6 +71,7 @@ import {
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
+import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -2316,6 +2316,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
+  const [asignacionExpandida, setAsignacionExpandida] = useState(() => {
+    if (typeof window === 'undefined') return true
+    const w = window.innerWidth
+    const landscape = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(orientation: landscape)').matches
+      : w > window.innerHeight
+    const mobile = w <= 767 || (landscape && w <= 932)
+    return !mobile
+  })
+  const [itemInfoPopup, setItemInfoPopup] = useState(null)
+  useEffect(() => {
+    if (!hojaCompact) setAsignacionExpandida(true)
+  }, [hojaCompact])
   const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, unidad: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
   const [mostrarLista,   setMostrarLista]   = useState(false)
   const [indiceItemKbd,  setIndiceItemKbd]  = useState(-1)
@@ -3165,7 +3178,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       : false
   const puedeTurnarLlaveMisil = muestraPanelDobleLlave && miSlotLibre && !llaveContrariaOcupadaPorOtro
 
-  const CampoRO = ({ label, labelShort, valor, color, truncate }) => (
+  const CampoRO = ({ label, labelShort, valor, color, truncate, truncateWords, onTruncateClick }) => {
+    const texto = valor != null ? String(valor) : ''
+    const maxWords = truncateWords != null
+      ? truncateWords
+      : (truncate ? (hojaCompact ? 2 : 5) : null)
+    const words = texto.trim() ? texto.trim().split(/\s+/) : []
+    const truncatedByWords = maxWords != null && words.length > maxWords
+    const display = truncatedByWords ? `${words.slice(0, maxWords).join(' ')}…` : (valor ?? null)
+    const openPopup = truncatedByWords && typeof onTruncateClick === 'function'
+    return (
     <div style={{ minWidth: 0 }}>
       <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
         {labelShort ? (
@@ -3176,14 +3198,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         ) : label}
       </div>
       <div
-        className={truncate ? 'cc-sicoe-truncate' : undefined}
-        title={truncate && valor != null ? String(valor) : undefined}
-        style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}`, ...(truncate ? { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } : {}) }}
+        className={truncate || truncatedByWords ? 'cc-sicoe-truncate' : undefined}
+        title={texto || undefined}
+        role={openPopup ? 'button' : undefined}
+        tabIndex={openPopup ? 0 : undefined}
+        onClick={openPopup ? (e) => { e.stopPropagation(); onTruncateClick() } : undefined}
+        onKeyDown={openPopup ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTruncateClick() } } : undefined}
+        style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}`, cursor: openPopup ? 'pointer' : undefined, ...(truncate || truncatedByWords ? { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } : {}) }}
       >
-        {valor ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
+        {display ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
       </div>
     </div>
-  )
+    )
+  }
 
   const CampoEdit = ({ label, value, onChange, placeholder }) => (
     <div>
@@ -3486,10 +3513,47 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Asignación de Ítem ─ */}
       {(editableCampos || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario) && (
-        <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
-          <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+        <div style={{ background:t.bg, borderRadius:'10px', padding: (!hojaCompact || asignacionExpandida) ? '16px' : '10px 14px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
+          {hojaCompact ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setAsignacionExpandida((v) => !v) }}
+              aria-expanded={asignacionExpandida}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                marginBottom: asignacionExpandida ? 12 : 0,
+                minHeight: 44,
+                textAlign: 'left',
+              }}
+            >
+              <span style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>
+                🔖 Asignación de Ítem
+                {!asignacionExpandida && itemSel?.item_numero ? (
+                  <span style={{ marginLeft: 8, fontWeight: 600, color: t.textMuted, textTransform: 'none', letterSpacing: 0 }}>
+                    · {itemSel.item_numero}
+                  </span>
+                ) : null}
+              </span>
+              <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', flexShrink: 0 }} aria-hidden>
+                {asignacionExpandida ? '▲' : '▼'}
+              </span>
+            </button>
+          ) : (
+            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+          )}
+          {(!hojaCompact || asignacionExpandida) && (
+          <>
           <div
-            style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}
+            className="cc-sicoe-asignacion-grid"
+            style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : '1fr 1fr 2fr', gap:'12px' }}
             onMouseDown={e => e.stopPropagation()}
             onClick={e => e.stopPropagation()}
           >
@@ -3500,7 +3564,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 disabled={!editableCampos}
                 onMouseDown={e => e.stopPropagation()}
                 onKeyDown={e => e.stopPropagation()}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, minHeight: hojaCompact ? 44 : undefined }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -3517,7 +3581,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 placeholder="— Todas —"
                 allowEmpty
                 opciones={competencias}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box' }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box', minHeight: hojaCompact ? 44 : undefined }}
               />
             </div>
             {/* Búsqueda de ítem */}
@@ -3560,7 +3624,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 }}
                 placeholder="Buscar por número o descripción..."
                 disabled={!editableCampos}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65 }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65, minHeight: hojaCompact ? 44 : undefined }}
               />
               {mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
@@ -3585,10 +3649,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {/* Ítem seleccionado — info auto */}
           {itemSel && (
             <div style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : '2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
-              <CampoRO label="Descripción" labelShort="Descr." valor={itemSel.descripcion} truncate />
+              <CampoRO
+                label="Descripción"
+                labelShort="Descr."
+                valor={itemSel.descripcion}
+                truncate={hojaCompact}
+                truncateWords={hojaCompact ? 2 : undefined}
+                onTruncateClick={hojaCompact ? () => setItemInfoPopup({
+                  title: registro?.numero_registro != null ? `Registro #${registro.numero_registro}` : 'Asignación de ítem',
+                  item: itemSel.item_numero || registro?.item_numero || null,
+                  descripcion: itemSel.descripcion || null,
+                  unidad: itemSel.unidad || registro?.unidad || null,
+                  vlrUnitario: nivelInfo.verValoresEconomicos
+                    ? (itemSel.precio_unitario != null ? fmtD(itemSel.precio_unitario) : (vlrUnitario ? fmtD(vlrUnitario) : null))
+                    : null,
+                }) : undefined}
+              />
               <CampoRO label="Unidad"         valor={itemSel.unidad || null} />
               {nivelInfo.verValoresEconomicos && <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={fmtD(itemSel.precio_unitario)} color='#10B981' />}
             </div>
+          )}
+          </>
           )}
         </div>
       )}
@@ -4152,10 +4233,33 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {mediaLightbox && (
         <SicoeMediaLightbox
           open
+          t={t}
+          title={registro?.numero_registro != null ? `Registro #${registro.numero_registro}` : 'Registro fotográfico'}
+          meta={{
+            numero_registro: registro?.numero_registro,
+            item: registro?.item_numero || itemSel?.item_numero || null,
+            descripcion: registro?.item_descripcion || itemSel?.descripcion || null,
+            unidad: registro?.unidad || itemSel?.unidad || null,
+            vlrUnitario: nivelInfo.verValoresEconomicos
+              ? (vlrUnitario ? fmtD(vlrUnitario) : (registro?.vlr_unitario != null ? fmtD(registro.vlr_unitario) : null))
+              : null,
+          }}
           items={mediaLightbox.items}
           index={mediaLightbox.index}
           onClose={() => setMediaLightbox(null)}
           onIndexChange={(i) => setMediaLightbox((prev) => (prev ? { ...prev, index: i } : null))}
+        />
+      )}
+      {itemInfoPopup && (
+        <SicoeItemInfoPopup
+          open
+          t={t}
+          title={itemInfoPopup.title}
+          item={itemInfoPopup.item}
+          descripcion={itemInfoPopup.descripcion}
+          unidad={itemInfoPopup.unidad}
+          vlrUnitario={itemInfoPopup.vlrUnitario}
+          onClose={() => setItemInfoPopup(null)}
         />
       )}
     </div>
@@ -4331,6 +4435,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
   const [registroExpandido, setRegistroExpandido] = useState(null)
   const [menuAccionesRegId, setMenuAccionesRegId] = useState(null)
+  const [itemInfoPopup, setItemInfoPopup] = useState(null)
 
   useEffect(() => {
     if (!repoProp?._autoRegistro) return
@@ -5243,11 +5348,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     const und = sinAsignar ? '—' : String(ref.unidad || '').trim() || '—'
     const vlr = sinAsignar ? null : ref.vlr_unitario
     const verEco = nivelInfo.verValoresEconomicos
+    const descWords = desc.trim() ? desc.trim().split(/\s+/) : []
+    const descTruncatedMobile = carpetaCompact && descWords.length > 2
+    const descDisplayMobile = descTruncatedMobile ? `${descWords.slice(0, 2).join(' ')}…` : desc
+    const openItemInfo = () => setItemInfoPopup({
+      title: sinAsignar ? 'Sin ítem asignado' : `Ítem ${itemCode}`,
+      item: sinAsignar ? null : itemCode,
+      descripcion: desc,
+      unidad: sinAsignar ? null : und,
+      vlrUnitario: verEco && vlr != null && vlr !== '' ? fmtPesosResumenItemTab(vlr) : null,
+    })
     const gridStyle = {
       display: 'grid',
-      gridTemplateColumns: verEco
-        ? 'minmax(3.2rem,0.42fr) minmax(5rem,1.25fr) minmax(2rem,0.18fr) minmax(4rem,0.38fr) minmax(3.5rem,0.32fr) minmax(4rem,0.38fr)'
-        : 'minmax(3.2rem,0.42fr) minmax(5rem,1.45fr) minmax(2rem,0.22fr) minmax(3.5rem,0.4fr)',
+      gridTemplateColumns: carpetaCompact
+        ? (verEco ? 'minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,0.9fr)' : 'minmax(0,1.6fr) minmax(0,1fr)')
+        : (verEco
+          ? 'minmax(3.2rem,0.42fr) minmax(5rem,1.25fr) minmax(2rem,0.18fr) minmax(4rem,0.38fr) minmax(3.5rem,0.32fr) minmax(4rem,0.38fr)'
+          : 'minmax(3.2rem,0.42fr) minmax(5rem,1.45fr) minmax(2rem,0.22fr) minmax(3.5rem,0.4fr)'),
       gap: 'var(--cc-space-2)',
       alignItems: 'center',
       background: t.bgCard,
@@ -5272,6 +5389,40 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
+    }
+
+    if (carpetaCompact) {
+      return (
+        <div className="cc-sicoe-item-resumen-mobile" style={gridStyle} role="group" aria-label="Resumen del ítem en este reporte">
+          <div>
+            <div style={th}>Descripción</div>
+            <div
+              style={{ ...td, lineHeight: 1.3, cursor: descTruncatedMobile ? 'pointer' : undefined }}
+              title={desc}
+              role={descTruncatedMobile ? 'button' : undefined}
+              tabIndex={descTruncatedMobile ? 0 : undefined}
+              onClick={descTruncatedMobile ? (e) => { e.stopPropagation(); openItemInfo() } : undefined}
+              onKeyDown={descTruncatedMobile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItemInfo() } } : undefined}
+            >
+              {descDisplayMobile}
+            </div>
+          </div>
+          <div>
+            <div style={th}>Cantidad</div>
+            <div style={{ ...td, textAlign: 'left', fontVariantNumeric: 'tabular-nums', fontSize: 'var(--cc-body)' }}>
+              {fmtCantResumenItemTab(sumCant)}
+            </div>
+          </div>
+          {verEco && (
+            <div>
+              <div style={{ ...th, textAlign: 'right' }}>Costo dir.</div>
+              <div style={{ ...td, textAlign: 'right', color: t.primary, fontVariantNumeric: 'tabular-nums', fontSize: 'var(--cc-body)' }}>
+                {fmtPesosResumenItemTab(sumCd)}
+              </div>
+            </div>
+          )}
+        </div>
+      )
     }
 
     return (
@@ -6562,6 +6713,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </div>
           </div>
         </div>
+      )}
+
+      {itemInfoPopup && (
+        <SicoeItemInfoPopup
+          open
+          t={t}
+          title={itemInfoPopup.title}
+          item={itemInfoPopup.item}
+          descripcion={itemInfoPopup.descripcion}
+          unidad={itemInfoPopup.unidad}
+          vlrUnitario={itemInfoPopup.vlrUnitario}
+          onClose={() => setItemInfoPopup(null)}
+        />
       )}
     </div>
   )
@@ -13937,9 +14101,16 @@ function MiniMapaSemaforo({
 // ─── BUZÓN DE NOTIFICACIONES ──────────────────────────────────────────────────
 const BUZON_Z_PANEL = 11000
 const BUZON_Z_MODAL = 11001
+/** Por encima del menú móvil (12060) para que el panel no quede atrapado bajo el drawer. */
+const BUZON_Z_PANEL_MOBILE = 13000
+const BUZON_Z_MODAL_MOBILE = 13001
 
-function BuzonNotificaciones({ t, usuario, onNavegar }) {
+function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   const API = API_BASE
+  const { isMobile: buzonVpMobile, isLandscapeMobile: buzonLandscapeMobile } = useClaraViewport()
+  const buzonMobile = buzonVpMobile || buzonLandscapeMobile
+  const zPanel = buzonMobile ? BUZON_Z_PANEL_MOBILE : BUZON_Z_PANEL
+  const zModal = buzonMobile ? BUZON_Z_MODAL_MOBILE : BUZON_Z_MODAL
   const contratoCtx = usuario?.contrato_id
   const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
   const [abierto,       setAbierto]       = useState(false)
@@ -13959,6 +14130,7 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
   const [enviando, setEnviando] = useState(false)
   const [respondiendo, setRespondiendo] = useState(false)
   const [respuesta,    setRespuesta]    = useState('')
+  const [accionId, setAccionId] = useState(null)
 
   const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
   const authHeaders = () => {
@@ -13968,6 +14140,14 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
   const authHeadersJson = () => ({ ...authHeaders(), 'Content-Type': 'application/json' })
   const excluirSoporte = (lista) =>
     (Array.isArray(lista) ? lista : []).filter((n) => (n.tipo || '').toUpperCase() !== 'SOPORTE')
+
+  const setAbiertoSafe = (next) => {
+    setAbierto((prev) => {
+      const val = typeof next === 'function' ? next(prev) : next
+      onOpenChange?.(val)
+      return val
+    })
+  }
 
   const cargarCount = async () => {
     if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
@@ -14055,6 +14235,13 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
     cargarRecibidos(); cargarEnviados(); cargarDestinatarios()
   }, [abierto, contratoCtx, filtroRecibidos])
 
+  useEffect(() => {
+    if (!buzonMobile || !abierto) return undefined
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [buzonMobile, abierto])
+
   async function abrirHilo(notif) {
     if ((notif?.tipo || '').toUpperCase() === 'SOPORTE') return
     setHiloActivo(notif)
@@ -14088,6 +14275,40 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
     setHiloLoading(false)
     cargarCount()
     cargarRecibidos()
+  }
+
+  async function marcarLeida(notif, e) {
+    e?.stopPropagation?.()
+    if (!notif?.id || notif.leido || accionId === notif.id) return
+    setAccionId(notif.id)
+    try {
+      await fetch(`${API}/notificaciones/${notif.id}/leida`, { method: 'PUT', headers: authHeaders() })
+      setRecibidos((prev) => prev.map((n) => (n.id === notif.id ? { ...n, leido: true } : n)))
+      await cargarCount()
+      await cargarRecibidos()
+    } finally {
+      setAccionId(null)
+    }
+  }
+
+  async function ocultarNotif(notif, e) {
+    e?.stopPropagation?.()
+    if (!notif?.id || accionId === notif.id) return
+    setAccionId(notif.id)
+    try {
+      await fetch(`${API}/notificaciones/${notif.id}/ocultar`, { method: 'PUT', headers: authHeaders() })
+      setRecibidos((prev) => prev.filter((n) => n.id !== notif.id))
+      setEnviados((prev) => prev.filter((n) => n.id !== notif.id))
+      if (hiloActivo?.id === notif.id) {
+        setHiloActivo(null)
+        setHiloError('')
+      }
+      await cargarCount()
+      await cargarRecibidos()
+      await cargarEnviados()
+    } finally {
+      setAccionId(null)
+    }
   }
 
   async function enviarNuevo() {
@@ -14151,7 +14372,7 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
   const seccionH = (titulo, cant, color) => (
     <div
       style={{
-        fontSize: 'var(--cc-caption)',
+        fontSize: buzonMobile ? 'var(--cc-label)' : 'var(--cc-caption)',
         fontWeight: '800',
         letterSpacing: '0.6px',
         textTransform: 'uppercase',
@@ -14172,314 +14393,794 @@ function BuzonNotificaciones({ t, usuario, onNavegar }) {
   )
 
   const btnTab = (key, label) => (
-    <button key={key} onClick={() => setTab(key)} style={{
-      background: tab===key ? t.primary : 'transparent',
-      color: tab===key ? '#fff' : t.textMuted,
-      border: `1px solid ${tab===key ? t.primary : t.border}`,
-      borderRadius:'20px', padding:'4px 14px', fontSize:'var(--cc-sm)',
-      fontWeight: tab===key ? '700' : '400', cursor:'pointer'
-    }}>{label}</button>
+    <button
+      key={key}
+      type="button"
+      onClick={() => setTab(key)}
+      style={{
+        background: tab===key ? t.primary : 'transparent',
+        color: tab===key ? '#fff' : t.textMuted,
+        border: `1px solid ${tab===key ? t.primary : t.border}`,
+        borderRadius:'20px',
+        padding: buzonMobile ? '10px 16px' : '4px 14px',
+        fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+        fontWeight: tab===key ? '700' : '400',
+        cursor:'pointer',
+        minHeight: buzonMobile ? 44 : undefined,
+        flex: buzonMobile ? 1 : undefined,
+      }}
+    >
+      {label}
+    </button>
   )
 
   const ItemNotif = ({ n, esRecibido }) => {
     const noLeida = esRecibido && !n.leido
+    const busy = accionId === n.id
     return (
-      <div onClick={() => abrirHilo(n)}
-        style={{ padding:'10px 14px', borderRadius:'8px', cursor: 'pointer', marginBottom:'6px',
+      <div
+        className={buzonMobile ? 'cc-buzon-item' : undefined}
+        onClick={() => abrirHilo(n)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrirHilo(n) } }}
+        style={{
+          padding: buzonMobile ? '12px 14px' : '10px 14px',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          marginBottom: '6px',
           background: noLeida ? t.primary+'11' : t.bg,
           border: `1px solid ${noLeida ? t.primary+'44' : t.border}`,
-          transition:'background 0.15s' }}
-        onMouseEnter={e => { e.currentTarget.style.background = t.primary+'18' }}
-        onMouseLeave={e => { e.currentTarget.style.background = noLeida ? t.primary+'11' : t.bg }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
+          transition: 'background 0.15s',
+          minHeight: buzonMobile ? 44 : undefined,
+        }}
+        onMouseEnter={e => { if (!buzonMobile) e.currentTarget.style.background = t.primary+'18' }}
+        onMouseLeave={e => { if (!buzonMobile) e.currentTarget.style.background = noLeida ? t.primary+'11' : t.bg }}
+      >
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px', gap: 8 }}>
           <div style={{ display:'flex', alignItems:'center', gap:'6px', minWidth:0, flex:1 }}>
             {noLeida && <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:t.primary, flexShrink:0 }}/>}
-            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.asunto}</span>
+            <span style={{
+              fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+              fontWeight:'700',
+              color:t.text,
+              overflow:'hidden',
+              textOverflow:'ellipsis',
+              whiteSpace: buzonMobile ? 'normal' : 'nowrap',
+              lineHeight: 1.35,
+            }}>{n.asunto}</span>
           </div>
-          <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, flexShrink:0, marginLeft:'8px' }}>{fmtFecha(n.created_at)}</span>
+          <span style={{ fontSize: buzonMobile ? 'var(--cc-label)' : 'var(--cc-caption)', color:t.textMuted, flexShrink:0 }}>{fmtFecha(n.created_at)}</span>
         </div>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, flexWrap: buzonMobile ? 'wrap' : 'nowrap' }}>
+          <span style={{ fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)', color:t.textMuted }}>
             {esRecibido ? `De: ${n.remitente_nombre}` : `Para: ${destinatarios.find(d=>d.id===n.destinatario_id)?.nombre || (n.destinatario_id ? `#${n.destinatario_id}` : 'Todos')}`}
           </span>
           <span style={{ fontSize:'var(--cc-caption)', background: tipoColor(n.tipo)+'22', color: tipoColor(n.tipo), border:`1px solid ${tipoColor(n.tipo)}44`, borderRadius:'20px', padding:'1px 8px' }}>
             {tipoLabel(n.tipo)}
           </span>
         </div>
-        {n.mensaje && <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.mensaje}</div>}
+        {n.mensaje && (
+          <div style={{
+            fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)',
+            color:t.textMuted,
+            marginTop:'4px',
+            overflow:'hidden',
+            textOverflow:'ellipsis',
+            whiteSpace: buzonMobile ? 'normal' : 'nowrap',
+            display: buzonMobile ? '-webkit-box' : undefined,
+            WebkitLineClamp: buzonMobile ? 2 : undefined,
+            WebkitBoxOrient: buzonMobile ? 'vertical' : undefined,
+            lineHeight: 1.4,
+          }}>{n.mensaje}</div>
+        )}
+        {buzonMobile && (
+          <div
+            className="cc-buzon-item-actions"
+            style={{
+              display: 'flex',
+              gap: 8,
+              marginTop: 10,
+              flexWrap: 'wrap',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {esRecibido && noLeida && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={(e) => marcarLeida(n, e)}
+                aria-label="Marcar como leída"
+                style={{
+                  flex: 1,
+                  minHeight: 44,
+                  minWidth: 0,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.primary}66`,
+                  background: t.primary + '18',
+                  color: t.primary,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: busy ? 'wait' : 'pointer',
+                }}
+              >
+                ✓ Leída
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={(e) => ocultarNotif(n, e)}
+              aria-label="Eliminar del buzón"
+              style={{
+                flex: 1,
+                minHeight: 44,
+                minWidth: 0,
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: 'transparent',
+                color: t.textMuted,
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                cursor: busy ? 'wait' : 'pointer',
+              }}
+            >
+              🗑 Eliminar
+            </button>
+          </div>
+        )}
       </div>
     )
   }
 
-  return (
-    <>
-      {/* Campana */}
-      <div style={{ position:'relative' }}>
-        <button onClick={() => setAbierto(o => !o)} style={{
+  const campanaBtn = (
+    <div style={{ position:'relative' }}>
+      <button
+        type="button"
+        className={buzonMobile ? 'cc-buzon-trigger' : undefined}
+        onClick={() => setAbiertoSafe((o) => !o)}
+        aria-label={noLeidas > 0 ? `Notificaciones, ${noLeidas} sin leer` : 'Notificaciones'}
+        aria-expanded={abierto}
+        style={{
           background: abierto ? t.primary+'22' : 'transparent',
           border: `1px solid ${abierto ? t.primary : t.border}`,
-          borderRadius:'8px', padding:'6px 12px', cursor:'pointer',
-          color: abierto ? t.primary : t.textMuted, fontSize:'var(--cc-lg)', lineHeight:1,
-          display:'flex', alignItems:'center', gap:'4px'
-        }}>
-          🔔
-          {noLeidas > 0 && (
-            <span style={{ background:'#EF4444', color:'#fff', borderRadius:'20px', fontSize:'var(--cc-caption)', fontWeight:'700', padding:'1px 6px', minWidth:'16px', textAlign:'center' }}>
-              {noLeidas > 99 ? '99+' : noLeidas}
-            </span>
-          )}
-        </button>
-      </div>
+          borderRadius: buzonMobile ? 10 : 8,
+          padding: buzonMobile ? 0 : '6px 12px',
+          width: buzonMobile ? 44 : undefined,
+          height: buzonMobile ? 44 : undefined,
+          cursor:'pointer',
+          color: abierto ? t.primary : t.textMuted,
+          fontSize: buzonMobile ? '1.25rem' : 'var(--cc-lg)',
+          lineHeight:1,
+          display:'flex',
+          alignItems:'center',
+          justifyContent: 'center',
+          gap:'4px',
+          flexShrink: 0,
+          position: 'relative',
+        }}
+      >
+        🔔
+        {noLeidas > 0 && (
+          <span
+            className="cc-buzon-badge"
+            style={{
+              position: buzonMobile ? 'absolute' : 'static',
+              top: buzonMobile ? -4 : undefined,
+              right: buzonMobile ? -4 : undefined,
+              background:'#EF4444',
+              color:'#fff',
+              borderRadius:'20px',
+              fontSize: buzonMobile ? 11 : 'var(--cc-caption)',
+              fontWeight:'700',
+              padding: buzonMobile ? '2px 6px' : '1px 6px',
+              minWidth: buzonMobile ? 18 : 16,
+              height: buzonMobile ? 18 : undefined,
+              textAlign:'center',
+              lineHeight: buzonMobile ? '14px' : undefined,
+              boxShadow: buzonMobile ? '0 0 0 2px ' + (t.headerBg || t.bgCard) : undefined,
+              pointerEvents: 'none',
+            }}
+          >
+            {noLeidas > 99 ? '99+' : noLeidas}
+          </span>
+        )}
+      </button>
+    </div>
+  )
 
-      {/* Panel buzón */}
-      {abierto && (
-        <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:BUZON_Z_PANEL, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
-          {/* Header del buzón */}
-          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div>
-              <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
-            </div>
-            <div style={{ display:'flex', gap:'8px' }}>
-              <button onClick={() => setMostrarNuevo(true)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'5px 12px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
-                ✉️ Nuevo
-              </button>
-              <button onClick={() => setAbierto(false)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
-            </div>
-          </div>
-
-          {/* Tabs */}
-          <div style={{ padding:'10px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px' }}>
-            {btnTab('recibidos', `📥 Recibidos${noLeidas > 0 ? ` (${noLeidas})` : ''}`)}
-            {btnTab('enviados', '📤 Enviados')}
-          </div>
-
-          {/* Filtro recibidos: todas vs solo no leídas */}
-          {tab === 'recibidos' && (
-            <div style={{ padding: '8px 16px 0', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: '4px' }}>Vista:</span>
-              <button
-                type="button"
-                onClick={() => setFiltroRecibidos('todas')}
-                style={{
-                  background: filtroRecibidos === 'todas' ? t.primary : 'transparent',
-                  color: filtroRecibidos === 'todas' ? '#fff' : t.textMuted,
-                  border: `1px solid ${filtroRecibidos === 'todas' ? t.primary : t.border}`,
-                  borderRadius: '20px', padding: '3px 12px', fontSize: 'var(--cc-label)', fontWeight: filtroRecibidos === 'todas' ? '700' : '500',
-                  cursor: 'pointer',
-                }}
-              >
-                Todas (separadas)
-              </button>
-              <button
-                type="button"
-                onClick={() => setFiltroRecibidos('no_leidas')}
-                style={{
-                  background: filtroRecibidos === 'no_leidas' ? t.primary : 'transparent',
-                  color: filtroRecibidos === 'no_leidas' ? '#fff' : t.textMuted,
-                  border: `1px solid ${filtroRecibidos === 'no_leidas' ? t.primary : t.border}`,
-                  borderRadius: '20px', padding: '3px 12px', fontSize: 'var(--cc-label)', fontWeight: filtroRecibidos === 'no_leidas' ? '700' : '500',
-                  cursor: 'pointer',
-                }}
-              >
-                Solo no leídas{noLeidas > 0 ? ` · ${noLeidas}` : ''}
-              </button>
-            </div>
-          )}
-
-          {/* Lista */}
-          <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
-            {tab === 'recibidos' && (
-              recibidos.length === 0
-                ? (
-                    <div style={{ textAlign:'center', padding:'32px 16px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
-                      {filtroRecibidos === 'no_leidas'
-                        ? 'No hay notificaciones sin leer. Las que abriste o marcaste ya quedan en “Todas (separadas)”.'
-                        : 'Sin notificaciones recibidas.'}
-                    </div>
-                  )
-                : (filtroRecibidos === 'no_leidas'
-                    ? recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
-                    : (() => {
-                        const sinLeer = recibidos.filter(n => !n.leido)
-                        const leidasList = recibidos.filter(n => n.leido)
-                        return (
-                          <div>
-                            {sinLeer.length > 0 && (
-                              <div style={{ marginBottom: leidasList.length ? '16px' : 0 }}>
-                                {seccionH('Sin leer', sinLeer.length, t.primary)}
-                                {sinLeer.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
-                              </div>
-                            )}
-                            {leidasList.length > 0 && (
-                              <div>
-                                {seccionH('Leídas / archivo', leidasList.length, t.textMuted)}
-                                {leidasList.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })()
-                  )
-            )}
-            {tab === 'enviados' && (
-              enviados.length === 0
-                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin mensajes enviados</div>
-                : enviados.map(n => <ItemNotif key={n.id} n={n} esRecibido={false} />)
-            )}
-          </div>
-
-          {/* Soporte al desarrollador */}
-          {!esDev && (
-            <div style={{ padding:'12px 16px', borderTop:`1px solid ${t.border}` }}>
-              <button onClick={() => { setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'SOPORTE' }); setMostrarNuevo(true) }}
-                style={{ width:'100%', background:'#F59E0B22', border:'1px solid #F59E0B66', borderRadius:'8px', padding:'8px', color:'#F59E0B', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
-                🐛 Reportar bug / Solicitar al Desarrollador
-              </button>
-            </div>
-          )}
-        </div>
+  const panelEl = abierto ? (
+    <>
+      {buzonMobile && (
+        <div
+          role="presentation"
+          className="cc-buzon-backdrop"
+          onClick={() => setAbiertoSafe(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: zPanel - 1,
+            background: 'rgba(0,0,0,0.45)',
+          }}
+        />
       )}
+      <div
+        className={buzonMobile ? 'cc-buzon-panel cc-buzon-panel--mobile' : 'cc-buzon-panel'}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Notificaciones"
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          left: buzonMobile ? 0 : undefined,
+          bottom: 0,
+          width: buzonMobile ? '100%' : '400px',
+          maxWidth: buzonMobile ? '100vw' : undefined,
+          background: t.bgCard,
+          borderLeft: buzonMobile ? 'none' : `1px solid ${t.border}`,
+          zIndex: zPanel,
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: buzonMobile ? '0 8px 32px rgba(0,0,0,0.28)' : '-4px 0 24px rgba(0,0,0,0.2)',
+          paddingTop: buzonMobile ? 'env(safe-area-inset-top, 0px)' : undefined,
+          paddingBottom: buzonMobile ? 'env(safe-area-inset-bottom, 0px)' : undefined,
+        }}
+      >
+        <div style={{
+          padding: buzonMobile ? '12px 14px' : '16px 20px',
+          borderBottom: `1px solid ${t.border}`,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          flexShrink: 0,
+        }}>
+          <div style={{ fontSize: buzonMobile ? 'var(--cc-lg)' : 'var(--cc-md)', fontWeight: '700', color: t.text, minWidth: 0 }}>
+            🔔 Notificaciones
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setMostrarNuevo(true)}
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: buzonMobile ? '10px 14px' : '5px 12px',
+                fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-sm)',
+                fontWeight: 700,
+                cursor: 'pointer',
+                minHeight: buzonMobile ? 44 : undefined,
+              }}
+            >
+              ✉️ Nuevo
+            </button>
+            <button
+              type="button"
+              onClick={() => setAbiertoSafe(false)}
+              aria-label="Cerrar notificaciones"
+              style={{
+                background: buzonMobile ? t.bg : 'transparent',
+                border: buzonMobile ? `1px solid ${t.border}` : 'none',
+                borderRadius: 8,
+                width: buzonMobile ? 44 : undefined,
+                height: buzonMobile ? 44 : undefined,
+                fontSize: 'var(--cc-lg)',
+                cursor: 'pointer',
+                color: t.text,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
 
-      {/* Modal hilo */}
-      {hiloActivo && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:BUZON_Z_MODAL, display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={() => { setHiloActivo(null); setHiloError('') }}>
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'540px', maxWidth:'95vw', maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
-              <div>
-                <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto || hiloActivo.asunto}</div>
-                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'2px' }}>
-                  {hiloLoading
-                    ? 'Cargando…'
-                    : hiloError
-                      ? 'No se pudo cargar el hilo'
-                      : `${hilo.length} mensaje${hilo.length !== 1 ? 's' : ''} en este hilo`}
-                </div>
-              </div>
-              <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
-                {(hilo[0]?.modulo || hiloActivo?.modulo) && (
-                  <button onClick={() => { onNavegar(hilo[0] || hiloActivo); setHiloActivo(null); setAbierto(false) }}
-                    style={{ background:t.primary+'22', border:`1px solid ${t.primary}44`, borderRadius:'8px', padding:'5px 12px', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
-                    🔍 Rastrear registro
-                  </button>
-                )}
-                <button onClick={() => setHiloActivo(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
-              </div>
-            </div>
-            <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'10px', marginBottom:'14px' }}>
-              {hiloLoading ? (
-                <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>⏳ Cargando...</div>
-              ) : hiloError ? (
-                <div style={{ textAlign:'center', padding:'24px 16px', color:'#f87171', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>
-                  {hiloError}
-                  {(hiloActivo.mensaje || hiloActivo.asunto) && (
-                    <div style={{ marginTop:'16px', padding:'12px', borderRadius:'10px', background:t.bg, border:`1px solid ${t.border}`, color:t.text, textAlign:'left' }}>
-                      {hiloActivo.asunto && (
-                        <div style={{ fontWeight:'700', marginBottom:'6px' }}>{hiloActivo.asunto}</div>
-                      )}
-                      {hiloActivo.mensaje && (
-                        <div style={{ fontSize:'var(--cc-sm)', lineHeight:1.6, whiteSpace:'pre-wrap' }}>{hiloActivo.mensaje}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : hilo.map((m) => {
-                const esMio = m.remitente_id === usuario?.id
-                return (
-                  <div key={m.id} style={{ background: esMio ? t.primary+'11' : t.bg, border:`1px solid ${esMio ? t.primary+'33' : t.border}`, borderRadius:'10px', padding:'12px' }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
-                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{fmtFecha(m.created_at)}</span>
-                    </div>
-                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.6, whiteSpace:'pre-wrap' }}>{m.mensaje}</div>
+        <div style={{
+          padding: buzonMobile ? '12px 14px' : '10px 16px',
+          borderBottom: `1px solid ${t.border}`,
+          display: 'flex',
+          gap: 8,
+          flexShrink: 0,
+        }}>
+          {btnTab('recibidos', `📥 Recibidos${noLeidas > 0 ? ` (${noLeidas})` : ''}`)}
+          {btnTab('enviados', '📤 Enviados')}
+        </div>
+
+        {tab === 'recibidos' && (
+          <div style={{
+            padding: buzonMobile ? '10px 14px 0' : '8px 16px 0',
+            display: 'flex',
+            gap: 6,
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            flexShrink: 0,
+          }}>
+            {!buzonMobile && (
+              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: '4px' }}>Vista:</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setFiltroRecibidos('todas')}
+              style={{
+                background: filtroRecibidos === 'todas' ? t.primary : 'transparent',
+                color: filtroRecibidos === 'todas' ? '#fff' : t.textMuted,
+                border: `1px solid ${filtroRecibidos === 'todas' ? t.primary : t.border}`,
+                borderRadius: '20px',
+                padding: buzonMobile ? '10px 14px' : '3px 12px',
+                fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)',
+                fontWeight: filtroRecibidos === 'todas' ? '700' : '500',
+                cursor: 'pointer',
+                minHeight: buzonMobile ? 44 : undefined,
+                flex: buzonMobile ? 1 : undefined,
+              }}
+            >
+              Todas (separadas)
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltroRecibidos('no_leidas')}
+              style={{
+                background: filtroRecibidos === 'no_leidas' ? t.primary : 'transparent',
+                color: filtroRecibidos === 'no_leidas' ? '#fff' : t.textMuted,
+                border: `1px solid ${filtroRecibidos === 'no_leidas' ? t.primary : t.border}`,
+                borderRadius: '20px',
+                padding: buzonMobile ? '10px 14px' : '3px 12px',
+                fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)',
+                fontWeight: filtroRecibidos === 'no_leidas' ? '700' : '500',
+                cursor: 'pointer',
+                minHeight: buzonMobile ? 44 : undefined,
+                flex: buzonMobile ? 1 : undefined,
+              }}
+            >
+              Solo no leídas{noLeidas > 0 ? ` · ${noLeidas}` : ''}
+            </button>
+          </div>
+        )}
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: buzonMobile ? '12px 14px' : '12px 16px', WebkitOverflowScrolling: 'touch' }}>
+          {tab === 'recibidos' && (
+            recibidos.length === 0
+              ? (
+                  <div style={{ textAlign:'center', padding:'32px 16px', color:t.textMuted, fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)' }}>
+                    {filtroRecibidos === 'no_leidas'
+                      ? 'No hay notificaciones sin leer. Las que abriste o marcaste ya quedan en “Todas (separadas)”.'
+                      : 'Sin notificaciones recibidas.'}
                   </div>
                 )
-              })}
+              : (filtroRecibidos === 'no_leidas'
+                  ? recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
+                  : (() => {
+                      const sinLeer = recibidos.filter(n => !n.leido)
+                      const leidasList = recibidos.filter(n => n.leido)
+                      return (
+                        <div>
+                          {sinLeer.length > 0 && (
+                            <div style={{ marginBottom: leidasList.length ? '16px' : 0 }}>
+                              {seccionH('Sin leer', sinLeer.length, t.primary)}
+                              {sinLeer.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
+                            </div>
+                          )}
+                          {leidasList.length > 0 && (
+                            <div>
+                              {seccionH('Leídas / archivo', leidasList.length, t.textMuted)}
+                              {leidasList.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()
+                )
+          )}
+          {tab === 'enviados' && (
+            enviados.length === 0
+              ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)' }}>Sin mensajes enviados</div>
+              : enviados.map(n => <ItemNotif key={n.id} n={n} esRecibido={false} />)
+          )}
+        </div>
+
+        {!esDev && (
+          <div style={{ padding: buzonMobile ? '12px 14px' : '12px 16px', borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => { setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'SOPORTE' }); setMostrarNuevo(true) }}
+              style={{
+                width: '100%',
+                background: '#F59E0B22',
+                border: '1px solid #F59E0B66',
+                borderRadius: 8,
+                padding: buzonMobile ? '12px' : '8px',
+                color: '#F59E0B',
+                fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                fontWeight: 700,
+                cursor: 'pointer',
+                minHeight: buzonMobile ? 44 : undefined,
+              }}
+            >
+              🐛 Reportar bug / Solicitar al Desarrollador
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  ) : null
+
+  const hiloModal = hiloActivo ? (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: zModal,
+        display: 'flex',
+        alignItems: buzonMobile ? 'stretch' : 'center',
+        justifyContent: 'center',
+        padding: buzonMobile ? 0 : undefined,
+      }}
+      onClick={() => { setHiloActivo(null); setHiloError('') }}
+    >
+      <div
+        style={{
+          background: t.bgCard,
+          border: buzonMobile ? 'none' : `1px solid ${t.border}`,
+          borderRadius: buzonMobile ? 0 : 16,
+          padding: buzonMobile ? '14px 14px max(14px, env(safe-area-inset-bottom))' : 24,
+          width: buzonMobile ? '100%' : 540,
+          maxWidth: buzonMobile ? '100vw' : '95vw',
+          height: buzonMobile ? '100%' : undefined,
+          maxHeight: buzonMobile ? '100dvh' : '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: buzonMobile ? 'none' : '0 20px 60px rgba(0,0,0,0.35)',
+          paddingTop: buzonMobile ? 'max(14px, env(safe-area-inset-top))' : undefined,
+          boxSizing: 'border-box',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 8 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: buzonMobile ? 'var(--cc-lg)' : 'var(--cc-md)', fontWeight: 700, color: t.text, lineHeight: 1.3 }}>
+              {hilo[0]?.asunto || hiloActivo.asunto}
             </div>
-            {/* Responder */}
-            {!hiloError && hilo.length > 0 && (
-            <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px' }}>
-              <div style={{ position:'relative' }}>
-                <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
-                  placeholder="Escribe tu respuesta..."
-                  style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'var(--cc-sm)', resize:'vertical', boxSizing:'border-box' }} />
-                <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
-                  <EmojiPicker t={t} onSelect={em => setRespuesta(prev => prev + em)} />
-                </div>
-              </div>
-              <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'8px' }}>
-                <button onClick={responder} disabled={!respuesta.trim()}
-                  style={{ background: respuesta.trim() && !respondiendo ? t.primary : t.border, color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed', opacity: respondiendo ? 0.7 : 1 }}>
-                  {respondiendo ? 'Enviando...' : '↩ Responder'}
-                </button>
-              </div>
+            <div style={{ fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)', color: t.textMuted, marginTop: 2 }}>
+              {hiloLoading
+                ? 'Cargando…'
+                : hiloError
+                  ? 'No se pudo cargar el hilo'
+                  : `${hilo.length} mensaje${hilo.length !== 1 ? 's' : ''} en este hilo`}
             </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {(hilo[0]?.modulo || hiloActivo?.modulo) && (
+              <button
+                type="button"
+                onClick={() => { onNavegar(hilo[0] || hiloActivo); setHiloActivo(null); setAbiertoSafe(false) }}
+                style={{
+                  background: t.primary + '22',
+                  border: `1px solid ${t.primary}44`,
+                  borderRadius: 8,
+                  padding: buzonMobile ? '10px 12px' : '5px 12px',
+                  color: t.primary,
+                  fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  minHeight: buzonMobile ? 44 : undefined,
+                }}
+              >
+                🔍 Rastrear
+              </button>
             )}
+            <button
+              type="button"
+              onClick={() => setHiloActivo(null)}
+              aria-label="Cerrar hilo"
+              style={{
+                background: buzonMobile ? t.bg : 'transparent',
+                border: buzonMobile ? `1px solid ${t.border}` : 'none',
+                borderRadius: 8,
+                width: buzonMobile ? 44 : undefined,
+                height: buzonMobile ? 44 : undefined,
+                fontSize: 'var(--cc-lg)',
+                cursor: 'pointer',
+                color: t.text,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              ✕
+            </button>
           </div>
         </div>
-      )}
-
-      {/* Modal nuevo mensaje */}
-      {mostrarNuevo && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:BUZON_Z_MODAL, display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={() => setMostrarNuevo(false)}>
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'480px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
-              <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>✉️ Nuevo Mensaje</div>
-              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
-            </div>
-            {esDev && (
-              <div style={{ marginBottom:'14px' }}>
-                <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>TIPO</label>
-                <select value={nuevo.tipo} onChange={e => setNuevo({...nuevo, tipo: e.target.value, destinatario_id: e.target.value === 'BROADCAST' ? '' : nuevo.destinatario_id})}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)' }}>
-                  <option value="MENSAJE_DIRECTO">💬 Mensaje Directo</option>
-                  <option value="BROADCAST">📢 Broadcast — Todos los usuarios</option>
-                </select>
-              </div>
-            )}
-            {nuevo.tipo !== 'BROADCAST' && (
-              <div style={{ marginBottom:'14px' }}>
-                <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>PARA</label>
-                <select value={nuevo.destinatario_id} onChange={e => setNuevo({...nuevo, destinatario_id: e.target.value})}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)' }}>
-                  <option value="">— Selecciona destinatario —</option>
-                  {nuevo.tipo === 'SOPORTE'
-                    ? destinatarios.filter(d => d.cargo?.toLowerCase() === 'desarrollador').map(d => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
-                    : destinatarios.map(d => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
-                  }
-                </select>
-              </div>
-            )}
-            <div style={{ marginBottom:'14px' }}>
-              <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>ASUNTO</label>
-              <input value={nuevo.asunto} onChange={e => setNuevo({...nuevo, asunto: e.target.value})}
-                placeholder="Asunto del mensaje..."
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-            </div>
-            <div style={{ marginBottom:'20px' }}>
-              <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>MENSAJE</label>
-              <div style={{ position:'relative' }}>
-                <textarea value={nuevo.mensaje} onChange={e => setNuevo({...nuevo, mensaje: e.target.value})}
-                  placeholder="Escribe tu mensaje..."
-                  style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)', resize:'vertical', boxSizing:'border-box' }} />
-                <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
-                  <EmojiPicker t={t} onSelect={em => setNuevo(n => ({...n, mensaje: n.mensaje + em}))} />
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14, WebkitOverflowScrolling: 'touch' }}>
+          {hiloLoading ? (
+            <div style={{ textAlign: 'center', padding: 30, color: t.textMuted }}>⏳ Cargando...</div>
+          ) : hiloError ? (
+            <div style={{ textAlign: 'center', padding: '24px 16px', color: '#f87171', fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)', lineHeight: 1.5 }}>
+              {hiloError}
+              {(hiloActivo.mensaje || hiloActivo.asunto) && (
+                <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: t.bg, border: `1px solid ${t.border}`, color: t.text, textAlign: 'left' }}>
+                  {hiloActivo.asunto && (
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{hiloActivo.asunto}</div>
+                  )}
+                  {hiloActivo.mensaje && (
+                    <div style={{ fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{hiloActivo.mensaje}</div>
+                  )}
                 </div>
+              )}
+            </div>
+          ) : hilo.map((m) => {
+            const esMio = m.remitente_id === usuario?.id
+            return (
+              <div key={m.id} style={{ background: esMio ? t.primary + '11' : t.bg, border: `1px solid ${esMio ? t.primary + '33' : t.border}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+                  <span style={{ fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)', fontWeight: 700, color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
+                  <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>{fmtFecha(m.created_at)}</span>
+                </div>
+                <div style={{ fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)', color: t.text, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{m.mensaje}</div>
+              </div>
+            )
+          })}
+        </div>
+        {!hiloError && hilo.length > 0 && (
+          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 12, flexShrink: 0 }}>
+            <div style={{ position: 'relative' }}>
+              <textarea
+                value={respuesta}
+                onChange={(e) => setRespuesta(e.target.value)}
+                placeholder="Escribe tu respuesta..."
+                style={{
+                  width: '100%',
+                  minHeight: buzonMobile ? 88 : 72,
+                  background: t.bg,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  color: t.text,
+                  fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                  resize: 'vertical',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ position: 'absolute', bottom: 8, right: 8 }}>
+                <EmojiPicker t={t} onSelect={(em) => setRespuesta((prev) => prev + em)} />
               </div>
             </div>
-            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
-              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 18px', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
-              <button onClick={enviarNuevo} disabled={enviando || !nuevo.asunto || !nuevo.mensaje || (nuevo.tipo !== 'BROADCAST' && !nuevo.destinatario_id)}
-                style={{ background: t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: enviando ? 0.7 : 1 }}>
-                {enviando ? 'Enviando...' : '📨 Enviar'}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={responder}
+                disabled={!respuesta.trim()}
+                style={{
+                  background: respuesta.trim() && !respondiendo ? t.primary : t.border,
+                  color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted,
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: buzonMobile ? '12px 20px' : '8px 20px',
+                  fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed',
+                  opacity: respondiendo ? 0.7 : 1,
+                  minHeight: buzonMobile ? 44 : undefined,
+                  width: buzonMobile ? '100%' : undefined,
+                }}
+              >
+                {respondiendo ? 'Enviando...' : '↩ Responder'}
               </button>
             </div>
           </div>
+        )}
+      </div>
+    </div>
+  ) : null
+
+  const nuevoModal = mostrarNuevo ? (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: zModal,
+        display: 'flex',
+        alignItems: buzonMobile ? 'stretch' : 'center',
+        justifyContent: 'center',
+      }}
+      onClick={() => setMostrarNuevo(false)}
+    >
+      <div
+        style={{
+          background: t.bgCard,
+          border: buzonMobile ? 'none' : `1px solid ${t.border}`,
+          borderRadius: buzonMobile ? 0 : 16,
+          padding: buzonMobile ? '14px 14px max(14px, env(safe-area-inset-bottom))' : 28,
+          width: buzonMobile ? '100%' : 480,
+          maxWidth: buzonMobile ? '100vw' : '95vw',
+          height: buzonMobile ? '100%' : undefined,
+          maxHeight: buzonMobile ? '100dvh' : undefined,
+          overflowY: buzonMobile ? 'auto' : undefined,
+          WebkitOverflowScrolling: 'touch',
+          boxShadow: buzonMobile ? 'none' : '0 20px 60px rgba(0,0,0,0.35)',
+          paddingTop: buzonMobile ? 'max(14px, env(safe-area-inset-top))' : undefined,
+          boxSizing: 'border-box',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 8 }}>
+          <div style={{ fontSize: buzonMobile ? 'var(--cc-lg)' : 'var(--cc-md)', fontWeight: 700, color: t.text }}>✉️ Nuevo Mensaje</div>
+          <button
+            type="button"
+            onClick={() => setMostrarNuevo(false)}
+            aria-label="Cerrar nuevo mensaje"
+            style={{
+              background: buzonMobile ? t.bg : 'transparent',
+              border: buzonMobile ? `1px solid ${t.border}` : 'none',
+              borderRadius: 8,
+              width: buzonMobile ? 44 : undefined,
+              height: buzonMobile ? 44 : undefined,
+              fontSize: 'var(--cc-lg)',
+              cursor: 'pointer',
+              color: t.text,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            ✕
+          </button>
         </div>
-      )}
+        {esDev && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>TIPO</label>
+            <select
+              value={nuevo.tipo}
+              onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value, destinatario_id: e.target.value === 'BROADCAST' ? '' : nuevo.destinatario_id })}
+              style={{
+                width: '100%',
+                background: t.bg,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                padding: buzonMobile ? '12px' : '8px 12px',
+                color: t.text,
+                fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                minHeight: buzonMobile ? 44 : undefined,
+              }}
+            >
+              <option value="MENSAJE_DIRECTO">💬 Mensaje Directo</option>
+              <option value="BROADCAST">📢 Broadcast — Todos los usuarios</option>
+            </select>
+          </div>
+        )}
+        {nuevo.tipo !== 'BROADCAST' && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>PARA</label>
+            <select
+              value={nuevo.destinatario_id}
+              onChange={(e) => setNuevo({ ...nuevo, destinatario_id: e.target.value })}
+              style={{
+                width: '100%',
+                background: t.bg,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                padding: buzonMobile ? '12px' : '8px 12px',
+                color: t.text,
+                fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                minHeight: buzonMobile ? 44 : undefined,
+              }}
+            >
+              <option value="">— Selecciona destinatario —</option>
+              {nuevo.tipo === 'SOPORTE'
+                ? destinatarios.filter((d) => d.cargo?.toLowerCase() === 'desarrollador').map((d) => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
+                : destinatarios.map((d) => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>ASUNTO</label>
+          <input
+            value={nuevo.asunto}
+            onChange={(e) => setNuevo({ ...nuevo, asunto: e.target.value })}
+            placeholder="Asunto del mensaje..."
+            style={{
+              width: '100%',
+              background: t.bg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              padding: buzonMobile ? '12px' : '8px 12px',
+              color: t.text,
+              fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+              boxSizing: 'border-box',
+              minHeight: buzonMobile ? 44 : undefined,
+            }}
+          />
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>MENSAJE</label>
+          <div style={{ position: 'relative' }}>
+            <textarea
+              value={nuevo.mensaje}
+              onChange={(e) => setNuevo({ ...nuevo, mensaje: e.target.value })}
+              placeholder="Escribe tu mensaje..."
+              style={{
+                width: '100%',
+                minHeight: buzonMobile ? 120 : 100,
+                background: t.bg,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                padding: '10px 12px',
+                color: t.text,
+                fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                resize: 'vertical',
+                boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ position: 'absolute', bottom: 8, right: 8 }}>
+              <EmojiPicker t={t} onSelect={(em) => setNuevo((n) => ({ ...n, mensaje: n.mensaje + em }))} />
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexDirection: buzonMobile ? 'column-reverse' : 'row' }}>
+          <button
+            type="button"
+            onClick={() => setMostrarNuevo(false)}
+            style={{
+              background: 'transparent',
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              padding: buzonMobile ? '12px 18px' : '8px 18px',
+              fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+              color: t.textMuted,
+              cursor: 'pointer',
+              minHeight: buzonMobile ? 44 : undefined,
+              width: buzonMobile ? '100%' : undefined,
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={enviarNuevo}
+            disabled={enviando || !nuevo.asunto || !nuevo.mensaje || (nuevo.tipo !== 'BROADCAST' && !nuevo.destinatario_id)}
+            style={{
+              background: t.primary,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: buzonMobile ? '12px 22px' : '8px 22px',
+              fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+              fontWeight: 700,
+              cursor: 'pointer',
+              opacity: enviando ? 0.7 : 1,
+              minHeight: buzonMobile ? 44 : undefined,
+              width: buzonMobile ? '100%' : undefined,
+            }}
+          >
+            {enviando ? 'Enviando...' : '📨 Enviar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
+  const overlays = (
+    <>
+      {panelEl}
+      {hiloModal}
+      {nuevoModal}
+    </>
+  )
+
+  return (
+    <>
+      {campanaBtn}
+      {(abierto || hiloActivo || mostrarNuevo) && typeof document !== 'undefined'
+        ? createPortal(overlays, document.body)
+        : null}
     </>
   )
 }
@@ -16317,8 +17018,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === nombreLower && p.ver
     )
-  const tieneModuloSst = _permisoVerFuncion('sst documental')
-  const tieneModuloEnsayos = _permisoVerFuncion('ensayos pip')
   const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
   const progPermisos = permisosProgramacionObra(usuario, usuario?.contrato_id)
   const tienePermisoProgramacionObra = progPermisos.ver
@@ -16542,27 +17241,36 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           )}
         </div>
         {isMobileHeader ? (
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen((o) => !o)}
-            aria-label={mobileNavOpen ? 'Cerrar menú' : 'Abrir menú'}
-            aria-expanded={mobileNavOpen}
-            style={{
-              background: 'transparent',
-              border: `1px solid ${t.border}`,
-              borderRadius: 10,
-              width: 44,
-              height: 44,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: t.primary,
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            {mobileNavOpen ? <X size={22} strokeWidth={2.2} aria-hidden /> : <Menu size={22} strokeWidth={2.2} aria-hidden />}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <BuzonNotificaciones
+              key={`buzon-m-bar-${usuario?.contrato_id ?? 'x'}`}
+              t={t}
+              usuario={usuario}
+              onNavegar={(...args) => { setMobileNavOpen(false); handleNavegar(...args) }}
+              onOpenChange={(open) => { if (open) setMobileNavOpen(false) }}
+            />
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen((o) => !o)}
+              aria-label={mobileNavOpen ? 'Cerrar menú' : 'Abrir menú'}
+              aria-expanded={mobileNavOpen}
+              style={{
+                background: 'transparent',
+                border: `1px solid ${t.border}`,
+                borderRadius: 10,
+                width: 44,
+                height: 44,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: t.primary,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              {mobileNavOpen ? <X size={22} strokeWidth={2.2} aria-hidden /> : <Menu size={22} strokeWidth={2.2} aria-hidden />}
+            </button>
+          </div>
         ) : (
         <div className="cc-header-actions-desktop" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
           <AVITriggerButton t={t} />
@@ -16777,10 +17485,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   <span style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>Asistente AVI</span>
                   <AVITriggerButton t={t} />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
-                  <span style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>Notificaciones</span>
-                  <BuzonNotificaciones key={`buzon-m-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} onNavegar={(...args) => { setMobileNavOpen(false); handleNavegar(...args) }} />
-                </div>
                 <button
                   type="button"
                   onClick={() => { onOpenPerfil && onOpenPerfil(); setMobileNavOpen(false) }}
@@ -16872,9 +17576,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
-            ['sst',          '🦺', 'SST',            !esContador && tieneModuloSst],
-            ['ensayos',      '🧪', 'Ensayos',        !esContador && tieneModuloEnsayos],
-            ['auditor_sst',  '🛡️', 'Auditor SST',   !esContador && tieneModuloAuditorSst],
+            ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
             <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
@@ -16927,8 +17629,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
-              ['sst', '🦺', 'SST', !esContador && tieneModuloSst],
-              ['ensayos', '🧪', 'Ensayos', !esContador && tieneModuloEnsayos],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
             ].filter(([, , , visible]) => visible).map(([key, icon, label]) => (
               <button
@@ -19916,10 +20616,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           )
         )}
 
-
-        {moduloActivo === 'sst' && tieneModuloSst && <ModuloSST t={t} usuario={usuario} />}
-
-        {moduloActivo === 'ensayos' && tieneModuloEnsayos && <ModuloEnsayos t={t} usuario={usuario} />}
 
         {moduloActivo === 'auditor_sst' && tieneModuloAuditorSst && <ModuloAuditorSST t={t} usuario={usuario} />}
 

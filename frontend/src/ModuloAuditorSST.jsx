@@ -205,7 +205,7 @@ export default function ModuloAuditorSST({ usuario, t }) {
 
   if (!cid) return <div style={{ color: t.textMuted }}>Selecciona contrato.</div>
   if (!puedeAuditar && !puedeImportar) {
-    return <div style={{ color: t.textMuted }}>Sin permiso «Auditor SST (IA)». Activa Ver u Crear en Admin → Control de accesos.</div>
+    return <div style={{ color: t.textMuted }}>Sin permiso «Auditor (IA)». Activa Ver u Crear en Admin → Control de accesos.</div>
   }
 
   const card = { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }
@@ -700,7 +700,7 @@ export default function ModuloAuditorSST({ usuario, t }) {
 
   return (
     <div style={{ color: t.text, fontSize: 'var(--cc-sm)' }}>
-      <h2 style={{ color: t.primary, fontSize: 'var(--cc-h2)' }}>Auditor SST (IA)</h2>
+      <h2 style={{ color: t.primary, fontSize: 'var(--cc-h2)' }}>Auditor (IA)</h2>
       <p style={{ color: t.textMuted, fontSize: 'var(--cc-label)', marginBottom: 12 }}>
         Compare la nómina FOAC con PDFs por colaborador. Los resultados completos se guardan en Supabase cuando la tabla{' '}
         <code style={{ fontSize: 'var(--cc-caption)' }}>sst_auditorias</code> incluye <code style={{ fontSize: 'var(--cc-caption)' }}>resultado_json</code>{' '}

@@ -264,6 +264,7 @@ export default function PptoFiltroModal({
     <div
       role="dialog"
       aria-modal="true"
+      className="cc-ppto-modal-overlay"
       style={{
         position: 'fixed',
         inset: 0,
@@ -277,6 +278,7 @@ export default function PptoFiltroModal({
       onClick={(e) => e.target === e.currentTarget && !buscando && onClose()}
     >
       <div
+        className="cc-ppto-modal-sheet"
         style={{
           background: t.bgCard,
           border: `1px solid ${t.border}`,
@@ -324,7 +326,10 @@ export default function PptoFiltroModal({
           })}
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+        <div
+          className="cc-ppto-modal-body"
+          style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', WebkitOverflowScrolling: 'touch' }}
+        >
           {tab === 'plantillas' && (
             <div>
               <div
@@ -561,6 +566,7 @@ export default function PptoFiltroModal({
                     </button>
                     {abierto && (
                       <div
+                        className="cc-ppto-filtro-campos-grid"
                         style={{
                           padding: '12px 14px 14px',
                           borderTop: `1px solid ${t.border}`,
@@ -591,6 +597,7 @@ export default function PptoFiltroModal({
         </div>
 
         <div
+          className="cc-ppto-modal-footer"
           style={{
             padding: '14px 20px',
             borderTop: `1px solid ${t.border}`,
@@ -599,6 +606,7 @@ export default function PptoFiltroModal({
             alignItems: 'center',
             flexWrap: 'wrap',
             gap: 8,
+            flexShrink: 0,
           }}
         >
           <button type="button" onClick={ejecutarLimpiarTodo} disabled={buscando} style={{ ...btnSec, color: t.textMuted }}>

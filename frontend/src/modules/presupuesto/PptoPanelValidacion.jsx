@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
+import { useClaraViewport } from '../../useClaraViewport'
 import {
   PPTO_PANEL_ESTADOS,
   pptoPanelAgruparValidacion,
@@ -132,6 +133,8 @@ export default function PptoPanelValidacion({
   const checksRef = useRef(checks)
   /** Evita que autoCapitulo vuelva a forzar ítems tras pulsar «Atrás». */
   const navegacionManualRef = useRef(null)
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
+  const compact = vpMobile || isLandscapeMobile
 
   const panelCss = useMemo(() => {
     const base = t.bgCard
@@ -369,7 +372,145 @@ export default function PptoPanelValidacion({
   const puedeVolver = busquedaActiva && nivel === 'item'
 
   return (
-    <div style={shellStyle}>
+    <div className="cc-ppto-panel-validacion" style={shellStyle}>
+      {compact ? (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          if (e.target.closest('button[data-ppto-panel-action]')) return
+          setExpandido((v) => !v)
+        }}
+        onKeyDown={(e) => e.key === 'Enter' && setExpandido((v) => !v)}
+        className="cc-ppto-panel-header cc-ppto-panel-header--mobile"
+        style={{
+          padding: '10px 12px',
+          borderBottom: expandido ? '1px solid var(--ppto-panel-border)' : 'none',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'stretch',
+          gap: 8,
+          background: 'var(--ppto-panel-header)',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}>
+          {puedeVolver && (
+            <button
+              type="button"
+              data-ppto-panel-action
+              onClick={(e) => {
+                e.stopPropagation()
+                volverCapitulos()
+              }}
+              style={{ ...btnAtras, minHeight: 44, padding: '10px 12px' }}
+              title="Volver al listado de capítulos"
+            >
+              ← Atrás
+            </button>
+          )}
+          <span style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: 'var(--ppto-panel-text)', flex: 1, minWidth: 0 }}>
+            {encabezado}
+          </span>
+          <span style={{ color: 'var(--ppto-panel-muted)', fontSize: 'var(--cc-caption)', flexShrink: 0 }} title={expandido ? 'Contraer panel' : 'Expandir panel'}>
+            {expandido ? '▲' : '▼'}
+          </span>
+        </div>
+
+        <div className="cc-ppto-panel-actions" style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 8, width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {typeof onLimpiarTodo === 'function' && (
+            <button
+              type="button"
+              data-ppto-panel-action
+              disabled={cargando}
+              onClick={(e) => {
+                e.stopPropagation()
+                onLimpiarTodo()
+              }}
+              title="Quitar todos los filtros y volver a la vista por capítulos (solo presupuesto vigente)"
+              style={{ ...btnLimpiar, flex: 1, minHeight: 44, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+            >
+              Limpiar todo
+            </button>
+          )}
+          <button
+            type="button"
+            data-ppto-panel-action
+            disabled={!puedeBuscar || cargando}
+            onClick={handleBuscar}
+            title="Cargar grilla y resumen (solo presupuesto vigente; sin filtros → vista por capítulo)"
+            style={{ ...btnBuscar, flex: 1, minHeight: 44, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+          >
+            {cargando ? '⏳ Buscando…' : '🔍 Buscar'}
+          </button>
+          {busquedaActiva && labels.length > 0 && (
+            <button
+              type="button"
+              data-ppto-panel-action
+              disabled={cargando}
+              onClick={(e) => {
+                e.stopPropagation()
+                aplicarDesdeChecks()
+              }}
+              style={{
+                background: checksPendientes
+                  ? 'var(--ppto-panel-accent)'
+                  : `color-mix(in srgb, var(--ppto-panel-accent) 14%, var(--ppto-panel-header))`,
+                border: checksPendientes ? 'none' : '1px solid var(--ppto-panel-border)',
+                borderRadius: 6,
+                padding: '10px 12px',
+                minHeight: 44,
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 700,
+                color: checksPendientes ? '#fff' : 'var(--ppto-panel-text)',
+                cursor: cargando ? 'wait' : 'pointer',
+                flex: 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {cargando ? '⏳…' : checksPendientes ? 'Aplicar filtros ●' : 'Aplicar filtros'}
+            </button>
+          )}
+        </div>
+
+        {(busquedaActiva && (labels.length > 0 || avanceGlobal.total > 0)) && (
+          <div
+            className="cc-ppto-panel-meta"
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 10,
+              width: '100%',
+              fontSize: 'var(--cc-sm)',
+              color: 'var(--ppto-panel-muted)',
+              fontWeight: 600,
+            }}
+          >
+            {labels.length > 0 && <span>{checks.size}/{labels.length} filas</span>}
+            {avanceGlobal.total > 0 && (
+              <span
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                title={`${avanceGlobal.pct}% del volumen ya salió de «No revisado». ${avanceGlobal.pendientes.toLocaleString('es-CO')} reg. pendientes en ${avanceGlobal.filasIncompletas} ${nivel === 'capitulo' ? 'capítulos' : 'ítems'}.`}
+              >
+                <IndicadorAvance pct={avanceGlobal.pct} pendientes={avanceGlobal.pendientes} size="sm" />
+                <span>
+                  {avanceGlobal.pct}% validado
+                  {avanceGlobal.filasIncompletas > 0 ? (
+                    <span style={{ color: '#3B82F6', fontWeight: 700 }}> · {avanceGlobal.filasIncompletas} pend.</span>
+                  ) : null}
+                </span>
+              </span>
+            )}
+            <span>
+              {fmtCant(totales.totalCant)} cant.
+              {verValoresEconomicos ? ` · ${fmt(totales.totalCosto)}` : ''}
+            </span>
+          </div>
+        )}
+      </div>
+      ) : (
       <div
         role="button"
         tabIndex={0}
@@ -493,9 +634,10 @@ export default function PptoPanelValidacion({
           {expandido ? '▲' : '▼'}
         </span>
       </div>
+      )}
 
       {expandido && (
-        <div style={{ overflowX: 'auto', background: 'var(--ppto-panel-body)', borderTop: '1px solid var(--ppto-panel-outline)' }}>
+        <div className="cc-ppto-panel-table-scroll" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', background: 'var(--ppto-panel-body)', borderTop: '1px solid var(--ppto-panel-outline)' }}>
           {!busquedaActiva ? (
             <div
               style={{
@@ -531,7 +673,7 @@ export default function PptoPanelValidacion({
               Sin registros para el filtro actual.
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: compact ? 'var(--cc-sm)' : 'var(--cc-caption)', minWidth: compact ? 640 : undefined }}>
               <thead>
                 <tr>
                   <th style={{ ...th, width: 36, textAlign: 'center' }}>
@@ -587,6 +729,7 @@ export default function PptoPanelValidacion({
                         : g.pctValidado >= 100
                           ? '3px solid color-mix(in srgb, #10B981 35%, transparent)'
                           : '3px solid transparent',
+                      minHeight: compact ? 44 : undefined,
                     }}
                   >
                     <td style={{ padding: '3px 6px', textAlign: 'center' }}>

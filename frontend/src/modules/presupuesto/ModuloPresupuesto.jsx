@@ -11,6 +11,7 @@ import { supabase } from '../../supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
+import { useClaraViewport } from '../../useClaraViewport'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
@@ -271,6 +272,8 @@ function pptoCtxFiltro(drillRef, capExpandidoRef) {
 function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRegistroConsumed, oculto = false }) {
   const API = API_BASE
   const contratoId = usuario?.contrato_id
+  const { isMobile: pptoVpMobile, isLandscapeMobile: pptoLandscapeMobile } = useClaraViewport()
+  const pptoCompact = pptoVpMobile || pptoLandscapeMobile
 
   // ── Estado ─────────────────────────────────────────────────────────────────
   const [registros, setRegistros] = useState([])
@@ -4998,11 +5001,15 @@ async function restaurar(id) {
 
       {/* Modal detalle registro presupuesto */}
       {modalDetallePpto && (
-        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:'12px' }}
+        <div
+          className="cc-ppto-modal-overlay"
+          style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:'12px' }}
           onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}>
-          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'min(1040px, 100%)',maxWidth:'100%',maxHeight:'min(80vh, 700px)',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
+          <div
+            className="cc-ppto-modal-sheet cc-ppto-detalle-sheet"
+            style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'min(1040px, 100%)',maxWidth:'100%',maxHeight:'min(80vh, 700px)',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:'0 20px 60px rgba(0,0,0,0.4)',display:'flex',flexDirection:'column',boxSizing:'border-box' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap' }}>
+            <div className="cc-ppto-detalle-header" style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap', flexShrink:0 }}>
               <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize:'var(--cc-md)',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
                 {(() => {
@@ -5024,13 +5031,20 @@ async function restaurar(id) {
                         fontWeight: '700',
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
+                        minHeight: 44,
                       }}
                     >✏️ Editar</button>
                   )
                 })()}
               </div>
-              <button onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }} style={{ background:'transparent',border:'none',fontSize:'var(--cc-lg)',cursor:'pointer',color:t.textMuted }}>✕</button>
+              <button
+                type="button"
+                aria-label="Cerrar detalle"
+                onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}
+                style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, width: 44, height: 44, fontSize:'var(--cc-lg)',cursor:'pointer',color:t.text, display:'inline-flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}
+              >✕</button>
             </div>
+            <div className="cc-ppto-modal-body" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
             {(() => {
               const r = modalDetallePpto
               const F = ({label, val, flex=1}) => (
@@ -5040,7 +5054,7 @@ async function restaurar(id) {
                 </div>
               )
               const Row = ({children}) => (
-                <div style={{ display:'flex',gap:'12px',background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>{children}</div>
+                <div className="cc-ppto-detalle-row" style={{ display:'flex',gap:'12px',background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px',flexWrap:'wrap' }}>{children}</div>
               )
               const BigF = ({label, val}) => (
                 <div style={{ background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>
@@ -5066,7 +5080,7 @@ async function restaurar(id) {
                       🔓 Como contratista puede editar capítulo/ítem y datos permitidos: al guardar se pedirá un motivo obligatorio, se anulará el sellado y el estado de Interventoría volverá a «No Revisado» para volver a validar.
                     </div>
                   )}
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
+                  <div className="cc-ppto-detalle-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
                     <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
                       <Row>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -5124,8 +5138,8 @@ async function restaurar(id) {
                   </div>
                   {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
-                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'14px', paddingTop:'14px' }}>
-                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'stretch' }}>
+                    <div className="cc-ppto-detalle-acciones" style={{ borderTop:`1px solid ${t.border}`, marginTop:'14px', paddingTop:'14px' }}>
+                      <div className="cc-ppto-detalle-acciones-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'stretch' }}>
                       {/* ── Editar dimensiones — ancho/espesor siempre con permiso; área/long solo sin CAD o contrato autorizado ── */}
                       {puedeEditarDimensiones && !esSellado(r) && (
                         <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
@@ -5143,39 +5157,39 @@ async function restaurar(id) {
                               <span> El campo <strong>área/long/nod</strong> debe modificarse desde ClaraLink/DWG en este contrato.</span>
                             )}
                           </div>
-                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarAreaLongNodInline() ? '10px' : '8px' }}>
+                          <div className="cc-ppto-detalle-fields" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarAreaLongNodInline() ? '10px' : '8px' }}>
                             <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                               <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ANCHO</span>
                               <input type="number" step="any" value={popupDims.ancho}
                                 onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
-                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
                             </label>
                             <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                               <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ESPESOR</span>
                               <input type="number" step="any" value={popupDims.espesor}
                                 onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
-                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
                             </label>
                           </div>
                           {puedeEditarAreaLongNodInline() && (
-                            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'8px' }}>
+                            <div className="cc-ppto-detalle-fields" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'8px' }}>
                               <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ÁREA / LONG / NOD</span>
                                 <input type="number" step="any" value={popupDims.area_long_nod}
                                   onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
                               </label>
                               <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO INICIO</span>
                                 <input type="text" value={popupDims.no_inicio}
                                   onChange={e => setPopupDims(d => ({...d, no_inicio: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
                               </label>
                               <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO FINAL</span>
                                 <input type="text" value={popupDims.no_final}
                                   onChange={e => setPopupDims(d => ({...d, no_final: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
                               </label>
                             </div>
                           )}
@@ -5453,6 +5467,7 @@ async function restaurar(id) {
                 </>
               )
             })()}
+            </div>
           </div>
         </div>
       )}
@@ -6303,12 +6318,255 @@ async function restaurar(id) {
       </div>
       {/* ── Tabla ── */}
       {(busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
-        <div ref={pptoTablaScrollRef} style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
-          <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)' }}>
+        <>
+        {pptoCompact && (
+          <div className="cc-ppto-reg-cards" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+            {registrosPagina.map((r) => {
+              const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : undefined
+              const colorRev = r.revisado === 'Aprobado' ? '#10B981' : r.revisado === 'Pendiente' ? '#F59E0B' : r.revisado === 'Rechazado' ? '#EF4444' : '#3B82F6'
+              return (
+                <div
+                  key={`card-${r.id}`}
+                  className="cc-ppto-reg-card"
+                  onClick={() => {
+                    navegarRegistroEnPlano(r)
+                    abrirDetallePptoDesdeFila(r)
+                  }}
+                  style={{
+                    background: seleccionados.has(r.id) ? (t.primary + '18') : (bgSellado || t.bgCard),
+                    border: `1px solid ${seleccionados.has(r.id) ? t.primary : t.border}`,
+                    borderLeft: `4px solid ${colorRev}`,
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    minHeight: 44,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={seleccionados.has(r.id)}
+                      disabled={esSellado(r)}
+                      onChange={() => toggleSel(r.id)}
+                      style={{ width: 18, height: 18, cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1, flexShrink: 0 }}
+                    />
+                    <span style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-body)', flex: 1, minWidth: 0 }}>
+                      {r.id_pol || r.pk_id || `#${r.id}`}
+                    </span>
+                    {esSellado(r) && <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: '#15803d' }}>🔒</span>}
+                    <button
+                      type="button"
+                      aria-label="Ver detalle"
+                      onClick={() => abrirDetallePptoDesdeFila(r)}
+                      style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, minWidth: 44, minHeight: 44, cursor: 'pointer', fontSize: 'var(--cc-md)' }}
+                    >ℹ️</button>
+                  </div>
+                  <div className="cc-ppto-reg-card-meta">
+                    <div className="cc-ppto-reg-card-meta-item">
+                      <span>Capítulo</span>
+                      <span className="cc-sicoe-truncate" title={r.capitulo || '—'}>{r.capitulo || '—'}</span>
+                    </div>
+                    <div className="cc-ppto-reg-card-meta-item">
+                      <span>Ítem</span>
+                      <span className="cc-sicoe-truncate" title={r.item || '—'}>{r.item || '—'}</span>
+                    </div>
+                    <div className="cc-ppto-reg-card-meta-item">
+                      <span>Cant.</span>
+                      <span className="cc-sicoe-num">{fmtN(r.cant_total)}</span>
+                    </div>
+                    <div className="cc-ppto-reg-card-meta-item">
+                      <span>Estado</span>
+                      <span style={{ color: colorRev, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: colorRev, flexShrink: 0 }} />
+                        {r.revisado || 'No Revisado'}
+                      </span>
+                    </div>
+                  </div>
+                  {r.descripcion && (
+                    <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion}>
+                      {r.descripcion}
+                    </div>
+                  )}
+                  <div className="cc-ppto-reg-card-actions" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      aria-label="Trazabilidad"
+                      title="Trazabilidad"
+                      onClick={() => setTrazabilidadPresupuesto(r)}
+                      style={{
+                        width: 40,
+                        minWidth: 40,
+                        height: 40,
+                        minHeight: 40,
+                        flex: '0 0 auto',
+                        background: t.bg,
+                        border: `1px solid ${t.border}`,
+                        borderRadius: 8,
+                        color: t.primary,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        fontSize: 'var(--cc-md)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                      }}
+                    >📜</button>
+                    {mostrarColumnaDepuracion && (() => {
+                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
+                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
+                      return (
+                        <div className="cc-ppto-reg-card-semaforo" title="Depuración" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 6px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, minHeight: 40 }}>
+                          <span style={{ fontSize: 9, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>Dep</span>
+                          {SEMAFORO.map((s) => {
+                            const activo = preDisp === s.valor
+                            return (
+                              <button
+                                key={`card-pre-${s.valor}`}
+                                type="button"
+                                aria-label={`Depuración: ${s.valor}`}
+                                title={esLegadoPre ? `${s.valor} (legado)` : `Depuración: ${s.valor}`}
+                                onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
+                                style={{
+                                  width: activo ? 16 : 12,
+                                  height: activo ? 16 : 12,
+                                  borderRadius: '50%',
+                                  background: activo ? s.color : s.color + '33',
+                                  border: `2px solid ${activo ? s.color : s.color + '66'}`,
+                                  cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
+                                  opacity: esSellado(r) ? 0.55 : 1,
+                                  padding: 0,
+                                  boxShadow: activo ? `0 0 6px ${s.color}88` : 'none',
+                                }}
+                              />
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
+                    <div className="cc-ppto-reg-card-semaforo" title="Interventoría" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 6px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, minHeight: 40 }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>Int</span>
+                      {SEMAFORO.map((s) => {
+                        const activo = (r.revisado || 'No Revisado') === s.valor
+                        return (
+                          <button
+                            key={`card-int-${s.valor}`}
+                            type="button"
+                            aria-label={`Interventoría: ${s.valor}`}
+                            title={
+                              puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                                ? `${s.valor} — requiere depuración aprobada`
+                                : s.valor
+                            }
+                            onClick={() => puedeValidarInterventoriaRegistro(r) && !activo && cambiarEstadoDirecto(r.id, s.valor)}
+                            style={{
+                              width: activo ? 16 : 12,
+                              height: activo ? 16 : 12,
+                              borderRadius: '50%',
+                              background: activo ? s.color : s.color + '33',
+                              border: `2px solid ${activo ? s.color : s.color + '66'}`,
+                              cursor: puedeValidarInterventoriaRegistro(r) && !activo ? 'pointer' : 'default',
+                              opacity: esSellado(r) ? 0.55 : 1,
+                              padding: 0,
+                              boxShadow: activo ? `0 0 6px ${s.color}88` : 'none',
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                    {puedeEditar && (
+                      <button
+                        type="button"
+                        aria-label="Detalle"
+                        title="Detalle"
+                        onClick={() => abrirDetallePptoDesdeFila(r)}
+                        style={{
+                          width: 40,
+                          minWidth: 40,
+                          height: 40,
+                          minHeight: 40,
+                          flex: '0 0 auto',
+                          background: t.primary,
+                          border: 'none',
+                          borderRadius: 8,
+                          color: '#fff',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontSize: 'var(--cc-md)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >✏️</button>
+                    )}
+                    {puedeEliminar && !verPapelera && seleccionados.has(r.id) && !esSellado(r) && (
+                      <button
+                        type="button"
+                        aria-label="Dar de baja"
+                        title="Dar de baja"
+                        onClick={() => darDeBaja(r.id)}
+                        style={{
+                          width: 40,
+                          minWidth: 40,
+                          height: 40,
+                          minHeight: 40,
+                          flex: '0 0 auto',
+                          background: '#EF444415',
+                          border: '1px solid #EF444444',
+                          borderRadius: 8,
+                          color: '#EF4444',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontSize: 'var(--cc-md)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >🗑️</button>
+                    )}
+                    {puedeEliminar && verPapelera && seleccionados.has(r.id) && (
+                      <button
+                        type="button"
+                        aria-label="Restaurar"
+                        title="Restaurar"
+                        onClick={() => restaurar(r.id)}
+                        style={{
+                          width: 40,
+                          minWidth: 40,
+                          height: 40,
+                          minHeight: 40,
+                          flex: '0 0 auto',
+                          background: '#10B98115',
+                          border: '1px solid #10B98144',
+                          borderRadius: 8,
+                          color: '#10B981',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontSize: 'var(--cc-md)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >🔄</button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
+          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: 1100 }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                <th style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
-                <th style={thStyle}>ID_POL</th>
+                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
+                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={thStyle}>ID_POL</th>
                 <th style={thStyle}>Capítulo</th>
                 <th style={thStyle}>Competencia</th>
                 <th style={thStyle}>Ítem</th>
@@ -6335,9 +6593,9 @@ async function restaurar(id) {
               {registrosPagina.map(r => {
                 const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : 'transparent'
                 return (
-                  <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
+                  <tr key={r.id} data-id={r.id} className="cc-ppto-data-row" style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { navegarRegistroEnPlano(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
-                    <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
                           style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
@@ -6351,7 +6609,7 @@ async function restaurar(id) {
                         </button>
                       </div>
                     </td>
-                    <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                       <span
                         onClick={() => abrirDetallePptoDesdeFila(r)}
                         title="Ver detalle"
@@ -6569,16 +6827,21 @@ async function restaurar(id) {
               })}
             </tbody>
           </table>
-          {hayMasRegistrosVista && (
+        </div>
+        {hayMasRegistrosVista && (
             <div
               style={{
                 padding: '12px 16px',
-                borderTop: `1px solid ${t.border}`,
+                borderTop: pptoCompact ? 'none' : undefined,
                 display: 'flex',
                 flexWrap: 'wrap',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 8,
+                background: t.bgCard,
+                border: `1px solid ${t.border}`,
+                borderRadius: 12,
+                marginTop: pptoCompact ? 0 : undefined,
               }}
             >
               <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: 4 }}>
@@ -6597,7 +6860,8 @@ async function restaurar(id) {
                     background: inc === 'all' ? t.primary + '18' : 'transparent',
                     border: `1px solid ${inc === 'all' ? t.primary + '66' : t.border}`,
                     borderRadius: 8,
-                    padding: '7px 14px',
+                    padding: pptoCompact ? '10px 14px' : '7px 14px',
+                    minHeight: pptoCompact ? 44 : undefined,
                     fontSize: 'var(--cc-sm)',
                     fontWeight: 600,
                     color: inc === 'all' ? t.primary : t.textMuted,
@@ -6610,7 +6874,7 @@ async function restaurar(id) {
               ))}
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   )

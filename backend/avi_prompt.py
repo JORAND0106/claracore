@@ -20,8 +20,6 @@ MODULOS_VALIDOS = frozenset({
     "programacion_obra",
     "plano_semaforo",
     "guias",
-    "sst",
-    "ensayos",
     "auditor_sst",
     "admin",
     "listado_precios",
@@ -64,9 +62,7 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     ),
     "plano_semaforo": "Plano semáforo: mapa con colores presupuesto vs obra ejecutada/cobrada.",
     "guias": "Guías de usuario publicadas por módulo.",
-    "sst": "Módulo SST documental.",
-    "ensayos": "Ensayos y PIP.",
-    "auditor_sst": "Auditoría SST con inteligencia artificial (documentos y hallazgos).",
+    "auditor_sst": "Auditor con inteligencia artificial (documentos y hallazgos).",
     "admin": "Panel de administración (usuarios, cargos, permisos, contratos, etc.).",
     "listado_precios": "Listado de precios unitarios con agrupadores WBS.",
     "usuarios": "Gestión de usuarios, roles y cargos dentro del panel admin.",
@@ -956,7 +952,7 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
 
 10. Panel de administración
     - Overlay desde el dashboard (no menú lateral): usuarios, cargos, permisos, contratos.
-    - Listado de precios con agrupadores WBS; subcontratistas; actas; integración nube (Drive/OneDrive).
+    - Listado de precios con agrupadores WBS; subcontratistas; actas.
     - Resets de claves; novedades de la página de inicio; diagnóstico de plataforma (Desarrollador).
     - Sembrado de carpetas Cloudinary al crear contrato.
 

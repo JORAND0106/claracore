@@ -190,6 +190,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
 
   return (
     <div
+      className="cc-ppto-modal-overlay"
       style={{
         position: 'fixed',
         inset: 0,
@@ -203,6 +204,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
       onClick={onClose}
     >
       <div
+        className="cc-ppto-modal-sheet"
         style={{
           width: '100%',
           maxWidth: 1100,
@@ -291,13 +293,13 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
           {error && <div style={{ color: '#DC2626', fontSize: 'var(--cc-caption)', marginTop: 8 }}>{error}</div>}
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: '0 0 8px' }}>
+        <div className="cc-ppto-compare-scroll" style={{ flex: 1, overflow: 'auto', padding: '0 0 8px', WebkitOverflowScrolling: 'touch' }}>
           {!loaded ? (
             <div style={{ padding: 24, color: t.textMuted, fontSize: 'var(--cc-sm)', textAlign: 'center' }}>
               Elija el alcance y pulse «Ver comparación» para cargar capítulos e ítems.
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+            <table className="cc-ppto-compare-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: Math.max(720, 200 + numSubCols * 110) }}>
               <thead>
                 <tr style={{ background: `${t.primary}12`, position: 'sticky', top: 0, zIndex: 2 }}>
                   <th rowSpan={2} style={{ ...th, textAlign: 'left', minWidth: 200 }}>Capítulo / Ítem</th>

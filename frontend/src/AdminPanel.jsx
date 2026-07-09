@@ -6,7 +6,6 @@ import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
-import ModuloNube from "./ModuloNube";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
@@ -950,6 +949,18 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
   );
 }
 
+const FUNCIONES_PERMISOS_OCULTAS = new Set([
+  'sst documental',
+  'ensayos pip',
+  'integración nube claracore',
+]);
+
+function _filtrarFuncionesPermisos(lista) {
+  return (lista || []).filter(
+    (f) => !FUNCIONES_PERMISOS_OCULTAS.has((f.nombre || '').trim().toLowerCase()),
+  );
+}
+
 // ─── SECCIÓN 3: Control de accesos ─────────────────────────────────────────
 function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   const [cargoId, setCargoId] = useState("");
@@ -966,15 +977,16 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
   const sel = (extra) => themedSelect(theme, col, extra);
 
-  const cargarPermisos = useCallback(async (id) => {
+  const cargarPermisos = useCallback(async (id, opts = {}) => {
     if (!id || !contratoPermId) return;
-    setLoading(true);
+    const { silent = false } = opts;
+    if (!silent) setLoading(true);
     try {
       const [fns, perms] = await Promise.all([
         call("GET", "/funciones").catch(() => []),
         call("GET", `/admin/permisos/${id}?contrato_id=${contratoPermId}`).catch(() => []),
       ]);
-      setFunciones(fns);
+      setFunciones(_filtrarFuncionesPermisos(fns));
       const mapa = {};
       fns.forEach(f => {
         mapa[f.id] = {};
@@ -991,11 +1003,14 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [call, contratoPermId]);
 
-  useEffect(() => { cargarPermisos(cargoId); }, [cargoId, contratoPermId, cargarPermisos]);
+  useEffect(() => {
+    if (!cargoId) return;
+    cargarPermisos(cargoId);
+  }, [cargoId, contratoPermId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (contratoPermId || !contratos?.length) return;
@@ -1071,9 +1086,21 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
           {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         {cargoId && contratoPermId && (
-          <button type="button" style={{ ...S.btn("primary", true), minHeight: 44, padding: "10px 14px" }} onClick={guardar} disabled={saving}>
-            {saving ? "Guardando..." : "💾 Guardar cambios"}
-          </button>
+          <>
+            <button
+              type="button"
+              style={{ ...S.btn("secondary", true), minHeight: 44, padding: "10px 14px", display: "inline-flex", alignItems: "center", gap: 8 }}
+              onClick={() => cargarPermisos(cargoId)}
+              disabled={loading || saving}
+              title="Recargar matriz desde el servidor"
+            >
+              <RefreshCw size={16} aria-hidden />
+              Actualizar
+            </button>
+            <button type="button" style={{ ...S.btn("primary", true), minHeight: 44, padding: "10px 14px" }} onClick={guardar} disabled={saving}>
+              {saving ? "Guardando..." : "Guardar"}
+            </button>
+          </>
         )}
       </div>
       {cargoId && !loading && (
@@ -7470,7 +7497,6 @@ const TAB_FUNCIONES = {
   subcontratistas: ["subcontratistas"],
   resets:          ["panel de administración"],
   actas:           ["actas"],
-  nube:            ["integración nube claracore"],
 };
 
 function _permisoTabVisible(p) {
@@ -7487,7 +7513,6 @@ const ADMIN_PANEL_TABS = [
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
-  { id: "nube",         label: "Integración nube", soloAdmin: false },
   { id: "inicio",    label: "Página de inicio", soloAdmin: true },
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   { id: "diagnostico", label: "📊 Diagnóstico plataforma", soloDeveloper: true },
@@ -7510,8 +7535,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
       if (isDeveloper) return true;
       if (tabItem.soloDeveloper) return false;
       const funciones = TAB_FUNCIONES[tabItem.id] || [];
-      /* Administrador: mismo acceso que siempre a pestañas clásicas; «Integración nube» exige permiso en matriz. */
-      if (isAdmin && tabItem.id !== "nube") return true;
+      if (isAdmin) return true;
       if (
         funciones.some((fname) =>
           (user?.permisos || []).some(
@@ -7589,7 +7613,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
     actas:       { title: "Actas", sub: "Crear actas RPO y administrativas; cierre anticipado y traslado de residuales (RPO)" },
-    nube:       { title: "Integración nube", sub: "Google Drive u OneDrive: carpetas ClaraCore para SST y ensayos" },
     inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
     diagnostico: {
@@ -7624,7 +7647,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   }, [cargarCargos]);
 
   useEffect(() => {
-    const needContratos = ["contratos", "precios", "subcontratistas", "actas", "nube", "inicio"].includes(tab);
+    const needContratos = ["contratos", "precios", "subcontratistas", "actas", "inicio"].includes(tab);
     if (needContratos && !contratosPanelFetchRef.current) {
       contratosPanelFetchRef.current = true;
       void cargarContratos();
@@ -7815,7 +7838,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
-            {tab === "nube"             && <ModuloNube usuario={user} t={t} contratos={contratosVisibles} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
             {tab === "inicio"           && (
               <SeccionInicioNovedades

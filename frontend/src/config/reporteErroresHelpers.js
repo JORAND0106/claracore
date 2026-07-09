@@ -70,18 +70,8 @@ export function getModulosVisiblesReporte(usuario) {
     },
     { key: 'semaforo', label: 'Plano Semáforo', visible: true },
     {
-      key: 'sst',
-      label: 'SST',
-      visible: _permisoVerFuncion('sst documental'),
-    },
-    {
-      key: 'ensayos',
-      label: 'Ensayos',
-      visible: _permisoVerFuncion('ensayos pip'),
-    },
-    {
       key: 'auditor_sst',
-      label: 'Auditor SST',
+      label: 'Auditor',
       visible: _permisoVerFuncion('auditor sst (ia)'),
     },
   ]

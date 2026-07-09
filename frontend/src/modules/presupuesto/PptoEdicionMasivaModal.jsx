@@ -468,6 +468,7 @@ export default function PptoEdicionMasivaModal({
     <div
       role="dialog"
       aria-modal="true"
+      className="cc-ppto-modal-overlay"
       style={{
         position: 'fixed',
         inset: 0,
@@ -484,6 +485,7 @@ export default function PptoEdicionMasivaModal({
       onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
     >
       <div
+        className="cc-ppto-modal-sheet"
         style={{
           background: t.bgCard,
           border: `1px solid ${t.border}`,
@@ -553,11 +555,11 @@ export default function PptoEdicionMasivaModal({
           })}
         </div>
 
-        <div style={{ padding: `18px 22px`, overflowY: 'auto', flex: 1 }}>
+        <div className="cc-ppto-modal-body cc-ppto-edicion-body" style={{ padding: `18px 22px`, overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
           {tabSafe === 'capitem' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <AvisoMasivaSeleccion t={t} n={nEditables} />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+              <div className="cc-ppto-edicion-fields" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
                 <div style={{ flex: '1 1 200px' }}>
                   <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>NUEVO CAPÍTULO</div>
                   <select
@@ -619,7 +621,7 @@ export default function PptoEdicionMasivaModal({
               <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, fontStyle: 'italic', opacity: 0.82 }}>
                 <strong>Ancho</strong> y <strong>espesor</strong> se editan aquí (también en registros enlazados al plano). El <strong>área/long/nodo</strong> del plano no se cambia en masa — viene de ClaraLink/DWG.
               </p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+              <div className="cc-ppto-edicion-fields" style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
                 <DimInput label="ANCHO" value={dimAncho} onChange={setDimAncho} disabled={!nEditables} t={t} />
                 <DimInput label="ESPESOR" value={dimEspesor} onChange={setDimEspesor} disabled={!nEditables} t={t} />
               </div>
@@ -697,7 +699,7 @@ export default function PptoEdicionMasivaModal({
           )}
         </div>
 
-        <div style={{ padding: `14px 22px`, borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <div className="cc-ppto-modal-footer" style={{ padding: `14px 22px`, borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
           <button
             type="button"
             onClick={onClose}
