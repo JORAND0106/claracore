@@ -5,10 +5,10 @@ import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from '../../geoPlanoSanitize'
 import {
-  FILTER_MAPBOX_LABEL_ABSCISA,
   mapboxPlanoSymbolLayout,
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
+  addMapboxAbscisaLabelLayers,
 } from '../../mapboxPlanoLabels'
 import { crearMapboxMapSeguro } from '../../mapboxSafe'
 
@@ -241,18 +241,22 @@ export default function PptoFiltroMapaPk({
             ? { ...f, properties: { ...f.properties, pk_id: f.properties?.pk_id || pkid } }
             : f
         })
-        if (soloPoligonos.length > 0) {
-          if (isFiltered) {
+        // Puntos de abscisa (etiqueta K+M): necesarios para capas symbol; no mezclar con fill de PK.
+        const puntosAbscisa = (planoFc.features || []).filter((f) => {
+          const gt = f?.geometry?.type
+          if (gt !== 'Point' && gt !== 'MultiPoint') return false
+          return String(f?.properties?.etiqueta ?? f?.properties?.Etiqueta ?? '').trim().length > 0
+        })
+        if (soloPoligonos.length > 0 || puntosAbscisa.length > 0) {
+          let polys = soloPoligonos
+          if (isFiltered && soloPoligonos.length > 0) {
             const matched = soloPoligonos.filter((f) => {
               const id = featurePkId(f)
               return id && permitSet.has(id.toLowerCase())
             })
-            if (matched.length > 0) {
-              planoData = { type: 'FeatureCollection', features: matched }
-            }
-          } else {
-            planoData = { type: 'FeatureCollection', features: soloPoligonos }
+            if (matched.length > 0) polys = matched
           }
+          planoData = { type: 'FeatureCollection', features: [...polys, ...puntosAbscisa] }
         }
 
         if (planoData) {
@@ -272,11 +276,9 @@ export default function PptoFiltroMapaPk({
             source: 'ppto-plano',
             paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
           })
-          map.addLayer({
-            id: 'ppto-labels-abscisa',
-            type: 'symbol',
+          addMapboxAbscisaLabelLayers(map, {
+            idPrefix: 'ppto-labels-abscisa',
             source: 'ppto-plano',
-            filter: FILTER_MAPBOX_LABEL_ABSCISA,
             layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
             paint: MAPBOX_PLANO_PAINT_LABELS,
           })

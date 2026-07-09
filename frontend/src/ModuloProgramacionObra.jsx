@@ -56,10 +56,10 @@ import {
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 import {
-  FILTER_MAPBOX_LABEL_ABSCISA,
   mapboxPlanoSymbolLayout,
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
+  addMapboxAbscisaLabelLayers,
 } from './mapboxPlanoLabels'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
@@ -525,6 +525,10 @@ const PROG_MAP_HANDLERS = Symbol('progMapHandlers')
 
 function removeProgLayersIfAny(map) {
   try {
+    for (const suffix of ['1km', '200m', '50m']) {
+      const id = `prog-labels-abscisa-${suffix}`
+      if (map.getLayer(id)) map.removeLayer(id)
+    }
     if (map.getLayer('prog-labels-abscisa')) map.removeLayer('prog-labels-abscisa')
     if (map.getLayer('prog-desviacion-line')) map.removeLayer('prog-desviacion-line')
     if (map.getLayer('prog-fill-ejec')) map.removeLayer('prog-fill-ejec')
@@ -618,11 +622,9 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick, mapViewMo
       'line-opacity': 0.9,
     },
   })
-  map.addLayer({
-    id: 'prog-labels-abscisa',
-    type: 'symbol',
+  addMapboxAbscisaLabelLayers(map, {
+    idPrefix: 'prog-labels-abscisa',
     source: 'prog-pol',
-    filter: FILTER_MAPBOX_LABEL_ABSCISA,
     layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
     paint: MAPBOX_PLANO_PAINT_LABELS,
   })

@@ -384,3 +384,955 @@ select.cc-dashboard-acta-select--light option {
     min-width: 0;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Panel administrativo — responsive (móvil / tablet)
+   Desktop (>1024px): sin cambios; reglas solo en media queries.
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-admin-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-admin-touch-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 14px;
+  font-size: var(--cc-body, 15px);
+  box-sizing: border-box;
+}
+
+.cc-admin-touch-field {
+  min-height: 44px;
+  font-size: var(--cc-input, 16px) !important; /* iOS: evita zoom al enfocar */
+  padding: 10px 12px !important;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.cc-admin-user-cards {
+  display: none;
+}
+
+.cc-admin-user-table {
+  display: block;
+}
+
+.cc-admin-acta-cards {
+  display: none;
+}
+
+.cc-admin-acta-table {
+  display: block;
+}
+
+.cc-admin-perm-matrix {
+  width: 100%;
+  overflow: hidden;
+}
+
+.cc-admin-perm-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: min(72vh, 820px);
+}
+
+.cc-admin-perm-grid-head,
+.cc-admin-perm-grid-row {
+  display: grid;
+  grid-template-columns: 220px repeat(6, minmax(72px, 1fr)) 80px;
+  min-width: 740px;
+  align-items: center;
+}
+
+.cc-admin-perm-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: inherit;
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-admin-overlay {
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    padding: 0 !important;
+  }
+
+  .cc-admin-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 100dvh;
+    border-radius: 0 !important;
+    flex-direction: column !important;
+  }
+
+  .cc-admin-sidebar {
+    display: none !important;
+  }
+
+  .cc-admin-mobile-nav {
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 10px;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(0, 175, 197, 0.15);
+    scrollbar-width: thin;
+  }
+
+  .cc-admin-mobile-nav-item {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: var(--cc-sm, 13px);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    border: 1px solid transparent;
+    user-select: none;
+  }
+
+  .cc-admin-content-header {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    padding: 10px 12px !important;
+  }
+
+  .cc-admin-close-btn {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .cc-admin-scroll-area {
+    padding: 10px 12px max(20px, env(safe-area-inset-bottom, 0px)) !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-admin-user-table,
+  .cc-admin-acta-table {
+    display: none !important;
+  }
+
+  .cc-admin-user-cards,
+  .cc-admin-acta-cards {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .cc-admin-user-card,
+  .cc-admin-acta-card {
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .cc-admin-user-card-actions,
+  .cc-admin-acta-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cc-admin-user-card-actions button,
+  .cc-admin-acta-card-actions button,
+  .cc-admin-scroll-area button {
+    min-height: 44px;
+  }
+
+  .cc-admin-user-card select,
+  .cc-admin-user-card input,
+  .cc-admin-scroll-area select,
+  .cc-admin-scroll-area input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+    min-height: 44px;
+    font-size: 16px !important;
+    padding: 10px 12px !important;
+    max-width: 100%;
+  }
+
+  .cc-admin-perm-grid-head,
+  .cc-admin-perm-grid-row {
+    grid-template-columns: 140px repeat(6, 88px) 72px;
+    min-width: 740px;
+  }
+
+  .cc-admin-perm-scroll {
+    max-height: min(60vh, 520px);
+  }
+
+  .cc-admin-perm-toggle {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .cc-admin-modal-fs {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 100dvh;
+    border-radius: 0 !important;
+  }
+
+  .cc-admin-modal-overlay-fs {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
+  .cc-admin-panel {
+    width: min(100%, 98vw) !important;
+    height: min(100%, 96vh) !important;
+  }
+
+  .cc-admin-sidebar {
+    width: 160px !important;
+    min-width: 160px !important;
+  }
+
+  .cc-admin-mobile-nav {
+    display: none !important;
+  }
+
+  .cc-admin-perm-grid-head,
+  .cc-admin-perm-grid-row {
+    grid-template-columns: 180px repeat(6, minmax(64px, 1fr)) 72px;
+    min-width: 700px;
+  }
+}
+
+/* Desktop: ocultar nav móvil */
+@media (min-width: 1025px) {
+  .cc-admin-mobile-nav {
+    display: none !important;
+  }
+}
+
+/* ContratoEditModal — fullscreen + tabs scroll en móvil */
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-contrato-modal-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  .cc-contrato-modal-dialog {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 100dvh;
+    border-radius: 0 !important;
+  }
+
+  .cc-contrato-modal-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0 !important;
+  }
+
+  .cc-contrato-modal-tabs button {
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+
+  .cc-contrato-modal-body-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SICOE Obra — responsive móvil / landscape
+   Desktop (>1024px): sin cambios estructurales.
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-sicoe-root {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cc-sicoe-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-sicoe-sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: inherit;
+}
+
+.cc-sicoe-reportes-cards {
+  display: none;
+}
+
+.cc-sicoe-reportes-grid {
+  display: block;
+}
+
+.cc-sicoe-reg-cards {
+  display: none;
+}
+
+.cc-sicoe-reg-row-desktop {
+  display: flex;
+}
+
+.cc-sicoe-reg-card-meta {
+  display: none;
+}
+
+.cc-sicoe-reg-card-actions {
+  display: none;
+}
+
+.cc-sicoe-reg-menu {
+  display: none;
+}
+
+.cc-sicoe-label-short {
+  display: none;
+}
+
+.cc-sicoe-label-full {
+  display: inline;
+}
+
+.cc-sicoe-panel-compact-bar {
+  display: none;
+}
+
+.cc-sicoe-export-bar {
+  display: none;
+}
+
+.cc-sicoe-tabs-scroll {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-sicoe-chart-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-sicoe-chart-inner {
+  min-width: 0;
+}
+
+.cc-sicoe-filtro-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.cc-sicoe-filtro-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 16px;
+  font-size: var(--cc-caption, 12px);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.cc-sicoe-filtro-chip button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+/* Sheet PK: el mapa debe ocupar todo el alto disponible (desktop y móvil) */
+.cc-sicoe-pk-mapa-sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100dvh;
+}
+
+.cc-sicoe-pk-mapa-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cc-sicoe-pk-mapa-area .cc-sicoe-filtro-mapa-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-sicoe-root {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .cc-sicoe-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .cc-sicoe-header-actions {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .cc-sicoe-header-actions button,
+  .cc-sicoe-touch-btn {
+    min-height: 44px !important;
+    min-width: 44px;
+    padding: 10px 14px !important;
+    font-size: var(--cc-body, 15px) !important;
+  }
+
+  .cc-sicoe-export-bar {
+    display: flex !important;
+    z-index: 12;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    background: var(--cc-bg-card, #1e293b);
+  }
+
+  .cc-sicoe-export-bar button {
+    flex: 1 1 140px;
+    min-height: 44px;
+  }
+
+  .cc-sicoe-panel {
+    max-width: 100%;
+    overflow: visible !important;
+    display: block !important;
+    height: auto !important;
+    min-height: 0;
+    flex-shrink: 0;
+  }
+
+  .cc-sicoe-panel-scroll {
+    display: block !important;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+    max-height: min(55dvh, 420px);
+    min-height: 120px;
+    width: 100%;
+  }
+
+  .cc-sicoe-panel-scroll.cc-sicoe-chart-wrap {
+    /* Evitar colapso iOS: chart-wrap no debe forzar height 0 */
+    height: auto !important;
+  }
+
+  .cc-sicoe-panel-scroll > .cc-sicoe-chart-inner {
+    min-height: 1px;
+    height: auto;
+  }
+
+  .cc-sicoe-panel-table th,
+  .cc-sicoe-panel-table td {
+    font-size: var(--cc-body, 15px) !important;
+    white-space: nowrap;
+  }
+
+  .cc-sicoe-panel-table .cc-sicoe-num,
+  .cc-sicoe-panel-table .cc-sicoe-panel-bar-text {
+    font-size: var(--cc-md, 16px) !important;
+    font-weight: 700;
+  }
+
+  .cc-sicoe-panel-table {
+    min-width: 720px;
+  }
+
+  .cc-sicoe-panel-table thead th:nth-child(2),
+  .cc-sicoe-panel-table tbody td:nth-child(2) {
+    position: sticky;
+    left: 36px;
+    z-index: 2;
+    background: var(--cc-bg-card, #1e293b);
+    box-shadow: 4px 0 8px rgba(0, 0, 0, 0.08);
+  }
+
+  .cc-sicoe-panel-table thead th:first-child,
+  .cc-sicoe-panel-table tbody td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: var(--cc-bg-card, #1e293b);
+  }
+
+  .cc-sicoe-panel-table tfoot td:first-child,
+  .cc-sicoe-panel-table tfoot td:nth-child(2) {
+    position: sticky;
+    background: var(--cc-bg, #0f172a);
+  }
+
+  .cc-sicoe-panel-table tfoot td:first-child {
+    left: 0;
+    z-index: 3;
+  }
+
+  .cc-sicoe-panel-table tfoot td:nth-child(2) {
+    left: 36px;
+    z-index: 2;
+  }
+
+  .cc-sicoe-reportes-grid {
+    display: none !important;
+  }
+
+  .cc-sicoe-reportes-cards {
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px 14px;
+  }
+
+  .cc-sicoe-reporte-card {
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+  }
+
+  .cc-sicoe-reg-row-desktop {
+    display: none !important;
+  }
+
+  .cc-sicoe-reg-cards {
+    display: flex !important;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .cc-sicoe-reg-card {
+    border-radius: 8px;
+    padding: 6px 8px !important;
+    min-height: 0 !important;
+    display: flex;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 4px 8px !important;
+  }
+
+  /* En móvil: ocultar filas que inflaban la tarjeta */
+  .cc-sicoe-reg-card > .cc-sicoe-reg-obs,
+  .cc-sicoe-reg-card > .cc-sicoe-reg-fecha-inline,
+  .cc-sicoe-reg-card > .cc-sicoe-reg-status-row,
+  .cc-sicoe-reg-card > .cc-sicoe-reg-card-actions {
+    display: none !important;
+  }
+
+  .cc-sicoe-reg-card-meta {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 8px !important;
+    margin: 0 !important;
+    width: 100%;
+    order: 10;
+  }
+
+  .cc-sicoe-reg-card-meta-item {
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 0 !important;
+  }
+
+  .cc-sicoe-reg-card-meta-item > span:first-child {
+    font-size: 9px !important;
+    line-height: 1.1;
+  }
+
+  .cc-sicoe-reg-card-meta-item > span:last-child {
+    font-size: 12px !important;
+    line-height: 1.2;
+  }
+
+  .cc-sicoe-reg-menu-btn {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+  }
+
+  .cc-sicoe-reg-card-actions button,
+  .cc-sicoe-validacion-btns button {
+    min-height: 40px !important;
+    min-width: 40px;
+    padding: 6px 10px !important;
+    font-size: var(--cc-sm, 13px) !important;
+    flex: 1 1 auto;
+  }
+
+  .cc-sicoe-mapa-portada,
+  .cc-sicoe-mapa-portada > div {
+    min-height: 280px !important;
+    height: 280px !important;
+    width: 100% !important;
+  }
+
+  /* Mapa PK: llenar el alto del sheet (no forzar 260px — dejaba el mapa a ~1/3) */
+  .cc-sicoe-filtro-mapa-box {
+    min-height: 0 !important;
+    height: 100% !important;
+    max-height: none !important;
+    width: 100% !important;
+    flex: 1 1 auto !important;
+  }
+
+  .cc-sicoe-pk-mapa-sheet .cc-sicoe-filtro-mapa-box,
+  .cc-sicoe-pk-mapa-area {
+    min-height: 0 !important;
+    height: 100% !important;
+    max-height: none !important;
+  }
+
+  .cc-sicoe-portada-loc-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .cc-sicoe-reg-icons-inline {
+    display: none !important;
+  }
+
+  .cc-sicoe-reg-menu {
+    display: inline-flex !important;
+    position: relative;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .cc-sicoe-reg-menu-btn {
+    min-width: 44px !important;
+    min-height: 44px !important;
+    width: 44px;
+    height: 44px;
+    padding: 0 !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--cc-border, #334155);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--cc-text-muted, #94a3b8);
+  }
+
+  .cc-sicoe-reg-menu-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    min-width: 180px;
+    background: var(--cc-bg-card, #1e293b);
+    border: 1px solid var(--cc-border, #334155);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cc-sicoe-reg-menu-panel button {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--cc-text, #f1f5f9);
+    font-size: var(--cc-body, 15px);
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .cc-sicoe-reg-status-row {
+    gap: 8px !important;
+  }
+
+  .cc-sicoe-reg-status-row > * {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    padding: 1px 4px !important;
+  }
+
+  .cc-sicoe-label-full {
+    display: none !important;
+  }
+
+  .cc-sicoe-label-short {
+    display: inline !important;
+  }
+
+  .cc-sicoe-truncate {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    max-width: 100%;
+  }
+
+  .cc-sicoe-abscisa-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  .cc-sicoe-filtro-bar-actions button {
+    min-height: 44px !important;
+    padding: 10px 14px !important;
+  }
+
+  .cc-sicoe-filtro-modal-overlay {
+    align-items: flex-end !important;
+    padding: 0 !important;
+  }
+
+  .cc-sicoe-filtro-modal-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: min(92dvh, 92vh) !important;
+    border-radius: 16px 16px 0 0 !important;
+    min-height: 50vh;
+  }
+
+  .cc-sicoe-filtro-modal-sheet input,
+  .cc-sicoe-filtro-modal-sheet select {
+    min-height: 44px;
+    font-size: 16px !important;
+  }
+
+  .cc-sicoe-filtro-modal-sheet button {
+    min-height: 44px;
+  }
+
+  .cc-sicoe-chart-inner {
+    min-width: 600px;
+  }
+
+  .cc-sicoe-masivo-btns button {
+    min-height: 44px !important;
+    padding: 10px 14px !important;
+    flex: 1 1 30%;
+  }
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-sicoe-export-desktop {
+    display: none !important;
+  }
+
+  .cc-sicoe-reg-card > span,
+  .cc-sicoe-reg-card > div {
+    max-width: 100%;
+  }
+
+  .cc-sicoe-reg-status-row > * {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    padding: 1px 4px !important;
+  }
+
+  .cc-sicoe-tabs-scroll {
+    padding-bottom: 4px;
+  }
+
+  .cc-sicoe-tabs-scroll > button {
+    min-height: 44px !important;
+    padding: 10px 14px !important;
+    font-size: var(--cc-body, 15px) !important;
+    flex-shrink: 0;
+  }
+
+  .cc-sicoe-carpeta-shell {
+    max-width: 100% !important;
+    min-height: 100dvh !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  .cc-sicoe-carpeta-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  .cc-sicoe-carpeta-content {
+    padding: 14px 12px !important;
+  }
+
+  .cc-sicoe-panel-filters-collapse {
+    display: none !important;
+  }
+
+  .cc-sicoe-panel-filters-collapse.is-open {
+    display: block !important;
+  }
+
+  .cc-sicoe-panel-compact-bar {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+  }
+}
+
+/* Lightbox media — siempre disponible (tap en foto/gráfico) */
+.cc-sicoe-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cc-sicoe-lightbox-stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 48px 16px 56px;
+  box-sizing: border-box;
+}
+
+.cc-sicoe-lightbox-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.cc-sicoe-lightbox-close {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top, 0px));
+  right: max(10px, env(safe-area-inset-right, 0px));
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cc-sicoe-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cc-sicoe-lightbox-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.cc-sicoe-lightbox-prev {
+  left: max(8px, env(safe-area-inset-left, 0px));
+}
+
+.cc-sicoe-lightbox-next {
+  right: max(8px, env(safe-area-inset-right, 0px));
+}
+
+.cc-sicoe-lightbox-counter {
+  position: absolute;
+  bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  color: #fff;
+  font-size: var(--cc-sm, 13px);
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 6px 12px;
+  border-radius: 16px;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-sicoe-media-tap {
+  cursor: zoom-in;
+}
+
+@media (min-width: 1025px) {
+  .cc-sicoe-reportes-cards,
+  .cc-sicoe-reg-cards,
+  .cc-sicoe-export-bar,
+  .cc-sicoe-reg-card-meta,
+  .cc-sicoe-reg-card-actions,
+  .cc-sicoe-panel-compact-bar,
+  .cc-sicoe-reg-menu {
+    display: none !important;
+  }
+}

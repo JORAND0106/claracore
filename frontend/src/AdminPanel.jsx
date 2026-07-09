@@ -15,6 +15,7 @@ import ContratoEditModal from "./ContratoEditModal";
 import { ContratoDocumentosMatriz } from "./ContratoDocumentosContractuales";
 import { ContratoOrdenesPagoAlertasDev } from "./ContratoOrdenesPagoAlertasDev";
 import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
+import { useClaraViewport } from "./useClaraViewport";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -453,8 +454,11 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [addingContrato, setAddingContrato] = useState({});
   const [subcontratistas, setSubcontratistas] = useState({});
   const [verifInactBusy, setVerifInactBusy] = useState(false);
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
+  const adminCompact = vpMobile || isLandscapeMobile;
 
   const col = C(theme);
+  const tokCard = tFrom(theme, null);
 
   const cargar = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -516,9 +520,9 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   };
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
-  const guardar = async (uid) => {
+  const guardar = async (uid, override = null) => {
     setSaving(uid);
-    const e = edits[uid];
+    const e = { ...edits[uid], ...(override || {}) };
     const orig = usuarios.find(x => x.id === uid);
     // Convertir "" a null para campos int — Pydantic rechaza string vacío en Optional[int]
     const payload = {
@@ -533,6 +537,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
     }
     try {
       await call("PUT", `/admin/usuarios/${uid}`, payload);
+      if (override) setEdits(prev => ({ ...prev, [uid]: { ...prev[uid], ...override } }));
       setMsg({ type: "success", text: "Usuario actualizado." });
       cargar(true);
     } catch (e) {
@@ -595,7 +600,150 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
 
   const estadoBadge = { pendiente: "#f59e0b", aprobado: "#22c55e", rechazado: "#ef4444" };
   const tdStyle = S.td(theme);
-  const sel = (extra) => themedSelect(theme, col, extra);
+  const sel = (extra) => themedSelect(theme, col, { ...(adminCompact ? { minHeight: 44, fontSize: 16, padding: "10px 12px", width: "100%", maxWidth: "100%" } : {}), ...extra });
+  const touchBtn = (variant, sm) => ({
+    ...S.btn(variant, sm),
+    ...(adminCompact ? { minHeight: 44, minWidth: 44, padding: "10px 14px", fontSize: "var(--cc-body)" } : {}),
+  });
+
+  const renderExpandido = (u) => (
+    <div style={{ background: "rgba(0,175,197,0.04)", padding: adminCompact ? "12px 0 4px" : "12px 20px", borderTop: adminCompact ? `1px solid ${tokCard.border}` : undefined, marginTop: adminCompact ? 4 : 0 }}>
+      <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
+        Contratos autorizados para {u.nombre}:
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        {(ucContratos[u.id] || []).map(c => (
+          <span key={c.id} style={{ background: "rgba(0,175,197,0.1)", border: "1px solid rgba(0,175,197,0.3)", borderRadius: 6, padding: "8px 12px", fontSize: 12, color: "#8acdd8", display: "flex", alignItems: "center", gap: 6, minHeight: adminCompact ? 44 : undefined }}>
+            {c.numero}
+            <span style={{ cursor: "pointer", color: "#ef4444", fontWeight: 700, padding: 4 }} onClick={() => quitarContrato(u.id, c.id)}>×</span>
+          </span>
+        ))}
+        {(ucContratos[u.id] || []).length === 0 && <span style={{ color: col.textSecondary, fontSize: 12 }}>Sin contratos asignados</span>}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "stretch" }}>
+        <select style={sel({ minWidth: adminCompact ? "100%" : 180, flex: adminCompact ? "1 1 100%" : undefined })}
+          value={addingContrato[u.id] || ""}
+          onChange={e => setAddingContrato(p => ({ ...p, [u.id]: e.target.value }))}>
+          <option value="">+ Agregar contrato...</option>
+          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
+        </select>
+        <button type="button" style={touchBtn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
+      </div>
+      {u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista' && (
+        <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
+          <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
+            Subcontratista asignado:
+          </div>
+          {u.subcontratista_id ? (
+            <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
+              Actual: {(subcontratistas[u.id] || []).find(s => s.id === u.subcontratista_id)?.razon_social || `ID ${u.subcontratista_id}`}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select style={sel({ minWidth: adminCompact ? "100%" : 220, flex: adminCompact ? "1 1 100%" : undefined })}
+              value={edits[u.id]?.subcontratista_id || ""}
+              onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
+              <option value="">Sin subcontratista</option>
+              {(subcontratistas[u.id] || []).map(s => (
+                <option key={s.id} value={s.id}>{s.razon_social}</option>
+              ))}
+            </select>
+            <button type="button" style={touchBtn("primary", true)}
+              onClick={() => asignarSubcontratista(u.id, edits[u.id]?.subcontratista_id)}>
+              Asignar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderCamposUsuario = (u, asCard) => {
+    const fields = [
+      {
+        key: "estado",
+        label: "Estado",
+        node: (
+          <select style={sel({ minWidth: asCard ? undefined : 110, color: estadoBadge[edits[u.id]?.estado] || col.textTable })}
+            value={edits[u.id]?.estado || ""}
+            onChange={e => setEdit(u.id, "estado", e.target.value)}>
+            <option value="pendiente">🟡 Pendiente</option>
+            <option value="aprobado">🟢 Aprobado</option>
+            <option value="rechazado">🔴 Rechazado</option>
+          </select>
+        ),
+      },
+      {
+        key: "cargo",
+        label: "Cargo",
+        node: (
+          <select style={sel({ minWidth: asCard ? undefined : 140 })}
+            value={edits[u.id]?.cargo_id || ""}
+            onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
+            <option value="">Sin cargo</option>
+            {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        ),
+      },
+      {
+        key: "rol",
+        label: "Rol",
+        node: (
+          <select style={sel({ minWidth: asCard ? undefined : 130 })}
+            value={edits[u.id]?.rol_id || ""}
+            onChange={e => setEdit(u.id, "rol_id", e.target.value)}>
+            <option value="">Sin rol</option>
+            {roles.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+          </select>
+        ),
+      },
+      {
+        key: "contrato",
+        label: "Contrato principal",
+        node: (
+          <select style={sel({ minWidth: asCard ? undefined : 150 })}
+            value={edits[u.id]?.contrato_id || ""}
+            onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
+            <option value="">Sin contrato</option>
+            {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
+          </select>
+        ),
+      },
+      {
+        key: "politicas",
+        label: "Políticas",
+        node: (
+          <>
+            <select
+              style={sel({ minWidth: asCard ? undefined : 118 })}
+              value={edits[u.id]?.politicas_aceptadas ? "si" : "no"}
+              onChange={e => setEdit(u.id, "politicas_aceptadas", e.target.value === "si")}
+            >
+              <option value="si">Sí</option>
+              <option value="no">Pendiente</option>
+            </select>
+            <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 6, lineHeight: 1.35 }}>
+              {u.politicas_version ? <>v{u.politicas_version}</> : "—"}
+              {u.politicas_fecha ? (
+                <span style={{ display: "block" }}>
+                  {new Date(u.politicas_fecha).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
+                </span>
+              ) : null}
+            </div>
+          </>
+        ),
+      },
+    ];
+    if (!asCard) return fields;
+    return fields.map((f) => (
+      <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label style={{ fontSize: "var(--cc-caption)", color: col.textMuted }}>{f.label}</label>
+        {f.node}
+      </div>
+    ));
+  };
 
   return (
     <div>
@@ -608,7 +756,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
         <button
           type="button"
-          style={{ ...S.btn("ghost", true), opacity: verifInactBusy ? 0.7 : 1 }}
+          style={{ ...touchBtn("ghost", true), opacity: verifInactBusy ? 0.7 : 1 }}
           disabled={verifInactBusy}
           onClick={() => void ejecutarVerificarInactividad()}
           title="Antes se ejecutaba sola al abrir esta pestaña y podía saturar el servidor. Úsala solo cuando quieras aplicar la política de 7 días."
@@ -624,143 +772,94 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
       ) : usuarios.length === 0 ? (
         <div style={S.empty}>No hay usuarios registrados.</div>
       ) : (
-        <table style={S.table}>
-          <thead>
-            <tr>
-              {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Políticas", "Acciones"].map(h => (
-                <th key={h} style={S.th(theme)}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {usuarios.map(u => (
-              <Fragment key={u.id}>
+        <>
+          {/* Desktop / tablet: tabla */}
+          <div className="cc-admin-user-table cc-admin-table-scroll">
+            <table style={S.table}>
+              <thead>
                 <tr>
-                  <td style={tdStyle}>
-                    <div style={{ color: col.textPrimary, fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
-                    <div style={{ fontSize: 11, color: col.textSecondary }}>{u.email}</div>
-                  </td>
-                  <td style={tdStyle}>
-                    <select style={sel({ minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || col.textTable })}
-                      value={edits[u.id]?.estado || ""}
-                      onChange={e => setEdit(u.id, "estado", e.target.value)}>
-                      <option value="pendiente">🟡 Pendiente</option>
-                      <option value="aprobado">🟢 Aprobado</option>
-                      <option value="rechazado">🔴 Rechazado</option>
-                    </select>
-                  </td>
-                  <td style={tdStyle}>
-                    <select style={sel({ minWidth: 140 })}
-                      value={edits[u.id]?.cargo_id || ""}
-                      onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
-                      <option value="">Sin cargo</option>
-                      {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                    </select>
-                  </td>
-                  <td style={tdStyle}>
-                    <select style={sel({ minWidth: 130 })}
-                      value={edits[u.id]?.rol_id || ""}
-                      onChange={e => setEdit(u.id, "rol_id", e.target.value)}>
-                      <option value="">Sin rol</option>
-                      {roles.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-                    </select>
-                  </td>
-                  <td style={tdStyle}>
-                    <select style={sel({ minWidth: 150 })}
-                      value={edits[u.id]?.contrato_id || ""}
-                      onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
-                      <option value="">Sin contrato</option>
-                      {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
-                    </select>
-                  </td>
-                  <td style={tdStyle}>
-                    <select
-                      style={sel({ minWidth: 118 })}
-                      value={edits[u.id]?.politicas_aceptadas ? "si" : "no"}
-                      onChange={e => setEdit(u.id, "politicas_aceptadas", e.target.value === "si")}
-                    >
-                      <option value="si">Sí</option>
-                      <option value="no">Pendiente</option>
-                    </select>
-                    <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 6, lineHeight: 1.35 }}>
-                      {u.politicas_version ? <>v{u.politicas_version}</> : "—"}
-                      {u.politicas_fecha ? (
-                        <span style={{ display: "block" }}>
-                          {new Date(u.politicas_fecha).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
-                        </span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td style={tdStyle}>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button style={S.btn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
-                        {saving === u.id ? "..." : "💾"}
-                      </button>
-                      <button style={S.btn("ghost", true)} title="Gestionar contratos" onClick={() => toggleExpandir(u.id)}>
-                        {expandido === u.id ? "▲" : "📋"}
-                      </button>
-                    </div>
-                  </td>
+                  {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Políticas", "Acciones"].map(h => (
+                    <th key={h} style={S.th(theme)}>{h}</th>
+                  ))}
                 </tr>
-                {expandido === u.id && (
-                  <tr>
-                    <td colSpan={7} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
-                      <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
-                        Contratos autorizados para {u.nombre}:
-                      </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                        {(ucContratos[u.id] || []).map(c => (
-                          <span key={c.id} style={{ background: "rgba(0,175,197,0.1)", border: "1px solid rgba(0,175,197,0.3)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "#8acdd8", display: "flex", alignItems: "center", gap: 6 }}>
-                            {c.numero}
-                            <span style={{ cursor: "pointer", color: "#ef4444", fontWeight: 700 }} onClick={() => quitarContrato(u.id, c.id)}>×</span>
-                          </span>
-                        ))}
-                        {(ucContratos[u.id] || []).length === 0 && <span style={{ color: col.textSecondary, fontSize: 12 }}>Sin contratos asignados</span>}
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <select style={sel({ minWidth: 180 })}
-                          value={addingContrato[u.id] || ""}
-                          onChange={e => setAddingContrato(p => ({ ...p, [u.id]: e.target.value }))}>
-                          <option value="">+ Agregar contrato...</option>
-                          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
-                        </select>
-                        <button style={S.btn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
-                      </div>
-                      {u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista' && (
-                        <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
-                          <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
-                            Subcontratista asignado:
-                          </div>
-                          {u.subcontratista_id ? (
-                            <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
-                              Actual: {(subcontratistas[u.id] || []).find(s => s.id === u.subcontratista_id)?.razon_social || `ID ${u.subcontratista_id}`}
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
-                          )}
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <select style={sel({ minWidth: 220 })}
-                              value={edits[u.id]?.subcontratista_id || ""}
-                              onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
-                              <option value="">Sin subcontratista</option>
-                              {(subcontratistas[u.id] || []).map(s => (
-                                <option key={s.id} value={s.id}>{s.razon_social}</option>
-                              ))}
-                            </select>
-                            <button style={S.btn("primary", true)}
-                              onClick={() => asignarSubcontratista(u.id, edits[u.id]?.subcontratista_id)}>
-                              Asignar
-                            </button>
-                          </div>
+              </thead>
+              <tbody>
+                {usuarios.map(u => {
+                  const fields = renderCamposUsuario(u, false);
+                  return (
+                  <Fragment key={u.id}>
+                    <tr>
+                      <td style={tdStyle}>
+                        <div style={{ color: col.textPrimary, fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
+                        <div style={{ fontSize: 11, color: col.textSecondary }}>{u.email}</div>
+                      </td>
+                      {fields.map((f) => (
+                        <td key={f.key} style={tdStyle}>{f.node}</td>
+                      ))}
+                      <td style={tdStyle}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button type="button" style={touchBtn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
+                            {saving === u.id ? "..." : "💾"}
+                          </button>
+                          <button type="button" style={touchBtn("ghost", true)} title="Gestionar contratos" onClick={() => toggleExpandir(u.id)}>
+                            {expandido === u.id ? "▲" : "📋"}
+                          </button>
                         </div>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
+                      </td>
+                    </tr>
+                    {expandido === u.id && (
+                      <tr>
+                        <td colSpan={7} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: 0 }}>
+                          {renderExpandido(u)}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Móvil: tarjetas */}
+          <div className="cc-admin-user-cards">
+            {usuarios.map(u => (
+              <div
+                key={`card-${u.id}`}
+                className="cc-admin-user-card"
+                style={{
+                  background: tokCard.bgCard,
+                  border: `1px solid ${tokCard.border}`,
+                  boxShadow: tokCard.shadow,
+                }}
+              >
+                <div>
+                  <div style={{ color: col.textPrimary, fontWeight: 700, fontSize: "var(--cc-body)" }}>{u.nombre} {u.apellidos}</div>
+                  <div style={{ fontSize: "var(--cc-sm)", color: col.textSecondary, marginTop: 2, wordBreak: "break-all" }}>{u.email}</div>
+                  <span style={{ ...S.badge(edits[u.id]?.estado || u.estado), marginTop: 8 }}>{edits[u.id]?.estado || u.estado}</span>
+                </div>
+                {renderCamposUsuario(u, true)}
+                <div className="cc-admin-user-card-actions">
+                  <button type="button" style={{ ...touchBtn("success", false), flex: 1 }} disabled={saving === u.id}
+                    onClick={() => void guardar(u.id, { estado: "aprobado" })}>
+                    ✓ Aprobar
+                  </button>
+                  <button type="button" style={{ ...touchBtn("danger", false), flex: 1 }} disabled={saving === u.id}
+                    onClick={() => void guardar(u.id, { estado: "rechazado" })}>
+                    ✕ Rechazar
+                  </button>
+                  <button type="button" style={{ ...touchBtn("primary", false), flex: "1 1 100%" }} disabled={saving === u.id} onClick={() => guardar(u.id)}>
+                    {saving === u.id ? "Guardando…" : "💾 Guardar cambios"}
+                  </button>
+                  <button type="button" style={{ ...touchBtn("ghost", false), flex: "1 1 100%" }} onClick={() => toggleExpandir(u.id)}>
+                    {expandido === u.id ? "▲ Ocultar contratos" : "📋 Contratos autorizados"}
+                  </button>
+                </div>
+                {expandido === u.id && renderExpandido(u)}
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -945,6 +1044,8 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   };
 
   const tdStyle = S.td(theme);
+  const headBg = isDarkMode(theme) ? "#06101a" : (isRestMode(theme) ? "#2E2A25" : "#081318");
+  const stickyBg = isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? "#F2EDE4" : "#F8FAFC");
 
   return (
     <div>
@@ -958,19 +1059,19 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
         {(isDev || (contratos && contratos.length > 1)) && (
           <>
             <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Contrato:</div>
-            <select style={sel({ flex: 1, maxWidth: 220 })} value={contratoPermId} onChange={e => setContratoPermId(e.target.value)}>
+            <select style={sel({ flex: 1, maxWidth: 220, minHeight: 44, fontSize: 16 })} value={contratoPermId} onChange={e => setContratoPermId(e.target.value)}>
               <option value="">-- Contrato --</option>
               {(contratos || []).map(c => <option key={c.id} value={c.id}>{c.numero || c.id}</option>)}
             </select>
           </>
         )}
         <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
-        <select style={sel({ flex: 1, maxWidth: 280 })} value={cargoId} onChange={e => setCargoId(e.target.value)}>
+        <select style={sel({ flex: 1, maxWidth: 280, minHeight: 44, fontSize: 16 })} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
           {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         {cargoId && contratoPermId && (
-          <button style={S.btn("primary", true)} onClick={guardar} disabled={saving}>
+          <button type="button" style={{ ...S.btn("primary", true), minHeight: 44, padding: "10px 14px" }} onClick={guardar} disabled={saving}>
             {saving ? "Guardando..." : "💾 Guardar cambios"}
           </button>
         )}
@@ -991,39 +1092,68 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
       ) : funciones.length === 0 ? (
         <div style={S.empty}>No hay funciones registradas en el sistema.</div>
       ) : (
-        <div style={{ background: "#081318", borderRadius: 8, border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden", maxHeight: "min(72vh, 820px)", display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: "#06101a", borderBottom: "1px solid rgba(0,175,197,0.15)", flexShrink: 0 }}>
-            <div style={{ ...S.th(theme), padding: "12px 16px" }}>Función</div>
-            {ACCIONES.map(a => (
-              <div key={a} style={{ ...S.th(theme), textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
-            ))}
-            <div style={{ ...S.th(theme), textAlign: "center" }}>Todo</div>
-          </div>
-          <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
-          {funciones.map((f, idx) => {
-            const fila = permisos[f.id] || {};
-            const todoActivo = ACCIONES.every(a => fila[a]);
-            return (
-              <div key={f.id} style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: idx % 2 === 0 ? "transparent" : "rgba(0,175,197,0.025)", borderBottom: "1px solid rgba(255,255,255,0.03)", alignItems: "center" }}>
-                <div style={{ ...tdStyle, padding: "10px 16px" }}>
-                  <span style={{ color: "#8acdd8", fontSize: 13 }}>{f.nombre}</span>
-                  {f.descripcion && <div style={{ fontSize: 11, color: "#2a5a6a", marginTop: 1 }}>{f.descripcion}</div>}
-                </div>
-                {ACCIONES.map(a => (
-                  <div key={a} style={{ textAlign: "center", padding: "10px 4px" }}>
-                    <div onClick={() => togglePermiso(f.id, a)} style={{ width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer", border: `1.5px solid ${fila[a] ? accionColor[a] : "rgba(255,255,255,0.1)"}`, background: fila[a] ? `${accionColor[a]}22` : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: accionColor[a], transition: "all 0.15s" }}>
-                      {fila[a] ? "✓" : ""}
+        <div className="cc-admin-perm-matrix" style={{ background: isDarkMode(theme) ? "#081318" : stickyBg, borderRadius: 8, border: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.1)" : col.borderColor}`, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div className="cc-admin-perm-scroll">
+            <div className="cc-admin-perm-grid-head" style={{ background: headBg, borderBottom: "1px solid rgba(0,175,197,0.15)", position: "sticky", top: 0, zIndex: 3 }}>
+              <div className="cc-admin-perm-sticky" style={{ ...S.th(theme), padding: "12px 16px", background: headBg }}>{/* columna fija: función */}Función</div>
+              {ACCIONES.map(a => (
+                <div key={a} style={{ ...S.th(theme), textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
+              ))}
+              <div style={{ ...S.th(theme), textAlign: "center" }}>Todo</div>
+            </div>
+            {funciones.map((f, idx) => {
+              const fila = permisos[f.id] || {};
+              const todoActivo = ACCIONES.every(a => fila[a]);
+              const rowBg = idx % 2 === 0 ? (isDarkMode(theme) ? "#081318" : stickyBg) : (isDarkMode(theme) ? "rgba(0,175,197,0.04)" : "rgba(0,119,182,0.04)");
+              return (
+                <div key={f.id} className="cc-admin-perm-grid-row" style={{ background: rowBg, borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                  <div className="cc-admin-perm-sticky" style={{ ...tdStyle, padding: "10px 16px", background: rowBg }}>
+                    <span style={{ color: isDarkMode(theme) ? "#8acdd8" : col.textPrimary, fontSize: 13 }}>{f.nombre}</span>
+                    {f.descripcion && <div style={{ fontSize: 11, color: col.textMuted, marginTop: 1 }}>{f.descripcion}</div>}
+                  </div>
+                  {ACCIONES.map(a => (
+                    <div key={a} style={{ textAlign: "center", padding: "8px 4px" }}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className="cc-admin-perm-toggle"
+                        onClick={() => togglePermiso(f.id, a)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") togglePermiso(f.id, a); }}
+                        style={{
+                          width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer",
+                          border: `1.5px solid ${fila[a] ? accionColor[a] : "rgba(255,255,255,0.1)"}`,
+                          background: fila[a] ? `${accionColor[a]}22` : "transparent",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 13, color: accionColor[a], transition: "all 0.15s",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        {fila[a] ? "✓" : ""}
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ textAlign: "center", padding: "8px 4px" }}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="cc-admin-perm-toggle"
+                      onClick={() => toggleFilaCompleta(f.id)}
+                      title={todoActivo ? "Desactivar todos" : "Activar todos"}
+                      style={{
+                        width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer",
+                        border: `1.5px solid ${todoActivo ? "#00afc5" : "rgba(255,255,255,0.12)"}`,
+                        background: todoActivo ? "rgba(0,175,197,0.2)" : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 11, color: "#00afc5", transition: "all 0.15s",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {todoActivo ? "★" : "☆"}
                     </div>
                   </div>
-                ))}
-                <div style={{ textAlign: "center", padding: "10px 4px" }}>
-                  <div onClick={() => toggleFilaCompleta(f.id)} title={todoActivo ? "Desactivar todos" : "Activar todos"} style={{ width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer", border: `1.5px solid ${todoActivo ? "#00afc5" : "rgba(255,255,255,0.12)"}`, background: todoActivo ? "rgba(0,175,197,0.2)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#00afc5", transition: "all 0.15s" }}>
-                    {todoActivo ? "★" : "☆"}
-                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
           </div>
         </div>
       )}
@@ -1949,13 +2079,13 @@ function SeccionLicenciasClaraCAD({ call, theme }) {
             value={correo}
             onChange={(e) => setCorreo(e.target.value)}
             placeholder="usuario@empresa.com"
-            style={S.input}
+            style={{ ...S.input, minHeight: 44, fontSize: 16, padding: "10px 12px" }}
           />
         </div>
-        <button type="button" onClick={() => void generar()} disabled={generando} style={S.btn("primary")}>
+        <button type="button" onClick={() => void generar()} disabled={generando} style={{ ...S.btn("primary"), minHeight: 44 }}>
           {generando ? "Generando…" : "Generar código"}
         </button>
-        <button type="button" onClick={() => void cargar()} disabled={loading} style={S.btn("ghost")}>
+        <button type="button" onClick={() => void cargar()} disabled={loading} style={{ ...S.btn("ghost"), minHeight: 44 }}>
           Actualizar
         </button>
       </div>
@@ -1969,8 +2099,8 @@ function SeccionLicenciasClaraCAD({ call, theme }) {
       {loading ? (
         <div style={{ textAlign: "center", padding: 40, color: col.textMuted }}>Cargando códigos…</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={S.table}>
+        <div className="cc-admin-table-scroll" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ ...S.table, minWidth: 720 }}>
             <thead>
               <tr>
                 {["Correo", "Código", "Estado", "Generado", "Activado", "IP", "Equipo", ""].map((h) => (
@@ -4331,15 +4461,15 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       {/* ── Filtros ── */}
       {items.length > 0 && !loading && (
         <div style={{ display:"flex",gap:10,flexWrap:"wrap",marginBottom:14,alignItems:"center" }}>
-          <input style={{ ...S.input,padding:"6px 10px",fontSize:12,flex:"1 1 180px",maxWidth:260 }}
+          <input style={{ ...S.input,padding:"10px 12px",fontSize:16,flex:"1 1 180px",maxWidth:360,minHeight:44 }}
             placeholder="🔍 Buscar descripción o ítem..." value={filtroTexto}
             onChange={e=>setFiltroTexto(e.target.value)} />
-          <select style={{ ...S.select, minWidth:160 }} value={filtroCapitulo}
+          <select style={{ ...S.select, minWidth:160, minHeight:44, fontSize:16 }} value={filtroCapitulo}
             onChange={e=>setFiltroCapitulo(e.target.value)}>
             <option value="">Todos los capítulos</option>
             {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
-          <select style={{ ...S.select, minWidth:130 }} value={filtroEstado}
+          <select style={{ ...S.select, minWidth:130, minHeight:44, fontSize:16 }} value={filtroEstado}
             onChange={e=>setFiltroEstado(e.target.value)}>
             <option value="">Todos los estados</option>
             <option value="Aprobado">✓ Aprobado</option>
@@ -4364,8 +4494,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       ) : itemsFiltrados.length === 0 ? (
         <div style={S.empty}>Ningún precio coincide con los filtros aplicados.<br/><span style={{ fontSize:12,color:col.textMuted }}>Prueba ajustando los criterios de búsqueda.</span></div>
       ) : (
-        <div style={{ overflowX:"auto" }}>
-          <table style={S.table}>
+        <div className="cc-admin-table-scroll" style={{ overflowX:"auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ ...S.table, minWidth: 720 }}>
             <thead>
               <tr>
                 {headersTabla.map((h, i) => (
@@ -5825,7 +5955,9 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           {actasFiltradas.length === 0 ? (
             <div style={S.empty}>Ninguna acta coincide con el filtro.</div>
           ) : (
-            <table style={S.table}>
+            <>
+            <div className="cc-admin-acta-table cc-admin-table-scroll">
+            <table style={{ ...S.table, minWidth: 720 }}>
               <thead>
                 <tr>
                   {["Tipo", "RPO", "Período", "Consec.", "Tipo doc. / uso", "Costo (validación)", "Estado / Notas", "Acción"].map((h) => (
@@ -5911,6 +6043,60 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                 })}
               </tbody>
             </table>
+            </div>
+            <div className="cc-admin-acta-cards">
+              {actasFiltradas.map((a) => {
+                const esRpo = String(a.tipo_grupo || "").toUpperCase() === "RPO" && a.numero_rpo != null;
+                return (
+                  <div
+                    key={`acta-card-${a.id}`}
+                    className="cc-admin-acta-card"
+                    style={{
+                      background: tTok.bgCard,
+                      border: `1px solid ${tTok.border}`,
+                      boxShadow: tTok.shadow,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: col.textPrimary, fontSize: "var(--cc-body)" }}>{labelTipoFila(a)}</div>
+                        {esRpo ? (
+                          <button type="button" onClick={() => abrirDetalleRpo(a)} style={{ background: "none", border: "none", color: "#00afc5", fontWeight: 700, fontSize: "var(--cc-md)", padding: "4px 0", cursor: "pointer" }}>
+                            RPO #{a.numero_rpo}
+                          </button>
+                        ) : (
+                          <div style={{ fontSize: "var(--cc-sm)", color: col.textMuted, marginTop: 4 }}>{a.tipo_nombre || "Administrativa"}</div>
+                        )}
+                      </div>
+                      {esRpo ? (
+                        esVigente(a) ? <span style={{ ...S.badge("aprobado"), textTransform: "none" }}>En período</span>
+                          : <span style={{ ...S.badge("pendiente"), textTransform: "none" }}>Historial</span>
+                      ) : null}
+                    </div>
+                    <div style={{ fontSize: "var(--cc-sm)", color: col.textSecondary, lineHeight: 1.4 }}>
+                      <div>Período: {(a.fecha_inicio || "—").slice(0, 10)} → {(a.fecha_fin || "—").slice(0, 10)}</div>
+                      <div>Consec.: {a.consecutivo ?? "—"} · Costo: {fmtM(a.valor_total_acta)}</div>
+                    </div>
+                    <div className="cc-admin-acta-card-actions">
+                      <button type="button" style={{ ...S.btn("ghost", false), minHeight: 44, flex: 1 }} onClick={() => abrirEditar(a)}>
+                        Editar
+                      </button>
+                      {esRpo && (
+                        <button type="button" style={{ ...S.btn("primary", false), minHeight: 44, flex: 1 }} onClick={() => abrirDetalleRpo(a)}>
+                          Ver detalle
+                        </button>
+                      )}
+                      {esRpo && esVigente(a) && (
+                        <button type="button" style={{ ...S.btn("danger", false), minHeight: 44, flex: "1 1 100%" }} onClick={() => abrirCerrar(a)}>
+                          Cerrar acta
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            </>
           )}
         </>
       )}
@@ -5966,6 +6152,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
 
       {modalForm && (
         <div
+          className="cc-admin-modal-overlay-fs"
           style={{
             position: "fixed",
             inset: 0,
@@ -5980,10 +6167,12 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           onClick={(e) => e.target === e.currentTarget && !guardandoActa && setModalForm(false)}
         >
           <div
+            className="cc-admin-modal-fs"
             style={{
               width: "min(760px, 96vw)",
               maxHeight: "92vh",
               overflowY: "auto",
+              WebkitOverflowScrolling: "touch",
               background: isDarkMode(theme) ? "#0b1920" : tTok.bg,
               border: "1px solid rgba(0,175,197,0.25)",
               borderRadius: 14,
@@ -6667,7 +6856,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
   const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isDarkMode(theme)?"#0b1920":tTok.bg,borderRadius:14,border:`1px solid ${tTok.border}`,boxShadow:isRestMode(theme)?"0 32px 56px rgba(42,35,24,0.2)":"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
   const modalHeadBgS = isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE");
   const modalHead   = { padding:"12px 20px 10px",borderBottom:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.12)":tTok.border}`,background:modalHeadBgS,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll = { flex:1,overflowY:"auto",padding:"14px 20px",scrollbarWidth:"thin",scrollbarColor: isDarkMode(theme) ? "#1e3a44 transparent" : `${tTok.border}44`, background: isDarkMode(theme) ? "transparent" : (isRestMode(theme) ? tTok.bgCard : "#F8FAFC") };
+  const modalScroll = { flex:1,overflowY:"auto",padding:"14px 20px",scrollbarWidth:"thin",scrollbarColor: isDarkMode(theme) ? "#1e3a44 transparent" : `${tTok.border}44`, background: isDarkMode(theme) ? "transparent" : (isRestMode(theme) ? tTok.bgCard : "#F8FAFC"), WebkitOverflowScrolling: "touch" };
   const modalFoot   = { padding:"10px 20px",borderTop:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.1)":tTok.border}`,background:modalHeadBgS,display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
   const secTitle    = { fontSize:"var(--cc-caption)", color: tTok.primary, fontWeight:700, letterSpacing:1, textTransform:"uppercase", marginBottom:8 };
   const fmt         = (v) => v!=null?`$${Math.round(Number(v)).toLocaleString("es-CO")}`:"—";
@@ -6848,7 +7037,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {/* Barra acciones */}
       <div style={{display:"flex",gap:10,marginBottom:20,alignItems:"center",flexWrap:"wrap"}}>
         {perms?.crear&&<button style={S.btn("primary",true)} onClick={()=>setShowCrear(true)}>+ Crear Subcontratista</button>}
-        <input style={{...S.input,padding:"6px 10px",fontSize:12,flex:"1 1 180px",maxWidth:300}} placeholder="🔍 Buscar razón social, NIT, contacto..." value={filtro} onChange={e=>setFiltro(e.target.value)}/>
+        <input style={{...S.input,padding:"10px 12px",fontSize:16,flex:"1 1 180px",maxWidth:300,minHeight:44}} placeholder="🔍 Buscar razón social, NIT, contacto..." value={filtro} onChange={e=>setFiltro(e.target.value)}/>
         {subs.length>0&&<span style={{marginLeft:"auto",fontSize:12,color:col.textMuted}}>{subs.length.toLocaleString("es-CO")} subcontratistas</span>}
       </div>
 
@@ -6856,7 +7045,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {loading?(<div style={S.empty}><span style={{color:"#00afc5"}}>Cargando...</span></div>
       ):subs.length===0?(<div style={S.empty}>No hay subcontratistas registrados.<br/><span style={{fontSize:12,color:col.textMuted}}>Usa "Crear Subcontratista" para agregar uno.</span></div>
       ):(
-        <table style={S.table}>
+        <div className="cc-admin-table-scroll">
+        <table style={{ ...S.table, minWidth: 560 }}>
           <thead><tr>{["Razón Social","Nombre de Contacto","NIT","Estado"].map((h,i)=><th key={i} style={S.th(theme)}>{h}</th>)}</tr></thead>
           <tbody>
             {subsFiltrados.map(sub=>(
@@ -6871,18 +7061,19 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {/* ══ MODAL CREAR ══ */}
       {showCrear&&(
-        <div style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setShowCrear(false)}>
-          <div style={modalStyle(660)}>
+        <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setShowCrear(false)}>
+          <div className="cc-admin-modal-fs" style={modalStyle(660)}>
             <div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Subcontratista</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>Ingresa los datos del nuevo subcontratista</div>
               </div>
-              <button style={S.closeBtn(theme)} onClick={()=>setShowCrear(false)}>✕</button>
+              <button type="button" style={{ ...S.closeBtn(theme), minWidth: 44, minHeight: 44 }} onClick={()=>setShowCrear(false)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{marginBottom:14}}>
@@ -6926,27 +7117,27 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
 
       {/* ══ POPUP DETALLE ══ */}
       {detalle&&(
-        <div style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setDetalle(null)}>
-          <div style={modalStyle(900)}>
+        <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setDetalle(null)}>
+          <div className="cc-admin-modal-fs" style={modalStyle(900)}>
             <div style={modalHead}>
-              <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
                 <div>
                   <div style={{fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Subcontratista</div>
                   <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>{detalle.razon_social}</div>
                 </div>
                 <span style={S.badge(detalle.activo?"aprobado":"rechazado")}>{detalle.activo?"Activo":"Inactivo"}</span>
               </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                {perms?.editar&&<button style={S.btn(detalle.activo?"danger":"success",true)} onClick={toggleActivo} disabled={toggling}>{toggling?"...":(detalle.activo?"⏸ Desactivar":"▶ Activar")}</button>}
-                <button style={S.closeBtn(theme)} onClick={()=>setDetalle(null)}>✕</button>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                {perms?.editar&&<button type="button" style={{ ...S.btn(detalle.activo?"danger":"success",true), minHeight: 44 }} onClick={toggleActivo} disabled={toggling}>{toggling?"...":(detalle.activo?"⏸ Desactivar":"▶ Activar")}</button>}
+                <button type="button" style={{ ...S.closeBtn(theme), minWidth: 44, minHeight: 44 }} onClick={()=>setDetalle(null)}>✕</button>
               </div>
             </div>
 
             {/* Tabs internos */}
-            <div style={{display:"flex",borderBottom:`1px solid ${tTok.border}`,background: isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE"),flexShrink:0}}>
+            <div style={{display:"flex",borderBottom:`1px solid ${tTok.border}`,background: isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE"),flexShrink:0, overflowX:"auto", WebkitOverflowScrolling:"touch", flexWrap:"nowrap"}}>
               {[["datos","📋 Datos"],["cortes","📅 Cortes"],["precios","💲 Precios"]].map(([id,label])=>(
-                <button key={id} onClick={()=>setTabDetalle(id)}
-                  style={{padding:"10px 20px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:tabDetalle===id?700:400,color:tabDetalle===id?"#00afc5":col.textSecondary,borderBottom:tabDetalle===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s"}}>
+                <button key={id} type="button" onClick={()=>setTabDetalle(id)}
+                  style={{padding:"10px 20px",minHeight:44,border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:tabDetalle===id?700:400,color:tabDetalle===id?"#00afc5":col.textSecondary,borderBottom:tabDetalle===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s",whiteSpace:"nowrap",flex:"0 0 auto"}}>
                   {label}
                 </button>
               ))}
@@ -7308,6 +7499,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const [cargos, setCargos] = useState([]);
   const [contratos, setContratos] = useState([]);
   const t = tProp && tProp.text ? tProp : tFrom(activeTheme, null);
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
+  const adminCompact = vpMobile || isLandscapeMobile;
 
   const isDeveloper = user?.cargo_nombre?.toLowerCase() === "desarrollador";
   const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
@@ -7448,11 +7641,28 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   ) || {};
 
   return (
-    <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={S.panel(activeTheme, t, tab === "precios")} onClick={e => e.stopPropagation()}>
+    <div
+      className="cc-admin-overlay"
+      style={S.overlay}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="cc-admin-panel"
+        style={{
+          ...S.panel(activeTheme, t, tab === "precios"),
+          ...(adminCompact ? {
+            width: "100%",
+            height: "100%",
+            maxHeight: "100%",
+            borderRadius: 0,
+            flexDirection: "column",
+          } : {}),
+        }}
+        onClick={e => e.stopPropagation()}
+      >
 
-        {/* SIDEBAR */}
-        <div style={S.sidebar(activeTheme, t)}>
+        {/* SIDEBAR — oculto en móvil vía CSS; en desktop/tablet se muestra */}
+        <div className="cc-admin-sidebar" style={S.sidebar(activeTheme, t)}>
           <div style={S.sidebarHeader(activeTheme, t)}>
             <img
               src="/CLARA.CORE.png"
@@ -7479,10 +7689,39 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
 
         {/* CONTENIDO */}
         <div style={S.content}>
-          <div style={S.contentHeader(activeTheme, t)}>
-            <div>
+          {/* Nav horizontal móvil */}
+          <div
+            className="cc-admin-mobile-nav"
+            style={{
+              display: adminCompact ? "flex" : "none",
+              background: isDarkMode(activeTheme) ? "#081318" : t.bgCard,
+              borderBottom: `1px solid ${t.border}`,
+            }}
+          >
+            {TABS.map((it) => {
+              const active = tab === it.id;
+              return (
+                <button
+                  key={it.id}
+                  type="button"
+                  className="cc-admin-mobile-nav-item"
+                  onClick={() => setTab(it.id)}
+                  style={{
+                    background: active ? `${t.primary}22` : "transparent",
+                    borderColor: active ? t.primary : t.border,
+                    color: active ? t.primary : t.textMuted,
+                  }}
+                >
+                  {it.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="cc-admin-content-header" style={S.contentHeader(activeTheme, t)}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div style={S.contentTitle(activeTheme, t)}>{TITULOS[tab]?.title}</div>
-              <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>
+              {!adminCompact && <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {tab === "precios" && (
@@ -7492,8 +7731,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
                     border: `1px solid ${t.border}`, background: isDarkMode(activeTheme) ? "rgba(0,175,197,0.06)" : "rgba(0,119,182,0.06)",
                   }}>
                     {[
-                      { id: "lista", label: "📋 Lista de precios" },
-                      { id: "wbs", label: "🗂 Programación WBS" },
+                      { id: "lista", label: adminCompact ? "Lista" : "📋 Lista de precios" },
+                      { id: "wbs", label: adminCompact ? "WBS" : "🗂 Programación WBS" },
                     ].map(opt => {
                       const active = modoVistaPrecios === opt.id;
                       return (
@@ -7502,7 +7741,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
                           type="button"
                           onClick={() => setModoVistaPreciosPersist(opt.id)}
                           style={{
-                            border: "none", cursor: "pointer", padding: "6px 12px",
+                            border: "none", cursor: "pointer", padding: adminCompact ? "10px 12px" : "6px 12px",
+                            minHeight: adminCompact ? 44 : undefined,
                             fontSize: "var(--cc-sm)", fontWeight: active ? 700 : 500,
                             background: active ? (isDarkMode(activeTheme) ? "rgba(0,175,197,0.22)" : "rgba(0,119,182,0.14)") : "transparent",
                             color: active ? t.primary : t.textMuted,
@@ -7529,7 +7769,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
                           type="button"
                           onClick={() => setModoCantidadPreciosPersist(opt.id)}
                           style={{
-                            border: "none", cursor: "pointer", padding: "6px 14px",
+                            border: "none", cursor: "pointer", padding: adminCompact ? "10px 12px" : "6px 14px",
+                            minHeight: adminCompact ? 44 : undefined,
                             fontSize: "var(--cc-sm)", fontWeight: active ? 700 : 500,
                             background: active ? (isDarkMode(activeTheme) ? "rgba(0,175,197,0.22)" : "rgba(0,119,182,0.14)") : "transparent",
                             color: active ? t.primary : t.textMuted,
@@ -7543,11 +7784,11 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
                   </div>
                 </>
               )}
-              <button style={S.closeBtn(activeTheme, t)} onClick={onClose} title="Cerrar" type="button">✕</button>
+              <button className="cc-admin-close-btn" style={S.closeBtn(activeTheme, t)} onClick={onClose} title="Cerrar" type="button">✕</button>
             </div>
           </div>
 
-          <div style={S.scrollArea(activeTheme, t)}>
+          <div className="cc-admin-scroll-area" style={S.scrollArea(activeTheme, t)}>
             {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} contratos={contratosVisibles} user={user} theme={activeTheme} />}

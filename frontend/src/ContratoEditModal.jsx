@@ -6,6 +6,7 @@ import { ContratoDocumentosPanel } from "./ContratoDocumentosContractuales";
 import { ContratoOrdenesPagoPanel } from "./ContratoOrdenesPago";
 import { formatCOP } from "./utils/formatCOP";
 import { buildContratoUiTheme } from "./theme/adminPanelTheme";
+import { useClaraViewport } from "./useClaraViewport";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
@@ -50,6 +51,8 @@ export default function ContratoEditModal({
   const isEdit = mode === "edit";
   const ui = useMemo(() => buildContratoUiTheme(theme, tProp), [theme, tProp]);
   const { inp, lbl, font, fileDrop: fileDropStyle } = ui;
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
+  const compact = vpMobile || isLandscapeMobile;
 
   function copHint(val) {
     if (val == null || val === "" || Number.isNaN(Number(val))) return null;
@@ -78,6 +81,7 @@ export default function ContratoEditModal({
 
   return (
     <div
+      className="cc-contrato-modal-overlay"
       style={{
         position: "fixed",
         inset: 0,
@@ -86,22 +90,25 @@ export default function ContratoEditModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 16,
+        padding: compact ? 0 : 16,
       }}
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
+        className="cc-contrato-modal-dialog"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "min(1248px, 100%)",
-          maxHeight: "min(92vh, 920px)",
+          width: compact ? "100%" : "min(1248px, 100%)",
+          maxHeight: compact ? "100%" : "min(92vh, 920px)",
+          height: compact ? "100%" : undefined,
+          minHeight: compact ? "100dvh" : undefined,
           display: "flex",
           flexDirection: "column",
           background: ui.bg,
           border: `1px solid ${ui.border}`,
-          borderRadius: 14,
+          borderRadius: compact ? 0 : 14,
           boxShadow: ui.shadow,
           overflow: "hidden",
           fontSize: font.body,
@@ -110,7 +117,7 @@ export default function ContratoEditModal({
       >
         <div
           style={{
-            padding: "16px 20px 12px",
+            padding: compact ? "12px 14px 10px" : "16px 20px 12px",
             borderBottom: `1px solid ${ui.border}`,
             display: "flex",
             alignItems: "center",
@@ -133,6 +140,8 @@ export default function ContratoEditModal({
               border: `1px solid ${ui.border}`,
               borderRadius: 8,
               padding: "6px 12px",
+              minHeight: 44,
+              minWidth: 44,
               color: ui.textMuted,
               cursor: "pointer",
               fontSize: font.sm,
@@ -143,11 +152,14 @@ export default function ContratoEditModal({
         </div>
 
         <div
+          className="cc-contrato-modal-tabs"
           style={{
             display: "flex",
             gap: 6,
             padding: "10px 16px 0",
-            flexWrap: "wrap",
+            flexWrap: compact ? "nowrap" : "wrap",
+            overflowX: compact ? "auto" : undefined,
+            WebkitOverflowScrolling: compact ? "touch" : undefined,
             borderBottom: `1px solid ${ui.border}`,
             flexShrink: 0,
           }}
@@ -164,11 +176,13 @@ export default function ContratoEditModal({
                 borderBottom: tab === tb.id ? `1px solid ${ui.bg}` : undefined,
                 marginBottom: -1,
                 padding: "8px 14px",
+                minHeight: 44,
                 color: tab === tb.id ? ui.primary : ui.textMuted,
                 fontSize: font.caption,
                 fontWeight: tab === tb.id ? 700 : 500,
                 cursor: "pointer",
                 whiteSpace: "nowrap",
+                flex: "0 0 auto",
               }}
             >
               {tb.label}
@@ -176,7 +190,7 @@ export default function ContratoEditModal({
           ))}
         </div>
 
-        <div style={{ flex: 1, overflow: "auto", padding: "16px 20px 12px", color: ui.text }}>
+        <div style={{ flex: 1, overflow: "auto", padding: compact ? "12px 14px 16px" : "16px 20px 12px", color: ui.text, WebkitOverflowScrolling: "touch" }}>
           {msg && (
             <div
               style={{
@@ -193,10 +207,10 @@ export default function ContratoEditModal({
           )}
 
           {tab === "info" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 16 }}>
               <div>
                 <label style={lbl}>NÚMERO DE CONTRATO *</label>
-                <input style={inp} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} />
+                <input style={{ ...inp, minHeight: 44, fontSize: 16 }} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} />
                 <label style={lbl}>OBJETO DEL CONTRATO</label>
                 <input style={inp} placeholder="Descripción del objeto contractual" value={form.objeto} onChange={(e) => setForm((f) => ({ ...f, objeto: e.target.value }))} />
                 <label style={lbl}>CONTRATISTA *</label>
@@ -285,7 +299,7 @@ export default function ContratoEditModal({
 
           {tab === "financiera" && (
             <div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
+              <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 8 }}>
                 <div>
                   <label style={lbl}>AIU (%)</label>
                   <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%" value={form.aiu} onChange={(e) => setForm((f) => ({ ...f, aiu: e.target.value }))} />
@@ -306,7 +320,7 @@ export default function ContratoEditModal({
                 </div>
               </div>
               <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.6, margin: "4px 0 8px" }}>VALORES CONTRATUALES (COP$)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
+              <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 8 }}>
                 <div>
                   <label style={lbl}>VALOR COMPONENTE AMBIENTAL</label>
                   <input style={inp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_ambiental} onChange={(e) => setForm((f) => ({ ...f, valor_componente_ambiental: e.target.value }))} />

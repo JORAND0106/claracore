@@ -71,6 +71,7 @@ import {
   graficosPayloadDesdeHistorial,
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
+import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -138,10 +139,11 @@ import { useClaraViewport } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import {
-  FILTER_MAPBOX_LABEL_ABSCISA as _FILTER_MAPBOX_LABEL_ABSCISA,
   mapboxPlanoSymbolLayout as _mapboxPlanoSymbolLayout,
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
+  addMapboxAbscisaLabelLayers as _addMapboxAbscisaLabelLayers,
+  setMapboxAbscisaLabelsVisibility as _setMapboxAbscisaLabelsVisibility,
 } from './mapboxPlanoLabels'
 import { crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
@@ -1195,12 +1197,37 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
     else map.once('load', fit)
   }, [fallbackBounds, lat, lng])
 
+  useEffect(() => {
+    const map = mapRef.current
+    const el = containerRef.current
+    if (!map || !el) return undefined
+    const resize = () => { try { map.resize() } catch { /* ignore */ } }
+    resize()
+    const t1 = setTimeout(resize, 120)
+    const t2 = setTimeout(resize, 400)
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => resize())
+      ro.observe(el)
+      if (el.parentElement) ro.observe(el.parentElement)
+    }
+    window.addEventListener('orientationchange', resize)
+    window.addEventListener('resize', resize)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      try { ro?.disconnect() } catch { /* ignore */ }
+      window.removeEventListener('orientationchange', resize)
+      window.removeEventListener('resize', resize)
+    }
+  }, [mapError])
+
   const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
   if (mapError) {
     return <MapaNoDisponible t={t} mensaje={mapError} minHeight={340} />
   }
   return (
-    <div style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
+    <div className="cc-sicoe-mapa-portada" style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
       <div ref={containerRef} style={{ width:'100%', height:'100%', minHeight:'340px' }} />
       {!hasCoords && (
         <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:`${t.bgCard}EE`, gap:'8px', pointerEvents:'none' }}>
@@ -1281,10 +1308,16 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
               paint: { 'line-color': '#00A896', 'line-width': 1.2 },
             })
             map.addLayer({
-              id: 'portada-labels-abscisa',
+              id: 'portada-labels-pk',
               type: 'symbol',
               source: 'portada-plano',
-              filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+              filter: _FILTER_MAPBOX_LABEL_PK,
+              layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'pk_id'], ['get', 'PK_ID'], ['get', 'Layer'], '']),
+              paint: MAPBOX_PLANO_PAINT_LABELS,
+            })
+            _addMapboxAbscisaLabelLayers(map, {
+              idPrefix: 'portada-labels-abscisa',
+              source: 'portada-plano',
               layout: _mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
               paint: MAPBOX_PLANO_PAINT_LABELS,
             })
@@ -1328,10 +1361,36 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
       } else if (fallbackBounds) {
         _mapboxFitBoundsLngLat(map, fallbackBounds, { padding: 56, maxZoom: 14, duration: 650 })
       }
+      try { map.resize() } catch { /* ignore */ }
     }
     if (map.isStyleLoaded()) pintar()
     else map.once('load', pintar)
   }, [puntos, fallbackBounds, planoGeojson])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const el = containerRef.current
+    if (!map || !el) return undefined
+    const resize = () => { try { map.resize() } catch { /* ignore */ } }
+    resize()
+    const t1 = setTimeout(resize, 120)
+    const t2 = setTimeout(resize, 400)
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => resize())
+      ro.observe(el)
+      if (el.parentElement) ro.observe(el.parentElement)
+    }
+    window.addEventListener('orientationchange', resize)
+    window.addEventListener('resize', resize)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      try { ro?.disconnect() } catch { /* ignore */ }
+      window.removeEventListener('orientationchange', resize)
+      window.removeEventListener('resize', resize)
+    }
+  }, [mapError])
 
   const tieneToken = !!import.meta.env.VITE_MAPBOX_TOKEN
   const validos = (puntos || []).filter(
@@ -1343,13 +1402,13 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
     return <MapaNoDisponible t={t} mensaje={mapError} minHeight={340} />
   }
   return (
-    <div style={{ position: 'relative', width: '100%', minHeight: '340px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${t.border}` }}>
+    <div className="cc-sicoe-mapa-portada" style={{ position: 'relative', width: '100%', minHeight: '340px', height: '340px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${t.border}` }}>
       {!tieneToken ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '340px', padding: '20px', color: t.textMuted, fontSize: 'var(--cc-sm)', textAlign: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '340px', height: '100%', padding: '20px', color: t.textMuted, fontSize: 'var(--cc-sm)', textAlign: 'center' }}>
           Configure <code>VITE_MAPBOX_TOKEN</code> para ver el mapa de localizaciones.
         </div>
       ) : (
-        <div ref={containerRef} style={{ width: '100%', minHeight: '340px' }} />
+        <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: '340px' }} />
       )}
       {tieneToken && mostrarAvisoSinPins && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: `${t.bgCard}EE`, gap: '8px', pointerEvents: 'none' }}>
@@ -2251,6 +2310,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
+  const { isMobile: hojaVpMobile, isLandscapeMobile: hojaLandscapeMobile } = useClaraViewport()
+  const hojaCompact = hojaVpMobile || hojaLandscapeMobile
+  const [mediaLightbox, setMediaLightbox] = useState(null) // { items, index }
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -3103,10 +3165,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       : false
   const puedeTurnarLlaveMisil = muestraPanelDobleLlave && miSlotLibre && !llaveContrariaOcupadaPorOtro
 
-  const CampoRO = ({ label, valor, color }) => (
-    <div>
-      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
-      <div style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+  const CampoRO = ({ label, labelShort, valor, color, truncate }) => (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+        {labelShort ? (
+          <>
+            <span className="cc-sicoe-label-full">{label}</span>
+            <span className="cc-sicoe-label-short">{labelShort}</span>
+          </>
+        ) : label}
+      </div>
+      <div
+        className={truncate ? 'cc-sicoe-truncate' : undefined}
+        title={truncate && valor != null ? String(valor) : undefined}
+        style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}`, ...(truncate ? { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } : {}) }}
+      >
         {valor ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
       </div>
     </div>
@@ -3511,10 +3584,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
           {/* Ítem seleccionado — info auto */}
           {itemSel && (
-            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
-              <CampoRO label="Descripción"    valor={itemSel.descripcion} />
+            <div style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : '2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
+              <CampoRO label="Descripción" labelShort="Descr." valor={itemSel.descripcion} truncate />
               <CampoRO label="Unidad"         valor={itemSel.unidad || null} />
-              {nivelInfo.verValoresEconomicos && <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />}
+              {nivelInfo.verValoresEconomicos && <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={fmtD(itemSel.precio_unitario)} color='#10B981' />}
             </div>
           )}
         </div>
@@ -3604,11 +3677,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         ) : (
           <>
             <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
-              <CampoRO label="Abs. Inicio"  valor={registro.abs_inicio} />
-              <CampoRO label="Abs. Final"   valor={registro.abs_final} />
-              <CampoRO label="Nodo Inicio"  valor={registro.nodo_ini} />
-              <CampoRO label="Nodo Final"   valor={registro.nodo_fin} />
+            <div className="cc-sicoe-abscisa-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
+              <CampoRO label="Abs. Inicio" labelShort="Abs. Ini." valor={registro.abs_inicio} />
+              <CampoRO label="Abs. Final"  labelShort="Abs. Fin." valor={registro.abs_final} />
+              <CampoRO label="Nodo Inicial" labelShort="Nod. Ini." valor={registro.nodo_ini} />
+              <CampoRO label="Nodo Final"   labelShort="Nod. Fin." valor={registro.nodo_fin} />
             </div>
           </>
         )}
@@ -3662,6 +3735,22 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   src={fotoVista}
                   alt="Foto"
                   referrerPolicy="no-referrer"
+                  className="cc-sicoe-media-tap"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    const items = [{ url: fotoVista, label: 'Foto' }]
+                    for (const g of graficosLista) {
+                      if (g?.url) items.push({ url: g.url, label: g.numero != null ? `Gráfico #${g.numero}` : 'Gráfico' })
+                    }
+                    setMediaLightbox({ items, index: 0 })
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.currentTarget.click()
+                    }
+                  }}
                   style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }}
                   onLoad={() => setFotoImgError(false)}
                   onError={() => setFotoImgError(true)}
@@ -3731,7 +3820,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             {grafVista ? (
               <>
                 <div style={{ position:'relative' }}>
-                  <img src={grafVista} alt="Gráfico" referrerPolicy="no-referrer" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+                  <img
+                    src={grafVista}
+                    alt="Gráfico"
+                    referrerPolicy="no-referrer"
+                    className="cc-sicoe-media-tap"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      const items = []
+                      if (fotoVista) items.push({ url: fotoVista, label: 'Foto' })
+                      for (const g of graficosLista) {
+                        if (g?.url) items.push({ url: g.url, label: g.numero != null ? `Gráfico #${g.numero}` : 'Gráfico' })
+                      }
+                      if (!items.length && grafVista) items.push({ url: grafVista, label: 'Gráfico' })
+                      const idx = Math.max(0, items.findIndex((x) => x.url === grafVista))
+                      setMediaLightbox({ items, index: idx >= 0 ? idx : 0 })
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        e.currentTarget.click()
+                      }
+                    }}
+                    style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }}
+                  />
                   {graficosLista.length > 1 && (
                     <>
                       <button type="button" disabled={graficoIdx <= 0} onClick={() => setGraficoIdx((i) => Math.max(0, i - 1))}
@@ -3854,11 +3967,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               🚦 Validación · {titNv}
               {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
             </div>
-            <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+            <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               {BTNS.map(({ estado, icon, color }) => {
                 const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
                 return (
-                  <button key={estado} disabled={bloqueado}
+                  <button key={estado} type="button" disabled={bloqueado}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
                       padding: '8px 16px', borderRadius: '8px', fontSize: 'var(--cc-sm)', fontWeight: '700',
@@ -3951,11 +4064,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
             </div>
             {registro.nivel2_objeto_pago_sub ? (
-              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+              <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
                 {BTNS_SUB.map(({ estado, icon, color }) => {
                   const activo = estadoActual === estado
                   return (
-                    <button key={estado}
+                    <button key={estado} type="button"
                       onClick={() => ejecutarValidacionSub(estado)}
                       style={{
                         padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
@@ -4035,6 +4148,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           )}
         </div>
       )}
+
+      {mediaLightbox && (
+        <SicoeMediaLightbox
+          open
+          items={mediaLightbox.items}
+          index={mediaLightbox.index}
+          onClose={() => setMediaLightbox(null)}
+          onIndexChange={(i) => setMediaLightbox((prev) => (prev ? { ...prev, index: i } : null))}
+        />
+      )}
     </div>
   )
 }
@@ -4043,6 +4166,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null, onReporteActualizado = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
+  const { isMobile: carpetaVpMobile, isLandscapeMobile: carpetaLandscapeMobile } = useClaraViewport()
+  const carpetaCompact = carpetaVpMobile || carpetaLandscapeMobile
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
   const capasOpNorm = (capasFiltroValidacionOp || 'and') === 'or' ? 'or' : 'and'
   const [reporte, setReporte]                     = useState(repoProp)
@@ -4205,6 +4330,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [seleccionados, setSeleccionados]         = useState([])
   const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
   const [registroExpandido, setRegistroExpandido] = useState(null)
+  const [menuAccionesRegId, setMenuAccionesRegId] = useState(null)
 
   useEffect(() => {
     if (!repoProp?._autoRegistro) return
@@ -4361,9 +4487,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   useEffect(() => {
     if (!contrato_id || reporte._cargandoDetalle) return
     let cancelled = false
-    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
-      .then((d) => { if (!cancelled) setListaPkIds(d) })
-      .catch(() => { if (!cancelled) setListaPkIds([]) })
+    const cargar = (intento = 0) => {
+      fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
+        .then((d) => { if (!cancelled) setListaPkIds(Array.isArray(d) ? d : []) })
+        .catch(() => {
+          if (cancelled) return
+          if (intento < 2) {
+            setTimeout(() => cargar(intento + 1), 600 * (intento + 1))
+            return
+          }
+          setListaPkIds([])
+        })
+    }
+    cargar()
     return () => { cancelled = true }
   }, [contrato_id, API_URL, reporte._cargandoDetalle])
 
@@ -5053,10 +5189,21 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   // ─ Campo de info del reporte (para portada y hojas) ─
-  const CampoInfo = ({ label, valor, full = false }) => (
-    <div style={{ gridColumn: full ? '1 / -1' : undefined }}>
-      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
-      <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+  const CampoInfo = ({ label, labelShort, valor, full = false }) => (
+    <div style={{ gridColumn: full ? '1 / -1' : undefined, minWidth: 0 }}>
+      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>
+        {labelShort ? (
+          <>
+            <span className="cc-sicoe-label-full">{label}</span>
+            <span className="cc-sicoe-label-short">{labelShort}</span>
+          </>
+        ) : label}
+      </div>
+      <div
+        className={valor && String(valor).length > 28 ? 'cc-sicoe-truncate' : undefined}
+        title={valor ? String(valor) : undefined}
+        style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}
+      >
         {valor || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}
       </div>
     </div>
@@ -5251,12 +5398,146 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     )
   }
 
+  const colorEstadoValidacion = (st) =>
+    st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
+
+  const estadoMiNivelRegistro = (reg) => {
+    const nv = nvMasivo || nivelInfo.nivelValidacion
+    if (nv == null || nv === 0) return reg.sub_estado || 'No Revisado'
+    return reg[`nivel${nv}_estado`] || 'No Revisado'
+  }
+
+  const puedeValidarRapidoRegistro = (reg) =>
+    puedeMasivaNivel &&
+    !reg.bloqueado &&
+    !!String(reg.item_numero || '').trim() &&
+    regCumplePrereqMasivoNivel(reg) &&
+    !reporteExcluidoValidacionAvanzada
+
+  const renderAccionesValidacionCard = (reg) => {
+    const estado = estadoMiNivelRegistro(reg)
+    const colorEst = colorEstadoValidacion(estado)
+    const rapido = nivelInfo.puedeValidar && puedeValidarRapidoRegistro(reg)
+    return (
+      <>
+        <div className="cc-sicoe-reg-card-meta" onClick={(e) => e.stopPropagation()}>
+          <div className="cc-sicoe-reg-card-meta-item">
+            <span>Ítem</span>
+            <span className="cc-sicoe-truncate" title={reg.item_numero || 'Sin asignar'}>{reg.item_numero || 'Sin asignar'}</span>
+          </div>
+          <div className="cc-sicoe-reg-card-meta-item">
+            <span>Cant.</span>
+            <span className="cc-sicoe-num">
+              {reg.cantidad_total != null
+                ? Number(reg.cantidad_total).toLocaleString('es-CO', { maximumFractionDigits: 2 })
+                : (reg.cantidad != null ? String(reg.cantidad) : '—')}
+            </span>
+          </div>
+          <div className="cc-sicoe-reg-card-meta-item">
+            <span>Estado</span>
+            <span style={{ color: colorEst, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: colorEst, flexShrink: 0 }} />
+              {estado === 'No Revisado' ? 'Sin rev.' : estado}
+            </span>
+          </div>
+          <div className="cc-sicoe-reg-card-meta-item">
+            <span>Fecha</span>
+            <span>{(() => { try { const ts=reg.created_at; if (!ts) return '—'; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'—':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short'}) } catch{return '—'} })()}</span>
+          </div>
+        </div>
+        {rapido && (
+          <div className="cc-sicoe-reg-card-actions cc-sicoe-validacion-btns" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              disabled={ejecutandoMasivo || estado === 'Aprobado'}
+              onClick={() => ejecutarMasivoSeleccion('Aprobado', null, [reg.id])}
+              style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 800, cursor: ejecutandoMasivo ? 'wait' : 'pointer', opacity: ejecutandoMasivo || estado === 'Aprobado' ? 0.55 : 1 }}
+            >
+              ✅ Aprobar
+            </button>
+            <button
+              type="button"
+              disabled={ejecutandoMasivo}
+              onClick={() => setPopupMasivo({ estado: 'Pendiente', idsOverride: [reg.id] })}
+              style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 800, cursor: ejecutandoMasivo ? 'wait' : 'pointer', opacity: ejecutandoMasivo ? 0.55 : 1 }}
+            >
+              🟡 Pendiente
+            </button>
+            <button
+              type="button"
+              disabled={ejecutandoMasivo}
+              onClick={() => setPopupMasivo({ estado: 'Rechazado', idsOverride: [reg.id] })}
+              style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 800, cursor: ejecutandoMasivo ? 'wait' : 'pointer', opacity: ejecutandoMasivo ? 0.55 : 1 }}
+            >
+              🔴 Rechazar
+            </button>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  const renderMenuAccionesReg = (reg) => {
+    const abierto = menuAccionesRegId != null && String(menuAccionesRegId) === String(reg.id)
+    const abrirComentarios = () => {
+      const rolOrigen = determinarNivelValidacion(usuario, contrato_id).rolOrigen
+      setMenuAccionesRegId(null)
+      setModalComentarios({ reg, rolOrigen })
+      cargarComentariosRegistro(reg.id, rolOrigen)
+    }
+    const abrirTrazabilidad = () => {
+      setMenuAccionesRegId(null)
+      setModalTrazabilidadSicoe(reg)
+    }
+    return (
+      <>
+        <div className="cc-sicoe-reg-icons-inline" style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            onClick={abrirComentarios}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: 'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink: 0, lineHeight: 1, minWidth: 44, minHeight: 44 }}
+            title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}
+          >
+            💬{reg.num_comentarios > 0 && <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: '#10B981', marginLeft: 1 }}>{reg.num_comentarios}</span>}
+          </button>
+          <button
+            type="button"
+            title="Trazabilidad y auditoría (SICOE obra)"
+            onClick={abrirTrazabilidad}
+            style={{ background: 'none', border: `1px solid ${t.border}`, borderRadius: 8, cursor: 'pointer', padding: '2px 6px', fontSize: 'var(--cc-sm)', color: t.primary, flexShrink: 0, lineHeight: 1, minWidth: 44, minHeight: 44 }}
+          >📜</button>
+        </div>
+        <div className="cc-sicoe-reg-menu" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="cc-sicoe-reg-menu-btn"
+            aria-label="Más acciones"
+            aria-expanded={abierto}
+            onClick={() => setMenuAccionesRegId(abierto ? null : reg.id)}
+          >
+            ⋯
+          </button>
+          {abierto && (
+            <div className="cc-sicoe-reg-menu-panel" role="menu">
+              <button type="button" role="menuitem" onClick={abrirComentarios}>
+                💬 Comentarios{reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}
+              </button>
+              <button type="button" role="menuitem" onClick={abrirTrazabilidad}>
+                📜 Trazabilidad
+              </button>
+            </div>
+          )}
+        </div>
+      </>
+    )
+  }
+
   return (
-    <div style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
-      <div style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
+    <div className="cc-sicoe-carpeta-overlay" style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
+      <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
-        <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px' }}>
+        <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius: carpetaCompact ? 0 : '14px 14px 0 0', padding: carpetaCompact ? '14px 14px' : '16px 24px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px', flexWrap: carpetaCompact ? 'wrap' : undefined }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px', flex:'1 1 auto', minWidth:0 }}>
             <span style={{ fontSize:'28px' }}>📁</span>
             <div>
@@ -5325,7 +5606,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           </div>
         )}
         {/* ─ Tab bar horizontal ─ */}
-        <div style={{ display:'flex', gap:'4px', padding:'12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto' }}>
+        <div className="cc-sicoe-tabs-scroll" style={{ display:'flex', gap:'4px', padding: carpetaCompact ? '10px 12px 0' : '12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
           {[
             { key: 'portada',      label: '📋 Portada' },
             { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
@@ -5343,37 +5624,38 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               return { key: it, label: `${tienePendiente ? '🔴' : '🔖'} ${it}` }
             })
           ].map(tab => (
-            <button key={tab.key} onClick={() => setTabActiva(tab.key)} style={{
+            <button key={tab.key} type="button" onClick={() => setTabActiva(tab.key)} style={{
               background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
               color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
               border:        `1px solid ${tabActiva === tab.key ? '#7DD3E8' : '#475569'}`,
               borderBottom:  tabActiva === tab.key ? '1px solid #E8F6F8' : '1px solid #2A3F52',
-              borderRadius:  '8px 8px 0 0', padding:'8px 16px', fontSize:'var(--cc-sm)',
+              borderRadius:  '8px 8px 0 0', padding: carpetaCompact ? '10px 14px' : '8px 16px', fontSize:'var(--cc-sm)',
               fontWeight:    tabActiva === tab.key ? '700' : '500',
               cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s',
+              minHeight: carpetaCompact ? 44 : undefined,
               boxShadow: tabActiva === tab.key ? '0 -2px 8px rgba(0,0,0,0.12)' : 'none',
             }}>{tab.label}</button>
           ))}
 
           {/* Botones de acción */}
-          <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px' }}>
+          <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px', flexShrink:0 }}>
             {puedeEditar && seleccionados.length > 0 && (
-              <button onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
+              <button type="button" onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
                 background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px',
-                padding:'6px 14px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
+                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
               }}>↗ Mover ({seleccionados.length})</button>
             )}
             {puedeEditar && (
-              <button onClick={crearNuevoRegistro} disabled={creandoReg} style={{
+              <button type="button" onClick={crearNuevoRegistro} disabled={creandoReg} style={{
                 background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding:'6px 14px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
+                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
               }}>{creandoReg ? '...' : '+ Nuevo Registro'}</button>
             )}
           </div>
         </div>
 
         {/* ─ Contenido del tab ─ */}
-        <div style={{ flex:1, padding:'24px', overflowY:'auto' }}>
+        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding:'24px', overflowY:'auto' }}>
           {msgMasivo && (
             <div style={{
               marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
@@ -5429,22 +5711,22 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           {puedeMasivaNivel && portadaResumenEstado !== 'Aprobado' && idsPortadaResumenMasivoElegibles.length > 0 && (
                             <>
                               <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Masivo N{nvMasivo}:</span>
-                              <button type="button" disabled={ejecutandoMasivo}
+                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
                                 onClick={() => ejecutarMasivoSeleccion('Aprobado', null, idsPortadaResumenMasivoElegibles)}
-                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#16a34a', color: '#fff', border:'none' }}>
                                 Aprobar todos ({idsPortadaResumenMasivoElegibles.length})
                               </button>
-                              <button type="button" disabled={ejecutandoMasivo}
+                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
                                 onClick={() => setPopupMasivo({ estado: 'Pendiente', idsOverride: idsPortadaResumenMasivoElegibles })}
-                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#d97706', color: '#fff', border:'none' }}>
                                 Pendiente todos
                               </button>
-                              <button type="button" disabled={ejecutandoMasivo}
+                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
                                 onClick={() => setPopupMasivo({ estado: 'Rechazado', idsOverride: idsPortadaResumenMasivoElegibles })}
-                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#dc2626', color: '#fff', border:'none' }}>
                                 Rechazar todos
                               </button>
                             </>
@@ -5554,7 +5836,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     nodos={nodosPortada}
                   />
                 ) : (
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
+                <div className="cc-sicoe-portada-loc-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
 
                   {/* Columna izquierda — campos */}
                   <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
@@ -5612,11 +5894,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
                       {modoEdicion ? (
                         <>
-                          {[['Nodo Inicial', editNodoIni, setEditNodoIni, 'text'],
-                            ['Nodo Final',   editNodoFin, setEditNodoFin, 'text']
-                          ].map(([label, val, setter, type]) => (
+                          {[['Nodo Inicial', 'Nod. Ini.', editNodoIni, setEditNodoIni, 'text'],
+                            ['Nodo Final',   'Nod. Fin.', editNodoFin, setEditNodoFin, 'text']
+                          ].map(([label, labelShort, val, setter, type]) => (
                             <div key={label}>
-                              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+                                <span className="cc-sicoe-label-full">{label}</span>
+                                <span className="cc-sicoe-label-short">{labelShort}</span>
+                              </div>
                               <input type={type} value={val} onChange={e => setter(e.target.value)}
                                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                             </div>
@@ -5624,8 +5909,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         </>
                       ) : (
                         <>
-                          <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
-                          <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
+                          <CampoInfo label="Nodo Inicial" labelShort="Nod. Ini." valor={reporte.nodo_ini} />
+                          <CampoInfo label="Nodo Final" labelShort="Nod. Fin." valor={reporte.nodo_fin} />
                         </>
                       )}
                     </div>
@@ -5853,8 +6138,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 return (
                   <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
-                      onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
-                      style={{ display:'flex', alignItems:'center', gap:'8px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'8px 12px', cursor:'pointer', transition:'border 0.15s' }}
+                      className="cc-sicoe-reg-card"
+                      onClick={() => {
+                        setMenuAccionesRegId(null)
+                        setRegistroExpandido(expandido ? null : reg.id)
+                      }}
+                      style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:`4px solid ${colorNivel(nivelesInfo.find(n => n.nivelNum != null && nivelInfo.nivelValidacion === n.nivelNum)?.estado || 'No Revisado')}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding: carpetaCompact ? '6px 8px' : '12px 14px', cursor:'pointer', transition:'border 0.15s', minHeight: carpetaCompact ? 0 : 52 }}
                     >
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
@@ -5883,11 +6172,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           📷 {strRefCarpetaFoto(reg)}
                         </span>
                       )}
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
+                      <span className="cc-sicoe-reg-obs" style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
                         {reg.observacion || 'Sin observación'}
                       </span>
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
-                      <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
+                      <span className="cc-sicoe-reg-fecha-inline" style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
+                      <div className="cc-sicoe-reg-status-row" style={{ display:'flex', gap:'12px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
                         {nivelesInfo.map((item) => {
                           const esMiNivel = item.nivelNum != null && nivelInfo.nivelValidacion === item.nivelNum
                           const estado = item.estado
@@ -5905,37 +6194,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           )
                         })}
                       </div>
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          const rolOrigen = determinarNivelValidacion(usuario, contrato_id).rolOrigen
-                          setModalComentarios({ reg, rolOrigen })
-                          cargarComentariosRegistro(reg.id, rolOrigen)
-                        }}
-                        style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
-                                 fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
-                        title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
-                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        title="Trazabilidad y auditoría (SICOE obra)"
-                        onClick={e => {
-                          e.stopPropagation()
-                          setModalTrazabilidadSicoe(reg)
-                        }}
-                        style={{
-                          background: 'none',
-                          border: `1px solid ${t.border}`,
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          padding: '2px 6px',
-                          fontSize: 'var(--cc-sm)',
-                          color: t.primary,
-                          flexShrink: 0,
-                          lineHeight: 1,
-                        }}
-                      >📜</button>
+                      {renderMenuAccionesReg(reg)}
                       {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
                         <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
                       )}
@@ -5943,6 +6202,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
                       ) : null}
                       <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                      {renderAccionesValidacionCard(reg)}
                     </div>
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
@@ -5996,8 +6256,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 return (
                   <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
-                      onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
-                      style={{ display:'flex', alignItems:'center', gap:'8px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'8px 12px', cursor:'pointer', transition:'border 0.15s' }}
+                      className="cc-sicoe-reg-card"
+                      onClick={() => {
+                        setMenuAccionesRegId(null)
+                        setRegistroExpandido(expandido ? null : reg.id)
+                      }}
+                      style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:`4px solid ${colorNivel(nivelesInfo.find(n => n.nivelNum != null && nivelInfo.nivelValidacion === n.nivelNum)?.estado || 'No Revisado')}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding: carpetaCompact ? '6px 8px' : '12px 14px', cursor:'pointer', transition:'border 0.15s', minHeight: carpetaCompact ? 0 : 52 }}
                     >
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
@@ -6026,12 +6290,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           📷 {strRefCarpetaFoto(reg)}
                         </span>
                       )}
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
+                      <span className="cc-sicoe-reg-obs" style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
                         {reg.observacion || 'Sin observación'}
                       </span>
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
-                      {/* Íconos de validación */}
-                      <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
+                      <span className="cc-sicoe-reg-fecha-inline" style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
+                      <div className="cc-sicoe-reg-status-row" style={{ display:'flex', gap:'12px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
                         {nivelesInfo.map((item) => {
                           const esMiNivel = item.nivelNum != null && nivelInfo.nivelValidacion === item.nivelNum
                           const estado = item.estado
@@ -6049,38 +6312,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           )
                         })}
                       </div>
-                      {/* Burbuja de comentarios */}
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          const rolOrigen = determinarNivelValidacion(usuario, contrato_id).rolOrigen
-                          setModalComentarios({ reg, rolOrigen })
-                          cargarComentariosRegistro(reg.id, rolOrigen)
-                        }}
-                        style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
-                                 fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
-                        title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
-                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        title="Trazabilidad y auditoría (SICOE obra)"
-                        onClick={e => {
-                          e.stopPropagation()
-                          setModalTrazabilidadSicoe(reg)
-                        }}
-                        style={{
-                          background: 'none',
-                          border: `1px solid ${t.border}`,
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          padding: '2px 6px',
-                          fontSize: 'var(--cc-sm)',
-                          color: t.primary,
-                          flexShrink: 0,
-                          lineHeight: 1,
-                        }}
-                      >📜</button>
+                      {renderMenuAccionesReg(reg)}
                       {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
                         <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
                       )}
@@ -6088,6 +6320,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
                       ) : null}
                       <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                      {renderAccionesValidacionCard(reg)}
                     </div>
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
@@ -6357,7 +6590,7 @@ function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = '
         {/* Relleno muy tenue: solo guía visual, no tapar el texto */}
         <div style={{ height: '100%', width: `${pct}%`, background: color, opacity: 0.14 }} />
       </div>
-      <span style={{ position:'relative', zIndex: 1, color: textColor || color, fontWeight: 600 }}>{text}</span>
+      <span className="cc-sicoe-panel-bar-text" style={{ position:'relative', zIndex: 1, color: textColor || color, fontWeight: 600 }}>{text}</span>
     </div>
   )
 }
@@ -6429,6 +6662,8 @@ function ModuloSicoeObra({
   const API_URL = API_BASE
   const contrato_id = usuario?.contrato_id
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
+  const { isMobile: sicoeVpMobile, isLandscapeMobile: sicoeLandscapeMobile } = useClaraViewport()
+  const sicoeCompact = sicoeVpMobile || sicoeLandscapeMobile
   const {
     efectivoOffline,
     isOfflineReady,
@@ -8540,7 +8775,8 @@ function ModuloSicoeObra({
 
     const mapEl = document.createElement('div')
     mapEl.style.width = '100%'
-    mapEl.style.height = '260px'
+    mapEl.style.height = '100%'
+    mapEl.style.minHeight = '260px'
     container.innerHTML = ''
     container.appendChild(mapEl)
 
@@ -8632,6 +8868,10 @@ function ModuloSicoeObra({
         let planoData = { ...geo }
         if (planoSoloMaestro && permitSet.size > 0) {
           const matched = geo.features.filter((f) => {
+            const gt = f?.geometry?.type
+            if (gt === 'Point' || gt === 'MultiPoint') {
+              return String(f?.properties?.etiqueta ?? f?.properties?.Etiqueta ?? '').trim().length > 0
+            }
             const idf = _sicoeFeaturePkId(f)
             return idf && permitSet.has(idf.toLowerCase())
           })
@@ -8676,10 +8916,16 @@ function ModuloSicoeObra({
           paint: { 'line-color': planoSoloMaestro && planoData !== geo ? '#0F766E' : '#00A896', 'line-width': planoSoloMaestro && planoData !== geo ? 2 : 1.2 },
         })
         map.addLayer({
-          id: 'sicoe-filtro-labels-abscisa',
+          id: 'sicoe-filtro-labels-pk',
           type: 'symbol',
           source: 'sicoe-filtro-plano',
-          filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+          filter: _FILTER_MAPBOX_LABEL_PK,
+          layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'pk_id'], ['get', 'PK_ID'], ['get', 'Layer'], '']),
+          paint: MAPBOX_PLANO_PAINT_LABELS,
+        })
+        _addMapboxAbscisaLabelLayers(map, {
+          idPrefix: 'sicoe-filtro-labels-abscisa',
+          source: 'sicoe-filtro-plano',
           layout: _mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
           paint: MAPBOX_PLANO_PAINT_LABELS,
         })
@@ -9154,7 +9400,7 @@ function ModuloSicoeObra({
   const sicoeFGrow = { flex: '1 1 0', minWidth: 0, maxWidth: '100%' }
 
   return (
-    <div>
+    <div className="cc-sicoe-root">
       {/* ── Banners offline ── */}
       <OfflineStatusBanner />
       <SicoeSinCacheOfflineBanner />
@@ -9391,18 +9637,18 @@ function ModuloSicoeObra({
       )}
 
       {/* ── Header ── */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
+      <div className="cc-sicoe-header" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px', gap: 12, flexWrap: sicoeCompact ? 'wrap' : undefined }}>
         <div>
           <h2 style={{ margin:0, color:t.text, fontSize:'var(--cc-title)', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
           <p style={{ margin:0, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Reporte de cantidades de campo</p>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <div className="cc-sicoe-header-actions" style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
           <PrepareOfflineBtn actaRpo={filtros.acta_rpo || null} />
           <ForceOfflineToggle />
           {puedeCrear && (
-            <button onClick={() => setModalNuevoReporte(true)} style={{
+            <button type="button" className="cc-sicoe-touch-btn" onClick={() => setModalNuevoReporte(true)} style={{
               background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-              padding:'10px 20px', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
+              padding: sicoeCompact ? '10px 16px' : '10px 20px', minHeight: sicoeCompact ? 44 : undefined, fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
             }}>+ Nuevo Reporte</button>
           )}
         </div>
@@ -9450,7 +9696,7 @@ function ModuloSicoeObra({
       )}
 
       {/* ── Panel de análisis ── */}
-      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow:'hidden' }}>
+      <div className="cc-sicoe-panel" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow: sicoeCompact ? 'visible' : 'hidden' }}>
         {!sicoeVistaResultadosActiva ? (
           <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
             Defina criterios en Filtros y pulse <strong>Buscar</strong> para ver el panel de análisis.
@@ -9464,7 +9710,7 @@ function ModuloSicoeObra({
                 if (e.target.closest('button[data-sicoe-volver-panel]')) return
                 setPanelExpandido(v => !v)
               }}
-              style={{ padding:'10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'10px', background:'#1E293B', cursor:'pointer', userSelect:'none' }}>
+              style={{ padding: sicoeCompact ? '10px 12px' : '10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'10px', background:'#1E293B', cursor:'pointer', userSelect:'none', flexWrap: sicoeCompact ? 'wrap' : undefined }}>
               {puedeVolverPanel && (
                 <button
                   type="button"
@@ -9473,7 +9719,7 @@ function ModuloSicoeObra({
                   disabled={cargando || cargandoAnalisis}
                   style={{
                     background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.22)', borderRadius:'6px',
-                    padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#F1F5F9', cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer', flexShrink:0,
+                    padding: sicoeCompact ? '10px 12px' : '4px 10px', minHeight: sicoeCompact ? 44 : undefined, fontSize:'var(--cc-label)', fontWeight:'700', color:'#F1F5F9', cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer', flexShrink:0,
                     opacity: (cargando || cargandoAnalisis) ? 0.55 : 1,
                   }}
                 >
@@ -9496,7 +9742,8 @@ function ModuloSicoeObra({
                       background: panelChecksPendientes ? '#2563eb' : 'rgba(255,255,255,0.12)',
                       border: panelChecksPendientes ? 'none' : '1px solid rgba(255,255,255,0.25)',
                       borderRadius: 6,
-                      padding: '5px 12px',
+                      padding: sicoeCompact ? '10px 12px' : '5px 12px',
+                      minHeight: sicoeCompact ? 44 : undefined,
                       fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
                       color: '#F1F5F9',
@@ -9508,7 +9755,7 @@ function ModuloSicoeObra({
                   </button>
                 </>
               ) : null}
-              <span style={{ marginLeft:'auto', fontSize:'var(--cc-label)', color:'#94A3B8', flexShrink:0, textAlign:'right' }}>
+              <span style={{ marginLeft: sicoeCompact ? 0 : 'auto', fontSize:'var(--cc-label)', color:'#94A3B8', flexShrink:0, textAlign: sicoeCompact ? 'left' : 'right', width: sicoeCompact ? '100%' : undefined }}>
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
                 {analisis.verificacion?.dashboard_kpi_cobrado != null && nivelInfo.verValoresEconomicos ? (
                   <span style={{ display:'block', fontSize:'var(--cc-caption)', marginTop:2, color: analisis.verificacion.coherente_dashboard ? '#86efac' : '#fcd34d' }}>
@@ -9521,10 +9768,11 @@ function ModuloSicoeObra({
               </span>
               <span style={{ fontSize:'var(--cc-sm)', color:'#94A3B8' }}>{panelExpandido ? '▲' : '▼'}</span>
             </div>
-            {panelExpandido && <div style={{ overflowX:'auto' }}>
+            {panelExpandido && <div className="cc-sicoe-panel-scroll cc-sicoe-chart-wrap" style={{ overflowX:'auto', WebkitOverflowScrolling: 'touch' }}>
+              <div className="cc-sicoe-chart-inner">
               {analisis.modo === 'capitulo_items' ? (
                 // ── Tabla por ítems ────────────────────────────────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
+                <table className="cc-sicoe-panel-table" style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)', minWidth: sicoeCompact ? 720 : undefined }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
@@ -9635,7 +9883,7 @@ function ModuloSicoeObra({
                 </table>
               ) : analisis.modo === 'item_detalle' ? (
                 // ── Tabla por acta + capítulo ──────────────────────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
+                <table className="cc-sicoe-panel-table" style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)', minWidth: sicoeCompact ? 720 : undefined }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
@@ -9743,7 +9991,7 @@ function ModuloSicoeObra({
                 </table>
               ) : (
                 // ── Tabla por capítulos (acta_semana + general) ────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
+                <table className="cc-sicoe-panel-table" style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)', minWidth: sicoeCompact ? 720 : undefined }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
@@ -9829,6 +10077,7 @@ function ModuloSicoeObra({
                   </tfoot>
                 </table>
               )}
+              </div>
             </div>}
           </>
         ) : (
@@ -9915,10 +10164,10 @@ function ModuloSicoeObra({
                     )}
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
-                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Aprobado')} style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Aprobado</button>
-                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Pendiente')} style={{ background: '#ca8a04', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Pendiente</button>
-                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Rechazado')} style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Rechazado</button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }} className="cc-sicoe-masivo-btns">
+                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Aprobado')} style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', padding: sicoeCompact ? '10px 14px' : '6px 12px', minHeight: sicoeCompact ? 44 : undefined, fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Aprobado</button>
+                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Pendiente')} style={{ background: '#ca8a04', color: '#fff', border: 'none', borderRadius: '6px', padding: sicoeCompact ? '10px 14px' : '6px 12px', minHeight: sicoeCompact ? 44 : undefined, fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Pendiente</button>
+                  <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Rechazado')} style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: sicoeCompact ? '10px 14px' : '6px 12px', minHeight: sicoeCompact ? 44 : undefined, fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>Rechazado</button>
                 </div>
               </div>
               {msgMasivoFiltro && <div style={{ marginTop: '8px', fontSize: 'var(--cc-caption)', color: '#94A3B8', whiteSpace: 'pre-wrap' }}>{msgMasivoFiltro}</div>}
@@ -9928,8 +10177,32 @@ function ModuloSicoeObra({
       />
       {/* ── Grid reportes ── */}
       <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}` }}>
-        {/* Header grid — sticky */}
-        <div style={{
+        {puedeExportar && sicoeCompact && reportesMostrados?.length > 0 && (
+          <div className="cc-sicoe-export-bar" style={{ display: 'flex', gap: 8, padding: '10px 12px', borderBottom: `1px solid ${t.border}`, position: 'sticky', top: 0, zIndex: 8, background: t.bgCard }}>
+            <button
+              type="button"
+              className="cc-sicoe-touch-btn"
+              disabled={!reportesMostrados || reportesMostrados.length === 0}
+              onClick={abrirPopupExportRegistros}
+              style={{
+                flex: 1,
+                minHeight: 44,
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 'var(--cc-body)',
+                cursor: 'pointer',
+                opacity: (!reportesMostrados || reportesMostrados.length === 0) ? 0.55 : 1,
+              }}
+            >
+              ⬇ Exportar Excel
+            </button>
+          </div>
+        )}
+        {/* Header grid — sticky (desktop) */}
+        <div className="cc-sicoe-reportes-grid" style={{
           display:'grid',
           gridTemplateColumns: nivelInfo.verValoresEconomicos
             ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
@@ -9973,7 +10246,10 @@ function ModuloSicoeObra({
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
             Sin resultados para los filtros aplicados.
           </div>
-        ) : reportesMostrados.map(rep => (
+        ) : (
+          <>
+          <div className="cc-sicoe-reportes-grid cc-sicoe-table-scroll" style={{ overflowX: sicoeCompact ? undefined : undefined }}>
+          {reportesMostrados.map(rep => (
           <div key={rep.id} style={{
             display:'grid',
             gridTemplateColumns: nivelInfo.verValoresEconomicos
@@ -9981,7 +10257,7 @@ function ModuloSicoeObra({
               : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
-            transition:'background 0.15s' }}
+            transition:'background 0.15s', minWidth: 720 }}
             onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
                 ;(async () => {
@@ -10072,7 +10348,7 @@ function ModuloSicoeObra({
             </div>
             <div style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis' }}>{rep.descripcion_actividad || '—'}</div>
             {nivelInfo.verValoresEconomicos && (
-              <div style={{ fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
+              <div className="cc-sicoe-num" style={{ fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
                 {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
               </div>
             )}
@@ -10082,6 +10358,113 @@ function ModuloSicoeObra({
             </div>
           </div>
         ))}
+          </div>
+
+          {/* Móvil: tarjetas de reportes */}
+          <div className="cc-sicoe-reportes-cards">
+            {reportesMostrados.map(rep => (
+              <div
+                key={`card-rep-${rep.id}`}
+                className="cc-sicoe-reporte-card"
+                role="button"
+                tabIndex={0}
+                style={{
+                  background: t.bg,
+                  border: `1px solid ${t.border}`,
+                  boxShadow: t.shadow,
+                }}
+                onClick={() => {
+                  if (!esSub && rep.estado === 'Borrador') {
+                    ;(async () => {
+                      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                      const data = await r.json()
+                      setReporteEditando(data)
+                      setModalNuevoReporte(true)
+                    })()
+                  } else if (esSub || puedeVer) {
+                    abortarPeticionesSicoeFondo()
+                    setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
+                    setModalCarpeta(true)
+                    const regNumBusqueda = String(filtros.numero_registro ?? '').trim()
+                    ;(async () => {
+                      try {
+                        if (efectivoOffline && isOfflineReady) {
+                          const regs = await getRegistrosOffline(contrato_id, rep.id)
+                          const regMatch = regNumBusqueda
+                            ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
+                            : null
+                          setReporteSeleccionado({
+                            ...rep,
+                            registros: regs || [],
+                            puntos: [],
+                            _cargandoDetalle: false,
+                            _offline: true,
+                            ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
+                          })
+                        } else {
+                          const data = await fetchDetalleReporteSicoe(rep.id)
+                          if (!data?.id) {
+                            setReporteSeleccionado((prev) =>
+                              prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
+                            )
+                          } else {
+                            const regMatch0 = regNumBusqueda
+                              ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                              : null
+                            setReporteSeleccionado({
+                              ...data,
+                              _cargandoDetalle: false,
+                              ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                            })
+                          }
+                        }
+                      } catch {
+                        if (isOfflineReady) {
+                          try {
+                            const regs = await getRegistrosOffline(contrato_id, rep.id)
+                            const regMatchFb = regNumBusqueda
+                              ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
+                              : null
+                            setReporteSeleccionado({
+                              ...rep,
+                              registros: regs || [],
+                              puntos: [],
+                              _cargandoDetalle: false,
+                              _offline: true,
+                              ...(regMatchFb ? { _autoRegistro: regMatchFb.id } : {}),
+                            })
+                          } catch {
+                            setModalCarpeta(false)
+                            setReporteSeleccionado(null)
+                          }
+                        } else {
+                          setModalCarpeta(false)
+                          setReporteSeleccionado(null)
+                        }
+                      }
+                    })()
+                  }
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                  <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)' }}>#{rep.numero_reporte}</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 700 }}>{rep.num_registros != null ? `${rep.num_registros} regs` : '—'}</div>
+                </div>
+                <div style={{ fontWeight: 600, color: t.text, fontSize: 'var(--cc-body)', lineHeight: 1.35 }}>{rep.descripcion_actividad || 'Sin descripción'}</div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4 }}>
+                  <div>{rep.tramo || '—'} · {rep.calzada || rep.margen || '—'}</div>
+                  <div>{fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)} · {rep.capitulo || '—'}</div>
+                  {nivelInfo.verValoresEconomicos && (
+                    <div className="cc-sicoe-num" style={{ marginTop: 4, color: t.text, fontWeight: 700 }}>
+                      {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          </>
+        )}
 
         {/* Footer: cargar más / spinner / fin */}
         {busquedaRealizada && reportes.length > 0 && (
@@ -10089,8 +10472,8 @@ function ModuloSicoeObra({
             {cargando ? (
               <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Cargando...</span>
             ) : hayMas ? (
-              <button onClick={() => buscarReportes(filtros, offsetActual, capasValidacion)}
-                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 20px', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
+              <button type="button" className="cc-sicoe-touch-btn" onClick={() => buscarReportes(filtros, offsetActual, capasValidacion)}
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding: sicoeCompact ? '12px 20px' : '7px 20px', minHeight: sicoeCompact ? 44 : undefined, fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
                 ⬇ Cargar 50 reportes más
               </button>
             ) : (
@@ -11335,9 +11718,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           setCapitulos(sorted.map(c => ({ capitulo: c })))
         }
       })
-    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
-      .then((d) => setPkIds(d))
-// Precargar borrador si existe
+    const cargarPkIdsFormulario = (intento = 0) => {
+      fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
+        .then((d) => setPkIds(Array.isArray(d) ? d : []))
+        .catch(() => {
+          if (intento < 2) {
+            setTimeout(() => cargarPkIdsFormulario(intento + 1), 600 * (intento + 1))
+            return
+          }
+          setPkIds([])
+        })
+    }
+    cargarPkIdsFormulario()
+    // Precargar borrador si existe
     if (reporteInicial) {
       setTipoLocalizacion(reporteInicial.tipo_localizacion || 'unica')
       setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
@@ -11467,16 +11860,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         paint: { 'fill-color': '#F59E0B', 'fill-opacity': 0.6 },
         filter: ['==', 'Layer', ''],
       })
-      const paintLabels = {
-        'text-color': '#ffffff',
-        'text-halo-color': 'rgba(0,0,0,0.75)',
-        'text-halo-width': 1.5,
-      }
-      map.addLayer({
-        id: 'pkids-labels-abscisa',
-        type: 'symbol',
+      const paintLabels = MAPBOX_PLANO_PAINT_LABELS
+      _addMapboxAbscisaLabelLayers(map, {
+        idPrefix: 'pkids-labels-abscisa',
         source: 'pkids',
-        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
         layout: _mapboxPlanoSymbolLayout([
           'coalesce',
           ['get', 'etiqueta'],
@@ -13015,11 +13402,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
         }
       })
 
-      const paintLabels = {
-        'text-color': '#ffffff',
-        'text-halo-color': 'rgba(0,0,0,0.75)',
-        'text-halo-width': 1.5
-      }
+      const paintLabels = MAPBOX_PLANO_PAINT_LABELS
       map.addLayer({
         id: 'plano-labels-pk',
         type: 'symbol',
@@ -13028,18 +13411,16 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
         layout: _mapboxPlanoSymbolLayout(['get', 'pk_id']),
         paint: paintLabels
       })
-      map.addLayer({
-        id: 'plano-labels-abscisa',
-        type: 'symbol',
+      _addMapboxAbscisaLabelLayers(map, {
+        idPrefix: 'plano-labels-abscisa',
         source: 'poligonos',
-        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
         layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], '']),
-        paint: paintLabels
+        paint: paintLabels,
       })
       {
         const m = capEtiquetasRef.current
         map.setLayoutProperty('plano-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
-        map.setLayoutProperty('plano-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+        _setMapboxAbscisaLabelsVisibility(map, 'plano-labels-abscisa', m === 'ambos' || m === 'abscisa')
       }
 
       const setCursorPointer = () => { map.getCanvas().style.cursor = 'pointer' }
@@ -13074,10 +13455,10 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   useEffect(() => {
     const map = mapInstance.current
     if (!map || cargando) return
-    if (!map.getLayer('plano-labels-pk') || !map.getLayer('plano-labels-abscisa')) return
+    if (!map.getLayer('plano-labels-pk') || !map.getLayer('plano-labels-abscisa-50m')) return
     const m = capEtiquetas
     map.setLayoutProperty('plano-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
-    map.setLayoutProperty('plano-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+    _setMapboxAbscisaLabelsVisibility(map, 'plano-labels-abscisa', m === 'ambos' || m === 'abscisa')
   }, [capEtiquetas, cargando])
 
   const fmt = n => n != null ? formatCOP(n) : '—'
@@ -13398,7 +13779,7 @@ function MiniMapaSemaforo({
           'line-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.88, 0.12]
         }
       })
-      const miniPaintLbl = { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.6)', 'text-halo-width': 1 }
+      const miniPaintLbl = MAPBOX_PLANO_PAINT_LABELS
       map.addLayer({
         id: 'mini-labels-pk',
         type: 'symbol',
@@ -13407,18 +13788,16 @@ function MiniMapaSemaforo({
         layout: _mapboxPlanoSymbolLayout(['get', 'pk_id'], true),
         paint: miniPaintLbl,
       })
-      map.addLayer({
-        id: 'mini-labels-abscisa',
-        type: 'symbol',
+      _addMapboxAbscisaLabelLayers(map, {
+        idPrefix: 'mini-labels-abscisa',
         source: 'mini-pols',
-        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
         layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], ''], true),
         paint: miniPaintLbl,
       })
       {
         const m = capEtiquetasMiniRef.current
         map.setLayoutProperty('mini-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
-        map.setLayoutProperty('mini-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+        _setMapboxAbscisaLabelsVisibility(map, 'mini-labels-abscisa', m === 'ambos' || m === 'abscisa')
       }
       map.on('click', 'mini-fill-cobro', (e) => {
         const pkid = e.features[0]?.properties?.pk_id
@@ -13511,10 +13890,10 @@ function MiniMapaSemaforo({
   useEffect(() => {
     const map = mapInstance.current
     if (!map || !listo) return
-    if (!map.getLayer('mini-labels-pk') || !map.getLayer('mini-labels-abscisa')) return
+    if (!map.getLayer('mini-labels-pk') || !map.getLayer('mini-labels-abscisa-50m')) return
     const m = capEtiquetas
     map.setLayoutProperty('mini-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
-    map.setLayoutProperty('mini-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+    _setMapboxAbscisaLabelsVisibility(map, 'mini-labels-abscisa', m === 'ambos' || m === 'abscisa')
   }, [capEtiquetas, listo])
 
   return (

@@ -24,6 +24,7 @@ export default function SicoeFiltroPkMapa({
     : '')
 
   const resolverPkId = (pkVal, meta) => {
+    console.log('[pkVal]', pkVal)
     const v = String(pkVal || '').trim()
     if (!v) return
     const row = buscarPkMaestroPorValorPlano(v, pkList)

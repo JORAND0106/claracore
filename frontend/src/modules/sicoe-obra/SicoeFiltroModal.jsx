@@ -321,6 +321,7 @@ export default function SicoeFiltroModal({
     <div
       role="dialog"
       aria-modal="true"
+      className="cc-sicoe-filtro-modal-overlay"
       style={{
         position: 'fixed',
         inset: 0,
@@ -334,6 +335,7 @@ export default function SicoeFiltroModal({
       onClick={(e) => e.target === e.currentTarget && !buscando && onClose()}
     >
       <div
+        className="cc-sicoe-filtro-modal-sheet"
         style={{
           background: t.bgCard,
           border: `1px solid ${t.border}`,
@@ -353,7 +355,7 @@ export default function SicoeFiltroModal({
           </div>
         </div>
 
-        <div style={{ display: 'flex', borderBottom: `1px solid ${t.border}`, padding: '0 12px' }}>
+        <div className="cc-sicoe-tabs-scroll" style={{ display: 'flex', borderBottom: `1px solid ${t.border}`, padding: '0 12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {[
             ['plantillas', 'Plantillas'],
             ['libre', 'Filtros libres'],
@@ -373,6 +375,9 @@ export default function SicoeFiltroModal({
                   fontWeight: activo ? 700 : 500,
                   fontSize: cc.sm,
                   cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  minHeight: 44,
                 }}
               >
                 {label}
