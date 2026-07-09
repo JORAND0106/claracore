@@ -52,6 +52,9 @@ export default function SicoeFiltroObraVista({
   )
 
   const resumen = useMemo(() => {
+    if (tieneCriterios && !busquedaRealizada) {
+      return 'Criterios definidos — pulse Buscar para ver la grilla y el panel.'
+    }
     if (!busquedaRealizada || !tieneCriterios) {
       return 'Sin criterios aplicados — abra Filtros, defina criterios y pulse Buscar.'
     }
@@ -59,7 +62,7 @@ export default function SicoeFiltroObraVista({
   }, [bundleAplicado, itemLabels, encabezadoPorNivel, busquedaRealizada, tieneCriterios])
 
   const chipsActivos = useMemo(() => {
-    if (!busquedaRealizada || !tieneCriterios) return []
+    if (!tieneCriterios) return []
     const f = bundleAplicado?.fSicoe || {}
     const keys = sicoeFiltrosActivosKeys(f, {
       capasValidacion: bundleAplicado?.capasValidacion,
@@ -174,7 +177,7 @@ export default function SicoeFiltroObraVista({
             }}
           >
             🔍 Filtros
-            {busquedaRealizada && tieneCriterios ? (
+            {tieneCriterios ? (
               <span style={{ marginLeft: 6, background: '#fff3', borderRadius: 10, padding: '1px 7px', fontSize: 'var(--cc-caption)' }}>
                 {chipsActivos.length || '●'}
               </span>

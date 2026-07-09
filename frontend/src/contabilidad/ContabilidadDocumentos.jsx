@@ -13,6 +13,50 @@ const EMPTY_FORM = {
   fecha_vencimiento: '',
 }
 
+/** Fuera del padre: si se definen dentro, cada setState remonta el árbol y se pierde foco/archivo. */
+function DocField({ label, t, children }) {
+  return (
+    <label style={{ display: 'block', marginBottom: 12 }}>
+      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, marginBottom: 4 }}>{label}</div>
+      {children}
+    </label>
+  )
+}
+
+function DocModalForm({ title, onSubmit, onClose, t, busy, btnGhost, btnPrimary, children }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 12500, background: 'rgba(0,0,0,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <form
+        onSubmit={onSubmit}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14,
+          width: 'min(520px, 96vw)', maxHeight: '90vh', overflow: 'auto', padding: 20,
+        }}
+      >
+        <div style={{ fontWeight: 800, color: t.primary, marginBottom: 16, fontSize: 'var(--cc-md)' }}>
+          {title}
+        </div>
+        {children}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
+          <button type="submit" disabled={busy} style={btnPrimary}>
+            {busy ? 'Guardando…' : 'Guardar'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -321,45 +365,6 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
     fontSize: 'var(--cc-sm)', minHeight: isNarrow ? 40 : undefined,
   }
 
-  const ModalForm = ({ title, onSubmit, children, onClose }) => (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 12500, background: 'rgba(0,0,0,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-      }}
-      onClick={onClose}
-    >
-      <form
-        onSubmit={onSubmit}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14,
-          width: 'min(520px, 96vw)', maxHeight: '90vh', overflow: 'auto', padding: 20,
-        }}
-      >
-        <div style={{ fontWeight: 800, color: t.primary, marginBottom: 16, fontSize: 'var(--cc-md)' }}>
-          {title}
-        </div>
-        {children}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-          <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
-          <button type="submit" disabled={busy} style={btnPrimary}>
-            {busy ? 'Guardando…' : 'Guardar'}
-          </button>
-        </div>
-      </form>
-    </div>
-  )
-
-  const Field = ({ label, children }) => (
-    <label style={{ display: 'block', marginBottom: 12 }}>
-      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, marginBottom: 4 }}>{label}</div>
-      {children}
-    </label>
-  )
-
   return (
     <div>
       <div style={{
@@ -496,8 +501,16 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
       )}
 
       {showUpload && (
-        <ModalForm title="Subir documento corporativo" onSubmit={subirDocumento} onClose={cerrarModales}>
-          <Field label="Categoría">
+        <DocModalForm
+          title="Subir documento corporativo"
+          onSubmit={subirDocumento}
+          onClose={cerrarModales}
+          t={t}
+          busy={busy}
+          btnGhost={btnGhost}
+          btnPrimary={btnPrimary}
+        >
+          <DocField label="Categoría" t={t}>
             <select
               value={form.categoria}
               onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}
@@ -508,8 +521,8 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
-          </Field>
-          <Field label="Nombre">
+          </DocField>
+          <DocField label="Nombre" t={t}>
             <input
               value={form.nombre}
               onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))}
@@ -517,34 +530,34 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
               required
               maxLength={200}
             />
-          </Field>
-          <Field label="Descripción (opcional)">
+          </DocField>
+          <DocField label="Descripción (opcional)" t={t}>
             <textarea
               value={form.descripcion}
               onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
               style={{ ...inputStyle, minHeight: 72, resize: 'vertical' }}
               maxLength={4000}
             />
-          </Field>
+          </DocField>
           <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 10 }}>
-            <Field label="Fecha del documento">
+            <DocField label="Fecha del documento" t={t}>
               <input
                 type="date"
                 value={form.fecha_documento}
                 onChange={(e) => setForm((f) => ({ ...f, fecha_documento: e.target.value }))}
                 style={inputStyle}
               />
-            </Field>
-            <Field label="Fecha de vencimiento">
+            </DocField>
+            <DocField label="Fecha de vencimiento" t={t}>
               <input
                 type="date"
                 value={form.fecha_vencimiento}
                 onChange={(e) => setForm((f) => ({ ...f, fecha_vencimiento: e.target.value }))}
                 style={inputStyle}
               />
-            </Field>
+            </DocField>
           </div>
-          <Field label="Archivo (PDF o imagen)">
+          <DocField label="Archivo (PDF o imagen)" t={t}>
             <input
               ref={fileRef}
               type="file"
@@ -552,7 +565,6 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
               capture="environment"
               onChange={onArchivoChange}
               style={inputStyle}
-              required
             />
             {preparandoArchivo && !archivoInfo && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
@@ -564,13 +576,21 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
                 {archivo.name} · {labelPesoSoporte(archivoInfo)}
               </div>
             )}
-          </Field>
-        </ModalForm>
+          </DocField>
+        </DocModalForm>
       )}
 
       {showEdit && (
-        <ModalForm title="Editar documento" onSubmit={guardarEdicion} onClose={cerrarModales}>
-          <Field label="Categoría">
+        <DocModalForm
+          title="Editar documento"
+          onSubmit={guardarEdicion}
+          onClose={cerrarModales}
+          t={t}
+          busy={busy}
+          btnGhost={btnGhost}
+          btnPrimary={btnPrimary}
+        >
+          <DocField label="Categoría" t={t}>
             <select
               value={form.categoria}
               onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}
@@ -581,8 +601,8 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
-          </Field>
-          <Field label="Nombre">
+          </DocField>
+          <DocField label="Nombre" t={t}>
             <input
               value={form.nombre}
               onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))}
@@ -590,34 +610,34 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
               required
               maxLength={200}
             />
-          </Field>
-          <Field label="Descripción">
+          </DocField>
+          <DocField label="Descripción" t={t}>
             <textarea
               value={form.descripcion}
               onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
               style={{ ...inputStyle, minHeight: 72, resize: 'vertical' }}
               maxLength={4000}
             />
-          </Field>
+          </DocField>
           <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 10 }}>
-            <Field label="Fecha del documento">
+            <DocField label="Fecha del documento" t={t}>
               <input
                 type="date"
                 value={form.fecha_documento}
                 onChange={(e) => setForm((f) => ({ ...f, fecha_documento: e.target.value }))}
                 style={inputStyle}
               />
-            </Field>
-            <Field label="Fecha de vencimiento">
+            </DocField>
+            <DocField label="Fecha de vencimiento" t={t}>
               <input
                 type="date"
                 value={form.fecha_vencimiento}
                 onChange={(e) => setForm((f) => ({ ...f, fecha_vencimiento: e.target.value }))}
                 style={inputStyle}
               />
-            </Field>
+            </DocField>
           </div>
-          <Field label="Reemplazar archivo (opcional)">
+          <DocField label="Reemplazar archivo (opcional)" t={t}>
             {docEditando && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
                 Archivo actual: {docEditando.nombre_archivo || '—'} · {fmtBytes(docEditando.tamano_bytes)}
@@ -641,8 +661,8 @@ export default function ContabilidadDocumentos({ t, token, onAlertasChange }) {
                 Nuevo: {archivoReemplazo.name} · {labelPesoSoporte(archivoReemplazoInfo)}
               </div>
             )}
-          </Field>
-        </ModalForm>
+          </DocField>
+        </DocModalForm>
       )}
 
       <SoportePreviewModal

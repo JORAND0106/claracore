@@ -30,6 +30,7 @@ import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offline
 import { prepararImagenParaUpload } from './comprimirImagen'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
+import { openAdminUsuarios } from './openAdminListadoPrecios'
 import ModuloInformes from './ModuloInformes'
 import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
@@ -7401,7 +7402,13 @@ function ModuloSicoeObra({
       sicoeBusquedaAbortRef.current = null
       sicoeBusquedaEnCursoRef.current = false
     }
+    setCargando(false)
+    setCargandoAnalisis(false)
   }
+
+  useEffect(() => () => {
+    abortarPeticionesSicoeFondo()
+  }, [])
 
   /** @param {{ aplicarFiltros?: boolean }} [opts] — false solo para auto-abrir por N° registro. */
   const fetchDetalleReporteSicoe = async (repId, opts = {}) => {
@@ -7812,6 +7819,8 @@ function ModuloSicoeObra({
     }
     const ac = new AbortController()
     sicoeBusquedaAbortRef.current = ac
+    const SICOE_BUSQUEDA_TIMEOUT_MS = 120_000
+    const timeoutId = window.setTimeout(() => ac.abort(), SICOE_BUSQUEDA_TIMEOUT_MS)
     const opSeq = ++sicoeOperacionSeqRef.current
     sicoeBusquedaEnCursoRef.current = true
     try {
@@ -7825,9 +7834,14 @@ function ModuloSicoeObra({
     } catch (e) {
       if (e?.name !== 'AbortError') throw e
     } finally {
+      window.clearTimeout(timeoutId)
       if (sicoeBusquedaAbortRef.current === ac) {
         sicoeBusquedaAbortRef.current = null
         sicoeBusquedaEnCursoRef.current = false
+      }
+      if (opSeq === sicoeOperacionSeqRef.current) {
+        setCargando(false)
+        setCargandoAnalisis(false)
       }
     }
   }
@@ -8172,14 +8186,18 @@ function ModuloSicoeObra({
 
   useEffect(() => {
     if (!contrato_id) return
+    abortarPeticionesSicoeFondo()
+    ++sicoeOperacionSeqRef.current
     setReportes([])
     setAnalisis(null)
     setBusquedaRealizada(false)
     setHayMas(false)
     setOffsetActual(0)
+    setCargando(false)
+    setCargandoAnalisis(false)
   }, [contrato_id])
 
-  /** Validador: si tiene nivel 1–6 → capa No Revisado + buscar (grilla + panel). */
+  /** Validador: si tiene nivel 1–6 → capa No Revisado (sin auto-buscar; el usuario pulsa Buscar). */
   useEffect(() => {
     if (!contrato_id) return
     if (
@@ -8249,7 +8267,7 @@ function ModuloSicoeObra({
         panelCapitulos: [],
         panelActasRpo: [],
       })
-      aplicarSicoeFiltroBundle(snap, true)
+      aplicarSicoeFiltroBundle(snap, false)
       return
     }
 
@@ -9227,6 +9245,7 @@ function ModuloSicoeObra({
   ])
 
   const limpiarFiltros = () => {
+    abortarPeticionesSicoeFondo()
     ++sicoeOperacionSeqRef.current
     ++sicoeBusquedaPaginaSeqRef.current
     if (sicoeAutoBusquedaTimerRef.current) {
@@ -14182,7 +14201,9 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   const buzonMobile = buzonVpMobile || buzonLandscapeMobile
   const zPanel = buzonMobile ? BUZON_Z_PANEL_MOBILE : BUZON_Z_PANEL
   const zModal = buzonMobile ? BUZON_Z_MODAL_MOBILE : BUZON_Z_MODAL
-  const contratoCtx = usuario?.contrato_id
+  const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
+  // A1: Desarrollador ve notificaciones de todos los contratos (sin filtrar por contrato_id).
+  const contratoCtx = esDev ? null : usuario?.contrato_id
   const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
   const [abierto,       setAbierto]       = useState(false)
   const [tab,           setTab]           = useState('recibidos')
@@ -14203,7 +14224,6 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   const [respuesta,    setRespuesta]    = useState('')
   const [accionId, setAccionId] = useState(null)
 
-  const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
   const authHeaders = () => {
     const tok = getToken()
     return tok ? { Authorization: `Bearer ${tok}` } : {}
@@ -14221,15 +14241,15 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   }
 
   const cargarCount = async () => {
-    if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
+    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setNoLeidas(0); return }
     const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
   }
 
   const cargarRecibidos = async () => {
-    if (contratoCtx == null || contratoCtx === '') { setRecibidos([]); return }
+    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setRecibidos([]); return }
     const p = new URLSearchParams()
-    p.set('contrato_id', String(contratoCtx))
+    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
     if (filtroRecibidos === 'no_leidas') p.set('solo_no_leidas', 'true')
     p.set('limit', '100')
     const q = p.toString()
@@ -14238,7 +14258,7 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   }
 
   const cargarEnviados = async () => {
-    if (contratoCtx == null || contratoCtx === '') { setEnviados([]); return }
+    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setEnviados([]); return }
     const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) setEnviados(excluirSoporte(await r.json()))
   }
@@ -14944,7 +14964,10 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
                   minHeight: buzonMobile ? 44 : undefined,
                 }}
               >
-                🔍 Rastrear
+                {((hilo[0]?.modulo || hiloActivo?.modulo || '').toUpperCase() === 'AUTH'
+                  && (hilo[0]?.entidad_tipo || hiloActivo?.entidad_tipo || '').toLowerCase() === 'usuario')
+                  ? '👤 Gestionar usuario'
+                  : '🔍 Rastrear'}
               </button>
             )}
             <button
@@ -16554,6 +16577,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   async function handleNavegar(notif) {
     if (!notif?.modulo) return
     const modulo = notif.modulo?.toLowerCase()
+    // Deep link: nuevo usuario pendiente → Panel Admin → Gestión de Usuarios
+    if (
+      (modulo === 'auth' || notif.modulo === 'AUTH') &&
+      (notif.entidad_tipo || '').toLowerCase() === 'usuario' &&
+      notif.entidad_id
+    ) {
+      openAdminUsuarios({ usuarioId: notif.entidad_id })
+      return
+    }
     if (notif.entidad_id && modulo === 'sicoe_obra' && notif.entidad_tipo === 'registro') {
       // Buscar el reporte que contiene este registro
       try {

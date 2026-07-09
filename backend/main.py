@@ -2222,6 +2222,11 @@ from contabilidad_routes import router as contabilidad_router
 app.include_router(contabilidad_router)
 
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
+from usuario_bienvenida_email import (
+    BienvenidaEmailError,
+    contacto_smtp_configured,
+    send_bienvenida_email,
+)
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -5104,13 +5109,320 @@ def login(request: Request, body: LoginRequest):
         }
     }
 
+def _ids_cargo_por_nombre(nombre_cargo: str) -> List[int]:
+    """IDs de cargos cuyo nombre coincide (case-insensitive)."""
+    target = (nombre_cargo or "").strip().lower()
+    if not target:
+        return []
+    try:
+        rows = supabase.table("cargos").select("id, nombre").execute().data or []
+        return [
+            int(r["id"])
+            for r in rows
+            if r.get("id") is not None
+            and ((r.get("nombre") or "").strip().lower() == target)
+        ]
+    except Exception:
+        return []
+
+
+def _usuarios_activos_por_cargos(cargo_ids: List[int]) -> List[dict]:
+    if not cargo_ids:
+        return []
+    try:
+        rows = (
+            supabase.table("usuarios")
+            .select("id, cargo_id, contrato_id, activo, estado")
+            .in_("cargo_id", cargo_ids)
+            .eq("activo", True)
+            .execute()
+            .data
+            or []
+        )
+        return [r for r in rows if (r.get("estado") or "").lower() != "rechazado"]
+    except Exception:
+        return []
+
+
+def _destinatarios_notif_nuevo_registro(contrato_id: Optional[int]) -> List[int]:
+    """
+    Desarrolladores (todos) + Administradores del contrato del registrado.
+    Sin contrato: solo Desarrolladores.
+    """
+    dest: Set[int] = set()
+    for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("desarrollador")):
+        try:
+            dest.add(int(u["id"]))
+        except (TypeError, ValueError, KeyError):
+            pass
+    if contrato_id is not None:
+        try:
+            cid = int(contrato_id)
+        except (TypeError, ValueError):
+            cid = None
+        if cid is not None:
+            for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("administrador")):
+                try:
+                    if u.get("contrato_id") is not None and int(u["contrato_id"]) == cid:
+                        dest.add(int(u["id"]))
+                except (TypeError, ValueError, KeyError):
+                    pass
+                # También administradores vinculados vía usuario_contratos
+            try:
+                admin_ids = [
+                    int(u["id"])
+                    for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("administrador"))
+                    if u.get("id") is not None
+                ]
+                if admin_ids:
+                    uc = (
+                        supabase.table("usuario_contratos")
+                        .select("usuario_id")
+                        .eq("contrato_id", cid)
+                        .in_("usuario_id", admin_ids)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    for row in uc:
+                        try:
+                            dest.add(int(row["usuario_id"]))
+                        except (TypeError, ValueError, KeyError):
+                            pass
+            except Exception:
+                pass
+    return sorted(dest)
+
+
+def _fmt_fecha_hora_registro(created_at) -> str:
+    if not created_at:
+        return datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    try:
+        if isinstance(created_at, datetime):
+            dt = created_at
+        else:
+            s = str(created_at).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    except Exception:
+        return str(created_at)[:19]
+
+
+def _notificar_registro_usuario_pendiente(usuario_row: dict) -> None:
+    """Inserta notificaciones SISTEMA en el buzón de Desarrolladores y Admin del contrato."""
+    try:
+        uid = int(usuario_row["id"])
+        nombre = f"{usuario_row.get('nombre') or ''} {usuario_row.get('apellidos') or ''}".strip() or "Usuario"
+        email = (usuario_row.get("email") or "").strip()
+        cargo_id = usuario_row.get("cargo_id")
+        contrato_id = usuario_row.get("contrato_id")
+        cargo_nombre = "Sin cargo"
+        contrato_etiqueta = "Sin contrato"
+        if cargo_id:
+            cr = supabase.table("cargos").select("nombre").eq("id", cargo_id).limit(1).execute().data
+            if cr:
+                cargo_nombre = cr[0].get("nombre") or cargo_nombre
+        if contrato_id is not None:
+            ct = (
+                supabase.table("contratos")
+                .select("numero, objeto")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if ct:
+                num = (ct[0].get("numero") or "").strip()
+                contrato_etiqueta = num or f"Contrato #{contrato_id}"
+        fecha_txt = _fmt_fecha_hora_registro(usuario_row.get("created_at"))
+        asunto = f"Nuevo usuario pendiente: {nombre}"
+        mensaje = (
+            f"Se registró un nuevo usuario pendiente de aprobación.\n\n"
+            f"Nombre: {nombre}\n"
+            f"Correo: {email}\n"
+            f"Cargo: {cargo_nombre}\n"
+            f"Contrato: {contrato_etiqueta}\n"
+            f"Fecha y hora de registro: {fecha_txt}\n\n"
+            f"Abra Gestión de usuarios en el Panel Admin para aprobar o rechazar."
+        )
+        dest_ids = _destinatarios_notif_nuevo_registro(
+            int(contrato_id) if contrato_id is not None else None
+        )
+        if not dest_ids:
+            _log_api.warning(
+                "registro: sin destinatarios para notificación de usuario pendiente id=%s",
+                uid,
+            )
+            return
+        rows = []
+        for did in dest_ids:
+            rows.append({
+                "remitente_id": None,
+                "remitente_nombre": "ClaraCore",
+                "destinatario_id": did,
+                "asunto": asunto,
+                "mensaje": mensaje,
+                "tipo": "SISTEMA",
+                "modulo": "AUTH",
+                "contrato_id": int(contrato_id) if contrato_id is not None else None,
+                "entidad_tipo": "usuario",
+                "entidad_id": str(uid),
+                "leido": False,
+            })
+        # Insertar por lotes pequeños
+        batch = 50
+        for i in range(0, len(rows), batch):
+            supabase.table("notificaciones").insert(rows[i : i + batch]).execute()
+    except Exception as e:
+        _log_api.exception(
+            "registro: fallo al notificar nuevo usuario pendiente: %s", e
+        )
+
+
+def _registrar_log_correo_bienvenida(
+    *,
+    usuario_id: int,
+    destinatario: str,
+    asunto: Optional[str],
+    exito: bool,
+    error_detalle: Optional[str],
+    enviado_por: Optional[int],
+) -> None:
+    try:
+        supabase.table("usuario_correo_envio").insert({
+            "usuario_id": usuario_id,
+            "tipo": "bienvenida",
+            "destinatario": (destinatario or "").strip().lower(),
+            "asunto": asunto,
+            "exito": bool(exito),
+            "error_detalle": (error_detalle or None),
+            "enviado_por": enviado_por,
+        }).execute()
+    except Exception as e:
+        _log_api.exception(
+            "bienvenida: no se pudo registrar log de correo usuario_id=%s: %s",
+            usuario_id,
+            e,
+        )
+
+
+def _enviar_bienvenida_usuario_aprobado(
+    usuario_id: int,
+    aprobado_por: Optional[int] = None,
+) -> None:
+    """
+    Envía correo de bienvenida sin bloquear la aprobación.
+    Registra éxito/fallo en usuario_correo_envio y actualiza bienvenida_enviada_en si ok.
+    """
+    destinatario = ""
+    asunto = None
+    try:
+        rows = (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos, email, cargo_id, estado, bienvenida_enviada_en")
+            .eq("id", usuario_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            _log_api.warning("bienvenida: usuario %s no encontrado", usuario_id)
+            return
+        u = rows[0]
+        if (u.get("estado") or "").lower() != "aprobado":
+            return
+        destinatario = (u.get("email") or "").strip().lower()
+        if not destinatario:
+            _registrar_log_correo_bienvenida(
+                usuario_id=usuario_id,
+                destinatario="",
+                asunto=None,
+                exito=False,
+                error_detalle="Usuario sin correo",
+                enviado_por=aprobado_por,
+            )
+            return
+        cargo_nombre = None
+        if u.get("cargo_id"):
+            cr = (
+                supabase.table("cargos")
+                .select("nombre")
+                .eq("id", u["cargo_id"])
+                .limit(1)
+                .execute()
+                .data
+            )
+            if cr:
+                cargo_nombre = cr[0].get("nombre")
+        nombre_completo = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+        if not contacto_smtp_configured():
+            _registrar_log_correo_bienvenida(
+                usuario_id=usuario_id,
+                destinatario=destinatario,
+                asunto=None,
+                exito=False,
+                error_detalle="SMTP contacto no configurado",
+                enviado_por=aprobado_por,
+            )
+            _log_api.warning(
+                "bienvenida: SMTP no configurado; usuario %s aprobado sin correo",
+                usuario_id,
+            )
+            return
+        asunto = send_bienvenida_email(
+            destinatario=destinatario,
+            nombre_completo=nombre_completo,
+            cargo_nombre=cargo_nombre,
+        )
+        _registrar_log_correo_bienvenida(
+            usuario_id=usuario_id,
+            destinatario=destinatario,
+            asunto=asunto,
+            exito=True,
+            error_detalle=None,
+            enviado_por=aprobado_por,
+        )
+        try:
+            supabase.table("usuarios").update({
+                "bienvenida_enviada_en": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", usuario_id).execute()
+        except Exception as e:
+            _log_api.exception(
+                "bienvenida: correo ok pero no se actualizó bienvenida_enviada_en id=%s: %s",
+                usuario_id,
+                e,
+            )
+    except BienvenidaEmailError as e:
+        _registrar_log_correo_bienvenida(
+            usuario_id=usuario_id,
+            destinatario=destinatario,
+            asunto=asunto,
+            exito=False,
+            error_detalle=str(e)[:500],
+            enviado_por=aprobado_por,
+        )
+        _log_api.warning("bienvenida: fallo SMTP usuario_id=%s: %s", usuario_id, e)
+    except Exception as e:
+        _registrar_log_correo_bienvenida(
+            usuario_id=usuario_id,
+            destinatario=destinatario,
+            asunto=asunto,
+            exito=False,
+            error_detalle=str(e)[:500],
+            enviado_por=aprobado_por,
+        )
+        _log_api.exception("bienvenida: error inesperado usuario_id=%s", usuario_id)
+
+
 @app.post("/usuarios/registro")
 def registro_usuario(usuario: UsuarioRegistro):
     existe = supabase.table("usuarios").select("id").eq("email", usuario.email).execute()
     if existe.data:
         raise HTTPException(status_code=400, detail="Este correo ya está registrado")
     hashed = hash_password(usuario.password)
-    supabase.table("usuarios").insert({
+    result = supabase.table("usuarios").insert({
         "nombre": usuario.nombre,
         "apellidos": usuario.apellidos,
         "email": usuario.email,
@@ -5120,6 +5432,24 @@ def registro_usuario(usuario: UsuarioRegistro):
         "activo": False,
         "estado": "pendiente"
     }).execute()
+    nuevo = (result.data or [None])[0]
+    if nuevo:
+        _notificar_registro_usuario_pendiente(nuevo)
+    else:
+        # Fallback: reconsultar por email si el insert no devolvió fila
+        try:
+            again = (
+                supabase.table("usuarios")
+                .select("id, nombre, apellidos, email, cargo_id, contrato_id, created_at, estado")
+                .eq("email", usuario.email)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if again:
+                _notificar_registro_usuario_pendiente(again[0])
+        except Exception as e:
+            _log_api.exception("registro: no se pudo notificar tras insert: %s", e)
     return {"mensaje": "Registro exitoso, pendiente de aprobación"}
 
 # ─────────────────────────────────────────────
@@ -5611,7 +5941,21 @@ def usuarios_pendientes(current_user=Depends(get_current_user)):
     return result.data
 
 @app.put("/admin/usuarios/{usuario_id}/aprobar")
-def aprobar_usuario(usuario_id: int, body: AprobarRequest, current_user=Depends(get_current_user)):
+def aprobar_usuario(
+    usuario_id: int,
+    body: AprobarRequest,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    prev = (
+        supabase.table("usuarios")
+        .select("estado")
+        .eq("id", usuario_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    prev_estado = ((prev[0].get("estado") if prev else None) or "").lower()
     supabase.table("usuarios").update({
         "estado": "aprobado", "activo": True, "rol_id": body.rol_id
     }).eq("id", usuario_id).execute()
@@ -5621,6 +5965,14 @@ def aprobar_usuario(usuario_id: int, body: AprobarRequest, current_user=Depends(
         rol_nombre = r.data[0]["nombre"] if r.data else str(body.rol_id)
     registrar_log(current_user, "APROBAR", "USUARIOS", "usuario", str(usuario_id),
         {"estado": "aprobado", "rol": rol_nombre})
+    if prev_estado != "aprobado":
+        try:
+            aprobado_por = int(current_user.get("sub"))
+        except (TypeError, ValueError):
+            aprobado_por = None
+        background_tasks.add_task(
+            _enviar_bienvenida_usuario_aprobado, usuario_id, aprobado_por
+        )
     return {"mensaje": "Usuario aprobado"}
 
 @app.put("/admin/usuarios/{usuario_id}/rechazar")
@@ -5705,7 +6057,12 @@ def todos_usuarios(current_user=Depends(get_current_user)):
     return filtered
 
 @app.put("/admin/usuarios/{usuario_id}")
-def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depends(get_current_user)):
+def actualizar_usuario(
+    usuario_id: int,
+    body: UsuarioUpdate,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
     # Proteger: no se puede modificar un Desarrollador SALVO que sea él mismo editándose
     es_el_mismo = str(usuario_id) == str(current_user.get("sub"))
     if not es_el_mismo:
@@ -5719,6 +6076,7 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
         "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, nombre, apellidos, email"
     ).eq("id", usuario_id).limit(1).execute().data
     prev_snap = prev_snap[0] if prev_snap else {}
+    prev_estado = (prev_snap.get("estado") or "").lower()
 
     # exclude_unset=True: campos no enviados no se tocan; null explícito sí borra el campo
     data = body.dict(exclude_unset=True)
@@ -5755,6 +6113,15 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
             }).execute()
         except Exception:
             pass
+        # Correo de bienvenida solo al pasar a aprobado (no reenvía si ya estaba aprobado)
+        if prev_estado != "aprobado":
+            try:
+                aprobado_por = int(current_user.get("sub"))
+            except (TypeError, ValueError):
+                aprobado_por = None
+            background_tasks.add_task(
+                _enviar_bienvenida_usuario_aprobado, usuario_id, aprobado_por
+            )
     # Enriquecer detalle con nombres legibles
     detalle_log = dict(data)
     if "cargo_id" in detalle_log:
@@ -15943,6 +16310,103 @@ def _sicoe_dedupe_registros_por_id(regs: list) -> list:
     return out
 
 
+def _sicoe_analisis_response_cache_key(
+    contrato_id: int,
+    current_user,
+    *,
+    acta_rpo=None,
+    semana=None,
+    subcontratista_id=None,
+    capitulo=None,
+    capitulos_filtro=None,
+    item=None,
+    items_filtro=None,
+    items_filtro_op=None,
+    actas_filtro=None,
+    tramo=None,
+    costado=None,
+    abs_inicio=None,
+    abs_final=None,
+    estado=None,
+    numero_reporte=None,
+    numero_registro=None,
+    pk_id=None,
+    cargo_id=None,
+    estado_validacion=None,
+    validacion_capas=None,
+    validacion_capas_op=None,
+    q_observacion=None,
+    q_nodo=None,
+    etiqueta_validacion=None,
+    cantidad_desde=None,
+    cantidad_hasta=None,
+    costo_directo_desde=None,
+    costo_directo_hasta=None,
+    ambito_fecha=None,
+    tipo_fecha=None,
+    fecha_desde=None,
+    fecha_hasta=None,
+    usuario_id=None,
+    usuario_accion=None,
+    pendiente_item=False,
+) -> tuple:
+    """Clave estable para caché HTTP de GET /sicoe-obra/.../analisis (TTL compartido con dashboard)."""
+    uid = _dashboard_resumen_user_cache_key(current_user)
+    parts = []
+    for k, v in sorted(
+        {
+            "acta_rpo": acta_rpo,
+            "semana": semana,
+            "subcontratista_id": subcontratista_id,
+            "capitulo": capitulo,
+            "capitulos_filtro": capitulos_filtro,
+            "item": item,
+            "items_filtro": items_filtro,
+            "items_filtro_op": items_filtro_op,
+            "actas_filtro": actas_filtro,
+            "tramo": tramo,
+            "costado": costado,
+            "abs_inicio": abs_inicio,
+            "abs_final": abs_final,
+            "estado": estado,
+            "numero_reporte": numero_reporte,
+            "numero_registro": numero_registro,
+            "pk_id": pk_id,
+            "cargo_id": cargo_id,
+            "estado_validacion": estado_validacion,
+            "validacion_capas": validacion_capas,
+            "validacion_capas_op": validacion_capas_op,
+            "q_observacion": q_observacion,
+            "q_nodo": q_nodo,
+            "etiqueta_validacion": etiqueta_validacion,
+            "cantidad_desde": cantidad_desde,
+            "cantidad_hasta": cantidad_hasta,
+            "costo_directo_desde": costo_directo_desde,
+            "costo_directo_hasta": costo_directo_hasta,
+            "ambito_fecha": ambito_fecha,
+            "tipo_fecha": tipo_fecha,
+            "fecha_desde": fecha_desde,
+            "fecha_hasta": fecha_hasta,
+            "usuario_id": usuario_id,
+            "usuario_accion": usuario_accion,
+            "pendiente_item": pendiente_item,
+        }.items()
+    ):
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            parts.append((k, v))
+        elif isinstance(v, float):
+            parts.append((k, round(v, 6)))
+        elif isinstance(v, str):
+            s = v.strip()
+            if s:
+                parts.append((k, s))
+        else:
+            parts.append((k, v))
+    return ("sicoe_analisis_v1", int(contrato_id), uid, tuple(parts))
+
+
 def _sicoe_analisis_fetch_registros_paginated(build_q):
     """
     Carga todas las filas filtradas para el panel /analisis.
@@ -15951,9 +16415,9 @@ def _sicoe_analisis_fetch_registros_paginated(build_q):
 
     build_q: callable que devuelve el query builder Supabase (sin .range ni .order).
 
-    Variable opcional: SICOE_ANALISIS_PAGE_SIZE (default 1000).
+    Variable opcional: SICOE_ANALISIS_PAGE_SIZE (default 2000).
     """
-    PAGE = max(200, min(50000, int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", "1000"))))
+    PAGE = max(200, min(50000, int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", "2000"))))
 
     def _page(off: int):
         return supabase_execute(
@@ -16014,6 +16478,49 @@ def analisis_registros_obra(
     current_user=Depends(get_current_user)
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
+    _analisis_cache_key = _sicoe_analisis_response_cache_key(
+        contrato_id,
+        current_user,
+        acta_rpo=acta_rpo,
+        semana=semana,
+        subcontratista_id=subcontratista_id,
+        capitulo=capitulo,
+        capitulos_filtro=capitulos_filtro,
+        item=item,
+        items_filtro=items_filtro,
+        items_filtro_op=items_filtro_op,
+        actas_filtro=actas_filtro,
+        tramo=tramo,
+        costado=costado,
+        abs_inicio=abs_inicio,
+        abs_final=abs_final,
+        estado=estado,
+        numero_reporte=numero_reporte,
+        numero_registro=numero_registro,
+        pk_id=pk_id,
+        cargo_id=cargo_id,
+        estado_validacion=estado_validacion,
+        validacion_capas=validacion_capas,
+        validacion_capas_op=validacion_capas_op,
+        q_observacion=q_observacion,
+        q_nodo=q_nodo,
+        etiqueta_validacion=etiqueta_validacion,
+        cantidad_desde=cantidad_desde,
+        cantidad_hasta=cantidad_hasta,
+        costo_directo_desde=costo_directo_desde,
+        costo_directo_hasta=costo_directo_hasta,
+        ambito_fecha=ambito_fecha,
+        tipo_fecha=tipo_fecha,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        usuario_id=usuario_id,
+        usuario_accion=usuario_accion,
+        pendiente_item=pendiente_item,
+    )
+    _cached_analisis = _dashboard_response_cache_get(_analisis_cache_key)
+    if _cached_analisis is not None:
+        return _cached_analisis
+
     _amb_fu, _tip_fu, _fd_fu, _fh_fu, _uid_fu, _uacc_fu, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
         ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
     )
@@ -16583,7 +17090,7 @@ def analisis_registros_obra(
     tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 0)
     t_cant = round(sum(float(g.get("cantidad_total") or 0) for g in grupos_list), 2)
 
-    return {
+    result = {
         "modo": modo,
         "encabezado": encabezado,
         "grupos": grupos_list,
@@ -16600,6 +17107,8 @@ def analisis_registros_obra(
         "total_rechazados_count": trj_c,
         "verificacion": verificacion,
     }
+    _dashboard_response_cache_set(_analisis_cache_key, result)
+    return result
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
@@ -24291,7 +24800,8 @@ def dashboard_matriz_validacion_obra(
         payload_desde_sql = False
         niveles_activos = _get_niveles_activos_contrato(contrato_id)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
-        usar_sql_matriz = sorted(niveles_activos) == [1, 2, 3]
+        # La RPC SQL lee niveles_activos del contrato (1–6); no limitar al trío clásico [1,2,3].
+        usar_sql_matriz = bool(niveles_activos) and all(1 <= int(n) <= 6 for n in niveles_activos)
 
         def _parse_rpc_matrix_raw(raw):
             if raw is None:
@@ -24322,7 +24832,7 @@ def dashboard_matriz_validacion_obra(
             acta_id_filtro = supabase_execute(_aid)
             acta_rpo_resp = int(acta_rpo) if acta_rpo is not None else None
         else:
-            # Acta vigente: RPC SQL solo si niveles clásicos [1,2,3]; si no, Python (niveles dinámicos).
+            # Acta vigente: preferir bundle RPC SQL (niveles dinámicos en contrato_niveles_validacion).
             bundle_meta = None
             if usar_sql_matriz:
                 try:

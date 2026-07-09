@@ -440,7 +440,7 @@ function useApi(token, opts = {}) {
 }
 
 // ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
-function SeccionUsuarios({ call, cargos, theme, userId }) {
+function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null }) {
   const [usuarios, setUsuarios] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contratos, setContratos] = useState([]);
@@ -453,6 +453,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [addingContrato, setAddingContrato] = useState({});
   const [subcontratistas, setSubcontratistas] = useState({});
   const [verifInactBusy, setVerifInactBusy] = useState(false);
+  const [highlightUid, setHighlightUid] = useState(null);
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const adminCompact = vpMobile || isLandscapeMobile;
 
@@ -495,6 +496,26 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   useEffect(() => {
     cargar();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (focusUsuarioId == null || focusUsuarioId === "") return;
+    const id = String(focusUsuarioId);
+    setHighlightUid(id);
+    const t = setTimeout(() => {
+      const nodes = document.querySelectorAll(`[data-cc-admin-usuario="${id}"]`);
+      for (const el of nodes) {
+        if (el && el.offsetParent !== null) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          break;
+        }
+      }
+    }, 350);
+    const clear = setTimeout(() => setHighlightUid(null), 8000);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(clear);
+    };
+  }, [focusUsuarioId, usuarios.length]);
 
   const ejecutarVerificarInactividad = async () => {
     if (!window.confirm(
@@ -785,9 +806,13 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
               <tbody>
                 {usuarios.map(u => {
                   const fields = renderCamposUsuario(u, false);
+                  const isFocus = highlightUid != null && String(u.id) === String(highlightUid);
                   return (
                   <Fragment key={u.id}>
-                    <tr>
+                    <tr
+                      data-cc-admin-usuario={u.id}
+                      style={isFocus ? { outline: "2px solid #00afc5", outlineOffset: -2, background: "rgba(0,175,197,0.12)" } : undefined}
+                    >
                       <td style={tdStyle}>
                         <div style={{ color: col.textPrimary, fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
                         <div style={{ fontSize: 11, color: col.textSecondary }}>{u.email}</div>
@@ -822,14 +847,18 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
 
           {/* Móvil: tarjetas */}
           <div className="cc-admin-user-cards">
-            {usuarios.map(u => (
+            {usuarios.map(u => {
+              const isFocus = highlightUid != null && String(u.id) === String(highlightUid);
+              return (
               <div
                 key={`card-${u.id}`}
+                data-cc-admin-usuario={u.id}
                 className="cc-admin-user-card"
                 style={{
                   background: tokCard.bgCard,
-                  border: `1px solid ${tokCard.border}`,
+                  border: isFocus ? "2px solid #00afc5" : `1px solid ${tokCard.border}`,
                   boxShadow: tokCard.shadow,
+                  outline: isFocus ? "2px solid rgba(0,175,197,0.35)" : undefined,
                 }}
               >
                 <div>
@@ -856,7 +885,8 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                 </div>
                 {expandido === u.id && renderExpandido(u)}
               </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -7552,6 +7582,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
 
   const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");
   const [openContratoRequest, setOpenContratoRequest] = useState(null);
+  const [focusUsuarioId, setFocusUsuarioId] = useState(null);
   const [modoCantidadPrecios, setModoCantidadPrecios] = useState(() => {
     try {
       const v = sessionStorage.getItem("cc_listado_precios_modo_cantidad");
@@ -7592,6 +7623,9 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
     }
     if (nav?.modoVista === "wbs") {
       setModoVistaPreciosPersist("wbs");
+    }
+    if (nav?.usuarioId != null && nav.usuarioId !== "") {
+      setFocusUsuarioId(String(nav.usuarioId));
     }
   }, [TABS]);
 
@@ -7812,7 +7846,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
           </div>
 
           <div className="cc-admin-scroll-area" style={S.scrollArea(activeTheme, t)}>
-            {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
+            {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} focusUsuarioId={focusUsuarioId} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} contratos={contratosVisibles} user={user} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratosVisibles} recargarContratos={cargarContratos}
