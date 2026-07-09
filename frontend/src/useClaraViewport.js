@@ -6,17 +6,32 @@ export const CLARA_BP = {
   tabletMin: 768,
   tabletMax: 1024,
   desktopMin: 1025,
+  /** Ancho máximo típico de teléfono en landscape (iPhone 14 Pro Max, etc.). */
+  landscapeMobileMax: 932,
 }
 
 function readViewport() {
   if (typeof window === 'undefined') {
-    return { width: 1280, isMobile: false, isTablet: false, isDesktop: true }
+    return {
+      width: 1280,
+      isMobile: false,
+      isTablet: false,
+      isDesktop: true,
+      isLandscape: false,
+      isLandscapeMobile: false,
+    }
   }
   const width = window.innerWidth
+  const isLandscape =
+    typeof window.matchMedia === 'function'
+      ? window.matchMedia('(orientation: landscape)').matches
+      : window.innerWidth > window.innerHeight
   const isMobile = width <= CLARA_BP.mobileMax
   const isTablet = width >= CLARA_BP.tabletMin && width <= CLARA_BP.tabletMax
   const isDesktop = width >= CLARA_BP.desktopMin
-  return { width, isMobile, isTablet, isDesktop }
+  /** Teléfono en horizontal: ancho suele superar 767px y romper layouts de una columna. */
+  const isLandscapeMobile = isLandscape && width <= CLARA_BP.landscapeMobileMax
+  return { width, isMobile, isTablet, isDesktop, isLandscape, isLandscapeMobile }
 }
 
 export function useClaraViewport() {
@@ -25,7 +40,21 @@ export function useClaraViewport() {
   useEffect(() => {
     const onResize = () => setVp(readViewport())
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    let mql
+    if (typeof window.matchMedia === 'function') {
+      mql = window.matchMedia('(orientation: landscape)')
+      if (mql.addEventListener) mql.addEventListener('change', onResize)
+      else if (mql.addListener) mql.addListener(onResize)
+    }
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+      if (mql) {
+        if (mql.removeEventListener) mql.removeEventListener('change', onResize)
+        else if (mql.removeListener) mql.removeListener(onResize)
+      }
+    }
   }, [])
 
   return vp

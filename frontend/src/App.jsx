@@ -2955,7 +2955,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           else if (err?.message) msg = String(err.message)
           throw new Error(msg)
         }
-        onItemAsignado()
+        onItemAsignado?.()
       } catch (e) {
         const msg = e?.message || String(e)
         alert(`No se pudo guardar el comentario: ${msg}`)
@@ -2994,7 +2994,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           endpoint: `/sicoe-obra/${contrato_id}/registros/${registro.id}/${sufijo}`,
           body,
         })
-        onItemAsignado()
+        onItemAsignado?.()
       } catch (e) {
         onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
         alert(`Error guardando validación offline: ${e.message}`)
@@ -3011,7 +3011,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const err = await res.json().catch(() => ({}))
         throw new Error(err.detail || `Error ${res.status}`)
       }
-      onItemAsignado()
+      onItemAsignado?.()
     } catch(e) {
       // Revertir estado optimista si falló
       onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
@@ -3050,7 +3050,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         setToastMsg('Tu autorización quedó registrada. Falta la de la contraparte (N2 o Interventoría).')
       }
       setTimeout(() => setToastMsg(null), 4000)
-      onItemAsignado()
+      onItemAsignado?.()
     } catch (e) {
       alert(e?.message || String(e))
     }
@@ -3067,7 +3067,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const err = await res.json().catch(() => ({}))
         throw new Error(err.detail || `Error ${res.status}`)
       }
-      onItemAsignado()
+      onItemAsignado?.()
     } catch (e) {
       onItemAsignado?.()
       alert(`Error actualizando objeto de pago: ${e.message}`)
@@ -3222,7 +3222,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       method:'PUT', headers:hdrs,
                       body: JSON.stringify({ ...reporte, subcontratista_id: subcontratistaSel ? parseInt(subcontratistaSel) : null })
                     })
-                    onItemAsignado()
+                    onItemAsignado?.()
                   } catch(e) { alert(`Error al guardar: ${e.message}`) }
                   setEditandoSub(false)
                 }} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 10px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
@@ -3930,7 +3930,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               throw new Error(err.detail || `Error ${res.status}`)
             }
             setToastMsg(`✅ Registro ${estadoValidando.toLowerCase()} correctamente`)
-            setTimeout(() => { setToastMsg(null); onItemAsignado() }, 2500)
+            setTimeout(() => { setToastMsg(null); onItemAsignado?.() }, 2500)
           } catch(e) {
             alert(`No se pudo aplicar la validación: ${e.message}`)
           }
@@ -5954,7 +5954,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={null}
+                          onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -6099,7 +6099,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
-                          onItemAsignado={null}
+                          onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -14266,7 +14266,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
-  const [isMobileHeader, setIsMobileHeader] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+  const [isMobileHeader, setIsMobileHeader] = useState(() => {
+    if (typeof window === 'undefined') return false
+    const w = window.innerWidth
+    const landscape = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(orientation: landscape)').matches
+      : w > window.innerHeight
+    return w < 768 || (landscape && w <= 932)
+  })
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [tabInferior, setTabInferior] = useState('programacion')
   const [analisis, setAnalisis] = useState('financiero')
@@ -14378,7 +14385,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
   const dashModuloActivo = moduloActivo === 'dashboard'
-  const { isMobile: dashMobile, isTablet: dashTablet, isDesktop: dashDesktop } = useClaraViewport()
+  const {
+    isMobile: dashVpMobile,
+    isTablet: dashTablet,
+    isDesktop: dashDesktop,
+    isLandscapeMobile: dashLandscapeMobile,
+  } = useClaraViewport()
+  /** Portrait ≤767 o teléfono en landscape ≤932: layout de una columna. */
+  const dashMobile = dashVpMobile || dashLandscapeMobile
   const dashColsGrid = dashMobile ? '1fr' : '1fr 1fr'
   const colsGrid = dashColsGrid
   const dashPanelPad = dashMobile ? '14px' : '20px'
@@ -16013,12 +16027,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   useEffect(() => {
     const onResize = () => {
-      const mobile = window.innerWidth < 768
+      const w = window.innerWidth
+      const landscape = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(orientation: landscape)').matches
+        : w > window.innerHeight
+      const mobile = w < 768 || (landscape && w <= 932)
       setIsMobileHeader(mobile)
       if (!mobile) setMobileNavOpen(false)
     }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
   }, [])
 
   useEffect(() => {
@@ -16425,7 +16447,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         </>
       )}
 
-      <div style={{ display:'flex', minHeight:'calc(100vh - 72px)' }}>
+      <div
+        className={isMobileHeader && moduloActivo === 'dashboard' ? 'cc-app-main-row cc-app-main-row--dash-mobile' : 'cc-app-main-row'}
+        style={{
+          display: 'flex',
+          minHeight: 'calc(100vh - 72px)',
+          /* iOS: no recortar hijos del dashboard; el documento hace scroll */
+          ...(isMobileHeader && moduloActivo === 'dashboard'
+            ? { overflow: 'visible', alignItems: 'flex-start' }
+            : {}),
+        }}
+      >
 
         {/* ── Sidebar ── */}
         <div className="cc-module-sidebar" style={{
@@ -16483,7 +16515,24 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         </div>
 
         {/* ── Contenido principal ── */}
-        <div style={{ flex:1, padding: isMobileHeader ? '12px 12px' : '20px 24px', minWidth:0, overflow:'hidden' }}>
+        <div
+          className={moduloActivo === 'dashboard' ? 'cc-app-content cc-app-content--dashboard' : 'cc-app-content'}
+          style={{
+            flex: 1,
+            padding: isMobileHeader ? '12px 12px' : '20px 24px',
+            minWidth: 0,
+            /*
+             * iPhone Safari: overflow:auto anidado en flex + overflow-x:clip/hidden
+             * a menudo no scrollea y recorta paneles bajos (validación por rol).
+             * En móvil del dashboard: overflow visible → scroll del documento.
+             */
+            ...(moduloActivo === 'dashboard'
+              ? (isMobileHeader
+                  ? { overflow: 'visible', WebkitOverflowScrolling: 'touch' }
+                  : { overflowX: 'hidden', overflowY: 'auto', WebkitOverflowScrolling: 'touch' })
+              : { overflow: 'hidden' }),
+          }}
+        >
         {isMobileHeader && (
           <div style={{
             display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch',
@@ -16591,8 +16640,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             rows.length === 0 && !dashCapFinLoading ? (
               <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
             ) : (
-              <div className="cc-dash-table-wrap" style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth: dashMobile ? 480 : 560 }}>
+              <div className="cc-dash-table-wrap" style={{ maxHeight: dashLandscapeMobile ? 'min(280px, 55vh)' : 'min(520px, 62vh)', overflowY:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth: dashMobile ? 600 : 560 }}>
                   <thead>
                     <tr style={{ background:headerBg, color:'#fff', position:'sticky', top:0, zIndex:1 }}>
                       {puedeExportarDashboard ? (
@@ -16898,7 +16947,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <>
             {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
-            <div style={{ display:'grid', gridTemplateColumns: dashMobile ? '1fr' : (dashTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap:'10px', marginBottom:'16px' }}>
+            <div className="cc-dash-kpi-row" style={{ display:'grid', gridTemplateColumns: dashMobile ? '1fr' : (dashTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap:'10px', marginBottom:'16px' }}>
               {(() => {
                 const kpis = [
                   {
@@ -16922,7 +16971,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </div>
 
             {/* ── Grid 2×2 ── */}                                  
-            <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease', minWidth:0 }}>
+            <div className="cc-dash-grid-2x2" style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease', minWidth:0 }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
               <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow, ...(panelFoco==='cobro-acta' && {gridColumn:'1 / -1'}) }}>
@@ -16952,10 +17001,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   }))
                   const pathD = pts.map((p,i) => `${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
                   const areaD = `${pathD} L${pts[pts.length-1].x.toFixed(1)},${H-PAD} L${pts[0].x.toFixed(1)},${H-PAD} Z`
-                  const [hovered, setHovered] = [null, ()=>{}]
                   return (
                     <div className="cc-dash-chart-wrap" style={{ position:'relative' }}>
-                      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height: dashMobile ? '140px' : '160px', overflow:'visible', display:'block' }}>
+                      <div className="cc-dash-chart-inner">
+                      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height: dashLandscapeMobile ? '120px' : (dashMobile ? '140px' : '160px'), overflow:'visible', display:'block' }}>
                         <defs>
                           <linearGradient id="cobroGrad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor={t.primary} stopOpacity="0.4"/>
@@ -16989,6 +17038,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         {porActa.length > 0 && <span>Acta {porActa[0]?.acta}</span>}
                         {porActa.length > 1 && <span>Acta {porActa[porActa.length-1]?.acta}</span>}
                       </div>
+                      </div>
                     </div>
                   )
                 })()}
@@ -17015,13 +17065,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {porCapPpto.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos de presupuesto</div>
                 ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'200px', overflowY:'auto' }}>
+                  <div className="cc-dash-scroll-x cc-dash-bars-scroll" style={{ maxHeight: dashLandscapeMobile ? 'min(160px, 40vh)' : '200px', overflowY:'auto' }}>
+                    <div className="cc-dash-bars-inner" style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
                     {porCapPpto.map((cap, i) => {
                       const pct = Math.round(cap.costo / maxCapCosto * 100)
                       const color = ['#0077B6','#00B4C6','#00A896','#028090','#05668D','#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B','#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B'][i % 15]
                       return (
                         <div key={cap.capitulo} style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                          <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width: dashMobile ? '72px' : '140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
+                          <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width: dashMobile ? '100px' : '140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
                             {cap.capitulo}
                           </div>
                           <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden', minWidth:40 }}>
@@ -17033,17 +17084,35 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       )
                     })}
+                    </div>
                   </div>
                 )}
               </div>
 
               {/* 🟢 Ppto vs Cobro + Matriz validación (SICOE / Acta RPO) */}
-              <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: (dashMobile || panelFoco==='ppto-cobro') ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
-              <div style={{
+              <div
+                className="cc-dash-ppto-cobro-row"
+                style={{
+                  gridColumn: '1 / -1',
+                  /* Móvil: grid 1 col (Safari no colapsa altura). Desktop: flex 2 cols. */
+                  display: dashMobile ? 'grid' : 'flex',
+                  gridTemplateColumns: dashMobile ? '1fr' : undefined,
+                  flexDirection: (!dashMobile && panelFoco === 'ppto-cobro') ? 'column' : (dashMobile ? undefined : 'row'),
+                  flexWrap: dashMobile ? undefined : 'wrap',
+                  gap: '16px',
+                  alignItems: dashMobile ? 'start' : 'stretch',
+                  overflow: 'visible',
+                }}
+              >
+              <div className="cc-dash-ppto-cobro-col" style={{
                 display:'flex', flexDirection:'column', gap:'16px',
-                flex: (dashMobile || panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)',
-                minWidth: (dashMobile || panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)',
+                flex: dashMobile ? 'none' : ((panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)'),
+                flexShrink: dashMobile ? 0 : undefined,
+                minWidth: dashMobile ? 0 : ((panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)'),
+                width: dashMobile ? '100%' : undefined,
+                maxWidth: '100%',
                 boxSizing:'border-box',
+                overflow: 'visible',
               }}>
               <div className="cc-dash-panel-card" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:dashPanelPad, boxShadow:t.shadow }}>
                 <div style={{ marginBottom:'14px' }}>
@@ -17113,10 +17182,22 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
               {/* ── Drill → ahora vive en el popup ── */}
 
-              <div className="cc-dash-panel-card" style={{
+              <div className="cc-dash-panel-card cc-dash-validacion-panel" style={{
                 background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding: dashMobile ? '14px' : '16px', boxShadow:t.shadow,
-                flex: (dashMobile || panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: (dashMobile || panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)', boxSizing:'border-box',
-                maxHeight: panelFoco==='ppto-cobro' ? 'none' : 'min(92vh, 780px)', overflowY:'auto',
+                /* iOS Safari: flex-shrink:1 + basis 100% colapsa este panel; en móvil forzar bloque */
+                flex: dashMobile ? 'none' : ((panelFoco==='ppto-cobro') ? '1 1 100%' : '1 1 calc(50% - 8px)'),
+                flexShrink: 0,
+                minWidth: dashMobile ? 0 : ((panelFoco==='ppto-cobro') ? '100%' : 'min(300px, 100%)'),
+                width: dashMobile ? '100%' : undefined,
+                maxWidth: '100%',
+                boxSizing:'border-box',
+                maxHeight: dashMobile ? 'none' : ((panelFoco==='ppto-cobro') ? 'none' : 'min(92vh, 780px)'),
+                height: 'auto',
+                overflow: dashMobile ? 'visible' : undefined,
+                overflowY: dashMobile ? 'visible' : 'auto',
+                display: 'block',
+                visibility: 'visible',
+                position: 'relative',
               }}>
 
                 <div style={{ marginBottom:'12px' }}>

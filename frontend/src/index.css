@@ -58,8 +58,21 @@ img.cc-brand-logo--admin {
     flex-direction: column !important;
   }
 
+  .cc-app-main-row--dash-mobile {
+    overflow: visible !important;
+    align-items: stretch !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
   .cc-app-content {
     padding: 12px 12px !important;
+  }
+
+  /* iOS Safari: en móvil el scroll debe ser del documento, no de un flex overflow:auto anidado */
+  .cc-app-content--dashboard {
+    overflow: visible !important;
+    -webkit-overflow-scrolling: touch;
   }
 
   .cc-inicio-root {
@@ -78,6 +91,28 @@ img.cc-brand-logo--admin {
     width: 100% !important;
     min-width: 0 !important;
     max-width: 100% !important;
+  }
+}
+
+/* Shell en teléfono landscape (mismo criterio que dashboard) */
+@media (orientation: landscape) and (max-width: 932px) {
+  .cc-app-content {
+    padding: 10px 12px !important;
+  }
+
+  .cc-app-main-row--dash-mobile {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  .cc-app-content--dashboard {
+    overflow: visible !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-module-sidebar {
+    display: none !important;
   }
 }
 
@@ -103,7 +138,9 @@ select.cc-dashboard-acta-select--light option {
 .cc-dashboard-root {
   min-width: 0;
   max-width: 100%;
-  overflow-x: clip;
+  /* hidden (no clip): Safari iOS trata mal overflow-x:clip con scroll vertical anidado */
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .cc-dash-table-wrap {
@@ -113,14 +150,51 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Contenedor de gráficos: scroll horizontal interno (no de la página) */
 .cc-dash-chart-wrap {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
+.cc-dash-chart-inner {
+  width: 100%;
+  min-width: 0;
+}
+
+.cc-dash-scroll-x {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-dash-validacion-panel {
+  min-width: 0;
+  max-width: 100%;
+  visibility: visible;
+  display: block;
+  height: auto;
+  overflow: visible;
+}
+
+/*
+ * iOS Safari: flex hijo con flex-shrink:1 + basis 100% dentro de un ancestro
+ * overflow:auto puede colapsar la altura del panel de validación a ~0.
+ * En móvil usamos grid de 1 columna (flujo de bloque) y flex: none.
+ */
 @media (max-width: 767px) {
+  .cc-dashboard-root {
+    overflow-x: hidden;
+    overflow-y: visible;
+    /* Espacio bajo el último panel (home indicator / barra Safari) */
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  }
+
   .cc-dashboard-root .cc-dash-toolbar-sep {
     display: none;
   }
@@ -146,6 +220,150 @@ select.cc-dashboard-acta-select--light option {
   .cc-dashboard-root .cc-dash-panel-card {
     padding: 14px !important;
   }
+
+  .cc-dashboard-root .cc-dash-chart-inner {
+    min-width: 600px;
+  }
+
+  .cc-dashboard-root .cc-dash-bars-inner {
+    min-width: 600px;
+  }
+
+  .cc-dashboard-root .cc-dash-grid-2x2 {
+    grid-template-columns: 1fr !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-grid-2x2 > * {
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-ppto-cobro-row {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    align-items: start !important;
+    gap: 16px !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-ppto-cobro-col,
+  .cc-dashboard-root .cc-dash-validacion-panel {
+    flex: none !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-validacion-panel {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative !important;
+    z-index: 1;
+  }
+}
+
+/* Móvil landscape: una columna, alturas contenidas */
+@media (orientation: landscape) and (max-width: 932px) {
+  .cc-dashboard-root {
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  .cc-dashboard-root .cc-dash-toolbar-sep {
+    display: none;
+  }
+
+  .cc-dashboard-root .cc-dash-touch-select {
+    min-height: 40px;
+    font-size: var(--cc-body, 15px) !important;
+    padding: 8px 10px !important;
+  }
+
+  .cc-dashboard-root .cc-dash-touch-btn {
+    min-height: 40px;
+    padding: 8px 12px !important;
+  }
+
+  .cc-dashboard-root select.cc-dashboard-acta-select {
+    min-height: 40px;
+    font-size: var(--cc-body, 15px) !important;
+    padding: 8px 10px !important;
+    max-width: 100% !important;
+  }
+
+  .cc-dashboard-root .cc-dash-panel-card {
+    padding: 12px !important;
+  }
+
+  .cc-dashboard-root .cc-dash-chart-inner {
+    min-width: 600px;
+  }
+
+  .cc-dashboard-root .cc-dash-bars-inner {
+    min-width: 600px;
+  }
+
+  .cc-dashboard-root .cc-dash-chart-wrap svg {
+    height: 120px !important;
+  }
+
+  .cc-dashboard-root .cc-dash-grid-2x2 {
+    grid-template-columns: 1fr !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-grid-2x2 > * {
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-kpi-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .cc-dashboard-root .cc-dash-ppto-cobro-row {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    align-items: start !important;
+    gap: 16px !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-ppto-cobro-col,
+  .cc-dashboard-root .cc-dash-validacion-panel {
+    flex: none !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .cc-dashboard-root .cc-dash-validacion-panel {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative !important;
+    z-index: 1;
+  }
+
+  .cc-dashboard-root .cc-dash-table-wrap {
+    max-height: min(280px, 55vh) !important;
+  }
+
+  .cc-dashboard-root .cc-dash-bars-scroll {
+    max-height: min(160px, 40vh) !important;
+  }
 }
 
 @media (min-width: 768px) and (max-width: 1024px) {
@@ -157,5 +375,12 @@ select.cc-dashboard-acta-select--light option {
 
   .cc-dashboard-root .cc-dash-kpi-card-span {
     grid-column: 1 / -1;
+  }
+}
+
+/* Tablet en landscape de teléfono ya cubierto arriba; tablet real mantiene 2 cols vía JS */
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
+  .cc-dashboard-root .cc-dash-chart-inner {
+    min-width: 0;
   }
 }
