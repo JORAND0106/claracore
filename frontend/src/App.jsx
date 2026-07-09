@@ -20,6 +20,7 @@ import {
   getPreciosOffline,
   getNextNumeroReporteOffline,
   getRegistrosOffline,
+  filtrarRegistrosOfflinePorBusqueda,
   aplicarValidacionLocal,
   crearReporteLocal,
   crearRegistroLocal,
@@ -4527,6 +4528,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!repoProp?.id) return
     const idChanged = repoPropIdRef.current !== repoProp.id
     const detalleListo = repoPropCargandoRef.current && !repoProp._cargandoDetalle
+    const vistaFiltrada = !!repoProp.registros_vista_filtrada
     repoPropIdRef.current = repoProp.id
     repoPropCargandoRef.current = !!repoProp._cargandoDetalle
 
@@ -4534,6 +4536,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setReporte({ ...repoProp })
       if (Array.isArray(repoProp.registros)) {
         setRegistros(repoProp.registros.map((row) => ({ ...row })))
+      } else if (idChanged) {
+        setRegistros([])
       }
       if (Array.isArray(repoProp.puntos)) setPuntosEdit(repoProp.puntos.map((p) => ({ ...p })))
       if (Object.prototype.hasOwnProperty.call(repoProp, 'enlace_soporte')) {
@@ -4545,8 +4549,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
     if (repoProp._cargandoDetalle) return
 
-    if (Array.isArray(repoProp.registros) && repoProp.registros.length) {
-      setRegistros((prev) => fusionarRegistrosDesdePadre(prev, repoProp.registros))
+    if (Array.isArray(repoProp.registros)) {
+      if (vistaFiltrada) {
+        // Vista filtrada: reemplazar (no fusionar). Fusionar reintroducía ítems fuera del filtro (típico en móvil/realtime).
+        setRegistros(repoProp.registros.map((row) => ({ ...row })))
+        setReporte((prev) => ({ ...prev, registros_vista_filtrada: true }))
+      } else if (repoProp.registros.length) {
+        setRegistros((prev) => fusionarRegistrosDesdePadre(prev, repoProp.registros))
+      }
     }
   }, [repoProp])
 
@@ -4698,9 +4708,21 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         (subIdEnCarpeta === null || r.subcontratista_id === subIdEnCarpeta))
     : registrosMostrados
 
-  // Ítems asignados únicos — cada uno genera un tab
-  const itemsAsignados = [...new Set(registrosVisibles.filter(r => r.item_numero).map(r => r.item_numero))]
-  const regsSinAsignar = registrosVisibles.filter(r => !r.item_numero)
+  // Ítems asignados únicos — cada uno genera un tab (solo desde registros de la vista actual).
+  const itemsAsignados = useMemo(
+    () => [...new Set(registrosVisibles.filter((r) => r.item_numero).map((r) => r.item_numero))],
+    [registrosVisibles],
+  )
+  const regsSinAsignar = useMemo(
+    () => registrosVisibles.filter((r) => !r.item_numero),
+    [registrosVisibles],
+  )
+
+  // Si la vista filtrada deja fuera el tab activo, volver a Portada.
+  useEffect(() => {
+    if (tabActiva === 'portada' || tabActiva === 'sin_asignar') return
+    if (!itemsAsignados.includes(tabActiva)) setTabActiva('portada')
+  }, [itemsAsignados, tabActiva])
 
   useEffect(() => {
     setMsgMasivo('')
@@ -4795,8 +4817,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setRecargando(true)
     try {
       const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
-      // Siempre GET completo: la URL filtrada de la grilla omite registros sin ítem y líneas nuevas.
-      const urlS = build(reporte.id)
+      // Misma vista que al abrir: si la grilla tiene filtros, recargar con aplicar_filtros_busqueda.
+      const filtrada = typeof urlReporteDetalleFiltradoFn === 'function'
+        ? urlReporteDetalleFiltradoFn(reporte.id)
+        : null
+      const urlS = filtrada || build(reporte.id)
       let res = await fetch(urlS, { headers: hdrs })
       let data = await res.json().catch(() => ({}))
       if (seq !== recargarSeqRef.current) return null
@@ -7350,6 +7375,26 @@ function ModuloSicoeObra({
   const urlReporteDetalleSimple = (repId) =>
     `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}?ligero=1`
 
+  /** Mismos criterios que la grilla; null si no hay búsqueda activa con filtros. */
+  const urlReporteDetalleFiltradoSiAplica = (repId) => {
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return null
+    const params = new URLSearchParams()
+    params.set('aplicar_filtros_busqueda', 'true')
+    sicoeAppendParamsBusquedaActivos(params)
+    const qs = params.toString()
+    if (!qs) return null
+    const base = urlReporteDetalleSimple(repId)
+    return `${base}${base.includes('?') ? '&' : '?'}${qs}`
+  }
+
+  const urlDetalleReporteParaAbrir = (repId, { aplicarFiltros = true } = {}) => {
+    if (aplicarFiltros) {
+      const filtrada = urlReporteDetalleFiltradoSiAplica(repId)
+      if (filtrada) return filtrada
+    }
+    return urlReporteDetalleSimple(repId)
+  }
+
   const abortarPeticionesSicoeFondo = () => {
     if (sicoeBusquedaAbortRef.current) {
       sicoeBusquedaAbortRef.current.abort()
@@ -7358,12 +7403,14 @@ function ModuloSicoeObra({
     }
   }
 
-  const fetchDetalleReporteSicoe = async (repId) => {
+  /** @param {{ aplicarFiltros?: boolean }} [opts] — false solo para auto-abrir por N° registro. */
+  const fetchDetalleReporteSicoe = async (repId, opts = {}) => {
+    const { aplicarFiltros = true } = opts
     if (sicoeDetalleAbortRef.current) sicoeDetalleAbortRef.current.abort()
     const ac = new AbortController()
     sicoeDetalleAbortRef.current = ac
     try {
-      const r = await fetch(urlReporteDetalleSimple(repId), {
+      const r = await fetch(urlDetalleReporteParaAbrir(repId, { aplicarFiltros }), {
         headers: { Authorization: `Bearer ${getToken()}` },
         signal: ac.signal,
       })
@@ -7378,19 +7425,29 @@ function ModuloSicoeObra({
     }
   }
 
-  /** Segundo GET opcional: mismos criterios que la grilla; null si no aplica. */
-  const urlReporteDetalleFiltradoSiAplica = (repId) => {
-    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return null
-    const params = new URLSearchParams()
-    params.set('aplicar_filtros_busqueda', 'true')
-    sicoeAppendParamsBusquedaActivos(params)
-    const qs = params.toString()
-    if (!qs) return null
-    return `${urlReporteDetalleSimple(repId)}?${qs}`
-  }
+  const urlReporteDetalleRef = useRef(urlDetalleReporteParaAbrir)
+  urlReporteDetalleRef.current = urlDetalleReporteParaAbrir
 
-  const urlReporteDetalleRef = useRef(urlReporteDetalleSimple)
-  urlReporteDetalleRef.current = urlReporteDetalleSimple
+  /** Offline: mismos criterios de línea que la grilla al abrir carpeta. */
+  const registrosOfflineParaCarpeta = (regs) => {
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
+      return { registros: regs || [], registros_vista_filtrada: false }
+    }
+    const fOff = sicoeFiltrosOfflineConItems(
+      filtros,
+      itemsFiltroChipsRef.current,
+      itemsFiltroOpRef.current,
+    )
+    return {
+      registros: filtrarRegistrosOfflinePorBusqueda(
+        regs || [],
+        fOff,
+        capasValidacion,
+        capasValidacionOp,
+      ),
+      registros_vista_filtrada: true,
+    }
+  }
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = [], capasOpParam, opSeqParam, abortSignal) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
@@ -7490,8 +7547,8 @@ function ModuloSicoeObra({
         const rep = lista[0]
         setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
         setModalCarpeta(true)
-        // Detalle sin aplicar_filtros_busqueda: si no, capas/validación pueden excluir la línea y no hay _autoRegistro
-        const r2 = await fetchDetalleReporteSicoe(rep.id)
+        // Detalle sin filtros: capas/validación podrían excluir la línea y no habría _autoRegistro
+        const r2 = await fetchDetalleReporteSicoe(rep.id, { aplicarFiltros: false })
         if (opSeqParam != null && seq !== sicoeOperacionSeqRef.current) return resultado
         if (r2?.id) {
           const regs = Array.isArray(r2.registros) ? r2.registros : []
@@ -8655,9 +8712,14 @@ function ModuloSicoeObra({
       .then((r) => r.json())
       .then((data) => {
         if (!data?.id) return
-        setReporteSeleccionado((prev) =>
-          prev?.id === rid ? { ...prev, ...data, _cargandoDetalle: false } : prev,
-        )
+        setReporteSeleccionado((prev) => {
+          if (prev?.id !== rid) return prev
+          // Si la carpeta está en vista filtrada, no aceptar un refresh sin ese flag (reintroduciría todos los ítems).
+          if (prev.registros_vista_filtrada && !data.registros_vista_filtrada) {
+            return { ...prev, _cargandoDetalle: false }
+          }
+          return { ...prev, ...data, _cargandoDetalle: false }
+        })
       })
       .catch(() => {})
   }, [contrato_id])
@@ -8680,7 +8742,8 @@ function ModuloSicoeObra({
         next[idx] = { ...next[idx], ...row }
         return { ...prev, registros: next }
       }
-      if (ev === 'INSERT' && String(row.reporte_id) === String(rid)) {
+      // Con filtros de grilla activos no insertar líneas nuevas (rompería pestañas filtradas).
+      if (ev === 'INSERT' && String(row.reporte_id) === String(rid) && !prev.registros_vista_filtrada) {
         return { ...prev, registros: [...regs, row] }
       }
       return prev
@@ -10438,7 +10501,8 @@ function ModuloSicoeObra({
                 ;(async () => {
                   try {
                     if (efectivoOffline && isOfflineReady) {
-                      const regs = await getRegistrosOffline(contrato_id, rep.id)
+                      const regsAll = await getRegistrosOffline(contrato_id, rep.id)
+                      const { registros: regs, registros_vista_filtrada } = registrosOfflineParaCarpeta(regsAll)
                       const regMatch = regNumBusqueda
                         ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
                         : null
@@ -10448,6 +10512,7 @@ function ModuloSicoeObra({
                         puntos: [],
                         _cargandoDetalle: false,
                         _offline: true,
+                        ...(registros_vista_filtrada ? { registros_vista_filtrada: true } : {}),
                         ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
                       })
                     } else {
@@ -10471,7 +10536,8 @@ function ModuloSicoeObra({
                     // Fallback: intentar IndexedDB si el fetch falló
                     if (isOfflineReady) {
                       try {
-                        const regs = await getRegistrosOffline(contrato_id, rep.id)
+                        const regsAll = await getRegistrosOffline(contrato_id, rep.id)
+                        const { registros: regs, registros_vista_filtrada } = registrosOfflineParaCarpeta(regsAll)
                         const regMatchFb = regNumBusqueda
                           ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
                           : null
@@ -10481,6 +10547,7 @@ function ModuloSicoeObra({
                           puntos: [],
                           _cargandoDetalle: false,
                           _offline: true,
+                          ...(registros_vista_filtrada ? { registros_vista_filtrada: true } : {}),
                           ...(regMatchFb ? { _autoRegistro: regMatchFb.id } : {}),
                         })
                       } catch {
@@ -10553,7 +10620,8 @@ function ModuloSicoeObra({
                     ;(async () => {
                       try {
                         if (efectivoOffline && isOfflineReady) {
-                          const regs = await getRegistrosOffline(contrato_id, rep.id)
+                          const regsAll = await getRegistrosOffline(contrato_id, rep.id)
+                          const { registros: regs, registros_vista_filtrada } = registrosOfflineParaCarpeta(regsAll)
                           const regMatch = regNumBusqueda
                             ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
                             : null
@@ -10563,6 +10631,7 @@ function ModuloSicoeObra({
                             puntos: [],
                             _cargandoDetalle: false,
                             _offline: true,
+                            ...(registros_vista_filtrada ? { registros_vista_filtrada: true } : {}),
                             ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
                           })
                         } else {
@@ -10585,7 +10654,8 @@ function ModuloSicoeObra({
                       } catch {
                         if (isOfflineReady) {
                           try {
-                            const regs = await getRegistrosOffline(contrato_id, rep.id)
+                            const regsAll = await getRegistrosOffline(contrato_id, rep.id)
+                            const { registros: regs, registros_vista_filtrada } = registrosOfflineParaCarpeta(regsAll)
                             const regMatchFb = regNumBusqueda
                               ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
                               : null
@@ -10595,6 +10665,7 @@ function ModuloSicoeObra({
                               puntos: [],
                               _cargandoDetalle: false,
                               _offline: true,
+                              ...(registros_vista_filtrada ? { registros_vista_filtrada: true } : {}),
                               ...(regMatchFb ? { _autoRegistro: regMatchFb.id } : {}),
                             })
                           } catch {
@@ -10848,7 +10919,7 @@ function ModuloSicoeObra({
           nivelesContrato={nivelesContrato}
           capasFiltroValidacion={capasValidacion.length > 0 ? capasValidacion : null}
           capasFiltroValidacionOp={capasValidacion.length > 1 ? capasValidacionOp : 'and'}
-          urlReporteDetalle={urlReporteDetalleSimple}
+          urlReporteDetalle={(id) => urlDetalleReporteParaAbrir(id, { aplicarFiltros: true })}
           urlReporteDetalleFiltrado={urlReporteDetalleFiltradoSiAplica}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}

@@ -159,6 +159,43 @@ function itemsListaYOpDesdeFiltros(filtros) {
   return { list, op }
 }
 
+/**
+ * Aplica a registros de un reporte los mismos criterios de línea que la grilla offline
+ * (capítulo, ítem(s), N° registro, capas de validación).
+ */
+export function filtrarRegistrosOfflinePorBusqueda(registros, filtros = {}, capas = [], capasOp = 'and') {
+  let regs = Array.isArray(registros) ? [...registros] : []
+  if (!regs.length) return regs
+
+  const consultaDirectaIdentificador =
+    filtros.numero_reporte != null || filtros.numero_registro != null
+  const capasEff = consultaDirectaIdentificador ? [] : (capas || [])
+  const capasOpEff = consultaDirectaIdentificador ? 'and' : capasOp
+
+  if (filtros.capitulo) regs = regs.filter((r) => r.capitulo === filtros.capitulo)
+  const { list: itemsLBus, op: itemsOpBus } = itemsListaYOpDesdeFiltros(filtros)
+  if (itemsLBus.length) {
+    regs = regs.filter((r) => filtroRegistroPorItemsLista(r, itemsLBus, itemsOpBus))
+  }
+  if (filtros.numero_registro) {
+    regs = regs.filter((r) => String(r.numero_registro) === String(filtros.numero_registro))
+  }
+  if (capasEff.length > 0) {
+    regs = aplicarCapasFiltro(regs, capasEff, capasOpEff)
+  } else if (filtros.cargo && filtros.estado_registro) {
+    const campoNivel = CARGO_NIVEL_MAP[parseInt(filtros.cargo, 10)]
+    if (campoNivel) {
+      regs = regs.filter((r) => {
+        const est = r[campoNivel] || 'No Revisado'
+        return filtros.estado_registro === 'No Revisado'
+          ? (est === 'No Revisado' || est == null)
+          : est === filtros.estado_registro
+      })
+    }
+  }
+  return regs
+}
+
 /** Misma semántica que `_estado_efectivo` del backend en análisis SICOE (main.py). */
 function estadoEfectivoSicoePanel(r) {
   const n1 = String(r.nivel1_estado || '').trim()
