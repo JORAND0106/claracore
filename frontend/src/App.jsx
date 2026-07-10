@@ -124,9 +124,11 @@ import {
 import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
 import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
 import { permisosProgramacionObra } from './progObraPermisos'
+import { permisosAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
+import AlmacenMain from './almacen/AlmacenMain'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
@@ -5714,6 +5716,160 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
+        {carpetaCompact ? (
+          <div
+            className="cc-sicoe-carpeta-header cc-sicoe-carpeta-header--mobile"
+            style={{
+              background: `linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`,
+              padding: '8px 10px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              {capasF && (
+                <button
+                  type="button"
+                  className="cc-sicoe-carpeta-back"
+                  onClick={onClose}
+                  aria-label="Volver al panel"
+                  style={{
+                    background: 'rgba(255,255,255,0.18)',
+                    border: 'none',
+                    color: '#fff',
+                    borderRadius: 8,
+                    width: 36,
+                    height: 36,
+                    minWidth: 36,
+                    fontSize: 'var(--cc-body)',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  ←
+                </button>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {reporte._cargandoDetalle && (
+                  <div style={{ fontSize: 'var(--cc-caption)', color: '#fff', opacity: 0.9, marginBottom: 2 }}>
+                    ⏳ Cargando…
+                  </div>
+                )}
+                <div
+                  className="cc-sicoe-carpeta-title"
+                  style={{
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 800,
+                    color: '#fff',
+                    lineHeight: 1.25,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
+                >
+                  {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
+                </div>
+                <div
+                  style={{
+                    fontSize: 'var(--cc-caption)',
+                    color: 'rgba(255,255,255,0.78)',
+                    fontWeight: 600,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={`${reporte.capitulo || ''} · ${reporte.subcontratista_nombre || '—'}`}
+                >
+                  {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <span
+                  style={{
+                    fontSize: 'var(--cc-md)',
+                    fontWeight: 900,
+                    color: '#fff',
+                    lineHeight: 1,
+                    padding: '0 2px',
+                  }}
+                >
+                  #{reporte.numero_reporte}
+                </span>
+                <button
+                  type="button"
+                  disabled={recargando}
+                  onClick={() => { void recargar() }}
+                  aria-label="Actualizar reporte"
+                  title="Actualizar reporte"
+                  style={{
+                    background: 'rgba(255,255,255,0.15)',
+                    border: 'none',
+                    color: '#fff',
+                    borderRadius: 8,
+                    width: 36,
+                    height: 36,
+                    minWidth: 36,
+                    fontSize: 'var(--cc-body)',
+                    cursor: recargando ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {recargando ? '⏳' : '⟳'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Cerrar reporte"
+                  style={{
+                    background: 'rgba(255,255,255,0.2)',
+                    border: 'none',
+                    color: '#fff',
+                    borderRadius: 8,
+                    width: 36,
+                    height: 36,
+                    minWidth: 36,
+                    fontSize: 'var(--cc-md)',
+                    cursor: 'pointer',
+                    fontWeight: 900,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            {!!reporte.registros_vista_filtrada && (
+              <div
+                style={{
+                  fontSize: 'var(--cc-caption)',
+                  color: '#D9F99D',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  background: 'rgba(0,0,0,0.18)',
+                  borderRadius: 6,
+                  alignSelf: 'flex-start',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title="Filtro de búsqueda activo: solo se listan las líneas que coinciden con los criterios de la grilla."
+              >
+                🔍 Filtro activo
+              </div>
+            )}
+          </div>
+        ) : (
         <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius: carpetaCompact ? 0 : '14px 14px 0 0', padding: carpetaCompact ? '14px 14px' : '16px 24px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px', flexWrap: carpetaCompact ? 'wrap' : undefined }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px', flex:'1 1 auto', minWidth:0 }}>
             <span style={{ fontSize:'28px' }}>📁</span>
@@ -5773,9 +5929,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </div>
           </div>
         </div>
+        )}
 
-        {/* ─ Botón volver al panel ─ */}
-        {capasF && (
+        {/* ─ Botón volver al panel (desktop / sin back en header) ─ */}
+        {capasF && !carpetaCompact && (
           <div style={{ padding:'6px 16px', background:'#0F1923', borderBottom:`1px solid ${C.borde}` }}>
             <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${C.borde}`, borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', color:'#94A3B8', cursor:'pointer' }}>
               ← Volver al panel
@@ -5783,7 +5940,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           </div>
         )}
         {/* ─ Tab bar horizontal ─ */}
-        <div className="cc-sicoe-tabs-scroll" style={{ display:'flex', gap:'4px', padding: carpetaCompact ? '10px 12px 0' : '12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
+        <div className={`cc-sicoe-tabs-scroll${carpetaCompact ? ' cc-sicoe-carpeta-tabs' : ''}`} style={{ display:'flex', gap:'4px', padding: carpetaCompact ? '6px 8px 0' : '12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch', flexShrink: 0 }}>
           {[
             { key: 'portada',      label: '📋 Portada' },
             { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
@@ -5806,10 +5963,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
               border:        `1px solid ${tabActiva === tab.key ? '#7DD3E8' : '#475569'}`,
               borderBottom:  tabActiva === tab.key ? '1px solid #E8F6F8' : '1px solid #2A3F52',
-              borderRadius:  '8px 8px 0 0', padding: carpetaCompact ? '10px 14px' : '8px 16px', fontSize:'var(--cc-sm)',
+              borderRadius:  '8px 8px 0 0', padding: carpetaCompact ? '8px 12px' : '8px 16px', fontSize: carpetaCompact ? 'var(--cc-caption)' : 'var(--cc-sm)',
               fontWeight:    tabActiva === tab.key ? '700' : '500',
               cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s',
-              minHeight: carpetaCompact ? 44 : undefined,
+              minHeight: carpetaCompact ? 40 : undefined,
               boxShadow: tabActiva === tab.key ? '0 -2px 8px rgba(0,0,0,0.12)' : 'none',
             }}>{tab.label}</button>
           ))}
@@ -5832,7 +5989,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         </div>
 
         {/* ─ Contenido del tab ─ */}
-        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding:'24px', overflowY:'auto' }}>
+        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding: carpetaCompact ? '10px 10px' : '24px', overflowY:'auto', minHeight: 0 }}>
           {msgMasivo && (
             <div style={{
               marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
@@ -16603,7 +16760,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       } catch {}
       return
     }
-    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard' }
+    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard', ALMACEN:'almacen', almacen:'almacen' }
     setModuloActivo(modMap[notif.modulo] || modulo || 'dashboard')
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
@@ -17074,10 +17231,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }, [analisisData, analisisDir, analisisRangoMin, analisisRangoMax, analisisSortCol, analisisSortDir])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
-  const cargoNombreNorm = (usuario?.cargo_nombre || '').trim().toLowerCase()
-  const esDeveloper = cargoNombreNorm === 'desarrollador'
-  const esContador = cargoNombreNorm === 'contador'
-  const esAdminCargo = cargoNombreNorm === 'administrador'
+  const esDeveloper = esUsuarioDesarrollador(usuario)
+  const esContador = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'contador'
+  const esAdminCargo = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'administrador'
   // Funciones que habilitan ver el panel admin (cualquier acción distinta de “todo en falso”)
   const ADMIN_FUNCIONES = ["contratos", "listado de precios", "subcontratistas", "actas"]
   const _permisoAlgunaAccion = (p) =>
@@ -17142,6 +17298,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeValidarTopografia = _topoPermiso('validar')
   const puedeEliminarTopografia = _topoPermiso('eliminar')
   const puedeExportarTopografia = _topoPermiso('exportar')
+  const almacenPerm = permisosAlmacen(usuario, usuario?.contrato_id)
+  const tienePermisoAlmacen = esDeveloper || almacenPerm.ver
+  const puedeCrearAlmacen = esDeveloper || almacenPerm.crear
+  const puedeEditarAlmacen = esDeveloper || almacenPerm.editar
+  const puedeValidarAlmacen = esDeveloper || almacenPerm.validar
+  const puedeExportarAlmacen = esDeveloper || almacenPerm.exportar
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
@@ -17675,7 +17837,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['presupuesto',  '📋', 'Presupuesto',    !esContador && tienePermisoPresupuesto],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    !esContador && tienePermisoSicoeObra],
             ['informes',     '📄', 'Informes',       !esContador && tienePermisoInformesCcd],
-            ['almacen',      '🏪', 'Almacén',        !esContador],
+            ['almacen',      '🏪', 'Almacén',        !esContador && tienePermisoAlmacen],
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
@@ -17728,7 +17890,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ['presupuesto', '📋', 'Presupuesto', !esContador && tienePermisoPresupuesto],
               ['sicoe_obra', '🏗️', 'SICOE', !esContador && tienePermisoSicoeObra],
               ['informes', '📄', 'Informes', !esContador && tienePermisoInformesCcd],
-              ['almacen', '🏪', 'Almacén', !esContador],
+              ['almacen', '🏪', 'Almacén', !esContador && tienePermisoAlmacen],
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
@@ -20772,9 +20934,29 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Módulos próximamente ── */}
         {moduloActivo === 'almacen' && (
-          <div style={{ textAlign:'center', padding:'80px 20px', color:t.textMuted, fontSize:'var(--cc-md)' }}>
-            🏪 Módulo próximamente
-          </div>
+          tienePermisoAlmacen ? (
+            <AlmacenMain
+              key={`almacen-${usuario?.contrato_id ?? 'x'}`}
+              t={t}
+              token={getToken()}
+              permisos={{
+                ...almacenPerm,
+                contratoId: usuario?.contrato_id,
+                ver: tienePermisoAlmacen,
+                crear: puedeCrearAlmacen,
+                editar: puedeEditarAlmacen,
+                validar: puedeValidarAlmacen,
+                exportar: puedeExportarAlmacen,
+              }}
+            />
+          ) : (
+            <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Almacén</div>
+              <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Almacén» (acción Ver).
+              </div>
+            </div>
+          )
         )}
         {moduloActivo === 'semaforo' && (
           <ModuloPlanoSemaforo key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />

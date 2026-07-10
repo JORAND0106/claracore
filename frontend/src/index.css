@@ -1191,8 +1191,10 @@ select.cc-dashboard-acta-select--light option {
   .cc-sicoe-carpeta-shell {
     max-width: 100% !important;
     min-height: 100dvh !important;
+    max-height: 100dvh !important;
     border-radius: 0 !important;
     margin: 0 !important;
+    overflow: hidden;
   }
 
   .cc-sicoe-carpeta-overlay {
@@ -1201,7 +1203,24 @@ select.cc-dashboard-acta-select--light option {
   }
 
   .cc-sicoe-carpeta-content {
-    padding: 14px 12px !important;
+    padding: 10px !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-sicoe-carpeta-header--mobile {
+    flex-shrink: 0;
+  }
+
+  .cc-sicoe-carpeta-tabs > button {
+    min-height: 40px !important;
+    padding: 8px 12px !important;
+    font-size: var(--cc-caption, 11px) !important;
+  }
+
+  .cc-sicoe-carpeta-tabs > div button {
+    min-height: 40px !important;
+    padding: 8px 12px !important;
+    font-size: var(--cc-caption, 11px) !important;
   }
 
   .cc-sicoe-panel-filters-collapse {

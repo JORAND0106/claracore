@@ -1443,6 +1443,33 @@ def _es_desarrollador(current_user) -> bool:
         return False
 
 
+def _permisos_desarrollador_acceso_total(permisos: list, funciones_rows: list, cargo_id) -> list:
+    """Desarrollador: todas las acciones en funciones existentes + filas sintéticas faltantes."""
+    full = {
+        "ver": True,
+        "crear": True,
+        "editar": True,
+        "eliminar": True,
+        "validar": True,
+        "exportar": True,
+    }
+    out = [{**p, **full} for p in (permisos or [])]
+    nombres = {(p.get("funcion_nombre") or "").strip().lower() for p in out}
+    for func in funciones_rows or []:
+        fn = (func.get("nombre") or "").strip()
+        key = fn.lower()
+        if key and key not in nombres:
+            out.append({
+                "id": None,
+                "cargo_id": cargo_id,
+                "funcion_id": func.get("id"),
+                "funcion_nombre": fn,
+                **full,
+            })
+            nombres.add(key)
+    return out
+
+
 def _es_cargo_administrador_sicoe(current_user) -> bool:
     """Cargo Administrador (sin ser Desarrollador): validación SICOE N1–N3 solo en su contrato."""
     try:
@@ -2220,6 +2247,9 @@ app.include_router(contrato_orden_pago_router)
 
 from contabilidad_routes import router as contabilidad_router
 app.include_router(contabilidad_router)
+
+from almacen_routes import router as almacen_router
+app.include_router(almacen_router)
 
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
@@ -5036,29 +5066,11 @@ def login(request: Request, body: LoginRequest):
         funciones_rows = supabase.table("funciones").select("id, nombre").execute().data
         funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
-    # Hotfix: garantizar exportación para Desarrollador en cualquier contrato
+    # Desarrollador: acceso total (sin depender de la matriz por función).
     if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
-        permisos = [{**p, "exportar": True, "ver": True} for p in (permisos or [])]
-        if not any((p.get("funcion_nombre") or "").strip().lower() == "reporte de cantidades" for p in permisos):
-            funcion_id = None
-            try:
-                fr = supabase.table("funciones").select("id,nombre").ilike("nombre", "Reporte de Cantidades").limit(1).execute().data
-                if fr:
-                    funcion_id = fr[0].get("id")
-            except Exception:
-                funcion_id = None
-            permisos.append({
-                "id": None,
-                "cargo_id": usuario.get("cargo_id"),
-                "funcion_id": funcion_id,
-                "funcion_nombre": "Reporte de Cantidades",
-                "ver": True,
-                "crear": True,
-                "editar": True,
-                "eliminar": True,
-                "validar": True,
-                "exportar": True,
-            })
+        permisos = _permisos_desarrollador_acceso_total(
+            permisos, funciones_rows, usuario.get("cargo_id")
+        )
     # C3: Subcontratista sin subcontratista asignado → sin acceso
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not usuario.get('subcontratista_id'):
         permisos = []
@@ -5484,6 +5496,7 @@ def get_mi_usuario(
             if r.data: rol_nombre = r.data[0]["nombre"]
         except Exception: pass
     permisos = []
+    funciones_rows = []
     if u.get("cargo_id"):
         try:
             cid_scope = contrato_id if contrato_id is not None else u.get("contrato_id")
@@ -5491,34 +5504,21 @@ def get_mi_usuario(
                 int(u["cargo_id"]),
                 int(cid_scope) if cid_scope is not None else None,
             )
-            funciones_rows = sb.table("funciones").select("id, nombre").execute().data
+            funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
             funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
             permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
         except Exception:
             permisos_raw = []
-    # Hotfix: garantizar exportación para Desarrollador en cualquier contrato
+    # Desarrollador: acceso total (sin depender de la matriz por función).
     if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
-        permisos = [{**p, "exportar": True, "ver": True} for p in (permisos or [])]
-        if not any((p.get("funcion_nombre") or "").strip().lower() == "reporte de cantidades" for p in permisos):
-            funcion_id = None
+        if not funciones_rows:
             try:
-                fr = sb.table("funciones").select("id,nombre").ilike("nombre", "Reporte de Cantidades").limit(1).execute().data
-                if fr:
-                    funcion_id = fr[0].get("id")
+                funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
             except Exception:
-                funcion_id = None
-            permisos.append({
-                "id": None,
-                "cargo_id": u.get("cargo_id"),
-                "funcion_id": funcion_id,
-                "funcion_nombre": "Reporte de Cantidades",
-                "ver": True,
-                "crear": True,
-                "editar": True,
-                "eliminar": True,
-                "validar": True,
-                "exportar": True,
-            })
+                funciones_rows = []
+        permisos = _permisos_desarrollador_acceso_total(
+            permisos, funciones_rows, u.get("cargo_id")
+        )
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not u.get('subcontratista_id'):
         permisos = []
     if cargo_nombre and cargo_nombre.strip().lower() == 'contador':
@@ -5783,6 +5783,7 @@ def listar_funciones(current_user=Depends(get_current_user)):
         {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
         {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
         {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
+        {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]

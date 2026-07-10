@@ -3,6 +3,19 @@
  * Prioridad: fila con contrato_id exacto → fila legacy (contrato_id null) → primera coincidencia.
  */
 
+export function esDesarrolladorUsuario(usuario) {
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
+  return cargo === 'desarrollador' || rol === 'desarrollador'
+}
+
 export function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
   const want = (nombreFuncion || '').toLowerCase().trim()
   const rows = (usuario?.permisos || []).filter(
@@ -24,7 +37,7 @@ export function tienePermisoAlgunaAccion(p) {
 }
 
 export function tienePermisoFlag(usuario, nombreFuncion, flag, contratoId) {
-  if ((usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador') return true
+  if (esDesarrolladorUsuario(usuario)) return true
   const p = permisoFuncionContrato(usuario, nombreFuncion, contratoId)
   return !!(p && p[flag])
 }
