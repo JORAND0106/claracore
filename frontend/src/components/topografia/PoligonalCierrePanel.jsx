@@ -1,20 +1,22 @@
-import { Semaforo, useTopoTheme } from './topografiaShared'
+import { Semaforo, useTopoTheme, useTopoViewport } from './topografiaShared'
 import { fmtNum, fmtRatio } from '../../utils/topografia_angular'
 
 /**
- * Panel de cierre angular + lineal (dos columnas iguales).
+ * Panel de cierre angular + lineal (dos columnas en desktop; una en móvil).
  */
 export default function PoligonalCierrePanel({ cierre }) {
   const { cierre: C } = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   if (!cierre) return null
   const seg = cierre.error_angular_seg
   const segTxt = seg === null || seg === undefined ? '—' : `${seg >= 0 ? '' : '-'}${Math.abs(seg).toFixed(1)}"`
 
   return (
     <div
+      className="cc-topo-cierre-grid"
       style={{
         display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
+        gridTemplateColumns: isCompact ? '1fr' : '1fr 1fr',
         gap: 10,
         alignItems: 'stretch',
         width: '100%',

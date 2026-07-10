@@ -338,9 +338,10 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
           <div style={{ ...ui.card, padding: '12px 14px', marginBottom: 12 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px 16px' }}>
             <PoligonalResumen poligonal={pol} cierre={detalle.cierre} />
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0, alignSelf: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0, alignSelf: 'flex-start' }} className="cc-topo-actions-bar">
               <button
                 type="button"
+                className="cc-topo-touch-btn"
                 style={ui.btnSecondary}
                 title="Recalcula el resumen desde el servidor"
                 onClick={() => cargarDetalle(sel)}
@@ -349,22 +350,22 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
                 {refreshingVista ? 'Actualizando…' : 'Actualizar'}
               </button>
               {puede(permisos, 'editar') && !sellada && !terminada && (
-                <button type="button" style={ui.btnPrimary} onClick={() => abrirEditar(sel)} title="Libreta de cálculo, armadas y terminar poligonal">
+                <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} onClick={() => abrirEditar(sel)} title="Libreta de cálculo, armadas y terminar poligonal">
                   Editar poligonal
                 </button>
               )}
               {(terminada && !sellada) && (
-                <button type="button" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas calculadas, ajuste y validación contratista / interventoría">
+                <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas calculadas, ajuste y validación contratista / interventoría">
                   Validar poligonal
                 </button>
               )}
               {sellada && (
-                <button type="button" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas y validación (solo lectura)">
+                <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} onClick={() => abrirVer(sel)} title="Coordenadas y validación (solo lectura)">
                   Ver poligonal
                 </button>
               )}
               {puede(permisos, 'exportar') && (
-                <button type="button" style={ui.btnSecondary} onClick={descargarPdfPoligonal} disabled={pdfBusy}>
+                <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={descargarPdfPoligonal} disabled={pdfBusy}>
                   {pdfBusy ? 'Generando PDF…' : 'PDF'}
                 </button>
               )}

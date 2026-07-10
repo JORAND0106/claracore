@@ -13,6 +13,7 @@ import {
   TopoHelpIcon,
   useTopografiaApi,
   useTopoTheme,
+  useTopoViewport,
 } from './topografiaShared'
 
 const AYUDA_MODULO_DISENO =
@@ -42,6 +43,7 @@ function cotasEnAbscisa(cotasPorAbscisa, abscisa) {
 
 export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
   const ui = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   const { api } = useTopografiaApi(contratoId, token)
   const fileRef = useRef(null)
 
@@ -436,7 +438,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-            <div style={{ flex: '0 0 55%', minWidth: 320, maxWidth: 780 }}>
+            <div style={{ flex: isCompact ? '1 1 100%' : '0 0 55%', minWidth: isCompact ? 0 : 320, maxWidth: isCompact ? '100%' : 780, width: isCompact ? '100%' : undefined }}>
               <PanelColapsable
                 ui={ui}
                 titulo="Estructura de vía"
@@ -458,7 +460,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                 />
               </PanelColapsable>
             </div>
-            <div style={{ flex: '1 1 35%', minWidth: 240 }}>
+            <div style={{ flex: isCompact ? '1 1 100%' : '1 1 35%', minWidth: isCompact ? 0 : 240, width: isCompact ? '100%' : undefined }}>
               <div style={{ ...ui.card, padding: '14px 16px', height: '100%' }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: 'var(--cc-base)', color: ui.text }}>
                   Nueva estructura
@@ -505,7 +507,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                   intermedias cada {fmtN(eje.paso_intermedias_m, 2)} m entre borde y eje.
                 </p>
               )}
-              <div style={{ overflowX: 'auto', maxHeight: 480, overflowY: 'auto' }}>
+              <div style={{ overflowX: 'auto', maxHeight: isCompact ? 'min(52dvh, 420px)' : 480, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
                   <thead>
                     <tr>

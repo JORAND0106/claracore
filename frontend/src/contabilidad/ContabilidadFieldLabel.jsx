@@ -84,7 +84,7 @@ export const TX_FIELD_HINTS = {
   proveedor_razon_social: 'Nombre o razón social del proveedor del egreso (obligatorio).',
   proveedor_nit: 'NIT numérico del proveedor (obligatorio en egresos).',
   proveedor_nit_dv: 'Dígito de verificación (un solo dígito). Se guarda junto al NIT como XXXXXXXXX-D.',
-  propina: 'Propina u otro cargo opcional. Se suma al total de la factura.',
-  total_factura: 'Total calculado: Valor bruto − Retención − IVA + Propina.',
+  propina: 'Active el interruptor para incluir propina. El % sugiere un monto (p. ej. 10% del bruto); el valor siempre es editable. Si edita el valor a mano, el % se limpia para no sobrescribirlo.',
+  total_factura: 'Total = Valor bruto (costo directo) + IVA + Propina − Retención. La retención solo se descuenta si es mayor a cero.',
   notas: 'Comentarios opcionales: número de factura, beneficiario, referencia interna, etc.',
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import FirmaDigital from './FirmaDigital'
-import { PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import { PermisoAviso, puede, TopoTableScroll, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function TuberiaRegistroDiario({ contratoId, token, tuberia, permisos }) {
   const ui = useTopoTheme()
@@ -78,16 +78,18 @@ export default function TuberiaRegistroDiario({ contratoId, token, tuberia, perm
             <input placeholder="Cota diseno fin" value={formTubo.cota_diseno_fin} onChange={(e) => setFormTubo({ ...formTubo, cota_diseno_fin: e.target.value })} style={ui.inputStyle} />
           </div>
           <PermisoAviso permisos={permisos} accion="editar">
-          <button type="button" style={{ ...btnPrimary, marginTop: 8 }} onClick={agregarTubo}>Registrar tubo</button>
+          <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 8 }} onClick={agregarTubo}>Registrar tubo</button>
           </PermisoAviso>
-          <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse' }}>
-            <thead><tr style={{ background: '#f1f5f9' }}><th>#</th><th>Abscisa</th><th>Cota campo</th><th>Delta</th><th>OK</th></tr></thead>
+          <TopoTableScroll style={{ marginTop: 12 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
+            <thead><tr style={{ background: ui.t?.inputBg || '#f1f5f9' }}><th style={ui.th}>#</th><th style={ui.th}>Abscisa</th><th style={ui.th}>Cota campo</th><th style={ui.th}>Delta</th><th style={ui.th}>OK</th></tr></thead>
             <tbody>
               {tubos.map((t) => (
-                <tr key={t.id}><td>{t.numero_tubo}</td><td>{t.abscisa_inicio}-{t.abscisa_fin}</td><td>{t.cota_campo_inicio}</td><td>{t.delta_inicio}</td><td>{t.dentro_tolerancia ? 'SI' : 'NO'}</td></tr>
+                <tr key={t.id}><td style={ui.td}>{t.numero_tubo}</td><td style={ui.td}>{t.abscisa_inicio}-{t.abscisa_fin}</td><td style={ui.td}>{t.cota_campo_inicio}</td><td style={ui.td}>{t.delta_inicio}</td><td style={ui.td}>{t.dentro_tolerancia ? 'SI' : 'NO'}</td></tr>
               ))}
             </tbody>
           </table>
+          </TopoTableScroll>
           <PermisoAviso permisos={permisos} accion="editar">
           <div style={{ marginTop: 12 }}>
             <FirmaDigital onConfirm={(f) => api(`/tuberias/${tuberia.id}/firma`, { method: 'POST', body: JSON.stringify({ nombre_firmante: 'Topografo', firma_base64: f }) })} />

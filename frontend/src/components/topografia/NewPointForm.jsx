@@ -300,7 +300,7 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
       {(modo === 'form' || (modo === 'detalle' && detalle)) && (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={ui.card}>
-            <div style={ui.compactFieldRow}>
+            <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
               <label style={col('1.35 1 9em')}>
                 <TopoFieldLabel
                   texto="Poligonal"
@@ -478,10 +478,11 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+            <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
               {modo === 'form' && puede(permisos, 'crear') && (
                 <button
                   type="button"
+                  className="cc-topo-touch-btn"
                   style={ui.btnPrimary}
                   onClick={guardar}
                   disabled={busy || !form.poligonal_id || !form.punto1_id || !form.punto2_id || puntos.length < 2}
@@ -490,7 +491,7 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
                 </button>
               )}
               {modo === 'detalle' && !sellada && puede(permisos, 'editar') && (
-                <button type="button" style={ui.btnPrimary} onClick={recalcular} disabled={busy}>
+                <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} onClick={recalcular} disabled={busy}>
                   {busy ? 'Recalculando…' : 'Recalcular'}
                 </button>
               )}

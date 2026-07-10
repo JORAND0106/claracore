@@ -3,6 +3,7 @@ import {
   chipEstadoValidacion,
   determinarNivelValidacionTopo,
   useTopoTheme,
+  useTopoViewport,
 } from './topografiaShared'
 import PoligonalValidacionComentarioModal from './PoligonalValidacionComentarioModal'
 
@@ -12,7 +13,7 @@ const BTNS = [
   { estado: 'Rechazado', icon: '🔴', color: '#dc2626' },
 ]
 
-function PanelNivel({ titulo, ayuda, estadoActual, habilitado, busy, bloqueado, aviso, onValidar }) {
+function PanelNivel({ titulo, ayuda, estadoActual, habilitado, busy, bloqueado, aviso, onValidar, compact }) {
   const ui = useTopoTheme()
   const chip = chipEstadoValidacion(estadoActual)
   return (
@@ -41,8 +42,10 @@ function PanelNivel({ titulo, ayuda, estadoActual, habilitado, busy, bloqueado, 
                 type="button"
                 disabled={busy}
                 onClick={() => onValidar(estado)}
+                className="cc-topo-touch-btn"
                 style={{
-                  padding: '6px 10px',
+                  padding: compact ? '10px 12px' : '6px 10px',
+                  minHeight: compact ? 44 : undefined,
                   borderRadius: 8,
                   fontSize: 'var(--cc-xs)',
                   fontWeight: 700,
@@ -79,6 +82,7 @@ export default function PoligonalValidacionPanel({
   avisoPreValidacion = null,
 }) {
   const ui = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   const [busy, setBusy] = useState(false)
   const [modalVal, setModalVal] = useState(null)
 
@@ -147,7 +151,15 @@ export default function PoligonalValidacionPanel({
         </p>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'stretch' }}>
+      <div
+        className="cc-topo-validacion-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isCompact ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+          gap: 12,
+          alignItems: 'stretch',
+        }}
+      >
         <PanelNivel
           titulo="Contratista"
           ayuda="Primera aprobación del circuito topográfico (contratista / topógrafo)."
@@ -155,6 +167,7 @@ export default function PoligonalValidacionPanel({
           habilitado={habilitadoN1}
           busy={busy}
           bloqueado={sellada}
+          compact={isCompact}
           aviso={
             !requisitosN1Ok && !sellada && listaValidar
               ? avisoRequisitosN1
@@ -170,6 +183,7 @@ export default function PoligonalValidacionPanel({
           habilitado={habilitadoN2}
           busy={busy}
           bloqueado={sellada}
+          compact={isCompact}
           aviso={
             !habilitadoN2 && !sellada && n1Aprobado && !listaValidar
               ? 'Ejecute «Corregir y ajustar» antes de validar.'

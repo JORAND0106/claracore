@@ -93,18 +93,22 @@ def calcular_valor_neto(
     propina: Decimal = Decimal("0"),
 ) -> Decimal:
     """
-    Total de factura:
-      Valor bruto - Retención - IVA + Propina  (según requerimiento de UI)
-    Nota: en egresos el IVA pagado suele sumarse al pago; aquí se sigue la fórmula
-    solicitada para el total mostrado/almacenado como valor_neto.
+    Total factura = Valor bruto (costo directo) + IVA + Propina − Retención.
+    IVA/propina/retención solo se aplican si son > 0.
     """
     t = (tipo or "").strip().lower()
     tip = _money(_d(propina))
-    if tip < 0:
+    if tip <= 0:
         tip = Decimal("0")
+    ret = _money(_d(retencion_valor))
+    if ret <= 0:
+        ret = Decimal("0")
+    iva = _money(_d(iva_valor))
+    if iva <= 0:
+        iva = Decimal("0")
     if t not in TX_TIPOS:
         raise ValueError("tipo debe ser ingreso o egreso.")
-    return _money(valor_bruto - retencion_valor - iva_valor + tip)
+    return _money(valor_bruto + iva + tip - ret)
 
 
 def _subcuenta_capitalizacion(fuente_ingreso: Optional[str]) -> str:
@@ -127,7 +131,10 @@ def _movimientos_para_transaccion(row: dict) -> List[dict]:
     if tipo == "ingreso":
         cap = _money(bruto * CAPITALIZACION_TASA)
         tip = _money(_d(row.get("propina")))
-        oper = _money(bruto - ret - cap - iva + tip)
+        if tip <= 0:
+            tip = Decimal("0")
+        # Operativa: bruto − retención − capitalización + propina (IVA va a impuestos aparte).
+        oper = _money(bruto - ret - cap + tip)
         fuente = _subcuenta_capitalizacion(row.get("fuente_ingreso"))
         if cap > 0:
             movs.append({

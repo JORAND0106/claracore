@@ -1,6 +1,6 @@
 import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { cotaReferenciaEnOrdenada, hiDesdeCotaVplus, resolveHiEntrega } from '../../utils/entrega_dg_bloques'
-import { PermisoAviso, puede } from './topografiaShared'
+import { PermisoAviso, puede, TopoTableScroll, useTopoViewport } from './topografiaShared'
 
 const VI_W = 65
 
@@ -70,6 +70,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   addingBloqueAt,
   onDirtyChange,
 }, ref) {
+  const { isCompact } = useTopoViewport()
   const entrega = detalle?.entrega
   const bloques = detalle?.bloques || []
   const capas = detalle?.capas || []
@@ -448,7 +449,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
             {' · diseño '}{fmtN(espesorDiseno, 3)} m · tol ±{fmtN(tol, 3)} m
           </span>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="cc-topo-actions-bar" style={{ marginLeft: isCompact ? 0 : 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', width: isCompact ? '100%' : undefined }}>
           {dirty && (
             <span style={{ fontSize: 'var(--cc-xs)', color: warnColor }}>Cambios sin guardar</span>
           )}
@@ -456,6 +457,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
             <>
               <button
                 type="button"
+                className="cc-topo-touch-btn"
                 style={ui.btnPrimary}
                 onClick={guardarCartera}
                 disabled={busy || saving}
@@ -475,7 +477,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', maxHeight: 580, overflowY: 'auto' }}>
+      <TopoTableScroll maxHeight={580}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 + nTrans * 80 }}>
           <thead>
             <tr>
@@ -745,7 +747,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
             No hay estaciones en el rango de abscisas.
           </p>
         )}
-      </div>
+      </TopoTableScroll>
       <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
         Vi / Diseño{!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / {capaLabel} por ordenada transversal.
         {esModoTerreno

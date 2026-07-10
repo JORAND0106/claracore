@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
 import FirmaDigital from './FirmaDigital'
-import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme, useTopoViewport } from './topografiaShared'
 
 function estadoEquipo(item) {
   if (item.motivo === 'Sin verificacion') return 'rojo'
@@ -17,6 +17,7 @@ const colorMap = { rojo: '#dc2626', amarillo: '#ca8a04', verde: '#16a34a' }
 
 export default function EquiposForm({ contratoId, token, onAlertasChange, permisos }) {
   const ui = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [equipos, setEquipos] = useState([])
   const [alertas, setAlertas] = useState(null)
@@ -127,18 +128,39 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
           <input placeholder="Modelo" value={formEq.modelo} onChange={(e) => setFormEq({ ...formEq, modelo: e.target.value })} style={ui.inputStyle} />
           <input placeholder="Serie" value={formEq.serie} onChange={(e) => setFormEq({ ...formEq, serie: e.target.value })} style={ui.inputStyle} />
         </div>
-        <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearEquipo}>Agregar equipo</button>
+        <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 10 }} onClick={crearEquipo}>Agregar equipo</button>
       </div>
       </PermisoAviso>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
+      <div
+        className="cc-topo-split"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isCompact ? '1fr' : '280px 1fr',
+          gap: 16,
+        }}
+      >
         <div style={ui.card}>
           <h4 style={{ marginTop: 0 }}>Equipos</h4>
           {equipos.map((e) => {
             const alertItem = alertaItems.find((a) => a.id === e.id)
             const estado = alertItem ? estadoEquipo(alertItem) : 'verde'
             return (
-              <button key={e.id} type="button" onClick={() => cargarVerificaciones(e.id)} style={{ ...btnSecondary, display: 'block', width: '100%', marginBottom: 6, textAlign: 'left', borderLeft: `4px solid ${colorMap[estado]}` }}>
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => cargarVerificaciones(e.id)}
+                className="cc-topo-touch-btn"
+                style={{
+                  ...ui.btnSecondary,
+                  display: 'block',
+                  width: '100%',
+                  marginBottom: 6,
+                  textAlign: 'left',
+                  borderLeft: `4px solid ${colorMap[estado]}`,
+                  minHeight: isCompact ? 44 : undefined,
+                }}
+              >
                 {e.nombre} ({e.tipo})
               </button>
             )
@@ -150,7 +172,7 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
             <PermisoAviso permisos={permisos} accion="crear">
             <div style={{ ...ui.card, marginBottom: 16 }}>
               <h4>Nueva verificacion</h4>
-              <input type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }} />
+              <input type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={{ ...ui.inputStyle, marginBottom: 8 }} />
               {equipos.find((e) => e.id === sel)?.tipo === 'estacion_total' ? (
                 <>
                   <TopoAngularInput label="Horizontal directa" value={formVer.horizontal_directa_gms} onChange={(_, v) => setFormVer({ ...formVer, horizontal_directa_gms: v })} />
@@ -160,14 +182,14 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
                 </>
               ) : (
                 <>
-                  <input placeholder="Distancia estacas (m)" value={formVer.distancia_estacas} onChange={(e) => setFormVer({ ...formVer, distancia_estacas: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }} />
+                  <input placeholder="Distancia estacas (m)" value={formVer.distancia_estacas} onChange={(e) => setFormVer({ ...formVer, distancia_estacas: e.target.value })} style={{ ...ui.inputStyle, marginBottom: 8 }} />
                   <input placeholder="Lectura A pos1" value={formVer.lectura_a_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos1: e.target.value })} style={ui.inputStyle} />
                   <input placeholder="Lectura B pos1" value={formVer.lectura_b_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos1: e.target.value })} style={ui.inputStyle} />
                   <input placeholder="Lectura A pos2" value={formVer.lectura_a_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos2: e.target.value })} style={ui.inputStyle} />
                   <input placeholder="Lectura B pos2" value={formVer.lectura_b_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos2: e.target.value })} style={ui.inputStyle} />
                 </>
               )}
-              <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crearVerificacion}>Registrar verificacion</button>
+              <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 10 }} onClick={crearVerificacion}>Registrar verificacion</button>
             </div>
             </PermisoAviso>
 
@@ -179,7 +201,7 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
                     <span>{v.fecha} — {v.resultados?.diagnostico || (v.cumple ? 'CUMPLE' : 'NO CUMPLE')}</span>
                     <Semaforo ok={v.cumple} labelOk="CUMPLE" labelBad="NO CUMPLE" />
                   </div>
-                  {puede(permisos, 'exportar') && <button type="button" style={{ ...btnSecondary, marginTop: 6 }} onClick={() => downloadPdf(`/equipos/${sel}/verificaciones/${v.id}/pdf`, 'verificacion.pdf')}>PDF</button>}
+                  {puede(permisos, 'exportar') && <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnSecondary, marginTop: 6 }} onClick={() => downloadPdf(`/equipos/${sel}/verificaciones/${v.id}/pdf`, 'verificacion.pdf')}>PDF</button>}
                 </div>
               ))}
             </div>

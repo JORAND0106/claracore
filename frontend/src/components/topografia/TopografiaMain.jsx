@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BibliiotecaPuntos from './BibliiotecaPuntos'
 import PoligonalForm from './PoligonalForm'
 import NewPointForm from './NewPointForm'
@@ -10,7 +10,15 @@ import TuberiaRegistroDiario from './TuberiaRegistroDiario'
 import AreasForm from './AreasForm'
 import EquiposForm from './EquiposForm'
 import TopoConfirmModal from './TopoConfirmModal'
-import { OfflineBadge, defaultPermisos, topoStyles, TopoThemeProvider, useTopoTheme, useTopografiaApi } from './topografiaShared'
+import {
+  OfflineBadge,
+  defaultPermisos,
+  topoStyles,
+  TopoThemeProvider,
+  useTopoTheme,
+  useTopoViewport,
+  useTopografiaApi,
+} from './topografiaShared'
 
 const PUNTOS_Y_CIRCUITOS = [
   {
@@ -54,20 +62,23 @@ const OTROS = [
   { id: 'topo_equipos', label: 'Equipos' },
 ]
 
-function NavBtn({ mod, active, onClick, alertas, ui }) {
+const ALL_MODS = [...PUNTOS_Y_CIRCUITOS, ...VIAS, ...OTROS]
+
+function NavBtn({ mod, active, onClick, alertas, ui, compact }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={mod.ayuda || mod.label}
+      className="cc-topo-nav-btn"
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 6,
         width: '100%',
         textAlign: 'left',
-        padding: '10px 12px',
-        marginBottom: 4,
+        padding: compact ? '12px 14px' : '10px 12px',
+        marginBottom: compact ? 0 : 4,
         border: 'none',
         borderRadius: 8,
         cursor: 'pointer',
@@ -75,6 +86,8 @@ function NavBtn({ mod, active, onClick, alertas, ui }) {
         color: active ? ui.accent : ui.text,
         fontWeight: active ? 600 : 400,
         fontSize: 'var(--cc-sm)',
+        minHeight: compact ? 44 : undefined,
+        boxSizing: 'border-box',
       }}
     >
       <span style={{ flex: 1 }}>{mod.label}</span>
@@ -82,8 +95,8 @@ function NavBtn({ mod, active, onClick, alertas, ui }) {
         <span
           title={mod.ayuda}
           style={{
-            display: 'inline-flex', width: 14, height: 14, borderRadius: '50%',
-            background: active ? ui.accent : '#cbd5e1', color: '#fff', fontSize: 9,
+            display: 'inline-flex', width: compact ? 22 : 14, height: compact ? 22 : 14, borderRadius: '50%',
+            background: active ? ui.accent : '#cbd5e1', color: '#fff', fontSize: compact ? 11 : 9,
             fontWeight: 700, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}
         >
@@ -97,10 +110,10 @@ function NavBtn({ mod, active, onClick, alertas, ui }) {
   )
 }
 
-function NavGroup({ titulo, mods, submodulo, intentarSubmodulo, alertas, ui }) {
+function NavGroup({ titulo, mods, submodulo, intentarSubmodulo, alertas, ui, compact }) {
   return (
     <>
-      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted, margin: '12px 0 6px', letterSpacing: 0.5 }}>
+      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted, margin: compact ? '8px 0 4px' : '12px 0 6px', letterSpacing: 0.5 }}>
         {titulo}
       </div>
       {mods.map((mod) => (
@@ -111,6 +124,7 @@ function NavGroup({ titulo, mods, submodulo, intentarSubmodulo, alertas, ui }) {
           onClick={() => intentarSubmodulo(mod.id)}
           alertas={alertas}
           ui={ui}
+          compact={compact}
         />
       ))}
     </>
@@ -119,24 +133,39 @@ function NavGroup({ titulo, mods, submodulo, intentarSubmodulo, alertas, ui }) {
 
 function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuberiaSel, setTuberiaSel }) {
   const ui = useTopoTheme()
+  const { isCompact, isLandscapeMobile } = useTopoViewport()
   const contratoId = usuario?.contrato_id
   const [submodulo, setSubmodulo] = useState('topo_biblioteca')
+  const [navOpen, setNavOpen] = useState(false)
   const [salirModuloPendiente, setSalirModuloPendiente] = useState(null)
   const [guardSalidaBusy, setGuardSalidaBusy] = useState(false)
   const entregaGuardRef = useRef(null)
   const { api, online } = useTopografiaApi(contratoId, token)
+
+  const labelActual = useMemo(
+    () => ALL_MODS.find((m) => m.id === submodulo)?.label || 'Topografía',
+    [submodulo],
+  )
+
+  useEffect(() => {
+    if (!isCompact) setNavOpen(false)
+  }, [isCompact])
 
   const registerUnsavedGuard = useCallback((guard) => {
     entregaGuardRef.current = guard
   }, [])
 
   const intentarSubmodulo = useCallback((id) => {
-    if (id === submodulo) return
+    if (id === submodulo) {
+      setNavOpen(false)
+      return
+    }
     if (submodulo === 'topo_entrega_dg' && entregaGuardRef.current?.isDirty?.()) {
       setSalirModuloPendiente(id)
       return
     }
     setSubmodulo(id)
+    setNavOpen(false)
   }, [submodulo])
 
   const ejecutarSalidaModulo = async (guardar) => {
@@ -149,6 +178,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
       }
       setSubmodulo(salirModuloPendiente)
       setSalirModuloPendiente(null)
+      setNavOpen(false)
     } finally {
       setGuardSalidaBusy(false)
     }
@@ -185,46 +215,114 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
     }
   }
 
+  const navContent = (
+    <nav className="cc-topo-nav">
+      <NavGroup
+        titulo="PUNTOS Y CIRCUITOS"
+        mods={PUNTOS_Y_CIRCUITOS}
+        submodulo={submodulo}
+        intentarSubmodulo={intentarSubmodulo}
+        alertas={alertas}
+        ui={ui}
+        compact={isCompact}
+      />
+      <NavGroup
+        titulo="VÍAS"
+        mods={VIAS}
+        submodulo={submodulo}
+        intentarSubmodulo={intentarSubmodulo}
+        alertas={alertas}
+        ui={ui}
+        compact={isCompact}
+      />
+      <NavGroup
+        titulo="OTROS"
+        mods={OTROS}
+        submodulo={submodulo}
+        intentarSubmodulo={intentarSubmodulo}
+        alertas={alertas}
+        ui={ui}
+        compact={isCompact}
+      />
+    </nav>
+  )
+
   return (
-    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', color: ui.text }}>
-      <aside style={{ width: 260, flexShrink: 0, ...ui.card, padding: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>Topografia</h2>
-          {alertas > 0 && (
-            <span title="Alertas de equipos" style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
-              {alertas}
-            </span>
+    <div
+      className={`cc-topo-root${isCompact ? ' cc-topo-root--compact' : ''}${isLandscapeMobile ? ' cc-topo-root--landscape' : ''}`}
+      style={{
+        display: 'flex',
+        gap: isCompact ? 12 : 16,
+        alignItems: 'flex-start',
+        flexWrap: isCompact ? 'nowrap' : 'wrap',
+        flexDirection: isCompact ? 'column' : 'row',
+        color: ui.text,
+        width: '100%',
+        minWidth: 0,
+      }}
+    >
+      {isCompact ? (
+        <div className="cc-topo-mobile-nav" style={{ ...ui.card, padding: 0, width: '100%', overflow: 'hidden' }}>
+          <button
+            type="button"
+            className="cc-topo-mobile-nav-toggle"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen((v) => !v)}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              padding: '12px 14px',
+              minHeight: 48,
+              border: 'none',
+              background: 'transparent',
+              color: ui.text,
+              cursor: 'pointer',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: ui.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Topografía
+              </div>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: ui.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {labelActual}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <OfflineBadge online={online} />
+              {alertas > 0 && (
+                <span style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
+                  {alertas}
+                </span>
+              )}
+              <span aria-hidden style={{ fontSize: 'var(--cc-lg)', color: ui.textMuted }}>{navOpen ? '▴' : '▾'}</span>
+            </div>
+          </button>
+          {navOpen && (
+            <div style={{ padding: '0 8px 10px', borderTop: `1px solid ${ui.t?.border || '#e2e8f0'}`, maxHeight: isLandscapeMobile ? '42dvh' : '55dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+              {navContent}
+            </div>
           )}
         </div>
-        <OfflineBadge online={online} />
-        <nav style={{ marginTop: 12 }}>
-          <NavGroup
-            titulo="PUNTOS Y CIRCUITOS"
-            mods={PUNTOS_Y_CIRCUITOS}
-            submodulo={submodulo}
-            intentarSubmodulo={intentarSubmodulo}
-            alertas={alertas}
-            ui={ui}
-          />
-          <NavGroup
-            titulo="VÍAS"
-            mods={VIAS}
-            submodulo={submodulo}
-            intentarSubmodulo={intentarSubmodulo}
-            alertas={alertas}
-            ui={ui}
-          />
-          <NavGroup
-            titulo="OTROS"
-            mods={OTROS}
-            submodulo={submodulo}
-            intentarSubmodulo={intentarSubmodulo}
-            alertas={alertas}
-            ui={ui}
-          />
-        </nav>
-      </aside>
-      <main style={{ flex: 1, minWidth: 280 }}>
+      ) : (
+        <aside style={{ width: 260, flexShrink: 0, ...ui.card, padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>Topografia</h2>
+            {alertas > 0 && (
+              <span title="Alertas de equipos" style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
+                {alertas}
+              </span>
+            )}
+          </div>
+          <OfflineBadge online={online} />
+          <div style={{ marginTop: 12 }}>{navContent}</div>
+        </aside>
+      )}
+
+      <main className="cc-topo-main" style={{ flex: 1, minWidth: 0, width: isCompact ? '100%' : undefined }}>
         {renderSubmodulo()}
       </main>
 

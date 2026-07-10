@@ -13,9 +13,11 @@ const EMPTY_FORM = {
   tipo: 'ingreso',
   valor_bruto: '',
   retencion_pct: '',
-  retencion_fuente_valor: '0',
+  retencion_fuente_valor: '',
   iva_pct: '',
   iva_valor: '0',
+  propina_activa: false,
+  propina_pct: '10',
   propina: '0',
   categoria_id: '',
   centro_costo_tipo: 'empresa',
@@ -46,12 +48,55 @@ function joinNit(base, dv) {
   return d ? `${b}-${d}` : b
 }
 
+function numOrZero(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return 0
+  const n = Number(s.replace(',', '.'))
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Solo montos > 0; vacío / 0 / negativo → 0 (no afectan el total). */
+function positiveAmount(raw) {
+  const n = numOrZero(raw)
+  return n > 0 ? n : 0
+}
+
+function parsePct(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  const n = Number(s.replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+function calcMontoFromPct(brutoRaw, pctRaw) {
+  const pct = parsePct(pctRaw)
+  if (pct == null) return null
+  const bruto = Number(String(brutoRaw ?? '').replace(',', '.'))
+  if (!Number.isFinite(bruto) || bruto < 0) return 0
+  return Math.round(bruto * (pct / 100))
+}
+
+/**
+ * Retención efectiva: solo si el usuario ingresó % > 0 o valor > 0.
+ * Si ambos están vacíos o en cero → 0 (no descuenta).
+ */
+function effectiveRetencion(form) {
+  const pct = parsePct(form.retencion_pct)
+  if (pct != null && pct > 0) {
+    const calc = calcMontoFromPct(form.valor_bruto, form.retencion_pct)
+    return calc != null && calc > 0 ? calc : 0
+  }
+  return positiveAmount(form.retencion_fuente_valor)
+}
+
+/** Total = Valor Bruto + IVA + Propina − Retención (solo si > 0). */
 function calcTotalFactura(form) {
-  const bruto = Number(String(form.valor_bruto ?? '').replace(',', '.')) || 0
-  const ret = Number(String(form.retencion_fuente_valor ?? '').replace(',', '.')) || 0
-  const iva = Number(String(form.iva_valor ?? '').replace(',', '.')) || 0
-  const tip = Number(String(form.propina ?? '').replace(',', '.')) || 0
-  return Math.round(bruto - ret - iva + tip)
+  const bruto = numOrZero(form.valor_bruto)
+  const ret = effectiveRetencion(form)
+  const iva = positiveAmount(form.iva_valor)
+  const tip = form.propina_activa ? positiveAmount(form.propina) : 0
+  return Math.round(bruto + iva + tip - ret)
 }
 
 /** Fuera del padre: si se define dentro, cada setState remonta inputs y se pierde el foco. */
@@ -90,25 +135,9 @@ function labelCentroCosto(tx) {
   return 'Empresa general'
 }
 
-function parsePct(raw) {
-  const s = String(raw ?? '').trim()
-  if (!s) return null
-  const n = Number(s.replace(',', '.'))
-  if (!Number.isFinite(n) || n < 0) return null
-  return n
-}
-
-function calcMontoFromPct(brutoRaw, pctRaw) {
-  const pct = parsePct(pctRaw)
-  if (pct == null) return null
-  const bruto = Number(String(brutoRaw ?? '').replace(',', '.'))
-  if (!Number.isFinite(bruto) || bruto < 0) return 0
-  return Math.round(bruto * (pct / 100))
-}
-
 function tasaFromPct(pctRaw) {
   const pct = parsePct(pctRaw)
-  if (pct == null) return 0
+  if (pct == null || pct <= 0) return 0
   return pct / 100
 }
 
@@ -121,10 +150,26 @@ function pctFromTasa(tasa) {
 
 function applyAutoCalculos(form) {
   const next = { ...form }
-  const retCalc = calcMontoFromPct(form.valor_bruto, form.retencion_pct)
-  if (retCalc != null) next.retencion_fuente_valor = String(retCalc)
+  const retPct = parsePct(form.retencion_pct)
+  if (retPct != null && retPct > 0) {
+    const retCalc = calcMontoFromPct(form.valor_bruto, form.retencion_pct)
+    if (retCalc != null) next.retencion_fuente_valor = String(retCalc)
+  } else if (!(String(form.retencion_pct ?? '').trim()) || retPct === 0) {
+    // % vacío o 0: no descontar. Si el valor quedó en 0, dejar vacío.
+    if (!positiveAmount(form.retencion_fuente_valor)) next.retencion_fuente_valor = ''
+  }
+
   const ivaCalc = calcMontoFromPct(form.valor_bruto, form.iva_pct)
   if (ivaCalc != null) next.iva_valor = String(ivaCalc)
+
+  if (next.propina_activa) {
+    // Solo recalcular desde % si hay porcentaje (sugerencia). Si el usuario editó el valor
+    // (propina_pct vacío), respetar el monto manual.
+    const tipCalc = calcMontoFromPct(form.valor_bruto, form.propina_pct)
+    if (tipCalc != null) next.propina = String(tipCalc)
+  } else {
+    next.propina = '0'
+  }
   return next
 }
 
@@ -178,6 +223,7 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
   soportePendiente,
   ocrStatus,
   ocrSuggested,
+  ocrMessage,
   cameraRef,
   fileRef,
   replaceRef,
@@ -307,7 +353,12 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
             step="0.01"
             style={inp}
             value={form.retencion_pct}
-            onChange={(e) => onPatchForm({ retencion_pct: e.target.value })}
+            onChange={(e) => {
+              const v = e.target.value
+              // Al vaciar el %, limpiar el valor calculado para que no siga descontando.
+              if (!String(v).trim()) onPatchForm({ retencion_pct: '', retencion_fuente_valor: '' })
+              else onPatchForm({ retencion_pct: v })
+            }}
             placeholder="Ej. 2.5"
           />
         </TxField>
@@ -319,9 +370,10 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
             step="1"
             style={{ ...inp, opacity: retAuto ? 0.85 : 1 }}
             value={form.retencion_fuente_valor}
-            onChange={(e) => onPatchForm({ retencion_fuente_valor: e.target.value })}
+            onChange={(e) => onPatchForm({ retencion_pct: '', retencion_fuente_valor: e.target.value })}
             readOnly={retAuto}
             title={retAuto ? 'Calculado desde el porcentaje' : undefined}
+            placeholder="0"
           />
         </TxField>
         <TxField name="iva_pct" label="IVA % (opcional)" t={t} lblStyle={lbl} suggested={!!sug.iva_pct}>
@@ -349,17 +401,62 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
             title={ivaAuto ? 'Calculado desde el porcentaje' : undefined}
           />
         </TxField>
-        <TxField name="propina" label="Propina (opcional)" t={t} lblStyle={lbl}>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            step="1"
-            style={inp}
-            value={form.propina}
-            onChange={(e) => onPatchForm({ propina: e.target.value })}
-          />
-        </TxField>
+
+        <div style={{ gridColumn: isMobile ? '1 / -1' : undefined }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: form.propina_activa ? 8 : 0 }}>
+            <input
+              type="checkbox"
+              checked={!!form.propina_activa}
+              onChange={(e) => {
+                const on = e.target.checked
+                if (on) {
+                  const pct = form.propina_pct || '10'
+                  const tipCalc = calcMontoFromPct(form.valor_bruto, pct)
+                  onPatchForm({
+                    propina_activa: true,
+                    propina_pct: pct,
+                    propina: tipCalc != null ? String(tipCalc) : form.propina || '0',
+                  })
+                } else {
+                  onPatchForm({ propina_activa: false, propina: '0' })
+                }
+              }}
+              style={{ width: 18, height: 18 }}
+            />
+            <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.text }}>
+              Incluir propina (sugerencia 10% del bruto, editable)
+            </span>
+          </label>
+          {form.propina_activa && (
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginTop: 8 }}>
+              <TxField name="propina" label="Propina % (sugerido)" t={t} lblStyle={lbl}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  style={inp}
+                  value={form.propina_pct}
+                  onChange={(e) => onPatchForm({ propina_pct: e.target.value })}
+                  placeholder="10"
+                />
+              </TxField>
+              <TxField name="propina" label="Propina valor" t={t} lblStyle={lbl}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  step="1"
+                  style={inp}
+                  value={form.propina}
+                  onChange={(e) => onPatchForm({ propina_pct: '', propina: e.target.value })}
+                  placeholder="Monto editable"
+                />
+              </TxField>
+            </div>
+          )}
+        </div>
+
         <TxField name="categoria" label="Categoría" t={t} lblStyle={lbl}>
           <select
             style={inp}
@@ -412,7 +509,7 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
           {fmtCOP(totalFactura)}
         </div>
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
-          Bruto − Retención − IVA + Propina
+          Bruto + IVA + Propina − Retención
         </div>
       </div>
 
@@ -493,9 +590,18 @@ const TransaccionFormPanel = memo(function TransaccionFormPanel({
             Leyendo factura (OCR)… puede tardar unos segundos. Puede seguir editando el formulario.
           </div>
         )}
-        {ocrStatus === 'done' && Object.keys(sug).length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
-            Campos detectados por OCR (resaltados). Revise y corrija si hace falta.
+        {ocrMessage && ocrStatus !== 'loading' && (
+          <div style={{
+            marginTop: 8,
+            fontSize: 'var(--cc-sm)',
+            fontWeight: 600,
+            color: ocrStatus === 'ok' ? t.primary : (ocrStatus === 'fail' ? '#EF4444' : t.textMuted),
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${ocrStatus === 'ok' ? t.primary + '55' : (ocrStatus === 'fail' ? '#EF444466' : t.border)}`,
+            background: ocrStatus === 'ok' ? t.primary + '10' : (ocrStatus === 'fail' ? '#EF444412' : t.bg),
+          }}>
+            {ocrMessage}
           </div>
         )}
         {soportePendiente?.file && (
@@ -541,8 +647,9 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
   const [busy, setBusy] = useState(false)
   const [soportePendiente, setSoportePendiente] = useState(null)
   const [soporteInlineInfo, setSoporteInlineInfo] = useState('')
-  const [ocrStatus, setOcrStatus] = useState('') // '' | loading | done
+  const [ocrStatus, setOcrStatus] = useState('') // '' | loading | ok | fail | empty
   const [ocrSuggested, setOcrSuggested] = useState({})
+  const [ocrMessage, setOcrMessage] = useState('')
   const [previewTxId, setPreviewTxId] = useState(null)
   const [replaceBusy, setReplaceBusy] = useState(false)
   const [preview, setPreview] = useState({
@@ -688,13 +795,28 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
   }, [])
 
   const runOcrIfEgreso = useCallback(async (file) => {
-    if (formTipoRef.current !== 'egreso' || !file) return
+    if (formTipoRef.current !== 'egreso' || !file) return null
     setOcrStatus('loading')
+    setOcrMessage('Leyendo factura con Azure Document Intelligence…')
     try {
-      const result = await contabOcrFactura(token, file, { timeoutMs: 45000 })
-      if (result?.ok && result.sugerencias) applyOcrSugerencias(result.sugerencias)
-    } finally {
-      setOcrStatus('done')
+      const result = await contabOcrFactura(token, file, { timeoutMs: 60000 })
+      if (result?.ok && result.sugerencias && Object.keys(result.sugerencias).length) {
+        applyOcrSugerencias(result.sugerencias)
+        setOcrStatus('ok')
+        setOcrMessage(result.mensaje || 'OCR completado. Revise los campos resaltados.')
+      } else if (result?.status === 'no_fields') {
+        setOcrStatus('empty')
+        setOcrMessage(result.mensaje || 'OCR no detectó campos. Complete manualmente.')
+      } else {
+        setOcrStatus('fail')
+        const detail = result?.error_detalle ? ` (${result.error_detalle})` : ''
+        setOcrMessage((result?.mensaje || 'OCR falló.') + detail)
+      }
+      return result
+    } catch (e) {
+      setOcrStatus('fail')
+      setOcrMessage(`OCR falló: ${e?.message || e}`)
+      return null
     }
   }, [token, applyOcrSugerencias])
 
@@ -705,6 +827,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     setSoportePendiente(null)
     setOcrStatus('')
     setOcrSuggested({})
+    setOcrMessage('')
     setForm(applyAutoCalculos({
       ...EMPTY_FORM,
       fecha: new Date().toISOString().slice(0, 10),
@@ -721,18 +844,22 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     setSoportePendiente(null)
     setOcrStatus('')
     setOcrSuggested({})
+    setOcrMessage('')
     const retPct = pctFromTasa(tx.retencion_fuente_tasa)
     const ivaPct = pctFromTasa(tx.iva_tasa)
     const nit = splitNit(tx.proveedor_nit)
+    const tip = Math.round(Number(tx.propina) || 0)
     setForm(applyAutoCalculos({
       fecha: tx.fecha,
       tipo: tx.tipo,
       valor_bruto: String(tx.valor_bruto ?? ''),
       retencion_pct: retPct,
-      retencion_fuente_valor: String(Math.round(Number(tx.retencion_fuente_valor) || 0)),
+      retencion_fuente_valor: String(Math.round(Number(tx.retencion_fuente_valor) || 0) || ''),
       iva_pct: ivaPct,
       iva_valor: String(Math.round(Number(tx.iva_valor) || 0)),
-      propina: String(Math.round(Number(tx.propina) || 0)),
+      propina_activa: tip > 0,
+      propina_pct: tip > 0 ? '' : '10',
+      propina: String(tip),
       categoria_id: String(tx.categoria_id ?? ''),
       centro_costo_tipo: tx.centro_costo_tipo || 'empresa',
       contrato_id: tx.contrato_id ? String(tx.contrato_id) : '',
@@ -784,17 +911,20 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
   }, [])
 
   const payloadFromForm = useCallback(() => {
-    const retPct = parsePct(form.retencion_pct)
+    const retencionValor = effectiveRetencion(form)
     const ivaPct = parsePct(form.iva_pct)
+    const ivaValor = positiveAmount(form.iva_valor)
     return {
       fecha: form.fecha,
       tipo: form.tipo,
-      valor_bruto: Number(form.valor_bruto) || 0,
-      retencion_fuente_tasa: retPct != null ? tasaFromPct(form.retencion_pct) : 0,
-      retencion_fuente_valor: Number(form.retencion_fuente_valor) || 0,
-      iva_tasa: ivaPct != null ? tasaFromPct(form.iva_pct) : 0,
-      iva_valor: Number(form.iva_valor) || 0,
-      propina: Number(form.propina) || 0,
+      valor_bruto: numOrZero(form.valor_bruto),
+      retencion_fuente_tasa: retencionValor > 0 && parsePct(form.retencion_pct) > 0
+        ? tasaFromPct(form.retencion_pct)
+        : 0,
+      retencion_fuente_valor: retencionValor,
+      iva_tasa: ivaPct != null && ivaPct > 0 ? tasaFromPct(form.iva_pct) : 0,
+      iva_valor: ivaValor,
+      propina: form.propina_activa ? positiveAmount(form.propina) : 0,
       categoria_id: Number(form.categoria_id),
       centro_costo_tipo: form.centro_costo_tipo,
       contrato_id: form.centro_costo_tipo === 'contrato' ? Number(form.contrato_id) : null,
@@ -807,10 +937,17 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
 
   const onSoporteFile = useCallback(async (file, { fromCamera = false } = {}) => {
     if (!file) return
+    // 1) OCR primero (egreso) para obtener sugerencias + crop bbox
+    // 2) Luego comprimir (y recortar si Azure devolvió bbox)
+    let crop = null
+    let ocrResult = null
+    if (formTipoRef.current === 'egreso') {
+      ocrResult = await runOcrIfEgreso(file)
+      crop = ocrResult?.crop || null
+    }
     try {
-      const prepared = await prepareSoporteConPeso(file, 800 * 1024, { cropDocument: fromCamera || /^image\//i.test(file.type || '') })
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, { crop })
       setSoportePendiente(prepared)
-      void runOcrIfEgreso(prepared.file || file)
     } catch {
       setSoportePendiente({
         file,
@@ -819,7 +956,6 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
         wasCompressed: false,
         wasCropped: false,
       })
-      void runOcrIfEgreso(file)
     }
   }, [runOcrIfEgreso])
 
@@ -828,15 +964,15 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     setReplaceBusy(true)
     setBusy(true)
     try {
-      const prepared = await prepareSoporteConPeso(file, 800 * 1024, {
-        cropDocument: fromCamera || /^image\//i.test(file.type || ''),
-      })
+      let crop = null
+      if (formTipoRef.current === 'egreso' || showForm) {
+        const ocrResult = await runOcrIfEgreso(file)
+        crop = ocrResult?.crop || null
+      }
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, { crop })
       const fd = new FormData()
       fd.append('archivo', prepared.file)
       await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
-      if (formTipoRef.current === 'egreso' || showForm) {
-        void runOcrIfEgreso(prepared.file)
-      }
       await cargar()
       if (preview.open && previewTxId === txId) {
         await abrirPreview({ id: txId, soporte_nombre_archivo: prepared.file.name, soporte_mime_type: prepared.file.type })
@@ -859,6 +995,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     setSoportePendiente(null)
     setOcrStatus('')
     setOcrSuggested({})
+    setOcrMessage('')
   }, [])
 
   const guardar = useCallback(async () => {
@@ -896,6 +1033,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
       setSoportePendiente(null)
       setOcrStatus('')
       setOcrSuggested({})
+      setOcrMessage('')
       await cargar()
     } catch (e) {
       setError(e.message)
@@ -934,9 +1072,13 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     setBusy(true)
     setSoporteInlineInfo('')
     try {
-      const prepared = await prepareSoporteConPeso(file, 800 * 1024, {
-        cropDocument: fromCamera || /^image\//i.test(file.type || ''),
-      })
+      let crop = null
+      // OCR solo si el formulario abierto es egreso; en listado no forzamos OCR de egreso
+      if (showForm && formTipoRef.current === 'egreso') {
+        const ocrResult = await runOcrIfEgreso(file)
+        crop = ocrResult?.crop || null
+      }
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, { crop })
       setSoporteInlineInfo([
         prepared.wasCropped ? 'documento recortado' : null,
         labelPesoSoporte(prepared),
@@ -951,7 +1093,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
     } finally {
       setBusy(false)
     }
-  }, [token, cargar])
+  }, [token, cargar, runOcrIfEgreso, showForm])
 
   const touchPad = isMobile ? '12px 14px' : '8px 10px'
   const touchMin = isMobile ? 44 : undefined
@@ -1043,6 +1185,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper, viewp
           soportePendiente={soportePendiente}
           ocrStatus={ocrStatus}
           ocrSuggested={ocrSuggested}
+          ocrMessage={ocrMessage}
           cameraRef={cameraRef}
           fileRef={fileRef}
           replaceRef={replaceRef}

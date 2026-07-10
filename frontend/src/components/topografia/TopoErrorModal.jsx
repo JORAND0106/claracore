@@ -60,6 +60,7 @@ export default function TopoErrorModal({
         <div style={{ padding: '12px 20px 18px', display: 'flex', justifyContent: 'flex-end' }}>
           <button
             type="button"
+            className="cc-topo-touch-btn"
             onClick={onClose}
             style={{
               background: '#DC2626',
@@ -70,6 +71,7 @@ export default function TopoErrorModal({
               fontSize: 'var(--cc-sm)',
               fontWeight: 700,
               cursor: 'pointer',
+              minHeight: 44,
             }}
           >
             {cerrar}

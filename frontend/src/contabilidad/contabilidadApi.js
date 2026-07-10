@@ -57,8 +57,8 @@ export async function contabSend(path, token, { method = 'POST', body, formData 
   }
 }
 
-/** OCR factura (egresos). No lanza si el backend responde 4xx/5xx: devuelve ok:false. */
-export async function contabOcrFactura(token, file, { timeoutMs = 45000 } = {}) {
+/** OCR factura (egresos). Devuelve siempre un objeto con mensaje; no lanza. */
+export async function contabOcrFactura(token, file, { timeoutMs = 60000 } = {}) {
   const fd = new FormData()
   fd.append('archivo', file)
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -70,10 +70,48 @@ export async function contabOcrFactura(token, file, { timeoutMs = 45000 } = {}) 
       body: fd,
       ...(controller ? { signal: controller.signal } : {}),
     })
-    if (!res.ok) return { ok: false, status: 'http_error', sugerencias: {}, campos_detectados: [] }
-    return res.json()
-  } catch {
-    return { ok: false, status: 'network_or_timeout', sugerencias: {}, campos_detectados: [] }
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const j = await res.json()
+        detail = typeof j?.detail === 'string' ? j.detail : JSON.stringify(j)
+      } catch {
+        detail = res.statusText || ''
+      }
+      return {
+        ok: false,
+        status: 'http_error',
+        mensaje: `Error del servidor OCR (HTTP ${res.status}).`,
+        error_detalle: detail || null,
+        sugerencias: {},
+        campos_detectados: [],
+        crop: null,
+      }
+    }
+    const data = await res.json()
+    return {
+      ok: !!data.ok,
+      configured: data.configured,
+      status: data.status || 'unknown',
+      mensaje: data.mensaje || (data.ok ? 'OCR completado.' : 'OCR sin resultado.'),
+      error_detalle: data.error_detalle || null,
+      sugerencias: data.sugerencias || {},
+      campos_detectados: data.campos_detectados || [],
+      crop: data.crop || null,
+    }
+  } catch (e) {
+    const aborted = e?.name === 'AbortError'
+    return {
+      ok: false,
+      status: aborted ? 'timeout' : 'network_or_timeout',
+      mensaje: aborted
+        ? 'El OCR superó el tiempo de espera. Complete los campos manualmente.'
+        : 'No se pudo contactar el OCR. Verifique la red o complete manualmente.',
+      error_detalle: String(e?.message || e),
+      sugerencias: {},
+      campos_detectados: [],
+      crop: null,
+    }
   } finally {
     if (timer) clearTimeout(timer)
   }

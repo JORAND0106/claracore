@@ -7,6 +7,7 @@ import PoligonalValidacionPanel from './PoligonalValidacionPanel'
 import FirmaPerfilTopo from './FirmaPerfilTopo'
 import {
   useTopoTheme,
+  useTopoViewport,
   parseApiError,
   puede,
 } from './topografiaShared'
@@ -107,6 +108,7 @@ export default function PoligonalModal({
   token = null,
 }) {
   const ui = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   const theme = themeProp || ui.t
   const [step, setStep] = useState('chooseTipo')
   const [poligonalId, setPoligonalId] = useState(null)
@@ -721,21 +723,26 @@ export default function PoligonalModal({
     zIndex: 100010,
     background: 'rgba(15, 23, 42, 0.5)',
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: isCompact ? 'stretch' : 'flex-start',
     justifyContent: 'center',
-    padding: '24px 16px',
+    padding: isCompact ? 0 : '24px 16px',
     overflowY: 'auto',
   }
 
   const panel = {
     width: '100%',
-    maxWidth: 1560,
+    maxWidth: isCompact ? '100%' : 1560,
+    minHeight: isCompact ? '100%' : undefined,
+    maxHeight: isCompact ? '100dvh' : undefined,
     background: ui.card.background,
-    borderRadius: 14,
+    borderRadius: isCompact ? 0 : 14,
     border: ui.card.border,
     boxShadow: theme?.shadow || ui.t?.shadow || '0 24px 64px rgba(0,0,0,0.25)',
     color: ui.text,
-    padding: 20,
+    padding: isCompact ? 14 : 20,
+    boxSizing: 'border-box',
+    overflowY: isCompact ? 'auto' : undefined,
+    WebkitOverflowScrolling: isCompact ? 'touch' : undefined,
   }
 
   return (
@@ -978,7 +985,7 @@ export default function PoligonalModal({
                   </div>
                 )}
 
-                <div style={{ overflowX: 'auto' }}>
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
                   <table style={{ borderCollapse: 'collapse', minWidth: 560, width: '100%' }}>
                     <thead>
                       <tr style={{ background: '#f1f5f9' }}>
@@ -1190,11 +1197,18 @@ export default function PoligonalModal({
               )}
 
               {editableLibreta && (() => {
-                const amarreInp = { ...ui.inputStyle, padding: '3px 6px', fontSize: 'var(--cc-xs)', minWidth: 0 }
+                const amarreInp = {
+                  ...ui.inputStyle,
+                  padding: isCompact ? '10px 8px' : '3px 6px',
+                  fontSize: isCompact ? 'var(--cc-input)' : 'var(--cc-xs)',
+                  minWidth: 0,
+                  minHeight: isCompact ? 44 : undefined,
+                  boxSizing: 'border-box',
+                }
                 const filaGrid = {
                   display: 'grid',
-                  gridTemplateColumns: '52px repeat(4, minmax(0, 1fr))',
-                  gap: 6,
+                  gridTemplateColumns: isCompact ? '1fr' : '52px repeat(4, minmax(0, 1fr))',
+                  gap: isCompact ? 8 : 6,
                   alignItems: 'end',
                 }
                 return (
@@ -1375,7 +1389,7 @@ export default function PoligonalModal({
               {editableLibreta && (
               <>
               {/* Armadas (compactas, 2+ columnas segun ancho) */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 8, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isCompact ? 100 : 340}px, 1fr))`, gap: 8, marginBottom: 14 }}>
                 {armadas.map((arm) => {
                   const esActual = armadaActual && arm.id === armadaActual.id
                   const ec = arm.estacion_coords || {}
@@ -1535,9 +1549,10 @@ export default function PoligonalModal({
               )}
 
               {editableLibreta && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+                <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
                   <button
                     type="button"
+                    className="cc-topo-touch-btn"
                     style={{ ...ui.btnPrimary, opacity: (detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) ? 1 : 0.5 }}
                     onClick={cerrarCircuito}
                     disabled={busy || !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) || !detalle.estaciones?.length}
@@ -1584,9 +1599,10 @@ export default function PoligonalModal({
               </div>
 
               {!sellada && puede(permisos, 'editar') && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+                <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
                   <button
                     type="button"
+                    className="cc-topo-touch-btn"
                     style={{ ...ui.btnPrimary, background: '#047857' }}
                     onClick={ajustarPoligonal}
                     disabled={busy}

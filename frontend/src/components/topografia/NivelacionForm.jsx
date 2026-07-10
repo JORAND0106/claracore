@@ -13,6 +13,7 @@ import {
   themeColorScheme,
   useTopografiaApi,
   useTopoTheme,
+  useTopoViewport,
 } from './topografiaShared'
 import {
   ABSCISA_NUMERICA_MSG,
@@ -208,6 +209,7 @@ const AYUDA_MODULO_NIVELACION =
 
 export default function NivelacionForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
+  const { isCompact } = useTopoViewport()
   const bloques = useMemo(() => coloresBloqueNiv(ui.t), [ui.t])
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [lista, setLista] = useState([])
@@ -981,7 +983,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       {creando && (
         <PermisoAviso permisos={permisos} accion="crear">
           <div style={{ ...ui.card, marginBottom: 16 }}>
-            <div style={ui.compactFieldRow}>
+            <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
               <div style={ui.compactFieldCol('1 1 8em')}>
                 <TopoFieldLabel texto="Nombre" color={ui.textMuted} ayuda="Identificador del circuito." />
                 <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.compactInput} />
@@ -1033,7 +1035,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               onToggle={() => setPanelNivAbierto((v) => !v)}
               ui={ui}
             >
-              <div style={ui.compactFieldRow}>
+              <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
                 <div style={ui.compactFieldCol('1 1 8em')}>
                   <TopoFieldLabel texto="Nombre" color={ui.textMuted} ayuda="Identificador del circuito." />
                   <input
@@ -1096,7 +1098,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   </select>
                 </div>
               </div>
-              <div style={{ ...ui.compactFieldRow, marginTop: 8 }}>
+              <div style={{ ...ui.compactFieldRow, marginTop: 8 }} className="cc-topo-compact-row">
                 <div style={ui.compactFieldCol('1 1 7em')}>
                   <TopoFieldLabel texto="Operador" color={ui.textMuted} ayuda="Nombre del operador (autocompletado)." />
                   <input
@@ -1133,7 +1135,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: mostrarValidacion ? 'minmax(240px, 1fr) minmax(320px, 1.25fr)' : '1fr',
+                  gridTemplateColumns: isCompact
+                    ? '1fr'
+                    : (mostrarValidacion ? 'minmax(240px, 1fr) minmax(320px, 1.25fr)' : '1fr'),
                   gap: 16,
                   alignItems: 'start',
                 }}
@@ -1231,14 +1235,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               )}
               </div>
 
-              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 {puede(permisos, 'editar') && !sellada && (
                   <>
-                    <button type="button" style={ui.btnSecondary} onClick={guardarCartera} disabled={guardando || !sel}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={guardarCartera} disabled={guardando || !sel}>
                       {guardando ? 'Guardando…' : 'Guardar cartera'}
                     </button>
                     <button
                       type="button"
+                      className="cc-topo-touch-btn"
                       style={ui.btnPrimary}
                       onClick={finalizarCircuito}
                       disabled={guardando || !sel || circuitoTerminado}
@@ -1249,7 +1254,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   </>
                 )}
                 {puede(permisos, 'exportar') && (
-                  <button type="button" style={ui.btnSecondary} onClick={() => downloadPdf(`/nivelaciones/${sel}/pdf`, 'circuito_nivelacion.pdf')}>Informe PDF</button>
+                  <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={() => downloadPdf(`/nivelaciones/${sel}/pdf`, 'circuito_nivelacion.pdf')}>Informe PDF</button>
                 )}
               </div>
             </div>
@@ -1320,7 +1325,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     {vista.avisos.slice(0, 3).join(' ')}
                   </p>
                 )}
-                <div style={{ overflowX: 'auto', colorScheme: themeColorScheme(ui.t) }}>
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
                   <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
                     <thead>
                       <tr>

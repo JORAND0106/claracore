@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { PermisoAviso, puede, useTopoTheme } from './topografiaShared'
+import { PermisoAviso, puede, TopoTableScroll, useTopoTheme } from './topografiaShared'
 
 const filaVacia = () => ({ nombre: '', espesor_m: '', referencia_orden: '', sobre_ancho_m: '' })
 
@@ -165,7 +165,7 @@ export default function DisenoEstructuraPanel({
         En «Ref. espesor» indique la capa inferior usada al verificar espesor en entrega de obra.
       </p>
 
-      <div style={{ overflowX: 'auto' }}>
+      <TopoTableScroll>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', tableLayout: 'fixed' }}>
           <colgroup>
             <col style={{ width: '40px' }} />
@@ -270,7 +270,7 @@ export default function DisenoEstructuraPanel({
             </tr>
           </tbody>
         </table>
-      </div>
+      </TopoTableScroll>
 
       {puede(permisos, 'editar') && (
         <button type="button" style={{ ...ui.btnSecondary, marginTop: 10 }} onClick={agregar}>
@@ -379,7 +379,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           />
         </label>
 
-        <div style={{ overflowX: 'auto' }}>
+        <TopoTableScroll>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '56px' }} />
@@ -433,7 +433,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
               </tr>
             </tbody>
           </table>
-        </div>
+        </TopoTableScroll>
 
         <button
           type="button"

@@ -1,5 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+import { useClaraViewport } from '../../useClaraViewport'
+
+/**
+ * Viewport del módulo Topografía.
+ * Compacto = portrait ≤767 o landscape teléfono ≤932 (misma regla ClaraCore).
+ * Solo presentación — no altera lógica de datos.
+ */
+export function useTopoViewport() {
+  const vp = useClaraViewport()
+  const isCompact = Boolean(vp.isMobile || vp.isLandscapeMobile)
+  return { ...vp, isCompact }
+}
 
 /** Estilos del módulo Topografía alineados con tema global (claro | auto | oscuro | descansar). */
 export function topoStyles(t) {
@@ -35,7 +47,7 @@ export function topoStyles(t) {
       lineHeight: 1.35,
       boxSizing: 'border-box',
     },
-    /** Fila compacta de campos (una línea); escala con pequeña / mediana / grande vía --cc-* */
+    /** Fila compacta de campos (una línea); en móvil CSS fuerza wrap (cc-topo-compact-row). */
     compactFieldRow: {
       display: 'flex',
       flexWrap: 'nowrap',
@@ -74,6 +86,7 @@ export function topoStyles(t) {
       background: primary,
       color: '#fff',
       cursor: 'pointer',
+      fontSize: 'var(--cc-sm)',
     },
     btnSecondary: {
       padding: '8px 14px',
@@ -82,6 +95,7 @@ export function topoStyles(t) {
       background: bgCard,
       color: text,
       cursor: 'pointer',
+      fontSize: 'var(--cc-sm)',
     },
     th: {
       textAlign: 'left',
@@ -109,6 +123,7 @@ export function topoStyles(t) {
       marginBottom: 12,
       borderBottom: `2px solid ${border}`,
       flexWrap: 'nowrap',
+      WebkitOverflowScrolling: 'touch',
     },
     tabBtn: (active) => ({
       display: 'inline-flex',
@@ -274,12 +289,48 @@ export function TopoHelpIcon({ ayuda, style }) {
   )
 }
 
+/** Contenedor de tabla con scroll horizontal interno (móvil: altura acotada vía CSS). */
+export function TopoTableScroll({ children, style, className = '', maxHeight }) {
+  return (
+    <div
+      className={`cc-topo-table-scroll ${className}`.trim()}
+      style={{
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        ...(maxHeight != null ? { maxHeight, overflowY: 'auto' } : {}),
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/** Barra de acciones principales — sticky en móvil para quedar accesible sin scroll. */
+export function TopoActionsBar({ children, style, className = '' }) {
+  return (
+    <div
+      className={`cc-topo-actions-bar ${className}`.trim()}
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        alignItems: 'center',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 /** Panel con cabecera colapsable (título + resumen cuando está cerrado). */
 export function PanelColapsable({ titulo, resumen, abierto, onToggle, ui, children, style }) {
   return (
     <div style={{ ...ui.card, marginBottom: 16, ...style }}>
       <button
         type="button"
+        className="cc-topo-collapse-btn"
         onClick={onToggle}
         aria-expanded={abierto}
         style={{

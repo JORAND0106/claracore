@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useTopoTheme } from './topografiaShared'
+import { TopoTableScroll, useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
 
 function advertenciaDistancia(e, cierre) {
@@ -96,7 +96,7 @@ export default function PoligonalCalculoTable({
           Revise las filas con el indicador de advertencia en distancia (superan el límite entre vértices).
         </p>
       )}
-      <div style={{ overflowX: 'auto' }}>
+      <TopoTableScroll>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: ajustada ? 1400 : 980 }}>
           <thead>
             <tr>
@@ -197,7 +197,7 @@ export default function PoligonalCalculoTable({
             })}
           </tbody>
         </table>
-      </div>
+      </TopoTableScroll>
     </div>
   )
 }

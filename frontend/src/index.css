@@ -1740,3 +1740,85 @@ select.cc-dashboard-acta-select--light option {
     display: none !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Topografía — móvil (portrait ≤767 / landscape ≤932)
+   Solo presentación. Desktop sin cambios.
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-topo-root {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.cc-topo-main {
+  min-width: 0;
+  width: 100%;
+}
+
+.cc-topo-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-topo-root--compact {
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+  }
+
+  .cc-topo-root--landscape .cc-topo-mobile-nav > div {
+    max-height: 38dvh;
+  }
+
+  .cc-topo-touch-btn,
+  .cc-topo-actions-bar > button,
+  .cc-topo-nav-btn,
+  .cc-topo-collapse-btn {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+  .cc-topo-root--compact input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  .cc-topo-root--compact select,
+  .cc-topo-root--compact textarea {
+    min-height: 44px;
+    font-size: var(--cc-input, 16px);
+    box-sizing: border-box;
+  }
+
+  .cc-topo-compact-row {
+    flex-wrap: wrap !important;
+    overflow-x: visible !important;
+    align-items: stretch !important;
+  }
+
+  .cc-topo-compact-row > * {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+  }
+
+  .cc-topo-actions-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+    margin-top: 8px;
+    background: color-mix(in srgb, Canvas 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 -6px 18px rgba(15, 23, 42, 0.12);
+  }
+
+  .cc-topo-table-scroll {
+    max-height: min(58dvh, 480px);
+    overflow-y: auto;
+  }
+
+  .cc-topo-root--landscape .cc-topo-table-scroll {
+    max-height: min(48dvh, 360px);
+  }
+}

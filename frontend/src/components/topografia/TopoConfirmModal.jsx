@@ -67,9 +67,10 @@ export default function TopoConfirmModal({
         <div style={{ padding: '18px 20px', fontSize: 'var(--cc-sm)', color: t.text || '#0F172A', lineHeight: 1.55, textAlign: 'center' }}>
           {children}
         </div>
-        <div style={{ padding: '4px 20px 18px', display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="cc-topo-actions-bar" style={{ padding: '4px 20px 18px', display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button
             type="button"
+            className="cc-topo-touch-btn"
             onClick={onCancel}
             disabled={busy}
             style={{
@@ -81,6 +82,7 @@ export default function TopoConfirmModal({
               fontSize: 'var(--cc-sm)',
               fontWeight: 700,
               cursor: busy ? 'default' : 'pointer',
+              minHeight: 44,
             }}
           >
             {cancelLabel}
@@ -88,6 +90,7 @@ export default function TopoConfirmModal({
           {secondaryLabel && onSecondary && (
             <button
               type="button"
+              className="cc-topo-touch-btn"
               onClick={onSecondary}
               disabled={busy}
               style={{
@@ -99,6 +102,7 @@ export default function TopoConfirmModal({
                 fontSize: 'var(--cc-sm)',
                 fontWeight: 700,
                 cursor: busy ? 'default' : 'pointer',
+                minHeight: 44,
               }}
             >
               {secondaryLabel}
@@ -106,6 +110,7 @@ export default function TopoConfirmModal({
           )}
           <button
             type="button"
+            className="cc-topo-touch-btn"
             onClick={onConfirm}
             disabled={busy}
             style={{
@@ -118,6 +123,7 @@ export default function TopoConfirmModal({
               fontWeight: 700,
               cursor: busy ? 'default' : 'pointer',
               opacity: busy ? 0.7 : 1,
+              minHeight: 44,
             }}
           >
             {busy ? 'Procesando…' : confirmLabel}

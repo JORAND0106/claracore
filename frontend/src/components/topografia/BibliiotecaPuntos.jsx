@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import TopoErrorModal from './TopoErrorModal'
-import { parseApiError, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import { parseApiError, TopoTableScroll, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 const TIPOS = ['BM', 'estacion', 'auxiliar', 'PI', 'cambio']
 
@@ -84,7 +84,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
       </div>
 
       {loading ? <div style={{ color: ui.textMuted }}>Cargando...</div> : (
-        <div style={{ overflowX: 'auto' }}>
+        <TopoTableScroll>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
             <thead>
               <tr>
@@ -126,7 +126,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
               ))}
             </tbody>
           </table>
-        </div>
+        </TopoTableScroll>
       )}
 
       {errorModal && (
