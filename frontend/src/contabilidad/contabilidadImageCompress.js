@@ -2,6 +2,8 @@
  * Comprime imágenes en el cliente antes de subir (máx. 800 KB por defecto).
  * PDF y otros formatos se devuelven sin cambios.
  */
+import { cropDocumentFromImage } from './contabilidadDocumentCrop'
+
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 function loadImageFromFile(file) {
@@ -86,16 +88,27 @@ export async function compressImageForSoporte(file, maxBytes = 800 * 1024) {
  * Comprime (si aplica) y devuelve el archivo listo más pesos para mostrar al usuario.
  * @param {File} file
  * @param {number} [maxBytes]
- * @returns {Promise<{ file: File, originalBytes: number, compressedBytes: number, wasCompressed: boolean }>}
+ * @param {{ cropDocument?: boolean }} [options]
+ * @returns {Promise<{ file: File, originalBytes: number, compressedBytes: number, wasCompressed: boolean, wasCropped: boolean }>}
  */
-export async function prepareSoporteConPeso(file, maxBytes = 800 * 1024) {
+export async function prepareSoporteConPeso(file, maxBytes = 800 * 1024, options = {}) {
   const originalBytes = file?.size || 0
-  const prepared = await compressImageForSoporte(file, maxBytes)
+  let working = file
+  let wasCropped = false
+  if (options.cropDocument) {
+    const cropped = await cropDocumentFromImage(file)
+    if (cropped && cropped !== file) {
+      working = cropped
+      wasCropped = cropped.size !== file.size || cropped.name !== file.name
+    }
+  }
+  const prepared = await compressImageForSoporte(working, maxBytes)
   const compressedBytes = prepared?.size || 0
   return {
-    file: prepared || file,
+    file: prepared || working || file,
     originalBytes,
     compressedBytes,
     wasCompressed: compressedBytes > 0 && compressedBytes < originalBytes,
+    wasCropped,
   }
 }

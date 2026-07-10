@@ -24,6 +24,7 @@ from contabilidad_documentos_service import (
     update_documento_empresa,
 )
 from contabilidad_export import build_export_xlsx
+from contabilidad_ocr import analyze_invoice_bytes, ocr_configured
 from contabilidad_permissions import (
     require_firma_cierre,
     require_permiso_contabilidad,
@@ -132,6 +133,9 @@ class TransaccionBody(BaseModel):
     contrato_id: Optional[int] = Field(None, ge=1)
     fuente_ingreso: Optional[str] = Field(None, pattern="^(licenciamiento|servicios)$")
     notas: Optional[str] = Field(None, max_length=4000)
+    proveedor_razon_social: Optional[str] = Field(None, max_length=255)
+    proveedor_nit: Optional[str] = Field(None, max_length=40)
+    propina: float = Field(0, ge=0)
 
 
 class TransaccionDesdeOrdenBody(BaseModel):
@@ -347,6 +351,24 @@ async def subir_soporte(
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.post("/ocr/factura")
+async def ocr_factura_egreso(
+    archivo: UploadFile = File(...),
+    current_user=Depends(_require_crear),
+):
+    """
+    OCR no bloqueante a nivel de UX: el front puede cancelar/ignorar.
+    Solo para egresos (el front no debe llamar en ingresos).
+    Si DI no está configurado o falla, responde ok=false sin error HTTP.
+    """
+    _ = current_user
+    data = await archivo.read()
+    if not data:
+        return {"ok": False, "configured": ocr_configured(), "status": "empty", "sugerencias": {}, "campos_detectados": []}
+    result = analyze_invoice_bytes(data, archivo.content_type)
+    return result
 
 
 @router.get("/transacciones/{transaccion_id}/soporte")

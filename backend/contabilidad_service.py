@@ -90,13 +90,21 @@ def calcular_valor_neto(
     valor_bruto: Decimal,
     retencion_valor: Decimal,
     iva_valor: Decimal,
+    propina: Decimal = Decimal("0"),
 ) -> Decimal:
+    """
+    Total de factura:
+      Valor bruto - Retención - IVA + Propina  (según requerimiento de UI)
+    Nota: en egresos el IVA pagado suele sumarse al pago; aquí se sigue la fórmula
+    solicitada para el total mostrado/almacenado como valor_neto.
+    """
     t = (tipo or "").strip().lower()
-    if t == "ingreso":
-        return _money(valor_bruto - retencion_valor)
-    if t == "egreso":
-        return _money(valor_bruto + iva_valor - retencion_valor)
-    raise ValueError("tipo debe ser ingreso o egreso.")
+    tip = _money(_d(propina))
+    if tip < 0:
+        tip = Decimal("0")
+    if t not in TX_TIPOS:
+        raise ValueError("tipo debe ser ingreso o egreso.")
+    return _money(valor_bruto - retencion_valor - iva_valor + tip)
 
 
 def _subcuenta_capitalizacion(fuente_ingreso: Optional[str]) -> str:
@@ -118,7 +126,8 @@ def _movimientos_para_transaccion(row: dict) -> List[dict]:
 
     if tipo == "ingreso":
         cap = _money(bruto * CAPITALIZACION_TASA)
-        oper = _money(bruto - ret - cap)
+        tip = _money(_d(row.get("propina")))
+        oper = _money(bruto - ret - cap - iva + tip)
         fuente = _subcuenta_capitalizacion(row.get("fuente_ingreso"))
         if cap > 0:
             movs.append({
@@ -157,7 +166,7 @@ def _movimientos_para_transaccion(row: dict) -> List[dict]:
                 "transaccion_id": tx_id,
             })
     elif tipo == "egreso":
-        neto = calcular_valor_neto("egreso", bruto, ret, iva)
+        neto = calcular_valor_neto("egreso", bruto, ret, iva, _d(row.get("propina")))
         if neto != 0:
             movs.append({
                 "cuenta_tipo": "operativa",
@@ -331,7 +340,29 @@ def _validar_payload_transaccion(sb, data: dict, *, es_update: bool = False) -> 
     elif tipo == "ingreso":
         fuente = "licenciamiento"
 
-    valor_neto = calcular_valor_neto(tipo, bruto, ret_valor, iva_valor)
+    proveedor_razon = (data.get("proveedor_razon_social") or "").strip() or None
+    proveedor_nit = (data.get("proveedor_nit") or "").strip() or None
+    if tipo == "egreso":
+        if not proveedor_razon:
+            raise ValueError("La razón social del proveedor es obligatoria en egresos.")
+        if not proveedor_nit:
+            raise ValueError("El NIT del proveedor es obligatorio en egresos.")
+        if len(proveedor_razon) > 255:
+            raise ValueError("proveedor_razon_social supera 255 caracteres.")
+        # Formato preferido XXXXXXXXX-D; se acepta también solo dígitos.
+        nit_clean = re.sub(r"[^\d\-]", "", proveedor_nit)
+        if not re.match(r"^\d{5,15}(-\d)?$", nit_clean):
+            raise ValueError("NIT inválido. Use formato numérico con dígito de verificación (XXXXXXXXX-D).")
+        proveedor_nit = nit_clean[:40]
+    else:
+        proveedor_razon = None
+        proveedor_nit = None
+
+    propina = _money(_d(data.get("propina")))
+    if propina < 0:
+        raise ValueError("propina debe ser >= 0.")
+
+    valor_neto = calcular_valor_neto(tipo, bruto, ret_valor, iva_valor, propina)
 
     payload = {
         "fecha": fecha.isoformat(),
@@ -348,6 +379,9 @@ def _validar_payload_transaccion(sb, data: dict, *, es_update: bool = False) -> 
         "contrato_id": contrato_id,
         "fuente_ingreso": fuente,
         "notas": (data.get("notas") or "").strip() or None,
+        "proveedor_razon_social": proveedor_razon,
+        "proveedor_nit": proveedor_nit,
+        "propina": float(propina),
         "updated_at": _now_iso(),
     }
     if not es_update:
@@ -655,6 +689,38 @@ def validate_soporte_upload(content_type: Optional[str], size: int) -> str:
     return mime
 
 
+def _nombre_soporte_pdf(nombre_archivo: str) -> str:
+    base = re.sub(r"\.[^.]+$", "", (nombre_archivo or "soporte").strip()) or "soporte"
+    base = re.sub(r"[^\w.\-]", "_", base)[:200]
+    return f"{base}.pdf"
+
+
+def normalizar_soporte_bytes(
+    data: bytes,
+    content_type: Optional[str],
+    nombre_archivo: str,
+) -> Tuple[bytes, str, str]:
+    """
+    PDF se conserva; JPEG/PNG/WebP se convierten a PDF (mismo criterio que documentos firmados).
+    Devuelve (bytes, mime, nombre_archivo).
+    """
+    mime = validate_soporte_upload(content_type, len(data))
+    if mime == "application/pdf":
+        name = (nombre_archivo or "soporte.pdf").strip()
+        if not name.lower().endswith(".pdf"):
+            name = _nombre_soporte_pdf(name)
+        return data, mime, name[:255]
+
+    from contrato_documentos_service import imagen_a_pdf
+
+    pdf_bytes = imagen_a_pdf(data, mime)
+    if len(pdf_bytes) > MAX_SOPORTE_BYTES:
+        raise ValueError(
+            f"El PDF generado supera el máximo de {MAX_SOPORTE_BYTES // (1024 * 1024)} MB."
+        )
+    return pdf_bytes, "application/pdf", _nombre_soporte_pdf(nombre_archivo or "soporte")
+
+
 def upload_soporte_transaccion(
     sb,
     transaccion_id: int,
@@ -670,14 +736,14 @@ def upload_soporte_transaccion(
     if _periodo_bloqueado(sb, fecha):
         raise ValueError("El período está cerrado; no se puede adjuntar soporte.")
 
-    mime = validate_soporte_upload(content_type, len(data))
+    data, mime, nombre = normalizar_soporte_bytes(data, content_type, nombre_archivo or "soporte")
     old_path = (tx.get("soporte_azure_blob_path") or "").strip()
-    blob_path = path_contabilidad_soporte(transaccion_id, nombre_archivo or "soporte")
+    blob_path = path_contabilidad_soporte(transaccion_id, nombre)
     upload_blob_private(blob_path, data, mime, overwrite=True)
 
     sb.table("contabilidad_transaccion").update({
         "soporte_azure_blob_path": blob_path,
-        "soporte_nombre_archivo": (nombre_archivo or "soporte").strip()[:255],
+        "soporte_nombre_archivo": nombre[:255],
         "soporte_mime_type": mime,
         "soporte_tamano_bytes": len(data),
         "updated_at": _now_iso(),
@@ -789,15 +855,30 @@ def list_movimientos_cuentas(
 # ── Contratos (centro de costo) ───────────────────────────────────────────────
 
 def list_contratos_centro_costo(sb) -> List[dict]:
-    return (
+    """Contratos de la plataforma para el selector de centro de costo (número + nombre)."""
+    rows = (
         sb.table("contratos")
-        .select("id, numero, objeto")
+        .select("id, numero, objeto, fase")
         .order("numero")
         .limit(500)
         .execute()
         .data
         or []
     )
+    # Excluir liquidación si el campo existe; el resto se considera activo en plataforma.
+    activos = []
+    for r in rows:
+        fase = (r.get("fase") or "").strip().upper()
+        if fase == "LIQUIDACION":
+            continue
+        activos.append({
+            "id": r.get("id"),
+            "numero": r.get("numero"),
+            "objeto": r.get("objeto"),
+            "nombre": r.get("objeto"),
+            "fase": r.get("fase"),
+        })
+    return activos
 
 
 # ── Cierre mensual ────────────────────────────────────────────────────────────

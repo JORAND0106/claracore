@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Camera, Paperclip } from 'lucide-react'
 import { API_BASE } from '../apiBase'
-import { contabGet, contabSend } from './contabilidadApi'
+import { contabGet, contabOcrFactura, contabSend } from './contabilidadApi'
 import { prepareSoporteConPeso } from './contabilidadImageCompress'
 import { FieldLabel, TX_FIELD_HINTS } from './ContabilidadFieldLabel'
 import SoportePreviewModal from './SoportePreviewModal'
@@ -12,19 +12,522 @@ const EMPTY_FORM = {
   fecha: new Date().toISOString().slice(0, 10),
   tipo: 'ingreso',
   valor_bruto: '',
-  retencion_fuente_tasa: '0',
+  retencion_pct: '',
   retencion_fuente_valor: '0',
-  iva_tasa: '0.19',
+  iva_pct: '',
   iva_valor: '0',
+  propina: '0',
   categoria_id: '',
   centro_costo_tipo: 'empresa',
   contrato_id: '',
   fuente_ingreso: 'licenciamiento',
+  proveedor_razon_social: '',
+  proveedor_nit_base: '',
+  proveedor_nit_dv: '',
   notas: '',
 }
 
-export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
-  const { isMobile, isTablet } = useContabilidadViewport()
+function splitNit(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return { base: '', dv: '' }
+  if (s.includes('-')) {
+    const [a, b = ''] = s.split('-')
+    return { base: a.replace(/\D/g, ''), dv: b.replace(/\D/g, '').slice(0, 1) }
+  }
+  const digits = s.replace(/\D/g, '')
+  if (digits.length >= 6) return { base: digits.slice(0, -1), dv: digits.slice(-1) }
+  return { base: digits, dv: '' }
+}
+
+function joinNit(base, dv) {
+  const b = String(base || '').replace(/\D/g, '')
+  const d = String(dv || '').replace(/\D/g, '').slice(0, 1)
+  if (!b) return ''
+  return d ? `${b}-${d}` : b
+}
+
+function calcTotalFactura(form) {
+  const bruto = Number(String(form.valor_bruto ?? '').replace(',', '.')) || 0
+  const ret = Number(String(form.retencion_fuente_valor ?? '').replace(',', '.')) || 0
+  const iva = Number(String(form.iva_valor ?? '').replace(',', '.')) || 0
+  const tip = Number(String(form.propina ?? '').replace(',', '.')) || 0
+  return Math.round(bruto - ret - iva + tip)
+}
+
+/** Fuera del padre: si se define dentro, cada setState remonta inputs y se pierde el foco. */
+function TxField({ name, label, t, lblStyle, suggested, children }) {
+  return (
+    <label style={{
+      display: 'block',
+      borderRadius: 8,
+      outline: suggested ? `2px solid ${t.primary}66` : undefined,
+      background: suggested ? `${t.primary}12` : undefined,
+      padding: suggested ? 6 : 0,
+      boxSizing: 'border-box',
+    }}>
+      <span style={lblStyle}>
+        <FieldLabel label={label} hint={TX_FIELD_HINTS[name]} t={t} />
+        {suggested ? (
+          <span style={{ marginLeft: 6, fontSize: '0.85em', color: t.primary, fontWeight: 700 }}>OCR</span>
+        ) : null}
+      </span>
+      {children}
+    </label>
+  )
+}
+
+function labelContrato(c) {
+  if (!c) return '—'
+  const num = c.numero || c.id
+  const nombre = (c.objeto || c.nombre || '').trim()
+  return nombre ? `${num} — ${nombre}` : String(num)
+}
+
+function labelCentroCosto(tx) {
+  if ((tx?.centro_costo_tipo || '') === 'contrato') {
+    return labelContrato(tx.contrato) || (tx.contrato_id ? `Contrato #${tx.contrato_id}` : 'Contrato')
+  }
+  return 'Empresa general'
+}
+
+function parsePct(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  const n = Number(s.replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+function calcMontoFromPct(brutoRaw, pctRaw) {
+  const pct = parsePct(pctRaw)
+  if (pct == null) return null
+  const bruto = Number(String(brutoRaw ?? '').replace(',', '.'))
+  if (!Number.isFinite(bruto) || bruto < 0) return 0
+  return Math.round(bruto * (pct / 100))
+}
+
+function tasaFromPct(pctRaw) {
+  const pct = parsePct(pctRaw)
+  if (pct == null) return 0
+  return pct / 100
+}
+
+function pctFromTasa(tasa) {
+  const n = Number(tasa)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const pct = n * 100
+  return Number.isInteger(pct) ? String(pct) : String(Number(pct.toFixed(4)))
+}
+
+function applyAutoCalculos(form) {
+  const next = { ...form }
+  const retCalc = calcMontoFromPct(form.valor_bruto, form.retencion_pct)
+  if (retCalc != null) next.retencion_fuente_valor = String(retCalc)
+  const ivaCalc = calcMontoFromPct(form.valor_bruto, form.iva_pct)
+  if (ivaCalc != null) next.iva_valor = String(ivaCalc)
+  return next
+}
+
+function TxDetailBlock({ tx, t }) {
+  return (
+    <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+      <div><strong style={{ color: t.text }}>Fecha:</strong> {tx.fecha}</div>
+      <div>
+        <strong style={{ color: t.text }}>Tipo:</strong>{' '}
+        <span style={{ color: tx.tipo === 'ingreso' ? '#10B981' : '#EF4444', fontWeight: 700, textTransform: 'capitalize' }}>
+          {tx.tipo}
+        </span>
+      </div>
+      <div><strong style={{ color: t.text }}>Bruto:</strong> {fmtCOP(tx.valor_bruto)}</div>
+      <div><strong style={{ color: t.text }}>Retención:</strong> {fmtCOP(tx.retencion_fuente_valor)}</div>
+      <div><strong style={{ color: t.text }}>IVA:</strong> {fmtCOP(tx.iva_valor)}</div>
+      <div><strong style={{ color: t.text }}>Propina:</strong> {fmtCOP(tx.propina || 0)}</div>
+      <div><strong style={{ color: t.text }}>Total:</strong> {fmtCOP(tx.valor_neto)}</div>
+      <div><strong style={{ color: t.text }}>Categoría:</strong> {tx.categoria?.nombre || '—'}</div>
+      <div><strong style={{ color: t.text }}>Centro:</strong> {labelCentroCosto(tx)}</div>
+      <div>
+        <strong style={{ color: t.text }}>Proveedor:</strong>{' '}
+        {tx.tipo === 'egreso' ? (tx.proveedor_razon_social || '—') : '—'}
+      </div>
+      <div>
+        <strong style={{ color: t.text }}>NIT:</strong>{' '}
+        {tx.tipo === 'egreso' ? (tx.proveedor_nit || '—') : '—'}
+      </div>
+      <div><strong style={{ color: t.text }}>Origen:</strong> {tx.origen || '—'}</div>
+      <div><strong style={{ color: t.text }}>Notas:</strong> {tx.notas || '—'}</div>
+      <div>
+        <strong style={{ color: t.text }}>Soporte:</strong>{' '}
+        {tx.soporte_nombre_archivo
+          ? `${tx.soporte_nombre_archivo}${tx.soporte_tamano_bytes ? ` (${fmtBytes(tx.soporte_tamano_bytes)})` : ''}`
+          : 'Sin adjunto'}
+      </div>
+    </div>
+  )
+}
+
+const TransaccionFormPanel = memo(function TransaccionFormPanel({
+  t,
+  form,
+  editId,
+  isMobile,
+  isTablet,
+  busy,
+  catsIngreso,
+  catsEgreso,
+  contratos,
+  soportePendiente,
+  ocrStatus,
+  ocrSuggested,
+  cameraRef,
+  fileRef,
+  replaceRef,
+  formRef,
+  inp,
+  lbl,
+  btn,
+  onPatchForm,
+  onTipoChange,
+  onCentroCostoChange,
+  onSoporteFile,
+  onReplaceSoporte,
+  onGuardar,
+  onCancelar,
+}) {
+  const formGridCols = isMobile
+    ? '1fr'
+    : isTablet
+      ? 'repeat(2, minmax(0, 1fr))'
+      : 'repeat(auto-fill, minmax(180px, 1fr))'
+
+  const retAuto = parsePct(form.retencion_pct) != null
+  const ivaAuto = parsePct(form.iva_pct) != null
+  const totalFactura = calcTotalFactura(form)
+  const sug = ocrSuggested || {}
+
+  return (
+    <div
+      ref={formRef}
+      style={{
+        background: t.bgCard,
+        border: `1px solid ${t.primary}44`,
+        borderRadius: 12,
+        padding: isMobile ? 14 : 16,
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 12, color: t.primary }}>
+        {editId ? 'Editar transacción' : 'Nueva transacción'}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: formGridCols, gap: 12 }}>
+        <TxField name="tipo" label="Tipo" t={t} lblStyle={lbl}>
+          <select style={inp} value={form.tipo} onChange={(e) => onTipoChange(e.target.value)}>
+            <option value="ingreso">Ingreso</option>
+            <option value="egreso">Egreso</option>
+          </select>
+        </TxField>
+        <TxField name="fecha" label="Fecha" t={t} lblStyle={lbl} suggested={!!sug.fecha}>
+          <input
+            type="date"
+            style={inp}
+            value={form.fecha}
+            onChange={(e) => onPatchForm({ fecha: e.target.value })}
+          />
+        </TxField>
+
+        {form.tipo === 'egreso' && (
+          <>
+            <TxField name="proveedor_razon_social" label="Razón social proveedor *" t={t} lblStyle={lbl} suggested={!!sug.proveedor_razon_social}>
+              <input
+                type="text"
+                style={inp}
+                value={form.proveedor_razon_social}
+                onChange={(e) => onPatchForm({ proveedor_razon_social: e.target.value })}
+                required
+                maxLength={255}
+                placeholder="Nombre del proveedor"
+                autoFocus={!editId}
+              />
+            </TxField>
+            <div style={{
+              gridColumn: isMobile ? '1 / -1' : undefined,
+              borderRadius: 8,
+              outline: sug.proveedor_nit ? `2px solid ${t.primary}66` : undefined,
+              background: sug.proveedor_nit ? `${t.primary}12` : undefined,
+              padding: sug.proveedor_nit ? 6 : 0,
+            }}>
+              <div style={lbl}>
+                <FieldLabel label="NIT proveedor *" hint={TX_FIELD_HINTS.proveedor_nit} t={t} />
+                {sug.proveedor_nit ? (
+                  <span style={{ marginLeft: 6, fontSize: '0.85em', color: t.primary, fontWeight: 700 }}>OCR</span>
+                ) : null}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  style={{ ...inp, flex: '1 1 auto' }}
+                  value={form.proveedor_nit_base}
+                  onChange={(e) => onPatchForm({ proveedor_nit_base: e.target.value.replace(/\D/g, '') })}
+                  required
+                  placeholder="NIT"
+                />
+                <span style={{ fontWeight: 700, color: t.textMuted }}>—</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  style={{ ...inp, width: 64, flex: '0 0 64px' }}
+                  value={form.proveedor_nit_dv}
+                  onChange={(e) => onPatchForm({ proveedor_nit_dv: e.target.value.replace(/\D/g, '').slice(0, 1) })}
+                  maxLength={1}
+                  placeholder="DV"
+                  title="Dígito de verificación"
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        <TxField name="valor_bruto" label="Valor bruto" t={t} lblStyle={lbl} suggested={!!sug.valor_bruto}>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="1"
+            style={inp}
+            value={form.valor_bruto}
+            onChange={(e) => onPatchForm({ valor_bruto: e.target.value })}
+            autoFocus={!editId && form.tipo !== 'egreso'}
+          />
+        </TxField>
+        <TxField name="retencion_pct" label="Retención % (opcional)" t={t} lblStyle={lbl}>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            style={inp}
+            value={form.retencion_pct}
+            onChange={(e) => onPatchForm({ retencion_pct: e.target.value })}
+            placeholder="Ej. 2.5"
+          />
+        </TxField>
+        <TxField name="retencion_fuente_valor" label="Retención valor" t={t} lblStyle={lbl} suggested={!!sug.retencion_fuente_valor}>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            step="1"
+            style={{ ...inp, opacity: retAuto ? 0.85 : 1 }}
+            value={form.retencion_fuente_valor}
+            onChange={(e) => onPatchForm({ retencion_fuente_valor: e.target.value })}
+            readOnly={retAuto}
+            title={retAuto ? 'Calculado desde el porcentaje' : undefined}
+          />
+        </TxField>
+        <TxField name="iva_pct" label="IVA % (opcional)" t={t} lblStyle={lbl} suggested={!!sug.iva_pct}>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            style={inp}
+            value={form.iva_pct}
+            onChange={(e) => onPatchForm({ iva_pct: e.target.value })}
+            placeholder="Ej. 19"
+          />
+        </TxField>
+        <TxField name="iva_valor" label="IVA valor" t={t} lblStyle={lbl} suggested={!!sug.iva_valor}>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            step="1"
+            style={{ ...inp, opacity: ivaAuto ? 0.85 : 1 }}
+            value={form.iva_valor}
+            onChange={(e) => onPatchForm({ iva_valor: e.target.value })}
+            readOnly={ivaAuto}
+            title={ivaAuto ? 'Calculado desde el porcentaje' : undefined}
+          />
+        </TxField>
+        <TxField name="propina" label="Propina (opcional)" t={t} lblStyle={lbl}>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            step="1"
+            style={inp}
+            value={form.propina}
+            onChange={(e) => onPatchForm({ propina: e.target.value })}
+          />
+        </TxField>
+        <TxField name="categoria" label="Categoría" t={t} lblStyle={lbl}>
+          <select
+            style={inp}
+            value={form.categoria_id}
+            onChange={(e) => onPatchForm({ categoria_id: e.target.value })}
+          >
+            <option value="">—</option>
+            {(form.tipo === 'ingreso' ? catsIngreso : catsEgreso).map((c) => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
+          </select>
+        </TxField>
+        <TxField name="centro_costo" label="Centro de costo" t={t} lblStyle={lbl}>
+          <select
+            style={inp}
+            value={form.centro_costo_tipo === 'contrato' ? form.contrato_id : 'empresa'}
+            onChange={(e) => onCentroCostoChange(e.target.value)}
+          >
+            <option value="empresa">Empresa general</option>
+            {contratos.map((c) => (
+              <option key={c.id} value={String(c.id)}>{labelContrato(c)}</option>
+            ))}
+          </select>
+        </TxField>
+        {form.tipo === 'ingreso' && (
+          <TxField name="fuente_ingreso" label="Fuente ingreso" t={t} lblStyle={lbl}>
+            <select
+              style={inp}
+              value={form.fuente_ingreso}
+              onChange={(e) => onPatchForm({ fuente_ingreso: e.target.value })}
+            >
+              <option value="licenciamiento">Licenciamiento</option>
+              <option value="servicios">Servicios</option>
+            </select>
+          </TxField>
+        )}
+      </div>
+
+      <div style={{
+        marginTop: 14,
+        padding: '12px 14px',
+        borderRadius: 10,
+        border: `1px solid ${t.primary}55`,
+        background: `${t.primary}10`,
+      }}>
+        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4 }}>
+          <FieldLabel label="Total de la factura" hint={TX_FIELD_HINTS.total_factura} t={t} />
+        </div>
+        <div style={{ fontWeight: 800, fontSize: 'var(--cc-lg)', color: t.primary }}>
+          {fmtCOP(totalFactura)}
+        </div>
+        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
+          Bruto − Retención − IVA + Propina
+        </div>
+      </div>
+
+      <label style={{ display: 'block', marginTop: 12 }}>
+        <span style={lbl}><FieldLabel label="Notas" hint={TX_FIELD_HINTS.notas} t={t} /></span>
+        <textarea
+          style={{ ...inp, minHeight: 60 }}
+          value={form.notas}
+          onChange={(e) => onPatchForm({ notas: e.target.value })}
+        />
+      </label>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, marginBottom: 8 }}>
+          Soporte / recibo
+          {form.tipo === 'egreso' ? ' · OCR automático al adjuntar' : ''}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button
+            type="button"
+            style={{ ...btn(true), flex: isMobile ? '1 1 140px' : undefined }}
+            onClick={() => cameraRef.current?.click()}
+          >
+            <Camera size={18} strokeWidth={2.2} /> Tomar foto
+          </button>
+          <button
+            type="button"
+            style={{ ...btn(false), flex: isMobile ? '1 1 140px' : undefined }}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Paperclip size={16} strokeWidth={2.2} /> {isMobile ? 'Galería / PDF' : 'Adjuntar archivo'}
+          </button>
+          {editId && typeof onReplaceSoporte === 'function' && (
+            <button
+              type="button"
+              style={{ ...btn(false), flex: isMobile ? '1 1 140px' : undefined }}
+              onClick={() => replaceRef?.current?.click()}
+            >
+              🔁 Reemplazar imagen
+            </button>
+          )}
+        </div>
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={(e) => {
+            onSoporteFile(e.target.files?.[0], { fromCamera: true })
+            e.target.value = ''
+          }}
+        />
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".pdf,image/*"
+          hidden
+          onChange={(e) => {
+            onSoporteFile(e.target.files?.[0], { fromCamera: false })
+            e.target.value = ''
+          }}
+        />
+        {editId && (
+          <input
+            ref={replaceRef}
+            type="file"
+            accept=".pdf,image/*"
+            hidden
+            onChange={(e) => {
+              onReplaceSoporte?.(e.target.files?.[0], { fromCamera: false })
+              e.target.value = ''
+            }}
+          />
+        )}
+        {ocrStatus === 'loading' && (
+          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+            Leyendo factura (OCR)… puede tardar unos segundos. Puede seguir editando el formulario.
+          </div>
+        )}
+        {ocrStatus === 'done' && Object.keys(sug).length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
+            Campos detectados por OCR (resaltados). Revise y corrija si hace falta.
+          </div>
+        )}
+        {soportePendiente?.file && (
+          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
+            ✓ {soportePendiente.file.name || 'Archivo listo'}
+            {soportePendiente.wasCropped ? ' · documento recortado' : ''}
+            {' · '}
+            {labelPesoSoporte(soportePendiente)}
+            {editId ? ' · se subirá al reemplazar' : ' · se subirá al guardar'}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+        <button type="button" style={{ ...btn(true), flex: isMobile ? '1 1 120px' : undefined }} disabled={busy} onClick={onGuardar}>
+          {busy ? 'Guardando…' : (editId ? 'Guardar' : 'Crear')}
+        </button>
+        <button
+          type="button"
+          style={{ ...btn(false), flex: isMobile ? '1 1 100px' : undefined }}
+          onClick={onCancelar}
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
+  )
+})
+
+export default function ContabilidadTransacciones({ t, token, esDeveloper, viewport }) {
+  const vpHook = useContabilidadViewport()
+  const { isMobile, isTablet } = viewport || vpHook
   const [items, setItems] = useState([])
   const [categorias, setCategorias] = useState([])
   const [contratos, setContratos] = useState([])
@@ -38,6 +541,10 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   const [busy, setBusy] = useState(false)
   const [soportePendiente, setSoportePendiente] = useState(null)
   const [soporteInlineInfo, setSoporteInlineInfo] = useState('')
+  const [ocrStatus, setOcrStatus] = useState('') // '' | loading | done
+  const [ocrSuggested, setOcrSuggested] = useState({})
+  const [previewTxId, setPreviewTxId] = useState(null)
+  const [replaceBusy, setReplaceBusy] = useState(false)
   const [preview, setPreview] = useState({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
   })
@@ -45,12 +552,16 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
   const formRef = useRef(null)
   const cameraRef = useRef(null)
   const fileRef = useRef(null)
+  const replaceRef = useRef(null)
+  const formTipoRef = useRef(form.tipo)
+  formTipoRef.current = form.tipo
 
   const cerrarPreview = useCallback(() => {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
       previewUrlRef.current = null
     }
+    setPreviewTxId(null)
     setPreview({ open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null })
   }, [])
 
@@ -58,11 +569,12 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
   }, [])
 
-  const abrirPreview = async (tx) => {
+  const abrirPreview = useCallback(async (tx) => {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
       previewUrlRef.current = null
     }
+    setPreviewTxId(tx.id)
     setPreview({
       open: true,
       loading: true,
@@ -88,15 +600,18 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     } catch (e) {
       setPreview((p) => ({ ...p, loading: false, error: e.message || 'Error al cargar' }))
     }
-  }
+  }, [token])
 
-  const descargarPreview = () => {
-    if (!preview.blobUrl || !preview.nombre) return
-    const a = document.createElement('a')
-    a.href = preview.blobUrl
-    a.download = preview.nombre
-    a.click()
-  }
+  const descargarPreview = useCallback(() => {
+    setPreview((p) => {
+      if (!p.blobUrl || !p.nombre) return p
+      const a = document.createElement('a')
+      a.href = p.blobUrl
+      a.download = p.nombre
+      a.click()
+      return p
+    })
+  }, [])
 
   const catsIngreso = useMemo(() => categorias.filter((c) => c.tipo === 'ingreso'), [categorias])
   const catsEgreso = useMemo(() => categorias.filter((c) => c.tipo === 'egreso'), [categorias])
@@ -124,87 +639,252 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
 
   useEffect(() => { cargar() }, [cargar])
 
-  const scrollToForm = () => {
+  const scrollToForm = useCallback(() => {
     requestAnimationFrame(() => {
       formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
-  }
+  }, [])
 
-  const abrirNueva = (tipoPreferido) => {
-    const tipo = tipoPreferido || (isMobile ? 'egreso' : 'ingreso')
+  const applyOcrSugerencias = useCallback((sugerencias) => {
+    if (!sugerencias || typeof sugerencias !== 'object') return
+    const flags = {}
+    setForm((prev) => {
+      const patch = {}
+      if (sugerencias.proveedor_razon_social) {
+        patch.proveedor_razon_social = String(sugerencias.proveedor_razon_social)
+        flags.proveedor_razon_social = true
+      }
+      if (sugerencias.proveedor_nit) {
+        const nit = splitNit(sugerencias.proveedor_nit)
+        patch.proveedor_nit_base = nit.base
+        patch.proveedor_nit_dv = nit.dv
+        flags.proveedor_nit = true
+      }
+      if (sugerencias.fecha) {
+        patch.fecha = String(sugerencias.fecha).slice(0, 10)
+        flags.fecha = true
+      }
+      if (sugerencias.valor_bruto != null) {
+        patch.valor_bruto = String(Math.round(Number(sugerencias.valor_bruto) || 0))
+        flags.valor_bruto = true
+      }
+      if (sugerencias.iva_valor != null) {
+        patch.iva_valor = String(Math.round(Number(sugerencias.iva_valor) || 0))
+        patch.iva_pct = ''
+        flags.iva_valor = true
+      }
+      if (sugerencias.iva_pct != null) {
+        patch.iva_pct = String(sugerencias.iva_pct)
+        flags.iva_pct = true
+      }
+      if (sugerencias.retencion_fuente_valor != null) {
+        patch.retencion_fuente_valor = String(Math.round(Number(sugerencias.retencion_fuente_valor) || 0))
+        patch.retencion_pct = ''
+        flags.retencion_fuente_valor = true
+      }
+      setOcrSuggested(flags)
+      return applyAutoCalculos({ ...prev, ...patch })
+    })
+  }, [])
+
+  const runOcrIfEgreso = useCallback(async (file) => {
+    if (formTipoRef.current !== 'egreso' || !file) return
+    setOcrStatus('loading')
+    try {
+      const result = await contabOcrFactura(token, file, { timeoutMs: 45000 })
+      if (result?.ok && result.sugerencias) applyOcrSugerencias(result.sugerencias)
+    } finally {
+      setOcrStatus('done')
+    }
+  }, [token, applyOcrSugerencias])
+
+  const abrirNueva = useCallback((tipoPreferido) => {
+    const tipo = tipoPreferido || 'egreso'
     const cats = tipo === 'egreso' ? catsEgreso : catsIngreso
     setEditId(null)
     setSoportePendiente(null)
-    setForm({
+    setOcrStatus('')
+    setOcrSuggested({})
+    setForm(applyAutoCalculos({
       ...EMPTY_FORM,
+      fecha: new Date().toISOString().slice(0, 10),
       tipo,
       categoria_id: cats[0]?.id || '',
-      iva_tasa: tipo === 'egreso' ? '0.19' : '0.19',
-    })
+      iva_pct: '19',
+    }))
     setShowForm(true)
     scrollToForm()
-  }
+  }, [catsEgreso, catsIngreso, scrollToForm])
 
-  const abrirEditar = (tx) => {
+  const abrirEditar = useCallback((tx) => {
     setEditId(tx.id)
     setSoportePendiente(null)
-    setForm({
+    setOcrStatus('')
+    setOcrSuggested({})
+    const retPct = pctFromTasa(tx.retencion_fuente_tasa)
+    const ivaPct = pctFromTasa(tx.iva_tasa)
+    const nit = splitNit(tx.proveedor_nit)
+    setForm(applyAutoCalculos({
       fecha: tx.fecha,
       tipo: tx.tipo,
       valor_bruto: String(tx.valor_bruto ?? ''),
-      retencion_fuente_tasa: String(tx.retencion_fuente_tasa ?? 0),
-      retencion_fuente_valor: String(tx.retencion_fuente_valor ?? 0),
-      iva_tasa: String(tx.iva_tasa ?? 0),
-      iva_valor: String(tx.iva_valor ?? 0),
+      retencion_pct: retPct,
+      retencion_fuente_valor: String(Math.round(Number(tx.retencion_fuente_valor) || 0)),
+      iva_pct: ivaPct,
+      iva_valor: String(Math.round(Number(tx.iva_valor) || 0)),
+      propina: String(Math.round(Number(tx.propina) || 0)),
       categoria_id: String(tx.categoria_id ?? ''),
       centro_costo_tipo: tx.centro_costo_tipo || 'empresa',
       contrato_id: tx.contrato_id ? String(tx.contrato_id) : '',
       fuente_ingreso: tx.fuente_ingreso || 'licenciamiento',
+      proveedor_razon_social: tx.proveedor_razon_social || '',
+      proveedor_nit_base: nit.base,
+      proveedor_nit_dv: nit.dv,
       notas: tx.notas || '',
-    })
+    }))
     setShowForm(true)
     scrollToForm()
-  }
+  }, [scrollToForm])
 
-  const payloadFromForm = () => ({
-    fecha: form.fecha,
-    tipo: form.tipo,
-    valor_bruto: Number(form.valor_bruto) || 0,
-    retencion_fuente_tasa: Number(form.retencion_fuente_tasa) || 0,
-    retencion_fuente_valor: Number(form.retencion_fuente_valor) || 0,
-    iva_tasa: Number(form.iva_tasa) || 0,
-    iva_valor: Number(form.iva_valor) || 0,
-    categoria_id: Number(form.categoria_id),
-    centro_costo_tipo: form.centro_costo_tipo,
-    contrato_id: form.centro_costo_tipo === 'contrato' ? Number(form.contrato_id) : null,
-    fuente_ingreso: form.tipo === 'ingreso' ? form.fuente_ingreso : null,
-    notas: form.notas || null,
-  })
+  const onPatchForm = useCallback((patch) => {
+    setForm((prev) => applyAutoCalculos({ ...prev, ...patch }))
+    setOcrSuggested((prev) => {
+      if (!prev || !Object.keys(prev).length) return prev
+      const next = { ...prev }
+      Object.keys(patch).forEach((k) => {
+        if (k === 'proveedor_nit_base' || k === 'proveedor_nit_dv') delete next.proveedor_nit
+        else delete next[k]
+      })
+      return next
+    })
+  }, [])
 
-  const onSoporteFile = async (file) => {
+  const onTipoChange = useCallback((tipo) => {
+    setForm((prev) => {
+      const cats = tipo === 'egreso' ? catsEgreso : catsIngreso
+      return applyAutoCalculos({
+        ...prev,
+        tipo,
+        categoria_id: cats[0]?.id || '',
+        proveedor_razon_social: tipo === 'egreso' ? prev.proveedor_razon_social : '',
+        proveedor_nit_base: tipo === 'egreso' ? prev.proveedor_nit_base : '',
+        proveedor_nit_dv: tipo === 'egreso' ? prev.proveedor_nit_dv : '',
+      })
+    })
+    setOcrSuggested({})
+  }, [catsEgreso, catsIngreso])
+
+  const onCentroCostoChange = useCallback((value) => {
+    setForm((prev) => {
+      if (value === 'empresa' || !value) {
+        return { ...prev, centro_costo_tipo: 'empresa', contrato_id: '' }
+      }
+      return { ...prev, centro_costo_tipo: 'contrato', contrato_id: value }
+    })
+  }, [])
+
+  const payloadFromForm = useCallback(() => {
+    const retPct = parsePct(form.retencion_pct)
+    const ivaPct = parsePct(form.iva_pct)
+    return {
+      fecha: form.fecha,
+      tipo: form.tipo,
+      valor_bruto: Number(form.valor_bruto) || 0,
+      retencion_fuente_tasa: retPct != null ? tasaFromPct(form.retencion_pct) : 0,
+      retencion_fuente_valor: Number(form.retencion_fuente_valor) || 0,
+      iva_tasa: ivaPct != null ? tasaFromPct(form.iva_pct) : 0,
+      iva_valor: Number(form.iva_valor) || 0,
+      propina: Number(form.propina) || 0,
+      categoria_id: Number(form.categoria_id),
+      centro_costo_tipo: form.centro_costo_tipo,
+      contrato_id: form.centro_costo_tipo === 'contrato' ? Number(form.contrato_id) : null,
+      fuente_ingreso: form.tipo === 'ingreso' ? form.fuente_ingreso : null,
+      proveedor_razon_social: form.tipo === 'egreso' ? (form.proveedor_razon_social || null) : null,
+      proveedor_nit: form.tipo === 'egreso' ? (joinNit(form.proveedor_nit_base, form.proveedor_nit_dv) || null) : null,
+      notas: form.notas || null,
+    }
+  }, [form])
+
+  const onSoporteFile = useCallback(async (file, { fromCamera = false } = {}) => {
     if (!file) return
     try {
-      const prepared = await prepareSoporteConPeso(file)
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, { cropDocument: fromCamera || /^image\//i.test(file.type || '') })
       setSoportePendiente(prepared)
+      void runOcrIfEgreso(prepared.file || file)
     } catch {
       setSoportePendiente({
         file,
         originalBytes: file.size,
         compressedBytes: file.size,
         wasCompressed: false,
+        wasCropped: false,
       })
+      void runOcrIfEgreso(file)
     }
-  }
+  }, [runOcrIfEgreso])
 
-  const guardar = async () => {
+  const subirSoporteReplace = useCallback(async (txId, file, { fromCamera = false } = {}) => {
+    if (!file || !txId) return
+    setReplaceBusy(true)
+    setBusy(true)
+    try {
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, {
+        cropDocument: fromCamera || /^image\//i.test(file.type || ''),
+      })
+      const fd = new FormData()
+      fd.append('archivo', prepared.file)
+      await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
+      if (formTipoRef.current === 'egreso' || showForm) {
+        void runOcrIfEgreso(prepared.file)
+      }
+      await cargar()
+      if (preview.open && previewTxId === txId) {
+        await abrirPreview({ id: txId, soporte_nombre_archivo: prepared.file.name, soporte_mime_type: prepared.file.type })
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReplaceBusy(false)
+      setBusy(false)
+    }
+  }, [token, cargar, runOcrIfEgreso, showForm, preview.open, previewTxId, abrirPreview])
+
+  const onReplaceFromForm = useCallback(async (file, opts) => {
+    if (editId) await subirSoporteReplace(editId, file, opts)
+    else await onSoporteFile(file, opts)
+  }, [editId, subirSoporteReplace, onSoporteFile])
+
+  const onCancelar = useCallback(() => {
+    setShowForm(false)
+    setSoportePendiente(null)
+    setOcrStatus('')
+    setOcrSuggested({})
+  }, [])
+
+  const guardar = useCallback(async () => {
+    if (form.tipo === 'egreso') {
+      if (!(form.proveedor_razon_social || '').trim()) {
+        setError('La razón social del proveedor es obligatoria en egresos.')
+        return
+      }
+      if (!(form.proveedor_nit_base || '').trim()) {
+        setError('El NIT del proveedor es obligatorio en egresos.')
+        return
+      }
+    }
+    if (form.centro_costo_tipo === 'contrato' && !form.contrato_id) {
+      setError('Seleccione un contrato para el centro de costo.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
       let txId = editId
+      const body = payloadFromForm()
       if (editId) {
-        await contabSend(`/transacciones/${editId}`, token, { method: 'PATCH', body: payloadFromForm() })
+        await contabSend(`/transacciones/${editId}`, token, { method: 'PATCH', body })
       } else {
-        const created = await contabSend('/transacciones', token, { body: payloadFromForm() })
+        const created = await contabSend('/transacciones', token, { body })
         txId = created?.id
       }
       if (!editId && txId && soportePendiente?.file) {
@@ -214,15 +894,17 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
       }
       setShowForm(false)
       setSoportePendiente(null)
+      setOcrStatus('')
+      setOcrSuggested({})
       await cargar()
     } catch (e) {
       setError(e.message)
     } finally {
       setBusy(false)
     }
-  }
+  }, [form, editId, payloadFromForm, soportePendiente, token, cargar])
 
-  const anular = async (id) => {
+  const anular = useCallback(async (id) => {
     if (!window.confirm('¿Anular esta transacción?')) return
     setBusy(true)
     try {
@@ -233,9 +915,9 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     } finally {
       setBusy(false)
     }
-  }
+  }, [token, cargar])
 
-  const desdeOrden = async (ordenId) => {
+  const desdeOrden = useCallback(async (ordenId) => {
     setBusy(true)
     try {
       await contabSend(`/transacciones/desde-orden/${ordenId}`, token, { body: {} })
@@ -245,15 +927,20 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     } finally {
       setBusy(false)
     }
-  }
+  }, [token, cargar])
 
-  const subirSoporte = async (txId, file) => {
+  const subirSoporte = useCallback(async (txId, file, { fromCamera = false } = {}) => {
     if (!file) return
     setBusy(true)
     setSoporteInlineInfo('')
     try {
-      const prepared = await prepareSoporteConPeso(file)
-      setSoporteInlineInfo(labelPesoSoporte(prepared))
+      const prepared = await prepareSoporteConPeso(file, 800 * 1024, {
+        cropDocument: fromCamera || /^image\//i.test(file.type || ''),
+      })
+      setSoporteInlineInfo([
+        prepared.wasCropped ? 'documento recortado' : null,
+        labelPesoSoporte(prepared),
+      ].filter(Boolean).join(' · '))
       const fd = new FormData()
       fd.append('archivo', prepared.file)
       await contabSend(`/transacciones/${txId}/soporte`, token, { method: 'POST', formData: fd })
@@ -264,20 +951,11 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     } finally {
       setBusy(false)
     }
-  }
-
-  const Field = ({ name, label, children }) => (
-    <label style={{ display: 'block' }}>
-      <span style={lbl}>
-        <FieldLabel label={label} hint={TX_FIELD_HINTS[name]} t={t} />
-      </span>
-      {children}
-    </label>
-  )
+  }, [token, cargar])
 
   const touchPad = isMobile ? '12px 14px' : '8px 10px'
   const touchMin = isMobile ? 44 : undefined
-  const inp = {
+  const inp = useMemo(() => ({
     background: t.inputBg,
     border: `1px solid ${t.border}`,
     borderRadius: 8,
@@ -287,9 +965,13 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     width: '100%',
     boxSizing: 'border-box',
     minHeight: touchMin,
-  }
-  const lbl = { fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4, display: 'block' }
-  const btn = (primary) => ({
+  }), [t.inputBg, t.border, t.text, touchPad, isMobile, touchMin])
+
+  const lbl = useMemo(() => ({
+    fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 4, display: 'block',
+  }), [t.textMuted])
+
+  const btn = useCallback((primary) => ({
     background: primary ? t.primary : 'transparent',
     color: primary ? '#fff' : t.primary,
     border: primary ? 'none' : `1.5px solid ${t.primary}`,
@@ -303,13 +985,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-  })
-
-  const formGridCols = isMobile
-    ? '1fr'
-    : isTablet
-      ? 'repeat(2, minmax(0, 1fr))'
-      : 'repeat(auto-fill, minmax(180px, 1fr))'
+  }), [t.primary, isMobile, touchMin])
 
   return (
     <div>
@@ -322,29 +998,21 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
         paddingTop: isMobile ? 4 : 0,
         paddingBottom: isMobile ? 8 : 0,
       }}>
-        {isMobile ? (
-          <>
-            <button type="button" style={{ ...btn(true), flex: '1 1 160px' }} onClick={() => abrirNueva('egreso')}>
-              + Egreso rápido
-            </button>
-            <button type="button" style={{ ...btn(false), flex: '0 0 auto' }} onClick={() => abrirNueva('ingreso')}>
-              Ingreso
-            </button>
-          </>
-        ) : (
-          <button type="button" style={btn(true)} onClick={() => abrirNueva()}>+ Nueva transacción</button>
-        )}
+        <button type="button" style={{ ...btn(true), flex: isMobile ? '1 1 160px' : undefined }} onClick={() => abrirNueva('egreso')}>
+          + {isMobile ? 'Egreso rápido' : 'Nueva transacción'}
+        </button>
+        <button type="button" style={{ ...btn(false), flex: isMobile ? '0 0 auto' : undefined }} onClick={() => abrirNueva('ingreso')}>
+          Ingreso
+        </button>
         <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)} style={{ ...inp, width: isMobile ? '100%' : 'auto', flex: isMobile ? '1 1 100%' : undefined }}>
           <option value="">Todos los tipos</option>
           <option value="ingreso">Ingresos</option>
           <option value="egreso">Egresos</option>
         </select>
-        {!isMobile && (
-          <button type="button" style={btn(false)} onClick={cargar}>↻ Actualizar</button>
-        )}
+        <button type="button" style={btn(false)} onClick={cargar}>↻ Actualizar</button>
       </div>
 
-      {!isMobile && ordenesPendientes.length > 0 && (
+      {ordenesPendientes.length > 0 && (
         <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
           <div style={{ fontWeight: 700, color: t.text, marginBottom: 8 }}>Órdenes facturadas sin vincular ({ordenesPendientes.length})</div>
           {ordenesPendientes.slice(0, 5).map((o) => (
@@ -362,169 +1030,34 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
       {error && <div style={{ color: '#EF4444', marginBottom: 12, fontSize: 'var(--cc-sm)' }}>{error}</div>}
 
       {showForm && (
-        <div
-          ref={formRef}
-          style={{
-            background: t.bgCard,
-            border: `1px solid ${t.primary}44`,
-            borderRadius: 12,
-            padding: isMobile ? 14 : 16,
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 12, color: t.primary }}>
-            {editId ? 'Editar transacción' : (isMobile && form.tipo === 'egreso' ? 'Registrar egreso' : 'Nueva transacción')}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: formGridCols, gap: 12 }}>
-            <Field name="fecha" label="Fecha">
-              <input type="date" style={inp} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
-            </Field>
-            <Field name="tipo" label="Tipo">
-              <select
-                style={inp}
-                value={form.tipo}
-                onChange={(e) => {
-                  const tipo = e.target.value
-                  const cats = tipo === 'egreso' ? catsEgreso : catsIngreso
-                  setForm({ ...form, tipo, categoria_id: cats[0]?.id || '' })
-                }}
-              >
-                <option value="ingreso">Ingreso</option>
-                <option value="egreso">Egreso</option>
-              </select>
-            </Field>
-            <Field name="valor_bruto" label="Valor bruto">
-              <input
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="0.01"
-                style={inp}
-                value={form.valor_bruto}
-                onChange={(e) => setForm({ ...form, valor_bruto: e.target.value })}
-                autoFocus={isMobile && !editId}
-              />
-            </Field>
-            {(!isMobile || form.tipo === 'ingreso') && (
-              <Field name="retencion_fuente_valor" label="Retención valor">
-                <input type="number" inputMode="decimal" min="0" step="0.01" style={inp} value={form.retencion_fuente_valor} onChange={(e) => setForm({ ...form, retencion_fuente_valor: e.target.value })} />
-              </Field>
-            )}
-            <Field name="iva_tasa" label="IVA tasa">
-              <input type="number" inputMode="decimal" min="0" step="0.0001" style={inp} value={form.iva_tasa} onChange={(e) => setForm({ ...form, iva_tasa: e.target.value })} />
-            </Field>
-            <Field name="iva_valor" label="IVA valor">
-              <input type="number" inputMode="decimal" min="0" step="0.01" style={inp} value={form.iva_valor} onChange={(e) => setForm({ ...form, iva_valor: e.target.value })} />
-            </Field>
-            <Field name="categoria" label="Categoría">
-              <select style={inp} value={form.categoria_id} onChange={(e) => setForm({ ...form, categoria_id: e.target.value })}>
-                <option value="">—</option>
-                {(form.tipo === 'ingreso' ? catsIngreso : catsEgreso).map((c) => (
-                  <option key={c.id} value={c.id}>{c.nombre}</option>
-                ))}
-              </select>
-            </Field>
-            {!isMobile && (
-              <Field name="centro_costo_tipo" label="Centro de costo">
-                <select style={inp} value={form.centro_costo_tipo} onChange={(e) => setForm({ ...form, centro_costo_tipo: e.target.value })}>
-                  <option value="empresa">Empresa general</option>
-                  <option value="contrato">Contrato</option>
-                </select>
-              </Field>
-            )}
-            {!isMobile && form.centro_costo_tipo === 'contrato' && (
-              <Field name="contrato" label="Contrato">
-                <select style={inp} value={form.contrato_id} onChange={(e) => setForm({ ...form, contrato_id: e.target.value })}>
-                  <option value="">—</option>
-                  {contratos.map((c) => <option key={c.id} value={c.id}>{c.numero}</option>)}
-                </select>
-              </Field>
-            )}
-            {form.tipo === 'ingreso' && (
-              <Field name="fuente_ingreso" label="Fuente ingreso">
-                <select style={inp} value={form.fuente_ingreso} onChange={(e) => setForm({ ...form, fuente_ingreso: e.target.value })}>
-                  <option value="licenciamiento">Licenciamiento</option>
-                  <option value="servicios">Servicios</option>
-                </select>
-              </Field>
-            )}
-          </div>
-
-          {(!isMobile || form.tipo === 'ingreso') && (
-            <label style={{ display: 'block', marginTop: 12 }}>
-              <span style={lbl}><FieldLabel label="Notas" hint={TX_FIELD_HINTS.notas} t={t} /></span>
-              <textarea style={{ ...inp, minHeight: 60 }} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
-            </label>
-          )}
-
-          {!editId && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, marginBottom: 8 }}>
-                Soporte / recibo
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {isMobile && (
-                  <button
-                    type="button"
-                    style={{ ...btn(true), flex: '1 1 140px' }}
-                    onClick={() => cameraRef.current?.click()}
-                  >
-                    <Camera size={18} strokeWidth={2.2} /> Tomar foto
-                  </button>
-                )}
-                <button
-                  type="button"
-                  style={{ ...btn(false), flex: isMobile ? '1 1 140px' : undefined }}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <Paperclip size={16} strokeWidth={2.2} /> {isMobile ? 'Galería / PDF' : 'Adjuntar archivo'}
-                </button>
-              </div>
-              <input
-                ref={cameraRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                hidden
-                onChange={(e) => {
-                  onSoporteFile(e.target.files?.[0])
-                  e.target.value = ''
-                }}
-              />
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".pdf,image/*"
-                hidden
-                onChange={(e) => {
-                  onSoporteFile(e.target.files?.[0])
-                  e.target.value = ''
-                }}
-              />
-              {soportePendiente?.file && (
-                <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
-                  ✓ {soportePendiente.file.name || 'Archivo listo'}
-                  {' · '}
-                  {labelPesoSoporte(soportePendiente)}
-                  {' · se subirá al guardar'}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-            <button type="button" style={{ ...btn(true), flex: isMobile ? '1 1 120px' : undefined }} disabled={busy} onClick={guardar}>
-              {busy ? 'Guardando…' : (editId ? 'Guardar' : 'Crear')}
-            </button>
-            <button
-              type="button"
-              style={{ ...btn(false), flex: isMobile ? '1 1 100px' : undefined }}
-              onClick={() => { setShowForm(false); setSoportePendiente(null) }}
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
+        <TransaccionFormPanel
+          t={t}
+          form={form}
+          editId={editId}
+          isMobile={isMobile}
+          isTablet={isTablet}
+          busy={busy}
+          catsIngreso={catsIngreso}
+          catsEgreso={catsEgreso}
+          contratos={contratos}
+          soportePendiente={soportePendiente}
+          ocrStatus={ocrStatus}
+          ocrSuggested={ocrSuggested}
+          cameraRef={cameraRef}
+          fileRef={fileRef}
+          replaceRef={replaceRef}
+          formRef={formRef}
+          inp={inp}
+          lbl={lbl}
+          btn={btn}
+          onPatchForm={onPatchForm}
+          onTipoChange={onTipoChange}
+          onCentroCostoChange={onCentroCostoChange}
+          onSoporteFile={onSoporteFile}
+          onReplaceSoporte={onReplaceFromForm}
+          onGuardar={guardar}
+          onCancelar={onCancelar}
+        />
       )}
 
       {loading ? (
@@ -533,7 +1066,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {soporteInlineInfo && (
             <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600 }}>
-              Comprimiendo / subiendo… {soporteInlineInfo}
+              Preparando soporte… {soporteInlineInfo}
             </div>
           )}
           {items.map((tx) => (
@@ -546,20 +1079,11 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                 padding: 14,
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                <span style={{ color: tx.tipo === 'ingreso' ? '#10B981' : '#EF4444', fontWeight: 700, textTransform: 'capitalize' }}>
-                  {tx.tipo}
-                </span>
-                <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>{tx.fecha}</span>
-              </div>
-              <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: t.text, marginBottom: 4 }}>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: t.text, marginBottom: 8 }}>
                 {fmtCOP(tx.valor_neto)}
               </div>
-              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 10 }}>
-                {tx.categoria?.nombre || '—'} · Bruto {fmtCOP(tx.valor_bruto)}
-                {tx.iva_valor ? ` · IVA ${fmtCOP(tx.iva_valor)}` : ''}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <TxDetailBlock tx={tx} t={t} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 10 }}>
                 {tx.soporte_nombre_archivo ? (
                   <button type="button" style={btn(false)} onClick={() => abrirPreview(tx)}>
                     📎 Ver soporte
@@ -583,7 +1107,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                         type="file"
                         accept=".pdf,image/*"
                         hidden
-                        onChange={(e) => subirSoporte(tx.id, e.target.files?.[0])}
+                        onChange={(e) => subirSoporte(tx.id, e.target.files?.[0], { fromCamera: false })}
                       />
                     </label>
                     <input
@@ -593,7 +1117,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                       capture="environment"
                       hidden
                       onChange={(e) => {
-                        subirSoporte(tx.id, e.target.files?.[0])
+                        subirSoporte(tx.id, e.target.files?.[0], { fromCamera: true })
                         e.target.value = ''
                       }}
                     />
@@ -614,13 +1138,13 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
         <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {soporteInlineInfo && (
             <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 600, marginBottom: 8 }}>
-              Comprimiendo / subiendo… {soporteInlineInfo}
+              Preparando soporte… {soporteInlineInfo}
             </div>
           )}
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: isTablet ? 720 : undefined }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: isTablet ? 980 : undefined }}>
             <thead>
               <tr style={{ background: t.primary + '18', color: t.text }}>
-                {['Fecha', 'Tipo', 'Bruto', 'IVA', 'Neto', 'Categoría', 'Centro', 'Origen', 'Soporte', ''].map((h) => (
+                {['Fecha', 'Tipo', 'Bruto', 'Retención', 'IVA', 'Propina', 'Total', 'Categoría', 'Centro', 'Proveedor', 'NIT', 'Origen', 'Notas', 'Soporte', ''].map((h) => (
                   <th key={h || 'acciones'} style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700 }}>{h}</th>
                 ))}
               </tr>
@@ -631,11 +1155,22 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                   <td style={{ padding: '8px' }}>{tx.fecha}</td>
                   <td style={{ padding: '8px', color: tx.tipo === 'ingreso' ? '#10B981' : '#EF4444', fontWeight: 600 }}>{tx.tipo}</td>
                   <td style={{ padding: '8px' }}>{fmtCOP(tx.valor_bruto)}</td>
+                  <td style={{ padding: '8px' }}>{fmtCOP(tx.retencion_fuente_valor)}</td>
                   <td style={{ padding: '8px' }}>{fmtCOP(tx.iva_valor)}</td>
+                  <td style={{ padding: '8px' }}>{fmtCOP(tx.propina || 0)}</td>
                   <td style={{ padding: '8px', fontWeight: 600 }}>{fmtCOP(tx.valor_neto)}</td>
                   <td style={{ padding: '8px' }}>{tx.categoria?.nombre || '—'}</td>
-                  <td style={{ padding: '8px' }}>{tx.contrato?.numero || (tx.centro_costo_tipo === 'empresa' ? 'Empresa' : '—')}</td>
-                  <td style={{ padding: '8px' }}>{tx.origen}</td>
+                  <td style={{ padding: '8px', maxWidth: 180 }} title={labelCentroCosto(tx)}>{labelCentroCosto(tx)}</td>
+                  <td style={{ padding: '8px', maxWidth: 160 }} title={tx.proveedor_razon_social || ''}>
+                    {tx.tipo === 'egreso' ? (tx.proveedor_razon_social || '—') : '—'}
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    {tx.tipo === 'egreso' ? (tx.proveedor_nit || '—') : '—'}
+                  </td>
+                  <td style={{ padding: '8px' }}>{tx.origen || '—'}</td>
+                  <td style={{ padding: '8px', maxWidth: 160 }} title={tx.notas || ''}>
+                    {tx.notas ? (tx.notas.length > 40 ? `${tx.notas.slice(0, 40)}…` : tx.notas) : '—'}
+                  </td>
                   <td style={{ padding: '8px' }}>
                     {tx.soporte_nombre_archivo ? (
                       <button
@@ -655,9 +1190,36 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                         ) : null}
                       </button>
                     ) : (
-                      <label style={{ cursor: 'pointer', color: t.textMuted }}>
-                        📤<input type="file" accept=".pdf,image/*" hidden onChange={(e) => subirSoporte(tx.id, e.target.files?.[0])} />
-                      </label>
+                      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: t.textMuted, padding: 0 }}
+                          title="Tomar foto"
+                          onClick={() => document.getElementById(`cam-tx-d-${tx.id}`)?.click()}
+                        >
+                          📷
+                        </button>
+                        <label style={{ cursor: 'pointer', color: t.textMuted }} title="Adjuntar archivo">
+                          📤
+                          <input
+                            type="file"
+                            accept=".pdf,image/*"
+                            hidden
+                            onChange={(e) => subirSoporte(tx.id, e.target.files?.[0], { fromCamera: false })}
+                          />
+                        </label>
+                        <input
+                          id={`cam-tx-d-${tx.id}`}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          hidden
+                          onChange={(e) => {
+                            subirSoporte(tx.id, e.target.files?.[0], { fromCamera: true })
+                            e.target.value = ''
+                          }}
+                        />
+                      </span>
                     )}
                   </td>
                   <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
@@ -667,7 +1229,7 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
                 </tr>
               ))}
               {!items.length && (
-                <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>Sin transacciones</td></tr>
+                <tr><td colSpan={15} style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>Sin transacciones</td></tr>
               )}
             </tbody>
           </table>
@@ -684,6 +1246,8 @@ export default function ContabilidadTransacciones({ t, token, esDeveloper }) {
         blobUrl={preview.blobUrl}
         onClose={cerrarPreview}
         onDownload={descargarPreview}
+        onReplace={previewTxId ? (file, opts) => subirSoporteReplace(previewTxId, file, opts) : undefined}
+        replaceBusy={replaceBusy}
       />
     </div>
   )

@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS public.contabilidad_transaccion (
   soporte_nombre_archivo  text,
   soporte_mime_type       text,
   soporte_tamano_bytes    bigint,
+  proveedor_razon_social  text,
+  proveedor_nit           text,
+  propina                 numeric(18,2) NOT NULL DEFAULT 0 CHECK (propina >= 0),
   created_at              timestamptz NOT NULL DEFAULT now(),
   created_by              integer REFERENCES public.usuarios(id) ON DELETE SET NULL,
   updated_at              timestamptz,
@@ -110,6 +113,10 @@ CREATE TABLE IF NOT EXISTS public.contabilidad_transaccion (
   CONSTRAINT contabilidad_tx_fuente_ingreso_check CHECK (
     (tipo = 'egreso' AND fuente_ingreso IS NULL)
     OR (tipo = 'ingreso')
+  ),
+  CONSTRAINT contabilidad_tx_proveedor_egreso_check CHECK (
+    (tipo = 'ingreso' AND proveedor_razon_social IS NULL AND proveedor_nit IS NULL)
+    OR (tipo = 'egreso')
   )
 );
 
@@ -136,6 +143,15 @@ COMMENT ON TABLE public.contabilidad_transaccion IS
 
 COMMENT ON COLUMN public.contabilidad_transaccion.valor_bruto IS
   'Base gravable sin IVA. Desde orden de pago: subtotal.';
+
+COMMENT ON COLUMN public.contabilidad_transaccion.proveedor_razon_social IS
+  'Razón social del proveedor. Obligatorio en egresos; NULL en ingresos.';
+
+COMMENT ON COLUMN public.contabilidad_transaccion.proveedor_nit IS
+  'NIT del proveedor. Obligatorio en egresos; NULL en ingresos.';
+
+COMMENT ON COLUMN public.contabilidad_transaccion.propina IS
+  'Propina u otro cargo opcional en pesos. Se suma al total de la factura.';
 
 -- ── Movimientos de cuentas especiales (ledger) ──────────────────────────────
 CREATE TABLE IF NOT EXISTS public.contabilidad_cuenta_movimiento (

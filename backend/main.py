@@ -24621,12 +24621,27 @@ def _matriz_enforce_pendiente_item_n_min(bloque: dict, niveles_activos: List[int
     return out
 
 
+def _matriz_bloque_usa_claves_nivel(bloque: Optional[dict]) -> bool:
+    """True si el bloque SQL/Python ya trae nivel1..nivel6 (no inspector/residente/interventoria)."""
+    if not bloque or not isinstance(bloque, dict):
+        return False
+    for fila in ("aprobado", "pendiente", "no_revisado", "rechazado", "habilitado"):
+        src = bloque.get(fila)
+        if isinstance(src, dict) and any(str(k).startswith("nivel") for k in src.keys()):
+            return True
+    return False
+
+
 def _matriz_finalizar_bloque(bloque: Optional[dict], niveles_activos: List[int], *, desde_sql_legacy: bool) -> dict:
     na = sorted({int(x) for x in niveles_activos if 1 <= int(x) <= 6}) or [1, 2, 3]
-    if desde_sql_legacy:
+    # SQL nuevo emite nivelN; solo mapear inspector/residente/interventoria si aún viene legado.
+    if desde_sql_legacy and not _matriz_bloque_usa_claves_nivel(bloque):
         b = _matriz_legacy_bloque_a_niveles(bloque, na)
     elif bloque and isinstance(bloque, dict):
-        b = bloque
+        if _matriz_bloque_usa_claves_nivel(bloque):
+            b = _matriz_legacy_bloque_a_niveles(bloque, na)  # rellena solo niveles activos
+        else:
+            b = bloque
     else:
         b = _matriz_validacion_empty(na)
     return _matriz_enforce_pendiente_item_n_min(b, na)

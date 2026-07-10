@@ -227,13 +227,13 @@ def _sheet_deducciones(ws, data: dict) -> None:
 
 
 def _sheet_transacciones(ws, txs: List[dict], meta: dict) -> None:
-    ncols = 12
+    ncols = 15
     row = _write_title(ws, "Libro de transacciones", ncols)
     ws.cell(row=row, column=1, value=f"Período: {meta.get('fecha_desde')} — {meta.get('fecha_hasta')}")
     row += 2
     headers = [
-        "ID", "Fecha", "Tipo", "Bruto", "Retención", "IVA", "Neto",
-        "Categoría", "Centro costo", "Contrato", "Origen", "Notas",
+        "ID", "Fecha", "Tipo", "Bruto", "Retención", "IVA", "Propina", "Neto",
+        "Categoría", "Centro costo", "Contrato", "Proveedor", "NIT", "Origen", "Notas",
     ]
     for i, h in enumerate(headers, 1):
         ws.cell(row=row, column=i, value=h)
@@ -244,7 +244,9 @@ def _sheet_transacciones(ws, txs: List[dict], meta: dict) -> None:
         contrato = tx.get("contrato")
         c_label = ""
         if contrato:
-            c_label = f"{contrato.get('numero') or contrato.get('id')}"
+            num = contrato.get("numero") or contrato.get("id")
+            obj = (contrato.get("objeto") or "").strip()
+            c_label = f"{num} — {obj}" if obj else str(num)
         elif (tx.get("centro_costo_tipo") or "") == "empresa":
             c_label = "Empresa general"
         ws.append([
@@ -254,14 +256,17 @@ def _sheet_transacciones(ws, txs: List[dict], meta: dict) -> None:
             tx.get("valor_bruto"),
             tx.get("retencion_fuente_valor"),
             tx.get("iva_valor"),
+            tx.get("propina") or 0,
             tx.get("valor_neto"),
             cat,
             tx.get("centro_costo_tipo"),
             c_label,
+            tx.get("proveedor_razon_social") or "",
+            tx.get("proveedor_nit") or "",
             tx.get("origen"),
             (tx.get("notas") or "")[:200],
         ])
-        for c in range(4, 8):
+        for c in range(4, 9):
             ws.cell(row=row, column=c).number_format = '#,##0.00'
         row += 1
     _autosize_columns(ws)

@@ -4,13 +4,11 @@
 -- Es idempotente: se puede re-ejecutar tras cambios. El editor puede avisar que se
 -- eliminarán funciones/vista al inicio; es normal: se recrean al final del mismo script.
 --
--- Errores frecuentes si falta contexto:
---   42P16  → vista con columnas distintas (p. ej. costo_directo vs cantidad_total)
---   42703  → referencia SQL incorrecta en CTE (corregido en cfg_min)
---   42883  → falta dash_costo_agregado (incluida abajo, idempotente)
---
--- Regla de negocio (cascada): N1 clasifica todo el acta; N2 solo filas con N1=Aprobado; N3 solo con N1 y N2=Aprobado.
--- Fila «pendiente_item»: estado Pendiente en el nivel mínimo activo del contrato (columna nivel{n_min}), no sub_estado.
+-- Regla de negocio (cascada por niveles activos del contrato):
+--   - N_min (menor nivel activo): clasifica todas las filas del acta.
+--   - Nivel N (> N_min): solo filas con TODOS los niveles activos < N en Aprobado.
+--   - Claves de salida: nivel1..nivel6 (no inspector/residente/interventoria).
+-- Fila «pendiente_item»: estado Pendiente en el nivel mínimo activo (columna nivel{n_min}).
 
 -- ── Prerequisito: costo agregado cant×VU (también en dashboard_costo_agregado.sql) ──
 CREATE OR REPLACE FUNCTION public.dash_costo_agregado(p_cant numeric, p_vu numeric)
@@ -79,6 +77,46 @@ AS $f$
   END;
 $f$;
 
+-- Estado normalizado del nivel N (1..6) en una fila de la matriz.
+CREATE OR REPLACE FUNCTION public._matriz_estado_nivel(
+  p_n smallint,
+  p_n1 text, p_n2 text, p_n3 text, p_n4 text, p_n5 text, p_n6 text
+)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $f$
+  SELECT CASE p_n
+    WHEN 1 THEN p_n1
+    WHEN 2 THEN p_n2
+    WHEN 3 THEN p_n3
+    WHEN 4 THEN p_n4
+    WHEN 5 THEN p_n5
+    WHEN 6 THEN p_n6
+    ELSE 'No Revisado'
+  END;
+$f$;
+
+-- True si todos los niveles activos estrictamente menores a p_nivel están Aprobado.
+CREATE OR REPLACE FUNCTION public._matriz_prereqs_ok(
+  p_na bigint[],
+  p_nivel smallint,
+  p_n1 text, p_n2 text, p_n3 text, p_n4 text, p_n5 text, p_n6 text
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $f$
+  SELECT NOT EXISTS (
+    SELECT 1
+    FROM unnest(COALESCE(p_na, ARRAY[]::bigint[])) AS u(n)
+    WHERE u.n::smallint < p_nivel
+      AND public._matriz_estado_nivel(
+            u.n::smallint, p_n1, p_n2, p_n3, p_n4, p_n5, p_n6
+          ) IS DISTINCT FROM 'Aprobado'
+  );
+$f$;
+
 CREATE OR REPLACE FUNCTION public.dashboard_matriz_validacion_agg(p_contrato_id bigint, p_acta_id bigint DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE sql
@@ -98,6 +136,10 @@ cfg_min AS (
     c.na,
     (SELECT min(u::smallint) FROM unnest(c.na) AS u(u)) AS n_min
   FROM cfg c
+),
+niveles AS (
+  SELECT u::smallint AS n
+  FROM cfg_min cm, LATERAL unnest(cm.na) AS u(u)
 ),
 base AS (
   SELECT
@@ -124,82 +166,97 @@ base AS (
     AND (p_acta_id IS NULL OR r.acta_rpo_id = p_acta_id)
     AND public._dash_norm_item_key(r.item_numero) IS NOT NULL
 ),
-item_buckets AS (
+-- Una fila por (bloque, ítem, nivel activo): cantidad neta en cada bucket de estado.
+item_nivel AS (
   SELECT
-    bloque,
-    cap_k,
-    it,
-    MAX(vu) AS vu,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_int,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_res,
-    SUM(CASE WHEN n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_apr_ins,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_int,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_res,
-    SUM(CASE WHEN n1 = 'Pendiente' THEN cq ELSE 0 END) AS q_pend_ins,
+    b.bloque,
+    b.cap_k,
+    b.it,
+    nv.n AS nivel,
+    MAX(b.vu) AS vu,
     SUM(CASE
-      WHEN (SELECT n_min FROM cfg_min) = 1 AND n1 = 'Pendiente' THEN cq
-      WHEN (SELECT n_min FROM cfg_min) = 2 AND n2 = 'Pendiente' THEN cq
-      WHEN (SELECT n_min FROM cfg_min) = 3 AND n3 = 'Pendiente' THEN cq
-      WHEN (SELECT n_min FROM cfg_min) = 4 AND n4 = 'Pendiente' THEN cq
-      WHEN (SELECT n_min FROM cfg_min) = 5 AND n5 = 'Pendiente' THEN cq
-      WHEN (SELECT n_min FROM cfg_min) = 6 AND n6 = 'Pendiente' THEN cq
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        OR public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+      THEN CASE
+        WHEN public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6) = 'Aprobado'
+          THEN b.cq ELSE 0 END
       ELSE 0
-    END) AS q_pend_item_nmin,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_int,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_res,
-    SUM(CASE WHEN n1 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cq ELSE 0 END) AS q_nr_ins,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_int,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_res,
-    SUM(CASE WHEN n1 = 'Rechazado' THEN cq ELSE 0 END) AS q_rej_ins,
-    SUM(cq) AS q_hab_ins,
-    SUM(CASE WHEN n1 = 'Aprobado' THEN cq ELSE 0 END) AS q_hab_res,
-    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cq ELSE 0 END) AS q_hab_int
-  FROM base
-  GROUP BY bloque, cap_k, it
+    END) AS q_apr,
+    SUM(CASE
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        OR public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+      THEN CASE
+        WHEN public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6) = 'Pendiente'
+          THEN b.cq ELSE 0 END
+      ELSE 0
+    END) AS q_pend,
+    SUM(CASE
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        OR public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+      THEN CASE
+        WHEN public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6) = 'Rechazado'
+          THEN b.cq ELSE 0 END
+      ELSE 0
+    END) AS q_rej,
+    SUM(CASE
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        OR public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+      THEN CASE
+        WHEN public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6)
+               NOT IN ('Aprobado', 'Pendiente', 'Rechazado')
+          THEN b.cq ELSE 0 END
+      ELSE 0
+    END) AS q_nr,
+    SUM(CASE
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        OR public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+      THEN b.cq ELSE 0
+    END) AS q_hab,
+    SUM(CASE
+      WHEN nv.n = (SELECT n_min FROM cfg_min)
+        AND public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6) = 'Pendiente'
+      THEN b.cq ELSE 0
+    END) AS q_pend_item
+  FROM base b
+  CROSS JOIN niveles nv
+  GROUP BY b.bloque, b.cap_k, b.it, nv.n
 ),
-main AS (
+main_nivel AS (
   SELECT
     bloque,
-    SUM(public.dash_costo_agregado(q_apr_int, vu)) AS aprobado_interventoria,
-    SUM(public.dash_costo_agregado(q_apr_res, vu)) AS aprobado_residente,
-    SUM(public.dash_costo_agregado(q_apr_ins, vu)) AS aprobado_inspector,
-    SUM(public.dash_costo_agregado(q_pend_int, vu)) AS pendiente_interventoria,
-    SUM(public.dash_costo_agregado(q_pend_res, vu)) AS pendiente_residente,
-    SUM(public.dash_costo_agregado(q_pend_ins, vu)) AS pendiente_inspector,
-    SUM(public.dash_costo_agregado(q_pend_item_nmin, vu)) AS pendiente_item_nmin,
-    SUM(public.dash_costo_agregado(q_nr_int, vu)) AS no_revisado_interventoria,
-    SUM(public.dash_costo_agregado(q_nr_res, vu)) AS no_revisado_residente,
-    SUM(public.dash_costo_agregado(q_nr_ins, vu)) AS no_revisado_inspector,
-    SUM(public.dash_costo_agregado(q_rej_int, vu)) AS rechazado_interventoria,
-    SUM(public.dash_costo_agregado(q_rej_res, vu)) AS rechazado_residente,
-    SUM(public.dash_costo_agregado(q_rej_ins, vu)) AS rechazado_inspector,
-    SUM(public.dash_costo_agregado(q_hab_ins, vu)) AS habilitado_inspector,
-    SUM(public.dash_costo_agregado(q_hab_res, vu)) AS habilitado_residente,
-    SUM(public.dash_costo_agregado(q_hab_int, vu)) AS habilitado_interventoria
-  FROM item_buckets
-  GROUP BY bloque
+    nivel,
+    SUM(public.dash_costo_agregado(q_apr, vu)) AS aprobado,
+    SUM(public.dash_costo_agregado(q_pend, vu)) AS pendiente,
+    SUM(public.dash_costo_agregado(q_pend_item, vu)) AS pendiente_item,
+    SUM(public.dash_costo_agregado(q_nr, vu)) AS no_revisado,
+    SUM(public.dash_costo_agregado(q_rej, vu)) AS rechazado,
+    SUM(public.dash_costo_agregado(q_hab, vu)) AS habilitado
+  FROM item_nivel
+  GROUP BY bloque, nivel
 ),
 main_full AS (
   SELECT
     s.bloque,
-    COALESCE(m.aprobado_interventoria, 0) AS aprobado_interventoria,
-    COALESCE(m.aprobado_residente, 0) AS aprobado_residente,
-    COALESCE(m.aprobado_inspector, 0) AS aprobado_inspector,
-    COALESCE(m.pendiente_interventoria, 0) AS pendiente_interventoria,
-    COALESCE(m.pendiente_residente, 0) AS pendiente_residente,
-    COALESCE(m.pendiente_inspector, 0) AS pendiente_inspector,
-    COALESCE(m.pendiente_item_nmin, 0) AS pendiente_item_nmin,
-    COALESCE(m.no_revisado_interventoria, 0) AS no_revisado_interventoria,
-    COALESCE(m.no_revisado_residente, 0) AS no_revisado_residente,
-    COALESCE(m.no_revisado_inspector, 0) AS no_revisado_inspector,
-    COALESCE(m.rechazado_interventoria, 0) AS rechazado_interventoria,
-    COALESCE(m.rechazado_residente, 0) AS rechazado_residente,
-    COALESCE(m.rechazado_inspector, 0) AS rechazado_inspector,
-    COALESCE(m.habilitado_inspector, 0) AS habilitado_inspector,
-    COALESCE(m.habilitado_residente, 0) AS habilitado_residente,
-    COALESCE(m.habilitado_interventoria, 0) AS habilitado_interventoria
+    n.n AS nivel,
+    COALESCE(m.aprobado, 0) AS aprobado,
+    COALESCE(m.pendiente, 0) AS pendiente,
+    COALESCE(m.pendiente_item, 0) AS pendiente_item,
+    COALESCE(m.no_revisado, 0) AS no_revisado,
+    COALESCE(m.rechazado, 0) AS rechazado,
+    COALESCE(m.habilitado, 0) AS habilitado
   FROM scaffold s
-  LEFT JOIN main m ON m.bloque = s.bloque
+  CROSS JOIN niveles n
+  LEFT JOIN main_nivel m ON m.bloque = s.bloque AND m.nivel = n.n
 ),
 otras_base AS (
   SELECT
@@ -210,6 +267,9 @@ otras_base AS (
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
     public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6,
     CASE
       WHEN upper(trim(COALESCE(r.capitulo, ''))) LIKE '14.%' OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '15.%'
         OR upper(trim(COALESCE(r.capitulo, ''))) LIKE '%ENSAYO%'
@@ -225,81 +285,80 @@ otras_base AS (
 ),
 otras_item AS (
   SELECT
-    bloque,
-    cap_k,
-    it,
-    MAX(vu) AS vu,
+    b.bloque,
+    b.cap_k,
+    b.it,
+    nv.n AS nivel,
+    MAX(b.vu) AS vu,
     SUM(CASE
-      WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cq ELSE 0 END) AS q_int,
-    SUM(CASE
-      WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cq ELSE 0 END) AS q_res,
-    SUM(CASE WHEN n1 = 'Pendiente' THEN cq ELSE 0 END) AS q_ins
-  FROM otras_base
-  GROUP BY bloque, cap_k, it
+      WHEN public._matriz_prereqs_ok(
+             (SELECT na FROM cfg_min), nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+           )
+        AND public._matriz_estado_nivel(nv.n, b.n1, b.n2, b.n3, b.n4, b.n5, b.n6) = 'Pendiente'
+      THEN b.cq ELSE 0
+    END) AS q_otras
+  FROM otras_base b
+  CROSS JOIN niveles nv
+  GROUP BY b.bloque, b.cap_k, b.it, nv.n
 ),
-otras AS (
+otras_nivel AS (
   SELECT
     bloque,
-    SUM(public.dash_costo_agregado(q_int, vu)) AS otras_interventoria,
-    SUM(public.dash_costo_agregado(q_res, vu)) AS otras_residente,
-    SUM(public.dash_costo_agregado(q_ins, vu)) AS otras_inspector
+    nivel,
+    SUM(public.dash_costo_agregado(q_otras, vu)) AS otras_actas
   FROM otras_item
-  GROUP BY 1
+  GROUP BY bloque, nivel
 ),
 otras_full AS (
-  SELECT s.bloque,
-    COALESCE(o.otras_interventoria, 0) AS otras_interventoria,
-    COALESCE(o.otras_residente, 0) AS otras_residente,
-    COALESCE(o.otras_inspector, 0) AS otras_inspector
+  SELECT
+    s.bloque,
+    n.n AS nivel,
+    COALESCE(o.otras_actas, 0) AS otras_actas
   FROM scaffold s
-  LEFT JOIN otras o ON o.bloque = s.bloque
+  CROSS JOIN niveles n
+  LEFT JOIN otras_nivel o ON o.bloque = s.bloque AND o.nivel = n.n
 ),
 bloque_json AS (
   SELECT
-    m.bloque,
+    mf.bloque,
     jsonb_build_object(
-      'aprobado', jsonb_build_object(
-        'interventoria', round(m.aprobado_interventoria::numeric, 0),
-        'residente', round(m.aprobado_residente::numeric, 0),
-        'inspector', round(m.aprobado_inspector::numeric, 0)
+      'aprobado', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.aprobado::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'pendiente', jsonb_build_object(
-        'interventoria', round(m.pendiente_interventoria::numeric, 0),
-        'residente', round(m.pendiente_residente::numeric, 0),
-        'inspector', round(m.pendiente_inspector::numeric, 0)
+      'pendiente', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.pendiente::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'pendiente_item', (
-        SELECT jsonb_set(
-          '{}'::jsonb,
-          ARRAY['nivel' || cm.n_min::text],
-          to_jsonb(round(m.pendiente_item_nmin::numeric, 0)),
-          true
-        )
-        FROM cfg_min cm
+      'pendiente_item', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.pendiente_item::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'no_revisado', jsonb_build_object(
-        'interventoria', round(m.no_revisado_interventoria::numeric, 0),
-        'residente', round(m.no_revisado_residente::numeric, 0),
-        'inspector', round(m.no_revisado_inspector::numeric, 0)
+      'no_revisado', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.no_revisado::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'rechazado', jsonb_build_object(
-        'interventoria', round(m.rechazado_interventoria::numeric, 0),
-        'residente', round(m.rechazado_residente::numeric, 0),
-        'inspector', round(m.rechazado_inspector::numeric, 0)
+      'rechazado', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.rechazado::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'habilitado', jsonb_build_object(
-        'interventoria', round(m.habilitado_interventoria::numeric, 0),
-        'residente', round(m.habilitado_residente::numeric, 0),
-        'inspector', round(m.habilitado_inspector::numeric, 0)
+      'habilitado', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.habilitado::numeric, 0))
+         FROM main_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       ),
-      'otras_actas', jsonb_build_object(
-        'interventoria', round(ot.otras_interventoria::numeric, 0),
-        'residente', round(ot.otras_residente::numeric, 0),
-        'inspector', round(ot.otras_inspector::numeric, 0)
+      'otras_actas', COALESCE(
+        (SELECT jsonb_object_agg('nivel' || x.nivel::text, round(x.otras_actas::numeric, 0))
+         FROM otras_full x WHERE x.bloque = mf.bloque),
+        '{}'::jsonb
       )
     ) AS j
-  FROM main_full m
-  JOIN otras_full ot ON ot.bloque = m.bloque
+  FROM (SELECT DISTINCT bloque FROM main_full) mf
 )
 SELECT jsonb_build_object(
   'obra_ejecutada_directo_sin_aiu', (SELECT j FROM bloque_json WHERE bloque = 'obra'),
@@ -308,7 +367,7 @@ SELECT jsonb_build_object(
 $BODY$;
 
 COMMENT ON FUNCTION public.dashboard_matriz_validacion_agg(bigint, bigint) IS
-  'Matriz validación SICOE: acta filtrada por p_acta_id; cascada por niveles activos; pendiente_item en nivel{n_min} del contrato.';
+  'Matriz validación SICOE: acta filtrada por p_acta_id; cascada por niveles activos; claves nivel1..nivel6; pendiente_item en nivel{n_min}.';
 
 -- Una sola llamada: resuelve acta RPO vigente en BD + agrega (evita 2 round-trips desde el API).
 CREATE OR REPLACE FUNCTION public.dashboard_matriz_validacion_vigente_bundle(p_contrato_id bigint)
@@ -359,5 +418,7 @@ COMMENT ON FUNCTION public.dashboard_matriz_validacion_vigente_bundle(bigint) IS
   'Matriz validación: acta RPO en período (calendario; desempate en solape por fecha_inicio desc) + agregación.';
 
 GRANT EXECUTE ON FUNCTION public._norm_estado_matriz(text) TO authenticated, service_role, anon;
+GRANT EXECUTE ON FUNCTION public._matriz_estado_nivel(smallint, text, text, text, text, text, text) TO authenticated, service_role, anon;
+GRANT EXECUTE ON FUNCTION public._matriz_prereqs_ok(bigint[], smallint, text, text, text, text, text, text) TO authenticated, service_role, anon;
 GRANT EXECUTE ON FUNCTION public.dashboard_matriz_validacion_agg(bigint, bigint) TO authenticated, service_role, anon;
 GRANT EXECUTE ON FUNCTION public.dashboard_matriz_validacion_vigente_bundle(bigint) TO authenticated, service_role, anon;

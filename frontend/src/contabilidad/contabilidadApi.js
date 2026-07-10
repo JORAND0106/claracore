@@ -57,6 +57,28 @@ export async function contabSend(path, token, { method = 'POST', body, formData 
   }
 }
 
+/** OCR factura (egresos). No lanza si el backend responde 4xx/5xx: devuelve ok:false. */
+export async function contabOcrFactura(token, file, { timeoutMs = 45000 } = {}) {
+  const fd = new FormData()
+  fd.append('archivo', file)
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
+  try {
+    const res = await fetch(`${API_BASE}/contabilidad/ocr/factura`, {
+      method: 'POST',
+      headers: headers(token),
+      body: fd,
+      ...(controller ? { signal: controller.signal } : {}),
+    })
+    if (!res.ok) return { ok: false, status: 'http_error', sugerencias: {}, campos_detectados: [] }
+    return res.json()
+  } catch {
+    return { ok: false, status: 'network_or_timeout', sugerencias: {}, campos_detectados: [] }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function contabDownloadExport(tipo, token, params = {}) {
   const qs = new URLSearchParams()
   Object.entries(params).forEach(([k, v]) => {
