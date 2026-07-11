@@ -42,11 +42,27 @@ export function createAlmacenApi(contratoId, token) {
     getPresupuestoItems: () =>
       fetch(`${base}/presupuesto-items`, { headers: headers(token) }).then(parseJsonList),
 
+    getListadoCapitulos: () =>
+      fetch(`${base}/listado-capitulos`, { headers: headers(token) }).then(parseJsonList),
+
+    getListadoItems: (capitulo) =>
+      fetch(`${base}/listado-items?capitulo=${encodeURIComponent(capitulo)}`, { headers: headers(token) }).then(parseJsonList),
+
     searchInsumos: (q = '') =>
       fetch(`${base}/insumos/search?q=${encodeURIComponent(q)}`, { headers: headers(token) }).then(parseJsonList),
 
-    createInsumo: (body) =>
+    searchInsumosCatalog: (q = '', limit = 50, offset = 0) =>
+      fetch(`${base}/insumos/catalog?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, { headers: headers(token) }).then(parseJson),
+
+    createInsumoForm: (formData) =>
       fetch(`${base}/insumos`, {
+        method: 'POST',
+        headers: headers(token),
+        body: formData,
+      }).then(parseJson),
+
+    createInsumo: (body) =>
+      fetch(`${base}/insumos/json`, {
         method: 'POST',
         headers: headers(token, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),

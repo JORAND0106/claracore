@@ -44,7 +44,6 @@ AS $$
       AND (p_calzada IS NULL OR trim(p_calzada) = '' OR p.calzada = p_calzada)
       AND (
         NOT coalesce(p_filtrar_interv, true)
-        OR p.pre_interv_estado IS NULL
         OR p.pre_interv_estado = 'Aprobado'
       )
   ),
@@ -57,7 +56,6 @@ AS $$
       AND trim(p.tipo_ejecucion) IN ('Presupuesto de Obra', 'Obra Ejecutada')
       AND (
         NOT coalesce(p_filtrar_interv, true)
-        OR p.pre_interv_estado IS NULL
         OR p.pre_interv_estado = 'Aprobado'
       )
   )

@@ -147,10 +147,10 @@ export function AlmacenHelpIcon({ ayuda }) {
   )
 }
 
-export function AlmacenFieldLabel({ icon, label, ayuda }) {
+export function AlmacenFieldLabel({ icon, label, ayuda, compact }) {
   const ui = useAlmacenTheme()
   return (
-    <label style={ui.label}>
+    <label style={{ ...ui.label, marginBottom: compact ? 2 : ui.label.marginBottom, fontSize: compact ? 'var(--cc-xs)' : ui.label.fontSize }}>
       {icon && <span aria-hidden>{icon}</span>}
       <span>{label}</span>
       <AlmacenHelpIcon ayuda={ayuda} />
@@ -197,8 +197,9 @@ export function fmtCant(n) {
 }
 
 export function fmtMoney(n) {
+  if (n == null || n === '') return '—'
   const v = Number(n)
-  if (!Number.isFinite(v)) return '—'
+  if (!Number.isFinite(v) || v === 0) return '—'
   return v.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 })
 }
 

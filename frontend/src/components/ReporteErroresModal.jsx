@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { API_BASE } from '../apiBase'
 import { useModulo } from '../context/ModuloContext'
+import { useClaraViewport } from '../useClaraViewport'
 import {
   REPORTE_CRITICIDAD,
   REPORTE_OTRO_KEY,
@@ -18,6 +20,9 @@ import {
 } from '../config/reporteErroresHelpers'
 
 const OTRO = REPORTE_OTRO_KEY
+
+const REPORTE_Z_MODAL = 10000
+const REPORTE_Z_MODAL_MOBILE = 14000
 
 const inputStyle = (t) => ({
   width: '100%',
@@ -330,7 +335,11 @@ function resetFormState() {
   }
 }
 
-export function ReporteErroresBtn({ t, usuario, token }) {
+export function ReporteErroresBtn({ t, usuario, token, onOpenChange, fullWidthTrigger = false, hideTrigger = false, openSignal = 0 }) {
+  const { isMobile: reporteVpMobile, isLandscapeMobile: reporteLandscapeMobile } = useClaraViewport()
+  const reporteMobile = reporteVpMobile || reporteLandscapeMobile
+  const zModal = reporteMobile ? REPORTE_Z_MODAL_MOBILE : REPORTE_Z_MODAL
+
   const { moduloActivo: moduloCtx } = useModulo()
   const [abierto, setAbierto] = useState(false)
   const [form, setForm] = useState(resetFormState)
@@ -371,6 +380,23 @@ export function ReporteErroresBtn({ t, usuario, token }) {
     void cargarDestinatarioDev()
   }, [abierto, cargarDestinatarioDev])
 
+  useEffect(() => {
+    if (!reporteMobile || !abierto) return undefined
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [reporteMobile, abierto])
+
+  useEffect(() => {
+    if (reporteMobile && abierto) onOpenChange?.(true)
+  }, [reporteMobile, abierto, onOpenChange])
+
+  useEffect(() => {
+    if (!openSignal) return
+    setForm({ ...resetFormState(), modulo: prefModulo })
+    setAbierto(true)
+  }, [openSignal, prefModulo])
+
   const handleDescripcionPaste = (e) => {
     const items = e.clipboardData?.items
     if (!items) return
@@ -396,6 +422,7 @@ export function ReporteErroresBtn({ t, usuario, token }) {
   const abrir = () => {
     setForm({ ...resetFormState(), modulo: prefModulo })
     setAbierto(true)
+    if (reporteMobile) onOpenChange?.(true)
   }
 
   const cerrar = () => {
@@ -527,34 +554,45 @@ export function ReporteErroresBtn({ t, usuario, token }) {
 
   if (!puedeVer) return null
 
+  const showMobileFooter =
+    reporteMobile &&
+    !form.confirmacion?.startsWith('gracias') &&
+    (form.paso === 'error' || form.paso === 'mejora')
+
   const overlay = abierto && (
     <div
+      className={reporteMobile ? 'cc-reporte-overlay' : undefined}
       style={{
         position: 'fixed',
         inset: 0,
         background: 'rgba(15, 23, 42, 0.52)',
-        zIndex: 10000,
+        zIndex: zModal,
         display: 'flex',
-        alignItems: 'center',
+        alignItems: reporteMobile ? 'stretch' : 'center',
         justifyContent: 'center',
-        padding: '16px',
+        boxSizing: 'border-box',
       }}
       onClick={() => !form.enviando && cerrar()}
     >
       <div
         role="dialog"
         aria-modal="true"
+        className={reporteMobile ? 'cc-reporte-sheet' : undefined}
         style={{
           background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: '16px',
-          width: '580px',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          border: reporteMobile ? `1px solid ${t.border}` : `1px solid ${t.border}`,
+          borderRadius: reporteMobile ? 14 : 16,
+          width: reporteMobile ? '100%' : '580px',
+          maxWidth: reporteMobile ? '100%' : '95vw',
+          height: reporteMobile ? '100%' : undefined,
+          maxHeight: reporteMobile ? '100%' : '90vh',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
           boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+          boxSizing: 'border-box',
+          minHeight: 0,
+          padding: reporteMobile ? 0 : undefined,
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -567,7 +605,16 @@ export function ReporteErroresBtn({ t, usuario, token }) {
           disabled={form.enviando}
         />
 
-        <div style={{ padding: '20px 22px 22px', overflowY: 'auto', flex: 1 }}>
+        <div
+          className={reporteMobile ? 'cc-reporte-body' : undefined}
+          style={{
+            padding: reporteMobile ? '14px 14px' : '20px 22px 22px',
+            overflowY: 'auto',
+            flex: 1,
+            minHeight: 0,
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
           {form.confirmacion === 'gracias-mejora' && (
             <div style={{ textAlign: 'center', padding: '24px 8px 8px' }}>
               <div style={{ fontSize: '3rem', marginBottom: 12 }}>💡</div>
@@ -603,7 +650,14 @@ export function ReporteErroresBtn({ t, usuario, token }) {
           )}
 
           {!form.confirmacion?.startsWith('gracias') && form.paso === 'tipo' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <div
+              className={reporteMobile ? 'cc-reporte-tipo-grid' : undefined}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: reporteMobile ? '1fr' : 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 12,
+              }}
+            >
               <TipoCard
                 t={t}
                 icon="🐛"
@@ -625,16 +679,23 @@ export function ReporteErroresBtn({ t, usuario, token }) {
 
           {!form.confirmacion?.startsWith('gracias') && form.paso === 'mejora' && (
             <>
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: reporteMobile ? 0 : 16 }}>
                 <label style={{ ...labelStyle, color: t.textMuted }}>Tu sugerencia</label>
                 <textarea
                   value={form.mejoraTexto}
                   onChange={(e) => patch({ mejoraTexto: e.target.value })}
                   placeholder="Cuéntanos qué te gustaría mejorar o agregar..."
                   rows={6}
-                  style={{ ...inputStyle(t), minHeight: '140px', resize: 'vertical' }}
+                  style={{
+                    ...inputStyle(t),
+                    minHeight: reporteMobile ? '120px' : '140px',
+                    resize: 'vertical',
+                    fontSize: reporteMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                    padding: reporteMobile ? '12px' : '9px 12px',
+                  }}
                 />
               </div>
+              {!reporteMobile && (
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                 <BtnSecundario t={t} onClick={() => patch({ paso: 'tipo', tipo: null, mejoraTexto: '' })}>
                   Volver
@@ -648,16 +709,18 @@ export function ReporteErroresBtn({ t, usuario, token }) {
                   {form.enviando ? 'Enviando…' : <>📨 Enviar sugerencia</>}
                 </BtnPrimario>
               </div>
+              )}
             </>
           )}
 
           {!form.confirmacion?.startsWith('gracias') && form.paso === 'error' && (
             <>
               <div
+                className={reporteMobile ? 'cc-reporte-form-grid' : undefined}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '14px 16px',
+                  gridTemplateColumns: reporteMobile ? '1fr' : '1fr 1fr',
+                  gap: reporteMobile ? '12px' : '14px 16px',
                   marginBottom: 14,
                 }}
               >
@@ -783,9 +846,9 @@ export function ReporteErroresBtn({ t, usuario, token }) {
                 </div>
               </div>
 
-              <div style={{ marginBottom: 20 }}>
+              <div style={{ marginBottom: reporteMobile ? 0 : 20 }}>
                 <label style={{ ...labelStyle, color: t.textMuted }}>Urgencia</label>
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
+                <div style={{ fontSize: reporteMobile ? 'var(--cc-body)' : 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
                   ¿Qué tan pronto lo necesitas?
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -802,6 +865,7 @@ export function ReporteErroresBtn({ t, usuario, token }) {
                 </div>
               </div>
 
+              {!reporteMobile && (
               <div
                 style={{
                   display: 'flex',
@@ -824,35 +888,112 @@ export function ReporteErroresBtn({ t, usuario, token }) {
                   {form.enviando ? 'Enviando…' : <>📨 Enviar reporte</>}
                 </BtnPrimario>
               </div>
+              )}
             </>
           )}
         </div>
+
+        {showMobileFooter && (
+          <div
+            className="cc-reporte-footer"
+            style={{
+              borderTop: `1px solid ${t.border}`,
+              flexShrink: 0,
+              background: t.bgCard,
+              display: 'flex',
+              gap: 10,
+              padding: '10px 12px max(10px, env(safe-area-inset-bottom, 0px))',
+            }}
+          >
+            <button
+              type="button"
+              className="cc-reporte-footer-btn"
+              onClick={() => patch(form.paso === 'mejora'
+                ? { paso: 'tipo', tipo: null, mejoraTexto: '' }
+                : { paso: 'tipo', tipo: null })}
+              style={{
+                flex: 1,
+                minHeight: 44,
+                background: 'transparent',
+                border: `1px solid ${t.border}`,
+                borderRadius: 10,
+                padding: '10px 14px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                color: t.textMuted,
+                cursor: 'pointer',
+              }}
+            >
+              Volver
+            </button>
+            <button
+              type="button"
+              className="cc-reporte-footer-btn"
+              onClick={form.paso === 'mejora' ? enviarMejora : enviarError}
+              disabled={
+                form.enviando ||
+                (form.paso === 'mejora' ? !form.mejoraTexto.trim() : !errorFormValid)
+              }
+              style={{
+                flex: 1,
+                minHeight: 44,
+                background: (form.paso === 'mejora' ? form.mejoraTexto.trim() : errorFormValid) && !form.enviando
+                  ? `linear-gradient(135deg, ${t.primary} 0%, ${t.primaryLight || t.primary} 100%)`
+                  : t.border,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 10,
+                padding: '10px 14px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 800,
+                cursor: form.enviando ? 'wait' : 'pointer',
+                opacity: form.enviando ? 0.7 : 1,
+              }}
+            >
+              {form.enviando
+                ? 'Enviando…'
+                : form.paso === 'mejora'
+                  ? '📨 Enviar'
+                  : '📨 Enviar reporte'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
 
   return (
     <>
+      {!hideTrigger && (
       <button
         type="button"
         title="Reportar error o mejora"
+        className={reporteMobile ? 'cc-reporte-trigger' : undefined}
         onClick={abrir}
         style={{
-          background: abierto ? `${t.primary}22` : 'transparent',
+          background: abierto ? `${t.primary}22` : (fullWidthTrigger ? t.bg : 'transparent'),
           border: `1px solid ${abierto ? t.primary : t.border}`,
-          borderRadius: '8px',
-          padding: '6px 12px',
+          borderRadius: fullWidthTrigger ? 12 : 8,
+          padding: reporteMobile && fullWidthTrigger ? '12px 14px' : '6px 12px',
           cursor: 'pointer',
           color: abierto ? t.primary : t.textMuted,
-          fontSize: 'var(--cc-lg)',
+          fontSize: fullWidthTrigger ? 'var(--cc-sm)' : (reporteMobile ? '1.25rem' : 'var(--cc-lg)'),
           lineHeight: 1,
           display: 'flex',
           alignItems: 'center',
+          justifyContent: fullWidthTrigger ? 'center' : 'flex-start',
+          gap: fullWidthTrigger ? 8 : undefined,
+          width: fullWidthTrigger ? '100%' : undefined,
+          minHeight: reporteMobile ? 44 : undefined,
+          fontWeight: fullWidthTrigger ? 600 : undefined,
         }}
       >
-        🛟
+        🛟{fullWidthTrigger ? ' Reportar bug' : ''}
       </button>
-      {overlay}
+      )}
+      {abierto && typeof document !== 'undefined'
+        ? createPortal(overlay, document.body)
+        : null}
     </>
   )
 }

@@ -17,12 +17,17 @@ from almacen_insumos_service import (
     create_insumo,
     create_proveedor,
     get_presupuesto_context,
+    list_listado_capitulos,
+    list_listado_items_capitulo,
     list_precios_insumo_proveedor,
     resolve_insumo_for_solicitud,
     search_insumos,
+    search_insumos_solo_catalogo,
+    search_insumos_catalog,
     search_proveedores,
 )
 from almacen_permissions import require_permiso_almacen
+from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from almacen_service import (
     add_cotizacion,
     alertas_vencimiento,
@@ -80,9 +85,17 @@ class ConfigUpdateBody(BaseModel):
 
 class SolicitudItemBody(BaseModel):
     presupuesto_id: Optional[int] = None
+    presupuesto_capitulo: Optional[str] = None
+    presupuesto_item: Optional[str] = None
     insumo_id: Optional[int] = None
     listado_precio_id: Optional[int] = None
     pk_id: Optional[str] = None
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[float] = None
+    abscisa_final: Optional[float] = None
+    observacion_residente: Optional[str] = None
     material_descripcion: Optional[str] = None
     unidad: Optional[str] = None
     cantidad: float = Field(..., gt=0)
@@ -90,13 +103,19 @@ class SolicitudItemBody(BaseModel):
     es_recurrente: bool = False
 
 
+class ImpuestoInsumoBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
+    tipo: str = Field("porcentaje", pattern="^(porcentaje|valor)$")
+    valor: float = Field(..., ge=0)
+
+
 class InsumoCreateBody(BaseModel):
     codigo: str = Field(..., min_length=1)
     descripcion: str = Field(..., min_length=1)
     unidad: Optional[str] = "UND"
-    valor_compra_referencia: Optional[float] = 0
-    capitulo: Optional[str] = None
-    item_numero: Optional[str] = None
+    costo_base: Optional[float] = Field(None, ge=0)
+    impuestos: Optional[List[ImpuestoInsumoBody]] = None
+    valor_compra_referencia: Optional[float] = Field(None, ge=0)
     listado_precio_id: Optional[int] = None
 
 
@@ -108,7 +127,16 @@ class ProveedorCreateBody(BaseModel):
 class InsumoPreviewBody(BaseModel):
     insumo_id: Optional[int] = None
     listado_precio_id: Optional[int] = None
+    presupuesto_id: Optional[int] = None
+    presupuesto_capitulo: Optional[str] = None
+    presupuesto_item: Optional[str] = None
     pk_id: str = Field(..., min_length=1)
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[float] = None
+    abscisa_final: Optional[float] = None
+    observacion_residente: Optional[str] = None
     cantidad: float = Field(..., gt=0)
     valor_compra_unitario: Optional[float] = None
     exclude_solicitud_id: Optional[int] = None
@@ -180,6 +208,24 @@ def route_presupuesto_items(contrato_id: int, current_user=Depends(get_current_u
     return list_presupuesto_items(contrato_id)
 
 
+@router.get("/{contrato_id}/listado-capitulos")
+def route_listado_capitulos(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return list_listado_capitulos(contrato_id)
+
+
+@router.get("/{contrato_id}/listado-items")
+def route_listado_items(
+    contrato_id: int,
+    capitulo: str,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return list_listado_items_capitulo(contrato_id, capitulo)
+
+
 @router.get("/{contrato_id}/insumos/search")
 def route_search_insumos(
     contrato_id: int,
@@ -192,12 +238,74 @@ def route_search_insumos(
     return search_insumos(contrato_id, q, min(limit, 50))
 
 
-@router.post("/{contrato_id}/insumos")
-def route_create_insumo(contrato_id: int, body: InsumoCreateBody, current_user=Depends(get_current_user)):
+@router.get("/{contrato_id}/insumos/catalog")
+def route_insumos_catalog(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_almacen(current_user, "ver")
+    rows, total, catalog_total = search_insumos_solo_catalogo(contrato_id, q, min(limit, 100), max(offset, 0))
+    return {"items": rows, "total": total, "catalogo_vacio": catalog_total == 0}
+
+
+@router.post("/{contrato_id}/insumos")
+async def route_create_insumo(
+    contrato_id: int,
+    codigo: str = Form(...),
+    descripcion: str = Form(...),
+    unidad: str = Form("UND"),
+    costo_base: float = Form(...),
+    rendimiento: Optional[float] = Form(None),
+    tipo_impuesto: Optional[str] = Form(None),
+    impuesto_porcentaje: Optional[float] = Form(None),
+    proveedor_id: Optional[int] = Form(None),
+    razon_social: Optional[str] = Form(None),
+    nit: Optional[str] = Form(None),
+    soporte_pdf: Optional[UploadFile] = File(None),
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "crear")
+    soporte = None
+    if soporte_pdf and soporte_pdf.filename:
+        data = await soporte_pdf.read()
+        if len(data) > 204800:
+            raise HTTPException(status_code=400, detail="El PDF de soporte no puede superar 200 KB.")
+        mime = soporte_pdf.content_type or "application/pdf"
+        if mime != "application/pdf":
+            raise HTTPException(status_code=400, detail="El soporte debe ser un archivo PDF.")
+        soporte = (data, soporte_pdf.filename, mime)
+    body = {
+        "codigo": codigo,
+        "descripcion": descripcion,
+        "unidad": unidad,
+        "costo_base": costo_base,
+        "rendimiento": rendimiento,
+        "tipo_impuesto": tipo_impuesto,
+        "impuesto_porcentaje": impuesto_porcentaje,
+        "proveedor_id": proveedor_id,
+        "razon_social": razon_social,
+        "nit": nit,
+    }
     try:
-        return create_insumo(contrato_id, _uid(current_user), body.model_dump())
+        return create_insumo(contrato_id, _uid(current_user), body, soporte=soporte)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/insumos/json")
+def route_create_insumo_json(contrato_id: int, body: InsumoCreateBody, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "crear")
+    try:
+        return create_insumo(contrato_id, _uid(current_user), {
+            **body.model_dump(),
+            "impuestos": [i.model_dump() if hasattr(i, "model_dump") else i for i in (body.impuestos or [])],
+        })
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

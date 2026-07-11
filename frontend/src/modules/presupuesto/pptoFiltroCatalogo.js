@@ -116,6 +116,35 @@ function hasRange(min, max) {
   return hasStr(min) || hasStr(max)
 }
 
+/** Clave estable para tramo/calzada en caché (singular + listas multi). */
+export function pptoFiltroUbicacionCacheKey(f) {
+  const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
+  const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+  return {
+    tramos: tramos.slice().sort().join('\x1f'),
+    calzadas: calzadas.slice().sort().join('\x1f'),
+  }
+}
+
+/**
+ * Params de cascada para GET /presupuesto/{id}/filtros.
+ * Con un solo capítulo/competencia se acotan tramos/calzadas (p. ej. alcantarillado sanitario).
+ */
+export function pptoFiltroCascadeOpcionesParams(f, tipoEjecucionActivo) {
+  const capVals = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
+  const compVals = pptoFiltroValoresLista(pptoFiltroDef('competencia'), f)
+  const tramoVals = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
+  const calzadaVals = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+  const te = String(tipoEjecucionActivo || f?.tipoEjecucion || 'Presupuesto de Obra').trim()
+  return {
+    capitulo: capVals.length === 1 ? capVals[0] : undefined,
+    competencia: compVals.length === 1 ? compVals[0] : undefined,
+    tramo: tramoVals[0] || undefined,
+    calzada: calzadaVals[0] || undefined,
+    tipo_ejecucion: te || 'Presupuesto de Obra',
+  }
+}
+
 /** Valores activos de un filtro (lista para multi-select). */
 export function pptoFiltroValoresLista(def, f) {
   if (!def || !f) return []
@@ -364,6 +393,12 @@ export function pptoFilaCoincideFObra(row, f, drillArr = []) {
   if (itemsDrill?.length && !itemsDrill.some((it) => pptoMatchItemNumero(item, it))) return false
   if (items.length && !items.some((it) => pptoMatchItemNumero(item, it))) return false
   if (comps.length && !comps.includes(comp)) return false
+  const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
+  const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+  const tr = String(row.tramo ?? '').trim()
+  const cal = String(row.calzada ?? '').trim()
+  if (tramos.length && !tramos.includes(tr)) return false
+  if (calzadas.length && !calzadas.includes(cal)) return false
   const te = strVal(f?.tipoEjecucion)
   if (te && String(row.tipo_ejecucion ?? '').trim() !== te) return false
   if (!pptoFilaCoincideRevisado(row, f?.revisado)) return false

@@ -154,6 +154,7 @@ import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
 import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
+import { usuarioPuedeReportarErrores } from './config/reporteErroresHelpers'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -15780,6 +15781,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     return w < 768 || (landscape && w <= 932)
   })
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileReporteSignal, setMobileReporteSignal] = useState(0)
+  const [mobileSoporteSignal, setMobileSoporteSignal] = useState(0)
   const [tabInferior, setTabInferior] = useState('programacion')
   const [analisis, setAnalisis] = useState('financiero')
   const [dashTab, setDashTab] = useState('resumen')
@@ -17409,7 +17412,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const esContador = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'contador'
   const esAdminCargo = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'administrador'
   // Funciones que habilitan ver el panel admin (cualquier acción distinta de “todo en falso”)
-  const ADMIN_FUNCIONES = ["contratos", "listado de precios", "subcontratistas", "actas"]
+  const ADMIN_FUNCIONES = ["contratos", "listado de precios", "catálogo de insumos", "subcontratistas", "actas"]
   const _permisoAlgunaAccion = (p) =>
     !!(p && (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar))
   const tienePermisoAdmin = ADMIN_FUNCIONES.some((fn) =>
@@ -17783,6 +17786,27 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         )}
       </div>
 
+      {isMobileHeader && (
+        <>
+          <ReporteErroresBtn
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            hideTrigger
+            openSignal={mobileReporteSignal}
+            onOpenChange={(open) => { if (open) setMobileNavOpen(false) }}
+          />
+          <PanelSoporteTecnico
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            hideTrigger
+            openSignal={mobileSoporteSignal}
+            onOpenChange={(open) => { if (open) setMobileNavOpen(false) }}
+          />
+        </>
+      )}
+
       {isMobileHeader && mobileNavOpen && (
         <>
           <div
@@ -17935,10 +17959,64 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 >
                   👤 Editar perfil
                 </button>
+                {(usuarioPuedeReportarErrores(usuario) || usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador') && (
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <div style={{ flex: 1 }}><ReporteErroresBtn t={t} usuario={usuario} token={getToken()} /></div>
-                  <div style={{ flex: 1 }}><PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} /></div>
+                  {usuarioPuedeReportarErrores(usuario) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileNavOpen(false)
+                        setMobileReporteSignal((n) => n + 1)
+                      }}
+                      style={{
+                        flex: 1,
+                        background: t.bg,
+                        border: `1px solid ${t.border}`,
+                        borderRadius: 12,
+                        padding: '12px 14px',
+                        color: t.text,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: 'var(--cc-sm)',
+                        minHeight: 48,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      🛟 Reportar bug
+                    </button>
+                  )}
+                  {usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileNavOpen(false)
+                        setMobileSoporteSignal((n) => n + 1)
+                      }}
+                      style={{
+                        flex: 1,
+                        background: t.bg,
+                        border: `1px solid ${t.border}`,
+                        borderRadius: 12,
+                        padding: '12px 14px',
+                        color: t.text,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: 'var(--cc-sm)',
+                        minHeight: 48,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      🎧 Soporte
+                    </button>
+                  )}
                 </div>
+                )}
                 {canAdmin && (
                   <button
                     type="button"

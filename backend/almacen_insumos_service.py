@@ -14,6 +14,115 @@ def _norm_item_key(item: Optional[str]) -> str:
     return re.sub(r"\.+$", "", t)
 
 
+def _normalize_impuestos(raw: Any) -> List[dict]:
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for imp in raw:
+        if not isinstance(imp, dict):
+            continue
+        nombre = (imp.get("nombre") or "").strip()
+        tipo = (imp.get("tipo") or "porcentaje").strip().lower()
+        if tipo not in ("porcentaje", "valor"):
+            tipo = "porcentaje"
+        valor = _to_float(imp.get("valor"))
+        if not nombre or valor < 0:
+            continue
+        out.append({"nombre": nombre, "tipo": tipo, "valor": valor})
+    return out
+
+
+def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]] = None) -> float:
+    base = max(_to_float(costo_base), 0)
+    total = base
+    for imp in _normalize_impuestos(impuestos):
+        if imp["tipo"] == "porcentaje":
+            total += base * (imp["valor"] / 100.0)
+        else:
+            total += imp["valor"]
+    return round(total, 2)
+
+
+def compute_costo_total_insumo(
+    costo_base: float,
+    tipo_impuesto: Optional[str] = None,
+    impuesto_porcentaje: float = 0,
+    impuestos: Optional[List[dict]] = None,
+) -> float:
+    base = max(_to_float(costo_base), 0)
+    tipo = (tipo_impuesto or "").strip().lower()
+    pct = _to_float(impuesto_porcentaje)
+    if tipo in ("iva", "aiu") and pct > 0:
+        return round(base * (1 + pct / 100.0), 2)
+    if impuestos:
+        return compute_valor_total_insumo(base, impuestos)
+    return round(base, 2)
+
+
+def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float) -> str:
+    tipo = (tipo_impuesto or "").strip().lower()
+    pct = _to_float(impuesto_porcentaje)
+    if tipo == "iva" and pct:
+        return f"IVA {pct:g}%"
+    if tipo == "aiu" and pct:
+        return f"AIU {pct:g}%"
+    return "—"
+
+
+def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
+    sb = _sb()
+    out: List[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            sb.table("listado_precios")
+            .select(select)
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+            or []
+        )
+        out.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return out
+
+
+def list_listado_capitulos(contrato_id: int) -> List[str]:
+    caps = set()
+    for row in _fetch_all_listado_rows(contrato_id, "capitulo"):
+        cap = (row.get("capitulo") or "").strip()
+        if cap:
+            caps.add(cap)
+    return sorted(caps)
+
+
+def list_listado_items_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
+    capitulo = (capitulo or "").strip()
+    if not capitulo:
+        return []
+    seen: set = set()
+    out: List[dict] = []
+    for row in _fetch_all_listado_rows(contrato_id, "capitulo, item_numero, descripcion, unidad"):
+        if (row.get("capitulo") or "").strip() != capitulo:
+            continue
+        key = _norm_item_key(row.get("item_numero")).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "item": row.get("item_numero"),
+            "descripcion": row.get("descripcion"),
+            "unidad": row.get("unidad") or "UND",
+        })
+    return sorted(out, key=lambda r: _norm_item_key(r.get("item")))
+
+
 def _insumo_label(row: dict) -> str:
     cod = (row.get("codigo") or "").strip()
     desc = (row.get("descripcion") or "").strip()
@@ -22,14 +131,32 @@ def _insumo_label(row: dict) -> str:
     return cod or desc or "Insumo"
 
 
+def _insumo_tiene_precio_compra(row: dict) -> bool:
+    """True solo si el insumo del catálogo tiene valor de compra registrado (> 0)."""
+    if (row.get("origen") or "") == "listado_precios":
+        return False
+    if row.get("costo_base") is not None and _to_float(row.get("costo_base")) > 0:
+        return True
+    return _to_float(row.get("valor_compra_referencia")) > 0
+
+
 def _row_from_listado(lp: dict) -> dict:
     return {
         "id": None,
+        "insumo_id": None,
         "listado_precio_id": lp.get("id"),
+        "proveedor_id": None,
+        "proveedor_nombre": "—",
         "codigo": lp.get("item_numero") or "",
         "descripcion": lp.get("descripcion") or "",
         "unidad": lp.get("unidad") or "UND",
-        "valor_compra_referencia": _to_float(lp.get("precio_unitario")),
+        "rendimiento": None,
+        "costo": None,
+        "tipo_impuesto": None,
+        "impuesto_etiqueta": "—",
+        "costo_total": None,
+        "valor_compra_referencia": None,
+        "tiene_precio_compra": False,
         "capitulo": lp.get("capitulo"),
         "item_numero": lp.get("item_numero"),
         "origen": "listado_precios",
@@ -40,68 +167,160 @@ def _row_from_listado(lp: dict) -> dict:
     }
 
 
-def _row_from_almacen_insumo(row: dict) -> dict:
+def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
+    costo = _to_float(row.get("costo_base") if row.get("costo_base") is not None else row.get("valor_compra_referencia"))
+    tipo = row.get("tipo_impuesto")
+    pct = _to_float(row.get("impuesto_porcentaje"))
+    tiene = _insumo_tiene_precio_compra({**row, "origen": "almacen_insumo"})
+    total = None
+    if tiene:
+        total = _to_float(row.get("valor_compra_referencia")) or compute_costo_total_insumo(
+            costo, tipo, pct, row.get("impuestos"),
+        )
     return {
         **row,
+        "insumo_id": row.get("id"),
+        "proveedor_nombre": proveedor_nombre,
+        "rendimiento": row.get("rendimiento"),
+        "costo": costo if tiene else None,
+        "tipo_impuesto": tipo,
+        "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct) if tiene else "—",
+        "costo_total": total,
+        "valor_compra_referencia": total,
+        "tiene_precio_compra": tiene,
         "origen": "almacen_insumo",
         "label": _insumo_label(row),
     }
 
 
 def search_insumos(contrato_id: int, q: str = "", limit: int = 30) -> List[dict]:
+    rows, _, _ = search_insumos_solo_catalogo(contrato_id, q, limit, 0)
+    return rows
+
+
+def search_insumos_solo_catalogo(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[List[dict], int, int]:
+    """Búsqueda para solicitudes: solo insumos activos del catálogo (almacen_insumo).
+    Retorna (filas, total_filtrado, total_catalogo_activo)."""
     sb = _sb()
-    q = (q or "").strip()
+    q_raw = (q or "").strip()
+    q_lower = q_raw.lower()
+    query = (
+        sb.table("almacen_insumo")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .order("codigo")
+    )
+    rows = query.execute().data or []
+    catalog_total = len(rows)
+
+    prov_ids = {r.get("proveedor_id") for r in rows if r.get("proveedor_id")}
+    prov_map: Dict[int, str] = {}
+    if prov_ids:
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", list(prov_ids))
+            .execute()
+            .data
+            or []
+        )
+        prov_map = {int(p["id"]): p.get("razon_social") or "—" for p in provs}
+
+    out: List[dict] = []
+    for row in rows:
+        label = _insumo_label(row)
+        pname = prov_map.get(int(row.get("proveedor_id") or 0), "—")
+        if q_lower:
+            hay = (
+                q_lower in label.lower()
+                or q_lower in (row.get("codigo") or "").lower()
+                or q_lower in (row.get("descripcion") or "").lower()
+                or q_lower in pname.lower()
+            )
+            if not hay:
+                continue
+        out.append(_row_from_almacen_insumo(row, pname))
+
+    total = len(out)
+    return out[offset: offset + limit], total, catalog_total
+
+
+def search_insumos_catalog(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[List[dict], int]:
+    sb = _sb()
+    q = (q or "").strip().lower()
+    lp_rows = _fetch_all_listado_rows(
+        contrato_id,
+        "id, item_numero, descripcion, unidad, precio_unitario, capitulo, competencia",
+    )
+    ai_rows = (
+        sb.table("almacen_insumo")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .order("codigo")
+        .execute()
+        .data
+        or []
+    )
+    prov_ids = {r.get("proveedor_id") for r in ai_rows if r.get("proveedor_id")}
+    prov_map: Dict[int, str] = {}
+    if prov_ids:
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", list(prov_ids))
+            .execute()
+            .data
+            or []
+        )
+        prov_map = {int(p["id"]): p.get("razon_social") or "—" for p in provs}
+
     out: List[dict] = []
     seen_lp: set = set()
     seen_cod: set = set()
 
-    if q:
-        lp_q = (
-            sb.table("listado_precios")
-            .select("id, item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
-            .eq("contrato_id", contrato_id)
-            .or_(f"descripcion.ilike.%{q}%,item_numero.ilike.%{q}%")
-            .limit(limit)
-            .execute()
-            .data
-            or []
-        )
-    else:
-        lp_q = (
-            sb.table("listado_precios")
-            .select("id, item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
-            .eq("contrato_id", contrato_id)
-            .order("item_numero")
-            .limit(limit)
-            .execute()
-            .data
-            or []
-        )
+    def _match(text: str) -> bool:
+        if not q:
+            return True
+        return q in (text or "").lower()
 
-    ai_q = sb.table("almacen_insumo").select("*").eq("contrato_id", contrato_id).eq("activo", True)
-    if q:
-        ai_q = ai_q.or_(f"descripcion.ilike.%{q}%,codigo.ilike.%{q}%")
-    ai_rows = ai_q.order("codigo").limit(limit).execute().data or []
-
-    for lp in lp_q:
+    for lp in lp_rows:
         lid = lp.get("id")
         if lid in seen_lp:
             continue
+        label = _insumo_label({"codigo": lp.get("item_numero"), "descripcion": lp.get("descripcion")})
+        hay = _match(label) or _match(lp.get("item_numero") or "") or _match(lp.get("descripcion") or "")
+        if not hay:
+            continue
         seen_lp.add(lid)
-        cod = _norm_item_key(lp.get("item_numero"))
-        seen_cod.add(cod.lower())
+        seen_cod.add(_norm_item_key(lp.get("item_numero")).lower())
         out.append(_row_from_listado(lp))
 
     for row in ai_rows:
         cod = _norm_item_key(row.get("codigo")).lower()
-        if row.get("listado_precio_id") in seen_lp:
+        if row.get("listado_precio_id") in seen_lp or cod in seen_cod:
             continue
-        if cod in seen_cod:
+        label = _insumo_label(row)
+        hay = _match(label) or _match(row.get("codigo") or "") or _match(row.get("descripcion") or "")
+        if not hay:
             continue
         seen_cod.add(cod)
-        out.append(_row_from_almacen_insumo(row))
+        pname = prov_map.get(int(row.get("proveedor_id") or 0), "—")
+        out.append(_row_from_almacen_insumo(row, pname))
 
-    return out[:limit]
+    total = len(out)
+    return out[offset: offset + limit], total
 
 
 def get_insumo(contrato_id: int, insumo_id: int) -> dict:
@@ -118,7 +337,21 @@ def get_insumo(contrato_id: int, insumo_id: int) -> dict:
     )
     if not rows:
         raise ValueError("Insumo no encontrado.")
-    return _row_from_almacen_insumo(rows[0])
+    row = rows[0]
+    pname = "—"
+    if row.get("proveedor_id"):
+        prov = (
+            sb.table("almacen_proveedor")
+            .select("razon_social")
+            .eq("id", int(row["proveedor_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if prov:
+            pname = prov[0].get("razon_social") or "—"
+    return _row_from_almacen_insumo(row, pname)
 
 
 def ensure_insumo_from_listado(contrato_id: int, listado_precio_id: int, user_id: int) -> dict:
@@ -179,27 +412,64 @@ def ensure_insumo_from_listado(contrato_id: int, listado_precio_id: int, user_id
     return _row_from_almacen_insumo(ins[0])
 
 
-def create_insumo(contrato_id: int, user_id: int, body: dict) -> dict:
+def create_insumo(contrato_id: int, user_id: int, body: dict, soporte: Optional[tuple] = None) -> dict:
     sb = _sb()
     codigo = (body.get("codigo") or "").strip()
     descripcion = (body.get("descripcion") or "").strip()
     if not codigo or not descripcion:
         raise ValueError("Código y descripción del insumo son obligatorios.")
+    tipo_imp = (body.get("tipo_impuesto") or "").strip().lower() or None
+    if tipo_imp not in (None, "", "iva", "aiu"):
+        raise ValueError("tipo_impuesto debe ser 'iva' o 'aiu'.")
+    if tipo_imp == "":
+        tipo_imp = None
+    if tipo_imp and tipo_imp not in ("iva", "aiu"):
+        tipo_imp = None
+    impuestos = _normalize_impuestos(body.get("impuestos"))
+    costo_base = _to_float(body.get("costo_base"))
+    if body.get("costo_base") is None and body.get("costo") is not None:
+        costo_base = _to_float(body.get("costo"))
+    if body.get("costo_base") is None and body.get("valor_compra_referencia") is not None:
+        costo_base = _to_float(body.get("valor_compra_referencia"))
+    imp_pct = _to_float(body.get("impuesto_porcentaje"))
+    valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
+    proveedor_id = body.get("proveedor_id")
+    if body.get("razon_social") and body.get("nit") and not proveedor_id:
+        prov = create_proveedor(contrato_id, user_id, {
+            "razon_social": body.get("razon_social"),
+            "nit": body.get("nit"),
+        })
+        proveedor_id = prov.get("id")
     row = {
         "contrato_id": contrato_id,
         "listado_precio_id": body.get("listado_precio_id"),
+        "proveedor_id": int(proveedor_id) if proveedor_id else None,
         "codigo": codigo,
         "descripcion": descripcion,
         "unidad": (body.get("unidad") or "UND").strip(),
-        "valor_compra_referencia": _to_float(body.get("valor_compra_referencia")),
-        "capitulo": body.get("capitulo"),
-        "item_numero": body.get("item_numero") or codigo,
+        "rendimiento": _to_float(body.get("rendimiento")) if body.get("rendimiento") not in (None, "") else None,
+        "costo_base": costo_base,
+        "tipo_impuesto": tipo_imp,
+        "impuesto_porcentaje": imp_pct if tipo_imp else None,
+        "impuestos": impuestos if not tipo_imp else [],
+        "valor_compra_referencia": valor_total,
         "created_by": user_id,
     }
     ins = sb.table("almacen_insumo").insert(row).execute().data
     if not ins:
         raise ValueError("No se pudo crear el insumo (¿código duplicado?).")
-    return _row_from_almacen_insumo(ins[0])
+    insumo_id = ins[0]["id"]
+    if soporte:
+        data, nombre, mime = soporte
+        if len(data) > 204800:
+            raise ValueError("El PDF de soporte no puede superar 200 KB.")
+        from almacen_service import _upload_soporte
+        meta = _upload_soporte(contrato_id, "insumos-soporte", insumo_id, data, nombre, mime)
+        sb.table("almacen_insumo").update({
+            "soporte_pdf_blob_path": meta["blob_path"],
+            "soporte_pdf_nombre": meta["nombre"],
+        }).eq("id", insumo_id).execute()
+    return get_insumo(contrato_id, insumo_id)
 
 
 def search_proveedores(contrato_id: int, q: str = "", limit: int = 25) -> List[dict]:
@@ -431,17 +701,21 @@ def resolve_insumo_for_solicitud(
     user_id: int,
     raw: dict,
 ) -> dict:
-    """Resuelve insumo + presupuesto + flags para una línea de solicitud."""
+    """Resuelve insumo + ítem de cobro explícito + presupuesto + flags para una línea."""
     insumo_id = raw.get("insumo_id")
     listado_precio_id = raw.get("listado_precio_id")
     pk_id = (raw.get("pk_id") or "").strip()
     presupuesto_id = raw.get("presupuesto_id")
+    capitulo_ppto = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or "").strip()
+    item_ppto = (raw.get("presupuesto_item") or raw.get("item") or "").strip()
     cant = _to_float(raw.get("cantidad"))
 
     if cant <= 0:
         raise ValueError("La cantidad debe ser mayor a cero.")
     if not pk_id:
         raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
+    if not presupuesto_id and (not capitulo_ppto or not item_ppto):
+        raise ValueError("Seleccione capítulo e ítem de cobro del presupuesto.")
 
     if insumo_id:
         insumo = get_insumo(contrato_id, int(insumo_id))
@@ -451,13 +725,8 @@ def resolve_insumo_for_solicitud(
     else:
         raise ValueError("Seleccione un insumo del catálogo.")
 
-    capitulo = insumo.get("capitulo")
-    item_numero = insumo.get("item_numero") or insumo.get("codigo")
-    if not capitulo or not item_numero:
-        raise ValueError("El insumo no tiene capítulo/ítem para cruzar con presupuesto.")
-
+    sb = _sb()
     if presupuesto_id:
-        sb = _sb()
         ppto_rows = (
             sb.table("presupuesto")
             .select("id, pk_id, capitulo, item, descripcion, und, cant_total, vlr_unitario")
@@ -471,10 +740,19 @@ def resolve_insumo_for_solicitud(
         if not ppto_rows:
             raise ValueError("Ítem de presupuesto inválido.")
         ppto = ppto_rows[0]
+        cap_ok = not capitulo_ppto or str(ppto.get("capitulo") or "") == capitulo_ppto
+        item_ok = not item_ppto or _norm_item_key(ppto.get("item")) == _norm_item_key(item_ppto)
+        if not cap_ok or not item_ok:
+            raise ValueError("El ítem de presupuesto no coincide con capítulo/ítem seleccionados.")
         if str(ppto.get("pk_id") or "") != pk_id:
-            ppto = resolve_presupuesto_row(contrato_id, capitulo, item_numero, pk_id)
+            ppto = resolve_presupuesto_row(
+                contrato_id,
+                capitulo_ppto or ppto.get("capitulo"),
+                item_ppto or ppto.get("item"),
+                pk_id,
+            )
     else:
-        ppto = resolve_presupuesto_row(contrato_id, capitulo, item_numero, pk_id)
+        ppto = resolve_presupuesto_row(contrato_id, capitulo_ppto, item_ppto, pk_id)
 
     ctx = get_presupuesto_context(
         contrato_id,
@@ -483,16 +761,30 @@ def resolve_insumo_for_solicitud(
         cant,
         exclude_solicitud_id=raw.get("exclude_solicitud_id"),
     )
-    valor_compra = _to_float(raw.get("valor_compra_unitario") or insumo.get("valor_compra_referencia"))
+    valor_compra_raw = raw.get("valor_compra_unitario")
+    if valor_compra_raw not in (None, ""):
+        valor_compra = _to_float(valor_compra_raw)
+    elif _insumo_tiene_precio_compra({**insumo, "origen": "almacen_insumo"}):
+        valor_compra = _to_float(insumo.get("valor_compra_referencia"))
+    else:
+        valor_compra = None
     vlr_cobro = ctx.get("vlr_unitario_cobro") or 0
-    costo_insumos = valor_compra * cant
-    utilidad_estimada = (vlr_cobro * cant) - costo_insumos if vlr_cobro else None
+    costo_insumos = (valor_compra * cant) if valor_compra is not None and valor_compra > 0 else None
+    utilidad_estimada = None
+    if costo_insumos is not None and vlr_cobro:
+        utilidad_estimada = (vlr_cobro * cant) - costo_insumos
 
     return {
         "insumo_id": insumo_id,
         "listado_precio_id": insumo.get("listado_precio_id"),
         "presupuesto_id": int(ppto["id"]),
         "pk_id": pk_id,
+        "pk_id_id": raw.get("pk_id_id"),
+        "tramo": (raw.get("tramo") or "").strip() or None,
+        "costado": (raw.get("costado") or "").strip() or None,
+        "abscisa_inicial": _to_float(raw.get("abscisa_inicial")) if raw.get("abscisa_inicial") not in (None, "") else None,
+        "abscisa_final": _to_float(raw.get("abscisa_final")) if raw.get("abscisa_final") not in (None, "") else None,
+        "observacion_residente": (raw.get("observacion_residente") or "").strip() or None,
         "capitulo": ppto.get("capitulo"),
         "item": ppto.get("item"),
         "material_descripcion": _insumo_label(insumo),
@@ -501,11 +793,13 @@ def resolve_insumo_for_solicitud(
         "es_recurrente": bool(raw.get("es_recurrente")),
         "cant_presupuestada": ctx.get("cant_presupuestada"),
         "valor_compra_unitario": valor_compra,
+        "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
         "vlr_unitario_cobro": vlr_cobro,
         "supera_presupuesto": ctx.get("supera_presupuesto"),
         "contexto_presupuesto": ctx,
         "analisis_valor": {
-            "costo_insumo_linea": round(costo_insumos, 2),
+            "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
+            "costo_insumo_linea": round(costo_insumos, 2) if costo_insumos is not None else None,
             "valor_cobro_unitario": vlr_cobro,
             "valor_cobro_linea": round(vlr_cobro * cant, 2) if vlr_cobro else None,
             "utilidad_estimada_linea": round(utilidad_estimada, 2) if utilidad_estimada is not None else None,

@@ -16,6 +16,14 @@ import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
+import PptoValidacionIcon from './PptoValidacionIcon'
+import {
+  PPTO_SEMAFORO_ESTADOS,
+  pptoEstadoDepuracionDisplay,
+  pptoEstadoInterventoriaDisplay,
+  pptoEstadoValidacionColor,
+  pptoEsLegadoDepuracion,
+} from './pptoEstadosValidacion'
 import {
   esDesarrolladorPresupuesto,
   esCargoDesarrolladorPresupuesto,
@@ -41,7 +49,7 @@ import {
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
-import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
 import CcAvisoModal from '../../components/CcAvisoModal'
@@ -1169,8 +1177,11 @@ useEffect(() => {
     } else if (itemsLista.length === 1) {
       itemKey = String(itemsLista[0])
     }
+    const ubKey = pptoFiltroUbicacionCacheKey(ff)
     const obraKey = [
-      ff.tramo, ff.calzada, ff.eje, ff.revisado, ff.preInterv, ff.idPol, ff.pkCriterio, ff.texto,
+      ubKey.tramos,
+      ubKey.calzadas,
+      ff.eje, ff.revisado, ff.preInterv, ff.idPol, ff.pkCriterio, ff.texto,
       ff.nodoI, ff.nodoF, ff.absA, ff.absB, ff.tipoEjecucion,
     ].join('\x1e')
     return [
@@ -2165,8 +2176,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [contratoId, oculto, detalleConItem, drill, verPapelera, loading, buscandoFiltroObra, fObra])
 
   function syncFObraALegacy(f) {
-    setUbicacionTramo(f.tramo || '')
-    setUbicacionCalzada(f.calzada || '')
+    const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
+    const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+    setUbicacionTramo(tramos.length === 1 ? tramos[0] : '')
+    setUbicacionCalzada(calzadas.length === 1 ? calzadas[0] : '')
     setFiltroEstado(f.revisado || '')
     if (f.nodoI || f.nodoF) {
       setBusquedaTipo('nodo')
@@ -2971,6 +2984,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     const revFiltro = fObra.revisado || filtroEstado || ''
     const preFiltro = fObra.preInterv || ''
+    const tramoFiltro = pptoFiltroValoresLista(pptoFiltroDef('tramo'), fObra)
+    const calzadaFiltro = pptoFiltroValoresLista(pptoFiltroDef('calzada'), fObra)
     return registros.filter(r => {
       if (!drillMatch(r)) return false
       if (pkidsSeleccionados.length > 0) {
@@ -2978,6 +2993,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       if (!pptoFilaCoincideRevisado(r, revFiltro)) return false
       if (!pptoFilaCoincidePreInterv(r, preFiltro)) return false
+      if (tramoFiltro.length && !tramoFiltro.includes(String(r.tramo ?? '').trim())) return false
+      if (calzadaFiltro.length && !calzadaFiltro.includes(String(r.calzada ?? '').trim())) return false
       if (detalleConItem) return true
       if (busquedaTipo === 'tramo') {
         const v1 = busquedaV1.trim().toLowerCase()
@@ -3008,7 +3025,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
 
   const chartData = useMemo(() => {
     if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {
@@ -3839,13 +3856,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['No Revisado', 'Rechazado', 'Pendiente', 'Aprobado']
-  const estadoColor = (r) => r === 'Aprobado' ? '#16A34A' : r === 'Pendiente' ? '#D97706' : r === 'Rechazado' ? '#EF4444' : '#3B82F6'
-  const SEMAFORO = [
-    { valor: 'No Revisado', color: '#3B82F6', label: '🔵' },
-    { valor: 'Rechazado', color: '#EF4444', label: '🔴' },
-    { valor: 'Pendiente', color: '#D97706', label: '🟡' },
-    { valor: 'Aprobado',  color: '#16A34A', label: '🟢' },
-  ]
+  const estadoColor = pptoEstadoValidacionColor
+  const SEMAFORO = PPTO_SEMAFORO_ESTADOS.map((s) => ({ ...s, label: s.valor === 'No Revisado' ? '🔵' : s.valor === 'Rechazado' ? '🔴' : s.valor === 'Pendiente' ? '🟡' : '🟢' }))
 
   /** Zoom + resaltado en plano vía cola del Agent (SicoeCAD). Requiere DWG enlazado (heartbeat). */
   function navegarRegistroEnPlano(registro) {
@@ -4157,18 +4169,20 @@ async function restaurar(id) {
               </div>
               )}
               <div style={{ display:'flex', gap:'4px' }}>
-                {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => (
-                  <button key={op.valor}
-                    title={op.valor}
-                    onClick={async (e) => { e.stopPropagation(); if (puedeValidarInterventoriaRegistro(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
-                    style={{ background: est === op.valor ? clr : t.bgCard,
-                      border:`1.5px solid ${est === op.valor ? clr : t.border}`,
-                      borderRadius:'50%', width:'22px', height:'22px', fontSize:'var(--cc-sm)',
-                      cursor: puedeValidarInterventoriaRegistro(r) ? 'pointer' : 'default',
-                      display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
-                    {op.label}
-                  </button>
-                ))}
+                <PptoValidacionIcon
+                  eje="interventoria"
+                  estado={pptoEstadoInterventoriaDisplay(r)}
+                  esSellado={esSellado(r)}
+                  t={t}
+                  compact
+                  tituloBloqueo={
+                    puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                      ? 'Requiere depuración aprobada'
+                      : ''
+                  }
+                  puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
+                  onSeleccionar={(valor) => cambiarEstadoDirecto(r.id, valor)}
+                />
               </div>
             </div>
           )
@@ -4724,31 +4738,17 @@ async function restaurar(id) {
                                 </div>
                                 )}
                                 {mostrarColumnaDepuracion && (
-                                  <div
-                                    onClick={e => e.stopPropagation()}
-                                    style={{ display:'flex', gap:'3px', alignItems:'center', justifyContent:'center', flex:'0.7 0 72px' }}
-                                    title="Depuración (residente de costos / obra)"
-                                  >
-                                    {SEMAFORO.map(s => {
-                                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
-                                      const activo = preDisp === s.valor
-                                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
-                                      return (
-                                        <div
-                                          key={`tr-pre-${r.id}-${s.valor}`}
-                                          onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
-                                          style={{
-                                            width: activo ? '15px' : '11px',
-                                            height: activo ? '15px' : '11px',
-                                            borderRadius: '50%',
-                                            background: activo ? s.color : s.color + '33',
-                                            border: `1.5px solid ${activo ? s.color : s.color + '55'}`,
-                                            cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
-                                            opacity: esSellado(r) ? 0.45 : (esLegadoPre ? 0.75 : 1),
-                                          }}
-                                        />
-                                      )
-                                    })}
+                                  <div style={{ display: 'flex', justifyContent: 'center', flex: '0.7 0 72px' }} onClick={e => e.stopPropagation()}>
+                                    <PptoValidacionIcon
+                                      eje="depuracion"
+                                      estado={pptoEstadoDepuracionDisplay(r)}
+                                      esLegado={pptoEsLegadoDepuracion(r)}
+                                      esSellado={esSellado(r)}
+                                      t={t}
+                                      compact
+                                      puedeSeleccionar={(valor) => puedePrevalidarUI && !esSellado(r)}
+                                      onSeleccionar={(valor) => cambiarPreIntervDirecto(r.id, valor)}
+                                    />
                                   </div>
                                 )}
                                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
@@ -4798,21 +4798,20 @@ async function restaurar(id) {
                                       ✓
                                     </button>
                                   )}
-                                  {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => {
-                                    const est = r.revisado || 'No Revisado'
-                                    const clr = estadoColor(est)
-                                    return (
-                                      <button key={op.valor} title={op.valor}
-                                        onClick={async (e) => { e.stopPropagation(); if (puedeValidarInterventoriaRegistro(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
-                                        style={{ background: est === op.valor ? clr : t.bgCard,
-                                          border:`1.5px solid ${est === op.valor ? clr : t.border}`,
-                                          borderRadius:'50%', width:'22px', height:'22px', fontSize:'var(--cc-sm)',
-                                          cursor: puedeValidarInterventoriaRegistro(r) ? 'pointer' : 'default',
-                                          display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
-                                        {op.label}
-                                      </button>
-                                    )
-                                  })}
+                                  <PptoValidacionIcon
+                                    eje="interventoria"
+                                    estado={pptoEstadoInterventoriaDisplay(r)}
+                                    esSellado={esSellado(r)}
+                                    t={t}
+                                    compact
+                                    tituloBloqueo={
+                                      puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                                        ? 'Requiere depuración aprobada'
+                                        : ''
+                                    }
+                                    puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
+                                    onSeleccionar={(valor) => cambiarEstadoDirecto(r.id, valor)}
+                                  />
                                   {puedeEditar && (
                                     <button
                                       type="button"
@@ -6382,7 +6381,7 @@ async function restaurar(id) {
           <div className="cc-ppto-reg-cards" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
             {registrosPagina.map((r) => {
               const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : undefined
-              const colorRev = r.revisado === 'Aprobado' ? '#10B981' : r.revisado === 'Pendiente' ? '#F59E0B' : r.revisado === 'Rechazado' ? '#EF4444' : '#3B82F6'
+              const colorRev = pptoEstadoValidacionColor(r.revisado)
               return (
                 <div
                   key={`card-${r.id}`}
@@ -6474,68 +6473,32 @@ async function restaurar(id) {
                         padding: 0,
                       }}
                     >📜</button>
-                    {mostrarColumnaDepuracion && (() => {
-                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
-                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
-                      return (
-                        <div className="cc-ppto-reg-card-semaforo" title="Depuración" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 6px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, minHeight: 40 }}>
-                          <span style={{ fontSize: 9, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>Dep</span>
-                          {SEMAFORO.map((s) => {
-                            const activo = preDisp === s.valor
-                            return (
-                              <button
-                                key={`card-pre-${s.valor}`}
-                                type="button"
-                                aria-label={`Depuración: ${s.valor}`}
-                                title={esLegadoPre ? `${s.valor} (legado)` : `Depuración: ${s.valor}`}
-                                onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
-                                style={{
-                                  width: activo ? 16 : 12,
-                                  height: activo ? 16 : 12,
-                                  borderRadius: '50%',
-                                  background: activo ? s.color : s.color + '33',
-                                  border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                  cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
-                                  opacity: esSellado(r) ? 0.55 : 1,
-                                  padding: 0,
-                                  boxShadow: activo ? `0 0 6px ${s.color}88` : 'none',
-                                }}
-                              />
-                            )
-                          })}
-                        </div>
-                      )
-                    })()}
-                    <div className="cc-ppto-reg-card-semaforo" title="Interventoría" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 6px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, minHeight: 40 }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>Int</span>
-                      {SEMAFORO.map((s) => {
-                        const activo = (r.revisado || 'No Revisado') === s.valor
-                        return (
-                          <button
-                            key={`card-int-${s.valor}`}
-                            type="button"
-                            aria-label={`Interventoría: ${s.valor}`}
-                            title={
-                              puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
-                                ? `${s.valor} — requiere depuración aprobada`
-                                : s.valor
-                            }
-                            onClick={() => puedeValidarInterventoriaRegistro(r) && !activo && cambiarEstadoDirecto(r.id, s.valor)}
-                            style={{
-                              width: activo ? 16 : 12,
-                              height: activo ? 16 : 12,
-                              borderRadius: '50%',
-                              background: activo ? s.color : s.color + '33',
-                              border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                              cursor: puedeValidarInterventoriaRegistro(r) && !activo ? 'pointer' : 'default',
-                              opacity: esSellado(r) ? 0.55 : 1,
-                              padding: 0,
-                              boxShadow: activo ? `0 0 6px ${s.color}88` : 'none',
-                            }}
-                          />
-                        )
-                      })}
-                    </div>
+                    {mostrarColumnaDepuracion && (
+                      <PptoValidacionIcon
+                        eje="depuracion"
+                        estado={pptoEstadoDepuracionDisplay(r)}
+                        esLegado={pptoEsLegadoDepuracion(r)}
+                        esSellado={esSellado(r)}
+                        t={t}
+                        compact
+                        puedeSeleccionar={(valor) => puedePrevalidarUI && !esSellado(r)}
+                        onSeleccionar={(valor) => cambiarPreIntervDirecto(r.id, valor)}
+                      />
+                    )}
+                    <PptoValidacionIcon
+                      eje="interventoria"
+                      estado={pptoEstadoInterventoriaDisplay(r)}
+                      esSellado={esSellado(r)}
+                      t={t}
+                      compact
+                      tituloBloqueo={
+                        puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                          ? 'Requiere depuración aprobada'
+                          : ''
+                      }
+                      puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
+                      onSeleccionar={(valor) => cambiarEstadoDirecto(r.id, valor)}
+                    />
                     {puedeEditar && (
                       <button
                         type="button"
@@ -6727,64 +6690,36 @@ async function restaurar(id) {
                     {nivelInfo.verValoresEconomicos && (
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
                     )}
-                    {mostrarColumnaDepuracion && (() => {
-                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
-                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
-                      return (
+                    {mostrarColumnaDepuracion && (
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                      <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center', flexWrap:'wrap' }}>
-                        {SEMAFORO.map(s => {
-                          const activo = preDisp === s.valor
-                          return (
-                            <div
-                              key={`pre-${s.valor}`}
-                              title={esLegadoPre ? `${s.valor} (registro anterior sin depuración)` : `Depuración: ${s.valor}`}
-                              onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
-                              style={{
-                                width: activo ? '18px' : '12px',
-                                height: activo ? '18px' : '12px',
-                                borderRadius: '50%',
-                                background: activo ? s.color : s.color + '33',
-                                border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
-                                opacity: esSellado(r) ? 0.55 : (esLegadoPre ? 0.75 : 1),
-                                transition: 'all 0.2s',
-                                boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
-                              }}
-                            />
-                          )
-                        })}
+                      <div style={{ display:'flex', justifyContent:'center' }}>
+                        <PptoValidacionIcon
+                          eje="depuracion"
+                          estado={pptoEstadoDepuracionDisplay(r)}
+                          esLegado={pptoEsLegadoDepuracion(r)}
+                          esSellado={esSellado(r)}
+                          t={t}
+                          puedeSeleccionar={(valor) => puedePrevalidarUI && !esSellado(r)}
+                          onSeleccionar={(valor) => cambiarPreIntervDirecto(r.id, valor)}
+                        />
                       </div>
                     </td>
-                      )
-                    })()}
+                    )}
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
-                        {SEMAFORO.map(s => {
-                          const activo = (r.revisado || 'No Revisado') === s.valor
-                          return (
-                            <div
-                              key={s.valor}
-                              title={
-                                puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
-                                  ? `${s.valor} — requiere depuración aprobada`
-                                  : s.valor
-                              }
-                              onClick={() => puedeValidarInterventoriaRegistro(r) && !activo && cambiarEstadoDirecto(r.id, s.valor)}
-                              style={{
-                                width: activo ? '18px' : '12px',
-                                height: activo ? '18px' : '12px',
-                                borderRadius: '50%',
-                                background: activo ? s.color : s.color + '33',
-                                border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedeValidarInterventoriaRegistro(r) && !activo ? 'pointer' : 'default',
-                                opacity: esSellado(r) ? 0.55 : 1,
-                                transition: 'all 0.2s',
-                                boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
-                              }}
-                            />
-                          )
-                        })}
+                        <PptoValidacionIcon
+                          eje="interventoria"
+                          estado={pptoEstadoInterventoriaDisplay(r)}
+                          esSellado={esSellado(r)}
+                          t={t}
+                          tituloBloqueo={
+                            puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                              ? 'Requiere depuración aprobada'
+                              : ''
+                          }
+                          puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
+                          onSeleccionar={(valor) => cambiarEstadoDirecto(r.id, valor)}
+                        />
                         {esSellado(r) && (
                           <span title="Sellado — aprobado por Interventoría" style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#15803d', marginLeft:'4px', whiteSpace:'nowrap' }}>🔒</span>
                         )}

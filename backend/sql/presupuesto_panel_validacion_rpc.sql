@@ -69,7 +69,6 @@ AS $$
       AND p.tipo_ejecucion = tr.te
       AND (
         NOT coalesce(p_filtrar_interv, true)
-        OR p.pre_interv_estado IS NULL
         OR p.pre_interv_estado = 'Aprobado'
       )
       -- Drill panel ítems

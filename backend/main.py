@@ -35,6 +35,7 @@ from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
     _presupuesto_q_estructura,
     _presupuesto_q_filtros_ubicacion,
+    _presupuesto_q_visibilidad_interventoria,
     _so_reg_filtro_abs_solape,
     presupuesto_estados_validacion_opciones,
     presupuesto_oficial_version_id,
@@ -1425,7 +1426,13 @@ def _cargo_puede_auditar_logs(current_user) -> bool:
 
 
 def _es_desarrollador(current_user) -> bool:
-    """Solo el cargo Desarrollador (no Administrador): acciones destructivas de desarrollo."""
+    """Cargo Desarrollador (o rol Desarrollador en JWT): acceso total sin matriz."""
+    rol_jwt = (current_user.get("rol_nombre") or "").strip().lower()
+    if rol_jwt == "desarrollador":
+        return True
+    cargo_jwt = (current_user.get("cargo_nombre") or "").strip().lower()
+    if cargo_jwt == "desarrollador":
+        return True
     try:
         uid = int(current_user.get("sub"))
     except (TypeError, ValueError):
@@ -1533,6 +1540,8 @@ def _cargo_tiene_permiso_funcion(
     contrato_id: Optional[int] = None,
 ) -> bool:
     """Matriz por cargo; si contrato_id, filas de ese contrato (misma lógica que login y /usuarios/me)."""
+    if _es_desarrollador(current_user):
+        return True
     cid = _caller_cargo_id(current_user)
     if cid is None:
         return False
@@ -2250,6 +2259,9 @@ app.include_router(contabilidad_router)
 
 from almacen_routes import router as almacen_router
 app.include_router(almacen_router)
+
+from catalogo_insumos_routes import router as catalogo_insumos_router
+app.include_router(catalogo_insumos_router)
 
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
@@ -5067,7 +5079,11 @@ def login(request: Request, body: LoginRequest):
         funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
     # Desarrollador: acceso total (sin depender de la matriz por función).
-    if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
+    es_dev_login = (
+        (cargo_nombre or "").strip().lower() == "desarrollador"
+        or (rol_nombre or "").strip().lower() == "desarrollador"
+    )
+    if es_dev_login:
         permisos = _permisos_desarrollador_acceso_total(
             permisos, funciones_rows, usuario.get("cargo_id")
         )
@@ -5510,7 +5526,11 @@ def get_mi_usuario(
         except Exception:
             permisos_raw = []
     # Desarrollador: acceso total (sin depender de la matriz por función).
-    if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
+    es_dev_me = (
+        (cargo_nombre or "").strip().lower() == "desarrollador"
+        or (rol_nombre or "").strip().lower() == "desarrollador"
+    )
+    if es_dev_me:
         if not funciones_rows:
             try:
                 funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
@@ -5784,6 +5804,7 @@ def listar_funciones(current_user=Depends(get_current_user)):
         {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
         {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
         {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
+        {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]
@@ -7460,8 +7481,7 @@ def get_presupuesto(
             costo_directo_desde=costo_directo_desde,
             costo_directo_hasta=costo_directo_hasta,
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     if limit is not None:
@@ -7566,8 +7586,7 @@ def get_presupuesto_conteo(
         costo_directo_desde=costo_directo_desde,
         costo_directo_hasta=costo_directo_hasta,
     )
-    if _presupuesto_aplica_filtro_interventoria(current_user):
-        q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+    q = _presupuesto_q_visibilidad_interventoria(q, current_user)
     result = q.execute()
     return {"total": int(result.count or 0)}
 
@@ -7678,6 +7697,7 @@ def _presupuesto_filtros_opciones_legacy(
     current_user,
     *,
     capitulo: Optional[str] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     tramo: Optional[str] = None,
@@ -7689,6 +7709,7 @@ def _presupuesto_filtros_opciones_legacy(
         contrato_id,
         current_user,
         capitulo=capitulo,
+        competencia=competencia,
         item=item,
         items=items,
         tramo=tramo,
@@ -7717,8 +7738,7 @@ def _presupuesto_filtros_opciones_legacy(
         .eq("contrato_id", contrato_id)
         .eq("dado_de_baja", False)
     )
-    if _presupuesto_aplica_filtro_interventoria(current_user):
-        tipos_q = tipos_q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+    tipos_q = _presupuesto_q_visibilidad_interventoria(tipos_q, current_user)
     tipos_rows: List[dict] = []
     tipos_off = 0
     while True:
@@ -7751,6 +7771,7 @@ def _presupuesto_fetch_filtros_source_rows(
     current_user,
     *,
     capitulo: Optional[str] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     tramo: Optional[str] = None,
@@ -7772,6 +7793,8 @@ def _presupuesto_fetch_filtros_source_rows(
         q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
         if capitulo:
             q = q.eq("capitulo", capitulo)
+        if competencia and str(competencia).strip():
+            q = q.eq("competencia", str(competencia).strip())
         ins = [str(x).strip() for x in (items or []) if str(x).strip()]
         if len(ins) > 1:
             if len(ins) > 200:
@@ -7785,8 +7808,7 @@ def _presupuesto_fetch_filtros_source_rows(
             q = q.eq("tramo", tramo)
         if calzada:
             q = q.eq("calzada", calzada)
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
@@ -7799,6 +7821,7 @@ def _presupuesto_fetch_filtros_source_rows(
 def get_filtros_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
@@ -7817,6 +7840,7 @@ def get_filtros_presupuesto(
         int(contrato_id),
         (tipo_ejecucion or "").strip(),
         (capitulo or "").strip(),
+        (competencia or "").strip(),
         item_eff or "",
         (tramo or "").strip(),
         (calzada or "").strip(),
@@ -7841,6 +7865,7 @@ def get_filtros_presupuesto(
             contrato_id,
             current_user,
             capitulo=capitulo,
+            competencia=competencia,
             item=item_eff,
             items=items,
             tramo=tramo,
@@ -7946,8 +7971,7 @@ def _presupuesto_agregar_por_capitulo_legacy(
             .eq("dado_de_baja", False)
         )
         q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
@@ -8184,8 +8208,7 @@ def get_items_presupuesto(
             "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
         ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)
         q_it = _presupuesto_q_tipo_ejecucion(q_it, tipo_ejecucion)
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q_it = q_it.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q_it = _presupuesto_q_visibilidad_interventoria(q_it, current_user)
         batch = q_it.order("id").range(offset, offset + 999).execute().data
         rows.extend(batch)
         if len(batch) < 1000: break 
@@ -8289,8 +8312,7 @@ def _presupuesto_fetch_export_rows_crudo(
             costo_directo_desde=body.costo_directo_desde,
             costo_directo_hasta=body.costo_directo_hasta,
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     PAGE = 1000
@@ -8349,8 +8371,7 @@ def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoIn
             costo_directo_desde=body.costo_directo_desde,
             costo_directo_hasta=body.costo_directo_hasta,
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     PAGE = 1000
@@ -8399,8 +8420,7 @@ def _presupuesto_version_fetch_export_rows(
                 .eq("version_id", version_id)
                 .eq("dado_de_baja", False)
             )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     off = 0
@@ -22887,7 +22907,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
                 .eq("dado_de_baja", False)
             )
             if pto_iv:
-                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+                q = q.eq("pre_interv_estado", "Aprobado")
             return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_q_pres) or []
@@ -25319,7 +25339,7 @@ def _ppto_rows_capitulo_tipo(
                 .eq("tipo_ejecucion", tipo_ejecucion)
             )
             if current_user and _presupuesto_aplica_filtro_interventoria(current_user):
-                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+                q = q.eq("pre_interv_estado", "Aprobado")
             if caps:
                 if len(caps) == 1:
                     q = q.eq("capitulo", caps[0])
@@ -26047,7 +26067,7 @@ def _gerencial_ppto_split_por_capitulo(
                     .eq("tipo_ejecucion", tipo)
                 )
             if filtra_interv:
-                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+                q = q.eq("pre_interv_estado", "Aprobado")
             return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_b) or []
@@ -26100,7 +26120,7 @@ def _gerencial_ppto_items(
                     .eq("tipo_ejecucion", tipo)
                 )
             if filtra_interv:
-                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+                q = q.eq("pre_interv_estado", "Aprobado")
             return q.order("id").range(o, o + 999).execute().data
 
         batch = supabase_execute(_b) or []

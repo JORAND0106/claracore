@@ -68,13 +68,15 @@ def _es_rol_interventoria_ppto(current_user) -> bool:
 
 
 def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
-    """Filtro de listados por depuración contratista (pre_interv_estado).
+    """¿Aplicar visibilidad restringida en listados para perfil Interventoría?"""
+    return _es_rol_interventoria_ppto(current_user)
 
-    Devuelve siempre False: Interventoría ve las mismas cantidades que Contratista.
-    La restricción operativa queda en validación (_pre_interv_liberado / bulk-estado),
-    no ocultando filas en grilla, panel, conteo ni exportación.
-    """
-    return False
+
+def _presupuesto_q_visibilidad_interventoria(q, current_user):
+    """Interventoría solo ve registros con depuración contratista aprobada."""
+    if _presupuesto_aplica_filtro_interventoria(current_user):
+        return q.eq("pre_interv_estado", "Aprobado")
+    return q
 
 
 PRESUPUESTO_ESTADOS_VALIDACION = ("No Revisado", "Aprobado", "Pendiente", "Rechazado")

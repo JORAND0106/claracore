@@ -111,7 +111,7 @@ def list_presupuesto_items(contrato_id: int) -> List[dict]:
     sb = _sb()
     rows = (
         sb.table("presupuesto")
-        .select("id, pk_id, capitulo, item, descripcion, und, cant_total, dado_de_baja")
+        .select("id, pk_id, capitulo, item, descripcion, und, cant_total, vlr_unitario, dado_de_baja")
         .eq("contrato_id", contrato_id)
         .eq("dado_de_baja", False)
         .order("capitulo")

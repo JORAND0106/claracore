@@ -653,6 +653,7 @@ def fetch_panel_validacion_biblioteca(
         _presupuesto_aplica_filtro_interventoria,
         _presupuesto_q_estructura,
         _presupuesto_q_filtros_ubicacion,
+        _presupuesto_q_visibilidad_interventoria,
     )
     from presupuesto_panel_validacion import panel_validacion_rpc_a_filas
 
@@ -702,8 +703,7 @@ def fetch_panel_validacion_biblioteca(
             costo_directo_desde=filtros.get("costo_directo_desde"),
             costo_directo_hasta=filtros.get("costo_directo_hasta"),
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         batch = q.range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:

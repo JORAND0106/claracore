@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
+    _presupuesto_q_visibilidad_interventoria,
     presupuesto_oficial_version_id,
 )
 from dashboard_costo_agregado import (
@@ -386,9 +387,7 @@ def _apply_capitulo_filter(q, sb, contrato_id: int, capitulo: str, *, tipo_ejecu
 
 
 def _apply_interventoria_filter(q, current_user):
-    if _presupuesto_aplica_filtro_interventoria(current_user):
-        return q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-    return q
+    return _presupuesto_q_visibilidad_interventoria(q, current_user)
 
 
 def _ingest_presupuesto_row(

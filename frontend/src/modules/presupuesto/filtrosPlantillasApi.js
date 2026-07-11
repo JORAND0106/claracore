@@ -45,6 +45,7 @@ export async function eliminarFiltroPlantilla(token, id) {
 export async function fetchPresupuestoFiltrosOpciones(contratoId, token, params = {}) {
   const p = new URLSearchParams()
   if (params.capitulo) p.set('capitulo', params.capitulo)
+  if (params.competencia) p.set('competencia', params.competencia)
   if (params.item) p.set('item', params.item)
   if (params.tramo) p.set('tramo', params.tramo)
   if (params.calzada) p.set('calzada', params.calzada)

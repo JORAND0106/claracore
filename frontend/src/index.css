@@ -1532,6 +1532,100 @@ select.cc-dashboard-acta-select--light option {
   .cc-buzon-hilo-footer-btn {
     box-sizing: border-box;
   }
+
+  /* Soporte técnico (desarrollador) — panel + detalle */
+  .cc-soporte-trigger {
+    min-width: 44px;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .cc-soporte-panel--mobile {
+    animation: cc-buzon-slide-down 0.22s ease-out;
+  }
+
+  .cc-soporte-item {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .cc-soporte-detalle-overlay {
+    padding: max(10px, env(safe-area-inset-top, 0px))
+      max(10px, env(safe-area-inset-right, 0px))
+      max(10px, env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px)) !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  .cc-soporte-detalle-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 14px !important;
+    margin: 0 !important;
+  }
+
+  .cc-soporte-detalle-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-soporte-detalle-footer {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .cc-soporte-detalle-footer-btn {
+    box-sizing: border-box;
+  }
+
+  /* Reportar bug / mejora — modal */
+  .cc-reporte-trigger {
+    min-width: 44px;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .cc-reporte-overlay {
+    padding: max(10px, env(safe-area-inset-top, 0px))
+      max(10px, env(safe-area-inset-right, 0px))
+      max(10px, env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px)) !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  .cc-reporte-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 14px !important;
+    margin: 0 !important;
+  }
+
+  .cc-reporte-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-reporte-body select,
+  .cc-reporte-body input,
+  .cc-reporte-body textarea {
+    min-height: 44px;
+    font-size: var(--cc-body, 15px) !important;
+  }
+
+  .cc-reporte-footer-btn {
+    box-sizing: border-box;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════

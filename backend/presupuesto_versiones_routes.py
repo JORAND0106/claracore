@@ -44,6 +44,7 @@ from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
     _presupuesto_coerce_multi_list,
     _presupuesto_q_filtros_ubicacion,
+    _presupuesto_q_visibilidad_interventoria,
 )
 
 from main import (
@@ -249,8 +250,7 @@ def get_presupuesto_version_items(
             costo_directo_desde=costo_directo_desde,
             costo_directo_hasta=costo_directo_hasta,
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     if limit is not None:
@@ -514,8 +514,7 @@ def get_presupuesto_version_conteo(
             q = q.eq("revisado", revisado)
         if pre_interv_estado:
             q = q.eq("pre_interv_estado", pre_interv_estado)
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         return q.order("id")
 
     total = conteo_biblioteca(supabase, contrato_id, version_id, _q_base)

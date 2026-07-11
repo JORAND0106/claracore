@@ -15,6 +15,9 @@ import { ContratoDocumentosMatriz } from "./ContratoDocumentosContractuales";
 import { ContratoOrdenesPagoAlertasDev } from "./ContratoOrdenesPagoAlertasDev";
 import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
+import SeccionCatalogoInsumos from "./admin/SeccionCatalogoInsumos";
+import { esDesarrolladorUsuario } from "./utils/permisosContrato";
+import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -1004,7 +1007,7 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const col = C(theme);
-  const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+  const isDev = esDesarrolladorUsuario(user);
   const sel = (extra) => themedSelect(theme, col, extra);
 
   const cargarPermisos = useCallback(async (id, opts = {}) => {
@@ -1098,6 +1101,12 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
         <div style={S.alert(msg.type)}>
           {msg.text}
           <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
+        </div>
+      )}
+      {isDev && (
+        <div style={{ ...S.card, marginBottom: 16, padding: '12px 16px', borderLeft: '3px solid #22c55e' }}>
+          <strong>Cargo Desarrollador:</strong> acceso total a todas las funciones del sistema (ver, crear, editar, eliminar, validar, exportar).
+          No requiere configuración en esta matriz.
         </div>
       )}
       <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
@@ -5562,7 +5571,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
   const col = C(theme);
   const tdStyle = S.td(theme);
   const tTok = tFrom(theme);
-  const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+  const isDev = esDesarrolladorUsuario(user);
 
   const [contratoId, setContratoId] = useState(user?.contrato_id || null);
   const [actasTodas, setActasTodas] = useState([]);
@@ -7524,6 +7533,7 @@ const TAB_FUNCIONES = {
   permisos:        ["panel de administración"],
   contratos:       ["contratos"],
   precios:         ["listado de precios"],
+  catalogo_insumos: ["catálogo de insumos", "catalogo de insumos"],
   subcontratistas: ["subcontratistas"],
   resets:          ["panel de administración"],
   actas:           ["actas"],
@@ -7540,6 +7550,7 @@ const ADMIN_PANEL_TABS = [
   { id: "permisos",  label: "Control de accesos"  },
   { id: "contratos", label: "Contratos"            },
   { id: "precios",          label: "Listado de Precios"   },
+  { id: "catalogo_insumos", label: "Catálogo de insumos"  },
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
@@ -7557,8 +7568,9 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const adminCompact = vpMobile || isLandscapeMobile;
 
-  const isDeveloper = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+  const isDeveloper = esDesarrolladorUsuario(user);
   const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
+  const permsDevOAdmin = isDeveloper || isAdmin ? PERMISOS_ADMIN_TODOS : null;
 
   const TABS = useMemo(() => {
     return ADMIN_PANEL_TABS.filter((tabItem) => {
@@ -7695,6 +7707,13 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
 
   const subPerms = (user?.permisos || []).find(
     p => p.funcion_nombre?.toLowerCase() === "subcontratistas"
+  ) || {};
+
+  const catalogoInsumosPerms = (user?.permisos || []).find(
+    p => {
+      const n = (p.funcion_nombre || "").toLowerCase();
+      return n === "catálogo de insumos" || n === "catalogo de insumos";
+    }
   ) || {};
 
   return (
@@ -7856,7 +7875,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             token={token}
             openContratoRequest={openContratoRequest}
             onOpenContratoHandled={() => setOpenContratoRequest(null)}
-            perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
+            perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } :
               (() => {
                 const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");
                 return {
@@ -7869,8 +7888,9 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
               })()
             }
           />}
-            {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
-            {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
+            {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={permsDevOAdmin || precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
+            {tab === "catalogo_insumos" && <SeccionCatalogoInsumos token={token} user={user} perms={permsDevOAdmin || catalogoInsumosPerms} theme={activeTheme} />}
+            {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
             {tab === "inicio"           && (

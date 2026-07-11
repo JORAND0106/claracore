@@ -10,6 +10,8 @@ import {
   pptoFiltroDef,
   pptoFiltroChipResumen,
   pptoFiltrosActivosKeys,
+  pptoFiltroCascadeOpcionesParams,
+  pptoFiltroValoresLista,
   pptoMergeItemsOpciones,
   PPTO_ESTADOS_VALIDACION,
 } from './pptoFiltroCatalogo'
@@ -72,23 +74,23 @@ export default function PptoFiltroModal({
   }, [open, fAplicado, seccionIds])
 
   const cascadeKey = useMemo(() => {
-    const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || '')
-    const compSingle = draftF.competencias?.length === 1
-      ? draftF.competencias[0]
-      : (draftF.competencia || '')
-    return [capSingle, compSingle, draftF.tramo || '', draftF.calzada || ''].join('|')
-  }, [draftF.cap, draftF.caps, draftF.competencia, draftF.competencias, draftF.tramo, draftF.calzada])
+    const p = pptoFiltroCascadeOpcionesParams(draftF, tipoEjecucionActivo)
+    const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), draftF)
+    const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), draftF)
+    return [
+      p.capitulo || '',
+      p.competencia || '',
+      tramos.join('\x1f'),
+      calzadas.join('\x1f'),
+    ].join('|')
+  }, [draftF, tipoEjecucionActivo])
 
   useEffect(() => {
     if (!open || !contratoId || !token) return
     let cancelled = false
-    // No enviar capitulo: la cascada en servidor dejaría un solo capítulo y bloquea multi-selección.
     const timer = setTimeout(() => {
-      fetchPresupuestoFiltrosOpciones(contratoId, token, {
-        tramo: draftF.tramo || undefined,
-        calzada: draftF.calzada || undefined,
-        tipo_ejecucion: tipoEjecucionActivo,
-      })
+      const cascadeParams = pptoFiltroCascadeOpcionesParams(draftF, tipoEjecucionActivo)
+      fetchPresupuestoFiltrosOpciones(contratoId, token, cascadeParams)
         .then((data) => { if (!cancelled) setOpciones(data || {}) })
         .catch(() => {})
     }, cascadeKey === '|||' ? 0 : 320)
@@ -130,10 +132,35 @@ export default function PptoFiltroModal({
 
     const items_opciones = pptoMergeItemsOpciones(itemsFromGrilla(), fromLp)
 
+    const ubicacionFromGrilla = (campo) => {
+      if (!(registrosGrilla || []).length) return []
+      const out = new Set()
+      for (const r of registrosGrilla) {
+        const cap = String(r.capitulo ?? '').trim()
+        const comp = String(r.competencia ?? '').trim()
+        const val = String(r[campo] ?? '').trim()
+        if (!val) continue
+        if (capsSel.length && !capsSel.includes(cap)) continue
+        if (compsSel.length && !compsSel.includes(comp)) continue
+        out.add(val)
+      }
+      return [...out].sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
+    }
+
+    const tramosGrilla = ubicacionFromGrilla('tramo')
+    const calzadasGrilla = ubicacionFromGrilla('calzada')
+
     const capitulosLp = [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
       .sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
     const capitulos = capitulosLp.length ? capitulosLp : (base.capitulos || [])
-    return { ...base, capitulos, items_opciones, items: [] }
+    return {
+      ...base,
+      capitulos,
+      items_opciones,
+      items: [],
+      tramos: tramosGrilla.length ? tramosGrilla : (base.tramos || []),
+      calzadas: calzadasGrilla.length ? calzadasGrilla : (base.calzadas || []),
+    }
   }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias])
 
   const opcionesResueltas = useMemo(

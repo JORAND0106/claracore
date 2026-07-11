@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from presupuesto_helpers import _presupuesto_aplica_filtro_interventoria
+from presupuesto_helpers import (
+    _presupuesto_aplica_filtro_interventoria,
+    _presupuesto_q_visibilidad_interventoria,
+)
 
 _PPTO_PANEL_ESTADOS = ("No Revisado", "Aprobado", "Pendiente", "Rechazado")
 
@@ -211,8 +214,7 @@ def _fetch_panel_validacion_rows(
             costo_directo_desde=filtros.get("costo_directo_desde"),
             costo_directo_hasta=filtros.get("costo_directo_hasta"),
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         batch = q.range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
@@ -459,8 +461,7 @@ def _fetch_panel_validacion_legacy(
             costo_directo_desde=filtros.get("costo_directo_desde"),
             costo_directo_hasta=filtros.get("costo_directo_hasta"),
         )
-        if _presupuesto_aplica_filtro_interventoria(current_user):
-            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
         batch = q.range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
