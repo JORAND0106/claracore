@@ -1496,6 +1496,42 @@ select.cc-dashboard-acta-select--light option {
   .cc-buzon-item-actions button {
     -webkit-tap-highlight-color: transparent;
   }
+
+  .cc-buzon-hilo-overlay {
+    padding: max(10px, env(safe-area-inset-top, 0px))
+      max(10px, env(safe-area-inset-right, 0px))
+      max(10px, env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px)) !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  .cc-buzon-hilo-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 14px !important;
+    margin: 0 !important;
+  }
+
+  .cc-buzon-hilo-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cc-buzon-hilo-footer {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .cc-buzon-hilo-footer-btn {
+    box-sizing: border-box;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════

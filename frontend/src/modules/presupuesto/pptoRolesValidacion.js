@@ -21,6 +21,12 @@ export function esDesarrolladorPresupuesto(usuario) {
   return cargo.includes('desarrollador') || rol === 'desarrollador'
 }
 
+/** Cargo Desarrollador exacto (alineado con backend `_es_desarrollador`). */
+export function esCargoDesarrolladorPresupuesto(usuario) {
+  const cargo = normRolPresupuesto(usuario?.cargo_nombre || usuario?.cargo || '')
+  return cargo === 'desarrollador'
+}
+
 /** Contratista Gerencial (rol gerencial contratista, sin Interventoría). */
 export function esContratistaGerencialPresupuesto(usuario) {
   const rol = normRolPresupuesto(usuario?.rol_nombre || usuario?.rol || '')

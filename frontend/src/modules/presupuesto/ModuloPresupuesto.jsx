@@ -18,6 +18,7 @@ import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
 import {
   esDesarrolladorPresupuesto,
+  esCargoDesarrolladorPresupuesto,
   esRolContratistaDepuracion,
   esRolInterventoriaValidacion,
   esContratistaGerencialPresupuesto,
@@ -30,6 +31,7 @@ import {
 } from './pptoUndoUltima'
 import PptoVersionador from './PptoVersionador'
 import PptoVersionCadConfirmModal from './PptoVersionCadConfirmModal'
+import PptoSincronizarVlrModal from './PptoSincronizarVlrModal'
 import {
   buildPptoEndpoints,
   pptoGuardarVersionActiva,
@@ -426,11 +428,16 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [versionCrearOpen, setVersionCrearOpen] = useState(false)
   const [versionPanelOpen, setVersionPanelOpen] = useState(false)
   const nivelInfo = useMemo(() => determinarNivelValidacion(usuario, contratoId), [usuario, contratoId])
-  const esDeveloper = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
+  const esDeveloper = esCargoDesarrolladorPresupuesto(usuario)
   /** Biblioteca paralela persistente (sessionStorage): requiere permiso editar presupuesto. */
   const puedeEditarVersionBiblioteca = esDeveloper || nivelInfo.puedeEditar
   const [versionActiva, setVersionActivaRaw] = useState(null)
   const [versionCadConfirm, setVersionCadConfirm] = useState(null)
+  const [syncVlrOpen, setSyncVlrOpen] = useState(false)
+  const [syncVlrPhase, setSyncVlrPhase] = useState('confirm')
+  const [syncVlrBusy, setSyncVlrBusy] = useState(false)
+  const [syncVlrError, setSyncVlrError] = useState(null)
+  const [syncVlrResult, setSyncVlrResult] = useState(null)
   const pptoEndpointsRef = useRef(buildPptoEndpoints({ API: API_BASE, contratoId, versionActiva: null }))
   const setVersionActiva = useCallback((v) => {
     pptoEndpointsRef.current = buildPptoEndpoints({ API, contratoId, versionActiva: v })
@@ -1896,6 +1903,44 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     await cargarCapitulos({ silent: true })
   }
   recargarCapActualRef.current = recargarCapActual
+
+  const abrirSincronizarVlrUnitario = useCallback(() => {
+    setSyncVlrPhase('confirm')
+    setSyncVlrError(null)
+    setSyncVlrResult(null)
+    setSyncVlrOpen(true)
+  }, [])
+
+  const ejecutarSincronizarVlrUnitario = useCallback(async () => {
+    if (!contratoId || syncVlrBusy) return
+    setSyncVlrBusy(true)
+    setSyncVlrError(null)
+    try {
+      const qs = armarQueryPresupuestoServer().toString()
+      const url = `${API}/presupuesto/${contratoId}/sincronizar-vlr-unitario${qs ? `?${qs}` : ''}`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try {
+          const j = await res.json()
+          msg = j?.detail || msg
+        } catch { /* ignore */ }
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      }
+      const data = await res.json()
+      setSyncVlrResult(data)
+      setSyncVlrPhase('result')
+      invalidarCachePresupuestoContrato()
+      await recargarCapActualRef.current?.(drill.length === 0)
+    } catch (e) {
+      setSyncVlrError(e?.message || 'No se pudo sincronizar los valores unitarios.')
+    } finally {
+      setSyncVlrBusy(false)
+    }
+  }, [API, contratoId, token, syncVlrBusy, drill.length, invalidarCachePresupuestoContrato, armarQueryPresupuestoServer])
 
   useEffect(() => {
     if (!contratoId || oculto || !versionRestorePendingRef.current) return
@@ -6086,6 +6131,9 @@ async function restaurar(id) {
           versionActiva={versionActiva}
           versionVistaTemporal={versionVistaTemporal}
           onVolverPresupuestoVivo={puedeEditarVersionBiblioteca ? () => void volverPresupuestoVivo() : undefined}
+          esDeveloper={esDeveloper}
+          onSincronizarVlrUnitario={abrirSincronizarVlrUnitario}
+          sincronizarVlrBusy={syncVlrBusy}
         />
       )}
 
@@ -6150,6 +6198,17 @@ async function restaurar(id) {
             skipVersionConfirm: true,
           })
         }}
+      />
+      <PptoSincronizarVlrModal
+        open={syncVlrOpen}
+        phase={syncVlrPhase}
+        busy={syncVlrBusy}
+        error={syncVlrError}
+        result={syncVlrResult}
+        t={t}
+        onCancel={() => !syncVlrBusy && setSyncVlrOpen(false)}
+        onConfirm={() => void ejecutarSincronizarVlrUnitario()}
+        onCloseResult={() => setSyncVlrOpen(false)}
       />
       {verPapelera && (
         <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar»; el filtrado avanzado aplica al volver a activos.</div>

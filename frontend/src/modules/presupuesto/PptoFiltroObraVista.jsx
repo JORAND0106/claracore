@@ -41,6 +41,9 @@ export default function PptoFiltroObraVista({
   versionActiva = null,
   versionVistaTemporal = false,
   onVolverPresupuestoVivo,
+  esDeveloper = false,
+  onSincronizarVlrUnitario,
+  sincronizarVlrBusy = false,
   tramoOptions: _tramoOptions,
   calzadaOptions: _calzadaOptions,
   listadoPrecios = [],
@@ -220,6 +223,24 @@ export default function PptoFiltroObraVista({
       {typeof onActualizar === 'function' && (
         <button type="button" onClick={onActualizar} disabled={!!actualizarDisabled} title="Recarga capítulos y datos del filtro actual" style={{ ...btnSec, border: 'none', color: '#94a3b8', opacity: actualizarDisabled ? 0.5 : 0.92 }}>
           🔄 Actualizar
+        </button>
+      )}
+      {esDeveloper && typeof onSincronizarVlrUnitario === 'function' && (
+        <button
+          type="button"
+          onClick={onSincronizarVlrUnitario}
+          disabled={sincronizarVlrBusy || buscando}
+          title="Desarrollador: sincronizar V.U. con listado de precios (todo el contrato, incluye sellados)"
+          style={{
+            ...btnSec,
+            padding: compact ? '10px 10px' : '4px 8px',
+            fontSize: compact ? 'var(--cc-body)' : 'var(--cc-caption)',
+            opacity: sincronizarVlrBusy ? 0.5 : 0.88,
+            color: t.textMuted,
+            border: `1px dashed ${t.border}`,
+          }}
+        >
+          💲↻
         </button>
       )}
       {typeof onExportarExcel === 'function' && (

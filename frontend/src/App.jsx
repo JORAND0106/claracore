@@ -14350,7 +14350,7 @@ const BUZON_Z_PANEL = 11000
 const BUZON_Z_MODAL = 11001
 /** Por encima del menú móvil (12060) para que el panel no quede atrapado bajo el drawer. */
 const BUZON_Z_PANEL_MOBILE = 13000
-const BUZON_Z_MODAL_MOBILE = 13001
+const BUZON_Z_MODAL_MOBILE = 14000
 
 function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   const API = API_BASE
@@ -14484,14 +14484,22 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   }, [abierto, contratoCtx, filtroRecibidos])
 
   useEffect(() => {
-    if (!buzonMobile || !abierto) return undefined
+    if (!buzonMobile || (!abierto && !hiloActivo && !mostrarNuevo)) return undefined
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = prev }
-  }, [buzonMobile, abierto])
+  }, [buzonMobile, abierto, hiloActivo, mostrarNuevo])
+
+  /** Al abrir detalle en móvil: cerrar menú hamburguesa (vía onOpenChange del Dashboard). */
+  useEffect(() => {
+    if (buzonMobile && (hiloActivo || mostrarNuevo)) {
+      onOpenChange?.(true)
+    }
+  }, [buzonMobile, hiloActivo, mostrarNuevo, onOpenChange])
 
   async function abrirHilo(notif) {
     if ((notif?.tipo || '').toUpperCase() === 'SOPORTE') return
+    if (buzonMobile) onOpenChange?.(true)
     setHiloActivo(notif)
     setHiloLoading(true)
     setHilo([])
@@ -14839,7 +14847,7 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
     </div>
   )
 
-  const panelEl = abierto ? (
+  const panelEl = abierto && !(buzonMobile && (hiloActivo || mostrarNuevo)) ? (
     <>
       {buzonMobile && (
         <div
@@ -15061,42 +15069,58 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
 
   const hiloModal = hiloActivo ? (
     <div
+      className={buzonMobile ? 'cc-buzon-hilo-overlay' : undefined}
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: buzonMobile ? 'rgba(15, 23, 42, 0.55)' : 'rgba(0,0,0,0.5)',
         zIndex: zModal,
         display: 'flex',
         alignItems: buzonMobile ? 'stretch' : 'center',
         justifyContent: 'center',
-        padding: buzonMobile ? 0 : undefined,
+        padding: buzonMobile ? undefined : undefined,
+        boxSizing: 'border-box',
       }}
       onClick={() => { setHiloActivo(null); setHiloError('') }}
     >
       <div
+        className={buzonMobile ? 'cc-buzon-hilo-sheet' : undefined}
         style={{
           background: t.bgCard,
-          border: buzonMobile ? 'none' : `1px solid ${t.border}`,
-          borderRadius: buzonMobile ? 0 : 16,
-          padding: buzonMobile ? '14px 14px max(14px, env(safe-area-inset-bottom))' : 24,
+          border: buzonMobile ? `1px solid ${t.border}` : `1px solid ${t.border}`,
+          borderRadius: buzonMobile ? 14 : 16,
+          padding: buzonMobile ? 0 : 24,
           width: buzonMobile ? '100%' : 540,
-          maxWidth: buzonMobile ? '100vw' : '95vw',
+          maxWidth: buzonMobile ? '100%' : '95vw',
           height: buzonMobile ? '100%' : undefined,
-          maxHeight: buzonMobile ? '100dvh' : '80vh',
+          maxHeight: buzonMobile ? '100%' : '80vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: buzonMobile ? 'none' : '0 20px 60px rgba(0,0,0,0.35)',
-          paddingTop: buzonMobile ? 'max(14px, env(safe-area-inset-top))' : undefined,
+          boxShadow: buzonMobile ? '0 16px 48px rgba(0,0,0,0.35)' : '0 20px 60px rgba(0,0,0,0.35)',
           boxSizing: 'border-box',
+          overflow: 'hidden',
+          minHeight: 0,
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 8 }}>
+        <div
+          className={buzonMobile ? 'cc-buzon-hilo-header' : undefined}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: buzonMobile ? 0 : 16,
+            gap: 8,
+            padding: buzonMobile ? '12px 14px' : undefined,
+            borderBottom: buzonMobile ? `1px solid ${t.border}` : undefined,
+            flexShrink: 0,
+          }}
+        >
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: buzonMobile ? 'var(--cc-lg)' : 'var(--cc-md)', fontWeight: 700, color: t.text, lineHeight: 1.3 }}>
+            <div style={{ fontSize: buzonMobile ? 'var(--cc-md)' : 'var(--cc-md)', fontWeight: 700, color: t.text, lineHeight: 1.3 }}>
               {hilo[0]?.asunto || hiloActivo.asunto}
             </div>
-            <div style={{ fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)', color: t.textMuted, marginTop: 2 }}>
+            <div style={{ fontSize: buzonMobile ? 'var(--cc-caption)' : 'var(--cc-label)', color: t.textMuted, marginTop: 2 }}>
               {hiloLoading
                 ? 'Cargando…'
                 : hiloError
@@ -15104,6 +15128,7 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
                   : `${hilo.length} mensaje${hilo.length !== 1 ? 's' : ''} en este hilo`}
             </div>
           </div>
+          {!buzonMobile && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {(hilo[0]?.modulo || hiloActivo?.modulo) && (
               <button
@@ -15113,12 +15138,11 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
                   background: t.primary + '22',
                   border: `1px solid ${t.primary}44`,
                   borderRadius: 8,
-                  padding: buzonMobile ? '10px 12px' : '5px 12px',
+                  padding: '5px 12px',
                   color: t.primary,
-                  fontSize: buzonMobile ? 'var(--cc-sm)' : 'var(--cc-label)',
+                  fontSize: 'var(--cc-label)',
                   fontWeight: 700,
                   cursor: 'pointer',
-                  minHeight: buzonMobile ? 44 : undefined,
                 }}
               >
                 {((hilo[0]?.modulo || hiloActivo?.modulo || '').toUpperCase() === 'AUTH'
@@ -15132,11 +15156,8 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
               onClick={() => setHiloActivo(null)}
               aria-label="Cerrar hilo"
               style={{
-                background: buzonMobile ? t.bg : 'transparent',
-                border: buzonMobile ? `1px solid ${t.border}` : 'none',
-                borderRadius: 8,
-                width: buzonMobile ? 44 : undefined,
-                height: buzonMobile ? 44 : undefined,
+                background: 'transparent',
+                border: 'none',
                 fontSize: 'var(--cc-lg)',
                 cursor: 'pointer',
                 color: t.text,
@@ -15148,8 +15169,22 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
               ✕
             </button>
           </div>
+          )}
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14, WebkitOverflowScrolling: 'touch' }}>
+        <div
+          className={buzonMobile ? 'cc-buzon-hilo-body' : undefined}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            marginBottom: buzonMobile ? 0 : 14,
+            WebkitOverflowScrolling: 'touch',
+            minHeight: 0,
+            padding: buzonMobile ? '12px 14px' : undefined,
+          }}
+        >
           {hiloLoading ? (
             <div style={{ textAlign: 'center', padding: 30, color: t.textMuted }}>⏳ Cargando...</div>
           ) : hiloError ? (
@@ -15178,8 +15213,32 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
               </div>
             )
           })}
+          {!hiloError && hilo.length > 0 && buzonMobile && (
+            <div style={{ marginTop: 4, position: 'relative', flexShrink: 0 }}>
+              <textarea
+                value={respuesta}
+                onChange={(e) => setRespuesta(e.target.value)}
+                placeholder="Escribe tu respuesta..."
+                style={{
+                  width: '100%',
+                  minHeight: 72,
+                  background: t.bg,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  color: t.text,
+                  fontSize: 'var(--cc-body)',
+                  resize: 'vertical',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ position: 'absolute', bottom: 8, right: 8 }}>
+                <EmojiPicker t={t} onSelect={(em) => setRespuesta((prev) => prev + em)} />
+              </div>
+            </div>
+          )}
         </div>
-        {!hiloError && hilo.length > 0 && (
+        {!hiloError && hilo.length > 0 && !buzonMobile && (
           <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 12, flexShrink: 0 }}>
             <div style={{ position: 'relative' }}>
               <textarea
@@ -15188,13 +15247,13 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
                 placeholder="Escribe tu respuesta..."
                 style={{
                   width: '100%',
-                  minHeight: buzonMobile ? 88 : 72,
+                  minHeight: 72,
                   background: t.bg,
                   border: `1px solid ${t.border}`,
                   borderRadius: 8,
                   padding: '10px 12px',
                   color: t.text,
-                  fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                  fontSize: 'var(--cc-sm)',
                   resize: 'vertical',
                   boxSizing: 'border-box',
                 }}
@@ -15213,18 +15272,133 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
                   color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted,
                   border: 'none',
                   borderRadius: 8,
-                  padding: buzonMobile ? '12px 20px' : '8px 20px',
-                  fontSize: buzonMobile ? 'var(--cc-body)' : 'var(--cc-sm)',
+                  padding: '8px 20px',
+                  fontSize: 'var(--cc-sm)',
                   fontWeight: 700,
                   cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed',
                   opacity: respondiendo ? 0.7 : 1,
-                  minHeight: buzonMobile ? 44 : undefined,
-                  width: buzonMobile ? '100%' : undefined,
                 }}
               >
                 {respondiendo ? 'Enviando...' : '↩ Responder'}
               </button>
             </div>
+          </div>
+        )}
+        {buzonMobile && (
+          <div className="cc-buzon-hilo-footer" style={{ borderTop: `1px solid ${t.border}`, flexShrink: 0, background: t.bgCard }}>
+            <button
+              type="button"
+              className="cc-buzon-hilo-footer-btn"
+              disabled={accionId === hiloActivo?.id}
+              onClick={(e) => ocultarNotif(hiloActivo, e)}
+              style={{
+                flex: '1 1 calc(33.33% - 6px)',
+                minHeight: 44,
+                minWidth: 0,
+                padding: '10px 8px',
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: 'transparent',
+                color: '#DC2626',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                cursor: accionId === hiloActivo?.id ? 'wait' : 'pointer',
+              }}
+            >
+              🗑 Eliminar
+            </button>
+            <button
+              type="button"
+              className="cc-buzon-hilo-footer-btn"
+              onClick={() => { setHiloActivo(null); setHiloError('') }}
+              style={{
+                flex: '1 1 calc(33.33% - 6px)',
+                minHeight: 44,
+                minWidth: 0,
+                padding: '10px 8px',
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: 'transparent',
+                color: t.textMuted,
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cerrar
+            </button>
+            {(hilo[0]?.modulo || hiloActivo?.modulo) && (
+              <button
+                type="button"
+                className="cc-buzon-hilo-footer-btn"
+                onClick={() => { onNavegar(hilo[0] || hiloActivo); setHiloActivo(null); setAbiertoSafe(false) }}
+                style={{
+                  flex: '1 1 calc(33.33% - 6px)',
+                  minHeight: 44,
+                  minWidth: 0,
+                  padding: '10px 8px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.primary}66`,
+                  background: t.primary + '18',
+                  color: t.primary,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {((hilo[0]?.modulo || hiloActivo?.modulo || '').toUpperCase() === 'AUTH'
+                  && (hilo[0]?.entidad_tipo || hiloActivo?.entidad_tipo || '').toLowerCase() === 'usuario')
+                  ? 'Gestionar'
+                  : 'Rastrear'}
+              </button>
+            )}
+            {!hiloError && hilo.length > 0 && (
+              <button
+                type="button"
+                className="cc-buzon-hilo-footer-btn"
+                onClick={responder}
+                disabled={!respuesta.trim() || respondiendo}
+                style={{
+                  flex: '1 1 calc(33.33% - 6px)',
+                  minHeight: 44,
+                  minWidth: 0,
+                  padding: '10px 8px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: respuesta.trim() && !respondiendo ? t.primary : t.border,
+                  color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed',
+                  opacity: respondiendo ? 0.7 : 1,
+                }}
+              >
+                {respondiendo ? '…' : 'Responder'}
+              </button>
+            )}
+            {!hiloError && hilo.length === 0 && !hiloActivo?.leido && !(hilo[0]?.modulo || hiloActivo?.modulo) && (
+              <button
+                type="button"
+                className="cc-buzon-hilo-footer-btn"
+                disabled={accionId === hiloActivo?.id}
+                onClick={(e) => marcarLeida(hiloActivo, e)}
+                style={{
+                  flex: '1 1 calc(33.33% - 6px)',
+                  minHeight: 44,
+                  minWidth: 0,
+                  padding: '10px 8px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.primary}66`,
+                  background: t.primary + '18',
+                  color: t.primary,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: accionId === hiloActivo?.id ? 'wait' : 'pointer',
+                }}
+              >
+                ✓ Leída
+              </button>
+            )}
           </div>
         )}
       </div>
