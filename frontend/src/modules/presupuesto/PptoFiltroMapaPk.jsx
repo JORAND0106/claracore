@@ -64,6 +64,8 @@ export default function PptoFiltroMapaPk({
   selectedPk = '',
   onClearSelection,
   height = 220,
+  zoomToSelected = false,
+  hideCaption = false,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -328,8 +330,30 @@ export default function PptoFiltroMapaPk({
         try {
           const bPlano = planoData ? boundsFromFC(planoData) : null
           const bProyecto = !isFiltered && plano && plano.type === 'FeatureCollection' ? boundsFromFC(plano) : null
+          const selPkNorm = String(selectedRef.current || '').trim().toLowerCase()
 
-          if (isFiltered) {
+          const fitSelectedPk = () => {
+            if (!zoomToSelected || !selPkNorm) return false
+            const matched = soloPoligonos.filter((f) => featurePkId(f).toLowerCase() === selPkNorm)
+            if (matched.length > 0) {
+              const bSel = boundsFromFC({ type: 'FeatureCollection', features: matched })
+              if (bSel) {
+                map.fitBounds(bSel, { padding: 48, maxZoom: 17, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
+                return true
+              }
+            }
+            const row = pkList.find((r) => String(r?.pk_id ?? r?.civ ?? '').trim().toLowerCase() === selPkNorm)
+            const ll = pickLngLat(row)
+            if (ll) {
+              map.flyTo({ center: ll, zoom: 16, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
+              return true
+            }
+            return false
+          }
+
+          if (fitSelectedPk()) {
+            /* zoom al PK seleccionado */
+          } else if (isFiltered) {
             if (toFit.length === 1) {
               map.flyTo({ center: toFit[0], zoom: 15, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
             } else if (toFit.length > 1) {
@@ -394,11 +418,13 @@ export default function PptoFiltroMapaPk({
       }
       mapRef.current = null
     }
-  }, [contratoId, filtroKey, selKey, height])
+  }, [contratoId, filtroKey, selKey, height, zoomToSelected])
 
   return (
     <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>Clic = filtrar PK · norte → derecha</div>
+      {!hideCaption && (
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>Clic = filtrar PK · norte → derecha</div>
+      )}
       <div ref={containerRef} style={{ borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.border}`, flex: 1, minHeight: 0 }} />
     </div>
   )

@@ -139,6 +139,7 @@ import RefreshCacheGuard from './components/RefreshCacheGuard'
 import { supabase } from './supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from './realtimeUtils'
 import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
+import { applyClaraThemeTokens } from './theme/adminPanelTheme'
 import { useClaraViewport } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
@@ -20624,7 +20625,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     height: exportModalUi.iconBox,
                     borderRadius: '10px',
                     background: '#ecfdf5',
-                    color: '#047857',
+                    color: 'var(--cc-color-success)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -21194,6 +21195,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               permisos={{
                 ...almacenPerm,
                 contratoId: usuario?.contrato_id,
+                userId: usuario?.id,
                 ver: tienePermisoAlmacen,
                 crear: puedeCrearAlmacen,
                 editar: puedeEditarAlmacen,
@@ -21326,6 +21328,10 @@ export default function App() {
   useEffect(() => {
     applyClaraTypography(fontSize)
   }, [fontSize])
+
+  useEffect(() => {
+    applyClaraThemeTokens(activeTheme)
+  }, [activeTheme])
 
   const cambiarFuente = (tamano) => {
     localStorage.setItem('claracore_font_size', tamano)

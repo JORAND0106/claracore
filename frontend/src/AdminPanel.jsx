@@ -3283,7 +3283,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       ) : (
       <>
       {msg && !modalMode && (
-        <div style={{ background: msg.type === "error" ? (isDarkMode(theme) ? "#2a0a0a" : "#FEE2E2") : (isDarkMode(theme) ? "#0a2a1a" : "#ECFDF5"), color: msg.type === "error" ? (isDarkMode(theme) ? "#f87171" : "#DC2626") : (isDarkMode(theme) ? "#4ade80" : "#047857"), borderRadius: 8, padding: "10px 14px", fontSize: "var(--cc-body)", marginBottom: 16 }}>
+        <div style={{ background: msg.type === "error" ? (isDarkMode(theme) ? "#2a0a0a" : "#FEE2E2") : (isDarkMode(theme) ? "#0a2a1a" : "#ECFDF5"), color: msg.type === "error" ? (isDarkMode(theme) ? "#f87171" : "#DC2626") : "var(--cc-color-success)", borderRadius: 8, padding: "10px 14px", fontSize: "var(--cc-body)", marginBottom: 16 }}>
           {msg.text}
         </div>
       )}
@@ -7889,7 +7889,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             }
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={permsDevOAdmin || precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
-            {tab === "catalogo_insumos" && <SeccionCatalogoInsumos token={token} user={user} perms={permsDevOAdmin || catalogoInsumosPerms} theme={activeTheme} />}
+            {tab === "catalogo_insumos" && <SeccionCatalogoInsumos token={token} user={user} perms={permsDevOAdmin || catalogoInsumosPerms} theme={activeTheme} t={t} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}

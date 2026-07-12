@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from catalogo_insumos_service import (
     create_insumo_catalogo,
+    delete_insumo_catalogo,
+    delete_proveedor_catalogo,
     find_duplicados,
     get_almacen_config,
     get_csv_template,
@@ -22,10 +24,12 @@ from catalogo_insumos_service import (
     list_catalogo_insumos,
     list_cotizaciones_soporte,
     list_precio_historial,
+    list_proveedores_catalogo,
     map_ocr_to_cotizacion,
+    next_codigo_insumo,
     update_insumo_catalogo,
 )
-from contabilidad_ocr import analyze_invoice_bytes, ocr_configured
+from almacen_insumos_service import search_proveedores
 from main import _require_contract_access, get_current_user, registrar_log
 
 _log = logging.getLogger("claracore.catalogo_insumos.routes")
@@ -79,6 +83,54 @@ def route_config(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
     require_permiso_catalogo_insumos(current_user, "ver")
     return get_almacen_config(contrato_id)
+
+
+@router.get("/{contrato_id}/proveedores")
+def route_list_proveedores(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 100,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    rows, total = list_proveedores_catalogo(contrato_id, q, min(limit, 200), max(offset, 0))
+    return {"items": rows, "total": total}
+
+
+@router.get("/{contrato_id}/proveedores/search")
+def route_search_proveedores(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 25,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    return search_proveedores(contrato_id, q, min(limit, 50))
+
+
+@router.delete("/{contrato_id}/proveedores/{proveedor_id}")
+def route_delete_proveedor(contrato_id: int, proveedor_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "eliminar")
+    try:
+        result = delete_proveedor_catalogo(contrato_id, proveedor_id)
+        registrar_log(
+            current_user, "ELIMINAR", "CATALOGO_INSUMOS", "almacen_proveedor", str(proveedor_id),
+            {"razon_social": result.get("razon_social")},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/next-codigo")
+def route_next_codigo(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    return {"codigo": next_codigo_insumo(contrato_id)}
 
 
 @router.get("/{contrato_id}/insumos")
@@ -145,9 +197,15 @@ async def route_create_insumo(
     proveedor_id: Optional[int] = Form(None),
     razon_social: Optional[str] = Form(None),
     nit: Optional[str] = Form(None),
+    contacto_email: Optional[str] = Form(None),
+    contacto_nombre: Optional[str] = Form(None),
+    contacto_telefono: Optional[str] = Form(None),
     cotizacion_numero: Optional[str] = Form(None),
     cotizacion_fecha: Optional[str] = Form(None),
     cotizacion_vigencia: Optional[str] = Form(None),
+    requiere_cotizacion: Optional[str] = Form("true"),
+    cantidad_negociada: Optional[float] = Form(None),
+    valor_negociado_total: Optional[float] = Form(None),
     force_update_id: Optional[int] = Form(None),
     cotizacion_ganadora_pdf: Optional[UploadFile] = File(None),
     cotizaciones_soporte: List[UploadFile] = File(default=[]),
@@ -166,9 +224,15 @@ async def route_create_insumo(
         "proveedor_id": proveedor_id,
         "razon_social": razon_social,
         "nit": nit,
+        "contacto_email": contacto_email,
+        "contacto_nombre": contacto_nombre,
+        "contacto_telefono": contacto_telefono,
         "cotizacion_numero": cotizacion_numero,
         "cotizacion_fecha": cotizacion_fecha,
         "cotizacion_vigencia": cotizacion_vigencia,
+        "requiere_cotizacion": requiere_cotizacion,
+        "cantidad_negociada": cantidad_negociada,
+        "valor_negociado_total": valor_negociado_total,
     }
     ganadora = None
     if cotizacion_ganadora_pdf and cotizacion_ganadora_pdf.filename:
@@ -196,6 +260,21 @@ async def route_create_insumo(
         raise _http_value_error(exc) from exc
 
 
+@router.delete("/{contrato_id}/insumos/{insumo_id}")
+def route_delete_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "eliminar")
+    try:
+        result = delete_insumo_catalogo(contrato_id, insumo_id)
+        registrar_log(
+            current_user, "ELIMINAR", "CATALOGO_INSUMOS", "almacen_insumo", str(insumo_id),
+            {"codigo": result.get("codigo")},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.put("/{contrato_id}/insumos/{insumo_id}")
 async def route_update_insumo(
     contrato_id: int,
@@ -210,9 +289,15 @@ async def route_update_insumo(
     proveedor_id: Optional[int] = Form(None),
     razon_social: Optional[str] = Form(None),
     nit: Optional[str] = Form(None),
+    contacto_email: Optional[str] = Form(None),
+    contacto_nombre: Optional[str] = Form(None),
+    contacto_telefono: Optional[str] = Form(None),
     cotizacion_numero: Optional[str] = Form(None),
     cotizacion_fecha: Optional[str] = Form(None),
     cotizacion_vigencia: Optional[str] = Form(None),
+    requiere_cotizacion: Optional[str] = Form("true"),
+    cantidad_negociada: Optional[float] = Form(None),
+    valor_negociado_total: Optional[float] = Form(None),
     cotizacion_ganadora_pdf: Optional[UploadFile] = File(None),
     cotizaciones_soporte: List[UploadFile] = File(default=[]),
     current_user=Depends(get_current_user),
@@ -230,9 +315,15 @@ async def route_update_insumo(
         "proveedor_id": proveedor_id,
         "razon_social": razon_social,
         "nit": nit,
+        "contacto_email": contacto_email,
+        "contacto_nombre": contacto_nombre,
+        "contacto_telefono": contacto_telefono,
         "cotizacion_numero": cotizacion_numero,
         "cotizacion_fecha": cotizacion_fecha,
         "cotizacion_vigencia": cotizacion_vigencia,
+        "requiere_cotizacion": requiere_cotizacion,
+        "cantidad_negociada": cantidad_negociada,
+        "valor_negociado_total": valor_negociado_total,
     }
     ganadora = None
     if cotizacion_ganadora_pdf and cotizacion_ganadora_pdf.filename:

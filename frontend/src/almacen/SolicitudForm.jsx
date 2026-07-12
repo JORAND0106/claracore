@@ -1,17 +1,29 @@
 import { useCallback, useEffect, useState } from 'react'
-import SicoeFiltroPkMapa from '../modules/sicoe-obra/SicoeFiltroPkMapa'
-import { fetchSicoePkIdsCached } from '../modules/sicoe-obra/sicoeCatalogoCache'
-import { API_BASE } from '../apiBase'
+import CcConfirmModal from '../components/CcConfirmModal'
 import InsumoSearchTable from './InsumoSearchTable'
-import ProveedorSelector from './ProveedorSelector'
-import PresupuestoItemSelector, { findPresupuestoId } from './PresupuestoItemSelector'
+import PresupuestoItemSelector from './PresupuestoItemSelector'
+import PresupuestoRegistroGrid from './PresupuestoRegistroGrid'
 import UbicacionSolicitudFields from './UbicacionSolicitudFields'
+import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
+import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
+import LineaResumenEconomico from './LineaResumenEconomico'
+import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import {
+  lineasSuperanPresupuesto,
+  lineasSuperanNegociado,
+  mapSolicitudItemsFromServer,
+  parseSolicitudApiError,
+  validateSolicitudItems,
+} from './solicitudFormHelpers'
 import {
   AlmacenFieldLabel,
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtCant,
   fmtMoney,
+  formatSolicitudLinea,
+  puedeAnularSolicitud,
+  textoAprobacionSolicitud,
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
@@ -20,6 +32,7 @@ const emptyItem = () => ({
   insumo: null,
   presupuesto_capitulo: '',
   presupuesto_item: '',
+  presupuesto_id: null,
   pk_id: '',
   pk_label: '',
   pk_id_id: null,
@@ -27,6 +40,10 @@ const emptyItem = () => ({
   costado: '',
   abscisa_inicial: '',
   abscisa_final: '',
+  abs_inicio_display: '',
+  abs_final_display: '',
+  nodo_inicio: '',
+  nodo_final: '',
   observacion_residente: '',
   cantidad: '',
   valor_compra_unitario: '',
@@ -45,13 +62,13 @@ function ubicacionPayload(it) {
   }
 }
 
-function PresupuestoContextBox({ ctx, analisis, supera, ui, sinPrecio }) {
-  if (!ctx) return null
-  const alertStyle = supera
+function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio }) {
+  if (!ctx && !ctxNeg?.tiene_negociado) return null
+  const alertStyle = supera || superaNegociado
     ? { background: '#fef2f2', border: '1px solid #dc2626', color: '#991b1b' }
     : { background: `${ui.accentSoft}`, border: `1px solid ${ui.textMuted}22` }
 
-  const mostrarAnalisis = analisis && !sinPrecio && analisis.tiene_precio_compra !== false
+  const posColor = 'var(--cc-color-positive)'
 
   return (
     <div style={{ ...alertStyle, borderRadius: 6, padding: '6px 8px', marginTop: 6, fontSize: 'var(--cc-xs)' }}>
@@ -60,27 +77,44 @@ function PresupuestoContextBox({ ctx, analisis, supera, ui, sinPrecio }) {
           ⚠ Supera presupuesto en este PK-ID
         </div>
       )}
-      <div style={{ fontWeight: 600, marginBottom: 2 }}>
-        {ctx.capitulo} · {ctx.item} — {ctx.descripcion}
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
-        <span>Ppto: <strong>{fmtCant(ctx.cant_presupuestada)}</strong> {ctx.unidad}</span>
-        <span>Acum.: <strong>{fmtCant(ctx.cant_solicitada_acumulada)}</strong></span>
-        <span>Esta línea: <strong>{fmtCant(ctx.cantidad_solicitada)}</strong></span>
-        <span>Saldo: <strong style={{ color: supera ? '#dc2626' : '#047857' }}>{fmtCant(ctx.saldo_disponible_despues)}</strong></span>
-      </div>
-      {sinPrecio && (
+      {superaNegociado && ctxNeg?.tiene_negociado && (
+        <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
+          ⚠ Supera cantidad negociada con el proveedor ({fmtCant(ctxNeg.consumo_total_despues)} / {fmtCant(ctxNeg.cantidad_negociada)} {ctxNeg.unidad})
+        </div>
+      )}
+      {ctx && (
+        <>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>
+            {ctx.capitulo} · {ctx.item} — {ctx.descripcion}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
+            <span>Ppto registro: <strong>{fmtCant(ctx.cant_presupuestada)}</strong> {ctx.unidad}</span>
+            {ctx.registros_combo_count > 1 && (
+              <span>
+                Total PK ({ctx.registros_combo_count} reg.):{' '}
+                <strong>{fmtCant(ctx.cant_presupuestada_combo)}</strong> {ctx.unidad}
+              </span>
+            )}
+            <span>Acum.: <strong>{fmtCant(ctx.cant_solicitada_acumulada)}</strong></span>
+            <span>Esta línea: <strong>{fmtCant(ctx.cantidad_solicitada)}</strong></span>
+            <span>Saldo después: <strong style={{ color: supera ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctx.saldo_disponible_despues)}</strong></span>
+          </div>
+        </>
+      )}
+      {ctxNeg?.tiene_negociado && (
+        <div style={{ marginTop: ctx ? 6 : 0, display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
+          <span>Negociado: <strong>{fmtCant(ctxNeg.cantidad_negociada)}</strong> {ctxNeg.unidad}</span>
+          <span>Consumido (incl. esta línea): <strong style={{ color: superaNegociado ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctxNeg.consumo_total_despues)}</strong></span>
+          <span>Saldo negociado: <strong style={{ color: superaNegociado ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctxNeg.saldo_negociado_despues)}</strong></span>
+        </div>
+      )}
+      {sinPrecio && !analisis && (
         <div style={{ marginTop: 4, fontStyle: 'italic', opacity: 0.85 }}>
           Sin precio de compra registrado en el catálogo.
         </div>
       )}
-      {mostrarAnalisis && (
-        <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-          <span>Cobro: {fmtMoney(analisis.valor_cobro_linea)}</span>
-          <span style={{ color: (analisis.utilidad_estimada_linea ?? 0) >= 0 ? '#047857' : '#dc2626' }}>
-            Utilidad est.: {fmtMoney(analisis.utilidad_estimada_linea)}
-          </span>
-        </div>
+      {analisis && (
+        <LineaResumenEconomico analisis={analisis} color={alertStyle.color || ui.textMuted} />
       )}
     </div>
   )
@@ -97,70 +131,27 @@ export default function SolicitudForm({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
-  const [pptoItems, setPptoItems] = useState([])
-  const [pkList, setPkList] = useState([])
   const [items, setItems] = useState([emptyItem()])
-  const [cotizaciones, setCotizaciones] = useState({})
-  const [cotForm, setCotForm] = useState({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
+  const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
   const [sol, setSol] = useState(null)
-  const [config, setConfig] = useState({ cotizaciones_minimas: 3 })
+  const [confirmAnular, setConfirmAnular] = useState(false)
 
   const editable = !solicitudId || sol?.estado === 'borrador'
 
-  useEffect(() => {
-    api.getConfig().then(setConfig).catch(() => {})
-    api.getPresupuestoItems().then(setPptoItems).catch(() => setPptoItems([]))
-  }, [api])
-
-  useEffect(() => {
-    if (!contratoId || !token) return
-    fetchSicoePkIdsCached(API_BASE, contratoId, token).then(setPkList).catch(() => setPkList([]))
-  }, [contratoId, token])
+  const aplicarSolicitudServidor = (s) => {
+    setSol(s)
+    const mapped = mapSolicitudItemsFromServer(s)
+    setItems(mapped.length ? mapped : [emptyItem()])
+  }
 
   useEffect(() => {
     if (!solicitudId) return
     api.getSolicitud(solicitudId).then((s) => {
-      setSol(s)
-      const mapped = (s.items || []).map((it, idx) => ({
-        id: it.id,
-        insumo: {
-          insumo_id: it.insumo_id,
-          listado_precio_id: it.listado_precio_id,
-          label: it.material_descripcion,
-          valor_compra_referencia: it.valor_compra_unitario,
-          tiene_precio_compra: it.valor_compra_unitario != null && Number(it.valor_compra_unitario) > 0,
-        },
-        presupuesto_capitulo: it.capitulo || '',
-        presupuesto_item: it.item || '',
-        pk_id: it.pk_id || '',
-        pk_label: it.pk_id || '',
-        pk_id_id: it.pk_id_id || null,
-        tramo: it.tramo || '',
-        costado: it.costado || '',
-        abscisa_inicial: it.abscisa_inicial ?? '',
-        abscisa_final: it.abscisa_final ?? '',
-        observacion_residente: it.observacion_residente
-          || (idx === 0 && s.observaciones ? s.observaciones : ''),
-        presupuesto_id: it.presupuesto_id,
-        cantidad: it.cantidad,
-        valor_compra_unitario: it.valor_compra_unitario ?? '',
-        es_recurrente: it.es_recurrente,
-        preview: {
-          contexto_presupuesto: it.contexto_presupuesto,
-          analisis_valor: it.analisis_valor,
-          supera_presupuesto: it.supera_presupuesto,
-          presupuesto_id: it.presupuesto_id,
-        },
-      }))
-      setItems(mapped.length ? mapped : [emptyItem()])
-      const cMap = {}
-      for (const it of s.items || []) {
-        cMap[it.id] = it.cotizaciones || []
-      }
-      setCotizaciones(cMap)
-    }).catch((e) => setError(e.message))
+      aplicarSolicitudServidor(s)
+    }).catch((e) => setError(parseSolicitudApiError(e)))
   }, [api, solicitudId])
 
   const updateItem = (idx, patch) => {
@@ -170,20 +161,35 @@ export default function SolicitudForm({
   const refreshPreview = useCallback(async (idx, draftItems) => {
     const it = draftItems[idx]
     const ins = it.insumo
-    if (!ins || !it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.cantidad || Number(it.cantidad) <= 0) {
+    if (!ins || !it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.presupuesto_id || !it.cantidad || Number(it.cantidad) <= 0) {
       updateItem(idx, { preview: null })
       return
     }
     try {
-      const presupuestoId = findPresupuestoId(pptoItems, it.presupuesto_capitulo, it.presupuesto_item, it.pk_id)
+      const cantBorradorAdicional = draftItems.reduce((acc, row, i) => {
+        if (i === idx) return acc
+        if (!row.cantidad || Number(row.cantidad) <= 0) return acc
+        if (Number(row.presupuesto_id) !== Number(it.presupuesto_id)) return acc
+        return acc + Number(row.cantidad)
+      }, 0)
+      const cantBorradorInsumo = draftItems.reduce((acc, row, i) => {
+        if (i === idx) return acc
+        if (!row.cantidad || Number(row.cantidad) <= 0) return acc
+        const iid = row.insumo?.insumo_id
+        const cur = ins.insumo_id
+        if (!iid || !cur || Number(iid) !== Number(cur)) return acc
+        return acc + Number(row.cantidad)
+      }, 0)
       const body = {
         insumo_id: ins.insumo_id || undefined,
         listado_precio_id: ins.listado_precio_id || undefined,
-        presupuesto_id: presupuestoId || undefined,
+        presupuesto_id: it.presupuesto_id,
         presupuesto_capitulo: it.presupuesto_capitulo,
         presupuesto_item: it.presupuesto_item,
         pk_id: it.pk_id,
         cantidad: Number(it.cantidad),
+        cantidad_borrador_adicional: cantBorradorAdicional,
+        cantidad_borrador_adicional_insumo: cantBorradorInsumo,
         valor_compra_unitario: it.valor_compra_unitario !== '' ? Number(it.valor_compra_unitario) : (
           ins.valor_compra_referencia != null && ins.tiene_precio_compra !== false
             ? ins.valor_compra_referencia
@@ -201,7 +207,19 @@ export default function SolicitudForm({
     } catch (e) {
       updateItem(idx, { preview: { error: e.message } })
     }
-  }, [api, pptoItems, solicitudId])
+  }, [api, solicitudId])
+
+  const clearUbicacionPresupuesto = () => ({
+    presupuesto_id: null,
+    tramo: '',
+    abscisa_inicial: '',
+    abscisa_final: '',
+    abs_inicio_display: '',
+    abs_final_display: '',
+    nodo_inicio: '',
+    nodo_final: '',
+    preview: null,
+  })
 
   const triggerPreview = (idx, next) => {
     setTimeout(() => refreshPreview(idx, next), 0)
@@ -213,7 +231,7 @@ export default function SolicitudForm({
         ...it,
         presupuesto_capitulo: capitulo ?? it.presupuesto_capitulo,
         presupuesto_item: item ?? it.presupuesto_item,
-        preview: null,
+        ...clearUbicacionPresupuesto(),
       } : it))
       triggerPreview(idx, next)
       return next
@@ -234,15 +252,33 @@ export default function SolicitudForm({
   }
 
   const onPkSelect = (idx, sel) => {
-    const pkVal = sel.pk_label || ''
-    const pkRow = pkList.find((p) => String(p.id) === String(sel.pk_id_id))
+    const pkVal = sel.pk_id || sel.pk_label || ''
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
         ...it,
         pk_id: pkVal,
-        pk_label: pkVal,
+        pk_label: sel.pk_label || pkVal,
         pk_id_id: sel.pk_id_id ? Number(sel.pk_id_id) : null,
-        tramo: pkRow?.tramo || '',
+        ...clearUbicacionPresupuesto(),
+      } : it))
+      triggerPreview(idx, next)
+      return next
+    })
+  }
+
+  const onRegistroSelect = (idx, reg) => {
+    setItems((prev) => {
+      const next = prev.map((it, i) => (i === idx ? {
+        ...it,
+        presupuesto_id: reg.presupuesto_id,
+        tramo: reg.tramo || '',
+        abscisa_inicial: reg.abscisa_inicial ?? '',
+        abscisa_final: reg.abscisa_final ?? '',
+        abs_inicio_display: reg.abs_inicio || '',
+        abs_final_display: reg.abs_final || '',
+        nodo_inicio: reg.nodo_inicio || '',
+        nodo_final: reg.nodo_final || '',
+        preview: null,
       } : it))
       triggerPreview(idx, next)
       return next
@@ -268,59 +304,102 @@ export default function SolicitudForm({
     })
   }
 
-  const buildPayload = () => ({
-    items: items.map((it) => {
-      if (!it.insumo?.insumo_id && !it.insumo?.listado_precio_id) {
-        throw new Error('Seleccione un insumo en cada línea.')
-      }
-      if (!it.presupuesto_capitulo || !it.presupuesto_item) {
-        throw new Error('Seleccione capítulo e ítem de cobro en cada línea.')
-      }
-      if (!it.pk_id) {
-        throw new Error('Seleccione ubicación PK-ID en cada línea.')
-      }
-      const presupuestoId = findPresupuestoId(pptoItems, it.presupuesto_capitulo, it.presupuesto_item, it.pk_id)
-        || it.preview?.presupuesto_id
-        || it.presupuesto_id
-      const base = {
-        cantidad: Number(it.cantidad),
-        es_recurrente: !!it.es_recurrente,
-        pk_id: it.pk_id,
-        presupuesto_capitulo: it.presupuesto_capitulo,
-        presupuesto_item: it.presupuesto_item,
-        presupuesto_id: presupuestoId || undefined,
-        valor_compra_unitario: it.valor_compra_unitario !== '' ? Number(it.valor_compra_unitario) : undefined,
-        ...ubicacionPayload(it),
-      }
-      if (it.insumo?.insumo_id) {
-        return { ...base, insumo_id: it.insumo.insumo_id }
-      }
-      return { ...base, listado_precio_id: it.insumo.listado_precio_id }
-    }),
-  })
+  const buildPayload = () => {
+    const validation = validateSolicitudItems(items)
+    if (!validation.ok) {
+      throw new Error(validation.message)
+    }
+    return {
+      items: items.map((it) => {
+        const base = {
+          cantidad: Number(it.cantidad),
+          es_recurrente: !!it.es_recurrente,
+          pk_id: String(it.pk_id || '').trim(),
+          presupuesto_capitulo: it.presupuesto_capitulo,
+          presupuesto_item: it.presupuesto_item,
+          presupuesto_id: it.presupuesto_id,
+          valor_compra_unitario: it.valor_compra_unitario !== '' ? Number(it.valor_compra_unitario) : undefined,
+          ...ubicacionPayload(it),
+        }
+        if (it.insumo?.insumo_id) {
+          return { ...base, insumo_id: it.insumo.insumo_id }
+        }
+        if (it.insumo?.listado_precio_id) {
+          return { ...base, listado_precio_id: it.insumo.listado_precio_id }
+        }
+        throw new Error('Cada línea debe tener un insumo seleccionado.')
+      }),
+    }
+  }
+
+  const confirmarSiSuperaPresupuesto = () => {
+    const lineas = lineasSuperanPresupuesto(items)
+    if (!lineas.length) return true
+    const detalle = lineas.slice(0, 3).map((it) => {
+      const ctx = it.preview?.contexto_presupuesto
+      return `• ${it.presupuesto_capitulo} · ${it.presupuesto_item} (PK ${it.pk_id}) — saldo ${fmtCant(ctx?.saldo_disponible_despues)} ${ctx?.unidad || ''}`
+    }).join('\n')
+    const extra = lineas.length > 3 ? `\n… y ${lineas.length - 3} línea(s) más.` : ''
+    return window.confirm(
+      `⚠ ADVERTENCIA — Supera presupuesto\n\n`
+      + `Una o más líneas dejan saldo negativo en su ítem/PK-ID:\n\n${detalle}${extra}\n\n`
+      + '¿Desea guardar la solicitud de todos modos?',
+    )
+  }
+
+  const confirmarSiSuperaNegociado = () => {
+    const lineas = lineasSuperanNegociado(items)
+    if (!lineas.length) return true
+    const detalle = lineas.slice(0, 3).map((it) => {
+      const ctx = it.preview?.contexto_negociado
+      return `• ${it.insumo?.label || 'Insumo'} — consumo ${fmtCant(ctx?.consumo_total_despues)} / ${fmtCant(ctx?.cantidad_negociada)} ${ctx?.unidad || ''}`
+    }).join('\n')
+    const extra = lineas.length > 3 ? `\n… y ${lineas.length - 3} línea(s) más.` : ''
+    return window.confirm(
+      `⚠ ADVERTENCIA — Supera cantidad negociada\n\n`
+      + `Una o más líneas superan el volumen pactado con el proveedor:\n\n${detalle}${extra}\n\n`
+      + '¿Desea continuar de todos modos?',
+    )
+  }
+
+  const confirmarAlertasLinea = () => {
+    if (!confirmarSiSuperaPresupuesto()) return false
+    if (!confirmarSiSuperaNegociado()) return false
+    return true
+  }
 
   const guardar = async () => {
     setError('')
+    setOkMsg('')
     setBusy(true)
     try {
       const payload = buildPayload()
+      if (!confirmarAlertasLinea()) {
+        setBusy(false)
+        return
+      }
       const result = solicitudId
         ? await api.updateSolicitud(solicitudId, payload)
         : await api.createSolicitud(payload)
+      aplicarSolicitudServidor(result)
+      setOkMsg('Borrador guardado correctamente.')
       onSaved?.(result)
     } catch (e) {
-      setError(e.message)
+      setError(parseSolicitudApiError(e))
     } finally {
       setBusy(false)
     }
   }
 
-  const enviar = async () => {
-    if (!window.confirm('¿Enviar solicitud a validación?')) return
+  const solicitarAprobacion = async () => {
     setBusy(true)
     setError('')
     try {
       const payload = buildPayload()
+      if (!confirmarAlertasLinea()) {
+        setBusy(false)
+        return
+      }
       let id = solicitudId
       if (!id) {
         const created = await api.createSolicitud(payload)
@@ -329,80 +408,133 @@ export default function SolicitudForm({
         await api.updateSolicitud(id, payload)
       }
       const r = await api.enviarSolicitud(id)
-      onSaved?.(r)
+      setModalExitoEnvio({
+        consecutivo: r.consecutivo,
+        solicitud: r,
+      })
     } catch (e) {
-      setError(e.message)
+      setError(parseSolicitudApiError(e))
     } finally {
       setBusy(false)
     }
   }
 
-  const addCot = async (itemId) => {
-    const f = cotForm[itemId] || {}
-    const prov = f.proveedor || {}
-    if (!prov.razon_social && !prov.proveedor_id) return
-    if (f.valor_unitario === '' || f.valor_unitario == null) return
-    try {
-      const body = {
-        valor_unitario: Number(f.valor_unitario),
-        observaciones: f.observaciones || null,
-      }
-      if (prov.proveedor_id) body.proveedor_id = prov.proveedor_id
-      else if (prov.nit) {
-        body.razon_social = prov.razon_social
-        body.nit = prov.nit
-      } else body.proveedor_nombre = prov.razon_social
-      await api.addCotizacion(itemId, body)
-      const s = await api.getSolicitud(solicitudId)
-      const cMap = {}
-      for (const it of s.items || []) cMap[it.id] = it.cotizaciones || []
-      setCotizaciones(cMap)
-      setCotForm((p) => ({ ...p, [itemId]: {} }))
-    } catch (e) {
-      setError(e.message)
-    }
+  const cerrarExitoEnvio = () => {
+    const r = modalExitoEnvio?.solicitud
+    setModalExitoEnvio(null)
+    if (r) onSaved?.(r)
   }
 
-  const delCot = async (cotId) => {
+  const anularSolicitud = async () => {
+    if (!solicitudId) return
+    setBusy(true)
+    setError('')
     try {
-      await api.deleteCotizacion(cotId)
-      const s = await api.getSolicitud(solicitudId)
-      const cMap = {}
-      for (const it of s.items || []) cMap[it.id] = it.cotizaciones || []
-      setCotizaciones(cMap)
+      const r = await api.anularSolicitud(solicitudId)
+      setConfirmAnular(false)
+      if (r?.deleted) {
+        onCancel?.()
+        return
+      }
+      onSaved?.(r)
     } catch (e) {
-      setError(e.message)
+      setError(parseSolicitudApiError(e))
+    } finally {
+      setBusy(false)
     }
   }
 
   const theme = t || { primary: ui.accent, border: '#e2e8f0', text: ui.text, textMuted: ui.textMuted, bgCard: '#fff' }
 
   return (
-    <div style={ui.card}>
-      <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12 }}>
-        {solicitudId ? `Solicitud #${sol?.consecutivo || '…'}` : 'Nueva solicitud de insumos'}
-        {sol?.estado && (
-          <span style={{
-            marginLeft: 10,
-            fontSize: 'var(--cc-sm)',
-            color: ESTADO_SOLICITUD_COLOR[sol.estado],
-            fontWeight: 600,
-          }}
-          >
-            {ESTADO_SOLICITUD_LABEL[sol.estado]}
-          </span>
+    <div style={ui.card} className="cc-almacen-form-root">
+      <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <span>
+          {solicitudId ? `Solicitud #${sol?.consecutivo || '…'}` : 'Nueva solicitud de insumos'}
+          {sol?.estado && (
+            <span style={{
+              marginLeft: 10,
+              fontSize: 'var(--cc-sm)',
+              color: ESTADO_SOLICITUD_COLOR[sol.estado],
+              fontWeight: 600,
+            }}
+            >
+              {ESTADO_SOLICITUD_LABEL[sol.estado]}
+            </span>
+          )}
+        </span>
+        {sol?.estado === 'aprobada' && sol?.orden_compra?.id && (
+          <OrdenCompraPdfClip ordenCompra={sol.orden_compra} />
         )}
       </div>
 
+      {sol && !editable && (
+        <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {sol.solicitante_nombre && (
+            <span>Solicitada por: <strong>{sol.solicitante_nombre}</strong></span>
+          )}
+          <span>{textoAprobacionSolicitud(sol)}</span>
+          {sol.motivo_rechazo && (
+            <span style={{ color: '#991b1b' }}>Motivo rechazo: {sol.motivo_rechazo}</span>
+          )}
+        </div>
+      )}
+
       {error && (
-        <div style={{ color: '#dc2626', marginBottom: 10, fontSize: 'var(--cc-sm)' }}>{error}</div>
+        <div style={{
+          color: '#991b1b',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: 10,
+          fontSize: 'var(--cc-sm)',
+          whiteSpace: 'pre-wrap',
+        }}
+        >
+          {error}
+        </div>
+      )}
+
+      {okMsg && (
+        <div style={{
+          color: 'var(--cc-color-success)',
+          background: '#ecfdf5',
+          border: '1px solid #a7f3d0',
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: 10,
+          fontSize: 'var(--cc-sm)',
+        }}
+        >
+          {okMsg}
+        </div>
       )}
 
       <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
         📦 Insumos solicitados
+        {sol?.consecutivo && !editable && (
+          <span style={{ fontWeight: 400, color: ui.textMuted, marginLeft: 8 }}>
+            ({items.length} línea{items.length !== 1 ? 's' : ''})
+          </span>
+        )}
       </div>
 
-      {items.map((it, idx) => (
+      {!editable && items.map((it, idx) => (
+        <SolicitudItemDetalleCard
+          key={it.id ?? idx}
+          item={it}
+          consecutivo={sol?.consecutivo}
+          lineIndex={it.numero_linea ?? idx + 1}
+          contratoId={contratoId}
+          token={token}
+          theme={theme}
+          accordion
+          defaultExpanded={false}
+        />
+      ))}
+
+      {editable && items.map((it, idx) => (
         <div
           key={it.id ?? idx}
           style={{
@@ -414,28 +546,41 @@ export default function SolicitudForm({
             position: 'relative',
           }}
         >
+          {(sol?.consecutivo || solicitudId) && (
+            <div style={{
+              fontSize: 'var(--cc-xs)',
+              fontWeight: 700,
+              color: ui.accent,
+              marginBottom: 6,
+              letterSpacing: '0.03em',
+            }}
+            >
+              {formatSolicitudLinea(sol?.consecutivo, it.numero_linea ?? idx + 1)}
+            </div>
+          )}
           {editable && (
             <button
               type="button"
-              title="Eliminar insumo"
+              title="Eliminar insumo de la solicitud"
               onClick={() => removeItem(idx)}
               style={{
                 position: 'absolute',
                 top: 6,
                 right: 6,
                 ...ui.btnSecondary,
-                padding: '2px 8px',
+                padding: '3px 8px',
                 color: '#dc2626',
                 borderColor: '#dc262666',
-                fontSize: 10,
+                fontSize: 'var(--cc-xs)',
                 lineHeight: 1.2,
+                fontWeight: 600,
               }}
             >
-              ✕
+              Eliminar insumo
             </button>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingRight: editable ? 28 : 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingRight: editable ? 118 : 0 }}>
             <PresupuestoItemSelector
               capitulo={it.presupuesto_capitulo}
               item={it.presupuesto_item}
@@ -451,18 +596,26 @@ export default function SolicitudForm({
 
             <div>
               <AlmacenFieldLabel icon="🗺️" label="Ubicación PK-ID" compact ayuda="Seleccione en el mapa el sector." />
-              <SicoeFiltroPkMapa
+              <AlmacenPkMapaSelector
                 t={theme}
                 token={token}
                 contratoId={contratoId}
-                pkList={pkList}
-                pkIdSeleccionado={it.pk_id}
-                pkLabel={it.pk_label}
+                pkIdSeleccionado={it.pk_id_id ? String(it.pk_id_id) : ''}
+                pkLabel={it.pk_label || it.pk_id}
                 onSeleccionar={(sel) => onPkSelect(idx, sel)}
                 onLimpiar={() => updateItem(idx, {
-                  pk_id: '', pk_label: '', pk_id_id: null, tramo: '', preview: null,
+                  pk_id: '', pk_label: '', pk_id_id: null, ...clearUbicacionPresupuesto(),
                 })}
                 compact
+              />
+              <PresupuestoRegistroGrid
+                capitulo={it.presupuesto_capitulo}
+                item={it.presupuesto_item}
+                pkId={it.pk_id}
+                presupuestoId={it.presupuesto_id}
+                excludeSolicitudId={solicitudId || undefined}
+                disabled={!editable}
+                onSelect={(reg) => onRegistroSelect(idx, reg)}
               />
               <UbicacionSolicitudFields
                 pkId={it.pk_label || it.pk_id}
@@ -470,11 +623,13 @@ export default function SolicitudForm({
                 costado={it.costado}
                 abscisaInicial={it.abscisa_inicial}
                 abscisaFinal={it.abscisa_final}
+                absInicioDisplay={it.abs_inicio_display}
+                absFinalDisplay={it.abs_final_display}
+                nodoInicio={it.nodo_inicio}
+                nodoFinal={it.nodo_final}
                 disabled={!editable}
                 onChange={(patch) => onUbicacionChange(idx, {
                   costado: patch.costado ?? it.costado,
-                  abscisa_inicial: patch.abscisaInicial ?? it.abscisa_inicial,
-                  abscisa_final: patch.abscisaFinal ?? it.abscisa_final,
                 })}
               />
             </div>
@@ -530,56 +685,12 @@ export default function SolicitudForm({
             ctx={it.preview?.contexto_presupuesto}
             analisis={it.preview?.analisis_valor}
             supera={it.preview?.supera_presupuesto}
+            superaNegociado={it.preview?.supera_negociado}
+            ctxNeg={it.preview?.contexto_negociado}
             sinPrecio={it.insumo && it.insumo.tiene_precio_compra === false}
             ui={ui}
           />
 
-          {it.id && solicitudId && (
-            <div style={{ marginTop: 8, borderTop: '1px solid #ccc3', paddingTop: 6 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, marginBottom: 8 }}>
-                💰 Cotizaciones
-                {!it.es_recurrente && (
-                  <span style={{ fontWeight: 400, color: ui.textMuted, marginLeft: 8 }}>
-                    (mín. {config.cotizaciones_minimas})
-                  </span>
-                )}
-              </div>
-              {(cotizaciones[it.id] || []).map((c) => (
-                <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, fontSize: 'var(--cc-sm)' }}>
-                  <span>{c.proveedor_nombre}</span>
-                  <span>{fmtMoney(c.valor_unitario)}</span>
-                  <span style={{ color: ui.textMuted }}>Total: {fmtMoney(c.valor_total)}</span>
-                  {editable && (
-                    <button type="button" style={{ ...ui.btnSecondary, padding: '2px 8px' }} onClick={() => delCot(c.id)}>✕</button>
-                  )}
-                </div>
-              ))}
-              {editable && permisos?.editar && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                  <ProveedorSelector
-                    value={cotForm[it.id]?.proveedor}
-                    onChange={(prov) => setCotForm((p) => ({ ...p, [it.id]: { ...p[it.id], proveedor: prov } }))}
-                    insumoId={it.insumo?.insumo_id}
-                    valorUnitario={cotForm[it.id]?.valor_unitario}
-                    onValorUnitarioChange={(v) => setCotForm((p) => ({ ...p, [it.id]: { ...p[it.id], valor_unitario: v } }))}
-                  />
-                  <div>
-                    <AlmacenFieldLabel icon="💰" label="Precio venta (cotización)" />
-                    <input
-                      style={ui.input}
-                      type="number"
-                      placeholder="V. unitario"
-                      value={cotForm[it.id]?.valor_unitario ?? ''}
-                      onChange={(e) => setCotForm((p) => ({ ...p, [it.id]: { ...p[it.id], valor_unitario: e.target.value } }))}
-                    />
-                  </div>
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <button type="button" style={ui.btnSecondary} onClick={() => addCot(it.id)}>+ Agregar cotización</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       ))}
 
@@ -600,14 +711,55 @@ export default function SolicitudForm({
               {busy ? 'Guardando…' : 'Guardar borrador'}
             </button>
             {solicitudId && (
-              <button type="button" style={ui.btnPrimary} disabled={busy} onClick={enviar}>
-                Enviar a validación
+              <button type="button" style={ui.btnPrimary} disabled={busy} onClick={solicitarAprobacion}>
+                {busy ? 'Enviando…' : 'Solicitar aprobación'}
               </button>
             )}
           </>
         )}
+        {solicitudId && sol && puedeAnularSolicitud(sol, permisos) && (
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}
+            disabled={busy}
+            onClick={() => setConfirmAnular(true)}
+          >
+            Anular solicitud
+          </button>
+        )}
         <button type="button" style={ui.btnSecondary} onClick={onCancel}>Volver</button>
       </div>
+
+      {confirmAnular && sol && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="danger"
+          titulo="Anular solicitud"
+          confirmar="Anular"
+          cancelar="Cancelar"
+          procesando={busy}
+          onCancel={() => !busy && setConfirmAnular(false)}
+          onConfirm={anularSolicitud}
+        >
+          {sol.estado === 'borrador'
+            ? `¿Eliminar la solicitud #${sol.consecutivo} en borrador? Esta acción no se puede deshacer.`
+            : `¿Anular la solicitud #${sol.consecutivo} enviada? Quedará marcada como rechazada.`}
+        </CcConfirmModal>
+      )}
+
+      {modalExitoEnvio && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="success"
+          titulo="Solicitud enviada"
+          confirmar="Entendido"
+          soloConfirmar
+          onCancel={cerrarExitoEnvio}
+        >
+          La solicitud #{modalExitoEnvio.consecutivo} fue generada con éxito y pasa al siguiente nivel de aprobación.
+          Los validadores recibirán una notificación para revisarla.
+        </CcConfirmModal>
+      )}
     </div>
   )
 }

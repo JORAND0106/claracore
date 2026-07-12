@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useMemo } from 'react'
+import { useClaraViewport } from '../useClaraViewport'
 import { createAlmacenApi } from './almacenApi'
 
-export function almacenStyles(t) {
+export function almacenStyles(t, compact = false) {
   const primary = t?.primary || '#2563eb'
   const border = t?.border || '#e2e8f0'
   const text = t?.text || '#0f172a'
@@ -23,13 +24,14 @@ export function almacenStyles(t) {
     },
     input: {
       width: '100%',
-      padding: 'var(--cc-space-2) var(--cc-space-3)',
+      padding: compact ? '10px 12px' : 'var(--cc-space-2) var(--cc-space-3)',
       borderRadius: 6,
       border: `1px solid ${t?.inputBorder || border}`,
       background: inputBg,
       color: text,
-      fontSize: 'var(--cc-input)',
+      fontSize: compact ? 'var(--cc-input)' : 'var(--cc-input)',
       boxSizing: 'border-box',
+      ...(compact ? { minHeight: 44 } : {}),
     },
     label: {
       display: 'flex',
@@ -41,7 +43,7 @@ export function almacenStyles(t) {
       marginBottom: 4,
     },
     btnPrimary: {
-      padding: '8px 14px',
+      padding: compact ? '10px 16px' : '8px 14px',
       borderRadius: 6,
       border: 'none',
       background: primary,
@@ -49,15 +51,17 @@ export function almacenStyles(t) {
       cursor: 'pointer',
       fontSize: 'var(--cc-sm)',
       fontWeight: 600,
+      ...(compact ? { minHeight: 44 } : {}),
     },
     btnSecondary: {
-      padding: '8px 14px',
+      padding: compact ? '10px 16px' : '8px 14px',
       borderRadius: 6,
       border: `1px solid ${border}`,
       background: bgCard,
       color: text,
       cursor: 'pointer',
       fontSize: 'var(--cc-sm)',
+      ...(compact ? { minHeight: 44 } : {}),
     },
     th: {
       textAlign: 'left',
@@ -85,7 +89,7 @@ export function almacenStyles(t) {
       display: 'inline-flex',
       alignItems: 'center',
       gap: 6,
-      padding: '10px 14px',
+      padding: compact ? '12px 16px' : '10px 14px',
       border: 'none',
       borderBottom: active ? `2px solid ${primary}` : '2px solid transparent',
       marginBottom: -2,
@@ -94,16 +98,32 @@ export function almacenStyles(t) {
       fontSize: 'var(--cc-sm)',
       fontWeight: active ? 600 : 400,
       cursor: 'pointer',
+      ...(compact ? { minHeight: 44 } : {}),
     }),
   }
 }
 
 const AlmacenThemeContext = createContext(almacenStyles(null))
+const AlmacenCompactContext = createContext(false)
 const AlmacenApiContext = createContext(null)
 
-export function AlmacenThemeProvider({ t, children }) {
-  const styles = useMemo(() => almacenStyles(t), [t])
-  return <AlmacenThemeContext.Provider value={styles}>{children}</AlmacenThemeContext.Provider>
+export function useAlmacenCompact() {
+  return useContext(AlmacenCompactContext)
+}
+
+export function useAlmacenViewport() {
+  const vp = useClaraViewport()
+  const isCompact = Boolean(vp.isMobile || vp.isLandscapeMobile)
+  return { ...vp, isCompact }
+}
+
+export function AlmacenThemeProvider({ t, compact = false, children }) {
+  const styles = useMemo(() => almacenStyles(t, compact), [t, compact])
+  return (
+    <AlmacenCompactContext.Provider value={compact}>
+      <AlmacenThemeContext.Provider value={styles}>{children}</AlmacenThemeContext.Provider>
+    </AlmacenCompactContext.Provider>
+  )
 }
 
 export function useAlmacenTheme() {
@@ -119,6 +139,19 @@ export function useAlmacenApi() {
   const api = useContext(AlmacenApiContext)
   if (!api) throw new Error('useAlmacenApi requiere AlmacenApiProvider')
   return api
+}
+
+/** Usuario de sesión ClaraCore (solo lectura, para Despachador). */
+export function getAlmacenSessionUser() {
+  try {
+    const raw = localStorage.getItem('cc_usuario') || sessionStorage.getItem('cc_usuario')
+    if (!raw) return null
+    const u = JSON.parse(raw)
+    const nombre = [u.nombre, u.apellidos].filter(Boolean).join(' ').trim()
+    return { id: u.id, label: nombre || u.email || `Usuario #${u.id}` }
+  } catch {
+    return null
+  }
 }
 
 export function AlmacenHelpIcon({ ayuda }) {
@@ -168,8 +201,16 @@ export const ESTADO_SOLICITUD_LABEL = {
 export const ESTADO_SOLICITUD_COLOR = {
   borrador: '#64748b',
   enviada: '#2563eb',
-  aprobada: '#047857',
+  aprobada: 'var(--cc-color-success)',
   rechazada: '#dc2626',
+}
+
+export function puedeAnularSolicitud(s, permisos) {
+  if (!s || !['borrador', 'enviada'].includes(s.estado)) return false
+  const uid = permisos?.userId
+  const esCreador = uid != null && Number(s.created_by) === Number(uid)
+  if (esCreador) return Boolean(permisos?.crear || permisos?.editar)
+  return Boolean(permisos?.editar)
 }
 
 export function SemaforoDot({ estado }) {
@@ -196,11 +237,66 @@ export function fmtCant(n) {
   return v.toLocaleString('es-CO', { maximumFractionDigits: 4 })
 }
 
+/** Formato placa vehículo: AAA-000 */
+export function formatPlacaVehiculo(raw) {
+  const s = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const letters = s.replace(/[^A-Z]/g, '').slice(0, 3)
+  const digits = s.replace(/\D/g, '').slice(0, 3)
+  if (!letters && !digits) return ''
+  if (letters.length === 3 && digits.length > 0) {
+    return `${letters}-${digits}`
+  }
+  if (letters.length === 3) return letters
+  return s.slice(0, 7)
+}
+
+/** Nombre propio: cada palabra capitalizada */
+export function formatNombrePropio(raw) {
+  return String(raw || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
+}
+
+export function formatEntradaNumero(num) {
+  if (num == null || num === '') return '—'
+  return `#${num}`
+}
+
 export function fmtMoney(n) {
   if (n == null || n === '') return '—'
   const v = Number(n)
   if (!Number.isFinite(v) || v === 0) return '—'
   return v.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 })
+}
+
+/** Etiqueta de línea interna: Solicitud #5 · Línea 2 */
+export function formatSolicitudLinea(consecutivo, numeroLinea) {
+  if (consecutivo != null && numeroLinea != null) {
+    return `#${consecutivo} · Línea ${numeroLinea}`
+  }
+  if (numeroLinea != null) return `Línea ${numeroLinea}`
+  if (consecutivo != null) return `#${consecutivo}`
+  return 'Línea'
+}
+
+/** Texto de aprobación para listado de solicitudes */
+export function textoAprobacionSolicitud(s) {
+  if (!s) return '—'
+  if (s.estado === 'aprobada') {
+    return s.validador_nombre ? `Aprobada por ${s.validador_nombre}` : 'Aprobada'
+  }
+  if (s.estado === 'rechazada') {
+    return s.validador_nombre ? `Rechazada por ${s.validador_nombre}` : 'Rechazada'
+  }
+  if (s.estado === 'enviada') {
+    const v = s.validadores_pendientes || []
+    if (v.length) return `Pendiente: ${v.join(', ')}`
+    return 'Pendiente aprobación'
+  }
+  return '—'
 }
 
 export function useAlmacenFetch(fn, deps) {

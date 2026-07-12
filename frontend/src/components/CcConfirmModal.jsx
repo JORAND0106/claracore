@@ -8,6 +8,7 @@ export default function CcConfirmModal({
   tipo = 'warn',
   confirmar = 'Confirmar',
   cancelar = 'Cancelar',
+  soloConfirmar = false,
   zIndex = 100020,
   procesando = false,
   onConfirm,
@@ -18,6 +19,7 @@ export default function CcConfirmModal({
     warn: { accent: '#D97706', bg: '#FEF3C7', icon: '⚠️' },
     info: { accent: t.primary || '#0077B6', bg: `${t.primary || '#0077B6'}14`, icon: 'ℹ️' },
     danger: { accent: '#DC2626', bg: '#FEE2E2', icon: '⚠️' },
+    success: { accent: 'var(--cc-color-success)', bg: '#ECFDF5', icon: '✅' },
   }[tipo] || { accent: t.primary || '#0077B6', bg: `${t.primary || '#0077B6'}14`, icon: 'ℹ️' }
 
   return (
@@ -76,30 +78,33 @@ export default function CcConfirmModal({
             flexWrap: 'wrap',
           }}
         >
-          <button
-            type="button"
-            disabled={procesando}
-            onClick={onCancel}
-            style={{
-              background: 'transparent',
-              color: t.textMuted || '#64748B',
-              border: `1px solid ${t.border || '#CBD5E1'}`,
-              borderRadius: 8,
-              padding: '8px 16px',
-              fontSize: 'var(--cc-sm)',
-              fontWeight: 600,
-              cursor: procesando ? 'wait' : 'pointer',
-              opacity: procesando ? 0.6 : 1,
-            }}
-          >
-            {cancelar}
-          </button>
+          {!soloConfirmar && (
+            <button
+              type="button"
+              disabled={procesando}
+              onClick={onCancel}
+              style={{
+                background: 'transparent',
+                color: t.textMuted || '#64748B',
+                border: `1px solid ${t.border || '#CBD5E1'}`,
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                cursor: procesando ? 'wait' : 'pointer',
+                opacity: procesando ? 0.6 : 1,
+              }}
+            >
+              {cancelar}
+            </button>
+          )}
           <button
             type="button"
             disabled={procesando}
             onClick={(e) => {
               e.stopPropagation();
-              void onConfirm?.();
+              if (soloConfirmar) onCancel?.();
+              else void onConfirm?.();
             }}
             style={{
               background: palette.accent,

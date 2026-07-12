@@ -17,6 +17,9 @@ ALTER TABLE public.almacen_insumo
 ALTER TABLE public.almacen_insumo
   ADD COLUMN IF NOT EXISTS updated_by integer REFERENCES public.usuarios(id) ON DELETE SET NULL;
 
+ALTER TABLE public.almacen_insumo
+  ADD COLUMN IF NOT EXISTS requiere_cotizacion boolean NOT NULL DEFAULT true;
+
 -- Historial de precios (snapshot al actualizar)
 CREATE TABLE IF NOT EXISTS public.almacen_insumo_precio_historial (
   id                    bigserial PRIMARY KEY,

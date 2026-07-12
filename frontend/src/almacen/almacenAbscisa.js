@@ -19,3 +19,14 @@ export function parseAbscisaMetros(val) {
   const n = parseFloat(s)
   return Number.isFinite(n) ? n : null
 }
+
+export const ABSCISA_RANGO_ERROR = 'La abscisa final no puede ser menor que la abscisa inicial.'
+
+/** Valida que abscisa final ≥ inicial cuando ambas son parseables. */
+export function validateAbscisaRango(inicial, final) {
+  const a = parseAbscisaMetros(inicial)
+  const b = parseAbscisaMetros(final)
+  if (a == null || b == null) return { ok: true }
+  if (b < a) return { ok: false, message: ABSCISA_RANGO_ERROR }
+  return { ok: true }
+}

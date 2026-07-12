@@ -1253,7 +1253,7 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
                       style={{
                         background: '#05966922',
                         border: '1px solid #05966988',
-                        color: '#047857',
+                        color: 'var(--cc-color-success)',
                         borderRadius: '8px',
                         padding: '5px 10px',
                         fontSize: 'var(--cc-caption)',

@@ -39,6 +39,53 @@ export const ADMIN_THEME = {
   },
 };
 
+/** Tokens semánticos (éxito / positivo / peligro) — se aplican vía `applyClaraThemeTokens`. */
+export const CLARA_THEME_SEMANTIC = {
+  light: {
+    success: '#047857',
+    positive: '#047857',
+    danger: '#dc2626',
+    successBtnBg: '#047857',
+    successBtnText: '#ffffff',
+  },
+  dark: {
+    success: '#fde047',
+    positive: '#22d3ee',
+    danger: '#f87171',
+    successBtnBg: '#fde047',
+    successBtnText: '#0f172a',
+  },
+  rest: {
+    success: '#166534',
+    positive: '#166534',
+    danger: '#DC2626',
+    successBtnBg: '#166534',
+    successBtnText: '#ffffff',
+  },
+}
+
+export function applyClaraThemeTokens(activeTheme) {
+  const mode = isRestMode(activeTheme) ? 'rest' : isDarkMode(activeTheme) ? 'dark' : 'light'
+  const sem = CLARA_THEME_SEMANTIC[mode]
+  const root = typeof document !== 'undefined' ? document.documentElement : null
+  if (!root) return
+  root.dataset.ccTheme = mode
+  root.style.setProperty('--cc-color-success', sem.success)
+  root.style.setProperty('--cc-color-positive', sem.positive)
+  root.style.setProperty('--cc-color-danger', sem.danger)
+  root.style.setProperty('--cc-btn-success-bg', sem.successBtnBg)
+  root.style.setProperty('--cc-btn-success-text', sem.successBtnText)
+}
+
+/** Estilo de botón de acción positiva (legible en claro y oscuro). */
+export function btnSuccessStyle(baseBtn = {}) {
+  return {
+    ...baseBtn,
+    background: 'var(--cc-btn-success-bg, var(--cc-color-success))',
+    color: 'var(--cc-btn-success-text, #ffffff)',
+  }
+}
+
 export function tFrom(modeOrTheme, t) {
   if (t && t.text) return t;
   if (modeOrTheme && ADMIN_THEME[modeOrTheme]) return ADMIN_THEME[modeOrTheme];
@@ -102,7 +149,7 @@ export function buildContratoUiTheme(activeTheme, tProp) {
     tabBorder: `${tok.border}`,
     dashedBorder: tok.border,
     successBg: dark ? "#0a2a1a" : rest ? "#E8F5E9" : "#ECFDF5",
-    successText: dark ? "#4ade80" : rest ? "#166534" : "#047857",
+    successText: 'var(--cc-color-success)',
     errorBg: dark ? "#2a0a0a" : rest ? "#FEE2E2" : "#FEF2F2",
     errorText: dark ? "#f87171" : rest ? "#991B1B" : "#DC2626",
     warnBg: dark ? "#2a1a0a" : rest ? "#FEF3C7" : "#FFFBEB",

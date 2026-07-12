@@ -19,6 +19,11 @@ def _norm(txt: str) -> str:
     return s.lower().strip()
 
 
+def _es_validador_almacen_por_cargo(current_user) -> bool:
+    cargo = _norm(current_user.get("cargo_nombre") or "")
+    return cargo in ("director de obra", "administrador")
+
+
 def _cargo_permiso_almacen(current_user, accion: AlmacenAccion) -> bool:
     try:
         uid = int(current_user.get("sub"))
@@ -28,6 +33,8 @@ def _cargo_permiso_almacen(current_user, accion: AlmacenAccion) -> bool:
         from main import supabase, supabase_execute, _es_desarrollador
 
         if _es_desarrollador(current_user):
+            return True
+        if accion == "validar" and _es_validador_almacen_por_cargo(current_user):
             return True
         urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
         u = urows[0] if urows else None

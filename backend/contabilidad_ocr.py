@@ -307,6 +307,9 @@ def analyze_invoice_bytes(data: bytes, content_type: Optional[str] = None) -> di
             sugerencias["proveedor_nit"] = nit
         if invoice_date:
             sugerencias["fecha"] = str(invoice_date)[:10]
+        invoice_id = _field_value(fields, "InvoiceId")
+        if invoice_id:
+            sugerencias["numero_documento"] = str(invoice_id).strip()[:64]
         if subtotal is not None:
             sugerencias["valor_bruto"] = subtotal
         elif invoice_total is not None and total_tax is not None:

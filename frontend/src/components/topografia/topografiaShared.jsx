@@ -209,7 +209,7 @@ export function topoStyles(t) {
     badgeEstacion: { background: `${primary}22`, color: primary },
     badgeAux: { background: inputBg, color: textMuted },
     link: primary,
-    success: '#047857',
+    success: 'var(--cc-color-success)',
     warn: '#b45309',
   }
 }

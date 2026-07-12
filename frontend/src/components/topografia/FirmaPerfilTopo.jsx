@@ -61,7 +61,7 @@ export default function FirmaPerfilTopo({ api, poligonalId, token, onFirmado }) 
         <p style={{ color: '#b45309', fontSize: 'var(--cc-sm)' }}>Sin firma en el perfil.</p>
       )}
       {registrada && (
-        <p style={{ fontSize: 'var(--cc-xs)', color: '#047857', margin: '0 0 8px' }}>
+        <p style={{ fontSize: 'var(--cc-xs)', color: 'var(--cc-color-success)', margin: '0 0 8px' }}>
           Firma registrada en esta poligonal (aparecerá en el PDF).
         </p>
       )}

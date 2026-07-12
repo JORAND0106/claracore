@@ -117,7 +117,7 @@ export default function DisenoEstructuraPanel({
               {estructuraVigente?.nombre || 'Sin definir'}
             </strong>
             {estructuraVigente?.vigente && (
-              <span style={{ marginLeft: 8, color: ui.t?.success || '#047857', fontWeight: 600 }}>
+              <span style={{ marginLeft: 8, color: ui.t?.success || 'var(--cc-color-success)', fontWeight: 600 }}>
                 (activa)
               </span>
             )}
@@ -142,7 +142,7 @@ export default function DisenoEstructuraPanel({
           <p style={{ margin: 0, flex: 1, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
             Vigente: <strong style={{ color: ui.text }}>{estructuraVigente?.nombre || 'Sin definir'}</strong>
             {estructuraVigente?.vigente && (
-              <span style={{ marginLeft: 6, color: ui.t?.success || '#047857' }}>(activa)</span>
+              <span style={{ marginLeft: 6, color: ui.t?.success || 'var(--cc-color-success)' }}>(activa)</span>
             )}
           </p>
           <PermisoAviso permisos={permisos} accion="editar">
@@ -257,14 +257,14 @@ export default function DisenoEstructuraPanel({
               </tr>
             ))}
             <tr style={{
-              background: `${ui.t?.success || '#047857'}22`,
+              background: `${ui.t?.success || 'var(--cc-color-success)'}22`,
               fontWeight: 700,
             }}
             >
               <td style={{ ...ui.td, color: ui.text }} colSpan={4}>
                 Espesor total estructura
               </td>
-              <td style={{ ...ui.td, color: ui.t?.success || '#047857' }} colSpan={2}>
+              <td style={{ ...ui.td, color: ui.t?.success || 'var(--cc-color-success)' }} colSpan={2}>
                 {total.toFixed(3)} m
               </td>
             </tr>
@@ -425,9 +425,9 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
                   </td>
                 </tr>
               ))}
-              <tr style={{ background: `${ui.t?.success || '#047857'}22`, fontWeight: 700 }}>
+              <tr style={{ background: `${ui.t?.success || 'var(--cc-color-success)'}22`, fontWeight: 700 }}>
                 <td style={ui.td} colSpan={2}>Espesor total</td>
-                <td style={{ ...ui.td, color: ui.t?.success || '#047857' }} colSpan={2}>
+                <td style={{ ...ui.td, color: ui.t?.success || 'var(--cc-color-success)' }} colSpan={2}>
                   {total.toFixed(3)} m
                 </td>
               </tr>

@@ -18,7 +18,10 @@ from almacen_insumos_service import (
     _row_from_almacen_insumo,
     compute_costo_total_insumo,
     create_proveedor,
+    get_contexto_negociado_insumo,
     get_insumo,
+    search_proveedores,
+    sync_proveedor_contacto,
 )
 from almacen_service import _sb, _to_float, _upload_soporte
 
@@ -41,14 +44,90 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
     "cotizacion_vigencia": ["cotizacion_vigencia", "cotizacion vigencia", "vigencia"],
     "proveedor": ["proveedor", "razon_social", "razon social", "nombre proveedor"],
     "nit": ["nit", "nit proveedor", "documento"],
+    "contacto_email": ["contacto_email", "contacto email", "email", "correo", "correo contacto", "email contacto"],
+    "contacto_nombre": ["contacto_nombre", "contacto nombre", "nombre comercial", "comercial", "nombre contacto"],
+    "contacto_telefono": ["contacto_telefono", "contacto telefono", "telefono", "teléfono", "telefono contacto", "celular"],
+    "rendimiento": ["rendimiento", "rend"],
+    "requiere_cotizacion": ["requiere_cotizacion", "requiere cotizacion", "cotizacion requerida", "exige cotizacion"],
 }
 
 CSV_TEMPLATE = (
-    "codigo,descripcion,unidad,costo,proveedor,nit,tipo_impuesto,impuesto_porcentaje,"
+    "proveedor,nit,contacto_email,contacto_nombre,contacto_telefono,"
+    "codigo,descripcion,unidad,rendimiento,costo,tipo_impuesto,impuesto_porcentaje,requiere_cotizacion,"
     "cotizacion_numero,cotizacion_fecha,cotizacion_vigencia\n"
-    "INS-001,Cemento gris 50 kg,UND,18500,Proveedor Ejemplo SA,900123456-1,iva,19,"
+    "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
+    "CC-0000-001,Cemento gris 50 kg,UND,1.05,18500,iva,19,false,"
     "COT-2026-001,2026-07-01,15 dias\n"
 )
+
+
+def contrato_codigo_segment(contrato_id: int) -> str:
+    """Segmento numérico del contrato para codificación de insumos (ej. 1614 en ICCU-CTO-1614-2025)."""
+    sb = _sb()
+    rows = (
+        sb.table("contratos")
+        .select("numero")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    numero = (rows[0].get("numero") or "") if rows else ""
+    parts = re.findall(r"\d+", numero)
+    years = {str(y) for y in range(2020, 2036)}
+    for part in parts:
+        if part not in years and len(part) >= 3:
+            return part
+    return str(contrato_id)
+
+
+def codigo_insumo_patron(segment: str) -> re.Pattern:
+    return re.compile(rf"^CC-{re.escape(segment)}-(\d{{3,}})$", re.IGNORECASE)
+
+
+def validar_codigo_insumo_contrato(codigo: str, contrato_id: int) -> str:
+    seg = contrato_codigo_segment(contrato_id)
+    cod = (codigo or "").strip().upper()
+    if not cod:
+        raise ValueError("El código del insumo es obligatorio.")
+    if not codigo_insumo_patron(seg).match(cod):
+        raise ValueError(
+            f"El código debe tener formato CC-{seg}-NNN (ej. CC-{seg}-001) para este contrato."
+        )
+    return cod
+
+
+def next_codigo_insumo(contrato_id: int) -> str:
+    """Genera el siguiente código CC-{segmento_contrato}-NNN único dentro del contrato."""
+    seg = contrato_codigo_segment(contrato_id)
+    prefix = f"CC-{seg}-"
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("codigo")
+        .eq("contrato_id", contrato_id)
+        .ilike("codigo", f"{prefix}%")
+        .execute()
+        .data
+        or []
+    )
+    pat = codigo_insumo_patron(seg)
+    max_n = 0
+    for row in rows:
+        m = pat.match((row.get("codigo") or "").strip().upper())
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return f"{prefix}{max_n + 1:03d}"
+
+
+def _resolve_codigo_insumo(body: dict, contrato_id: int, *, codigo_fijo: Optional[str] = None) -> str:
+    if codigo_fijo:
+        return str(codigo_fijo).strip().upper()
+    codigo = (body.get("codigo") or "").strip()
+    if not codigo:
+        return next_codigo_insumo(contrato_id)
+    return validar_codigo_insumo_contrato(codigo, contrato_id)
 
 
 def _norm_csv_header(h: str) -> str:
@@ -83,8 +162,10 @@ def _csv_columns_error(col_map: Dict[str, str]) -> None:
         "El CSV no cumple el formato esperado.\n"
         f"Columnas obligatorias faltantes: {', '.join(hints.get(m, m) for m in missing)}.\n"
         "Columnas obligatorias: codigo, descripcion, unidad, costo (o costo_base).\n"
-        "Opcionales: proveedor, nit, tipo_impuesto (iva/aiu), impuesto_porcentaje, "
+        "Opcionales: proveedor, nit, contacto_email, contacto_nombre, contacto_telefono, "
+        "rendimiento, tipo_impuesto (iva/aiu), impuesto_porcentaje, requiere_cotizacion (true/false), "
         "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia.\n"
+        "Los PDF de cotización no se importan por CSV; use el formulario para adjuntarlos.\n"
         "Use «Descargar plantilla CSV» en este módulo para ver el formato exacto."
     )
 
@@ -174,7 +255,7 @@ def list_catalogo_insumos(
     if prov_ids:
         provs = (
             sb.table("almacen_proveedor")
-            .select("id, razon_social, nit")
+            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
             .in_("id", list(prov_ids))
             .execute()
             .data
@@ -188,11 +269,99 @@ def list_catalogo_insumos(
         prov = prov_map.get(int(pid or 0), {})
         item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
         item["proveedor_nit"] = prov.get("nit")
+        item["contacto_email"] = prov.get("contacto_email")
+        item["contacto_nombre"] = prov.get("contacto_nombre")
+        item["contacto_telefono"] = prov.get("contacto_telefono")
         item["cotizacion_numero"] = row.get("cotizacion_numero")
         item["cotizacion_fecha"] = row.get("cotizacion_fecha")
         item["cotizacion_vigencia"] = row.get("cotizacion_vigencia")
+        item["cantidad_negociada"] = row.get("cantidad_negociada")
+        item["valor_negociado_total"] = row.get("valor_negociado_total")
+        if row.get("cantidad_negociada") is not None and _to_float(row.get("cantidad_negociada")) > 0:
+            ctx_neg = get_contexto_negociado_insumo(contrato_id, int(row["id"]), 0, None, 0)
+            item["consumo_negociado"] = ctx_neg
         out.append(item)
     return out, total
+
+
+def list_proveedores_catalogo(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> Tuple[List[dict], int]:
+    sb = _sb()
+    q = (q or "").strip()
+    query = (
+        sb.table("almacen_proveedor")
+        .select("*", count="exact")
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .order("razon_social")
+    )
+    if q:
+        query = query.or_(f"razon_social.ilike.%{q}%,nit.ilike.%{q}%")
+    resp = query.range(offset, offset + max(limit, 1) - 1).execute()
+    rows = resp.data or []
+    total = resp.count if resp.count is not None else len(rows)
+    if rows:
+        pids = [int(r["id"]) for r in rows if r.get("id")]
+        insumos = (
+            sb.table("almacen_insumo")
+            .select("proveedor_id")
+            .eq("contrato_id", contrato_id)
+            .eq("activo", True)
+            .in_("proveedor_id", pids)
+            .execute()
+            .data
+            or []
+        )
+        from collections import defaultdict
+        counts: dict = defaultdict(int)
+        for ins in insumos:
+            if ins.get("proveedor_id"):
+                counts[int(ins["proveedor_id"])] += 1
+        for r in rows:
+            r["insumos_activos"] = counts.get(int(r["id"]), 0)
+    return rows, total
+
+
+def delete_proveedor_catalogo(contrato_id: int, proveedor_id: int) -> dict:
+    """Desactiva un proveedor del directorio (soft delete)."""
+    sb = _sb()
+    rows = (
+        sb.table("almacen_proveedor")
+        .select("id, razon_social, nit, activo")
+        .eq("id", proveedor_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Proveedor no encontrado.")
+    row = rows[0]
+    if not row.get("activo", True):
+        raise ValueError("El proveedor ya está inactivo.")
+    insumos = (
+        sb.table("almacen_insumo")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("proveedor_id", proveedor_id)
+        .eq("activo", True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if insumos:
+        raise ValueError(
+            "No se puede eliminar: el proveedor tiene insumos activos en el catálogo. "
+            "Reasigne o elimine esos insumos primero."
+        )
+    sb.table("almacen_proveedor").update({"activo": False}).eq("id", proveedor_id).execute()
+    return {"ok": True, "proveedor_id": proveedor_id, "razon_social": row.get("razon_social")}
 
 
 def find_duplicados(
@@ -269,6 +438,84 @@ def list_cotizaciones_soporte(contrato_id: int, insumo_id: int) -> List[dict]:
     )
 
 
+def _parse_bool(raw: Any, default: bool = True) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).strip().lower()
+    if s in ("true", "1", "yes", "si", "sí", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
+def _count_cotizaciones_insumo(
+    sb,
+    insumo_id: Optional[int],
+    *,
+    existing_row: Optional[dict] = None,
+    ganadora_pdf=None,
+    soporte_pdfs=None,
+    body: Optional[dict] = None,
+) -> tuple[bool, int]:
+    """Retorna (tiene_ganadora, n_soportes)."""
+    tiene_ganadora = ganadora_pdf is not None
+    if existing_row:
+        tiene_ganadora = tiene_ganadora or bool(
+            existing_row.get("soporte_pdf_blob_path") or existing_row.get("cotizacion_numero")
+        )
+    if body and (body.get("cotizacion_numero") or "").strip():
+        tiene_ganadora = True
+    n_sop = len(soporte_pdfs or [])
+    if insumo_id:
+        n_sop += len(
+            sb.table("almacen_insumo_cotizacion_soporte")
+            .select("id")
+            .eq("insumo_id", insumo_id)
+            .execute()
+            .data
+            or []
+        )
+    return tiene_ganadora, n_sop
+
+
+def _validar_cotizaciones_requeridas(
+    contrato_id: int,
+    requiere_cotizacion: bool,
+    *,
+    insumo_id: Optional[int] = None,
+    existing_row: Optional[dict] = None,
+    ganadora_pdf=None,
+    soporte_pdfs=None,
+    body: Optional[dict] = None,
+) -> None:
+    if not requiere_cotizacion:
+        return
+    min_cot = get_almacen_config(contrato_id)["cotizaciones_minimas"]
+    need_sop = max(0, min_cot - 1)
+    sb = _sb()
+    tiene_ganadora, n_sop = _count_cotizaciones_insumo(
+        sb,
+        insumo_id,
+        existing_row=existing_row,
+        ganadora_pdf=ganadora_pdf,
+        soporte_pdfs=soporte_pdfs,
+        body=body,
+    )
+    if not tiene_ganadora:
+        raise ValueError(
+            "Este insumo requiere cotización: registre la cotización ganadora (PDF o número de cotización)."
+        )
+    if n_sop < need_sop:
+        raise ValueError(
+            f"Este insumo requiere cotización: faltan PDFs de soporte "
+            f"({n_sop}/{need_sop}). Se exigen al menos {min_cot} cotizaciones comparativas "
+            "(ganadora + soportes)."
+        )
+
+
 def _parse_fecha(raw: Any) -> Optional[str]:
     if raw is None or raw == "":
         return None
@@ -283,11 +530,11 @@ def _parse_fecha(raw: Any) -> Optional[str]:
     return s if re.match(r"^\d{4}-\d{2}-\d{2}$", s) else None
 
 
-def _build_insumo_payload(body: dict, contrato_id: int, user_id: int) -> dict:
-    codigo = (body.get("codigo") or "").strip()
+def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_fijo: Optional[str] = None) -> dict:
+    codigo = _resolve_codigo_insumo(body, contrato_id, codigo_fijo=codigo_fijo)
     descripcion = (body.get("descripcion") or "").strip()
-    if not codigo or not descripcion:
-        raise ValueError("Código y descripción del insumo son obligatorios.")
+    if not descripcion:
+        raise ValueError("La descripción del insumo es obligatoria.")
     tipo_imp = (body.get("tipo_impuesto") or "").strip().lower() or None
     if tipo_imp not in (None, "iva", "aiu"):
         raise ValueError("tipo_impuesto debe ser 'iva' o 'aiu'.")
@@ -297,13 +544,27 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int) -> dict:
         costo_base = _to_float(body.get("costo"))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
     valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
+    cantidad_negociada = (
+        _to_float(body.get("cantidad_negociada"))
+        if body.get("cantidad_negociada") not in (None, "")
+        else None
+    )
+    valor_negociado_total = None
+    if cantidad_negociada is not None and cantidad_negociada > 0 and valor_total > 0:
+        valor_negociado_total = round(cantidad_negociada * valor_total, 2)
     proveedor_id = body.get("proveedor_id")
     if body.get("razon_social") and body.get("nit") and not proveedor_id:
         prov = create_proveedor(contrato_id, user_id, {
             "razon_social": body.get("razon_social"),
             "nit": body.get("nit"),
+            "contacto_email": body.get("contacto_email"),
+            "contacto_nombre": body.get("contacto_nombre"),
+            "contacto_telefono": body.get("contacto_telefono"),
         })
         proveedor_id = prov.get("id")
+    if proveedor_id:
+        from almacen_insumos_service import sync_proveedor_contacto
+        sync_proveedor_contacto(int(proveedor_id), body)
     return {
         "contrato_id": contrato_id,
         "listado_precio_id": body.get("listado_precio_id"),
@@ -320,6 +581,9 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int) -> dict:
         "cotizacion_numero": (body.get("cotizacion_numero") or "").strip() or None,
         "cotizacion_fecha": _parse_fecha(body.get("cotizacion_fecha")),
         "cotizacion_vigencia": (body.get("cotizacion_vigencia") or "").strip() or None,
+        "requiere_cotizacion": _parse_bool(body.get("requiere_cotizacion"), default=True),
+        "cantidad_negociada": cantidad_negociada,
+        "valor_negociado_total": valor_negociado_total,
     }
 
 
@@ -377,6 +641,13 @@ def create_insumo_catalogo(
         )
     sb = _sb()
     payload = _build_insumo_payload(body, contrato_id, user_id)
+    _validar_cotizaciones_requeridas(
+        contrato_id,
+        payload["requiere_cotizacion"],
+        body=body,
+        ganadora_pdf=ganadora_pdf,
+        soporte_pdfs=soporte_pdfs,
+    )
     payload["created_by"] = user_id
     ins = sb.table("almacen_insumo").insert(payload).execute().data
     if not ins:
@@ -413,7 +684,18 @@ def update_insumo_catalogo(
         raise ValueError("Insumo no encontrado.")
     existing = existing_rows[0]
     _snapshot_historial(existing, contrato_id, user_id, motivo)
-    payload = _build_insumo_payload(body, contrato_id, user_id)
+    payload = _build_insumo_payload(body, contrato_id, user_id, codigo_fijo=existing.get("codigo"))
+    if body.get("requiere_cotizacion") is None and "requiere_cotizacion" not in body:
+        payload["requiere_cotizacion"] = existing.get("requiere_cotizacion", True)
+    _validar_cotizaciones_requeridas(
+        contrato_id,
+        payload["requiere_cotizacion"],
+        insumo_id=insumo_id,
+        existing_row=existing,
+        body=body,
+        ganadora_pdf=ganadora_pdf,
+        soporte_pdfs=soporte_pdfs,
+    )
     payload["updated_at"] = datetime.utcnow().isoformat()
     payload["updated_by"] = user_id
     sb.table("almacen_insumo").update(payload).eq("id", insumo_id).execute()
@@ -451,6 +733,60 @@ def map_ocr_to_cotizacion(ocr_result: dict) -> dict:
         except (TypeError, ValueError):
             pass
     return out
+
+
+def _insumo_en_solicitudes_abiertas(sb, contrato_id: int, insumo_id: int) -> bool:
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("solicitud_id")
+        .eq("insumo_id", insumo_id)
+        .execute()
+        .data
+        or []
+    )
+    if not items:
+        return False
+    sids = sorted({int(i["solicitud_id"]) for i in items if i.get("solicitud_id")})
+    if not sids:
+        return False
+    abiertas = (
+        sb.table("almacen_solicitud")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .in_("id", sids)
+        .in_("estado", ["borrador", "enviada"])
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return bool(abiertas)
+
+
+def delete_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
+    """Desactiva un insumo del catálogo (soft delete)."""
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, codigo, activo")
+        .eq("id", insumo_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo no encontrado.")
+    row = rows[0]
+    if not row.get("activo", True):
+        raise ValueError("El insumo ya está inactivo.")
+    if _insumo_en_solicitudes_abiertas(sb, contrato_id, insumo_id):
+        raise ValueError(
+            "No se puede eliminar: el insumo está en solicitudes en borrador o enviadas."
+        )
+    sb.table("almacen_insumo").update({"activo": False}).eq("id", insumo_id).execute()
+    return {"ok": True, "insumo_id": insumo_id, "codigo": row.get("codigo")}
 
 
 def clear_catalogo_insumos(contrato_id: int) -> int:
@@ -503,6 +839,7 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 "codigo": col("codigo", row),
                 "descripcion": col("descripcion", row),
                 "unidad": col("unidad", row) or "UND",
+                "rendimiento": col("rendimiento", row) or None,
                 "costo_base": col("costo_base", row),
                 "tipo_impuesto": col("tipo_impuesto", row) or "iva",
                 "impuesto_porcentaje": col("impuesto_porcentaje", row) or "19",
@@ -511,10 +848,22 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 "cotizacion_vigencia": col("cotizacion_vigencia", row),
                 "razon_social": col("proveedor", row),
                 "nit": col("nit", row),
+                "contacto_email": col("contacto_email", row),
+                "contacto_nombre": col("contacto_nombre", row),
+                "contacto_telefono": col("contacto_telefono", row),
+                "requiere_cotizacion": _parse_bool(col("requiere_cotizacion", row) or "false", default=False),
             }
-            if not body["codigo"] or not body["descripcion"]:
-                errores.append(f"Fila {i}: código y descripción obligatorios.")
+            if not body["descripcion"]:
+                errores.append(f"Fila {i}: descripción obligatoria.")
                 continue
+            if body["codigo"]:
+                try:
+                    body["codigo"] = validar_codigo_insumo_contrato(body["codigo"], contrato_id)
+                except ValueError as ve:
+                    errores.append(f"Fila {i}: {ve}")
+                    continue
+            else:
+                body["codigo"] = next_codigo_insumo(contrato_id)
             proveedor_id = None
             if body["nit"]:
                 sb = _sb()
@@ -530,10 +879,14 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 )
                 if prov:
                     proveedor_id = prov[0]["id"]
+                    sync_proveedor_contacto(proveedor_id, body)
                 elif body["razon_social"]:
                     prov_new = create_proveedor(contrato_id, user_id, {
                         "razon_social": body["razon_social"],
                         "nit": body["nit"],
+                        "contacto_email": body.get("contacto_email"),
+                        "contacto_nombre": body.get("contacto_nombre"),
+                        "contacto_telefono": body.get("contacto_telefono"),
                     })
                     proveedor_id = prov_new["id"]
             body["proveedor_id"] = proveedor_id
@@ -544,6 +897,12 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 update_insumo_catalogo(contrato_id, dups[0]["insumo_id"], user_id, body, motivo="import_csv_duplicado")
                 actualizados += 1
             else:
+                if body["requiere_cotizacion"]:
+                    errores.append(
+                        f"Fila {i}: requiere_cotizacion=true exige PDFs en el formulario; "
+                        "use false en CSV o cree el insumo manualmente."
+                    )
+                    continue
                 create_insumo_catalogo(contrato_id, user_id, body)
                 creados += 1
         except Exception as exc:

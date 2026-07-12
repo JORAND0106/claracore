@@ -118,7 +118,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
                   <td style={ui.td}>{p.operador || '—'}</td>
                   <td style={ui.td}>{fmtFechaPunto(p)}</td>
                   <td style={ui.td}>
-                    <span style={{ color: p.verificado ? (ui.t?.success || '#047857') : ui.textMuted, fontWeight: 600 }}>
+                    <span style={{ color: p.verificado ? (ui.t?.success || 'var(--cc-color-success)') : ui.textMuted, fontWeight: 600 }}>
                       {p.verificado ? 'Verificado' : 'Pendiente'}
                     </span>
                   </td>

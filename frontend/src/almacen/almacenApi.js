@@ -68,6 +68,12 @@ export function createAlmacenApi(contratoId, token) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    deleteInsumo: (insumoId) =>
+      fetch(`${base}/insumos/${insumoId}`, {
+        method: 'DELETE',
+        headers: headers(token),
+      }).then(parseJson),
+
     listPreciosInsumoProveedor: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}/precios-proveedor`, { headers: headers(token) }).then(parseJsonList),
 
@@ -80,6 +86,26 @@ export function createAlmacenApi(contratoId, token) {
         headers: headers(token, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
+
+    getTransportadorPorPlaca: (placa) =>
+      fetch(`${base}/transportadores/por-placa?placa=${encodeURIComponent(placa)}`, {
+        headers: headers(token),
+      }).then(parseJson),
+
+    searchTransportadores: (q = '') =>
+      fetch(`${base}/transportadores/search?q=${encodeURIComponent(q)}`, {
+        headers: headers(token),
+      }).then(parseJsonList),
+
+    getPresupuestoRegistros: (capitulo, item, pkId, excludeSolicitudId) => {
+      const params = new URLSearchParams({
+        capitulo,
+        item,
+        pk_id: pkId,
+      })
+      if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      return fetch(`${base}/presupuesto-registros?${params}`, { headers: headers(token) }).then(parseJson)
+    },
 
     getPresupuestoContext: (presupuestoId, pkId, cantidad, excludeSolicitudId) => {
       const params = new URLSearchParams({
@@ -140,6 +166,12 @@ export function createAlmacenApi(contratoId, token) {
         body: JSON.stringify({ motivo }),
       }).then(parseJson),
 
+    anularSolicitud: (id) =>
+      fetch(`${base}/solicitudes/${id}/anular`, {
+        method: 'POST',
+        headers: headers(token),
+      }).then(parseJson),
+
     addCotizacion: (itemId, body) =>
       fetch(`${base}/solicitudes/items/${itemId}/cotizaciones`, {
         method: 'POST',
@@ -171,8 +203,48 @@ export function createAlmacenApi(contratoId, token) {
 
     facturaDownloadUrl: (ocId) => `${base}/ordenes-compra/${ocId}/factura/download`,
 
+    ocPdfDownloadUrl: (ocId) => `${base}/ordenes-compra/${ocId}/pdf/download`,
+
+    async openOcPdf(ocId) {
+      const res = await fetch(`${base}/ordenes-compra/${ocId}/pdf/download`, {
+        headers: headers(token),
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try {
+          const data = await res.json()
+          const d = data.detail
+          msg = typeof d === 'string' ? d : JSON.stringify(d)
+        } catch {
+          const txt = await res.text().catch(() => '')
+          if (txt) msg = txt.slice(0, 240)
+        }
+        throw new Error(msg)
+      }
+      const blob = await res.blob()
+      if (!blob?.size) throw new Error('El PDF está vacío o no está disponible.')
+      const url = URL.createObjectURL(blob)
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `OC-${ocId}.pdf`
+        a.click()
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000)
+    },
+
     listEntradas: () =>
       fetch(`${base}/entradas`, { headers: headers(token) }).then(parseJsonList),
+
+    getEntrada: (entradaId) =>
+      fetch(`${base}/entradas/${entradaId}`, { headers: headers(token) }).then(parseJson),
+
+    deleteEntrada: (entradaId) =>
+      fetch(`${base}/entradas/${entradaId}`, {
+        method: 'DELETE',
+        headers: headers(token),
+      }).then(parseJson),
 
     createEntrada: (formData) =>
       fetch(`${base}/entradas`, {
@@ -213,5 +285,90 @@ export function createAlmacenApi(contratoId, token) {
 
     getExpediente: (ocId) =>
       fetch(`${base}/expedientes/${ocId}`, { headers: headers(token) }).then(parseJson),
+
+    listInsumosPorProveedor: (proveedorId, q = '') =>
+      fetch(`${base}/proveedores/${proveedorId}/insumos?q=${encodeURIComponent(q)}`, {
+        headers: headers(token),
+      }).then(parseJsonList),
+
+    buscarOrdenesCompraVigentes: (proveedorId, insumoId) =>
+      fetch(`${base}/ordenes-compra/buscar-vigentes?proveedor_id=${proveedorId}&insumo_id=${insumoId}`, {
+        headers: headers(token),
+      }).then(parseJsonList),
+
+    buscarOrdenesCompraPorPk: (pkId) =>
+      fetch(`${base}/ordenes-compra/contexto-por-pk?pk_id=${encodeURIComponent(pkId)}`, {
+        headers: headers(token),
+      }).then(parseJson),
+
+    getProximoNumeroDisposicion: () =>
+      fetch(`${base}/entradas/proximo-numero-disposicion`, {
+        headers: headers(token),
+      }).then(parseJson),
+
+    ocrRemisionEntrada: (file) => {
+      const fd = new FormData()
+      fd.append('archivo', file)
+      return fetch(`${base}/entradas/ocr-remision`, {
+        method: 'POST',
+        headers: headers(token),
+        body: fd,
+      }).then(parseJson)
+    },
+
+    disposicionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/disposicion/download`,
+
+    async openDisposicionPdf(entradaId) {
+      const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
+        headers: headers(token),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `disposicion-${entradaId}.pdf`
+        a.click()
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000)
+    },
+
+    async printDisposicionPdf(entradaId) {
+      const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
+        headers: headers(token),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const w = window.open(url, '_blank', 'noopener,noreferrer')
+      if (w) {
+        w.addEventListener('load', () => {
+          try { w.print() } catch { /* ignore */ }
+        })
+      } else {
+        const iframe = document.createElement('iframe')
+        iframe.style.display = 'none'
+        iframe.src = url
+        document.body.appendChild(iframe)
+        iframe.onload = () => {
+          try {
+            iframe.contentWindow?.print()
+          } finally {
+            setTimeout(() => {
+              iframe.remove()
+              URL.revokeObjectURL(url)
+            }, 60000)
+          }
+        }
+      }
+    },
   }
 }

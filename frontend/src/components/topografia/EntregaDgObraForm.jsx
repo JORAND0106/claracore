@@ -791,13 +791,13 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                 marginTop: 14,
                 padding: '10px 12px',
                 borderRadius: 8,
-                background: `${ui.t?.success || '#047857'}18`,
+                background: `${ui.t?.success || 'var(--cc-color-success)'}18`,
               }}
               >
                 <span style={{ fontSize: 'var(--cc-sm)' }}>
                   Avance: <strong>{resumen.totales.avance_pct}%</strong>
                 </span>
-                <span style={{ fontSize: 'var(--cc-sm)', color: '#047857' }}>
+                <span style={{ fontSize: 'var(--cc-sm)', color: 'var(--cc-color-success)' }}>
                   Entregadas: <strong>{resumen.totales.entregadas}</strong>
                 </span>
                 <span style={{ fontSize: 'var(--cc-sm)', color: '#2563eb' }}>

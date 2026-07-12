@@ -7,6 +7,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+:root {
+  --cc-color-success: #047857;
+  --cc-color-positive: #047857;
+  --cc-color-danger: #dc2626;
+  --cc-btn-success-bg: #047857;
+  --cc-btn-success-text: #ffffff;
+}
+
 /* Logo ClaraCore (public/CLARA.CORE.png): lockup horizontal; evita compresión en filas flex */
 img.cc-brand-logo {
   display: block;
@@ -1969,5 +1977,126 @@ select.cc-dashboard-acta-select--light option {
 
   .cc-topo-root--landscape .cc-topo-table-scroll {
     max-height: min(48dvh, 360px);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Almacén de Obra — responsive (móvil / tablet compacto)
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-almacen-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-almacen-root--compact .cc-almacen-tab-bar {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  gap: 0;
+}
+
+.cc-almacen-root--compact .cc-almacen-tab-bar button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table thead {
+  display: none;
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table tbody tr {
+  display: block;
+  margin: 0 0 12px;
+  padding: 12px;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table tbody tr:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table td {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 0;
+  border: none;
+  font-size: var(--cc-sm);
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table td::before {
+  content: attr(data-label);
+  font-weight: 700;
+  font-size: var(--cc-xs);
+  color: color-mix(in srgb, CanvasText 55%, transparent);
+  flex-shrink: 0;
+  max-width: 42%;
+}
+
+.cc-almacen-root--compact .cc-almacen-responsive-table td[data-label=""]::before,
+.cc-almacen-root--compact .cc-almacen-responsive-table td:not([data-label])::before {
+  content: none;
+}
+
+.cc-almacen-modal-overlay--compact {
+  align-items: flex-end !important;
+  padding: 0 !important;
+}
+
+.cc-almacen-modal-sheet {
+  border-radius: 16px 16px 0 0 !important;
+  max-height: 96dvh !important;
+}
+
+.cc-almacen-root--compact .cc-almacen-form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding-top: 10px;
+  margin-top: 12px;
+  background: color-mix(in srgb, Canvas 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.cc-almacen-root--compact .cc-almacen-form-root input,
+.cc-almacen-root--compact .cc-almacen-form-root select,
+.cc-almacen-root--compact .cc-almacen-form-root textarea,
+.cc-almacen-root--compact .cc-almacen-form-root button {
+  min-height: 44px;
+}
+
+.cc-almacen-root--compact .cc-almacen-form-root [style*="gridTemplateColumns"] {
+  grid-template-columns: 1fr !important;
+}
+
+/* Catálogo administrativo de insumos — móvil */
+.cc-catalogo-insumos-root--compact input,
+.cc-catalogo-insumos-root--compact select,
+.cc-catalogo-insumos-root--compact textarea,
+.cc-catalogo-insumos-root--compact button {
+  min-height: 44px;
+  font-size: var(--cc-input, 16px);
+}
+
+.cc-catalogo-insumos-root--compact [style*="gridTemplateColumns: '1fr 1fr'"],
+.cc-catalogo-insumos-root--compact [style*="gridTemplateColumns: \"1fr 1fr\""] {
+  grid-template-columns: 1fr !important;
+}
+
+.cc-catalogo-insumos-root--compact .cc-admin-table-scroll,
+.cc-catalogo-insumos-root--compact [style*="overflowX: 'auto'"],
+.cc-catalogo-insumos-root--compact [style*="overflow-x: auto"] {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-catalogo-insumos-root--compact table {
+    font-size: var(--cc-sm);
   }
 }

@@ -12,7 +12,9 @@ const SEMAFORO_TEXTO = {
   rojo: 'Superado',
 }
 
-export default function InventarioPanel({ permisos, token }) {
+export default function InventarioPanel({
+  permisos, token, refreshSignal = 0, onDataLoaded,
+}) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [rows, setRows] = useState([])
@@ -25,13 +27,20 @@ export default function InventarioPanel({ permisos, token }) {
 
   const reload = useCallback(() => {
     setLoading(true)
-    Promise.all([api.listInventario(), api.getAlertasVencimiento()])
+    return Promise.all([api.listInventario(), api.getAlertasVencimiento()])
       .then(([inv, al]) => { setRows(inv); setAlertas(al) })
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [api])
+      .finally(() => {
+        setLoading(false)
+        onDataLoaded?.()
+      })
+  }, [api, onDataLoaded])
 
   useEffect(() => { reload() }, [reload])
+
+  useEffect(() => {
+    if (refreshSignal > 0) reload()
+  }, [refreshSignal, reload])
 
   const verHistorial = async (r) => {
     setSel(r)
@@ -91,8 +100,8 @@ export default function InventarioPanel({ permisos, token }) {
           Sin stock registrado. Registre entradas de material para ver el inventario.
         </div>
       ) : (
-        <div style={{ ...ui.card, padding: 0, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
+          <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th style={ui.th}>Semáforo</th>
@@ -106,15 +115,15 @@ export default function InventarioPanel({ permisos, token }) {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td style={ui.td} title={SEMAFORO_TEXTO[r.semaforo]}>
+                  <td style={ui.td} data-label="Semáforo" title={SEMAFORO_TEXTO[r.semaforo]}>
                     <SemaforoDot estado={r.semaforo} />
                     {SEMAFORO_TEXTO[r.semaforo]}
                   </td>
-                  <td style={ui.td}>{r.material_descripcion}</td>
-                  <td style={ui.td}>{fmtCant(r.stock_disponible)} {r.unidad}</td>
-                  <td style={ui.td}>{fmtCant(r.cant_presupuestada)}</td>
-                  <td style={ui.td}>{fmtCant(r.ingresado_acumulado)}</td>
-                  <td style={ui.td}>
+                  <td style={ui.td} data-label="Material">{r.material_descripcion}</td>
+                  <td style={ui.td} data-label="Stock">{fmtCant(r.stock_disponible)} {r.unidad}</td>
+                  <td style={ui.td} data-label="Presupuestado">{fmtCant(r.cant_presupuestada)}</td>
+                  <td style={ui.td} data-label="Ingresado">{fmtCant(r.ingresado_acumulado)}</td>
+                  <td style={ui.td} data-label="Acciones">
                     <button type="button" style={ui.btnSecondary} onClick={() => verHistorial(r)}>
                       Historial
                     </button>

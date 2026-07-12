@@ -20,35 +20,49 @@ from almacen_insumos_service import (
     list_listado_capitulos,
     list_listado_items_capitulo,
     list_precios_insumo_proveedor,
+    list_insumos_por_proveedor,
+    list_presupuesto_registros,
     resolve_insumo_for_solicitud,
     search_insumos,
     search_insumos_solo_catalogo,
     search_insumos_catalog,
     search_proveedores,
 )
-from almacen_permissions import require_permiso_almacen
+from almacen_permissions import require_permiso_almacen, tiene_permiso_almacen
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
+from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_service import (
     add_cotizacion,
     alertas_vencimiento,
+    anular_solicitud,
     aprobar_solicitud,
+    buscar_ordenes_compra_vigentes,
+    buscar_ordenes_compra_por_pk,
+    contexto_ordenes_compra_por_pk,
     create_entrada,
     create_solicitud,
     delete_cotizacion,
+    download_disposicion_pdf,
+    download_pdf_oc,
     download_soporte,
+    eliminar_entrada,
     enviar_solicitud,
     get_config,
     get_entrada,
     get_expediente,
     get_orden_compra,
     get_solicitud,
+    get_transportador_por_placa,
     list_entradas,
     list_inventario,
     list_movimientos,
     list_ordenes_compra,
     list_presupuesto_items,
     list_solicitudes,
+    ocr_remision_entrada,
+    preview_proximo_numero_disposicion,
     rechazar_solicitud,
+    search_transportadores,
     update_config,
     update_solicitud,
     upload_factura_oc,
@@ -76,6 +90,13 @@ def _http_value_error(exc: ValueError) -> HTTPException:
 
 def _check_contrato(current_user, contrato_id: int) -> None:
     _require_contract_access(current_user, contrato_id)
+
+
+def _puede_anular_solicitud(current_user, sol: dict) -> bool:
+    uid = _uid(current_user)
+    if int(sol.get("created_by") or 0) == uid:
+        return tiene_permiso_almacen(current_user, "crear") or tiene_permiso_almacen(current_user, "editar")
+    return tiene_permiso_almacen(current_user, "editar")
 
 
 class ConfigUpdateBody(BaseModel):
@@ -122,6 +143,9 @@ class InsumoCreateBody(BaseModel):
 class ProveedorCreateBody(BaseModel):
     razon_social: str = Field(..., min_length=1)
     nit: str = Field(..., min_length=1)
+    contacto_email: Optional[str] = None
+    contacto_nombre: Optional[str] = None
+    contacto_telefono: Optional[str] = None
 
 
 class InsumoPreviewBody(BaseModel):
@@ -140,6 +164,8 @@ class InsumoPreviewBody(BaseModel):
     cantidad: float = Field(..., gt=0)
     valor_compra_unitario: Optional[float] = None
     exclude_solicitud_id: Optional[int] = None
+    cantidad_borrador_adicional: float = Field(0, ge=0)
+    cantidad_borrador_adicional_insumo: float = Field(0, ge=0)
 
 
 class SolicitudCreateBody(BaseModel):
@@ -320,6 +346,21 @@ def route_precios_insumo(contrato_id: int, insumo_id: int, current_user=Depends(
         raise _http_value_error(exc) from exc
 
 
+@router.delete("/{contrato_id}/insumos/{insumo_id}")
+def route_delete_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "eliminar")
+    try:
+        result = delete_insumo_catalogo(contrato_id, insumo_id)
+        registrar_log(
+            current_user, "ELIMINAR", "ALMACEN", "almacen_insumo", str(insumo_id),
+            {"codigo": result.get("codigo")},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/proveedores/search")
 def route_search_proveedores(
     contrato_id: int,
@@ -342,6 +383,55 @@ def route_create_proveedor(contrato_id: int, body: ProveedorCreateBody, current_
         raise _http_value_error(exc) from exc
 
 
+@router.get("/{contrato_id}/transportadores/por-placa")
+def route_transportador_por_placa(
+    contrato_id: int,
+    placa: str = "",
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    row = get_transportador_por_placa(contrato_id, placa)
+    if not row:
+        return {"encontrado": False}
+    return {**row, "encontrado": True}
+
+
+@router.get("/{contrato_id}/transportadores/search")
+def route_search_transportadores(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 25,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    return search_transportadores(contrato_id, q, min(limit, 50))
+
+
+@router.get("/{contrato_id}/presupuesto-registros")
+def route_presupuesto_registros(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    pk_id: str,
+    exclude_solicitud_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return list_presupuesto_registros(
+            contrato_id,
+            capitulo,
+            item,
+            pk_id,
+            exclude_solicitud_id,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.post("/{contrato_id}/insumos/preview-line")
 def route_preview_insumo_line(contrato_id: int, body: InsumoPreviewBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -359,6 +449,8 @@ def route_preview_insumo_line(contrato_id: int, body: InsumoPreviewBody, current
             "contexto_presupuesto": resolved.get("contexto_presupuesto"),
             "analisis_valor": resolved.get("analisis_valor"),
             "supera_presupuesto": resolved.get("supera_presupuesto"),
+            "supera_negociado": resolved.get("supera_negociado"),
+            "contexto_negociado": resolved.get("contexto_negociado"),
         }
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -377,7 +469,12 @@ def route_presupuesto_context(
     require_permiso_almacen(current_user, "ver")
     try:
         return get_presupuesto_context(
-            contrato_id, presupuesto_id, pk_id, cantidad, exclude_solicitud_id
+            contrato_id,
+            presupuesto_id,
+            pk_id,
+            cantidad,
+            exclude_solicitud_id,
+            descontar_linea_actual=cantidad > 0,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -473,6 +570,33 @@ def route_rechazar_solicitud(
         raise _http_value_error(exc) from exc
 
 
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/anular")
+def route_anular_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    try:
+        sol = get_solicitud(contrato_id, solicitud_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    if not _puede_anular_solicitud(current_user, sol):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para anular esta solicitud.",
+        )
+    try:
+        result = anular_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        registrar_log(
+            current_user, "ANULAR", "ALMACEN", "solicitud", solicitud_id,
+            {"estado_previo": sol.get("estado"), "deleted": result.get("deleted", False)},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.post("/{contrato_id}/solicitudes/items/{item_id}/cotizaciones")
 def route_add_cotizacion(
     contrato_id: int,
@@ -506,6 +630,49 @@ def route_list_oc(contrato_id: int, current_user=Depends(get_current_user)):
     return list_ordenes_compra(contrato_id)
 
 
+@router.get("/{contrato_id}/ordenes-compra/buscar-por-pk")
+def route_buscar_oc_por_pk(
+    contrato_id: int,
+    pk_id: str,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return buscar_ordenes_compra_por_pk(contrato_id, pk_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/ordenes-compra/contexto-por-pk")
+def route_contexto_oc_por_pk(
+    contrato_id: int,
+    pk_id: str,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return contexto_ordenes_compra_por_pk(contrato_id, pk_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/ordenes-compra/buscar-vigentes")
+def route_buscar_oc_vigentes(
+    contrato_id: int,
+    proveedor_id: int,
+    insumo_id: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return buscar_ordenes_compra_vigentes(contrato_id, proveedor_id, insumo_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}")
 def route_get_oc(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -514,6 +681,34 @@ def route_get_oc(contrato_id: int, oc_id: int, current_user=Depends(get_current_
         return get_orden_compra(contrato_id, oc_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/proveedores/{proveedor_id}/insumos")
+def route_insumos_por_proveedor(
+    contrato_id: int,
+    proveedor_id: int,
+    q: str = "",
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return list_insumos_por_proveedor(contrato_id, proveedor_id, q)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/entradas/ocr-remision")
+async def route_ocr_remision(
+    contrato_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    data = await archivo.read()
+    mime = archivo.content_type or "application/octet-stream"
+    return ocr_remision_entrada(data, mime)
 
 
 @router.post("/{contrato_id}/ordenes-compra/{oc_id}/factura")
@@ -550,6 +745,32 @@ def route_download_factura(contrato_id: int, oc_id: int, current_user=Depends(ge
         raise _http_value_error(exc) from exc
 
 
+@router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/download")
+def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        data, fname = download_pdf_oc(contrato_id, oc_id, _uid(current_user))
+        safe_name = fname.replace('"', "'")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("Error descargando PDF OC %s contrato %s", oc_id, contrato_id)
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+
+
+@router.get("/{contrato_id}/entradas/proximo-numero-disposicion")
+def route_proximo_numero_disposicion(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    return preview_proximo_numero_disposicion(contrato_id)
+
+
 @router.get("/{contrato_id}/entradas")
 def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -570,10 +791,21 @@ def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(ge
 @router.post("/{contrato_id}/entradas")
 async def route_create_entrada(
     contrato_id: int,
-    orden_compra_id: int = Form(...),
+    orden_compra_id: Optional[int] = Form(None),
     fecha_entrada: Optional[str] = Form(None),
     observaciones: Optional[str] = Form(None),
     items_json: str = Form(...),
+    tipo: Optional[str] = Form("recibo"),
+    numero_documento: Optional[str] = Form(None),
+    proveedor_id: Optional[int] = Form(None),
+    insumo_id: Optional[int] = Form(None),
+    pk_id: Optional[str] = Form(None),
+    tramo: Optional[str] = Form(None),
+    costado: Optional[str] = Form(None),
+    abscisa_inicial: Optional[str] = Form(None),
+    abscisa_final: Optional[str] = Form(None),
+    placa: Optional[str] = Form(None),
+    transportador: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
 ):
@@ -589,6 +821,17 @@ async def route_create_entrada(
         "fecha_entrada": fecha_entrada,
         "observaciones": observaciones,
         "items": items,
+        "tipo": tipo,
+        "numero_documento": numero_documento,
+        "proveedor_id": proveedor_id,
+        "insumo_id": insumo_id,
+        "pk_id": pk_id,
+        "tramo": tramo,
+        "costado": costado,
+        "abscisa_inicial": abscisa_inicial,
+        "abscisa_final": abscisa_final,
+        "placa": placa,
+        "transportador": transportador,
     }
     rem_data = rem_mime = rem_nombre = None
     if remision and remision.filename:
@@ -606,6 +849,18 @@ async def route_create_entrada(
         raise _http_value_error(exc) from exc
 
 
+@router.delete("/{contrato_id}/entradas/{entrada_id}")
+def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        result = eliminar_entrada(contrato_id, entrada_id)
+        registrar_log(current_user, "ELIMINAR", "ALMACEN", "entrada", entrada_id, result)
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/entradas/{entrada_id}/remision/download")
 def route_download_remision(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -617,6 +872,21 @@ def route_download_remision(contrato_id: int, entrada_id: int, current_user=Depe
         return StreamingResponse(
             io.BytesIO(data),
             media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/entradas/{entrada_id}/disposicion/download")
+def route_download_disposicion(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        data, fname = download_disposicion_pdf(contrato_id, entrada_id)
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
     except ValueError as exc:

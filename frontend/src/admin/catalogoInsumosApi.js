@@ -22,6 +22,8 @@ export function createCatalogoInsumosApi(contratoId, token) {
   return {
     getConfig: () => fetch(`${base}/config`, { headers: headers(token) }).then(parseJson),
 
+    getNextCodigo: () => fetch(`${base}/next-codigo`, { headers: headers(token) }).then(parseJson),
+
     listInsumos: (q = '', limit = 80, offset = 0) =>
       fetch(`${base}/insumos?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, {
         headers: headers(token),
@@ -39,6 +41,22 @@ export function createCatalogoInsumosApi(contratoId, token) {
 
     updateInsumoForm: (insumoId, formData) =>
       fetch(`${base}/insumos/${insumoId}`, { method: 'PUT', headers: headers(token), body: formData }).then(parseJson),
+
+    deleteInsumo: (insumoId) =>
+      fetch(`${base}/insumos/${insumoId}`, { method: 'DELETE', headers: headers(token) }).then(parseJson),
+
+    listProveedores: (q = '', limit = 100, offset = 0) =>
+      fetch(`${base}/proveedores?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, {
+        headers: headers(token),
+      }).then(parseJson),
+
+    searchProveedores: (q = '', limit = 25) =>
+      fetch(`${base}/proveedores/search?q=${encodeURIComponent(q)}&limit=${limit}`, {
+        headers: headers(token),
+      }).then(parseJson),
+
+    deleteProveedor: (proveedorId) =>
+      fetch(`${base}/proveedores/${proveedorId}`, { method: 'DELETE', headers: headers(token) }).then(parseJson),
 
     getHistorial: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}/historial`, { headers: headers(token) }).then(parseJson),

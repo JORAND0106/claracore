@@ -220,7 +220,7 @@ export default function TrazabilidadRegistroModal({
       fontSize: 'var(--cc-caption)',
     },
     cambioAntes: { color: '#B45309', wordBreak: 'break-word' },
-    cambioNuevo: { color: '#047857', fontWeight: 600, wordBreak: 'break-word' },
+    cambioNuevo: { color: 'var(--cc-color-success)', fontWeight: 600, wordBreak: 'break-word' },
     pre: {
       margin: 0,
       whiteSpace: 'pre-wrap',

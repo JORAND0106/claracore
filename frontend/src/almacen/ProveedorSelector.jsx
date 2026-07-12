@@ -8,6 +8,7 @@ export default function ProveedorSelector({
   valorUnitario,
   onValorUnitarioChange,
   disabled,
+  allowCreate = true,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -52,9 +53,22 @@ export default function ProveedorSelector({
     const v = e.target.value
     setQuery(v)
     setOpen(true)
+    if (value?.proveedor_id && v === value.razon_social) return
     onChange?.({ proveedor_id: null, razon_social: v, nit: value?.nit || '' })
     clearTimeout(timer.current)
     timer.current = setTimeout(() => search(v), 220)
+  }
+
+  const onBlurInput = () => {
+    setTimeout(() => {
+      setOpen(false)
+      if (!value?.proveedor_id && query.trim()) {
+        const exact = options.find(
+          (o) => o.razon_social?.toLowerCase() === query.trim().toLowerCase(),
+        )
+        if (exact) pick(exact)
+      }
+    }, 180)
   }
 
   const crearNuevo = async () => {
@@ -80,14 +94,16 @@ export default function ProveedorSelector({
       <AlmacenFieldLabel
         icon="🏢"
         label="Proveedor"
-        ayuda="Busque proveedores ya registrados o cree uno nuevo con razón social y NIT."
+        ayuda={allowCreate
+          ? 'Busque proveedores ya registrados o cree uno nuevo con razón social y NIT.'
+          : 'Seleccione un proveedor inscrito en el directorio. No se permite registrar proveedores nuevos desde aquí.'}
       />
       <input
         style={ui.input}
         value={query}
         onChange={onInput}
         onFocus={() => { setOpen(true); search(query) }}
-        onBlur={() => setTimeout(() => setOpen(false), 180)}
+        onBlur={onBlurInput}
         disabled={disabled}
         placeholder="Razón social o NIT…"
       />
@@ -145,7 +161,7 @@ export default function ProveedorSelector({
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>NIT {o.nit}</div>
             </button>
           ))}
-          {showCreate && !creating && (
+          {allowCreate && showCreate && !creating && (
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
@@ -172,7 +188,7 @@ export default function ProveedorSelector({
         </div>
       )}
 
-      {creating && (
+      {allowCreate && creating && (
         <div style={{ marginTop: 8, padding: 10, border: `1px dashed ${ui.textMuted}66`, borderRadius: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>Nuevo proveedor</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>

@@ -1,14 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlmacenFieldLabel, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { itemLabelFull, sortNatural } from './solicitudFormHelpers'
 
 export function normPptoItem(item) {
   return String(item || '').trim().replace(/\.+$/, '')
-}
-
-function itemLabel(p) {
-  const desc = (p.descripcion || '').trim()
-  const short = desc.length > 48 ? `${desc.slice(0, 48)}…` : desc
-  return `${p.item} — ${short}`
 }
 
 export default function PresupuestoItemSelector({
@@ -27,73 +22,94 @@ export default function PresupuestoItemSelector({
   const blurTimer = useRef(null)
 
   useEffect(() => {
-    api.getListadoCapitulos().then(setCapitulos).catch(() => setCapitulos([]))
+    api.getListadoCapitulos()
+      .then((caps) => setCapitulos([...(caps || [])].sort(sortNatural)))
+      .catch(() => setCapitulos([]))
   }, [api])
 
   useEffect(() => {
     if (!capitulo) {
       setItemsCap([])
+      setOpen(false)
       return
     }
     setLoadingItems(true)
+    setOpen(true)
     api.getListadoItems(capitulo)
-      .then(setItemsCap)
+      .then((rows) => setItemsCap([...(rows || [])].sort((a, b) => sortNatural(a.item, b.item))))
       .catch(() => setItemsCap([]))
       .finally(() => setLoadingItems(false))
   }, [api, capitulo])
+
+  const selectedRow = useMemo(
+    () => itemsCap.find((p) => normPptoItem(p.item) === normPptoItem(item)),
+    [itemsCap, item],
+  )
+
+  const selectedLabel = selectedRow ? itemLabelFull(selectedRow) : (item ? String(item) : '')
 
   useEffect(() => {
     if (!item) {
       setItemQuery('')
       return
     }
-    const row = itemsCap.find((p) => normPptoItem(p.item) === normPptoItem(item))
-    setItemQuery(row ? itemLabel(row) : String(item))
-  }, [item, itemsCap])
+    setItemQuery(selectedLabel)
+  }, [item, selectedLabel])
 
   const filtered = useMemo(() => {
     const q = itemQuery.trim().toLowerCase()
-    if (!q) return itemsCap.slice(0, 40)
+    if (!q) return itemsCap.slice(0, 50)
     return itemsCap.filter((p) => {
       const hay = `${p.item} ${p.descripcion || ''}`.toLowerCase()
       return hay.includes(q)
-    }).slice(0, 40)
+    }).slice(0, 50)
   }, [itemsCap, itemQuery])
 
   const pickItem = (p) => {
     onChange?.({ capitulo, item: p.item })
-    setItemQuery(itemLabel(p))
+    setItemQuery(itemLabelFull(p))
     setOpen(false)
   }
 
   const onCapChange = (cap) => {
     onChange?.({ capitulo: cap, item: '' })
     setItemQuery('')
+    setOpen(!!cap)
+  }
+
+  const inputStyle = {
+    ...ui.input,
+    padding: '6px 8px',
+    fontSize: 'var(--cc-sm)',
+    width: '100%',
+    boxSizing: 'border-box',
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.9fr) minmax(160px, 1.4fr)', gap: 8 }}>
-      <div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(200px, 2fr)', gap: 8, width: '100%' }}>
+      <div style={{ minWidth: 0 }}>
         <AlmacenFieldLabel icon="📂" label="Capítulo" compact />
         <select
-          style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+          style={inputStyle}
           value={capitulo || ''}
           disabled={disabled}
+          title={capitulo || 'Seleccione capítulo'}
           onChange={(e) => onCapChange(e.target.value)}
         >
           <option value="">Capítulo…</option>
           {capitulos.map((c) => (
-            <option key={c} value={c}>{c}</option>
+            <option key={c} value={c} title={c}>{c}</option>
           ))}
         </select>
       </div>
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', minWidth: 0 }}>
         <AlmacenFieldLabel icon="📋" label="Ítem de cobro" compact ayuda="Escriba número o descripción del ítem." />
         <input
-          style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+          style={inputStyle}
           value={itemQuery}
           disabled={disabled || !capitulo || loadingItems}
           placeholder={!capitulo ? 'Elija capítulo' : loadingItems ? 'Cargando…' : 'Buscar ítem…'}
+          title={selectedLabel || itemQuery || 'Ítem de cobro'}
           onChange={(e) => {
             setItemQuery(e.target.value)
             setOpen(true)
@@ -105,6 +121,25 @@ export default function PresupuestoItemSelector({
             blurTimer.current = setTimeout(() => setOpen(false), 160)
           }}
         />
+        {open && !disabled && capitulo && !loadingItems && filtered.length === 0 && (
+          <div style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: '100%',
+            marginTop: 2,
+            zIndex: 30,
+            padding: '8px 10px',
+            background: '#fff',
+            border: `1px solid ${ui.textMuted}44`,
+            borderRadius: 6,
+            fontSize: 'var(--cc-xs)',
+            color: ui.textMuted,
+          }}
+          >
+            No hay ítems de cobro para este capítulo en el listado de precios.
+          </div>
+        )}
         {open && !disabled && capitulo && filtered.length > 0 && (
           <div style={{
             position: 'absolute',
@@ -113,7 +148,7 @@ export default function PresupuestoItemSelector({
             top: '100%',
             marginTop: 2,
             zIndex: 30,
-            maxHeight: 160,
+            maxHeight: 200,
             overflowY: 'auto',
             background: '#fff',
             border: `1px solid ${ui.textMuted}44`,
@@ -121,27 +156,33 @@ export default function PresupuestoItemSelector({
             boxShadow: '0 4px 12px #0002',
           }}
           >
-            {filtered.map((p) => (
-              <button
-                key={normPptoItem(p.item)}
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pickItem(p)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '6px 8px',
-                  border: 'none',
-                  borderBottom: '1px solid #eee',
-                  background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
-                  cursor: 'pointer',
-                  fontSize: 'var(--cc-xs)',
-                }}
-              >
-                {itemLabel(p)}
-              </button>
-            ))}
+            {filtered.map((p) => {
+              const label = itemLabelFull(p)
+              return (
+                <button
+                  key={normPptoItem(p.item)}
+                  type="button"
+                  title={label}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickItem(p)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '6px 8px',
+                    border: 'none',
+                    borderBottom: '1px solid #eee',
+                    background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
+                    cursor: 'pointer',
+                    fontSize: 'var(--cc-xs)',
+                    whiteSpace: 'normal',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         )}
       </div>
@@ -152,10 +193,11 @@ export default function PresupuestoItemSelector({
 export function findPresupuestoId(pptoItems, capitulo, item, pkId) {
   if (!capitulo || !item || !pkId) return null
   const want = normPptoItem(item)
+  const pkNorm = String(pkId || '').trim()
   const row = (pptoItems || []).find(
     (p) => p.capitulo === capitulo
       && normPptoItem(p.item) === want
-      && String(p.pk_id || '') === String(pkId),
+      && String(p.pk_id || '').trim() === pkNorm,
   )
   return row?.id ?? null
 }

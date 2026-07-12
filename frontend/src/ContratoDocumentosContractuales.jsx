@@ -247,7 +247,7 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
         <div
           style={{
             background: msg.type === "error" ? "#2a0a0a" : "#0a2a1a",
-            color: msg.type === "error" ? "#f87171" : "#4ade80",
+            color: msg.type === "error" ? "#f87171" : "var(--cc-color-success)",
             borderRadius: 8,
             padding: "10px 14px",
             fontSize: CC_TYPO.body,

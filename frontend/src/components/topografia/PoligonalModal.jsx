@@ -11,6 +11,7 @@ import {
   parseApiError,
   puede,
 } from './topografiaShared'
+import { btnSuccessStyle } from '../../theme/adminPanelTheme'
 import { decimalToGms, fmtRatio, validarGms } from '../../utils/topografia_angular'
 
 /** Metros desde input (acepta coma decimal). */
@@ -795,7 +796,7 @@ export default function PoligonalModal({
             </div>
           </div>
           {syncMsg && (
-            <p style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: '#ecfdf5', color: '#047857', fontSize: 'var(--cc-sm)' }}>
+            <p style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: '#ecfdf5', color: 'var(--cc-color-success)', fontSize: 'var(--cc-sm)' }}>
               {syncMsg}
             </p>
           )}
@@ -1603,7 +1604,7 @@ export default function PoligonalModal({
                   <button
                     type="button"
                     className="cc-topo-touch-btn"
-                    style={{ ...ui.btnPrimary, background: '#047857' }}
+                    style={btnSuccessStyle({ ...ui.btnPrimary, className: 'cc-topo-touch-btn' })}
                     onClick={ajustarPoligonal}
                     disabled={busy}
                     title="Corrección angular + Bowditch antes de validar"
