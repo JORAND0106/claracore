@@ -3,6 +3,7 @@ PDF POS 80mm — Despachador (Disposición / Recibo de materiales), Almacén de 
 """
 from __future__ import annotations
 
+import base64
 import html
 import io
 import logging
@@ -11,17 +12,28 @@ from typing import Any, Dict, List, Sequence
 
 _log = logging.getLogger(__name__)
 
-# xhtml2pdf no admite «auto» en @page; una sola hoja continua 80 mm (rollo térmico).
-_POS_PAGE_SIZE = "80mm 290mm"
+_PAGE_ANCHO_MM = 80
+_COPIA_ALTO_MM = 200
 
 COPIAS_DISPOSICION: Sequence[str] = ("Transportador", "Escombrera", "Obra")
 COPIAS_RECIBO: Sequence[str] = ("Transportador", "Obra")
 
-_POS_CSS = f"""
-@page {{ size: {_POS_PAGE_SIZE}; margin: 2mm 3mm; }}
+
+def _page_height_mm(num_copias: int) -> int:
+    return _COPIA_ALTO_MM * num_copias
+
+
+def _page_size(num_copias: int) -> str:
+    return f"{_PAGE_ANCHO_MM}mm {_page_height_mm(num_copias)}mm"
+
+
+def _pos_css(num_copias: int) -> str:
+    page_size = _page_size(num_copias)
+    return f"""
+@page {{ size: {page_size}; margin: 2mm 3mm; }}
 body {{
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 7pt;
+  font-size: 12.75pt;
   line-height: 1.22;
   color: #111;
   margin: 0;
@@ -29,35 +41,37 @@ body {{
   width: 74mm;
 }}
 .copy-block {{
-  margin-bottom: 4px;
-  padding-bottom: 4px;
-  border-bottom: 1.5px dashed #444;
+  page-break-inside: avoid;
+  margin: 0;
+  padding: 0 0 3px;
+  border-bottom: 2px dashed #666;
 }}
 .copy-block-last {{
-  margin-bottom: 0;
-  padding-bottom: 0;
   border-bottom: none;
+  padding-bottom: 0;
 }}
 .copy-label {{
   text-align: center;
   font-weight: 700;
-  font-size: 7.5pt;
-  border: 1.5px solid #111;
-  padding: 3px 4px;
-  margin-bottom: 5px;
+  font-size: 13.75pt;
+  border: 2px solid #111;
+  padding: 5px 7px;
+  margin-bottom: 6px;
   text-transform: uppercase;
 }}
-.hdr {{ text-align: center; margin-bottom: 4px; border-bottom: 1px dashed #333; padding-bottom: 3px; }}
-.hdr h1 {{ font-size: 8pt; margin: 0 0 2px; font-weight: 700; }}
-.hdr p {{ margin: 1px 0; font-size: 6.5pt; word-break: break-word; }}
-.hdr p.objeto {{ font-size: 4.5pt; }}
-.title {{ text-align: center; font-weight: 700; font-size: 8.5pt; margin: 4px 0 3px; text-transform: uppercase; }}
-.row-tbl {{ width: 100%; margin: 1px 0; font-size: 6.5pt; border-collapse: collapse; border: none; }}
+.hdr {{ text-align: center; margin-bottom: 6px; border-bottom: 1px dashed #333; padding-bottom: 5px; }}
+.hdr h1 {{ font-size: 14.75pt; margin: 0 0 3px; font-weight: 700; }}
+.hdr p {{ margin: 1px 0; font-size: 11.75pt; word-break: break-word; }}
+.hdr p.objeto {{ font-size: 8.25pt; }}
+.qr-wrap {{ text-align: center; margin: 5px 0 3px; }}
+.qr-wrap img {{ width: 26mm; height: 26mm; }}
+.title {{ text-align: center; font-weight: 700; font-size: 15.75pt; margin: 6px 0 5px; text-transform: uppercase; }}
+.row-tbl {{ width: 100%; margin: 1px 0; font-size: 11.75pt; border-collapse: collapse; border: none; }}
 .row-tbl td {{ vertical-align: top; padding: 0; border: none; }}
 .row-tbl .lbl {{ font-weight: 600; width: 46%; }}
 .row-tbl .val {{ text-align: right; width: 54%; word-break: break-word; }}
 .sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 4px 0; line-height: 0; font-size: 0; overflow: hidden; }}
-.footer {{ text-align: center; font-size: 6pt; color: #444; margin-top: 3px; }}
+.footer {{ text-align: center; font-size: 10.75pt; color: #444; margin-top: 4px; }}
 """
 
 
@@ -126,12 +140,44 @@ def _titulo_documento(tipo: str) -> str:
     return "Disposición de material"
 
 
+def _build_qr_payload(contrato: Dict[str, Any]) -> str:
+    """Texto plano temporal para validación de impresión/lectura en campo."""
+    return "\n".join([
+        f"Contrato: {contrato.get('numero') or contrato.get('id') or '—'}",
+        f"Contratista: {contrato.get('contratista') or '—'}",
+        f"Objeto: {contrato.get('objeto') or '—'}",
+        f"Administrador: {contrato.get('administrador_nombre') or '—'}",
+        f"Email: {contrato.get('administrador_email') or '—'}",
+    ])
+
+
+def _qr_data_uri(text: str) -> str:
+    import qrcode
+    from qrcode.constants import ERROR_CORRECT_M
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=ERROR_CORRECT_M,
+        box_size=4,
+        border=2,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
 def _hdr_contrato_html(contrato: Dict[str, Any]) -> str:
+    qr_src = _qr_data_uri(_build_qr_payload(contrato))
     return f"""
   <div class="hdr">
     <h1>{_esc(contrato.get("numero") or contrato.get("id"))}</h1>
     <p><strong>{_esc(contrato.get("contratista"))}</strong></p>
     <p>NIT: {_esc(contrato.get("nit"))}</p>
+    <div class="qr-wrap"><img src="{qr_src}" alt="QR contrato"/></div>
     <p class="objeto">{_esc(contrato.get("objeto"))}</p>
   </div>"""
 
@@ -208,7 +254,7 @@ def generar_pdf_despachador_pos(
     usuario_nombre: str,
     unidad: str = "",
 ) -> bytes:
-    """Genera PDF térmico 80 mm con copias según tipo (Disposición: 3, Recibo: 2)."""
+    """Genera PDF térmico 80 mm continuo: 200 mm por copia (Disposición 600 mm, Recibo 400 mm)."""
     copias = _copias_por_tipo(tipo)
     doc_title = _titulo_documento(tipo)
     blocks = [
@@ -228,7 +274,7 @@ def generar_pdf_despachador_pos(
     ]
     html_doc = (
         f'<!DOCTYPE html><html><head><meta charset="utf-8"/>'
-        f"<style>{_POS_CSS}</style></head><body>{''.join(blocks)}</body></html>"
+        f"<style>{_pos_css(len(copias))}</style></head><body>{''.join(blocks)}</body></html>"
     )
     return _to_pdf_pos_bytes(html_doc)
 

@@ -721,6 +721,59 @@ def _usuario_tiene_acceso_contrato(sb, user_id: int, contrato_id: int) -> bool:
     return bool(uc_rows)
 
 
+def _administrador_contrato_info(sb, contrato_id: int) -> dict:
+    """Nombre y correo del administrador activo del contrato (principal o usuario_contratos)."""
+    cargos = sb.table("cargos").select("id, nombre").execute().data or []
+    admin_cargo_ids = [
+        int(c["id"])
+        for c in cargos
+        if _norm(c.get("nombre") or "") == "administrador"
+    ]
+    if not admin_cargo_ids:
+        return {"nombre": "—", "email": "—"}
+
+    admins = (
+        sb.table("usuarios")
+        .select("id, nombre, apellidos, email, contrato_id, activo")
+        .eq("activo", True)
+        .in_("cargo_id", admin_cargo_ids)
+        .execute()
+        .data
+        or []
+    )
+    for u in admins:
+        if u.get("contrato_id") is not None and int(u["contrato_id"]) == int(contrato_id):
+            nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+            return {
+                "nombre": nom or "—",
+                "email": (u.get("email") or "—").strip(),
+            }
+
+    admin_ids = [int(u["id"]) for u in admins if u.get("id") is not None]
+    if admin_ids:
+        uc = (
+            sb.table("usuario_contratos")
+            .select("usuario_id")
+            .eq("contrato_id", contrato_id)
+            .in_("usuario_id", admin_ids)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if uc:
+            uid = int(uc[0]["usuario_id"])
+            for u in admins:
+                if int(u["id"]) == uid:
+                    nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+                    return {
+                        "nombre": nom or "—",
+                        "email": (u.get("email") or "—").strip(),
+                    }
+
+    return {"nombre": "—", "email": "—"}
+
+
 def _destinatarios_validadores_almacen(contrato_id: int) -> List[int]:
     """Usuarios que validan solicitudes: Nivel 3 (Director de Obra), Administrador y permiso validar en Almacén."""
     sb = _sb()
@@ -1733,6 +1786,12 @@ def _generar_pdf_pos_entrada(
     )
     if not contrato_rows:
         return
+    admin = _administrador_contrato_info(sb, contrato_id)
+    contrato_pdf = {
+        **contrato_rows[0],
+        "administrador_nombre": admin["nombre"],
+        "administrador_email": admin["email"],
+    }
     names = _map_usuario_nombres(sb, [user_id])
     u_name = names.get(int(user_id), "—")
     prov_name = "—"
@@ -1751,7 +1810,7 @@ def _generar_pdf_pos_entrada(
     pdf_ctx = {**entrada_row, "cantidad_recibida": cantidad}
     pdf_bytes = generar_pdf_despachador_pos(
         tipo,
-        contrato_rows[0],
+        contrato_pdf,
         pdf_ctx,
         oc,
         oc_item.get("material_descripcion") or "—",

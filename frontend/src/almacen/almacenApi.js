@@ -2,6 +2,7 @@
  * Cliente API — módulo Almacén.
  */
 import { API_BASE } from '../apiBase'
+import { openPosPdfBlob, printPosPdfBlob } from './almacenPosPrint'
 
 function headers(token, extra = {}) {
   return {
@@ -327,15 +328,7 @@ export function createAlmacenApi(contratoId, token) {
         throw new Error(data.detail || `Error ${res.status}`)
       }
       const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const opened = window.open(url, '_blank', 'noopener,noreferrer')
-      if (!opened) {
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `disposicion-${entradaId}.pdf`
-        a.click()
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 120000)
+      await openPosPdfBlob(blob, { filename: `disposicion-${entradaId}.pdf` })
     },
 
     async printDisposicionPdf(entradaId) {
@@ -347,28 +340,7 @@ export function createAlmacenApi(contratoId, token) {
         throw new Error(data.detail || `Error ${res.status}`)
       }
       const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const w = window.open(url, '_blank', 'noopener,noreferrer')
-      if (w) {
-        w.addEventListener('load', () => {
-          try { w.print() } catch { /* ignore */ }
-        })
-      } else {
-        const iframe = document.createElement('iframe')
-        iframe.style.display = 'none'
-        iframe.src = url
-        document.body.appendChild(iframe)
-        iframe.onload = () => {
-          try {
-            iframe.contentWindow?.print()
-          } finally {
-            setTimeout(() => {
-              iframe.remove()
-              URL.revokeObjectURL(url)
-            }, 60000)
-          }
-        }
-      }
+      await printPosPdfBlob(blob, { filename: `disposicion-${entradaId}.pdf` })
     },
   }
 }
