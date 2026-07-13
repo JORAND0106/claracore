@@ -3,7 +3,6 @@ PDF POS 80mm — Despachador (Disposición / Recibo de materiales), Almacén de 
 """
 from __future__ import annotations
 
-import base64
 import html
 import io
 import logging
@@ -17,6 +16,12 @@ _COPIA_ALTO_MM = 200
 
 COPIAS_DISPOSICION: Sequence[str] = ("Transportador", "Escombrera", "Obra")
 COPIAS_RECIBO: Sequence[str] = ("Transportador", "Obra")
+
+COPY_ICON: Dict[str, str] = {
+    "Transportador": "&#9670;",
+    "Escombrera": "&#9679;",
+    "Obra": "&#9650;",
+}
 
 
 def _page_height_mm(num_copias: int) -> int:
@@ -59,18 +64,56 @@ body {{
   margin-bottom: 6px;
   text-transform: uppercase;
 }}
+.copy-icon {{
+  display: inline-block;
+  font-size: 16pt;
+  line-height: 1;
+  margin-right: 4px;
+  vertical-align: middle;
+}}
+.copy-icon-transportador {{ color: #111; }}
+.copy-icon-escombrera {{ color: #333; }}
+.copy-icon-obra {{ color: #000; }}
 .hdr {{ text-align: center; margin-bottom: 6px; border-bottom: 1px dashed #333; padding-bottom: 5px; }}
 .hdr h1 {{ font-size: 14.75pt; margin: 0 0 3px; font-weight: 700; }}
 .hdr p {{ margin: 1px 0; font-size: 11.75pt; word-break: break-word; }}
 .hdr p.objeto {{ font-size: 8.25pt; }}
-.qr-wrap {{ text-align: center; margin: 5px 0 3px; }}
-.qr-wrap img {{ width: 26mm; height: 26mm; }}
 .title {{ text-align: center; font-weight: 700; font-size: 15.75pt; margin: 6px 0 5px; text-transform: uppercase; }}
+.cantidad-hero {{
+  text-align: center;
+  font-weight: 800;
+  font-size: 20pt;
+  line-height: 1.15;
+  margin: 6px 0 8px;
+  padding: 6px 4px;
+  border: 2px solid #111;
+}}
+.cantidad-hero .lbl {{
+  display: block;
+  font-size: 10.75pt;
+  font-weight: 700;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}}
 .row-tbl {{ width: 100%; margin: 1px 0; font-size: 11.75pt; border-collapse: collapse; border: none; }}
 .row-tbl td {{ vertical-align: top; padding: 0; border: none; }}
 .row-tbl .lbl {{ font-weight: 600; width: 46%; }}
 .row-tbl .val {{ text-align: right; width: 54%; word-break: break-word; }}
 .sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 4px 0; line-height: 0; font-size: 0; overflow: hidden; }}
+.admin-block {{
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed #666;
+  font-size: 10.25pt;
+  line-height: 1.25;
+}}
+.admin-title {{
+  font-weight: 700;
+  font-size: 10.75pt;
+  margin-bottom: 3px;
+  text-align: center;
+}}
+.admin-line {{ margin: 1px 0; word-break: break-word; text-align: center; }}
 .footer {{ text-align: center; font-size: 10.75pt; color: #444; margin-top: 4px; }}
 """
 
@@ -108,14 +151,25 @@ def _esc(val) -> str:
     return html.escape(str(val or ""))
 
 
-def _fmt_fecha(raw) -> str:
-    if not raw:
-        return "—"
-    s = str(raw)[:10]
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except ValueError:
-        return s
+def _fmt_fecha_hora(created_at, fecha_entrada) -> str:
+    for raw in (created_at, fecha_entrada):
+        if not raw:
+            continue
+        s = str(raw).strip()
+        try:
+            if "T" in s or s.endswith("Z") or "+" in s[10:]:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            elif len(s) >= 19 and s[10] in (" ", "T"):
+                dt = datetime.strptime(s[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+            elif len(s) >= 16:
+                dt = datetime.strptime(s[:16].replace("T", " "), "%Y-%m-%d %H:%M")
+            else:
+                dt = datetime.strptime(s[:10], "%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
+            return dt.strftime("%d/%m/%Y %H:%M")
+        except ValueError:
+            continue
+    return "—"
 
 
 def _fmt_cant(v) -> str:
@@ -140,52 +194,51 @@ def _titulo_documento(tipo: str) -> str:
     return "Disposición de material"
 
 
-def _build_qr_payload(contrato: Dict[str, Any]) -> str:
-    """Texto plano temporal para validación de impresión/lectura en campo."""
-    return "\n".join([
-        f"Contrato: {contrato.get('numero') or contrato.get('id') or '—'}",
-        f"Contratista: {contrato.get('contratista') or '—'}",
-        f"Objeto: {contrato.get('objeto') or '—'}",
-        f"Administrador: {contrato.get('administrador_nombre') or '—'}",
-        f"Email: {contrato.get('administrador_email') or '—'}",
-    ])
-
-
-def _qr_data_uri(text: str) -> str:
-    import qrcode
-    from qrcode.constants import ERROR_CORRECT_M
-
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=ERROR_CORRECT_M,
-        box_size=4,
-        border=2,
-    )
-    qr.add_data(text)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{b64}"
+def _copy_icon_html(copy_label: str) -> str:
+    sym = COPY_ICON.get(copy_label, "&#9671;")
+    slug = copy_label.strip().lower().replace(" ", "-")
+    return f'<span class="copy-icon copy-icon-{slug}">{sym}</span>'
 
 
 def _hdr_contrato_html(contrato: Dict[str, Any]) -> str:
-    qr_src = _qr_data_uri(_build_qr_payload(contrato))
     return f"""
   <div class="hdr">
     <h1>{_esc(contrato.get("numero") or contrato.get("id"))}</h1>
     <p><strong>{_esc(contrato.get("contratista"))}</strong></p>
     <p>NIT: {_esc(contrato.get("nit"))}</p>
-    <div class="qr-wrap"><img src="{qr_src}" alt="QR contrato"/></div>
     <p class="objeto">{_esc(contrato.get("objeto"))}</p>
   </div>"""
+
+
+def _administradores_html(contrato: Dict[str, Any]) -> str:
+    admins = contrato.get("administradores") or []
+    if not admins:
+        return ""
+    lines = []
+    for adm in admins:
+        nom = _esc(adm.get("nombre"))
+        email = _esc(adm.get("email"))
+        lines.append(f'<p class="admin-line">{nom} · {email}</p>')
+    return (
+        f'<div class="admin-block">'
+        f'<div class="admin-title">Contacto administradores del contrato</div>'
+        f'{"".join(lines)}</div>'
+    )
 
 
 def _row(lbl: str, val: str) -> str:
     return (
         f'<table class="row-tbl" width="100%" cellpadding="0" cellspacing="0">'
         f"<tr><td class=\"lbl\">{_esc(lbl)}</td><td class=\"val\">{val}</td></tr></table>"
+    )
+
+
+def _cantidad_hero(cant: str, unidad: str) -> str:
+    return (
+        f'<div class="cantidad-hero">'
+        f'<span class="lbl">Cantidad</span>'
+        f"{cant} {_esc(unidad)}"
+        f"</div>"
     )
 
 
@@ -218,18 +271,21 @@ def _render_copia_html(
     transportador = entrada.get("transportador") or "—"
     block_cls = "copy-block copy-block-last" if is_last else "copy-block"
     hdr_html = _hdr_contrato_html(contrato)
+    icon_html = _copy_icon_html(copy_label)
+    admin_html = _administradores_html(contrato)
+    fecha_hora = _fmt_fecha_hora(entrada.get("created_at"), entrada.get("fecha_entrada"))
 
     return f"""
 <div class="{block_cls}">
-  <div class="copy-label">Copia: {_esc(copy_label)}</div>{hdr_html}
+  <div class="copy-label">{icon_html}Copia: {_esc(copy_label)}</div>{hdr_html}
   <div class="title">{_esc(doc_title)}</div>
   {_row("No. documento:", _esc(numero))}
-  {_row("Fecha:", _fmt_fecha(entrada.get("fecha_entrada")))}
+  {_row("Fecha y hora:", fecha_hora)}
   {_sep()}
   {_row("Orden de compra:", f"#{_esc(oc_num)}")}
   {_row("Proveedor:", _esc(proveedor_nombre))}
   {_row("Insumo:", _esc(insumo_label))}
-  {_row("Cantidad:", f"{cant} {_esc(unidad)}")}
+  {_cantidad_hero(cant, unidad)}
   {_sep()}
   {_row("PK / Ubicación:", _esc(pk))}
   {_row("Tramo:", _esc(tramo))}
@@ -240,6 +296,7 @@ def _render_copia_html(
   {_row("Transportador:", _esc(transportador))}
   {_sep()}
   {_row("Registrado por:", _esc(usuario_nombre))}
+  {admin_html}
   <div class="footer">ClaraCore · Almacén de Obra</div>
 </div>"""
 

@@ -721,8 +721,8 @@ def _usuario_tiene_acceso_contrato(sb, user_id: int, contrato_id: int) -> bool:
     return bool(uc_rows)
 
 
-def _administrador_contrato_info(sb, contrato_id: int) -> dict:
-    """Nombre y correo del administrador activo del contrato (principal o usuario_contratos)."""
+def _administradores_contrato_contactos(sb, contrato_id: int) -> List[dict]:
+    """Administradores activos del contrato (principal o usuario_contratos)."""
     cargos = sb.table("cargos").select("id, nombre").execute().data or []
     admin_cargo_ids = [
         int(c["id"])
@@ -730,7 +730,7 @@ def _administrador_contrato_info(sb, contrato_id: int) -> dict:
         if _norm(c.get("nombre") or "") == "administrador"
     ]
     if not admin_cargo_ids:
-        return {"nombre": "—", "email": "—"}
+        return [{"nombre": "—", "email": "—"}]
 
     admins = (
         sb.table("usuarios")
@@ -741,13 +741,23 @@ def _administrador_contrato_info(sb, contrato_id: int) -> dict:
         .data
         or []
     )
+    out: List[dict] = []
+    seen: set = set()
+
+    def _append(u: dict) -> None:
+        uid = int(u["id"])
+        if uid in seen:
+            return
+        seen.add(uid)
+        nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+        out.append({
+            "nombre": nom or "—",
+            "email": (u.get("email") or "—").strip(),
+        })
+
     for u in admins:
         if u.get("contrato_id") is not None and int(u["contrato_id"]) == int(contrato_id):
-            nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
-            return {
-                "nombre": nom or "—",
-                "email": (u.get("email") or "—").strip(),
-            }
+            _append(u)
 
     admin_ids = [int(u["id"]) for u in admins if u.get("id") is not None]
     if admin_ids:
@@ -756,22 +766,19 @@ def _administrador_contrato_info(sb, contrato_id: int) -> dict:
             .select("usuario_id")
             .eq("contrato_id", contrato_id)
             .in_("usuario_id", admin_ids)
-            .limit(1)
             .execute()
             .data
             or []
         )
-        if uc:
-            uid = int(uc[0]["usuario_id"])
-            for u in admins:
-                if int(u["id"]) == uid:
-                    nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
-                    return {
-                        "nombre": nom or "—",
-                        "email": (u.get("email") or "—").strip(),
-                    }
+        linked = {int(r["usuario_id"]) for r in uc}
+        for u in admins:
+            if int(u["id"]) in linked:
+                _append(u)
 
-    return {"nombre": "—", "email": "—"}
+    if not out:
+        return [{"nombre": "—", "email": "—"}]
+    out.sort(key=lambda x: (x.get("nombre") or "").lower())
+    return out
 
 
 def _destinatarios_validadores_almacen(contrato_id: int) -> List[int]:
@@ -1516,6 +1523,34 @@ def _presupuesto_material_pk_insumo(
     }
 
 
+def _contrato_segmento_documento(contrato_id: int) -> str:
+    from catalogo_insumos_service import contrato_codigo_segment
+
+    return contrato_codigo_segment(contrato_id)
+
+
+def _parse_consecutivo_numero_documento(contrato_id: int, raw: str) -> int:
+    raw = (raw or "").strip()
+    if not raw:
+        return 0
+    seg = _contrato_segmento_documento(contrato_id)
+    prefix = f"{seg}-"
+    if raw.upper().startswith(prefix.upper()):
+        tail = raw[len(prefix):].strip()
+        try:
+            return int(tail)
+        except ValueError:
+            return 0
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+def _format_numero_documento(contrato_id: int, consecutivo: int) -> str:
+    return f"{_contrato_segmento_documento(contrato_id)}-{consecutivo:05d}"
+
+
 def _max_numero_disposicion(contrato_id: int) -> int:
     sb = _sb()
     rows = (
@@ -1529,16 +1564,25 @@ def _max_numero_disposicion(contrato_id: int) -> int:
     )
     max_n = 0
     for r in rows:
-        raw = (r.get("numero_documento") or "").strip()
-        try:
-            max_n = max(max_n, int(raw))
-        except ValueError:
-            pass
+        max_n = max(max_n, _parse_consecutivo_numero_documento(contrato_id, r.get("numero_documento") or ""))
     return max_n
 
 
 def _next_numero_disposicion(contrato_id: int) -> str:
-    return f"{_max_numero_disposicion(contrato_id) + 1:05d}"
+    return _format_numero_documento(contrato_id, _max_numero_disposicion(contrato_id) + 1)
+
+
+def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: Optional[str]) -> str:
+    """Disposición: autonumerador del sistema. Recibo: número de remisión del proveedor."""
+    t = (tipo or "recibo").strip().lower()
+    raw = (numero_raw or "").strip()
+    if t == "disposicion":
+        return _next_numero_disposicion(contrato_id)
+    if t == "recibo":
+        if not raw:
+            raise ValueError("Indique el número de remisión del proveedor.")
+        return raw[:64]
+    raise ValueError("Tipo de entrada inválido.")
 
 
 def preview_proximo_numero_disposicion(contrato_id: int) -> dict:
@@ -1786,11 +1830,10 @@ def _generar_pdf_pos_entrada(
     )
     if not contrato_rows:
         return
-    admin = _administrador_contrato_info(sb, contrato_id)
+    admin_list = _administradores_contrato_contactos(sb, contrato_id)
     contrato_pdf = {
         **contrato_rows[0],
-        "administrador_nombre": admin["nombre"],
-        "administrador_email": admin["email"],
+        "administradores": admin_list,
     }
     names = _map_usuario_nombres(sb, [user_id])
     u_name = names.get(int(user_id), "—")
@@ -1807,7 +1850,17 @@ def _generar_pdf_pos_entrada(
         )
         if pr:
             prov_name = pr[0].get("razon_social") or "—"
-    pdf_ctx = {**entrada_row, "cantidad_recibida": cantidad}
+    ts_rows = (
+        sb.table("almacen_entrada")
+        .select("created_at")
+        .eq("id", entrada_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    created_at = ts_rows[0].get("created_at") if ts_rows else None
+    pdf_ctx = {**entrada_row, "cantidad_recibida": cantidad, "created_at": created_at}
     pdf_bytes = generar_pdf_despachador_pos(
         tipo,
         contrato_pdf,
@@ -1991,9 +2044,11 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     if not insumo_id:
         raise ValueError("Indique el insumo recibido.")
 
-    numero_doc = (body.get("numero_documento") or "").strip()
-    if tipo == "disposicion" and not numero_doc:
-        numero_doc = _next_numero_disposicion(contrato_id)
+    numero_doc = _resolve_numero_documento_entrada(
+        contrato_id,
+        tipo,
+        body.get("numero_documento"),
+    )
 
     numero_entrada = _next_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
 
@@ -2280,12 +2335,7 @@ def eliminar_entrada(contrato_id: int, entrada_id: int) -> dict:
     max_entrada = _max_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
     max_disp = _max_numero_disposicion(contrato_id) if tipo == "disposicion" else 0
 
-    numero_doc_int = 0
-    if numero_doc_raw:
-        try:
-            numero_doc_int = int(numero_doc_raw)
-        except ValueError:
-            pass
+    numero_doc_int = _parse_consecutivo_numero_documento(contrato_id, numero_doc_raw) if numero_doc_raw else 0
 
     for it in ent.get("items") or []:
         _rollback_entrada_item_line(sb, contrato_id, ent, it)

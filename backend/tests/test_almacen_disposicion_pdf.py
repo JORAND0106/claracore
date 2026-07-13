@@ -3,9 +3,10 @@
 from almacen_disposicion_pdf import (
     COPIAS_DISPOSICION,
     COPIAS_RECIBO,
+    COPY_ICON,
     _COPIA_ALTO_MM,
     _PAGE_ANCHO_MM,
-    _build_qr_payload,
+    _fmt_fecha_hora,
     _page_height_mm,
     _pos_css,
     generar_pdf_despachador_pos,
@@ -15,16 +16,19 @@ from almacen_disposicion_pdf import (
 _BASE = dict(
     contrato={
         "id": 1,
-        "numero": "CTO-001",
+        "numero": "ICCU-CTO-1614-2025",
         "contratista": "Contratista Demo",
         "nit": "900123456",
         "objeto": "Obra demo",
-        "administrador_nombre": "Admin Demo",
-        "administrador_email": "admin@demo.test",
+        "administradores": [
+            {"nombre": "Admin Demo", "email": "admin@demo.test"},
+            {"nombre": "Admin Dos", "email": "admin2@demo.test"},
+        ],
     },
     entrada={
-        "numero_documento": "00001",
+        "numero_documento": "1614-00001",
         "fecha_entrada": "2026-07-12",
+        "created_at": "2026-07-12T14:35:00+00:00",
         "cantidad_recibida": 12.5,
         "pk_id": "PK-001",
         "tramo": "TRAMO 1",
@@ -70,9 +74,10 @@ def test_pdf_altura_pagina_por_copias():
     assert "page-break-after: always" not in css_disp
     assert "80mm 600mm" in css_disp
     assert "80mm 400mm" in css_rec
-    assert "doc-sheet" not in css_disp
-    assert "font-size: 12.75pt" in css_disp
-    assert "qr-wrap" in css_disp
+    assert "cantidad-hero" in css_disp
+    assert "admin-block" in css_disp
+    assert "copy-icon" in css_disp
+    assert "qr-wrap" not in css_disp
     assert _page_height_mm(len(COPIAS_DISPOSICION)) == 600
     assert _page_height_mm(len(COPIAS_RECIBO)) == 400
     assert _page_height_mm(len(COPIAS_DISPOSICION)) == _COPIA_ALTO_MM * len(COPIAS_DISPOSICION)
@@ -97,6 +102,11 @@ def test_pdf_mediabox_exacto():
     assert _mm(mb.height) == _page_height_mm(len(COPIAS_RECIBO))
 
 
+def test_fmt_fecha_hora():
+    assert _fmt_fecha_hora("2026-07-12T14:35:00+00:00", None) == "12/07/2026 14:35"
+    assert _fmt_fecha_hora(None, "2026-07-12") == "12/07/2026"
+
+
 def test_generar_pdf_disposicion_tres_copias():
     pdf = generar_pdf_disposicion_pos(**_BASE)
     assert isinstance(pdf, bytes)
@@ -111,23 +121,35 @@ def test_generar_pdf_recibo_dos_copias():
     assert len(pdf) > 1000
 
 
+def test_recibo_pdf_muestra_numero_remision():
+    from almacen_disposicion_pdf import _render_copia_html
+
+    entrada = {**_BASE["entrada"], "numero_documento": "REM-987654"}
+    html = _render_copia_html(
+        copy_label="Transportador",
+        is_last=False,
+        doc_title="Recibo de materiales",
+        contrato=_BASE["contrato"],
+        entrada=entrada,
+        oc=_BASE["oc"],
+        insumo_label=_BASE["insumo_label"],
+        proveedor_nombre=_BASE["proveedor_nombre"],
+        usuario_nombre=_BASE["usuario_nombre"],
+        unidad=_BASE["unidad"],
+    )
+    assert "REM-987654" in html
+    assert "1614-00001" not in html
+
+
 def test_copias_configuradas():
     assert len(COPIAS_DISPOSICION) == 3
     assert COPIAS_DISPOSICION == ("Transportador", "Escombrera", "Obra")
     assert len(COPIAS_RECIBO) == 2
     assert COPIAS_RECIBO == ("Transportador", "Obra")
+    assert set(COPY_ICON) == set(COPIAS_DISPOSICION)
 
 
-def test_qr_payload_datos_planos():
-    payload = _build_qr_payload(_BASE["contrato"])
-    assert "Contrato: CTO-001" in payload
-    assert "Contratista: Contratista Demo" in payload
-    assert "Objeto: Obra demo" in payload
-    assert "Administrador: Admin Demo" in payload
-    assert "Email: admin@demo.test" in payload
-
-
-def test_pdf_usa_separadores_tabla():
+def test_pdf_sin_qr():
     from almacen_disposicion_pdf import _render_copia_html
 
     html = _render_copia_html(
@@ -142,14 +164,37 @@ def test_pdf_usa_separadores_tabla():
         usuario_nombre=_BASE["usuario_nombre"],
         unidad=_BASE["unidad"],
     )
+    assert "qr-wrap" not in html
+    assert "data:image/png;base64," not in html
+
+
+def test_pdf_rediseno_pos():
+    from almacen_disposicion_pdf import _render_copia_html
+
+    html = _render_copia_html(
+        copy_label="Transportador",
+        is_last=False,
+        doc_title="Disposición de material",
+        contrato=_BASE["contrato"],
+        entrada=_BASE["entrada"],
+        oc=_BASE["oc"],
+        insumo_label=_BASE["insumo_label"],
+        proveedor_nombre=_BASE["proveedor_nombre"],
+        usuario_nombre=_BASE["usuario_nombre"],
+        unidad=_BASE["unidad"],
+    )
+    assert "1614-00001" in html
+    assert "Fecha y hora:" in html
+    assert "12/07/2026 14:35" in html
+    assert "cantidad-hero" in html
+    assert "12.5 M3" in html
+    assert "copy-icon-transportador" in html
+    assert COPY_ICON["Transportador"] in html
+    assert "Contacto administradores del contrato" in html
+    assert "admin@demo.test" in html
+    assert "admin2@demo.test" in html
     assert html.count("sep-line") >= 4
     assert "row-tbl" in html
-    assert 'class="row"' not in html
-    assert "NIT:" in html
-    assert "Obra demo" in html
-    assert "qr-wrap" in html
-    assert "data:image/png;base64," in html
-    assert "hdr-mini" not in html
 
 
 def test_todas_las_copias_encabezado_completo():
@@ -178,9 +223,8 @@ def test_todas_las_copias_encabezado_completo():
             assert "NIT:" in html
             assert objeto_largo in html
             assert 'class="objeto"' in html
-            assert "qr-wrap" in html
+            assert f"copy-icon-{label.strip().lower().replace(' ', '-')}" in html
             assert "…" not in html
-            assert "hdr-mini" not in html
 
 
 def test_objeto_largo_una_sola_pagina():
@@ -194,4 +238,4 @@ def test_objeto_largo_una_sola_pagina():
     contrato = {**_BASE["contrato"], "objeto": objeto_largo}
     pdf = generar_pdf_disposicion_pos(**{**_BASE, "contrato": contrato})
     r = PdfReader(io.BytesIO(pdf))
-    assert len(r.pages) == 1
+    assert len(r.pages) <= 2

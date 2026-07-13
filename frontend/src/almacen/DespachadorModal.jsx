@@ -31,10 +31,11 @@ export default function DespachadorModal({
   const sessionUser = getAlmacenSessionUser()
   const fileRef = useRef(null)
   const camRef = useRef(null)
+  const numeroDocRef = useRef('')
 
   const [tipo, setTipo] = useState('recibo')
   const [numeroDoc, setNumeroDoc] = useState('')
-  const [proximoDisposicion, setProximoDisposicion] = useState('00001')
+  const [proximoDisposicion, setProximoDisposicion] = useState('')
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
   const [proveedor, setProveedor] = useState(null)
   const [insumo, setInsumo] = useState(null)
@@ -60,8 +61,8 @@ export default function DespachadorModal({
 
   const loadProximoDisposicion = useCallback(() => {
     api.getProximoNumeroDisposicion()
-      .then((r) => setProximoDisposicion(r?.proximo || '00001'))
-      .catch(() => setProximoDisposicion('00001'))
+      .then((r) => setProximoDisposicion(r?.proximo || ''))
+      .catch(() => setProximoDisposicion(''))
   }, [api])
 
   useEffect(() => {
@@ -71,6 +72,7 @@ export default function DespachadorModal({
   useEffect(() => {
     if (tipo === 'disposicion') {
       setNumeroDoc('')
+      numeroDocRef.current = ''
       loadProximoDisposicion()
     }
   }, [tipo, loadProximoDisposicion])
@@ -147,7 +149,15 @@ export default function DespachadorModal({
     try {
       const r = await api.ocrRemisionEntrada(f)
       const campos = r.campos || {}
-      if (campos.numero_documento) setNumeroDoc(campos.numero_documento)
+      if (campos.numero_documento) {
+        const sugerido = String(campos.numero_documento).trim()
+        setNumeroDoc((prev) => {
+          const actual = (prev || numeroDocRef.current || '').trim()
+          if (actual) return prev
+          numeroDocRef.current = sugerido
+          return sugerido
+        })
+      }
       if (campos.fecha_entrada) setFecha(campos.fecha_entrada)
       setOcrMsg(r.ocr?.mensaje || 'OCR completado. Revise los campos.')
     } catch (err) {
@@ -203,7 +213,9 @@ export default function DespachadorModal({
     if (superaSaldo) faltantes.push('Cantidad recibida (no puede superar el saldo de la OC)')
     if (!/^[A-Z]{3}-\d{3}$/.test(placaFmt)) faltantes.push('Placa (formato AAA-000)')
     if (!transportadorFmt.trim()) faltantes.push('Transportador')
-    if (tipo === 'recibo' && !numeroDoc.trim()) faltantes.push('Número de remisión del proveedor')
+    if (tipo === 'recibo' && !(numeroDocRef.current || numeroDoc).trim()) {
+      faltantes.push('Número de remisión del proveedor')
+    }
     if (tipo === 'recibo' && !remision) faltantes.push('Archivo de remisión del proveedor')
     return faltantes
   }
@@ -220,13 +232,16 @@ export default function DespachadorModal({
 
     setBusy(true)
     try {
+      const remisionNumero = (numeroDocRef.current || numeroDoc).trim()
       const fd = new FormData()
+      fd.append('tipo', tipo)
+      if (tipo === 'recibo') {
+        fd.append('numero_documento', remisionNumero)
+      }
       if (ocSel?.orden_compra_id) {
         fd.append('orden_compra_id', String(ocSel.orden_compra_id))
       }
       fd.append('fecha_entrada', fecha)
-      fd.append('tipo', tipo)
-      if (numeroDoc.trim()) fd.append('numero_documento', numeroDoc.trim())
       fd.append('proveedor_id', String(proveedor.proveedor_id))
       fd.append('insumo_id', String(insumo.insumo_id))
       fd.append('pk_id', pkId || pkLabel)
@@ -252,7 +267,7 @@ export default function DespachadorModal({
       }
       onSaved?.(r)
       const tienePdfPos = r?.tiene_pdf_disposicion && r?.id
-      if (tienePdfPos) {
+      if (tienePdfPos && !compact) {
         try {
           await api.printDisposicionPdf(r.id)
         } catch (printErr) {
@@ -263,7 +278,7 @@ export default function DespachadorModal({
             return
           }
         }
-      } else if (r?.id && (tipo === 'disposicion' || tipo === 'recibo')) {
+      } else if (r?.id && (tipo === 'disposicion' || tipo === 'recibo') && !tienePdfPos) {
         setError('La entrada se guardó, pero el PDF POS no está disponible.')
         return
       }
@@ -369,7 +384,7 @@ export default function DespachadorModal({
         {tipo === 'disposicion' ? (
           <input
             style={{ ...ui.input, marginBottom: 12, background: `${ui.accentSoft}` }}
-            value={`Autogenerado al guardar (${proximoDisposicion})`}
+            value={proximoDisposicion ? `Autogenerado al guardar (${proximoDisposicion})` : 'Autogenerado al guardar'}
             readOnly
             disabled
           />
@@ -377,7 +392,10 @@ export default function DespachadorModal({
           <input
             style={{ ...ui.input, marginBottom: 12 }}
             value={numeroDoc}
-            onChange={(e) => setNumeroDoc(e.target.value)}
+            onChange={(e) => {
+              numeroDocRef.current = e.target.value
+              setNumeroDoc(e.target.value)
+            }}
             placeholder="Número de remisión…"
           />
         )}

@@ -816,13 +816,20 @@ async def route_create_entrada(
         items = json.loads(items_json)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="items_json inválido") from exc
+    tipo_norm = (tipo or "recibo").strip().lower()
+    numero_norm = (numero_documento or "").strip()
+    if tipo_norm == "recibo" and not numero_norm:
+        raise HTTPException(
+            status_code=400,
+            detail="Indique el número de remisión del proveedor.",
+        )
     body = {
         "orden_compra_id": orden_compra_id,
         "fecha_entrada": fecha_entrada,
         "observaciones": observaciones,
         "items": items,
-        "tipo": tipo,
-        "numero_documento": numero_documento,
+        "tipo": tipo_norm,
+        "numero_documento": numero_norm or None,
         "proveedor_id": proveedor_id,
         "insumo_id": insumo_id,
         "pk_id": pk_id,
