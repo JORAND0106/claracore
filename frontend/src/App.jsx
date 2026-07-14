@@ -124,7 +124,7 @@ import {
 import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
 import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
 import { permisosProgramacionObra } from './progObraPermisos'
-import { permisosAlmacen } from './almacen/almacenPermisos'
+import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
@@ -17476,12 +17476,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeValidarTopografia = _topoPermiso('validar')
   const puedeEliminarTopografia = _topoPermiso('eliminar')
   const puedeExportarTopografia = _topoPermiso('exportar')
-  const almacenPerm = permisosAlmacen(usuario, usuario?.contrato_id)
-  const tienePermisoAlmacen = esDeveloper || almacenPerm.ver
+  const almacenAcceso = accesoAlmacen(usuario, usuario?.contrato_id)
+  const almacenPerm = almacenAcceso.permisos
+  const almacenRolBloqueado = almacenAcceso.bloqueado
+  const tienePermisoAlmacen = esDeveloper || (!almacenRolBloqueado && almacenPerm.ver)
   const puedeCrearAlmacen = esDeveloper || almacenPerm.crear
   const puedeEditarAlmacen = esDeveloper || almacenPerm.editar
   const puedeValidarAlmacen = esDeveloper || almacenPerm.validar
   const puedeExportarAlmacen = esDeveloper || almacenPerm.exportar
+  const almacenVerEconomicos = esDeveloper || almacenAcceso.verEconomicos
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
@@ -21196,18 +21199,22 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 ...almacenPerm,
                 contratoId: usuario?.contrato_id,
                 userId: usuario?.id,
+                esDesarrollador: esDeveloper,
                 ver: tienePermisoAlmacen,
                 crear: puedeCrearAlmacen,
                 editar: puedeEditarAlmacen,
                 validar: puedeValidarAlmacen,
                 exportar: puedeExportarAlmacen,
+                verEconomicos: almacenVerEconomicos,
               }}
             />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Almacén</div>
               <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
-                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Almacén» (acción Ver).
+                {almacenRolBloqueado
+                  ? 'El módulo Almacén de Obra está reservado para el contratista. Su rol no tiene acceso a este módulo.'
+                  : 'Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Almacén» (acción Ver).'}
               </div>
             </div>
           )

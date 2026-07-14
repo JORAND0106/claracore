@@ -5,7 +5,10 @@ Formato estándar: encabezado contratista, bloques Para/Enviar a, tabla de insum
 from __future__ import annotations
 
 import html
-from datetime import date, datetime
+from datetime import date
+
+from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
+from almacen_firma_pdf import firma_url_a_data_uri
 from typing import Any, Dict, List, Optional
 
 from topografia_utils import _html_logo_pdf, to_pdf_bytes
@@ -35,22 +38,40 @@ def _fmt_cant(v) -> str:
 
 
 def _fmt_fecha(raw) -> str:
-    if not raw:
-        return "—"
-    s = str(raw)[:10]
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except ValueError:
-        return s
+    return fmt_fecha_bogota(raw)
 
 
 def _fmt_fecha_ts(raw) -> str:
     if not raw:
         return "—"
-    s = str(raw)
-    if "T" in s:
-        s = s[:10]
-    return _fmt_fecha(s)
+    if "T" in str(raw):
+        return fmt_fecha_hora_bogota(raw)
+    return fmt_fecha_bogota(raw)
+
+
+def _html_firma_oc_celda(lbl: str, nombre: str, fecha: str, firma_data_uri: str = "") -> str:
+    """Columna de firma con imagen de perfil (mismo mecanismo que informes CCD)."""
+    if firma_data_uri:
+        img_html = (
+            '<table cellspacing="0" cellpadding="0" width="100%" '
+            'style="border-collapse:collapse;margin:0 8pt 4pt;table-layout:fixed;">'
+            '<tr><td style="height:28pt;max-height:28pt;min-height:28pt;overflow:hidden;'
+            'vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;">'
+            f'<img src="{firma_data_uri}" alt="" '
+            'style="display:block;margin:0 auto;max-width:100%;width:auto;'
+            'height:28pt;max-height:28pt;border:0;padding:0;"/>'
+            "</td></tr></table>"
+        )
+    else:
+        img_html = '<div style="height:28pt;"></div>'
+    return (
+        f"<td>"
+        f'<div class="firma-lbl">{_esc(lbl)}</div>'
+        f"{img_html}"
+        f'<div class="firma-line">{_esc(nombre)}</div>'
+        f'<div class="firma-fecha">Fecha: {_esc(fecha)}</div>'
+        f"</td>"
+    )
 
 
 def _split_line_tax(unit_total: float, insumo: Optional[dict]) -> tuple[float, float, str]:
@@ -204,6 +225,8 @@ def generar_pdf_orden_compra(
     orden_compra: dict,
     solicitud: dict,
     aprobador_nombre: str = "—",
+    aprobador_firma_url: Optional[str] = None,
+    solicitante_firma_url: Optional[str] = None,
     proveedores: Optional[List[dict]] = None,
     insumo_map: Optional[Dict[int, dict]] = None,
     puntos_entrega: Optional[List[str]] = None,
@@ -260,6 +283,11 @@ def generar_pdf_orden_compra(
         solicitud.get("observaciones") or "",
     )
 
+    firma_sol_uri = firma_url_a_data_uri(solicitante_firma_url)
+    firma_apr_uri = firma_url_a_data_uri(aprobador_firma_url)
+    celda_sol = _html_firma_oc_celda("Solicitó requisición", solicitante, fecha_sol, firma_sol_uri)
+    celda_apr = _html_firma_oc_celda("Aprobó y generó OC", aprobador_nombre, fecha_apr, firma_apr_uri)
+
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><style>
 @page {{ size: letter; margin: 1.1cm 1.3cm; }}
@@ -290,7 +318,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 .grand-row td {{ font-weight: bold; background: #e2e8f0; font-size: 9pt; }}
 .firmas {{ width: 100%; border-collapse: collapse; margin-top: 18pt; }}
 .firmas td {{ width: 50%; vertical-align: top; padding: 4pt 12pt; text-align: center; }}
-.firma-lbl {{ font-size: 7.5pt; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 28pt; }}
+.firma-lbl {{ font-size: 7.5pt; font-weight: bold; text-transform: uppercase; color: #64748b; margin-bottom: 2pt; }}
 .firma-line {{ border-top: 1px solid #334155; margin: 0 8pt; padding-top: 4pt; font-size: 8pt; }}
 .firma-fecha {{ font-size: 7.5pt; color: #64748b; margin-top: 2pt; }}
 .footer {{ margin-top: 10pt; font-size: 7pt; color: #94a3b8; text-align: center; }}
@@ -335,16 +363,8 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 </table>
 
 <table class="firmas"><tr>
-  <td>
-    <div class="firma-lbl">Solicitó requisición</div>
-    <div class="firma-line">{_esc(solicitante)}</div>
-    <div class="firma-fecha">Fecha: {_esc(fecha_sol)}</div>
-  </td>
-  <td>
-    <div class="firma-lbl">Aprobó y generó OC</div>
-    <div class="firma-line">{_esc(aprobador_nombre)}</div>
-    <div class="firma-fecha">Fecha: {_esc(fecha_apr)}</div>
-  </td>
+  {celda_sol}
+  {celda_apr}
 </tr></table>
 
 <div class="footer">Documento generado por ClaraCore — Almacén de Obra · Contrato {_esc(contrato.get('numero') or '')}</div>

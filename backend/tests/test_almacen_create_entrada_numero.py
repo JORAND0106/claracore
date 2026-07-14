@@ -42,7 +42,7 @@ def _patch_create_entrada_minimo(monkeypatch, *, inserted: dict):
     monkeypatch.setattr("almacen_service._sb", lambda: sb)
     monkeypatch.setattr(
         "almacen_service.get_orden_compra",
-        lambda _cid, _oc: {
+        lambda _cid, _oc, **kwargs: {
             "id": 1,
             "estado": "aprobada",
             "numero_oc": 10,
@@ -116,6 +116,29 @@ def test_create_entrada_recibo_guarda_remision_literal(monkeypatch):
         return q
 
     monkeypatch.setattr("almacen_service._sb", lambda: MagicMock(table=table))
+    monkeypatch.setattr(
+        "almacen_service._upload_soporte",
+        lambda *_a, **_k: {"blob_path": "x", "nombre": "rem.pdf", "mime": "application/pdf"},
+    )
+    monkeypatch.setattr("almacen_service._next_consecutivo", lambda *_a, **_k: 7)
+    monkeypatch.setattr("almacen_service._actualizar_estado_oc", lambda *_a, **_k: None)
+    monkeypatch.setattr("almacen_service._upsert_inventario", lambda *_a, **_k: None)
+    monkeypatch.setattr("almacen_service._generar_pdf_pos_entrada", lambda *_a, **_k: None)
+    monkeypatch.setattr("almacen_service.get_orden_compra", lambda *_a, **_k: {
+        "id": 1,
+        "estado": "aprobada",
+        "numero_oc": 10,
+        "items": [{
+            "id": 5,
+            "presupuesto_id": 1,
+            "material_descripcion": "Arena",
+            "unidad": "M3",
+            "cantidad": 100,
+            "cantidad_recibida": 0,
+            "valor_unitario": 1000,
+            "valor_recibido": 0,
+        }],
+    })
 
     create_entrada(
         1,
@@ -129,6 +152,9 @@ def test_create_entrada_recibo_guarda_remision_literal(monkeypatch):
             "pk_id": "PK-1",
             "items": [{"orden_compra_item_id": 5, "cantidad_recibida": 1}],
         },
+        remision_data=b"%PDF-test",
+        remision_nombre="rem.pdf",
+        remision_mime="application/pdf",
     )
 
     assert calls, "debe insertar almacen_entrada"

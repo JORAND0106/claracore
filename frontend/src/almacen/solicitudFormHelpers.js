@@ -1,4 +1,5 @@
 import { validateAbscisaRango } from './almacenAbscisa'
+import { abscisasLineaSolicitud } from './solicitudDetalleHelpers'
 
 /** Orden natural para capítulos e ítems (1, 2, 3 … 10, 11). */
 export function naturalSortKey(text) {
@@ -49,8 +50,10 @@ export function mapSolicitudItemsFromServer(s) {
     costado: it.costado || '',
     abscisa_inicial: it.abscisa_inicial ?? '',
     abscisa_final: it.abscisa_final ?? '',
-    abs_inicio_display: it.contexto_presupuesto?.abs_inicio || '',
-    abs_final_display: it.contexto_presupuesto?.abs_final || '',
+    ...(() => {
+      const abs = abscisasLineaSolicitud(it)
+      return { abs_inicio_display: abs.inicial, abs_final_display: abs.final }
+    })(),
     nodo_inicio: it.contexto_presupuesto?.nodo_inicio || '',
     nodo_final: it.contexto_presupuesto?.nodo_final || '',
     observacion_residente: it.observacion_residente

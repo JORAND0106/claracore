@@ -6,8 +6,9 @@ from __future__ import annotations
 import html
 import io
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Sequence
+
+from almacen_datetime import fmt_fecha_hora_entrada
 
 _log = logging.getLogger(__name__)
 
@@ -152,24 +153,7 @@ def _esc(val) -> str:
 
 
 def _fmt_fecha_hora(created_at, fecha_entrada) -> str:
-    for raw in (created_at, fecha_entrada):
-        if not raw:
-            continue
-        s = str(raw).strip()
-        try:
-            if "T" in s or s.endswith("Z") or "+" in s[10:]:
-                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            elif len(s) >= 19 and s[10] in (" ", "T"):
-                dt = datetime.strptime(s[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
-            elif len(s) >= 16:
-                dt = datetime.strptime(s[:16].replace("T", " "), "%Y-%m-%d %H:%M")
-            else:
-                dt = datetime.strptime(s[:10], "%Y-%m-%d")
-                return dt.strftime("%d/%m/%Y")
-            return dt.strftime("%d/%m/%Y %H:%M")
-        except ValueError:
-            continue
-    return "—"
+    return fmt_fecha_hora_entrada(created_at, fecha_entrada)
 
 
 def _fmt_cant(v) -> str:

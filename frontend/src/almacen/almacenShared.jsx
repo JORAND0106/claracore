@@ -103,6 +103,60 @@ export function almacenStyles(t, compact = false) {
   }
 }
 
+/** Variables CSS del tema ClaraCore para popups y superficies del módulo. */
+export function buildAlmacenCssVars(t) {
+  if (!t) return {}
+  const primary = t.primary || '#2563eb'
+  const bgCard = t.bgCard || '#ffffff'
+  const isDark = bgCard === '#0F2038'
+  return {
+    '--cc-almacen-bg': t.bg || bgCard,
+    '--cc-almacen-bg-card': bgCard,
+    '--cc-almacen-bg-header': t.headerBg || bgCard,
+    '--cc-almacen-input-bg': t.inputBg || '#f8fafc',
+    '--cc-almacen-text': t.text || '#0f172a',
+    '--cc-almacen-text-muted': t.textMuted || '#64748b',
+    '--cc-almacen-border': t.border || '#e2e8f0',
+    '--cc-almacen-accent': primary,
+    '--cc-almacen-accent-soft': `${primary}22`,
+    '--cc-almacen-overlay': t.overlay || (isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(15, 23, 42, 0.52)'),
+    '--cc-almacen-shadow-modal': t.shadow || (isDark ? '0 24px 64px rgba(0, 0, 0, 0.55)' : '0 24px 64px rgba(0, 0, 0, 0.28)'),
+    '--cc-almacen-shadow-sheet': isDark ? '0 -12px 40px rgba(0, 0, 0, 0.45)' : '0 -12px 40px rgba(0, 0, 0, 0.25)',
+    colorScheme: isDark ? 'dark' : 'light',
+  }
+}
+
+/** Tema unificado para CcConfirmModal dentro del módulo Almacén. */
+export function buildAlmacenConfirmTheme(t, ui) {
+  const base = t || {}
+  const cardBg = base.bgCard || ui?.card?.background || '#ffffff'
+  return {
+    ...base,
+    primary: base.primary || ui?.accent || '#2563eb',
+    bgCard: cardBg,
+    text: base.text || ui?.text || '#0f172a',
+    textMuted: base.textMuted || ui?.textMuted || '#64748b',
+    border: base.border || '#e2e8f0',
+    overlay: base.overlay || 'var(--cc-almacen-overlay, rgba(15, 23, 42, 0.52))',
+    shadow: base.shadow || 'var(--cc-almacen-shadow-modal, 0 24px 64px rgba(0,0,0,0.28))',
+    success: base.success || 'var(--cc-color-success, #16a34a)',
+    danger: base.danger || '#dc2626',
+    warn: base.warn || '#d97706',
+  }
+}
+
+export function almacenFormModalDialogStyle({ width, compact } = {}) {
+  return {
+    width: compact ? '100%' : (width || 'min(1248px, 100%)'),
+    maxHeight: compact ? '96dvh' : '92vh',
+    background: 'var(--cc-almacen-bg-card)',
+    color: 'var(--cc-almacen-text)',
+    border: compact ? 'none' : '1px solid var(--cc-almacen-border)',
+    borderRadius: compact ? '16px 16px 0 0' : 14,
+    boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
+  }
+}
+
 const AlmacenThemeContext = createContext(almacenStyles(null))
 const AlmacenCompactContext = createContext(false)
 const AlmacenApiContext = createContext(null)
@@ -121,18 +175,35 @@ export function AlmacenThemeProvider({ t, compact = false, children }) {
   const styles = useMemo(() => almacenStyles(t, compact), [t, compact])
   return (
     <AlmacenCompactContext.Provider value={compact}>
-      <AlmacenThemeContext.Provider value={styles}>{children}</AlmacenThemeContext.Provider>
+      <AlmacenThemeContext.Provider value={styles}>
+        {children}
+      </AlmacenThemeContext.Provider>
+    </AlmacenCompactContext.Provider>
+  )
+}
+
+export function AlmacenApiProvider({ contratoId, token, children }) {
+  const api = useMemo(() => createAlmacenApi(contratoId, token), [contratoId, token])
+  return <AlmacenApiContext.Provider value={api}>{children}</AlmacenApiContext.Provider>
+}
+
+/** Agrupa tema + API en un solo árbol de contexto (evita desincronización entre providers). */
+export function AlmacenProviders({ t, compact = false, contratoId, token, children }) {
+  const styles = useMemo(() => almacenStyles(t, compact), [t, compact])
+  const api = useMemo(() => createAlmacenApi(contratoId, token), [contratoId, token])
+  return (
+    <AlmacenCompactContext.Provider value={compact}>
+      <AlmacenThemeContext.Provider value={styles}>
+        <AlmacenApiContext.Provider value={api}>
+          {children}
+        </AlmacenApiContext.Provider>
+      </AlmacenThemeContext.Provider>
     </AlmacenCompactContext.Provider>
   )
 }
 
 export function useAlmacenTheme() {
   return useContext(AlmacenThemeContext)
-}
-
-export function AlmacenApiProvider({ contratoId, token, children }) {
-  const api = useMemo(() => createAlmacenApi(contratoId, token), [contratoId, token])
-  return <AlmacenApiContext.Provider value={api}>{children}</AlmacenApiContext.Provider>
 }
 
 export function useAlmacenApi() {
@@ -260,9 +331,112 @@ export function formatNombrePropio(raw) {
     .join(' ')
 }
 
-export function formatEntradaNumero(num) {
-  if (num == null || num === '') return '—'
-  return `#${num}`
+export function formatEntradaNumero(numOrRow, contratoSegment) {
+  if (numOrRow != null && typeof numOrRow === 'object') {
+    if (numOrRow.codigo) return numOrRow.codigo
+    return formatEntradaNumero(numOrRow.numero_entrada, contratoSegment)
+  }
+  if (numOrRow == null || numOrRow === '') return '—'
+  const n = Number(numOrRow)
+  if (!Number.isFinite(n)) return String(numOrRow)
+  const seg = contratoSegment != null && contratoSegment !== '' ? String(contratoSegment) : null
+  if (seg) return `Ent-${seg}-${String(n).padStart(5, '0')}`
+  return `Ent-${String(n).padStart(5, '0')}`
+}
+
+export function formatSalidaNumero(numOrRow, contratoSegment) {
+  if (numOrRow != null && typeof numOrRow === 'object') {
+    if (numOrRow.codigo) return numOrRow.codigo
+    return formatSalidaNumero(numOrRow.numero_salida, contratoSegment)
+  }
+  if (numOrRow == null || numOrRow === '') return '—'
+  const n = Number(numOrRow)
+  if (!Number.isFinite(n)) return String(numOrRow)
+  const seg = contratoSegment != null && contratoSegment !== '' ? String(contratoSegment) : null
+  if (seg) return `Sal-${seg}-${String(n).padStart(5, '0')}`
+  return `Sal-${String(n).padStart(5, '0')}`
+}
+
+/** Etiqueta visible de número de OC (p. ej. #00001). */
+export function formatNumeroOcDisplay(n) {
+  if (n == null || n === '') return '—'
+  const s = String(n).replace(/^#/, '')
+  if (/^CC-/i.test(s)) return s
+  const num = Number(s)
+  if (Number.isFinite(num)) return `#${String(num).padStart(5, '0')}`
+  return s.startsWith('#') ? s : `#${s}`
+}
+
+export function almacenLinkButtonStyle(ui) {
+  return {
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    margin: 0,
+    color: ui?.accent || 'var(--cc-almacen-accent, #2563eb)',
+    fontWeight: 700,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    fontSize: 'inherit',
+    fontFamily: 'inherit',
+  }
+}
+
+/** Estado de recepción de OC (no confundir con aprobación de solicitud). */
+export const ESTADO_OC_RECEPCION_LABEL = {
+  pendiente: 'Sin recibir',
+  parcial: 'Recepción parcial',
+  completa: 'Recepción completa',
+  anulada: 'Anulada',
+}
+
+export function mapOcEstadoRecepcion(estadoDb) {
+  if (estadoDb === 'parcial') return 'parcial'
+  if (estadoDb === 'completa') return 'completa'
+  if (estadoDb === 'anulada') return 'anulada'
+  return 'pendiente'
+}
+
+export function formatOcRecepcionLabel(oc) {
+  const key = oc?.estado_recepcion || mapOcEstadoRecepcion(oc?.estado)
+  return ESTADO_OC_RECEPCION_LABEL[key] || '—'
+}
+
+export function formatOcOpcionEntrada(oc) {
+  const num = oc?.numero_oc ?? '—'
+  const recv = formatOcRecepcionLabel(oc)
+  const saldo = Number(oc?.saldo_cantidad_pendiente)
+  const un = oc?.saldo_unidad
+    || (Array.isArray(oc?.saldo_unidades) && oc.saldo_unidades.length === 1 ? oc.saldo_unidades[0] : '')
+  if (Number.isFinite(saldo) && saldo > 0.0001) {
+    const saldoTxt = `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
+    return `OC #${num} · ${recv} (falta: ${saldoTxt})`
+  }
+  return `OC #${num} · ${recv}`
+}
+
+export function formatEntradaCantidadGrilla(entrada) {
+  const qty = Number(entrada?.cantidad_recibida_total)
+  if (!Number.isFinite(qty) || qty <= 0) return '—'
+  const un = entrada?.cantidad_recibida_unidad
+  return `${fmtCant(qty)}${un ? ` ${un}` : ''}`
+}
+
+export function formatEntradaSaldoOcDespuesGrilla(entrada) {
+  const saldo = Number(entrada?.saldo_oc_pendiente_despues)
+  if (!Number.isFinite(saldo)) return '—'
+  if (saldo <= 0.0001) return 'Completo'
+  const un = entrada?.saldo_oc_pendiente_despues_unidad || entrada?.cantidad_recibida_unidad
+  return `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
+}
+
+export function formatOcSaldoPendienteGrilla(oc) {
+  if (!oc?.numero_oc && oc?.saldo_cantidad_pendiente == null) return '—'
+  const saldo = Number(oc?.saldo_cantidad_pendiente)
+  if (!Number.isFinite(saldo) || saldo <= 0.0001) return 'Completo'
+  const un = oc?.saldo_unidad
+    || (Array.isArray(oc?.saldo_unidades) && oc.saldo_unidades.length === 1 ? oc.saldo_unidades[0] : '')
+  return `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
 }
 
 export function fmtMoney(n) {
@@ -281,6 +455,18 @@ export function formatSolicitudLinea(consecutivo, numeroLinea) {
   if (consecutivo != null) return `#${consecutivo}`
   return 'Línea'
 }
+
+export {
+  ALMACEN_TIMEZONE,
+  parseIsoAlmacen,
+  fmtFechaAlmacen,
+  fmtFechaAlmacenCorta,
+  fmtFechaAlmacenSolo,
+  todayDateInputColombia,
+  nowDatetimeLocalColombia,
+  datetimeLocalColombiaToIsoUtc,
+  isoUtcToDatetimeLocalColombia,
+} from './almacenDatetime'
 
 /** Texto de aprobación para listado de solicitudes */
 export function textoAprobacionSolicitud(s) {

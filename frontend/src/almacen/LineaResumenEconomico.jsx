@@ -3,8 +3,8 @@ import { fmtCant, fmtMoney } from './almacenShared'
 /**
  * Desglose económico de línea: cobro (listado), consumo (insumo c/ impuesto), utilidad.
  */
-export default function LineaResumenEconomico({ analisis, compact = false, color }) {
-  if (!analisis) return null
+export default function LineaResumenEconomico({ analisis, compact = false, color, verEconomicos = true }) {
+  if (!verEconomicos || !analisis) return null
 
   const cant = analisis.cantidad
   const vuCobro = analisis.valor_cobro_unitario

@@ -1991,6 +1991,183 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
+.cc-almacen-rentabilidad-table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+}
+
+.cc-almacen-rentabilidad-table--transposed {
+  min-width: 640px;
+}
+
+.cc-almacen-rentabilidad-th {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  width: 100%;
+}
+
+.cc-almacen-rentabilidad-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 28%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cc-accent-soft, #e2e8f0) 45%, transparent);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.cc-almacen-rentabilidad-toggle:hover {
+  background: color-mix(in srgb, var(--cc-almacen-accent-soft, var(--cc-accent-soft, #e2e8f0)) 70%, transparent);
+}
+
+.cc-almacen-modal-overlay {
+  background: var(--cc-almacen-overlay, rgba(15, 23, 42, 0.52));
+}
+
+.cc-almacen-solicitud-form-modal,
+.cc-almacen-form-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--cc-almacen-text, inherit);
+}
+
+.cc-almacen-solicitud-form-modal__header,
+.cc-almacen-form-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--cc-almacen-border, #e2e8f0);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--cc-almacen-accent, var(--cc-accent, #2563eb)) 16%, var(--cc-almacen-bg-header, var(--cc-almacen-bg-card, #fff))) 0%,
+    color-mix(in srgb, var(--cc-almacen-accent, var(--cc-accent, #2563eb)) 6%, var(--cc-almacen-bg-card, #fff)) 100%
+  );
+  color: var(--cc-almacen-text, inherit);
+  flex-shrink: 0;
+}
+
+.cc-almacen-solicitud-form-modal__body,
+.cc-almacen-form-modal__body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 24px calc(20px + env(safe-area-inset-bottom, 0px));
+  background: var(--cc-almacen-bg-card, inherit);
+  color: var(--cc-almacen-text, inherit);
+}
+
+.cc-almacen-form-root--embedded .cc-almacen-form-section {
+  border-radius: 10px;
+}
+
+.cc-almacen-form-actions--embedded {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cc-almacen-border, #e2e8f0);
+  background: color-mix(in srgb, var(--cc-almacen-bg-card, #fff) 94%, var(--cc-almacen-accent, #2563eb) 6%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--cc-almacen-text, inherit);
+}
+
+.cc-almacen-root--compact .cc-almacen-solicitud-form-modal__header {
+  padding: 16px 16px 12px;
+}
+
+.cc-almacen-root--compact .cc-almacen-solicitud-form-modal__body {
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+.cc-almacen-rentabilidad-table th,
+.cc-almacen-rentabilidad-table td {
+  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 28%, transparent);
+}
+
+.cc-almacen-rentabilidad-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--cc-accent-soft, #e2e8f0) 35%, transparent);
+}
+
+.cc-almacen-trazabilidad-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: var(--cc-xs);
+  line-height: 1.35;
+  margin-top: 4px;
+  padding: 4px 0 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 16%, transparent);
+}
+
+.cc-almacen-trazabilidad-segment:not(:last-child)::after {
+  content: '|';
+  margin-left: 10px;
+  opacity: 0.35;
+}
+
+.cc-almacen-tab-bar--detalle {
+  gap: 4px !important;
+  padding-bottom: 0;
+}
+
+.cc-almacen-tab-bar--detalle .cc-almacen-tab-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px !important;
+  margin-bottom: -2px;
+  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 22%, transparent) !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 8px 8px 0 0 !important;
+  background: color-mix(in srgb, var(--cc-accent-soft, #e2e8f0) 25%, transparent) !important;
+  font-size: var(--cc-sm) !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  color: inherit;
+}
+
+.cc-almacen-tab-bar--detalle .cc-almacen-tab-btn--active {
+  background: var(--cc-almacen-bg-card, inherit) !important;
+  border-bottom-color: var(--cc-almacen-accent, var(--cc-accent, #2563eb)) !important;
+  font-weight: 600 !important;
+  color: var(--cc-almacen-accent, var(--cc-accent, #2563eb)) !important;
+}
+
+.cc-almacen-solicitud-form-modal__header--compact {
+  padding: 14px 18px 10px !important;
+}
+
+.cc-almacen-form-root--embedded .cc-almacen-form-section {
+  margin-bottom: 8px;
+}
+
+.cc-almacen-form-root--embedded .cc-almacen-form-linea {
+  padding: 10px !important;
+}
+
+.cc-almacen-form-root--embedded .cc-almacen-form-actions--embedded {
+  margin-top: 10px;
+  padding-top: 8px;
+}
+
+.cc-almacen-solicitud-form-modal__body {
+  padding: 12px 18px calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
 .cc-almacen-root--compact .cc-almacen-tab-bar {
   overflow-x: auto;
   flex-wrap: nowrap;
@@ -2011,7 +2188,7 @@ select.cc-dashboard-acta-select--light option {
   display: block;
   margin: 0 0 12px;
   padding: 12px;
-  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  border-bottom: 1px solid var(--cc-almacen-border, #e2e8f0);
 }
 
 .cc-almacen-root--compact .cc-almacen-responsive-table tbody tr:last-child {
@@ -2033,7 +2210,7 @@ select.cc-dashboard-acta-select--light option {
   content: attr(data-label);
   font-weight: 700;
   font-size: var(--cc-xs);
-  color: color-mix(in srgb, CanvasText 55%, transparent);
+  color: var(--cc-almacen-text-muted, #64748b);
   flex-shrink: 0;
   max-width: 42%;
 }
@@ -2059,7 +2236,7 @@ select.cc-dashboard-acta-select--light option {
   z-index: 5;
   padding-top: 10px;
   margin-top: 12px;
-  background: color-mix(in srgb, Canvas 92%, transparent);
+  background: color-mix(in srgb, var(--cc-almacen-bg-card, #fff) 94%, var(--cc-almacen-accent, #2563eb) 6%);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }

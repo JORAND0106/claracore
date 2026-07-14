@@ -130,8 +130,10 @@ export function createAlmacenApi(contratoId, token) {
       return fetch(`${base}/solicitudes${q}`, { headers: headers(token) }).then(parseJsonList)
     },
 
-    getSolicitud: (id) =>
-      fetch(`${base}/solicitudes/${id}`, { headers: headers(token) }).then(parseJson),
+    getSolicitud: (id, { ligera = false } = {}) => {
+      const q = ligera ? '?ligera=1' : ''
+      return fetch(`${base}/solicitudes/${id}${q}`, { headers: headers(token) }).then(parseJson)
+    },
 
     createSolicitud: (body) =>
       fetch(`${base}/solicitudes`, {
@@ -160,6 +162,19 @@ export function createAlmacenApi(contratoId, token) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    aprobarTodosItemsSolicitud: (id) =>
+      fetch(`${base}/solicitudes/${id}/aprobar-todos-items`, {
+        method: 'POST',
+        headers: headers(token),
+      }).then(parseJson),
+
+    validarItemSolicitud: (solicitudId, itemId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/validar`, {
+        method: 'POST',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     rechazarSolicitud: (id, motivo) =>
       fetch(`${base}/solicitudes/${id}/rechazar`, {
         method: 'POST',
@@ -170,6 +185,12 @@ export function createAlmacenApi(contratoId, token) {
     anularSolicitud: (id) =>
       fetch(`${base}/solicitudes/${id}/anular`, {
         method: 'POST',
+        headers: headers(token),
+      }).then(parseJson),
+
+    eliminarSolicitudDesarrollador: (id) =>
+      fetch(`${base}/solicitudes/${id}/desarrollador`, {
+        method: 'DELETE',
         headers: headers(token),
       }).then(parseJson),
 
@@ -259,6 +280,14 @@ export function createAlmacenApi(contratoId, token) {
     listInventario: () =>
       fetch(`${base}/inventario`, { headers: headers(token) }).then(parseJsonList),
 
+    getInventarioGraficos: (capitulo, item) => {
+      const params = new URLSearchParams()
+      if (capitulo) params.set('capitulo', capitulo)
+      if (item) params.set('item', item)
+      const q = params.toString() ? `?${params.toString()}` : ''
+      return fetch(`${base}/inventario/graficos${q}`, { headers: headers(token) }).then(parseJson)
+    },
+
     listMovimientos: (presupuestoId, material) => {
       const q = material ? `?material=${encodeURIComponent(material)}` : ''
       return fetch(`${base}/inventario/${presupuestoId}/movimientos${q}`, {
@@ -341,6 +370,61 @@ export function createAlmacenApi(contratoId, token) {
       }
       const blob = await res.blob()
       await printPosPdfBlob(blob, { filename: `disposicion-${entradaId}.pdf` })
+    },
+
+    listSalidas: () =>
+      fetch(`${base}/salidas`, { headers: headers(token) }).then(parseJsonList),
+
+    getSalida: (salidaId) =>
+      fetch(`${base}/salidas/${salidaId}`, { headers: headers(token) }).then(parseJson),
+
+    createSalida: (body) =>
+      fetch(`${base}/salidas`, {
+        method: 'POST',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
+    deleteSalida: (salidaId) =>
+      fetch(`${base}/salidas/${salidaId}`, {
+        method: 'DELETE',
+        headers: headers(token),
+      }).then(parseJson),
+
+    searchUsuariosReceptorObra: (q = '') =>
+      fetch(`${base}/usuarios-receptor-obra?q=${encodeURIComponent(q)}`, {
+        headers: headers(token),
+      }).then(parseJsonList),
+
+    listEntradasDisponiblesPorPk: (pkId) =>
+      fetch(`${base}/entradas/disponibles-por-pk?pk_id=${encodeURIComponent(pkId)}`, {
+        headers: headers(token),
+      }).then(parseJsonList),
+
+    salidaPdfDownloadUrl: (salidaId) => `${base}/salidas/${salidaId}/recibo/download`,
+
+    async openSalidaPdf(salidaId) {
+      const res = await fetch(`${base}/salidas/${salidaId}/recibo/download`, {
+        headers: headers(token),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      await openPosPdfBlob(blob, { filename: `salida-${salidaId}.pdf` })
+    },
+
+    async printSalidaPdf(salidaId) {
+      const res = await fetch(`${base}/salidas/${salidaId}/recibo/download`, {
+        headers: headers(token),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      await printPosPdfBlob(blob, { filename: `salida-${salidaId}.pdf` })
     },
   }
 }

@@ -6,6 +6,7 @@ import PresupuestoRegistroGrid from './PresupuestoRegistroGrid'
 import UbicacionSolicitudFields from './UbicacionSolicitudFields'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
+import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenEconomico from './LineaResumenEconomico'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import {
@@ -17,16 +18,18 @@ import {
 } from './solicitudFormHelpers'
 import {
   AlmacenFieldLabel,
+  buildAlmacenConfirmTheme,
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtCant,
   fmtMoney,
   formatSolicitudLinea,
   puedeAnularSolicitud,
-  textoAprobacionSolicitud,
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
+import { solicitudAlmacenEditable } from './almacenPermisos'
+import { parseAbscisaMetros } from './almacenAbscisa'
 
 const emptyItem = () => ({
   insumo: null,
@@ -51,18 +54,24 @@ const emptyItem = () => ({
   preview: null,
 })
 
+function abscisaPayload(val) {
+  if (val === '' || val == null) return undefined
+  const m = parseAbscisaMetros(val)
+  return m != null ? m : undefined
+}
+
 function ubicacionPayload(it) {
   return {
     pk_id_id: it.pk_id_id || undefined,
     tramo: it.tramo || undefined,
     costado: it.costado || undefined,
-    abscisa_inicial: it.abscisa_inicial !== '' && it.abscisa_inicial != null ? Number(it.abscisa_inicial) : undefined,
-    abscisa_final: it.abscisa_final !== '' && it.abscisa_final != null ? Number(it.abscisa_final) : undefined,
+    abscisa_inicial: abscisaPayload(it.abscisa_inicial),
+    abscisa_final: abscisaPayload(it.abscisa_final),
     observacion_residente: it.observacion_residente || undefined,
   }
 }
 
-function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio }) {
+function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true }) {
   if (!ctx && !ctxNeg?.tiene_negociado) return null
   const alertStyle = supera || superaNegociado
     ? { background: '#fef2f2', border: '1px solid #dc2626', color: '#991b1b' }
@@ -114,7 +123,7 @@ function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg,
         </div>
       )}
       {analisis && (
-        <LineaResumenEconomico analisis={analisis} color={alertStyle.color || ui.textMuted} />
+        <LineaResumenEconomico analisis={analisis} color={alertStyle.color || ui.textMuted} verEconomicos={verEconomicos} />
       )}
     </div>
   )
@@ -128,6 +137,7 @@ export default function SolicitudForm({
   t,
   token,
   contratoId,
+  embedded = false,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -137,12 +147,17 @@ export default function SolicitudForm({
   const [okMsg, setOkMsg] = useState('')
   const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
   const [sol, setSol] = useState(null)
+  const [titulo, setTitulo] = useState('')
   const [confirmAnular, setConfirmAnular] = useState(false)
 
-  const editable = !solicitudId || sol?.estado === 'borrador'
+  const editable = solicitudAlmacenEditable(sol) && (
+    solicitudId ? Boolean(permisos?.editar) : Boolean(permisos?.crear)
+  )
+  const verEconomicos = permisos?.verEconomicos !== false
 
   const aplicarSolicitudServidor = (s) => {
     setSol(s)
+    setTitulo(s?.titulo || '')
     const mapped = mapSolicitudItemsFromServer(s)
     setItems(mapped.length ? mapped : [emptyItem()])
   }
@@ -286,7 +301,11 @@ export default function SolicitudForm({
   }
 
   const onUbicacionChange = (idx, patch) => {
-    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)))
+    setItems((prev) => {
+      const next = prev.map((it, i) => (i === idx ? { ...it, ...patch } : it))
+      triggerPreview(idx, next)
+      return next
+    })
   }
 
   const onCantidadChange = (idx, val) => {
@@ -310,6 +329,7 @@ export default function SolicitudForm({
       throw new Error(validation.message)
     }
     return {
+      titulo: titulo.trim() || undefined,
       items: items.map((it) => {
         const base = {
           cantidad: Number(it.cantidad),
@@ -444,13 +464,21 @@ export default function SolicitudForm({
     }
   }
 
-  const theme = t || { primary: ui.accent, border: '#e2e8f0', text: ui.text, textMuted: ui.textMuted, bgCard: '#fff' }
+  const theme = buildAlmacenConfirmTheme(t, ui)
+  const puedeReenviar = solicitudId && ['borrador', 'rechazada'].includes(sol?.estado) && permisos?.editar
+
+  const rootStyle = embedded
+    ? { padding: 0, border: 'none', boxShadow: 'none', background: 'transparent' }
+    : ui.card
 
   return (
-    <div style={ui.card} className="cc-almacen-form-root">
+    <div style={rootStyle} className={`cc-almacen-form-root${embedded ? ' cc-almacen-form-root--embedded' : ''}`}>
+      {!embedded && (
       <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <span>
-          {solicitudId ? `Solicitud #${sol?.consecutivo || '…'}` : 'Nueva solicitud de insumos'}
+          {solicitudId
+            ? (titulo.trim() || sol?.titulo?.trim() || `Solicitud #${sol?.consecutivo || '…'}`)
+            : 'Nueva solicitud de insumos'}
           {sol?.estado && (
             <span style={{
               marginLeft: 10,
@@ -463,20 +491,57 @@ export default function SolicitudForm({
             </span>
           )}
         </span>
-        {sol?.estado === 'aprobada' && sol?.orden_compra?.id && (
-          <OrdenCompraPdfClip ordenCompra={sol.orden_compra} />
+        {sol?.estado === 'aprobada' && sol?.orden_compra?.id && permisos?.exportar && (
+          <OrdenCompraPdfClip ordenCompra={sol.orden_compra} puedeExportar />
         )}
       </div>
+      )}
 
-      {sol && !editable && (
-        <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {sol.solicitante_nombre && (
-            <span>Solicitada por: <strong>{sol.solicitante_nombre}</strong></span>
-          )}
-          <span>{textoAprobacionSolicitud(sol)}</span>
-          {sol.motivo_rechazo && (
-            <span style={{ color: '#991b1b' }}>Motivo rechazo: {sol.motivo_rechazo}</span>
-          )}
+      {editable && (
+        <div className="cc-almacen-form-section" style={{ marginBottom: embedded ? 8 : 14 }}>
+          <AlmacenFieldLabel icon="📝" label="Título de la solicitud" ayuda="Nombre descriptivo para identificarla en el listado." />
+          <input
+            style={ui.input}
+            value={titulo}
+            disabled={busy}
+            placeholder="Ej.: Materiales muro PK-12 tramo norte"
+            onChange={(e) => setTitulo(e.target.value)}
+          />
+        </div>
+      )}
+
+      {!editable && sol?.titulo?.trim() && (
+        <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 14 }}>
+          Título: <strong style={{ color: ui.text }}>{sol.titulo}</strong>
+        </div>
+      )}
+
+      {sol && !editable && !embedded && (
+        <SolicitudTrazabilidadPanel sol={sol} />
+      )}
+
+      {sol?.estado === 'rechazada' && editable && sol.motivo_rechazo && (
+        <div style={{
+          fontSize: 'var(--cc-sm)',
+          color: '#991b1b',
+          background: 'color-mix(in srgb, #dc2626 8%, var(--cc-almacen-bg-card, #fff))',
+          border: '1px solid color-mix(in srgb, #dc2626 25%, transparent)',
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: 14,
+        }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Solicitud rechazada</div>
+          <div>{sol.motivo_rechazo}</div>
+          <div style={{ marginTop: 6, color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+            Corrija los insumos y use «Reenviar a aprobación» cuando esté listo.
+          </div>
+        </div>
+      )}
+
+      {sol && !editable && !embedded && sol.motivo_rechazo && (
+        <div style={{ fontSize: 'var(--cc-sm)', color: '#991b1b', marginBottom: 14 }}>
+          Motivo rechazo: {sol.motivo_rechazo}
         </div>
       )}
 
@@ -511,7 +576,7 @@ export default function SolicitudForm({
         </div>
       )}
 
-      <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
+      <div style={{ fontWeight: 600, marginBottom: embedded ? 4 : 6, fontSize: 'var(--cc-sm)' }}>
         📦 Insumos solicitados
         {sol?.consecutivo && !editable && (
           <span style={{ fontWeight: 400, color: ui.textMuted, marginLeft: 8 }}>
@@ -531,18 +596,20 @@ export default function SolicitudForm({
           theme={theme}
           accordion
           defaultExpanded={false}
+          verEconomicos={verEconomicos}
         />
       ))}
 
       {editable && items.map((it, idx) => (
         <div
           key={it.id ?? idx}
+          className="cc-almacen-form-section cc-almacen-form-linea"
           style={{
             border: `1px solid ${ui.textMuted}28`,
-            borderRadius: 6,
-            padding: 8,
-            marginBottom: 8,
-            background: `${ui.accentSoft}55`,
+            borderRadius: embedded ? 8 : 6,
+            padding: embedded ? 10 : 8,
+            marginBottom: embedded ? 8 : 8,
+            background: embedded ? `${ui.accentSoft}66` : `${ui.accentSoft}55`,
             position: 'relative',
           }}
         >
@@ -580,7 +647,7 @@ export default function SolicitudForm({
             </button>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingRight: editable ? 118 : 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: embedded ? 4 : 6, paddingRight: editable ? 118 : 0 }}>
             <PresupuestoItemSelector
               capitulo={it.presupuesto_capitulo}
               item={it.presupuesto_item}
@@ -627,10 +694,9 @@ export default function SolicitudForm({
                 absFinalDisplay={it.abs_final_display}
                 nodoInicio={it.nodo_inicio}
                 nodoFinal={it.nodo_final}
+                abscisasEditable={editable}
                 disabled={!editable}
-                onChange={(patch) => onUbicacionChange(idx, {
-                  costado: patch.costado ?? it.costado,
-                })}
+                onChange={(patch) => onUbicacionChange(idx, patch)}
               />
             </div>
 
@@ -688,6 +754,7 @@ export default function SolicitudForm({
             superaNegociado={it.preview?.supera_negociado}
             ctxNeg={it.preview?.contexto_negociado}
             sinPrecio={it.insumo && it.insumo.tiene_precio_compra === false}
+            verEconomicos={verEconomicos}
             ui={ui}
           />
 
@@ -704,15 +771,15 @@ export default function SolicitudForm({
         </button>
       )}
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {editable && permisos?.editar && (
+      <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {editable && (solicitudId ? permisos?.editar : permisos?.crear) && (
           <>
             <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
-              {busy ? 'Guardando…' : 'Guardar borrador'}
+              {busy ? 'Guardando…' : solicitudId && sol?.estado !== 'borrador' ? 'Guardar cambios' : 'Guardar borrador'}
             </button>
-            {solicitudId && (
+            {puedeReenviar && (
               <button type="button" style={ui.btnPrimary} disabled={busy} onClick={solicitarAprobacion}>
-                {busy ? 'Enviando…' : 'Solicitar aprobación'}
+                {busy ? 'Enviando…' : (sol?.estado === 'rechazada' ? 'Reenviar a aprobación' : 'Solicitar aprobación')}
               </button>
             )}
           </>
@@ -727,7 +794,12 @@ export default function SolicitudForm({
             Anular solicitud
           </button>
         )}
-        <button type="button" style={ui.btnSecondary} onClick={onCancel}>Volver</button>
+        {!embedded && (
+          <button type="button" style={ui.btnSecondary} onClick={onCancel}>Volver</button>
+        )}
+        {embedded && (
+          <button type="button" style={ui.btnSecondary} onClick={onCancel}>Cancelar</button>
+        )}
       </div>
 
       {confirmAnular && sol && (

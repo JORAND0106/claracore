@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fmtCant, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { fmtCant, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 export default function ExpedienteCompraModal({ ocId, token, onClose }) {
   const api = useAlmacenApi()
@@ -136,7 +136,7 @@ export default function ExpedienteCompraModal({ ocId, token, onClose }) {
               ) : (
                 data.entradas.map((e) => (
                   <div key={e.id} style={{ marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
-                    {e.fecha_entrada}
+                    {fmtFechaAlmacenSolo(e.fecha_entrada)}
                     {e.remision_nombre && (
                       <button
                         type="button"

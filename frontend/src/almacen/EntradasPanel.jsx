@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import EntradaForm from './EntradaForm'
+import CcConfirmModal from '../components/CcConfirmModal'
+import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
-import { puedeVerAlertasEntrada } from './almacenPermisos'
-import { formatEntradaNumero, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
+import {
+  formatEntradaNumero,
+  formatEntradaCantidadGrilla,
+  formatEntradaSaldoOcDespuesGrilla,
+  fmtFechaAlmacenSolo,
+  useAlmacenApi,
+  useAlmacenTheme,
+} from './almacenShared'
 
 const TIPO_LABEL = {
   disposicion: 'Disposición',
@@ -16,6 +24,7 @@ export default function EntradasPanel({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const verAlertas = puedeVerAlertasEntrada(permisos)
+  const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
   const puedeEliminar = Boolean(permisos?.editar)
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
@@ -23,18 +32,22 @@ export default function EntradasPanel({
   const [detalleId, setDetalleId] = useState(null)
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
+  const [eliminarTarget, setEliminarTarget] = useState(null)
 
-  const eliminarEntrada = async (e, entrada) => {
+  const solicitarEliminar = (e, entrada) => {
     e.stopPropagation()
-    const nEnt = formatEntradaNumero(entrada.numero_entrada)
-    const doc = entrada.numero_documento ? ` · doc. ${entrada.numero_documento}` : ''
-    const msg = `¿Eliminar la entrada N.º ${nEnt}${doc}?\n\nSi era el último consecutivo, ese número quedará disponible para el siguiente registro.`
-    if (!window.confirm(msg)) return
+    setEliminarTarget(entrada)
+  }
+
+  const ejecutarEliminar = async () => {
+    if (!eliminarTarget) return
+    const entrada = eliminarTarget
     setEliminandoId(entrada.id)
     setError('')
     try {
       await api.deleteEntrada(entrada.id)
       if (detalleId === entrada.id) setDetalleId(null)
+      setEliminarTarget(null)
       await reload()
     } catch (err) {
       setError(err.message)
@@ -57,16 +70,6 @@ export default function EntradasPanel({
     }
   }, [refreshSignal, creating, despachadorOpen, reload, onDataLoaded])
 
-  if (creating) {
-    return (
-      <EntradaForm
-        permisos={permisos}
-        onSaved={() => { setCreating(false); reload() }}
-        onCancel={() => setCreating(false)}
-      />
-    )
-  }
-
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
@@ -76,16 +79,18 @@ export default function EntradasPanel({
             Registre ingresos contra órdenes de compra con soporte de remisión o disposición.
           </div>
         </div>
-        {permisos?.crear && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {permisos?.crear && (
             <button type="button" style={ui.btnSecondary} onClick={() => setDespachadorOpen(true)}>
               🚚 Despachador
             </button>
+          )}
+          {puedeEntrada && (
             <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
               + Nueva entrada
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
@@ -102,6 +107,8 @@ export default function EntradasPanel({
                 <th style={ui.th}>Tipo</th>
                 <th style={ui.th}>Documento</th>
                 <th style={ui.th}>OC</th>
+                <th style={ui.th}>Recibido en entrada</th>
+                <th style={ui.th}>Saldo OC tras entrada</th>
                 <th style={ui.th}>Proveedor</th>
                 <th style={ui.th}>Usuario</th>
                 {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center' }}>⚠</th>}
@@ -120,11 +127,17 @@ export default function EntradasPanel({
                     onClick={() => setDetalleId(e.id)}
                     title="Ver resumen"
                   >
-                    <td style={{ ...ui.td, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e.numero_entrada)}</td>
-                    <td style={ui.td} data-label="Fecha">{e.fecha_entrada}</td>
+                    <td style={{ ...ui.td, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
+                    <td style={ui.td} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
                     <td style={ui.td} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
                     <td style={ui.td} data-label="Documento">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
                     <td style={ui.td} data-label="OC">#{oc.numero_oc || '—'}</td>
+                    <td style={ui.td} data-label="Recibido en entrada" title={formatEntradaCantidadGrilla(e)}>
+                      {formatEntradaCantidadGrilla(e)}
+                    </td>
+                    <td style={ui.td} data-label="Saldo OC tras entrada" title={formatEntradaSaldoOcDespuesGrilla(e)}>
+                      {formatEntradaSaldoOcDespuesGrilla(e)}
+                    </td>
                     <td style={ui.td} data-label="Proveedor">{e.proveedor_nombre || '—'}</td>
                     <td style={ui.td} data-label="Usuario">{e.usuario_nombre || '—'}</td>
                     {verAlertas && (
@@ -166,7 +179,7 @@ export default function EntradasPanel({
                           aria-label="Eliminar entrada"
                           disabled={eliminandoId === e.id}
                           style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-md)', color: '#b91c1c' }}
-                          onClick={(ev) => eliminarEntrada(ev, e)}
+                          onClick={(ev) => solicitarEliminar(ev, e)}
                         >
                           {eliminandoId === e.id ? '…' : '🗑️'}
                         </button>
@@ -191,6 +204,17 @@ export default function EntradasPanel({
         />
       )}
 
+      {creating && (
+        <EntradaFormModal
+          permisos={permisos}
+          t={t}
+          token={token}
+          contratoId={permisos?.contratoId}
+          onClose={() => setCreating(false)}
+          onSaved={() => { setCreating(false); reload() }}
+        />
+      )}
+
       {detalleId && (
         <EntradaDetalleModal
           entradaId={detalleId}
@@ -200,6 +224,32 @@ export default function EntradasPanel({
           permisos={permisos}
           onClose={() => setDetalleId(null)}
         />
+      )}
+
+      {eliminarTarget && (
+        <CcConfirmModal
+          theme={t}
+          tipo="danger"
+          titulo="Eliminar entrada"
+          confirmar="Eliminar"
+          cancelar="Cancelar"
+          procesando={eliminandoId === eliminarTarget.id}
+          onCancel={() => !eliminandoId && setEliminarTarget(null)}
+          onConfirm={ejecutarEliminar}
+        >
+          {(() => {
+            const nEnt = formatEntradaNumero(eliminarTarget)
+            const doc = eliminarTarget.numero_documento ? ` · doc. ${eliminarTarget.numero_documento}` : ''
+            return (
+              <>
+                ¿Eliminar la entrada {nEnt}{doc}?
+                <div style={{ marginTop: 10, color: 'inherit', opacity: 0.9 }}>
+                  Si era el último consecutivo, ese número quedará disponible para el siguiente registro.
+                </div>
+              </>
+            )
+          })()}
+        </CcConfirmModal>
       )}
     </div>
   )

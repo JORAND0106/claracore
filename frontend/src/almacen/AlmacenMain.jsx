@@ -3,10 +3,11 @@ import ModuloDataRefreshBar from '../components/ModuloDataRefreshBar'
 import { useModulo } from '../context/ModuloContext'
 import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
+import SalidasPanel from './SalidasPanel'
 import SolicitudesPanel from './SolicitudesPanel'
 import {
-  AlmacenApiProvider,
-  AlmacenThemeProvider,
+  AlmacenProviders,
+  buildAlmacenCssVars,
   useAlmacenApi,
   useAlmacenTheme,
   useAlmacenViewport,
@@ -15,7 +16,8 @@ import {
 const TABS = [
   { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.' },
   { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.' },
-  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Stock, semáforo presupuesto e historial.' },
+  { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.' },
+  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Gráficos comparativos: presupuesto, entradas, salidas y cobro SICOE.' },
 ]
 
 function AlmacenLayout({ permisos, token, t, compact }) {
@@ -73,12 +75,19 @@ function AlmacenLayout({ permisos, token, t, compact }) {
   }, [api, permisos?.validar, tab])
 
   const visibleTabs = useMemo(() => TABS.filter((tb) => {
-    if (tb.id === 'entradas') return permisos?.crear || permisos?.ver
+    if (tb.id === 'entradas' || tb.id === 'salidas') {
+      return permisos?.crear || permisos?.editar || permisos?.ver
+    }
     return true
   }), [permisos])
 
+  const cssVars = useMemo(() => buildAlmacenCssVars(t), [t])
+
   return (
-    <div className={compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'} style={{ maxWidth: compact ? '100%' : 1200, margin: '0 auto' }}>
+    <div
+      className={`cc-almacen-theme-scope ${compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'}`}
+      style={{ ...cssVars, maxWidth: compact ? '100%' : 1200, margin: '0 auto' }}
+    >
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -91,7 +100,7 @@ function AlmacenLayout({ permisos, token, t, compact }) {
         <div>
           <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700 }}>🏪 Almacén de Obra</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-            Compras, entradas e inventario de materiales ligados al presupuesto del contrato.
+            Compras, entradas, salidas e inventario de materiales ligados al presupuesto del contrato.
           </div>
         </div>
         <ModuloDataRefreshBar
@@ -149,6 +158,15 @@ function AlmacenLayout({ permisos, token, t, compact }) {
           onDataLoaded={onDataLoaded}
         />
       )}
+      {tab === 'salidas' && (
+        <SalidasPanel
+          permisos={permisos}
+          t={t}
+          token={token}
+          refreshSignal={refreshSignal}
+          onDataLoaded={onDataLoaded}
+        />
+      )}
       {tab === 'inventario' && (
         <InventarioPanel
           permisos={permisos}
@@ -173,10 +191,8 @@ export default function AlmacenMain({ t, token, permisos }) {
   }
 
   return (
-    <AlmacenThemeProvider t={t} compact={isCompact}>
-      <AlmacenApiProvider contratoId={contratoId} token={token}>
-        <AlmacenLayout permisos={permisos} token={token} t={t} compact={isCompact} />
-      </AlmacenApiProvider>
-    </AlmacenThemeProvider>
+    <AlmacenProviders t={t} compact={isCompact} contratoId={contratoId} token={token}>
+      <AlmacenLayout permisos={permisos} token={token} t={t} compact={isCompact} />
+    </AlmacenProviders>
   )
 }

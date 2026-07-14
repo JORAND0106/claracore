@@ -8,11 +8,12 @@ import io
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from almacen_export import build_inventario_xlsx
+from almacen_inventario_graficos import get_inventario_graficos
 from almacen_insumos_service import (
     create_insumo,
     create_proveedor,
@@ -28,7 +29,11 @@ from almacen_insumos_service import (
     search_insumos_catalog,
     search_proveedores,
 )
-from almacen_permissions import require_permiso_almacen, tiene_permiso_almacen
+from almacen_permissions import (
+    puede_ver_valores_economicos_almacen,
+    require_permiso_almacen,
+    tiene_permiso_almacen,
+)
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_service import (
@@ -36,21 +41,29 @@ from almacen_service import (
     alertas_vencimiento,
     anular_solicitud,
     aprobar_solicitud,
+    aprobar_todos_items_solicitud,
     buscar_ordenes_compra_vigentes,
     buscar_ordenes_compra_por_pk,
     contexto_ordenes_compra_por_pk,
     create_entrada,
+    create_salida,
     create_solicitud,
     delete_cotizacion,
     download_disposicion_pdf,
     download_pdf_oc,
+    download_salida_pdf,
     download_soporte,
     eliminar_entrada,
+    eliminar_salida,
+    eliminar_solicitud_desarrollador,
+    entradas_disponibles_por_pk,
     enviar_solicitud,
+    _fetch_solicitud_head,
     get_config,
     get_entrada,
     get_expediente,
     get_orden_compra,
+    get_salida,
     get_solicitud,
     get_transportador_por_placa,
     list_entradas,
@@ -58,7 +71,9 @@ from almacen_service import (
     list_movimientos,
     list_ordenes_compra,
     list_presupuesto_items,
+    list_salidas,
     list_solicitudes,
+    list_usuarios_receptor_obra,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
     rechazar_solicitud,
@@ -66,6 +81,7 @@ from almacen_service import (
     update_config,
     update_solicitud,
     upload_factura_oc,
+    validar_item_solicitud,
 )
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 
@@ -169,6 +185,7 @@ class InsumoPreviewBody(BaseModel):
 
 
 class SolicitudCreateBody(BaseModel):
+    titulo: Optional[str] = None
     observaciones: Optional[str] = None
     items: List[SolicitudItemBody]
 
@@ -190,6 +207,12 @@ class CotizacionSeleccionBody(BaseModel):
 class AprobarBody(BaseModel):
     fecha_compromiso: Optional[str] = None
     cotizaciones_seleccionadas: Optional[List[CotizacionSeleccionBody]] = None
+    aprobar_todos_pendientes: bool = True
+
+
+class ValidarItemBody(BaseModel):
+    accion: str = Field(..., pattern="^(aprobar|rechazar)$")
+    motivo: Optional[str] = None
 
 
 class RechazarBody(BaseModel):
@@ -488,15 +511,27 @@ def route_list_solicitudes(
 ):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
-    return list_solicitudes(contrato_id, estado)
+    ver_eco = puede_ver_valores_economicos_almacen(current_user)
+    return list_solicitudes(contrato_id, estado, ver_economicos=ver_eco)
 
 
 @router.get("/{contrato_id}/solicitudes/{solicitud_id}")
-def route_get_solicitud(contrato_id: int, solicitud_id: int, current_user=Depends(get_current_user)):
+def route_get_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    ligera: bool = False,
+    current_user=Depends(get_current_user),
+):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
+    ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
-        return get_solicitud(contrato_id, solicitud_id)
+        return get_solicitud(
+            contrato_id,
+            solicitud_id,
+            ver_economicos=ver_eco if not ligera else False,
+            ligera=ligera,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -504,7 +539,7 @@ def route_get_solicitud(contrato_id: int, solicitud_id: int, current_user=Depend
 @router.post("/{contrato_id}/solicitudes")
 def route_create_solicitud(contrato_id: int, body: SolicitudCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_almacen(current_user, "crear")
     try:
         result = create_solicitud(contrato_id, _uid(current_user), body.model_dump())
         registrar_log(current_user, "CREAR", "ALMACEN", "solicitud", result.get("id"), {})
@@ -555,6 +590,45 @@ def route_aprobar_solicitud(
         raise _http_value_error(exc) from exc
 
 
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/validar")
+def route_validar_item_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    body: ValidarItemBody,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "validar")
+    ver_eco = puede_ver_valores_economicos_almacen(current_user)
+    try:
+        validar_item_solicitud(
+            contrato_id,
+            solicitud_id,
+            item_id,
+            _uid(current_user),
+            body.accion,
+            body.motivo,
+        )
+        return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_eco)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/aprobar-todos-items")
+def route_aprobar_todos_items(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "validar")
+    try:
+        return aprobar_todos_items_solicitud(contrato_id, solicitud_id, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/rechazar")
 def route_rechazar_solicitud(
     contrato_id: int,
@@ -578,7 +652,7 @@ def route_anular_solicitud(
 ):
     _check_contrato(current_user, contrato_id)
     try:
-        sol = get_solicitud(contrato_id, solicitud_id)
+        sol = _fetch_solicitud_head(contrato_id, solicitud_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     if not _puede_anular_solicitud(current_user, sol):
@@ -591,6 +665,25 @@ def route_anular_solicitud(
         registrar_log(
             current_user, "ANULAR", "ALMACEN", "solicitud", solicitud_id,
             {"estado_previo": sol.get("estado"), "deleted": result.get("deleted", False)},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/solicitudes/{solicitud_id}/desarrollador")
+def route_eliminar_solicitud_desarrollador(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Eliminación permanente — solo cargo Desarrollador (limpieza de datos)."""
+    _check_contrato(current_user, contrato_id)
+    try:
+        result = eliminar_solicitud_desarrollador(contrato_id, solicitud_id, current_user)
+        registrar_log(
+            current_user, "ELIMINAR_DEV", "ALMACEN", "solicitud", solicitud_id,
+            {"deleted": True},
         )
         return result
     except ValueError as exc:
@@ -748,7 +841,7 @@ def route_download_factura(contrato_id: int, oc_id: int, current_user=Depends(ge
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/download")
 def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_permiso_almacen(current_user, "exportar")
     try:
         data, fname = download_pdf_oc(contrato_id, oc_id, _uid(current_user))
         safe_name = fname.replace('"', "'")
@@ -769,6 +862,20 @@ def route_proximo_numero_disposicion(contrato_id: int, current_user=Depends(get_
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "crear")
     return preview_proximo_numero_disposicion(contrato_id)
+
+
+@router.get("/{contrato_id}/entradas/disponibles-por-pk")
+def route_entradas_disponibles_por_pk(
+    contrato_id: int,
+    pk_id: str,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return entradas_disponibles_por_pk(contrato_id, pk_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.get("/{contrato_id}/entradas")
@@ -823,6 +930,21 @@ async def route_create_entrada(
             status_code=400,
             detail="Indique el número de remisión del proveedor.",
         )
+    if tipo_norm == "recibo" and (not remision or not remision.filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Adjunte el soporte fotográfico o PDF de la remisión.",
+        )
+    rem_data = rem_mime = rem_nombre = None
+    if remision and remision.filename:
+        rem_data = await remision.read()
+        rem_mime = remision.content_type or "image/jpeg"
+        rem_nombre = remision.filename
+        if tipo_norm == "recibo" and len(rem_data) > 300 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail="El soporte de remisión no puede superar 300 KB.",
+            )
     body = {
         "orden_compra_id": orden_compra_id,
         "fecha_entrada": fecha_entrada,
@@ -840,11 +962,6 @@ async def route_create_entrada(
         "placa": placa,
         "transportador": transportador,
     }
-    rem_data = rem_mime = rem_nombre = None
-    if remision and remision.filename:
-        rem_data = await remision.read()
-        rem_mime = remision.content_type or "image/jpeg"
-        rem_nombre = remision.filename
     try:
         result = create_entrada(
             contrato_id, _uid(current_user), body,
@@ -898,6 +1015,100 @@ def route_download_disposicion(contrato_id: int, entrada_id: int, current_user=D
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+class SalidaCreateBody(BaseModel):
+    receptor_usuario_id: int
+    fecha_hora_salida: Optional[str] = None
+    pk_id: str = Field(..., min_length=1)
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[str] = None
+    abscisa_final: Optional[str] = None
+    entrada_item_id: int
+    cantidad_salida: float = Field(..., gt=0)
+    observaciones: Optional[str] = None
+
+
+@router.get("/{contrato_id}/usuarios-receptor-obra")
+def route_usuarios_receptor_obra(
+    contrato_id: int,
+    q: str = "",
+    limit: int = 30,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return list_usuarios_receptor_obra(contrato_id, q, min(limit, 50))
+
+
+@router.get("/{contrato_id}/salidas")
+def route_list_salidas(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return list_salidas(contrato_id)
+
+
+@router.get("/{contrato_id}/salidas/{salida_id}")
+def route_get_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return get_salida(contrato_id, salida_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/salidas")
+def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    try:
+        result = create_salida(contrato_id, _uid(current_user), body.dict())
+        registrar_log(current_user, "CREAR", "ALMACEN", "salida", result.get("id"), {})
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/salidas/{salida_id}")
+def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        result = eliminar_salida(contrato_id, salida_id)
+        registrar_log(current_user, "ELIMINAR", "ALMACEN", "salida", salida_id, result)
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/salidas/{salida_id}/recibo/download")
+def route_download_salida_pdf(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        data, fname = download_salida_pdf(contrato_id, salida_id)
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/inventario/graficos")
+def route_inventario_graficos(
+    contrato_id: int,
+    capitulo: Optional[str] = Query(None),
+    item: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return get_inventario_graficos(contrato_id, capitulo=capitulo, item=item)
 
 
 @router.get("/{contrato_id}/inventario")

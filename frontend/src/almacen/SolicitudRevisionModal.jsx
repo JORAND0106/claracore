@@ -5,6 +5,7 @@ import ExpedienteCompraModal from './ExpedienteCompraModal'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import {
   ESTADO_SOLICITUD_LABEL,
+  almacenFormModalDialogStyle,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
@@ -113,7 +114,6 @@ export default function SolicitudRevisionModal({
         position: 'fixed',
         inset: 0,
         zIndex: 100010,
-        background: 'rgba(15, 23, 42, 0.52)',
         display: 'flex',
         alignItems: compact ? 'flex-end' : 'center',
         justifyContent: 'center',
@@ -127,13 +127,8 @@ export default function SolicitudRevisionModal({
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: compact ? '100%' : 'min(920px, 100%)',
-          maxHeight: compact ? '96dvh' : '92vh',
+          ...almacenFormModalDialogStyle({ width: 'min(920px, 100%)', compact }),
           overflow: 'auto',
-          background: theme.bgCard || '#fff',
-          border: compact ? 'none' : `1px solid ${theme.border || '#e2e8f0'}`,
-          borderRadius: compact ? '16px 16px 0 0' : 14,
-          boxShadow: compact ? '0 -12px 40px rgba(0,0,0,0.25)' : '0 24px 64px rgba(0,0,0,0.28)',
           padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : 20,
         }}
       >

@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 from datetime import datetime
 from typing import List
+from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -22,6 +23,7 @@ _AL_LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 _AL_RIGHT = Alignment(horizontal="right", vertical="center")
 
 _SEMAFORO_LABEL = {"verde": "Dentro de presupuesto", "amarillo": "Cerca del límite", "rojo": "Superado"}
+_BOGOTA = ZoneInfo("America/Bogota")
 
 
 def build_inventario_xlsx(contrato_id: int, contrato_numero: str = "") -> bytes:
@@ -34,7 +36,8 @@ def build_inventario_xlsx(contrato_id: int, contrato_numero: str = "") -> bytes:
     ws.merge_cells("A1:H1")
     c = ws.cell(row=1, column=1, value=titulo)
     c.font = _FONT_TITLE
-    ws.cell(row=2, column=1, value=f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    generado = datetime.now(_BOGOTA).strftime("%d/%m/%Y %H:%M")
+    ws.cell(row=2, column=1, value=f"Generado: {generado}")
 
     headers = [
         "Capítulo", "Ítem", "Material", "Unidad", "Stock disponible",

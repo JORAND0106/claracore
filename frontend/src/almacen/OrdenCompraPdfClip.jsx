@@ -7,11 +7,12 @@ export default function OrdenCompraPdfClip({
   ordenCompra,
   title,
   compact = false,
+  puedeExportar = true,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const oc = ordenCompra
-  if (!oc?.id) return null
+  if (!oc?.id || !puedeExportar) return null
 
   const abrirPdf = async (e) => {
     e?.stopPropagation?.()

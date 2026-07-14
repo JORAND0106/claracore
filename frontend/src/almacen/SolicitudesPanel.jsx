@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
-import SolicitudForm from './SolicitudForm'
-import SolicitudRevisionModal from './SolicitudRevisionModal'
+import SolicitudFormModal from './SolicitudFormModal'
+import SolicitudDetalleModal from './SolicitudDetalleModal'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
+  solicitudPuedeValidar,
+  solicitudTieneOrdenCompra,
+} from './solicitudDetalleHelpers'
+import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
+  fmtFechaAlmacenCorta,
   puedeAnularSolicitud,
   textoAprobacionSolicitud,
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
+import { puedeEliminarSolicitudDesarrollador } from './almacenPermisos'
 
 export default function SolicitudesPanel({
   permisos, t, token, contratoId, refreshSignal = 0, onDataLoaded,
@@ -22,9 +28,14 @@ export default function SolicitudesPanel({
   const [error, setError] = useState('')
   const [editId, setEditId] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [revisionId, setRevisionId] = useState(null)
+  const [detalleId, setDetalleId] = useState(null)
+  const [detalleTab, setDetalleTab] = useState('portada')
   const [anularTarget, setAnularTarget] = useState(null)
   const [anularBusy, setAnularBusy] = useState(false)
+  const [eliminarDevTarget, setEliminarDevTarget] = useState(null)
+  const [eliminarDevBusy, setEliminarDevBusy] = useState(false)
+
+  const puedeEliminarDev = puedeEliminarSolicitudDesarrollador(permisos)
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -41,10 +52,15 @@ export default function SolicitudesPanel({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      if (!creating && !editId) reload()
+      if (!creating && !editId && !detalleId) reload()
       else onDataLoaded?.()
     }
-  }, [refreshSignal, creating, editId, reload, onDataLoaded])
+  }, [refreshSignal, creating, editId, detalleId, reload, onDataLoaded])
+
+  const abrirDetalle = (s, tab = 'portada') => {
+    setDetalleTab(tab)
+    setDetalleId(s.id)
+  }
 
   const ejecutarAnular = async () => {
     if (!anularTarget) return
@@ -60,28 +76,21 @@ export default function SolicitudesPanel({
     }
   }
 
-  if (creating || editId) {
-    return (
-      <SolicitudForm
-        solicitudId={editId}
-        permisos={permisos}
-        t={t}
-        token={token}
-        contratoId={contratoId}
-        onSaved={(result) => {
-          if (result?.estado === 'borrador' && result?.id) {
-            setCreating(false)
-            setEditId(result.id)
-            return
-          }
-          setEditId(null)
-          setCreating(false)
-          reload()
-        }}
-        onCancel={() => { setEditId(null); setCreating(false) }}
-      />
-    )
+  const ejecutarEliminarDev = async () => {
+    if (!eliminarDevTarget) return
+    setEliminarDevBusy(true)
+    try {
+      await api.eliminarSolicitudDesarrollador(eliminarDevTarget.id)
+      setEliminarDevTarget(null)
+      reload()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setEliminarDevBusy(false)
+    }
   }
+
+  const formModalOpen = creating || editId
 
   return (
     <div>
@@ -92,7 +101,7 @@ export default function SolicitudesPanel({
             Genere solicitudes de insumos con ubicación PK-ID, control presupuestal y trazabilidad por línea.
           </div>
         </div>
-        {permisos?.editar && (
+        {permisos?.crear && (
           <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
             + Nueva solicitud
           </button>
@@ -113,6 +122,7 @@ export default function SolicitudesPanel({
             <thead>
               <tr>
                 <th style={ui.th}>#</th>
+                <th style={ui.th}>Título</th>
                 <th style={ui.th}>Estado</th>
                 <th style={ui.th}>Solicitante</th>
                 <th style={ui.th}>Aprobación</th>
@@ -124,8 +134,15 @@ export default function SolicitudesPanel({
             </thead>
             <tbody>
               {lista.map((s) => (
-                <tr key={s.id}>
+                <tr
+                  key={s.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => abrirDetalle(s)}
+                >
                   <td style={ui.td} data-label="#">{s.consecutivo}</td>
+                  <td style={{ ...ui.td, fontWeight: 600, maxWidth: 220 }} data-label="Título">
+                    {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
+                  </td>
                   <td style={{ ...ui.td, color: ESTADO_SOLICITUD_COLOR[s.estado], fontWeight: 600 }} data-label="Estado">
                     {ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
@@ -136,28 +153,37 @@ export default function SolicitudesPanel({
                     {textoAprobacionSolicitud(s)}
                   </td>
                   <td style={ui.td} data-label="Materiales">{(s.items || []).length} ítem(s)</td>
-                  <td style={ui.td} data-label="Fecha">{s.created_at?.slice(0, 10)}</td>
-                  <td style={ui.td} data-label="OC">
-                    {s.estado === 'aprobada' && s.orden_compra?.id ? (
-                      <OrdenCompraPdfClip ordenCompra={s.orden_compra} compact />
+                  <td style={ui.td} data-label="Fecha">{fmtFechaAlmacenCorta(s.created_at)}</td>
+                  <td style={ui.td} data-label="OC" onClick={(e) => e.stopPropagation()}>
+                    {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && s.orden_compra?.id && permisos?.exportar ? (
+                      <OrdenCompraPdfClip ordenCompra={s.orden_compra} compact puedeExportar />
                     ) : '—'}
                   </td>
-                  <td style={ui.td} data-label="Acciones">
+                  <td style={ui.td} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        style={ui.btnSecondary}
-                        onClick={() => setEditId(s.id)}
-                      >
-                        {s.estado === 'borrador' && permisos?.editar ? 'Editar' : 'Ver'}
-                      </button>
-                      {s.estado === 'enviada' && permisos?.validar && (
+                      {solicitudPuedeValidar(s, permisos) && (
                         <button
                           type="button"
                           style={{ ...ui.btnPrimary, padding: '6px 10px', fontSize: 'var(--cc-xs)' }}
-                          onClick={() => setRevisionId(s.id)}
+                          onClick={() => abrirDetalle(s, 'portada')}
                         >
                           Revisar
+                        </button>
+                      )}
+                      {puedeEliminarDev && (
+                        <button
+                          type="button"
+                          style={{
+                            ...ui.btnSecondary,
+                            padding: '6px 10px',
+                            fontSize: 'var(--cc-xs)',
+                            color: '#7c2d12',
+                            borderColor: '#7c2d1266',
+                          }}
+                          title="Eliminación permanente (solo Desarrollador)"
+                          onClick={() => setEliminarDevTarget(s)}
+                        >
+                          Eliminar
                         </button>
                       )}
                       {puedeAnularSolicitud(s, permisos) && (
@@ -184,17 +210,45 @@ export default function SolicitudesPanel({
         </div>
       )}
 
-      {revisionId && (
-        <SolicitudRevisionModal
-          solicitudId={revisionId}
+      {formModalOpen && (
+        <SolicitudFormModal
+          solicitudId={editId}
+          permisos={permisos}
+          t={t}
+          token={token}
+          contratoId={contratoId}
+          onClose={() => { setEditId(null); setCreating(false) }}
+          onSaved={(result) => {
+            if (result?.estado === 'borrador' && result?.id) {
+              setCreating(false)
+              setEditId(result.id)
+              reload()
+              return
+            }
+            setEditId(null)
+            setCreating(false)
+            reload()
+          }}
+        />
+      )}
+
+      {detalleId && (
+        <SolicitudDetalleModal
+          solicitudId={detalleId}
+          initialTab={detalleTab}
           permisos={permisos}
           token={token}
           t={t}
           contratoId={contratoId}
-          onClose={() => setRevisionId(null)}
+          onClose={() => setDetalleId(null)}
           onUpdated={() => {
-            setRevisionId(null)
+            setDetalleId(null)
             reload()
+          }}
+          onEdit={(sol) => {
+            setDetalleId(null)
+            setEditId(sol?.id || detalleId)
+            setCreating(false)
           }}
         />
       )}
@@ -213,6 +267,21 @@ export default function SolicitudesPanel({
           {anularTarget.estado === 'borrador'
             ? `¿Eliminar la solicitud #${anularTarget.consecutivo} en borrador? Esta acción no se puede deshacer.`
             : `¿Anular la solicitud #${anularTarget.consecutivo} enviada? Quedará marcada como rechazada.`}
+        </CcConfirmModal>
+      )}
+
+      {eliminarDevTarget && (
+        <CcConfirmModal
+          theme={t}
+          tipo="danger"
+          titulo="Eliminar solicitud (Desarrollador)"
+          confirmar="Eliminar permanentemente"
+          cancelar="Cancelar"
+          procesando={eliminarDevBusy}
+          onCancel={() => !eliminarDevBusy && setEliminarDevTarget(null)}
+          onConfirm={ejecutarEliminarDev}
+        >
+          {`¿Eliminar permanentemente la solicitud #${eliminarDevTarget.consecutivo} y todos sus datos asociados (OC, entradas, salidas)? Esta acción es irreversible y solo está disponible para Desarrollador.`}
         </CcConfirmModal>
       )}
     </div>

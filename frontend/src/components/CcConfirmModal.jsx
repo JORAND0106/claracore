@@ -1,6 +1,10 @@
 /**
  * Confirmación modal del sistema (reemplaza window.confirm en flujos ClaraCore).
  */
+function mixWithSurface(color, surface, pct = 14) {
+  return `color-mix(in srgb, ${color} ${pct}%, ${surface})`
+}
+
 export default function CcConfirmModal({
   theme,
   titulo = 'Confirmar',
@@ -15,12 +19,23 @@ export default function CcConfirmModal({
   onCancel,
 }) {
   const t = theme || {}
+  const surface = t.bgCard || 'var(--cc-almacen-bg-card, #ffffff)'
+  const text = t.text || 'var(--cc-almacen-text, #0F172A)'
+  const border = t.border || 'var(--cc-almacen-border, #E2E8F0)'
+  const overlay = t.overlay || 'var(--cc-almacen-overlay, rgba(15, 23, 42, 0.48))'
+  const primary = t.primary || 'var(--cc-almacen-accent, #0077B6)'
+  const success = t.success || 'var(--cc-color-success, #16a34a)'
+  const danger = t.danger || '#DC2626'
+  const warn = t.warn || '#D97706'
+
   const palette = {
-    warn: { accent: '#D97706', bg: '#FEF3C7', icon: '⚠️' },
-    info: { accent: t.primary || '#0077B6', bg: `${t.primary || '#0077B6'}14`, icon: 'ℹ️' },
-    danger: { accent: '#DC2626', bg: '#FEE2E2', icon: '⚠️' },
-    success: { accent: 'var(--cc-color-success)', bg: '#ECFDF5', icon: '✅' },
-  }[tipo] || { accent: t.primary || '#0077B6', bg: `${t.primary || '#0077B6'}14`, icon: 'ℹ️' }
+    warn: { accent: warn, bg: mixWithSurface(warn, surface, 16), icon: '⚠️' },
+    info: { accent: primary, bg: mixWithSurface(primary, surface, 14), icon: 'ℹ️' },
+    danger: { accent: danger, bg: mixWithSurface(danger, surface, 12), icon: '⚠️' },
+    success: { accent: success, bg: mixWithSurface(success, surface, 14), icon: '✅' },
+  }[tipo] || { accent: primary, bg: mixWithSurface(primary, surface, 14), icon: 'ℹ️' }
+
+  const confirmTextColor = '#fff'
 
   return (
     <div
@@ -28,7 +43,7 @@ export default function CcConfirmModal({
         position: 'fixed',
         inset: 0,
         zIndex,
-        background: 'rgba(15, 23, 42, 0.48)',
+        background: overlay,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -44,18 +59,19 @@ export default function CcConfirmModal({
         style={{
           width: '100%',
           maxWidth: 440,
-          background: t.bgCard || '#fff',
-          border: `1px solid ${t.border || '#E2E8F0'}`,
+          background: surface,
+          border: `1px solid ${border}`,
           borderRadius: 14,
-          boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
+          boxShadow: t.shadow || 'var(--cc-almacen-shadow-modal, 0 24px 64px rgba(0,0,0,0.28))',
           overflow: 'hidden',
+          color: text,
         }}
       >
         <div
           style={{
             padding: '16px 20px 12px',
             background: palette.bg,
-            borderBottom: `1px solid ${t.border || '#E2E8F0'}`,
+            borderBottom: `1px solid ${border}`,
             display: 'flex',
             alignItems: 'center',
             gap: 10,
@@ -66,7 +82,7 @@ export default function CcConfirmModal({
             {titulo}
           </div>
         </div>
-        <div style={{ padding: '16px 20px 6px', fontSize: 'var(--cc-sm)', color: t.text || '#0F172A', lineHeight: 1.45 }}>
+        <div style={{ padding: '16px 20px 6px', fontSize: 'var(--cc-sm)', color: text, lineHeight: 1.45 }}>
           {children}
         </div>
         <div
@@ -85,8 +101,8 @@ export default function CcConfirmModal({
               onClick={onCancel}
               style={{
                 background: 'transparent',
-                color: t.textMuted || '#64748B',
-                border: `1px solid ${t.border || '#CBD5E1'}`,
+                color: t.textMuted || 'var(--cc-almacen-text-muted, #64748B)',
+                border: `1px solid ${border}`,
                 borderRadius: 8,
                 padding: '8px 16px',
                 fontSize: 'var(--cc-sm)',
@@ -108,7 +124,7 @@ export default function CcConfirmModal({
             }}
             style={{
               background: palette.accent,
-              color: '#fff',
+              color: confirmTextColor,
               border: 'none',
               borderRadius: 8,
               padding: '8px 18px',

@@ -1,18 +1,13 @@
 import { useState } from 'react'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
+import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import LineaResumenEconomico from './LineaResumenEconomico'
+import { rentabilidadDesdeAnalisis, fmtAbscisasLinea } from './solicitudDetalleHelpers'
 import {
   fmtCant,
   formatSolicitudLinea,
   useAlmacenTheme,
 } from './almacenShared'
-
-function fmtAbscisa(absIni, absFin) {
-  const a = (absIni || '').trim()
-  const b = (absFin || '').trim()
-  if (a && b && a !== b) return `${a} → ${b}`
-  return a || b || '—'
-}
 
 export default function SolicitudItemDetalleCard({
   item,
@@ -24,22 +19,28 @@ export default function SolicitudItemDetalleCard({
   compact = false,
   accordion = true,
   defaultExpanded = false,
+  verEconomicos = true,
+  resaltarCantidad = false,
 }) {
   const ui = useAlmacenTheme()
   const [expanded, setExpanded] = useState(!accordion || defaultExpanded)
   const ctx = item.preview?.contexto_presupuesto || item.contexto_presupuesto
   const ctxNeg = item.preview?.contexto_negociado || item.contexto_negociado
   const analisis = item.preview?.analisis_valor || item.analisis_valor
+  const analisisRentabilidadRaw = item.preview?.analisis_rentabilidad || item.analisis_rentabilidad
+  const tablaRentabilidad = analisisRentabilidadRaw
+    || (analisis ? rentabilidadDesdeAnalisis(analisis, {
+      numeroOc: item.orden_compra?.numero_oc ?? item.numero_oc ?? null,
+      consecutivo: consecutivo,
+    }) : null)
   const supera = item.preview?.supera_presupuesto || item.supera_presupuesto || ctx?.supera_presupuesto
   const superaNeg = item.preview?.supera_negociado || item.supera_negociado || ctxNeg?.supera_negociado
   const alerta = supera || superaNeg
   const numeroLinea = item.numero_linea ?? lineIndex
   const pkLabel = item.pk_label || item.pk_id || ''
-  const absIni = item.abs_inicio_display || ctx?.abs_inicio || item.abscisa_inicial
-  const absFin = item.abs_final_display || ctx?.abs_final || item.abscisa_final
+  const absResumen = fmtAbscisasLinea(item)
   const observacion = (item.observacion_residente || '').trim()
   const material = item.insumo?.label || item.material_descripcion || '—'
-  const absResumen = fmtAbscisa(absIni, absFin)
 
   const toggle = () => {
     if (accordion) setExpanded((v) => !v)
@@ -61,8 +62,17 @@ export default function SolicitudItemDetalleCard({
       <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
         {item.presupuesto_capitulo || item.capitulo} · {item.presupuesto_item || item.item} — {material}
       </div>
-      <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
-        Cantidad: {fmtCant(item.cantidad)} {item.unidad || ctx?.unidad || ''}
+      <div style={{ fontSize: resaltarCantidad ? 'var(--cc-sm)' : 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
+        Cantidad:{' '}
+        <span style={resaltarCantidad ? {
+          fontWeight: 700,
+          color: ui.text,
+          fontSize: 'var(--cc-body)',
+          letterSpacing: '0.01em',
+        } : undefined}
+        >
+          {fmtCant(item.cantidad)} {item.unidad || ctx?.unidad || ''}
+        </span>
         {item.es_recurrente ? ' · Compra recurrente' : ''}
         {accordion && !expanded && absResumen !== '—' && (
           <span> · Abscisa: {absResumen}</span>
@@ -176,11 +186,17 @@ export default function SolicitudItemDetalleCard({
         </div>
       )}
 
-      {analisis && (
-        <LineaResumenEconomico analisis={analisis} color={ui.textMuted} />
-      )}
+      {!accordion && tablaRentabilidad ? (
+        <TablaRentabilidadAcumulada
+          analisisRentabilidad={tablaRentabilidad}
+          proveedorCatalogo={item.proveedor_catalogo}
+          verEconomicos={verEconomicos}
+        />
+      ) : accordion && analisis ? (
+        <LineaResumenEconomico analisis={analisis} color={ui.textMuted} verEconomicos={verEconomicos} />
+      ) : null}
 
-      {item.proveedor_catalogo && (
+      {accordion && !tablaRentabilidad && item.proveedor_catalogo && (
         <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 6 }}>
           Proveedor catálogo: {item.proveedor_catalogo}
         </div>

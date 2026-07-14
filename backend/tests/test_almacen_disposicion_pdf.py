@@ -103,7 +103,7 @@ def test_pdf_mediabox_exacto():
 
 
 def test_fmt_fecha_hora():
-    assert _fmt_fecha_hora("2026-07-12T14:35:00+00:00", None) == "12/07/2026 14:35"
+    assert _fmt_fecha_hora("2026-07-12T14:35:00+00:00", None) == "12/07/2026 09:35"
     assert _fmt_fecha_hora(None, "2026-07-12") == "12/07/2026"
 
 
@@ -185,7 +185,7 @@ def test_pdf_rediseno_pos():
     )
     assert "1614-00001" in html
     assert "Fecha y hora:" in html
-    assert "12/07/2026 14:35" in html
+    assert "12/07/2026 09:35" in html
     assert "cantidad-hero" in html
     assert "12.5 M3" in html
     assert "copy-icon-transportador" in html

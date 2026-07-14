@@ -6,8 +6,11 @@ from __future__ import annotations
 import logging
 import mimetypes
 import re
+import threading
 import unicodedata
 from datetime import date, datetime, timezone
+
+from almacen_datetime import normalize_fecha_hora_bogota_to_utc_iso
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -50,11 +53,103 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "abscisa_final",
     "observacion_residente",
     "numero_linea",
+    "estado_validacion",
 })
+
+ESTADOS_ITEM_VALIDACION = frozenset({"pendiente", "aprobado", "rechazado"})
+
+
+def _solicitud_editable(estado: str) -> bool:
+    """Editable hasta generar OC (estado aprobada)."""
+    return estado in ("borrador", "enviada", "rechazada")
 
 
 def _norm_pk_id(pk) -> str:
     return str(pk or "").strip()
+
+
+def _pk_digit_key(pk) -> str:
+    return re.sub(r"\D", "", _norm_pk_id(pk))
+
+
+def _pk_id_coincide(a, b) -> bool:
+    """Compara PK-ID de mapa, maestro o solicitud (ej. 120350 vs CUN12-SEC3 vía dígitos)."""
+    na = _norm_pk_id(a)
+    nb = _norm_pk_id(b)
+    if not na or not nb:
+        return False
+    if na.lower().replace(" ", "") == nb.lower().replace(" ", ""):
+        return True
+    da, db = _pk_digit_key(na), _pk_digit_key(nb)
+    if not da or not db:
+        return False
+    return da == db or da.endswith(db) or db.endswith(da)
+
+
+def _ubicacion_efectiva_entrada_items(
+    sb,
+    items: List[dict],
+    ent_by_id: Dict[int, dict],
+) -> Dict[int, dict]:
+    """PK y ubicación por línea de entrada: cabecera o solicitud/OC asociada."""
+    oci_ids = sorted({int(it["orden_compra_item_id"]) for it in items if it.get("orden_compra_item_id")})
+    oci_map: Dict[int, dict] = {}
+    sol_map: Dict[int, dict] = {}
+    if oci_ids:
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("id, solicitud_item_id")
+            .in_("id", oci_ids)
+            .execute()
+            .data
+            or []
+        )
+        oci_map = {int(r["id"]): r for r in oci_rows}
+        sid_list = sorted({int(r["solicitud_item_id"]) for r in oci_rows if r.get("solicitud_item_id")})
+        if sid_list:
+            sol_rows = (
+                sb.table("almacen_solicitud_item")
+                .select("id, pk_id, tramo, costado, abscisa_inicial, abscisa_final")
+                .in_("id", sid_list)
+                .execute()
+                .data
+                or []
+            )
+            sol_map = {int(r["id"]): r for r in sol_rows}
+
+    out: Dict[int, dict] = {}
+    for it in items:
+        ei_id = int(it["id"])
+        ent = ent_by_id.get(int(it["entrada_id"]), {})
+        pk = _norm_pk_id(ent.get("pk_id"))
+        tramo = (ent.get("tramo") or "").strip() or None
+        costado = (ent.get("costado") or "").strip() or None
+        abs_ini = (ent.get("abscisa_inicial") or "").strip() or None
+        abs_fin = (ent.get("abscisa_final") or "").strip() or None
+        oci_id = it.get("orden_compra_item_id")
+        if oci_id:
+            oci = oci_map.get(int(oci_id), {})
+            sid = oci.get("solicitud_item_id")
+            if sid:
+                sol = sol_map.get(int(sid), {})
+                if not pk:
+                    pk = _norm_pk_id(sol.get("pk_id"))
+                if not tramo:
+                    tramo = (sol.get("tramo") or "").strip() or None
+                if not costado:
+                    costado = (sol.get("costado") or "").strip() or None
+                if not abs_ini:
+                    abs_ini = _abscisa_entrada_str(sol.get("abscisa_inicial"))
+                if not abs_fin:
+                    abs_fin = _abscisa_entrada_str(sol.get("abscisa_final"))
+        out[ei_id] = {
+            "pk_id": pk or None,
+            "tramo": tramo,
+            "costado": costado,
+            "abscisa_inicial": abs_ini,
+            "abscisa_final": abs_fin,
+        }
+    return out
 
 
 def _item_for_db_insert(item: dict) -> dict:
@@ -255,6 +350,25 @@ def _map_usuario_nombres(sb, user_ids: List[int]) -> Dict[int, str]:
     return out
 
 
+def _usuario_firma_url(sb, user_id: Optional[int]) -> Optional[str]:
+    """URL de firma del perfil de usuario (mismo origen que informes CCD)."""
+    if not user_id:
+        return None
+    rows = (
+        sb.table("usuarios")
+        .select("firma_imagen_url")
+        .eq("id", int(user_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return None
+    url = (rows[0].get("firma_imagen_url") or "").strip()
+    return url or None
+
+
 def _nombres_validadores_pendientes(sb, contrato_id: int) -> List[str]:
     dest_ids = _destinatarios_validadores_almacen(contrato_id)
     names = _map_usuario_nombres(sb, dest_ids)
@@ -274,7 +388,47 @@ def _enrich_solicitud_usuarios(sb, sol: dict, validadores_pendientes: Optional[L
     return sol
 
 
-def _enrich_solicitud(sb, sol: dict, *, validadores_pendientes: Optional[List[str]] = None) -> dict:
+def _strip_economics_item(it: dict) -> None:
+    it.pop("analisis_valor", None)
+    it.pop("analisis_rentabilidad", None)
+    it.pop("valor_compra_unitario", None)
+    it.pop("vlr_unitario_cobro", None)
+    ctx = it.get("contexto_negociado")
+    if isinstance(ctx, dict):
+        ctx.pop("valor_negociado", None)
+
+
+def _strip_economics_solicitud(sol: dict) -> dict:
+    for it in sol.get("items") or []:
+        _strip_economics_item(it)
+    return sol
+
+
+def _fetch_solicitud_head(contrato_id: int, solicitud_id: int) -> dict:
+    sb = _sb()
+    rows = (
+        sb.table("almacen_solicitud")
+        .select("id, contrato_id, estado, created_by, consecutivo, titulo")
+        .eq("id", solicitud_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Solicitud no encontrada.")
+    return rows[0]
+
+
+def _enrich_solicitud(
+    sb,
+    sol: dict,
+    *,
+    validadores_pendientes: Optional[List[str]] = None,
+    ver_economicos: bool = True,
+    ligera: bool = False,
+) -> dict:
     sid = sol["id"]
     items = (
         sb.table("almacen_solicitud_item")
@@ -286,83 +440,187 @@ def _enrich_solicitud(sb, sol: dict, *, validadores_pendientes: Optional[List[st
         .data
         or []
     )
-    for it in items:
-        insumo_id = it.get("insumo_id")
-        if insumo_id:
-            cat_cot = _cotizaciones_catalogo_insumo(sb, int(insumo_id))
-            it["cotizaciones_catalogo"] = cat_cot
-            it["cotizaciones_count"] = cat_cot.get("total", 0)
-            pid = cat_cot.get("proveedor_id")
-            if pid:
-                prov = (
-                    sb.table("almacen_proveedor")
-                    .select("razon_social")
-                    .eq("id", int(pid))
+    if ligera:
+        insumo_ids = sorted({int(it["insumo_id"]) for it in items if it.get("insumo_id")})
+        insumo_codigos: Dict[int, str] = {}
+        if insumo_ids:
+            ins_rows = (
+                sb.table("almacen_insumo")
+                .select("id, codigo")
+                .in_("id", insumo_ids)
+                .execute()
+                .data
+                or []
+            )
+            for r in ins_rows:
+                cod = (r.get("codigo") or "").strip()
+                if cod:
+                    insumo_codigos[int(r["id"])] = cod
+        for it in items:
+            iid = it.get("insumo_id")
+            if iid and int(iid) in insumo_codigos:
+                it["insumo_codigo"] = insumo_codigos[int(iid)]
+            if not ver_economicos:
+                _strip_economics_item(it)
+        sol["items"] = items
+    else:
+        for it in items:
+            insumo_id = it.get("insumo_id")
+            listado_id = it.get("listado_precio_id")
+            if insumo_id:
+                ins_row = (
+                    sb.table("almacen_insumo")
+                    .select("codigo, descripcion")
+                    .eq("id", int(insumo_id))
                     .limit(1)
                     .execute()
                     .data
                     or []
                 )
-                if prov:
-                    it["proveedor_catalogo"] = prov[0].get("razon_social")
-        else:
-            it["cotizaciones_catalogo"] = {"total": 0, "ganadora": False, "soportes": 0}
-            it["cotizaciones_count"] = 0
-        it["cotizaciones"] = []
-        if insumo_id:
-            try:
-                from almacen_insumos_service import get_presupuesto_context
-                ctx = get_presupuesto_context(
-                    sol["contrato_id"],
-                    int(it["presupuesto_id"]),
-                    str(it.get("pk_id") or ""),
-                    _to_float(it.get("cantidad")),
-                    capitulo_listado=it.get("capitulo"),
-                    item_listado=it.get("item"),
+                if ins_row:
+                    it["insumo_codigo"] = (ins_row[0].get("codigo") or "").strip() or None
+            elif listado_id:
+                lp = (
+                    sb.table("listado_precios")
+                    .select("item_numero")
+                    .eq("id", int(listado_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
                 )
-                it["contexto_presupuesto"] = ctx
-                it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
-            except Exception:
-                pass
-            try:
-                from almacen_insumos_service import get_contexto_negociado_insumo
-                ctx_neg = get_contexto_negociado_insumo(
-                    sol["contrato_id"],
-                    int(insumo_id),
-                    _to_float(it.get("cantidad")),
-                )
-                it["contexto_negociado"] = ctx_neg
-                if ctx_neg.get("tiene_negociado"):
-                    it["supera_negociado"] = bool(it.get("supera_negociado")) or ctx_neg.get("supera_negociado")
-            except Exception:
-                pass
-        vc = _to_float(it.get("valor_compra_unitario"))
-        vlr = _to_float(it.get("vlr_unitario_cobro"))
-        cant = _to_float(it.get("cantidad"))
-        from almacen_insumos_service import _build_analisis_valor
-        it["analisis_valor"] = _build_analisis_valor(
-            cant,
-            vc if vc > 0 else None,
-            vlr,
-        )
-    sol["items"] = items
-    if sol.get("estado") == "aprobada":
-        oc = (
-            sb.table("almacen_orden_compra")
-            .select("id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre")
-            .eq("solicitud_id", sid)
-            .limit(1)
+                if lp:
+                    it["insumo_codigo"] = (lp[0].get("item_numero") or "").strip() or None
+            if insumo_id:
+                cat_cot = _cotizaciones_catalogo_insumo(sb, int(insumo_id))
+                it["cotizaciones_catalogo"] = cat_cot
+                it["cotizaciones_count"] = cat_cot.get("total", 0)
+                pid = cat_cot.get("proveedor_id")
+                if pid:
+                    prov = (
+                        sb.table("almacen_proveedor")
+                        .select("razon_social")
+                        .eq("id", int(pid))
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if prov:
+                        it["proveedor_catalogo"] = prov[0].get("razon_social")
+            else:
+                it["cotizaciones_catalogo"] = {"total": 0, "ganadora": False, "soportes": 0}
+                it["cotizaciones_count"] = 0
+            it["cotizaciones"] = []
+            if insumo_id:
+                try:
+                    from almacen_insumos_service import get_presupuesto_context
+                    ctx = get_presupuesto_context(
+                        sol["contrato_id"],
+                        int(it["presupuesto_id"]),
+                        str(it.get("pk_id") or ""),
+                        _to_float(it.get("cantidad")),
+                        capitulo_listado=it.get("capitulo"),
+                        item_listado=it.get("item"),
+                    )
+                    it["contexto_presupuesto"] = ctx
+                    it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
+                except Exception:
+                    pass
+                try:
+                    from almacen_insumos_service import get_contexto_negociado_insumo
+                    ctx_neg = get_contexto_negociado_insumo(
+                        sol["contrato_id"],
+                        int(insumo_id),
+                        _to_float(it.get("cantidad")),
+                    )
+                    it["contexto_negociado"] = ctx_neg
+                    if ctx_neg.get("tiene_negociado"):
+                        it["supera_negociado"] = bool(it.get("supera_negociado")) or ctx_neg.get("supera_negociado")
+                except Exception:
+                    pass
+            vc = _to_float(it.get("valor_compra_unitario"))
+            vlr = _to_float(it.get("vlr_unitario_cobro"))
+            cant = _to_float(it.get("cantidad"))
+            from almacen_insumos_service import _build_analisis_valor
+            it["analisis_valor"] = _build_analisis_valor(
+                cant,
+                vc if vc > 0 else None,
+                vlr,
+            )
+            if ver_economicos and it.get("id"):
+                try:
+                    from almacen_insumos_service import get_analisis_rentabilidad_por_oc
+                    it["analisis_rentabilidad"] = get_analisis_rentabilidad_por_oc(
+                        int(sol["contrato_id"]),
+                        solicitud_item_id=int(it["id"]),
+                        solicitud_id=int(sid),
+                        insumo_id=int(insumo_id) if insumo_id else None,
+                        capitulo=it.get("capitulo") or "",
+                        item_cobro=it.get("item") or "",
+                        cantidad_presente=cant,
+                        valor_compra_unitario=vc if vc > 0 else None,
+                        valor_cobro_unitario=vlr,
+                        solicitud_consecutivo=sol.get("consecutivo"),
+                    )
+                except Exception:
+                    pass
+            if not ver_economicos:
+                _strip_economics_item(it)
+        sol["items"] = items
+
+    oc = (
+        sb.table("almacen_orden_compra")
+        .select("id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, solicitud_id")
+        .eq("solicitud_id", sid)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if oc:
+        oc_row = oc[0]
+        oc_row["tiene_pdf_oc"] = bool(oc_row.get("pdf_blob_path"))
+        sol["orden_compra"] = oc_row
+        sol["tiene_orden_compra"] = True
+        if sol.get("estado") != "aprobada":
+            sb.table("almacen_solicitud").update({
+                "estado": "aprobada",
+            }).eq("id", sid).execute()
+            sol["estado"] = "aprobada"
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("solicitud_item_id")
+            .eq("orden_compra_id", oc_row["id"])
             .execute()
             .data
             or []
         )
-        if oc:
-            oc[0]["tiene_pdf_oc"] = bool(oc[0].get("pdf_blob_path"))
-        sol["orden_compra"] = oc[0] if oc else None
+        oc_item_ids = {int(r["solicitud_item_id"]) for r in oci_rows if r.get("solicitud_item_id")}
+        for it in sol["items"]:
+            if int(it.get("id") or 0) in oc_item_ids:
+                it["en_orden_compra"] = True
+                it["estado_validacion"] = "aprobado"
+    else:
+        sol["orden_compra"] = None
+        sol["tiene_orden_compra"] = False
     return _enrich_solicitud_usuarios(sb, sol, validadores_pendientes)
 
 
-def list_solicitudes(contrato_id: int, estado: Optional[str] = None) -> List[dict]:
+def _solicitud_tiene_orden_compra(sol: dict) -> bool:
+    """True si la solicitud ya tiene OC (orden_compra puede ser null explícito)."""
+    if sol.get("tiene_orden_compra"):
+        return True
+    oc = sol.get("orden_compra")
+    return bool(isinstance(oc, dict) and oc.get("id"))
+
+
+def list_solicitudes(
+    contrato_id: int,
+    estado: Optional[str] = None,
+    *,
+    ver_economicos: bool = True,
+) -> List[dict]:
     sb = _sb()
     q = sb.table("almacen_solicitud").select("*").eq("contrato_id", contrato_id)
     if estado:
@@ -371,11 +629,21 @@ def list_solicitudes(contrato_id: int, estado: Optional[str] = None) -> List[dic
     validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
     out = []
     for r in rows:
-        out.append(_enrich_solicitud(sb, dict(r), validadores_pendientes=validadores_pendientes))
+        out.append(_enrich_solicitud(
+            sb, dict(r),
+            validadores_pendientes=validadores_pendientes,
+            ver_economicos=ver_economicos,
+        ))
     return out
 
 
-def get_solicitud(contrato_id: int, solicitud_id: int) -> dict:
+def get_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    *,
+    ver_economicos: bool = True,
+    ligera: bool = False,
+) -> dict:
     sb = _sb()
     rows = (
         sb.table("almacen_solicitud")
@@ -389,7 +657,7 @@ def get_solicitud(contrato_id: int, solicitud_id: int) -> dict:
     )
     if not rows:
         raise ValueError("Solicitud no encontrada.")
-    return _enrich_solicitud(sb, rows[0])
+    return _enrich_solicitud(sb, rows[0], ver_economicos=ver_economicos, ligera=ligera)
 
 
 def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 0, exclude_solicitud_id: Optional[int] = None) -> List[dict]:
@@ -490,6 +758,7 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         "contrato_id": contrato_id,
         "consecutivo": consecutivo,
         "estado": "borrador",
+        "titulo": (body.get("titulo") or "").strip() or None,
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
     }
@@ -519,9 +788,23 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     )
     if not head:
         raise ValueError("Solicitud no encontrada.")
-    if head[0]["estado"] != "borrador":
-        raise ValueError("Solo se pueden editar solicitudes en borrador.")
+    estado = head[0]["estado"]
+    aprobada = estado == "aprobada"
+    if aprobada:
+        if "items" in body:
+            raise ValueError("La solicitud aprobada solo permite editar el título.")
+        upd = {}
+        if "titulo" in body:
+            upd["titulo"] = (body.get("titulo") or "").strip() or None
+        if not upd:
+            raise ValueError("La solicitud aprobada solo permite editar el título.")
+        sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
+        return get_solicitud(contrato_id, solicitud_id)
+    if not _solicitud_editable(estado):
+        raise ValueError("La solicitud ya fue aprobada y no puede editarse.")
     upd = {}
+    if "titulo" in body:
+        upd["titulo"] = (body.get("titulo") or "").strip() or None
     if "observaciones" in body:
         upd["observaciones"] = (body.get("observaciones") or "").strip() or None
     if upd:
@@ -533,6 +816,8 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
             row = _item_for_db_insert(it)
             row["solicitud_id"] = solicitud_id
             row["numero_linea"] = i
+            if estado in ("enviada", "rechazada"):
+                row["estado_validacion"] = "pendiente"
             sb.table("almacen_solicitud_item").insert(row).execute()
     return get_solicitud(contrato_id, solicitud_id)
 
@@ -953,8 +1238,8 @@ def enviar_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     if not rows:
         raise ValueError("Solicitud no encontrada.")
     sol = dict(rows[0])
-    if sol["estado"] != "borrador":
-        raise ValueError("Solo se pueden enviar solicitudes en borrador.")
+    if sol["estado"] not in ("borrador", "rechazada"):
+        raise ValueError("Solo se pueden enviar solicitudes en borrador o rechazadas para reenvío.")
     has_items = (
         sb.table("almacen_solicitud_item")
         .select("id")
@@ -970,20 +1255,145 @@ def enviar_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     sb.table("almacen_solicitud").update({
         "estado": "enviada",
         "enviada_at": enviada_at,
+        "motivo_rechazo": None,
+        "validada_at": None,
+        "validada_by": None,
     }).eq("id", solicitud_id).execute()
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "pendiente",
+    }).eq("solicitud_id", solicitud_id).execute()
     _notificar_validadores(contrato_id, solicitud_id, sol["consecutivo"], user_id)
     sol["estado"] = "enviada"
     sol["enviada_at"] = enviada_at
+    sol["motivo_rechazo"] = None
     return _enrich_solicitud_usuarios(sb, sol)
+
+
+def validar_item_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    user_id: int,
+    accion: str,
+    motivo: Optional[str] = None,
+) -> dict:
+    """Aprueba o rechaza un ítem individual de una solicitud enviada."""
+    sb = _sb()
+    sol = get_solicitud(contrato_id, solicitud_id)
+    if sol["estado"] != "enviada":
+        raise ValueError("Solo se pueden validar ítems de solicitudes enviadas.")
+    if _solicitud_tiene_orden_compra(sol):
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+    accion = _norm(accion)
+    if accion not in ("aprobar", "rechazar"):
+        raise ValueError("Acción inválida. Use aprobar o rechazar.")
+    item_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("id, solicitud_id")
+        .eq("id", item_id)
+        .eq("solicitud_id", solicitud_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not item_rows:
+        raise ValueError("Ítem de solicitud no encontrado.")
+    nuevo = "aprobado" if accion == "aprobar" else "rechazado"
+    if accion == "rechazar" and not (motivo or "").strip():
+        raise ValueError("Indique el motivo del rechazo del ítem.")
+    upd = {"estado_validacion": nuevo}
+    sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+
+
+def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
+    """Marca como aprobados todos los ítems pendientes de una solicitud enviada."""
+    sb = _sb()
+    sol = get_solicitud(contrato_id, solicitud_id)
+    if sol["estado"] != "enviada":
+        raise ValueError("Solo aplica a solicitudes enviadas.")
+    if _solicitud_tiene_orden_compra(sol):
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "aprobado",
+    }).eq("solicitud_id", solicitud_id).eq("estado_validacion", "pendiente").execute()
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "aprobado",
+    }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:
     sb = _sb()
+    body = body or {}
     sol = get_solicitud(contrato_id, solicitud_id)
+    if _solicitud_tiene_orden_compra(sol):
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
     if sol["estado"] != "enviada":
         raise ValueError("Solo se pueden aprobar solicitudes enviadas.")
 
+    existing_oc = (
+        sb.table("almacen_orden_compra")
+        .select("id")
+        .eq("solicitud_id", solicitud_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing_oc:
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+
+    if body.get("aprobar_todos_pendientes", True):
+        sb.table("almacen_solicitud_item").update({
+            "estado_validacion": "aprobado",
+        }).eq("solicitud_id", solicitud_id).eq("estado_validacion", "pendiente").execute()
+        sb.table("almacen_solicitud_item").update({
+            "estado_validacion": "aprobado",
+        }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
+        for it in sol.get("items") or []:
+            ev = it.get("estado_validacion") or "pendiente"
+            if ev in ("pendiente", "null"):
+                it["estado_validacion"] = "aprobado"
+
+    items_aprobados = [
+        it for it in (sol.get("items") or [])
+        if (it.get("estado_validacion") or "pendiente") == "aprobado"
+    ]
+    if not items_aprobados:
+        raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
+
+    insumo_ids = sorted({
+        int(it["insumo_id"]) for it in items_aprobados
+        if it.get("insumo_id") and not it.get("es_recurrente")
+    })
+    cat_map: Dict[int, dict] = {}
+    prov_ids: set = set()
+    for iid in insumo_ids:
+        cat = _cotizaciones_catalogo_insumo(sb, iid)
+        cat_map[iid] = cat
+        if cat.get("proveedor_id"):
+            prov_ids.add(int(cat["proveedor_id"]))
+    prov_nombres: Dict[int, str] = {}
+    if prov_ids:
+        prov_rows = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", list(prov_ids))
+            .execute()
+            .data
+            or []
+        )
+        prov_nombres = {int(r["id"]): (r.get("razon_social") or "") for r in prov_rows}
+
     numero_oc = _next_consecutivo(contrato_id, "almacen_orden_compra", "numero_oc")
+    aprobador_firma = _usuario_firma_url(sb, user_id)
+    if not aprobador_firma:
+        raise ValueError(
+            "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
+        )
+    solicitante_firma = _usuario_firma_url(sb, sol.get("created_by"))
     oc_row = {
         "solicitud_id": solicitud_id,
         "contrato_id": contrato_id,
@@ -991,13 +1401,15 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         "estado": "aprobada",
         "fecha_compromiso": body.get("fecha_compromiso") if body else None,
         "aprobada_por": user_id,
+        "aprobador_firma_imagen_url": aprobador_firma,
+        "solicitante_firma_imagen_url": solicitante_firma,
     }
     oc_ins = sb.table("almacen_orden_compra").insert(oc_row).execute().data
     if not oc_ins:
         raise ValueError("No se pudo generar la orden de compra.")
     oc_id = oc_ins[0]["id"]
 
-    for it in sol.get("items") or []:
+    for it in items_aprobados:
         iid = int(it["id"])
         if it.get("es_recurrente"):
             proveedor = "Compra recurrente"
@@ -1006,25 +1418,16 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         else:
             cat = it.get("cotizaciones_catalogo") or {}
             if not cat and it.get("insumo_id"):
-                cat = _cotizaciones_catalogo_insumo(sb, int(it["insumo_id"]))
+                cat = cat_map.get(int(it["insumo_id"])) or _cotizaciones_catalogo_insumo(sb, int(it["insumo_id"]))
             vu = _to_float(it.get("valor_compra_unitario")) or _to_float(cat.get("valor_compra_referencia"))
             if vu <= 0:
                 raise ValueError(
                     f"«{it.get('material_descripcion')}» no tiene precio de compra en el catálogo."
                 )
             proveedor = it.get("proveedor_catalogo") or "Proveedor catálogo"
-            if cat.get("proveedor_id"):
-                prov = (
-                    sb.table("almacen_proveedor")
-                    .select("razon_social")
-                    .eq("id", int(cat["proveedor_id"]))
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if prov:
-                    proveedor = prov[0].get("razon_social") or proveedor
+            pid = cat.get("proveedor_id")
+            if pid:
+                proveedor = prov_nombres.get(int(pid)) or proveedor
             cot_sel_id = None
         sb.table("almacen_orden_compra_item").insert({
             "orden_compra_id": oc_id,
@@ -1045,20 +1448,36 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         "motivo_rechazo": None,
     }).eq("id", solicitud_id).execute()
 
-    result = get_solicitud(contrato_id, solicitud_id)
-    oc_full = get_orden_compra(contrato_id, oc_id)
-    try:
-        generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, result, user_id)
-    except Exception as exc:
-        _log.warning("PDF OC %s no generado: %s", oc_id, exc)
-    result["orden_compra_generada"] = get_orden_compra(contrato_id, oc_id)
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "aprobado",
+    }).eq("solicitud_id", solicitud_id).in_("id", [int(it["id"]) for it in items_aprobados]).execute()
+
+    result = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    result["orden_compra_generada"] = {
+        "id": oc_id,
+        "numero_oc": numero_oc,
+        "estado": "aprobada",
+        "solicitud_id": solicitud_id,
+        "tiene_pdf_oc": False,
+        "pdf_generando": True,
+    }
+
+    def _pdf_en_segundo_plano() -> None:
+        try:
+            oc_full = get_orden_compra(contrato_id, oc_id)
+            sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
+            generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
+        except Exception as exc:
+            _log.warning("PDF OC %s no generado: %s", oc_id, exc)
+
+    threading.Thread(target=_pdf_en_segundo_plano, daemon=True).start()
     return result
 
 
 def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo: str) -> dict:
     sb = _sb()
-    sol = get_solicitud(contrato_id, solicitud_id)
-    if sol["estado"] != "enviada":
+    head = _fetch_solicitud_head(contrato_id, solicitud_id)
+    if head["estado"] != "enviada":
         raise ValueError("Solo se pueden rechazar solicitudes enviadas.")
     motivo = (motivo or "").strip()
     if not motivo:
@@ -1069,14 +1488,14 @@ def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo
         "validada_by": user_id,
         "motivo_rechazo": motivo,
     }).eq("id", solicitud_id).execute()
-    return get_solicitud(contrato_id, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     """Anula una solicitud en borrador (elimina) o enviada (marca rechazada)."""
     sb = _sb()
-    sol = get_solicitud(contrato_id, solicitud_id)
-    estado = sol.get("estado")
+    head = _fetch_solicitud_head(contrato_id, solicitud_id)
+    estado = head.get("estado")
     if estado not in ("borrador", "enviada"):
         raise ValueError("Solo se pueden anular solicitudes en borrador o enviadas.")
     if estado == "borrador":
@@ -1089,7 +1508,90 @@ def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
         "validada_by": user_id,
         "motivo_rechazo": "Anulada por el solicitante.",
     }).eq("id", solicitud_id).execute()
-    return get_solicitud(contrato_id, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+
+
+def eliminar_solicitud_desarrollador(contrato_id: int, solicitud_id: int, current_user) -> dict:
+    """
+    Elimina permanentemente una solicitud y datos dependientes.
+    Solo cargo Desarrollador — herramienta de limpieza, fuera del flujo operativo.
+    """
+    from main import _es_desarrollador
+
+    if not _es_desarrollador(current_user):
+        raise ValueError("Solo el cargo Desarrollador puede eliminar solicitudes de forma permanente.")
+
+    sb = _sb()
+    _fetch_solicitud_head(contrato_id, solicitud_id)
+
+    oc_rows = (
+        sb.table("almacen_orden_compra")
+        .select("id, pdf_blob_path, factura_blob_path")
+        .eq("solicitud_id", solicitud_id)
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+
+    for oc in oc_rows:
+        oc_id = int(oc["id"])
+        entradas = (
+            sb.table("almacen_entrada")
+            .select("id")
+            .eq("orden_compra_id", oc_id)
+            .execute()
+            .data
+            or []
+        )
+        for ent in entradas:
+            eid = int(ent["id"])
+            ei_rows = (
+                sb.table("almacen_entrada_item")
+                .select("id")
+                .eq("entrada_id", eid)
+                .execute()
+                .data
+                or []
+            )
+            ei_ids = [int(x["id"]) for x in ei_rows if x.get("id")]
+            if ei_ids:
+                salidas = (
+                    sb.table("almacen_salida")
+                    .select("id")
+                    .in_("entrada_item_id", ei_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+                for sal in salidas:
+                    eliminar_salida(contrato_id, int(sal["id"]))
+            eliminar_entrada(contrato_id, eid)
+
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("id")
+            .eq("orden_compra_id", oc_id)
+            .execute()
+            .data
+            or []
+        )
+        for oci in oci_rows:
+            sb.table("almacen_orden_compra_item").delete().eq("id", int(oci["id"])).execute()
+
+        for path in (oc.get("pdf_blob_path"), oc.get("factura_blob_path")):
+            p = (path or "").strip()
+            if p:
+                try:
+                    delete_blob_private(p)
+                except Exception as exc:
+                    _log.warning("Dev delete OC blob %s: %s", oc_id, exc)
+
+        sb.table("almacen_orden_compra").delete().eq("id", oc_id).execute()
+
+    sb.table("almacen_solicitud_item").delete().eq("solicitud_id", solicitud_id).execute()
+    sb.table("almacen_solicitud").delete().eq("id", solicitud_id).eq("contrato_id", contrato_id).execute()
+    return {"ok": True, "deleted": True, "id": solicitud_id}
 
 
 def list_ordenes_compra(contrato_id: int) -> List[dict]:
@@ -1103,10 +1605,10 @@ def list_ordenes_compra(contrato_id: int) -> List[dict]:
         .data
         or []
     )
-    return rows
+    return _enriquecer_ocs_con_saldo_recepcion(sb, rows)
 
 
-def get_orden_compra(contrato_id: int, oc_id: int) -> dict:
+def get_orden_compra(contrato_id: int, oc_id: int, *, incluir_entradas: bool = True) -> dict:
     sb = _sb()
     rows = (
         sb.table("almacen_orden_compra")
@@ -1131,16 +1633,58 @@ def get_orden_compra(contrato_id: int, oc_id: int) -> dict:
         or []
     )
     oc["items"] = [{**it, **_oc_item_saldos(it)} for it in items]
-    entradas = (
-        sb.table("almacen_entrada")
-        .select("*")
-        .eq("orden_compra_id", oc_id)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
-    )
-    oc["entradas"] = entradas
+    oc.update(_oc_recepcion_resumen(items, oc.get("estado")))
+    sid_items = [int(it["solicitud_item_id"]) for it in items if it.get("solicitud_item_id")]
+    sol_item_map: Dict[int, dict] = {}
+    if sid_items:
+        sol_rows = (
+            sb.table("almacen_solicitud_item")
+            .select("id, pk_id, tramo, costado, abscisa_inicial, abscisa_final, capitulo, item, insumo_id, material_descripcion, unidad")
+            .in_("id", sid_items)
+            .execute()
+            .data
+            or []
+        )
+        insumo_ids = sorted({int(r["insumo_id"]) for r in sol_rows if r.get("insumo_id")})
+        ins_codigos: Dict[int, str] = {}
+        if insumo_ids:
+            ins_rows = (
+                sb.table("almacen_insumo")
+                .select("id, codigo")
+                .in_("id", insumo_ids)
+                .execute()
+                .data
+                or []
+            )
+            for r in ins_rows:
+                c = (r.get("codigo") or "").strip()
+                if c:
+                    ins_codigos[int(r["id"])] = c
+        for r in sol_rows:
+            row = dict(r)
+            iid = row.get("insumo_id")
+            if iid and int(iid) in ins_codigos:
+                row["insumo_codigo"] = ins_codigos[int(iid)]
+            sol_item_map[int(r["id"])] = row
+    for it in oc["items"]:
+        sid = it.get("solicitud_item_id")
+        if sid and int(sid) in sol_item_map:
+            it["almacen_solicitud_item"] = sol_item_map[int(sid)]
+            if sol_item_map[int(sid)].get("insumo_codigo"):
+                it["insumo_codigo"] = sol_item_map[int(sid)]["insumo_codigo"]
+    if incluir_entradas:
+        entradas = (
+            sb.table("almacen_entrada")
+            .select("*")
+            .eq("orden_compra_id", oc_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+        oc["entradas"] = entradas
+    else:
+        oc["entradas"] = []
     oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
     return oc
 
@@ -1221,6 +1765,8 @@ def generar_y_guardar_pdf_oc(
         orden_compra=oc,
         solicitud=solicitud,
         aprobador_nombre=aprobador,
+        aprobador_firma_url=oc.get("aprobador_firma_imagen_url"),
+        solicitante_firma_url=oc.get("solicitante_firma_imagen_url"),
         proveedores=proveedores,
         insumo_map=insumo_map,
         terminos=terminos,
@@ -1320,6 +1866,81 @@ def _oc_item_saldos(item: dict) -> dict:
         "valor_recibido_acum": val_rec,
         "tiene_saldo": saldo_cant > 0.0001 and saldo_val > 0.01,
     }
+
+
+def _oc_recepcion_resumen(items: List[dict], estado_oc: Optional[str] = None) -> dict:
+    """Saldo pendiente y estado de recepción (distinto del flujo de aprobación)."""
+    saldo_cant = 0.0
+    tiene_saldo = False
+    unidades: List[str] = []
+    for it in items:
+        s = _oc_item_saldos(it)
+        saldo_cant += s["saldo_cantidad"]
+        if s["tiene_saldo"]:
+            tiene_saldo = True
+        u = (it.get("unidad") or "").strip()
+        if u and u not in unidades:
+            unidades.append(u)
+    saldo_cant = round(saldo_cant, 4)
+    if estado_oc == "anulada":
+        recepcion = "anulada"
+    elif items and not tiene_saldo:
+        recepcion = "completa"
+    elif any(_to_float(i.get("cantidad_recibida")) > 0 for i in items):
+        recepcion = "parcial"
+    else:
+        recepcion = "pendiente"
+    return {
+        "saldo_cantidad_pendiente": saldo_cant,
+        "saldo_unidad": unidades[0] if len(unidades) == 1 else None,
+        "saldo_unidades": unidades,
+        "tiene_saldo_recepcion": tiene_saldo,
+        "estado_recepcion": recepcion,
+    }
+
+
+def _enriquecer_ocs_con_saldo_recepcion(sb, rows: List[dict]) -> List[dict]:
+    if not rows:
+        return rows
+    oc_ids = [int(r["id"]) for r in rows]
+    all_items = (
+        sb.table("almacen_orden_compra_item")
+        .select("orden_compra_id, cantidad, cantidad_recibida, valor_unitario, valor_recibido, unidad")
+        .in_("orden_compra_id", oc_ids)
+        .execute()
+        .data
+        or []
+    )
+    items_by_oc: Dict[int, List[dict]] = {}
+    for it in all_items:
+        oid = int(it["orden_compra_id"])
+        items_by_oc.setdefault(oid, []).append(it)
+    for r in rows:
+        oid = int(r["id"])
+        r.update(_oc_recepcion_resumen(items_by_oc.get(oid, []), r.get("estado")))
+    return rows
+
+
+def _oc_resumen_para_entrada(sb, oc_id: int) -> dict:
+    oc_rows = (
+        sb.table("almacen_orden_compra")
+        .select("numero_oc, estado, solicitud_id")
+        .eq("id", oc_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    base = oc_rows[0] if oc_rows else {}
+    items = (
+        sb.table("almacen_orden_compra_item")
+        .select("cantidad, cantidad_recibida, valor_unitario, valor_recibido, unidad")
+        .eq("orden_compra_id", oc_id)
+        .execute()
+        .data
+        or []
+    )
+    return {**base, **_oc_recepcion_resumen(items, base.get("estado"))}
 
 
 ALERTA_SIN_OC_GESTIONADA = "sin_oc_gestionada"
@@ -1465,8 +2086,6 @@ def _contexto_oc_pk_flags(contrato_id: int, pk_id: str) -> dict:
         oc = oc_map.get(int(it["orden_compra_id"]))
         if not oc or oc.get("estado") == "anulada":
             continue
-        if oc.get("estado") == "completa":
-            continue
         if _oc_item_saldos(it)["tiene_saldo"]:
             any_vigente = True
             break
@@ -1551,6 +2170,26 @@ def _format_numero_documento(contrato_id: int, consecutivo: int) -> str:
     return f"{_contrato_segmento_documento(contrato_id)}-{consecutivo:05d}"
 
 
+def _format_codigo_entrada(contrato_id: int, consecutivo: int) -> str:
+    return f"Ent-{_contrato_segmento_documento(contrato_id)}-{int(consecutivo):05d}"
+
+
+def _format_codigo_salida(contrato_id: int, consecutivo: int) -> str:
+    return f"Sal-{_contrato_segmento_documento(contrato_id)}-{int(consecutivo):05d}"
+
+
+def _asegurar_codigo_entrada(contrato_id: int, row: dict) -> dict:
+    if row and not (row.get("codigo") or "").strip() and row.get("numero_entrada"):
+        row["codigo"] = _format_codigo_entrada(contrato_id, int(row["numero_entrada"]))
+    return row or {}
+
+
+def _asegurar_codigo_salida(contrato_id: int, row: dict) -> dict:
+    if row and not (row.get("codigo") or "").strip() and row.get("numero_salida"):
+        row["codigo"] = _format_codigo_salida(contrato_id, int(row["numero_salida"]))
+    return row or {}
+
+
 def _max_numero_disposicion(contrato_id: int) -> int:
     sb = _sb()
     rows = (
@@ -1572,6 +2211,85 @@ def _next_numero_disposicion(contrato_id: int) -> str:
     return _format_numero_documento(contrato_id, _max_numero_disposicion(contrato_id) + 1)
 
 
+REMISION_SOPORTE_MAX_BYTES = 300 * 1024
+
+
+def _abscisa_entrada_str(val: Any) -> Optional[str]:
+    if val is None or val == "":
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if "+" in s or s.upper().startswith("K"):
+        return s if s.upper().startswith("K") else f"K{s}"
+    try:
+        m = float(str(val).replace(",", "."))
+        km = int(m // 1000)
+        rest = m - km * 1000
+        txt = f"K{km}+{rest:.2f}".rstrip("0").rstrip(".")
+        return txt
+    except (TypeError, ValueError):
+        return s
+
+
+def _enriquecer_entrada_desde_oc(
+    contrato_id: int,
+    oc: dict,
+    lineas: List[dict],
+    body: dict,
+) -> dict:
+    """Autodiligencia de proveedor, PK-ID, tramo y abscisas desde la OC / solicitud."""
+    oc_items_map = {int(x["id"]): x for x in (oc.get("items") or []) if x.get("id") is not None}
+    ref_oci: Optional[dict] = None
+    for ln in lineas:
+        raw_id = ln.get("orden_compra_item_id")
+        if raw_id in (None, "", 0):
+            continue
+        ref_oci = oc_items_map.get(int(raw_id))
+        if ref_oci:
+            break
+    if not ref_oci:
+        return body
+
+    sol_it: Optional[dict] = None
+    embedded = ref_oci.get("almacen_solicitud_item")
+    if isinstance(embedded, dict) and embedded:
+        sol_it = embedded
+    sid = ref_oci.get("solicitud_item_id")
+    if not sol_it and sid:
+        rows = (
+            _sb()
+            .table("almacen_solicitud_item")
+            .select("pk_id, tramo, costado, abscisa_inicial, abscisa_final")
+            .eq("id", int(sid))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            sol_it = rows[0]
+
+    if sol_it:
+        if not _norm_pk_id(body.get("pk_id")):
+            body["pk_id"] = _norm_pk_id(sol_it.get("pk_id")) or None
+        if not (body.get("tramo") or "").strip():
+            body["tramo"] = (sol_it.get("tramo") or "").strip() or None
+        if not (body.get("costado") or "").strip():
+            body["costado"] = (sol_it.get("costado") or "").strip() or None
+        if not (body.get("abscisa_inicial") or "").strip():
+            body["abscisa_inicial"] = _abscisa_entrada_str(sol_it.get("abscisa_inicial"))
+        if not (body.get("abscisa_final") or "").strip():
+            body["abscisa_final"] = _abscisa_entrada_str(sol_it.get("abscisa_final"))
+
+    if not body.get("proveedor_id") and ref_oci.get("proveedor_nombre"):
+        pid = _resolve_proveedor_id(contrato_id, ref_oci.get("proveedor_nombre"))
+        if pid:
+            body["proveedor_id"] = pid
+
+    return body
+
+
 def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: Optional[str]) -> str:
     """Disposición: autonumerador del sistema. Recibo: número de remisión del proveedor."""
     t = (tipo or "recibo").strip().lower()
@@ -1581,7 +2299,7 @@ def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: O
     if t == "recibo":
         if not raw:
             raise ValueError("Indique el número de remisión del proveedor.")
-        return raw[:64]
+        return raw.upper()[:64]
     raise ValueError("Tipo de entrada inválido.")
 
 
@@ -1674,7 +2392,7 @@ def buscar_ordenes_compra_vigentes(contrato_id: int, proveedor_id: int, insumo_i
         if not saldos["tiene_saldo"]:
             continue
         oc = oc_map.get(int(it["orden_compra_id"]))
-        if not oc or oc.get("estado") == "completa":
+        if not oc or oc.get("estado") == "anulada":
             continue
         key = (int(it["orden_compra_id"]), int(it["id"]))
         if key in seen:
@@ -1760,7 +2478,7 @@ def buscar_ordenes_compra_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
         if not saldos["tiene_saldo"]:
             continue
         oc = oc_map.get(int(it["orden_compra_id"]))
-        if not oc or oc.get("estado") == "completa":
+        if not oc or oc.get("estado") == "anulada":
             continue
         key = (int(it["orden_compra_id"]), int(it["id"]))
         if key in seen:
@@ -1850,6 +2568,8 @@ def _generar_pdf_pos_entrada(
         )
         if pr:
             prov_name = pr[0].get("razon_social") or "—"
+    elif oc_item.get("proveedor_nombre"):
+        prov_name = oc_item.get("proveedor_nombre") or "—"
     ts_rows = (
         sb.table("almacen_entrada")
         .select("created_at")
@@ -2006,11 +2726,13 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     oc: Optional[dict] = None
 
     if oc_id:
-        oc = get_orden_compra(contrato_id, oc_id)
+        oc = get_orden_compra(contrato_id, oc_id, incluir_entradas=False)
         if oc.get("estado") == "anulada":
             raise ValueError("La orden de compra está anulada.")
-        if oc.get("estado") == "completa":
-            raise ValueError("La orden de compra ya fue consumida en su totalidad.")
+        items_oc = oc.get("items") or []
+        if not any(_oc_item_saldos(it)["tiene_saldo"] for it in items_oc):
+            raise ValueError("La orden de compra no tiene saldo pendiente por recibir.")
+        body = _enriquecer_entrada_desde_oc(contrato_id, oc, lineas, body)
     else:
         if not pk_id:
             raise ValueError("Indique el PK-ID o seleccione una orden de compra vigente.")
@@ -2023,6 +2745,12 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
             alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_OC_CONSUMIDA]
         else:
             raise ValueError("Debe seleccionar una orden de compra vigente con saldo disponible.")
+
+    pk_id = _norm_pk_id(body.get("pk_id") or pk_id) or None
+    if oc_id and not pk_id:
+        raise ValueError(
+            "No se pudo determinar el PK-ID de la entrada. Verifique la solicitud asociada a la orden de compra."
+        )
 
     proveedor_id = body.get("proveedor_id")
     if proveedor_id is not None:
@@ -2041,7 +2769,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
             raise ValueError("Proveedor no inscrito en el directorio.")
 
     insumo_id = int(body["insumo_id"]) if body.get("insumo_id") else None
-    if not insumo_id:
+    if not insumo_id and not oc_id:
         raise ValueError("Indique el insumo recibido.")
 
     numero_doc = _resolve_numero_documento_entrada(
@@ -2050,12 +2778,20 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         body.get("numero_documento"),
     )
 
+    if tipo == "recibo":
+        if not remision_data:
+            raise ValueError("Adjunte el soporte fotográfico o PDF de la remisión.")
+        if len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
+            raise ValueError("El soporte de remisión no puede superar 300 KB.")
+
     numero_entrada = _next_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
+    codigo_entrada = _format_codigo_entrada(contrato_id, numero_entrada)
 
     entrada_row = {
         "orden_compra_id": oc_id,
         "contrato_id": contrato_id,
         "numero_entrada": numero_entrada,
+        "codigo": codigo_entrada,
         "fecha_entrada": body.get("fecha_entrada") or date.today().isoformat(),
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
@@ -2219,39 +2955,50 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     if oc_id:
         _actualizar_estado_oc(sb, oc_id)
 
+    pdf_generando = False
     if primera_oci is not None and tipo in ("disposicion", "recibo"):
-        try:
-            _generar_pdf_pos_entrada(
-                contrato_id,
-                entrada_id,
-                {**entrada_row, "numero_documento": numero_doc or entrada_row.get("numero_documento"), "cantidad_recibida": primera_cantidad},
-                pdf_oc,
-                primera_oci,
-                primera_cantidad,
-                user_id,
-                tipo,
-            )
-        except ValueError:
-            raise
-        except Exception as exc:
-            _log.exception("PDF POS entrada %s: %s", entrada_id, exc)
-            raise ValueError(
-                "La entrada se registró, pero no se pudo generar el PDF POS. "
-                "Intente nuevamente desde el detalle de la entrada."
-            ) from exc
-        pdf_check = (
-            sb.table("almacen_entrada")
-            .select("disposicion_pdf_blob_path")
-            .eq("id", entrada_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not pdf_check or not pdf_check[0].get("disposicion_pdf_blob_path"):
-            raise ValueError("No se pudo generar el PDF POS del registro.")
+        pdf_generando = True
+        entrada_pdf = {
+            **entrada_row,
+            "numero_documento": numero_doc or entrada_row.get("numero_documento"),
+            "cantidad_recibida": primera_cantidad,
+        }
 
-    result = get_entrada(contrato_id, entrada_id)
+        def _pdf_pos_entrada_background() -> None:
+            try:
+                _generar_pdf_pos_entrada(
+                    contrato_id,
+                    entrada_id,
+                    entrada_pdf,
+                    pdf_oc,
+                    primera_oci,
+                    primera_cantidad,
+                    user_id,
+                    tipo,
+                )
+            except Exception as exc:
+                _log.warning("PDF POS entrada %s no generado: %s", entrada_id, exc)
+
+        threading.Thread(target=_pdf_pos_entrada_background, daemon=True).start()
+
+    result = {
+        **entrada_row,
+        "id": entrada_id,
+        "items": [],
+        "cantidad_recibida_total": sum(_to_float(ln.get("cantidad_recibida")) for ln in lineas),
+        "pdf_generando": pdf_generando,
+        "tiene_pdf_disposicion": False,
+    }
+    if oc_id:
+        result["almacen_orden_compra"] = {
+            "numero_oc": oc.get("numero_oc") if oc else None,
+            "estado": oc.get("estado") if oc else None,
+        }
+    else:
+        result["almacen_orden_compra"] = {}
+    if result.get("created_by"):
+        names = _map_usuario_nombres(sb, [result["created_by"]])
+        result["usuario_nombre"] = names.get(int(result["created_by"]))
     placa_val = entrada_row.get("placa")
     transportador_val = entrada_row.get("transportador")
     if placa_val and transportador_val:
@@ -2260,6 +3007,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         )
         if transportador_nuevo:
             result["transportador_registrado"] = True
+    _invalidar_graficos_inventario(contrato_id)
     return result
 
 
@@ -2327,6 +3075,22 @@ def eliminar_entrada(contrato_id: int, entrada_id: int) -> dict:
     sb = _sb()
     ent = get_entrada(contrato_id, entrada_id)
 
+    ei_ids = [int(it["id"]) for it in ent.get("items") or [] if it.get("id")]
+    if ei_ids:
+        salidas = (
+            sb.table("almacen_salida")
+            .select("id")
+            .in_("entrada_item_id", ei_ids)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if salidas:
+            raise ValueError(
+                "No se puede eliminar la entrada porque ya tiene salidas de material registradas contra ella."
+            )
+
     numero_entrada = int(ent.get("numero_entrada") or 0)
     numero_doc_raw = (ent.get("numero_documento") or "").strip()
     tipo = (ent.get("tipo") or "").strip().lower()
@@ -2364,6 +3128,7 @@ def eliminar_entrada(contrato_id: int, entrada_id: int) -> dict:
         numero_doc_int > 0 and tipo == "disposicion" and numero_doc_int == max_disp
     )
 
+    _invalidar_graficos_inventario(contrato_id)
     return {
         "ok": True,
         "id": int(entrada_id),
@@ -2453,18 +3218,14 @@ def list_entradas(contrato_id: int) -> List[dict]:
         .data
         or []
     )
+    oc_resumen_cache: Dict[int, dict] = {}
     for r in rows:
-        if r.get("orden_compra_id"):
-            oc = (
-                sb.table("almacen_orden_compra")
-                .select("numero_oc, solicitud_id")
-                .eq("id", r.get("orden_compra_id"))
-                .limit(1)
-                .execute()
-                .data
-                or []
-            )
-            r["almacen_orden_compra"] = oc[0] if oc else {}
+        oc_id = r.get("orden_compra_id")
+        if oc_id:
+            oc_id_int = int(oc_id)
+            if oc_id_int not in oc_resumen_cache:
+                oc_resumen_cache[oc_id_int] = _oc_resumen_para_entrada(sb, oc_id_int)
+            r["almacen_orden_compra"] = oc_resumen_cache[oc_id_int]
         else:
             r["almacen_orden_compra"] = {}
         if r.get("proveedor_id"):
@@ -2481,6 +3242,8 @@ def list_entradas(contrato_id: int) -> List[dict]:
         if r.get("created_by"):
             names = _map_usuario_nombres(sb, [r.get("created_by")])
             r["usuario_nombre"] = names.get(int(r["created_by"]))
+        _asegurar_codigo_entrada(contrato_id, r)
+    _enriquecer_entradas_listado(sb, rows)
     return rows
 
 
@@ -2519,6 +3282,13 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
         )
         it["almacen_orden_compra_item"] = oci[0] if oci else {}
     ent["items"] = items
+    if not _norm_pk_id(ent.get("pk_id")) and items:
+        ubic_map = _ubicacion_efectiva_entrada_items(sb, items, {int(ent["id"]): ent})
+        for it in items:
+            ubic = ubic_map.get(int(it["id"])) or {}
+            if _norm_pk_id(ubic.get("pk_id")):
+                ent["pk_id"] = ubic["pk_id"]
+                break
     ent["cantidad_recibida_total"] = sum(_to_float(it.get("cantidad_recibida")) for it in items)
     if ent.get("orden_compra_id"):
         oc = (
@@ -2564,7 +3334,15 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
         ent["usuario_nombre"] = names.get(int(ent["created_by"]))
     ent["tiene_pdf_disposicion"] = bool(ent.get("disposicion_pdf_blob_path"))
     ent["tiene_remision"] = bool(ent.get("remision_blob_path"))
-    return ent
+    return _asegurar_codigo_entrada(contrato_id, ent)
+
+
+def _invalidar_graficos_inventario(contrato_id: int) -> None:
+    try:
+        from almacen_inventario_graficos import invalidar_cache_inventario_graficos
+        invalidar_cache_inventario_graficos(contrato_id)
+    except Exception:
+        pass
 
 
 def list_inventario(contrato_id: int) -> List[dict]:
@@ -2706,3 +3484,948 @@ def get_expediente(contrato_id: int, oc_id: int) -> dict:
         "solicitud": solicitud,
         "entradas": entradas_det,
     }
+
+
+# ── Salidas de material ────────────────────────────────────────────────────────
+
+SALIDA_ALERTA_CONSUMO_FRACCION = 0.20
+
+
+def _sum_salidas_por_entrada_item(sb, entrada_item_ids: List[int]) -> Dict[int, float]:
+    ids = sorted({int(x) for x in entrada_item_ids if x})
+    if not ids:
+        return {}
+    rows = (
+        sb.table("almacen_salida")
+        .select("entrada_item_id, cantidad_salida")
+        .in_("entrada_item_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[int, float] = {}
+    for r in rows:
+        eid = int(r["entrada_item_id"])
+        out[eid] = out.get(eid, 0.0) + _to_float(r.get("cantidad_salida"))
+    return out
+
+
+def _cantidad_recibida_entrada_item(sb, entrada_item_id: int) -> float:
+    """Cantidad recibida en un registro de entrada (línea), nunca el total de la OC."""
+    rows = (
+        sb.table("almacen_entrada_item")
+        .select("cantidad_recibida")
+        .eq("id", int(entrada_item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return 0.0
+    return _to_float(rows[0].get("cantidad_recibida"))
+
+
+def _sum_entrada_item_recibido_posterior(
+    sb,
+    orden_compra_item_id: int,
+    entrada_id: int,
+    created_at: Optional[str],
+) -> float:
+    """Suma recibido en entradas posteriores a una misma línea de OC."""
+    ei_rows = (
+        sb.table("almacen_entrada_item")
+        .select("id, cantidad_recibida, entrada_id")
+        .eq("orden_compra_item_id", int(orden_compra_item_id))
+        .execute()
+        .data
+        or []
+    )
+    if not ei_rows:
+        return 0.0
+    entrada_ids = sorted({int(r["entrada_id"]) for r in ei_rows if r.get("entrada_id")})
+    ent_rows = (
+        sb.table("almacen_entrada")
+        .select("id, created_at")
+        .in_("id", entrada_ids)
+        .execute()
+        .data
+        or []
+    )
+    ent_map = {int(r["id"]): r.get("created_at") or "" for r in ent_rows}
+    ref_ts = str(created_at or ent_map.get(int(entrada_id), ""))
+    ref_id = int(entrada_id)
+    total = 0.0
+    for ei in ei_rows:
+        eid = int(ei.get("entrada_id") or 0)
+        if eid == ref_id:
+            continue
+        ts = str(ent_map.get(eid) or "")
+        if ts > ref_ts or (ts == ref_ts and eid > ref_id):
+            total += _to_float(ei.get("cantidad_recibida"))
+    return total
+
+
+def _saldo_oc_pendiente_tras_entrada(
+    sb,
+    entrada_id: int,
+    created_at: Optional[str],
+    entrada_items: List[dict],
+) -> Optional[dict]:
+    """Saldo OC pendiente justo después de registrar esta entrada."""
+    oci_ids = sorted({
+        int(x["orden_compra_item_id"])
+        for x in entrada_items
+        if x.get("orden_compra_item_id")
+    })
+    if not oci_ids:
+        return None
+    oci_rows = (
+        sb.table("almacen_orden_compra_item")
+        .select("id, cantidad, cantidad_recibida, unidad")
+        .in_("id", oci_ids)
+        .execute()
+        .data
+        or []
+    )
+    saldo_total = 0.0
+    unidades: List[str] = []
+    for oci in oci_rows:
+        oci_id = int(oci["id"])
+        cant_oc = _to_float(oci.get("cantidad"))
+        later = _sum_entrada_item_recibido_posterior(sb, oci_id, int(entrada_id), created_at)
+        rec_tras_esta = _to_float(oci.get("cantidad_recibida")) - later
+        saldo_total += max(0.0, cant_oc - rec_tras_esta)
+        u = (oci.get("unidad") or "").strip()
+        if u and u not in unidades:
+            unidades.append(u)
+    return {
+        "saldo_cantidad": round(saldo_total, 4),
+        "saldo_unidad": unidades[0] if len(unidades) == 1 else None,
+    }
+
+
+def _enriquecer_entradas_listado(sb, rows: List[dict]) -> None:
+    """Agrega cantidad recibida en el registro y saldo OC tras esa entrada."""
+    if not rows:
+        return
+    entrada_ids = [int(r["id"]) for r in rows]
+    ei_rows = (
+        sb.table("almacen_entrada_item")
+        .select("id, entrada_id, cantidad_recibida, orden_compra_item_id")
+        .in_("entrada_id", entrada_ids)
+        .execute()
+        .data
+        or []
+    )
+    by_entrada: Dict[int, List[dict]] = {}
+    for ei in ei_rows:
+        by_entrada.setdefault(int(ei["entrada_id"]), []).append(ei)
+
+    oci_ids = sorted({
+        int(ei["orden_compra_item_id"])
+        for ei in ei_rows
+        if ei.get("orden_compra_item_id")
+    })
+    unidad_map: Dict[int, str] = {}
+    if oci_ids:
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("id, unidad")
+            .in_("id", oci_ids)
+            .execute()
+            .data
+            or []
+        )
+        for o in oci_rows:
+            unidad_map[int(o["id"])] = (o.get("unidad") or "").strip()
+
+    for r in rows:
+        eid = int(r["id"])
+        items = by_entrada.get(eid, [])
+        qty = round(sum(_to_float(x.get("cantidad_recibida")) for x in items), 4)
+        r["cantidad_recibida_total"] = qty
+        unidades = sorted({
+            unidad_map.get(int(x["orden_compra_item_id"]), "")
+            for x in items
+            if x.get("orden_compra_item_id") and unidad_map.get(int(x["orden_compra_item_id"]))
+        })
+        r["cantidad_recibida_unidad"] = unidades[0] if len(unidades) == 1 else None
+        saldo = _saldo_oc_pendiente_tras_entrada(sb, eid, r.get("created_at"), items)
+        if saldo:
+            r["saldo_oc_pendiente_despues"] = saldo.get("saldo_cantidad")
+            r["saldo_oc_pendiente_despues_unidad"] = saldo.get("saldo_unidad") or r.get("cantidad_recibida_unidad")
+
+
+def _disponible_entrada_item(cantidad_recibida: float, cantidad_despachada: float) -> float:
+    return max(0.0, round(cantidad_recibida - cantidad_despachada, 4))
+
+
+def _alerta_proximidad_consumo(cantidad_recibida: float, cantidad_disponible: float) -> bool:
+    if cantidad_recibida <= 0:
+        return False
+    umbral = cantidad_recibida * SALIDA_ALERTA_CONSUMO_FRACCION
+    return cantidad_disponible <= umbral
+
+
+def _enriquecer_entrada_item_opcion(
+    sb,
+    contrato_id: int,
+    ent: dict,
+    it: dict,
+    salidas_map: Dict[int, float],
+) -> Optional[dict]:
+    ei_id = int(it["id"])
+    recibida = _cantidad_recibida_entrada_item(sb, ei_id)
+    despachada = salidas_map.get(ei_id, 0.0)
+    disponible = _disponible_entrada_item(recibida, despachada)
+    if disponible <= 0:
+        return None
+
+    oci_id = it.get("orden_compra_item_id")
+    material = "—"
+    unidad = "UND"
+    insumo_codigo = None
+    presupuesto_capitulo = None
+    presupuesto_item = None
+    numero_oc = None
+    cantidad_oc_autorizada = None
+
+    if oci_id:
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("material_descripcion, unidad, orden_compra_id, solicitud_item_id, presupuesto_id, cantidad")
+            .eq("id", int(oci_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if oci_rows:
+            oci = oci_rows[0]
+            cantidad_oc_autorizada = _to_float(oci.get("cantidad"))
+            material = oci.get("material_descripcion") or "—"
+            unidad = oci.get("unidad") or "UND"
+            oc_id = oci.get("orden_compra_id")
+            if oc_id:
+                oc_row = (
+                    sb.table("almacen_orden_compra")
+                    .select("numero_oc")
+                    .eq("id", int(oc_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if oc_row:
+                    numero_oc = oc_row[0].get("numero_oc")
+            sid = oci.get("solicitud_item_id")
+            if sid:
+                sol_it = (
+                    sb.table("almacen_solicitud_item")
+                    .select("capitulo, item, insumo_id")
+                    .eq("id", int(sid))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if sol_it:
+                    presupuesto_capitulo = sol_it[0].get("capitulo")
+                    presupuesto_item = sol_it[0].get("item")
+                    iid = sol_it[0].get("insumo_id")
+                    if iid:
+                        ins = (
+                            sb.table("almacen_insumo")
+                            .select("codigo")
+                            .eq("id", int(iid))
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if ins:
+                            insumo_codigo = (ins[0].get("codigo") or "").strip() or None
+            elif oci.get("presupuesto_id"):
+                try:
+                    ppto = _fetch_ppto_row(int(oci["presupuesto_id"]), contrato_id)
+                    presupuesto_capitulo = ppto.get("capitulo")
+                    presupuesto_item = ppto.get("item")
+                except ValueError:
+                    pass
+
+    return {
+        "entrada_id": ent.get("id"),
+        "entrada_item_id": ei_id,
+        "numero_entrada": ent.get("numero_entrada"),
+        "fecha_entrada": ent.get("fecha_entrada"),
+        "numero_documento": ent.get("numero_documento"),
+        "tipo_entrada": ent.get("tipo"),
+        "numero_oc": numero_oc,
+        "material_descripcion": material,
+        "unidad": unidad,
+        "insumo_codigo": insumo_codigo,
+        "presupuesto_capitulo": presupuesto_capitulo,
+        "presupuesto_item": presupuesto_item,
+        "cantidad_recibida": recibida,
+        "cantidad_recibida_entrada": recibida,
+        "cantidad_oc_autorizada": cantidad_oc_autorizada,
+        "cantidad_despachada": despachada,
+        "cantidad_disponible": disponible,
+        "alerta_proximidad_consumo": _alerta_proximidad_consumo(recibida, disponible),
+    }
+
+
+def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
+    """Entradas con saldo despachable para un PK-ID."""
+    sb = _sb()
+    pk_query = _norm_pk_id(pk_id)
+    if not pk_query:
+        raise ValueError("Indique el PK-ID.")
+
+    entradas = (
+        sb.table("almacen_entrada")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    if not entradas:
+        return []
+
+    ent_by_id = {int(e["id"]): e for e in entradas}
+    entrada_ids = list(ent_by_id.keys())
+    items = (
+        sb.table("almacen_entrada_item")
+        .select("*")
+        .in_("entrada_id", entrada_ids)
+        .execute()
+        .data
+        or []
+    )
+    if not items:
+        return []
+
+    ubicacion_map = _ubicacion_efectiva_entrada_items(sb, items, ent_by_id)
+    salidas_map = _sum_salidas_por_entrada_item(sb, [int(it["id"]) for it in items])
+    out: List[dict] = []
+    for it in items:
+        ei_id = int(it["id"])
+        ubic = ubicacion_map.get(ei_id) or {}
+        pk_eff = ubic.get("pk_id")
+        if not _pk_id_coincide(pk_eff, pk_query):
+            continue
+        ent = ent_by_id.get(int(it["entrada_id"]), {})
+        opc = _enriquecer_entrada_item_opcion(sb, contrato_id, ent, it, salidas_map)
+        if opc:
+            opc["pk_id"] = pk_eff
+            opc["tramo"] = ubic.get("tramo")
+            opc["costado"] = ubic.get("costado")
+            opc["abscisa_inicial"] = ubic.get("abscisa_inicial")
+            opc["abscisa_final"] = ubic.get("abscisa_final")
+            out.append(opc)
+    out.sort(key=lambda x: (
+        -(int(x.get("numero_entrada") or 0)),
+        -(int(x.get("entrada_item_id") or 0)),
+    ))
+    return out
+
+
+def list_usuarios_receptor_obra(contrato_id: int, q: str = "", limit: int = 30) -> List[dict]:
+    from almacen_permissions import es_rol_receptor_obra
+
+    sb = _sb()
+    uc = sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", contrato_id).execute().data or []
+    ids_uc = [int(r["usuario_id"]) for r in uc if r.get("usuario_id")]
+    usuarios_principal = sb.table("usuarios").select("id").eq("contrato_id", contrato_id).eq("activo", True).execute().data or []
+    ids_principal = [int(u["id"]) for u in usuarios_principal]
+    todos_ids = sorted(set(ids_uc + ids_principal))
+    if not todos_ids:
+        return []
+
+    rows = (
+        sb.table("usuarios")
+        .select("id, nombre, apellidos, email, rol_id, firma_imagen_url")
+        .in_("id", todos_ids)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    rol_ids = sorted({int(r["rol_id"]) for r in rows if r.get("rol_id")})
+    roles_map: Dict[int, str] = {}
+    if rol_ids:
+        rol_rows = sb.table("roles").select("id, nombre").in_("id", rol_ids).execute().data or []
+        for rr in rol_rows:
+            roles_map[int(rr["id"])] = rr.get("nombre") or ""
+
+    q_norm = _norm_pk_id(q).lower()
+    out: List[dict] = []
+    for u in rows:
+        rol_nom = roles_map.get(int(u.get("rol_id") or 0), "")
+        if not es_rol_receptor_obra(rol_nom):
+            continue
+        label = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+        if not label:
+            label = u.get("email") or f"Usuario #{u['id']}"
+        if q_norm:
+            blob = f"{label} {u.get('email') or ''}".lower()
+            if q_norm not in blob:
+                continue
+        out.append({
+            "id": u["id"],
+            "label": label,
+            "email": u.get("email"),
+            "rol_nombre": rol_nom,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _validar_receptor_obra(sb, contrato_id: int, receptor_id: int) -> dict:
+    from almacen_permissions import es_rol_receptor_obra
+
+    rows = (
+        sb.table("usuarios")
+        .select("id, nombre, apellidos, email, rol_id, firma_imagen_url, contrato_id, activo")
+        .eq("id", int(receptor_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows or not rows[0].get("activo"):
+        raise ValueError("El usuario receptor no existe o está inactivo.")
+    u = rows[0]
+    rol_nom = ""
+    if u.get("rol_id"):
+        rol_rows = sb.table("roles").select("nombre").eq("id", int(u["rol_id"])).limit(1).execute().data or []
+        if rol_rows:
+            rol_nom = rol_rows[0].get("nombre") or ""
+    if not es_rol_receptor_obra(rol_nom):
+        raise ValueError("El usuario seleccionado no tiene un rol válido para recibir material en obra.")
+
+    uid = int(u["id"])
+    uc = sb.table("usuario_contratos").select("id").eq("contrato_id", contrato_id).eq("usuario_id", uid).limit(1).execute().data or []
+    if not uc and int(u.get("contrato_id") or 0) != contrato_id:
+        raise ValueError("El usuario receptor no pertenece a este contrato.")
+    label = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip() or u.get("email") or f"Usuario #{uid}"
+    return {**u, "label": label, "rol_nombre": rol_nom}
+
+
+def _generar_pdf_salida(
+    contrato_id: int,
+    salida_id: int,
+    salida_row: dict,
+    ctx: dict,
+) -> None:
+    from almacen_salida_pdf import generar_pdf_salida_pos
+
+    sb = _sb()
+    contrato_rows = (
+        sb.table("contratos")
+        .select("id, numero, objeto, contratista, nit")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not contrato_rows:
+        return
+    contrato_pdf = {
+        **contrato_rows[0],
+        "administradores": _administradores_contrato_contactos(sb, contrato_id),
+    }
+    pdf_bytes = generar_pdf_salida_pos(
+        contrato_pdf,
+        salida_row,
+        str(ctx.get("numero_oc") or "—"),
+        ctx.get("insumo_label") or "—",
+        ctx.get("presupuesto_label") or "—",
+        ctx.get("unidad") or "",
+        ctx.get("receptor_nombre") or "—",
+        ctx.get("receptor_firma"),
+        ctx.get("despachador_nombre") or "—",
+        ctx.get("despachador_firma"),
+    )
+    meta = _upload_soporte(contrato_id, "salidas", salida_id, pdf_bytes, f"salida-{salida_id}.pdf", "application/pdf")
+    sb.table("almacen_salida").update({
+        "salida_pdf_blob_path": meta["blob_path"],
+        "salida_pdf_nombre": meta["nombre"],
+        "salida_pdf_mime": meta["mime"],
+    }).eq("id", salida_id).execute()
+
+
+def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
+    sb = _sb()
+    pk_id = _norm_pk_id(body.get("pk_id"))
+    if not pk_id:
+        raise ValueError("Seleccione la ubicación (PK-ID) en el mapa.")
+
+    entrada_item_id = body.get("entrada_item_id")
+    if not entrada_item_id:
+        raise ValueError("Seleccione la entrada de material a despachar.")
+    entrada_item_id = int(entrada_item_id)
+
+    qty = _to_float(body.get("cantidad_salida"))
+    if qty <= 0:
+        raise ValueError("Indique una cantidad de salida mayor a cero.")
+
+    receptor_id = body.get("receptor_usuario_id")
+    if not receptor_id:
+        raise ValueError("Indique quién recibe el material en obra.")
+    receptor = _validar_receptor_obra(sb, contrato_id, int(receptor_id))
+
+    ei_rows = (
+        sb.table("almacen_entrada_item")
+        .select("*")
+        .eq("id", entrada_item_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not ei_rows:
+        raise ValueError("La línea de entrada seleccionada no existe.")
+    ei = ei_rows[0]
+
+    ent_rows = (
+        sb.table("almacen_entrada")
+        .select("*")
+        .eq("id", int(ei["entrada_id"]))
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not ent_rows:
+        raise ValueError("La entrada asociada no pertenece a este contrato.")
+    ent = ent_rows[0]
+    ubic_map = _ubicacion_efectiva_entrada_items(sb, [ei], {int(ent["id"]): ent})
+    pk_eff = (ubic_map.get(entrada_item_id) or {}).get("pk_id")
+    if not _pk_id_coincide(pk_eff, pk_id):
+        raise ValueError("La entrada seleccionada no corresponde al PK-ID indicado.")
+    ubic_eff = ubic_map.get(entrada_item_id) or {}
+
+    salidas_map = _sum_salidas_por_entrada_item(sb, [entrada_item_id])
+    recibida = _cantidad_recibida_entrada_item(sb, entrada_item_id)
+    despachada = salidas_map.get(entrada_item_id, 0.0)
+    disponible = _disponible_entrada_item(recibida, despachada)
+    if qty > disponible + 1e-9:
+        raise ValueError(
+            f"La cantidad de salida ({qty}) supera la disponible ({disponible}) "
+            f"de esta entrada en el PK-ID {pk_id}."
+        )
+
+    fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
+        (body.get("fecha_hora_salida") or "").strip()
+    )
+    numero_salida = _next_consecutivo(contrato_id, "almacen_salida", "numero_salida")
+    codigo_salida = _format_codigo_salida(contrato_id, numero_salida)
+
+    salida_row = {
+        "contrato_id": contrato_id,
+        "numero_salida": numero_salida,
+        "codigo": codigo_salida,
+        "fecha_hora_salida": fecha_hora,
+        "receptor_usuario_id": int(receptor_id),
+        "pk_id": pk_id,
+        "pk_id_id": int(body["pk_id_id"]) if body.get("pk_id_id") else None,
+        "tramo": (body.get("tramo") or ubic_eff.get("tramo") or ent.get("tramo") or "").strip() or None,
+        "costado": (body.get("costado") or ubic_eff.get("costado") or ent.get("costado") or "").strip() or None,
+        "abscisa_inicial": (body.get("abscisa_inicial") or ubic_eff.get("abscisa_inicial") or ent.get("abscisa_inicial") or "").strip() or None,
+        "abscisa_final": (body.get("abscisa_final") or ubic_eff.get("abscisa_final") or ent.get("abscisa_final") or "").strip() or None,
+        "entrada_item_id": entrada_item_id,
+        "cantidad_salida": qty,
+        "observaciones": (body.get("observaciones") or "").strip() or None,
+        "created_by": user_id,
+    }
+    ins = sb.table("almacen_salida").insert(salida_row).execute().data
+    if not ins:
+        raise ValueError("No se pudo registrar la salida.")
+    salida_id = int(ins[0]["id"])
+
+    material = "—"
+    unidad = "UND"
+    presupuesto_id = ei.get("presupuesto_id")
+    numero_oc = None
+    insumo_label = material
+    presupuesto_label = "—"
+
+    oci_id = ei.get("orden_compra_item_id")
+    if oci_id:
+        oci_rows = (
+            sb.table("almacen_orden_compra_item")
+            .select("material_descripcion, unidad, orden_compra_id, solicitud_item_id, presupuesto_id")
+            .eq("id", int(oci_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if oci_rows:
+            oci = oci_rows[0]
+            material = oci.get("material_descripcion") or "—"
+            unidad = oci.get("unidad") or "UND"
+            presupuesto_id = oci.get("presupuesto_id") or presupuesto_id
+            insumo_label = material
+            if oci.get("orden_compra_id"):
+                oc_r = (
+                    sb.table("almacen_orden_compra")
+                    .select("numero_oc")
+                    .eq("id", int(oci["orden_compra_id"]))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if oc_r:
+                    numero_oc = oc_r[0].get("numero_oc")
+            sid = oci.get("solicitud_item_id")
+            cap = None
+            itm = None
+            cod = None
+            if sid:
+                sol_it = (
+                    sb.table("almacen_solicitud_item")
+                    .select("capitulo, item, insumo_id, material_descripcion")
+                    .eq("id", int(sid))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if sol_it:
+                    cap = sol_it[0].get("capitulo")
+                    itm = sol_it[0].get("item")
+                    iid = sol_it[0].get("insumo_id")
+                    if iid:
+                        ins_r = (
+                            sb.table("almacen_insumo")
+                            .select("codigo, descripcion")
+                            .eq("id", int(iid))
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if ins_r:
+                            cod = (ins_r[0].get("codigo") or "").strip()
+                            desc = (ins_r[0].get("descripcion") or sol_it[0].get("material_descripcion") or "").strip()
+                            insumo_label = f"{cod} — {desc}".strip(" —") if cod else desc
+            if cap or itm:
+                presupuesto_label = " · ".join(x for x in [cap, itm] if x)
+
+    if presupuesto_id:
+        sb.table("almacen_movimiento").insert({
+            "contrato_id": contrato_id,
+            "presupuesto_id": int(presupuesto_id),
+            "material_descripcion": material,
+            "unidad": unidad,
+            "tipo": "salida",
+            "cantidad": qty,
+            "entrada_item_id": entrada_item_id,
+            "referencia_tipo": "salida",
+            "referencia_id": salida_id,
+            "created_by": user_id,
+        }).execute()
+        _upsert_inventario(contrato_id, int(presupuesto_id), material, unidad, -qty, 0)
+
+    desp_names = _map_usuario_nombres(sb, [user_id])
+    despachador = desp_names.get(int(user_id), "—")
+    desp_firma = None
+    desp_rows = sb.table("usuarios").select("firma_imagen_url").eq("id", user_id).limit(1).execute().data or []
+    if desp_rows:
+        desp_firma = desp_rows[0].get("firma_imagen_url")
+
+    pdf_ctx = {
+        "numero_oc": numero_oc,
+        "insumo_label": insumo_label,
+        "presupuesto_label": presupuesto_label,
+        "unidad": unidad,
+        "receptor_nombre": receptor.get("label"),
+        "receptor_firma": receptor.get("firma_imagen_url"),
+        "despachador_nombre": despachador,
+        "despachador_firma": desp_firma,
+    }
+
+    pdf_generando = True
+
+    def _pdf_salida_background() -> None:
+        try:
+            _generar_pdf_salida(contrato_id, salida_id, {**salida_row, "id": salida_id}, pdf_ctx)
+        except Exception as exc:
+            _log.warning("PDF salida %s no generado: %s", salida_id, exc)
+
+    threading.Thread(target=_pdf_salida_background, daemon=True).start()
+
+    disponible_restante = _disponible_entrada_item(recibida, despachada + qty)
+    alerta_proximidad = _alerta_proximidad_consumo(recibida, disponible_restante)
+
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        **salida_row,
+        "id": salida_id,
+        "receptor_nombre": receptor.get("label"),
+        "despachador_nombre": despachador,
+        "material_descripcion": material,
+        "unidad": unidad,
+        "insumo_label": insumo_label,
+        "presupuesto_label": presupuesto_label,
+        "numero_oc": numero_oc,
+        "cantidad_disponible_restante": disponible_restante,
+        "alerta_proximidad_consumo": alerta_proximidad,
+        "pdf_generando": pdf_generando,
+        "tiene_pdf_salida": False,
+    }
+
+
+def list_salidas(contrato_id: int) -> List[dict]:
+    sb = _sb()
+    rows = (
+        sb.table("almacen_salida")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    user_ids = []
+    ei_ids = []
+    for r in rows:
+        if r.get("receptor_usuario_id"):
+            user_ids.append(int(r["receptor_usuario_id"]))
+        if r.get("created_by"):
+            user_ids.append(int(r["created_by"]))
+        if r.get("entrada_item_id"):
+            ei_ids.append(int(r["entrada_item_id"]))
+    names = _map_usuario_nombres(sb, user_ids)
+
+    ei_map: Dict[int, dict] = {}
+    if ei_ids:
+        ei_rows = sb.table("almacen_entrada_item").select("id, orden_compra_item_id, presupuesto_id").in_("id", ei_ids).execute().data or []
+        oci_ids = [int(x["orden_compra_item_id"]) for x in ei_rows if x.get("orden_compra_item_id")]
+        oci_map: Dict[int, dict] = {}
+        if oci_ids:
+            oci_rows = sb.table("almacen_orden_compra_item").select("id, material_descripcion, unidad, orden_compra_id").in_("id", oci_ids).execute().data or []
+            oc_ids = sorted({int(x["orden_compra_id"]) for x in oci_rows if x.get("orden_compra_id")})
+            oc_map: Dict[int, dict] = {}
+            if oc_ids:
+                oc_rows = sb.table("almacen_orden_compra").select("id, numero_oc").in_("id", oc_ids).execute().data or []
+                oc_map = {int(x["id"]): x for x in oc_rows}
+            for o in oci_rows:
+                oid = int(o["id"])
+                oc_id = o.get("orden_compra_id")
+                oci_map[oid] = {
+                    **o,
+                    "numero_oc": oc_map.get(int(oc_id), {}).get("numero_oc") if oc_id else None,
+                }
+        for e in ei_rows:
+            oid = e.get("orden_compra_item_id")
+            ei_map[int(e["id"])] = {
+                **e,
+                "almacen_orden_compra_item": oci_map.get(int(oid), {}) if oid else {},
+            }
+
+    for r in rows:
+        r["receptor_nombre"] = names.get(int(r["receptor_usuario_id"])) if r.get("receptor_usuario_id") else None
+        r["despachador_nombre"] = names.get(int(r["created_by"])) if r.get("created_by") else None
+        ei = ei_map.get(int(r["entrada_item_id"] or 0), {})
+        oci = ei.get("almacen_orden_compra_item") or {}
+        r["material_descripcion"] = oci.get("material_descripcion")
+        r["unidad"] = oci.get("unidad")
+        r["numero_oc"] = oci.get("numero_oc")
+        r["tiene_pdf_salida"] = bool(r.get("salida_pdf_blob_path"))
+        _asegurar_codigo_salida(contrato_id, r)
+    return rows
+
+
+def get_salida(contrato_id: int, salida_id: int) -> dict:
+    sb = _sb()
+    rows = (
+        sb.table("almacen_salida")
+        .select("*")
+        .eq("id", salida_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Salida no encontrada.")
+    r = rows[0]
+    lista = list_salidas(contrato_id)
+    enriched = next((x for x in lista if int(x["id"]) == int(salida_id)), r)
+    return enriched
+
+
+def _pdf_ctx_for_salida(sb, contrato_id: int, sal: dict) -> dict:
+    """Contexto para regenerar PDF POS de una salida existente."""
+    ei_id = sal.get("entrada_item_id")
+    material = sal.get("material_descripcion") or "—"
+    unidad = sal.get("unidad") or "UND"
+    numero_oc = sal.get("numero_oc")
+    insumo_label = material
+    presupuesto_label = "—"
+    if ei_id:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("orden_compra_item_id, presupuesto_id")
+            .eq("id", int(ei_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ei_rows:
+            oci_id = ei_rows[0].get("orden_compra_item_id")
+            if oci_id:
+                oci = (
+                    sb.table("almacen_orden_compra_item")
+                    .select("material_descripcion, unidad, orden_compra_id, solicitud_item_id")
+                    .eq("id", int(oci_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if oci:
+                    material = oci[0].get("material_descripcion") or material
+                    unidad = oci[0].get("unidad") or unidad
+                    if oci[0].get("orden_compra_id"):
+                        oc_r = (
+                            sb.table("almacen_orden_compra")
+                            .select("numero_oc")
+                            .eq("id", int(oci[0]["orden_compra_id"]))
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if oc_r:
+                            numero_oc = oc_r[0].get("numero_oc")
+                    sid = oci[0].get("solicitud_item_id")
+                    if sid:
+                        sol_it = (
+                            sb.table("almacen_solicitud_item")
+                            .select("capitulo, item, insumo_id, material_descripcion")
+                            .eq("id", int(sid))
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if sol_it:
+                            cap = sol_it[0].get("capitulo")
+                            itm = sol_it[0].get("item")
+                            if cap or itm:
+                                presupuesto_label = " · ".join(x for x in [cap, itm] if x)
+                            iid = sol_it[0].get("insumo_id")
+                            if iid:
+                                ins = (
+                                    sb.table("almacen_insumo")
+                                    .select("codigo, descripcion")
+                                    .eq("id", int(iid))
+                                    .limit(1)
+                                    .execute()
+                                    .data
+                                    or []
+                                )
+                                if ins:
+                                    cod = (ins[0].get("codigo") or "").strip()
+                                    desc = (ins[0].get("descripcion") or sol_it[0].get("material_descripcion") or material).strip()
+                                    insumo_label = f"{cod} — {desc}".strip(" —") if cod else desc
+
+    user_ids = [int(x) for x in (sal.get("receptor_usuario_id"), sal.get("created_by")) if x]
+    names = _map_usuario_nombres(sb, user_ids)
+    firmas: Dict[int, Optional[str]] = {}
+    if user_ids:
+        urows = (
+            sb.table("usuarios")
+            .select("id, firma_imagen_url")
+            .in_("id", user_ids)
+            .execute()
+            .data
+            or []
+        )
+        firmas = {int(u["id"]): u.get("firma_imagen_url") for u in urows}
+
+    rec_id = int(sal["receptor_usuario_id"]) if sal.get("receptor_usuario_id") else None
+    desp_id = int(sal["created_by"]) if sal.get("created_by") else None
+    return {
+        "numero_oc": numero_oc,
+        "insumo_label": insumo_label,
+        "presupuesto_label": presupuesto_label,
+        "unidad": unidad,
+        "receptor_nombre": names.get(rec_id) if rec_id else sal.get("receptor_nombre"),
+        "receptor_firma": firmas.get(rec_id) if rec_id else None,
+        "despachador_nombre": names.get(desp_id) if desp_id else sal.get("despachador_nombre"),
+        "despachador_firma": firmas.get(desp_id) if desp_id else None,
+    }
+
+
+def download_salida_pdf(contrato_id: int, salida_id: int) -> tuple:
+    sb = _sb()
+    sal = get_salida(contrato_id, salida_id)
+    try:
+        _generar_pdf_salida(contrato_id, salida_id, sal, _pdf_ctx_for_salida(sb, contrato_id, sal))
+        sal = get_salida(contrato_id, salida_id)
+    except Exception as exc:
+        _log.warning("Regenerar PDF salida %s: %s", salida_id, exc)
+    path = (sal.get("salida_pdf_blob_path") or "").strip()
+    if not path:
+        raise ValueError("El recibo de salida aún no está disponible. Intente de nuevo en unos segundos.")
+    data, mime = download_soporte(path)
+    fname = sal.get("salida_pdf_nombre") or f"salida-{salida_id}.pdf"
+    return data, fname
+
+
+def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
+    sb = _sb()
+    sal = get_salida(contrato_id, salida_id)
+    ei_id = int(sal["entrada_item_id"])
+    qty = _to_float(sal.get("cantidad_salida"))
+
+    ei_rows = sb.table("almacen_entrada_item").select("*").eq("id", ei_id).limit(1).execute().data or []
+    if ei_rows:
+        ei = ei_rows[0]
+        material = "—"
+        unidad = "UND"
+        presupuesto_id = ei.get("presupuesto_id")
+        oci_id = ei.get("orden_compra_item_id")
+        if oci_id:
+            oci = sb.table("almacen_orden_compra_item").select("material_descripcion, unidad, presupuesto_id").eq("id", int(oci_id)).limit(1).execute().data or []
+            if oci:
+                material = oci[0].get("material_descripcion") or material
+                unidad = oci[0].get("unidad") or unidad
+                presupuesto_id = oci[0].get("presupuesto_id") or presupuesto_id
+        if presupuesto_id:
+            _upsert_inventario(contrato_id, int(presupuesto_id), material, unidad, qty, 0)
+
+    sb.table("almacen_movimiento").delete().eq("referencia_tipo", "salida").eq("referencia_id", int(salida_id)).execute()
+
+    path = (sal.get("salida_pdf_blob_path") or "").strip()
+    if path:
+        try:
+            delete_blob_private(path)
+        except Exception as exc:
+            _log.warning("No se pudo borrar PDF salida %s: %s", salida_id, exc)
+
+    numero = int(sal.get("numero_salida") or 0)
+    max_num = _max_consecutivo(contrato_id, "almacen_salida", "numero_salida")
+    sb.table("almacen_salida").delete().eq("id", int(salida_id)).eq("contrato_id", contrato_id).execute()
+
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        "ok": True,
+        "id": int(salida_id),
+        "numero_salida": numero,
+        "consecutivo_liberado": numero > 0 and numero == max_num,
+    }
+

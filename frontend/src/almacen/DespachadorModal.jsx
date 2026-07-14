@@ -11,11 +11,13 @@ import {
   formatNombrePropio,
   formatPlacaVehiculo,
   getAlmacenSessionUser,
+  todayDateInputColombia,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
 } from './almacenShared'
 import { validateAbscisaRango } from './almacenAbscisa'
+import { fmtSoporteBytes, prepareRemisionSoporte, REMISION_SOPORTE_MAX_BYTES } from './almacenRemisionSoporte'
 
 export default function DespachadorModal({
   onClose,
@@ -36,7 +38,7 @@ export default function DespachadorModal({
   const [tipo, setTipo] = useState('recibo')
   const [numeroDoc, setNumeroDoc] = useState('')
   const [proximoDisposicion, setProximoDisposicion] = useState('')
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
+  const [fecha, setFecha] = useState(todayDateInputColombia())
   const [proveedor, setProveedor] = useState(null)
   const [insumo, setInsumo] = useState(null)
   const [pkContext, setPkContext] = useState(null)
@@ -53,6 +55,8 @@ export default function DespachadorModal({
   const [transportador, setTransportador] = useState('')
   const [transportadorMsg, setTransportadorMsg] = useState('')
   const [remision, setRemision] = useState(null)
+  const [remisionBytes, setRemisionBytes] = useState(0)
+  const [soporteBusy, setSoporteBusy] = useState(false)
   const [ocrMsg, setOcrMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [ocrBusy, setOcrBusy] = useState(false)
@@ -141,13 +145,29 @@ export default function DespachadorModal({
 
   const onFile = async (e) => {
     const f = e.target.files?.[0]
+    e.target.value = ''
     if (!f) return
-    setRemision(f)
+    setSoporteBusy(true)
+    setError('')
+    let preparedFile = null
+    try {
+      const { file, bytes } = await prepareRemisionSoporte(f)
+      preparedFile = file
+      setRemision(file)
+      setRemisionBytes(bytes)
+    } catch (err) {
+      setRemision(null)
+      setRemisionBytes(0)
+      setError(err.message)
+      return
+    } finally {
+      setSoporteBusy(false)
+    }
     setOcrMsg('')
-    if (tipo !== 'recibo') return
+    if (tipo !== 'recibo' || !preparedFile) return
     setOcrBusy(true)
     try {
-      const r = await api.ocrRemisionEntrada(f)
+      const r = await api.ocrRemisionEntrada(preparedFile)
       const campos = r.campos || {}
       if (campos.numero_documento) {
         const sugerido = String(campos.numero_documento).trim()
@@ -216,7 +236,10 @@ export default function DespachadorModal({
     if (tipo === 'recibo' && !(numeroDocRef.current || numeroDoc).trim()) {
       faltantes.push('Número de remisión del proveedor')
     }
-    if (tipo === 'recibo' && !remision) faltantes.push('Archivo de remisión del proveedor')
+    if (tipo === 'recibo' && !remision) faltantes.push('Archivo de remisión del proveedor (máx. 300 KB)')
+    if (tipo === 'recibo' && remision && remisionBytes > REMISION_SOPORTE_MAX_BYTES) {
+      faltantes.push('Archivo de remisión (no puede superar 300 KB)')
+    }
     return faltantes
   }
 
@@ -295,7 +318,6 @@ export default function DespachadorModal({
   const overlay = {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(15, 23, 42, 0.55)',
     zIndex: 9000,
     display: 'flex',
     alignItems: compact ? 'flex-end' : 'center',
@@ -309,7 +331,7 @@ export default function DespachadorModal({
     maxWidth: compact ? '100%' : 640,
     maxHeight: compact ? '96dvh' : '92vh',
     overflow: 'auto',
-    boxShadow: compact ? '0 -12px 40px rgba(0,0,0,0.25)' : '0 24px 64px rgba(0,0,0,0.35)',
+    boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
     borderRadius: compact ? '16px 16px 0 0' : ui.card.borderRadius,
     paddingBottom: compact ? 'calc(16px + env(safe-area-inset-bottom, 0px))' : ui.card.padding,
   }
@@ -604,19 +626,23 @@ export default function DespachadorModal({
             <AlmacenFieldLabel
               icon="📷"
               label="Remisión del proveedor"
-              ayuda="Adjunte foto o PDF; el OCR puede autocompletar número y fecha."
+              ayuda="Adjunte foto o PDF; máximo 300 KB. El OCR puede autocompletar número y fecha."
             />
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', flexDirection: compact ? 'column' : 'row' }}>
               <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={onFile} />
               <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFile} />
-              <button type="button" style={{ ...ui.btnPrimary, width: compact ? '100%' : undefined }} disabled={ocrBusy} onClick={() => camRef.current?.click()}>
+              <button type="button" style={{ ...ui.btnPrimary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => camRef.current?.click()}>
                 📷 {compact ? 'Tomar foto de remisión' : 'Tomar foto'}
               </button>
-              <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={ocrBusy} onClick={() => fileRef.current?.click()}>
+              <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => fileRef.current?.click()}>
                 📁 Cargar archivo
               </button>
-              {remision && <span style={{ fontSize: 'var(--cc-sm)', alignSelf: 'center' }}>{remision.name}</span>}
-              {ocrBusy && <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>Analizando OCR…</span>}
+              {remision && (
+                <span style={{ fontSize: 'var(--cc-sm)', alignSelf: 'center' }}>
+                  {remision.name} · {fmtSoporteBytes(remisionBytes)}
+                </span>
+              )}
+              {(ocrBusy || soporteBusy) && <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>{soporteBusy ? 'Preparando soporte…' : 'Analizando OCR…'}</span>}
             </div>
             {ocrMsg && (
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 12 }}>{ocrMsg}</div>
@@ -625,7 +651,7 @@ export default function DespachadorModal({
         )}
 
         <div className={compact ? 'cc-almacen-form-actions' : undefined} style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-          <button type="button" style={{ ...ui.btnPrimary, flex: compact ? 1 : undefined }} disabled={busy || ocrBusy} onClick={guardar}>
+          <button type="button" style={{ ...ui.btnPrimary, flex: compact ? 1 : undefined }} disabled={busy || ocrBusy || soporteBusy} onClick={guardar}>
             {busy ? 'Guardando…' : 'Guardar'}
           </button>
           <button type="button" style={{ ...ui.btnSecondary, flex: compact ? 1 : undefined }} disabled={busy} onClick={onClose}>

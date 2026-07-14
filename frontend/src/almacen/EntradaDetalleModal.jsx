@@ -6,6 +6,7 @@ import {
   fmtCant,
   fmtMoney,
   formatEntradaNumero,
+  fmtFechaAlmacenSolo,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
@@ -43,7 +44,6 @@ export default function EntradaDetalleModal({
   const overlay = {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(15, 23, 42, 0.55)',
     zIndex: 9000,
     display: 'flex',
     alignItems: compact ? 'flex-end' : 'center',
@@ -57,7 +57,7 @@ export default function EntradaDetalleModal({
     maxWidth: compact ? '100%' : 560,
     maxHeight: compact ? '96dvh' : '92vh',
     overflow: 'auto',
-    boxShadow: compact ? '0 -12px 40px rgba(0,0,0,0.25)' : '0 24px 64px rgba(0,0,0,0.35)',
+    boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
     borderRadius: compact ? '16px 16px 0 0' : ui.card.borderRadius,
     paddingBottom: compact ? 'calc(16px + env(safe-area-inset-bottom, 0px))' : ui.card.padding,
   }
@@ -80,13 +80,12 @@ export default function EntradaDetalleModal({
       className={compact ? 'cc-almacen-modal-overlay cc-almacen-modal-overlay--compact' : 'cc-almacen-modal-overlay'}
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
     >
       <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>
-              Entrada {formatEntradaNumero(ent?.numero_entrada)}
+              Entrada {formatEntradaNumero(ent)}
             </div>
             <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
               Resumen del registro de material
@@ -102,7 +101,7 @@ export default function EntradaDetalleModal({
           <>
             {row('Tipo', TIPO_LABEL[ent.tipo] || ent.tipo)}
             {row('Documento', ent.numero_documento || '—')}
-            {row('Fecha', ent.fecha_entrada)}
+            {row('Fecha', fmtFechaAlmacenSolo(ent.fecha_entrada))}
             {row('Orden de compra', oc.numero_oc ? `#${oc.numero_oc}` : '—')}
             {row('Proveedor', ent.proveedor_nombre)}
             {row('Insumo', ent.insumo_label || item0.material_descripcion)}
