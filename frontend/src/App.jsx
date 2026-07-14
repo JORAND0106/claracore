@@ -101,6 +101,7 @@ import {
   fetchSicoeNodosCached,
   fetchSicoePkIdsCached,
   fetchSicoePlantillasCached,
+  invalidateSicoeCatalogoCache,
 } from './modules/sicoe-obra/sicoeCatalogoCache'
 import {
   invalidateSicoeVistaCache,
@@ -4606,6 +4607,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   useEffect(() => {
     if (!contrato_id || reporte._cargandoDetalle) return
+    setListaPkIds([])
     let cancelled = false
     const cargar = (intento = 0) => {
       fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
@@ -7187,12 +7189,23 @@ function ModuloSicoeObra({
   const sicoeInitContratoFiltrosOnceRef = useRef(false)
 
   useEffect(() => {
-    if (!contrato_id) return
-    fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
-      .then((d) => setSicoePkList(d))
-      .catch(() => setSicoePkList([]))
-    getContratoPlanoGeojson(API_URL, contrato_id, getToken())
+    if (!contrato_id) {
+      setSicoePkList([])
+      setSicoePlanoGeojson(null)
+      setSicoeContratoCentro(null)
+      return
+    }
+    const cid = contrato_id
+    setSicoePkList([])
+    setSicoePlanoGeojson(null)
+    setSicoeContratoCentro(null)
+    let cancelled = false
+    fetchSicoePkIdsCached(API_URL, cid, getToken())
+      .then((d) => { if (!cancelled) setSicoePkList(Array.isArray(d) ? d : []) })
+      .catch(() => { if (!cancelled) setSicoePkList([]) })
+    getContratoPlanoGeojson(API_URL, cid, getToken())
       .then((d) => {
+        if (cancelled) return
         if (!d || typeof d !== 'object') {
           setSicoePlanoGeojson(null)
           setSicoeContratoCentro(null)
@@ -7206,9 +7219,11 @@ function ModuloSicoeObra({
         )
       })
       .catch(() => {
+        if (cancelled) return
         setSicoePlanoGeojson(null)
         setSicoeContratoCentro(null)
       })
+    return () => { cancelled = true }
   }, [contrato_id])
 
   useEffect(() => {
@@ -12071,15 +12086,24 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }, [contrato_id, token, API_URL, isOnline, isOfflineReady])
 
   useEffect(() => {
+    if (!contrato_id) return
+    let cancelled = false
+    setPkIds([])
+    setSubcontratistas([])
+    setInspectores([])
+    setCapitulos([])
+    setPkSeleccionado(null)
+    setPkBusqueda('')
+
     // ── Número de reporte ────────────────────────────────────────────────────
     if (!reporteInicial) {
       if (!isOnline && isOfflineReady) {
         // Offline: asignar número temporal — el servidor lo renumerará al sincronizar
-        getNextNumeroReporteOffline(contrato_id).then(n => setNumeroReporte(n))
+        getNextNumeroReporteOffline(contrato_id).then((n) => { if (!cancelled) setNumeroReporte(n) })
       } else {
         fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
           .then((r) => r.json())
-          .then((d) => { if (d.siguiente != null) setNumeroReporte(d.siguiente) })
+          .then((d) => { if (!cancelled && d.siguiente != null) setNumeroReporte(d.siguiente) })
           .catch(() => {})
       }
     } else {
@@ -12095,6 +12119,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         db.subcontratistas_cache.where('contrato_id').equals(cid).toArray(),
         db.pkids_cache.where('contrato_id').equals(cid).toArray(),
       ]).then(([d, insp, subs, pks]) => {
+        if (cancelled) return
         if (Array.isArray(d)) {
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
           const sorted = caps.sort((a, b) => {
@@ -12108,19 +12133,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         setSubcontratistas(Array.isArray(subs) ? subs : [])
         setPkIds(Array.isArray(pks) ? pks : [])
       }).catch(() => {
+        if (cancelled) return
         setInspectores([])
         setSubcontratistas([])
         setPkIds([])
       })
-      return
+      return () => { cancelled = true }
     }
 
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
-      .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
+      .then(r => r.json()).then(d => { if (!cancelled) setSubcontratistas(Array.isArray(d) ? d : []) })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
-      .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
+      .then(r => r.json()).then(d => { if (!cancelled) setInspectores(Array.isArray(d) ? d : []) })
     fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: hdrs })
       .then(r => r.json()).then(d => {
+        if (cancelled) return
         if (Array.isArray(d)) {
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
           const sorted = caps.sort((a, b) => {
@@ -12133,8 +12160,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     const cargarPkIdsFormulario = (intento = 0) => {
       fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
-        .then((d) => setPkIds(Array.isArray(d) ? d : []))
+        .then((d) => { if (!cancelled) setPkIds(Array.isArray(d) ? d : []) })
         .catch(() => {
+          if (cancelled) return
           if (intento < 2) {
             setTimeout(() => cargarPkIdsFormulario(intento + 1), 600 * (intento + 1))
             return
@@ -12159,7 +12187,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       if (reporteInicial.inspector_id) {
         fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: hdrs })
           .then(r => r.json()).then(u => {
-            if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
+            if (!cancelled && u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
           }).catch(() => {})
       }
       if (reporteInicial.registros?.length) {
@@ -12177,7 +12205,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
           grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url,
           graficos_historial: parseGraficosHistorial(r),
-          ...sicoeLocFromRegistro(r, pkIds),
+          ...sicoeLocFromRegistro(r, []),
         }))
         if (esMultIni) mappedRegs = inferLoteLocIdxEnRegistros(mappedRegs)
         setRegistros(mappedRegs)
@@ -12185,7 +12213,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         if (esMultIni && mappedRegs.length) {
           const maxLote = mappedRegs.reduce((m, r) => Math.max(m, r.loteLocIdx ?? 0), 0)
           setLoteLocIdxActual(maxLote)
-          setLocLoteActual(sicoeLocFromRegistro(mappedRegs.find((r) => (r.loteLocIdx ?? 0) === maxLote) || mappedRegs[0], pkIds))
+          setLocLoteActual(sicoeLocFromRegistro(mappedRegs.find((r) => (r.loteLocIdx ?? 0) === maxLote) || mappedRegs[0], []))
         }
       }
       if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
@@ -12193,7 +12221,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         cota: p.cota || '', descripcion: p.descripcion || ''
       })))
     }
-  }, [isOnline, isOfflineReady])
+    return () => { cancelled = true }
+  }, [contrato_id, API_URL, token, isOnline, isOfflineReady, reporteInicial?.id])
 
   useEffect(() => {
     if (reporteInicial?.pk_id_id && pkIds.length > 0 && !pkSeleccionado) {
@@ -21767,6 +21796,7 @@ if (contratos.length > 1) {
   async function cambiarContratoActivo(contrato, baseUser = null) {
     const prev = baseUser ?? usuario
     if (!prev || !contrato?.id) return null
+    const prevCid = prev.contrato_id
     const u = {
       ...prev,
       contrato_id: contrato.id,
@@ -21787,6 +21817,14 @@ if (contratos.length > 1) {
         if (permisos) u.permisos = permisos
       }
     } catch { /* silencioso */ }
+    if (prevCid != null && String(prevCid) !== String(contrato.id)) {
+      invalidateSicoeCatalogoCache(prevCid)
+      invalidateSicoeCatalogoCache(contrato.id)
+      invalidateSicoeVistaCache(prevCid)
+      invalidateSicoeVistaCache(contrato.id)
+      invalidateDashboardVistaCache(prevCid)
+      invalidateDashboardVistaCache(contrato.id)
+    }
     const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
     storage.setItem('cc_usuario', JSON.stringify(u))
     setUsuario(u)

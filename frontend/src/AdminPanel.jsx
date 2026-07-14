@@ -2711,6 +2711,22 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
   const [reseteandoSicoe, setReseteandoSicoe] = useState(null); // id del contrato en proceso
   const [planoArchivoLabel, setPlanoArchivoLabel] = useState(null); // nombre local o leyenda servidor
+  const [pkIdsCount, setPkIdsCount] = useState(null);
+  const [pkIdsSicoeRefs, setPkIdsSicoeRefs] = useState(null); // { reportes, registros, total }
+  const [pkIdsReemplazoBloqueado, setPkIdsReemplazoBloqueado] = useState(false);
+  const [pkCsvUploading, setPkCsvUploading] = useState(false);
+  const [pkCsvPending, setPkCsvPending] = useState(null); // { file, name, filasEstimadas }
+  const [pkCsvReplaceConfirm, setPkCsvReplaceConfirm] = useState(false);
+  const [pkCsvResult, setPkCsvResult] = useState(null); // { type: 'success'|'error', titulo, children }
+  const [pkPanoramaOpen, setPkPanoramaOpen] = useState(false);
+  const [pkPanoramaData, setPkPanoramaData] = useState(null);
+  const [pkPanoramaLoading, setPkPanoramaLoading] = useState(false);
+  const [pkPanoramaError, setPkPanoramaError] = useState(null);
+  const [pkPanoramaTitulo, setPkPanoramaTitulo] = useState("Panorama maestro PK-ID");
+  const [pkPanoramaSubtitulo, setPkPanoramaSubtitulo] = useState(null);
+  const [pkPanoramaModo, setPkPanoramaModo] = useState("maestro"); // maestro | comparar
+  const [pkPanoramaEliminando, setPkPanoramaEliminando] = useState(false);
+  const pkCsvFileInputRef = useRef(null);
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const planoFileInputRef = useRef(null);
@@ -2866,6 +2882,278 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     el?.click();
   }
 
+  async function cargarResumenPkIds(contratoId) {
+    if (!contratoId) {
+      setPkIdsCount(null);
+      setPkIdsSicoeRefs(null);
+      setPkIdsReemplazoBloqueado(false);
+      return;
+    }
+    try {
+      const res = await call("GET", `/admin/contratos/${contratoId}/pk-ids/resumen`);
+      setPkIdsCount(typeof res?.total_pk_ids === "number" ? res.total_pk_ids : null);
+      setPkIdsSicoeRefs(res?.sicoe_refs ?? null);
+      setPkIdsReemplazoBloqueado(Boolean(res?.reemplazo_bloqueado));
+    } catch {
+      setPkIdsCount(null);
+      setPkIdsSicoeRefs(null);
+      setPkIdsReemplazoBloqueado(false);
+    }
+  }
+
+  function abrirSelectorPkCsv() {
+    const el = pkCsvFileInputRef.current;
+    if (el) el.value = "";
+    el?.click();
+  }
+
+  async function handlePkCsvFile(e) {
+    const file = e.target.files?.[0];
+    if (!file || !editandoId) return;
+    e.target.value = "";
+    let text = "";
+    try {
+      text = await file.text();
+    } catch {
+      setMsg({ type: "error", text: "No se pudo leer el archivo CSV." });
+      return;
+    }
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) {
+      setMsg({
+        type: "error",
+        text: "El archivo debe incluir encabezado y al menos una fila de datos.",
+      });
+      return;
+    }
+    const headerNorm = lines[0].toUpperCase().replace(/\s/g, "_");
+    const cols = headerNorm.split(/[,;]/).map((c) => c.trim()).filter(Boolean);
+    if (!cols.includes("CAPA")) {
+      setMsg({
+        type: "error",
+        text:
+          "El CSV no tiene la columna obligatoria CAPA (código PK). " +
+          "Columnas esperadas: CAPA, CIV, TRAMO, INFRAESTRUCTURA, COSTADO, UBICACION, ABS_INICIO, ABS_FINAL, CALZADA.",
+      });
+      return;
+    }
+    setPkCsvPending({ file, name: file.name, filasEstimadas: Math.max(0, lines.length - 1), comparacionResumen: null, comparacionLoading: true });
+    setMsg(null);
+    void cargarComparacionPkCsv(file, editandoId);
+  }
+
+  async function cargarComparacionPkCsv(file, contratoId) {
+    if (!file || !contratoId) return;
+    try {
+      const fd = new FormData();
+      fd.append("archivo", file);
+      const res = await fetch(`${API}/admin/contratos/${contratoId}/pk-ids/comparar-csv`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : data.error || res.statusText;
+        throw new Error(detail || "Error al comparar CSV");
+      }
+      setPkCsvPending((prev) =>
+        prev?.file === file
+          ? { ...prev, comparacionResumen: data.resumen, comparacionLoading: false, comparacionError: null }
+          : prev,
+      );
+    } catch (err) {
+      setPkCsvPending((prev) =>
+        prev?.file === file
+          ? { ...prev, comparacionLoading: false, comparacionError: err?.message || "No se pudo comparar el CSV." }
+          : prev,
+      );
+    }
+  }
+
+  async function abrirPanoramaMaestroPkIds() {
+    if (!editandoId) return;
+    setPkPanoramaModo("maestro");
+    setPkPanoramaTitulo("Panorama maestro PK-ID");
+    setPkPanoramaSubtitulo("SICOE (naranja) · Presupuesto (índigo). PK sin vínculos se pueden eliminar.");
+    setPkPanoramaOpen(true);
+    setPkPanoramaLoading(true);
+    setPkPanoramaError(null);
+    setPkPanoramaData(null);
+    try {
+      const data = await call("GET", `/admin/contratos/${editandoId}/pk-ids/panorama`);
+      setPkPanoramaData(data);
+    } catch (err) {
+      setPkPanoramaError(err?.message || "No se pudo cargar el panorama.");
+    } finally {
+      setPkPanoramaLoading(false);
+    }
+  }
+
+  async function recargarPanoramaPkIds() {
+    if (!editandoId || !pkPanoramaOpen) return;
+    if (pkPanoramaModo === "comparar" && pkCsvPending?.file) {
+      await abrirComparacionPkCsv(true);
+    } else {
+      await abrirPanoramaMaestroPkIds();
+    }
+  }
+
+  async function abrirComparacionPkCsv(silent = false) {
+    if (!pkCsvPending?.file || !editandoId) return;
+    setPkPanoramaModo("comparar");
+    if (!silent) {
+      setPkPanoramaTitulo("Comparar CSV con maestro");
+      setPkPanoramaSubtitulo(
+        `Archivo: ${pkCsvPending.name} · M = maestro · C = CSV · SICOE / PPTO resaltados por color`,
+      );
+      setPkPanoramaOpen(true);
+    }
+    setPkPanoramaLoading(true);
+    setPkPanoramaError(null);
+    if (!silent) setPkPanoramaData(null);
+    try {
+      const fd = new FormData();
+      fd.append("archivo", pkCsvPending.file);
+      const res = await fetch(`${API}/admin/contratos/${editandoId}/pk-ids/comparar-csv`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : data.error || res.statusText;
+        throw new Error(detail || "Error al comparar CSV");
+      }
+      setPkPanoramaData(data);
+      setPkCsvPending((prev) =>
+        prev ? { ...prev, comparacionResumen: data.resumen, comparacionLoading: false, comparacionError: null } : prev,
+      );
+    } catch (err) {
+      const msgErr = err?.message || "No se pudo comparar el CSV.";
+      setPkPanoramaError(msgErr);
+      if (!silent) {
+        setPkCsvPending((prev) => (prev ? { ...prev, comparacionLoading: false, comparacionError: msgErr } : prev));
+      }
+    } finally {
+      setPkPanoramaLoading(false);
+    }
+  }
+
+  async function eliminarPkIdsSinUso() {
+    if (!editandoId) return;
+    setPkPanoramaEliminando(true);
+    try {
+      const data = await call("POST", `/admin/contratos/${editandoId}/pk-ids/eliminar-sin-uso`);
+      setMsg({
+        type: "success",
+        text: data?.eliminados
+          ? `${data.eliminados} PK eliminados del maestro (sin uso en SICOE ni Presupuesto).`
+          : data?.mensaje || "No había PK eliminables.",
+      });
+      setPkIdsCount(data?.total_despues ?? pkIdsCount);
+      void cargarResumenPkIds(editandoId);
+      await recargarPanoramaPkIds();
+    } catch (err) {
+      setMsg({ type: "error", text: err?.message || "No se pudieron eliminar los PK." });
+    } finally {
+      setPkPanoramaEliminando(false);
+    }
+  }
+
+  async function eliminarPkIdMaestro(pkMaestroId, pkCode) {
+    if (!editandoId || !pkMaestroId) return;
+    setPkPanoramaEliminando(true);
+    try {
+      await call("DELETE", `/admin/contratos/${editandoId}/pk-ids/${pkMaestroId}`);
+      setMsg({ type: "success", text: `PK ${pkCode || pkMaestroId} eliminado del maestro.` });
+      void cargarResumenPkIds(editandoId);
+      await recargarPanoramaPkIds();
+    } catch (err) {
+      setMsg({ type: "error", text: err?.message || "No se pudo eliminar el PK." });
+    } finally {
+      setPkPanoramaEliminando(false);
+    }
+  }
+
+  function cerrarPanoramaPkIds() {
+    setPkPanoramaOpen(false);
+    setPkPanoramaData(null);
+    setPkPanoramaError(null);
+    setPkPanoramaLoading(false);
+    setPkPanoramaEliminando(false);
+  }
+
+  async function ejecutarImportPkCsv(modo) {
+    if (!pkCsvPending?.file || !editandoId) return;
+    setPkCsvReplaceConfirm(false);
+    const pending = pkCsvPending;
+    setPkCsvPending(null);
+    setPkCsvUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("archivo", pending.file);
+      fd.append("modo", modo);
+      const res = await fetch(`${API}/admin/contratos/${editandoId}/pk-ids/importar-csv`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : data.error || res.statusText;
+        throw new Error(detail || "Error al importar maestro PK-ID");
+      }
+      const modoLabel =
+        modo === "reemplazar" ? "Reemplazo completo" : modo === "sincronizar" ? "Sincronización" : "Agregar";
+      const lineas = [
+        `Archivo: ${pending.name}`,
+      ];
+      if (modo === "sincronizar") {
+        lineas.push(
+          `${data.actualizados ?? 0} PK actualizados · ${data.insertados ?? 0} PK nuevos · Total en maestro: ${data.total_despues ?? "—"}`,
+        );
+      } else {
+        lineas.push(`${data.insertados ?? 0} PK insertados · Total en maestro: ${data.total_despues ?? "—"}`);
+      }
+      if (modo === "agregar" && (data.omitidos_existentes ?? 0) > 0) {
+        lineas.push(
+          `${data.omitidos_existentes} PK omitidos (CAPA ya existe — no se revisaron otras columnas; use Sincronizar si cambió COSTADO, UBICACION, etc.)`,
+        );
+      }
+      if (modo === "reemplazar" && (data.eliminados_previos ?? 0) > 0) {
+        lineas.push(`${data.eliminados_previos} PK anteriores eliminados`);
+      }
+      if ((data.duplicados_capa_en_archivo ?? 0) > 0) {
+        lineas.push(`${data.duplicados_capa_en_archivo} filas duplicadas en el CSV (se usó la última por CAPA)`);
+      }
+      setMsg({ type: "success", text: `Maestro PK-ID cargado correctamente (${modoLabel}).` });
+      setPkIdsCount(data.total_despues ?? pkIdsCount);
+      void cargarResumenPkIds(editandoId);
+      setPkCsvResult({
+        type: "success",
+        titulo: "Carga exitosa",
+        lineas,
+        modoLabel,
+      });
+    } catch (err) {
+      const errMsg = err?.message || "Error al cargar maestro PK-ID.";
+      setMsg({ type: "error", text: errMsg });
+      setPkCsvResult({
+        type: "error",
+        titulo: "Error al cargar maestro PK-ID",
+        lineas: [errMsg],
+      });
+    } finally {
+      setPkCsvUploading(false);
+    }
+  }
+
+  function solicitarReemplazoPkCsv() {
+    if (!pkCsvPending?.file) return;
+    setPkCsvReplaceConfirm(true);
+  }
+
   function handlePlanoGeojson(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2929,6 +3217,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     if (!d || typeof d !== "object") d = c;
     llenarFormDesdeContrato(d);
     setMsg(null);
+    void cargarResumenPkIds(c.id);
   }
 
   useEffect(() => {
@@ -2957,6 +3246,13 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
   function cancelarEdicion() {
     setEditandoId(null);
+    setPkCsvPending(null);
+    setPkCsvReplaceConfirm(false);
+    setPkCsvResult(null);
+    cerrarPanoramaPkIds();
+    setPkIdsCount(null);
+    setPkIdsSicoeRefs(null);
+    setPkIdsReemplazoBloqueado(false);
     setModalMode(null);
     setForm(FORM_VACIO);
     setNivelesActivosEdit([1, 2, 3]);
@@ -3416,6 +3712,37 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         handlePlanoGeojson={handlePlanoGeojson}
         abrirSelectorPlanoGeojson={abrirSelectorPlanoGeojson}
         quitarPlanoGeojson={quitarPlanoGeojson}
+        pkIdsCount={pkIdsCount}
+        pkIdsSicoeRefs={pkIdsSicoeRefs}
+        pkIdsReemplazoBloqueado={pkIdsReemplazoBloqueado}
+        pkCsvUploading={pkCsvUploading}
+        pkCsvPending={pkCsvPending}
+        pkCsvReplaceConfirm={pkCsvReplaceConfirm}
+        pkCsvResult={pkCsvResult}
+        pkCsvFileInputRef={pkCsvFileInputRef}
+        abrirSelectorPkCsv={abrirSelectorPkCsv}
+        handlePkCsvFile={handlePkCsvFile}
+        onPkCsvModoAgregar={() => void ejecutarImportPkCsv("agregar")}
+        onPkCsvModoSincronizar={() => void ejecutarImportPkCsv("sincronizar")}
+        onPkCsvModoReemplazar={solicitarReemplazoPkCsv}
+        onPkCsvReplaceConfirm={() => void ejecutarImportPkCsv("reemplazar")}
+        onPkCsvReplaceCancel={() => setPkCsvReplaceConfirm(false)}
+        onPkCsvCancelPending={() => setPkCsvPending(null)}
+        onPkCsvResultClose={() => setPkCsvResult(null)}
+        onAbrirPanoramaMaestroPkIds={() => void abrirPanoramaMaestroPkIds()}
+        onAbrirComparacionPkCsv={() => void abrirComparacionPkCsv()}
+        pkPanoramaOpen={pkPanoramaOpen}
+        pkPanoramaData={pkPanoramaData}
+        pkPanoramaLoading={pkPanoramaLoading}
+        pkPanoramaError={pkPanoramaError}
+        pkPanoramaTitulo={pkPanoramaTitulo}
+        pkPanoramaSubtitulo={pkPanoramaSubtitulo}
+        onCerrarPanoramaPkIds={cerrarPanoramaPkIds}
+        onEliminarPkIdsSinUso={() => eliminarPkIdsSinUso()}
+        onEliminarPkIdMaestro={(id, code) => eliminarPkIdMaestro(id, code)}
+        onRecargarPanoramaPkIds={() => recargarPanoramaPkIds()}
+        pkPanoramaEliminando={pkPanoramaEliminando}
+        editandoContratoId={editandoId}
         ENTIDADES={ENTIDADES}
         nivelesLabels={SICOE_NIVELES_VALIDACION_ADMIN_LABELS}
         perms={perms}

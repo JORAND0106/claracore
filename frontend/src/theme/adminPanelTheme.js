@@ -194,6 +194,11 @@ export function buildContratoUiTheme(activeTheme, tProp) {
       textMuted: tok.textMuted,
       primary: tok.primary,
       shadow: dark ? "0 24px 64px rgba(0,0,0,0.45)" : tok.shadow,
+      overlay: dark ? "rgba(8, 19, 24, 0.78)" : rest ? "rgba(42, 35, 24, 0.42)" : "rgba(15, 23, 42, 0.48)",
+      success: 'var(--cc-color-success)',
+      danger: dark ? "#f87171" : rest ? "#991B1B" : "#DC2626",
+      warn: dark ? "#fbbf24" : rest ? "#92400E" : "#D97706",
+      presupuesto: dark ? "#a5b4fc" : rest ? "#4338CA" : "#6366f1",
     },
   };
 }

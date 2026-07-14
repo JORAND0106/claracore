@@ -7,6 +7,8 @@ import { ContratoOrdenesPagoPanel } from "./ContratoOrdenesPago";
 import { formatCOP } from "./utils/formatCOP";
 import { buildContratoUiTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
+import CcConfirmModal from "./components/CcConfirmModal";
+import PkIdsCsvPanoramaModal from "./components/PkIdsCsvPanoramaModal";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
@@ -37,6 +39,37 @@ export default function ContratoEditModal({
   handlePlanoGeojson,
   abrirSelectorPlanoGeojson,
   quitarPlanoGeojson,
+  pkIdsCount = null,
+  pkIdsSicoeRefs = null,
+  pkIdsReemplazoBloqueado = false,
+  pkCsvUploading = false,
+  pkCsvPending = null,
+  pkCsvReplaceConfirm = false,
+  pkCsvResult = null,
+  pkCsvFileInputRef,
+  abrirSelectorPkCsv,
+  handlePkCsvFile,
+  onPkCsvModoAgregar,
+  onPkCsvModoSincronizar,
+  onPkCsvModoReemplazar,
+  onPkCsvReplaceConfirm,
+  onPkCsvReplaceCancel,
+  onPkCsvCancelPending,
+  onPkCsvResultClose,
+  onAbrirPanoramaMaestroPkIds,
+  onAbrirComparacionPkCsv,
+  pkPanoramaOpen = false,
+  pkPanoramaData = null,
+  pkPanoramaLoading = false,
+  pkPanoramaError = null,
+  pkPanoramaTitulo = "Panorama maestro PK-ID",
+  pkPanoramaSubtitulo = null,
+  onCerrarPanoramaPkIds,
+  onEliminarPkIdsSinUso,
+  onEliminarPkIdMaestro,
+  onRecargarPanoramaPkIds,
+  pkPanoramaEliminando = false,
+  editandoContratoId = null,
   ENTIDADES,
   nivelesLabels,
   perms,
@@ -50,7 +83,7 @@ export default function ContratoEditModal({
   const [tab, setTab] = useState(initialTab);
   const isEdit = mode === "edit";
   const ui = useMemo(() => buildContratoUiTheme(theme, tProp), [theme, tProp]);
-  const { inp, lbl, font, fileDrop: fileDropStyle } = ui;
+  const { inp, lbl, font, fileDrop: fileDropStyle, confirmTheme } = ui;
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const compact = vpMobile || isLandscapeMobile;
 
@@ -294,8 +327,323 @@ export default function ContratoEditModal({
                   </div>
                 )}
               </div>
+              {isEdit && perms?.editar && (
+                <div style={{ gridColumn: "1 / -1", marginTop: 4, paddingTop: 16, borderTop: `1px solid ${ui.border}` }}>
+                  <label style={lbl}>MAESTRO PK-ID (CSV)</label>
+                  <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 10 }}>
+                    Catálogo de PK por contrato (SICOE, Almacén, mapa). Columnas: CAPA, CIV, TRAMO, INFRAESTRUCTURA, COSTADO, UBICACION, ABS_INICIO, ABS_FINAL, CALZADA. CAPA = código PK.
+                    {pkIdsCount != null && (
+                      <span style={{ display: "block", marginTop: 6, color: ui.primary, fontWeight: 600 }}>
+                        PK en maestro actual: {pkIdsCount}
+                      </span>
+                    )}
+                    {pkIdsSicoeRefs?.total > 0 && (
+                      <span style={{ display: "block", marginTop: 6, color: ui.warnText, fontWeight: 600 }}>
+                        {pkIdsSicoeRefs.total} registro(s) SICOE vinculados al maestro
+                        {pkIdsSicoeRefs.reportes != null && pkIdsSicoeRefs.registros != null && (
+                          <> ({pkIdsSicoeRefs.reportes} reportes · {pkIdsSicoeRefs.registros} registros)</>
+                        )}
+                        . Use Sincronizar para actualizar sin borrar.
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      disabled={pkCsvUploading}
+                      onClick={abrirSelectorPkCsv}
+                      style={{
+                        ...fileDropStyle,
+                        marginBottom: 0,
+                        opacity: pkCsvUploading ? 0.6 : 1,
+                        cursor: pkCsvUploading ? "wait" : "pointer",
+                      }}
+                    >
+                      {pkCsvUploading ? "⏳ Procesando CSV…" : "📂 Cargar maestro PK-ID (CSV)"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pkCsvUploading}
+                      onClick={onAbrirPanoramaMaestroPkIds}
+                      style={{
+                        background: "transparent",
+                        border: `1px solid ${ui.border}`,
+                        color: ui.primary,
+                        borderRadius: 8,
+                        padding: "9px 14px",
+                        fontSize: font.sm,
+                        fontWeight: 700,
+                        cursor: pkCsvUploading ? "wait" : "pointer",
+                      }}
+                    >
+                      Ver panorama del maestro
+                    </button>
+                    <input
+                      ref={pkCsvFileInputRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      style={{ display: "none" }}
+                      onChange={handlePkCsvFile}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          {pkCsvPending && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 100020,
+                background: confirmTheme.overlay,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 16,
+              }}
+              onClick={onPkCsvCancelPending}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pk-csv-modo-title"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "100%",
+                  maxWidth: 440,
+                  background: confirmTheme.bgCard,
+                  border: `1px solid ${confirmTheme.border}`,
+                  borderRadius: 14,
+                  boxShadow: confirmTheme.shadow,
+                  overflow: "hidden",
+                  color: confirmTheme.text,
+                }}
+              >
+                <div
+                  style={{
+                    padding: "16px 20px 12px",
+                    background: `color-mix(in srgb, ${confirmTheme.primary} 14%, ${confirmTheme.bgCard})`,
+                    borderBottom: `1px solid ${confirmTheme.border}`,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  <span style={{ fontSize: "var(--cc-lg)", lineHeight: 1 }} aria-hidden>ℹ️</span>
+                  <div id="pk-csv-modo-title" style={{ fontSize: "var(--cc-body)", fontWeight: 800, color: confirmTheme.primary }}>
+                    Cargar maestro PK-ID
+                  </div>
+                </div>
+                <div style={{ padding: "16px 20px 6px", fontSize: "var(--cc-sm)", lineHeight: 1.45 }}>
+                  <p style={{ margin: "0 0 10px" }}>
+                    Archivo: <strong>{pkCsvPending.name}</strong>
+                    {pkCsvPending.filasEstimadas != null && (
+                      <> · ~{pkCsvPending.filasEstimadas} fila(s) de datos</>
+                    )}
+                  </p>
+                  <p style={{ margin: 0, color: confirmTheme.textMuted }}>
+                    ¿Desea agregar PK nuevos, sincronizar datos del CSV con el maestro actual, o reemplazarlo por completo?
+                  </p>
+                  {pkIdsReemplazoBloqueado && (
+                    <p style={{ margin: "10px 0 0", color: confirmTheme.warn, fontWeight: 600, lineHeight: 1.4 }}>
+                      Hay {pkIdsSicoeRefs?.total ?? "varios"} registro(s) SICOE vinculados. Reemplazar todo está bloqueado;
+                      use Sincronizar para actualizar COSTADO, UBICACION y demás campos sin perder referencias.
+                    </p>
+                  )}
+                  {pkCsvPending.comparacionLoading && (
+                    <p style={{ margin: "10px 0 0", color: confirmTheme.textMuted, fontSize: "var(--cc-caption)" }}>
+                      Analizando diferencias por columna…
+                    </p>
+                  )}
+                  {pkCsvPending.comparacionError && (
+                    <p style={{ margin: "10px 0 0", color: confirmTheme.danger, fontSize: "var(--cc-caption)" }}>
+                      {pkCsvPending.comparacionError}
+                    </p>
+                  )}
+                  {pkCsvPending.comparacionResumen && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        background: `color-mix(in srgb, ${confirmTheme.primary} 8%, ${confirmTheme.bgCard})`,
+                        border: `1px solid ${confirmTheme.border}`,
+                        fontSize: "var(--cc-caption)",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      <strong>Resumen CSV vs maestro:</strong>{" "}
+                      {pkCsvPending.comparacionResumen.nuevos ?? 0} nuevos ·{" "}
+                      <span style={{ color: confirmTheme.warn, fontWeight: 700 }}>
+                        {pkCsvPending.comparacionResumen.actualizar ?? 0} con cambios en columnas
+                      </span>{" "}
+                      · {pkCsvPending.comparacionResumen.igual ?? 0} sin cambios ·{" "}
+                      {pkCsvPending.comparacionResumen.solo_maestro ?? 0} solo en maestro ·{" "}
+                      {pkCsvPending.comparacionResumen.con_sicoe_refs ?? 0}{" "}
+                      <span style={{ color: confirmTheme.warn, fontWeight: 600 }}>SICOE</span> ·{" "}
+                      {pkCsvPending.comparacionResumen.con_presupuesto_refs ?? 0}{" "}
+                      <span style={{ color: confirmTheme.presupuesto, fontWeight: 600 }}>PPTO</span>
+                      {(pkCsvPending.comparacionResumen.eliminables ?? 0) > 0 && (
+                        <> · {pkCsvPending.comparacionResumen.eliminables} sin uso</>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: "12px 20px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <button
+                    type="button"
+                    disabled={pkCsvUploading}
+                    onClick={onAbrirComparacionPkCsv}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${confirmTheme.border}`,
+                      color: confirmTheme.text,
+                      borderRadius: 8,
+                      padding: "9px 14px",
+                      fontWeight: 600,
+                      cursor: pkCsvUploading ? "wait" : "pointer",
+                      fontSize: "var(--cc-sm)",
+                    }}
+                  >
+                    Ver panorama detallado (columnas M / C)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pkCsvUploading}
+                    onClick={onPkCsvModoSincronizar}
+                    style={{
+                      background: confirmTheme.primary,
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "10px 14px",
+                      fontWeight: 700,
+                      cursor: pkCsvUploading ? "wait" : "pointer",
+                      fontSize: "var(--cc-sm)",
+                      opacity: pkCsvUploading ? 0.7 : 1,
+                    }}
+                  >
+                    Sincronizar (actualizar existentes y agregar nuevos)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pkCsvUploading}
+                    onClick={onPkCsvModoAgregar}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${confirmTheme.primary}`,
+                      color: confirmTheme.primary,
+                      borderRadius: 8,
+                      padding: "10px 14px",
+                      fontWeight: 700,
+                      cursor: pkCsvUploading ? "wait" : "pointer",
+                      fontSize: "var(--cc-sm)",
+                      opacity: pkCsvUploading ? 0.7 : 1,
+                    }}
+                  >
+                    Agregar (solo PK nuevos, sin modificar existentes)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pkCsvUploading || pkIdsReemplazoBloqueado}
+                    title={
+                      pkIdsReemplazoBloqueado
+                        ? "Bloqueado: hay registros SICOE vinculados al maestro actual"
+                        : undefined
+                    }
+                    onClick={onPkCsvModoReemplazar}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${confirmTheme.danger}`,
+                      color: confirmTheme.danger,
+                      borderRadius: 8,
+                      padding: "10px 14px",
+                      fontWeight: 700,
+                      cursor: pkCsvUploading || pkIdsReemplazoBloqueado ? "not-allowed" : "pointer",
+                      fontSize: "var(--cc-sm)",
+                      opacity: pkCsvUploading || pkIdsReemplazoBloqueado ? 0.45 : 1,
+                    }}
+                  >
+                    Reemplazar todo el maestro
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pkCsvUploading}
+                    onClick={onPkCsvCancelPending}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${confirmTheme.border}`,
+                      color: confirmTheme.textMuted,
+                      borderRadius: 8,
+                      padding: "8px 14px",
+                      cursor: pkCsvUploading ? "wait" : "pointer",
+                      fontSize: "var(--cc-sm)",
+                      opacity: pkCsvUploading ? 0.7 : 1,
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pkCsvReplaceConfirm && pkCsvPending && (
+            <CcConfirmModal
+              theme={confirmTheme}
+              zIndex={100022}
+              tipo="danger"
+              titulo="Reemplazar maestro PK-ID"
+              confirmar="Sí, reemplazar"
+              cancelar="Cancelar"
+              procesando={pkCsvUploading}
+              onConfirm={onPkCsvReplaceConfirm}
+              onCancel={onPkCsvReplaceCancel}
+            >
+              <p style={{ margin: "0 0 10px" }}>
+                Reemplazar todo el maestro PK-ID eliminará por completo el catálogo actual de este contrato y lo sustituirá por el archivo seleccionado.
+              </p>
+              <p style={{ margin: 0, fontWeight: 700, color: confirmTheme.danger }}>
+                Esta acción no se puede revertir.
+              </p>
+            </CcConfirmModal>
+          )}
+
+          {pkCsvResult && (
+            <CcConfirmModal
+              theme={confirmTheme}
+              zIndex={100024}
+              tipo={pkCsvResult.type === "success" ? "success" : "danger"}
+              titulo={pkCsvResult.titulo}
+              confirmar="Entendido"
+              soloConfirmar
+              onCancel={onPkCsvResultClose}
+            >
+              {pkCsvResult.lineas?.map((linea, i) => (
+                <p key={i} style={{ margin: i === 0 ? "0 0 8px" : "0 0 8px" }}>
+                  {linea}
+                </p>
+              ))}
+            </CcConfirmModal>
+          )}
+
+          <PkIdsCsvPanoramaModal
+            open={pkPanoramaOpen}
+            onClose={onCerrarPanoramaPkIds}
+            theme={{ ...confirmTheme, inputBg: ui.inputBg }}
+            titulo={pkPanoramaTitulo}
+            subtitulo={pkPanoramaSubtitulo}
+            data={pkPanoramaData}
+            loading={pkPanoramaLoading}
+            error={pkPanoramaError}
+            contratoId={editandoContratoId}
+            onEliminarSinUso={onEliminarPkIdsSinUso}
+            onEliminarPk={onEliminarPkIdMaestro}
+            onRefresh={onRecargarPanoramaPkIds}
+            eliminando={pkPanoramaEliminando}
+          />
 
           {tab === "financiera" && (
             <div>

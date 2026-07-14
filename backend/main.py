@@ -44,6 +44,14 @@ from presupuesto_panel_validacion import (
     fetch_panel_validacion_interv,
     presupuesto_filtros_a_jsonb,
 )
+from pk_ids_csv import (
+    INSERT_CHUNK as PK_IDS_INSERT_CHUNK,
+    PK_IDS_CSV_COLUMNAS_ESPERADAS,
+    comparar_csv_con_maestro,
+    panorama_maestro_pk_ids,
+    parse_and_build_payloads,
+    validar_estructura_csv,
+)
 from azure_blob_storage import (
     blob_path_from_url,
     download_blob_bytes,
@@ -2058,12 +2066,17 @@ def _caller_contract_scope(current_user):
     return caller_data.get("contrato_id"), (cargo_nombre or "").strip().lower()
 
 def _require_contract_access(current_user, contrato_id: int):
-    """Bloquea acceso si intenta consultar un contrato distinto al propio."""
+    """Bloquea acceso si el usuario no está vinculado al contrato (principal o usuario_contratos)."""
     if _es_desarrollador(current_user):
         return
-    caller_contrato, _ = _caller_contract_scope(current_user)
-    if caller_contrato and int(caller_contrato) != int(contrato_id):
-        raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
+    try:
+        caller_id = int(current_user.get("sub"))
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    if _usuario_vinculado_a_contrato(caller_id, cid):
+        return
+    raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
 
 
 COMPETENCIAS_BASE = ["EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
@@ -4951,6 +4964,633 @@ def admin_reset_sicoe_contadores(
         "max_numero_registro": max_reg,
         "siguiente_numero_reporte": max_rep + 1 if max_rep else 1,
         "siguiente_numero_registro": max_reg + 1 if max_reg else 1,
+    }
+
+
+def _require_admin_contratos_pk_maestro(current_user) -> None:
+    if not _es_desarrollador(current_user) and not _es_admin_o_desarrollador(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Administrador o Desarrollador puede cargar el maestro PK-ID del contrato.",
+        )
+
+
+def _sicoe_catalogo_cache_invalidate_pk_ids(contrato_id: int) -> None:
+    _SICOE_CATALOGO_CACHE.pop(("pk-ids", int(contrato_id)), None)
+
+
+def _count_pk_ids_maestro_contrato_simple(contrato_id: int) -> int:
+    def _q():
+        return (
+            supabase.table("pk_ids")
+            .select("id", count="exact")
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+        )
+
+    r = supabase_execute(_q)
+    return int(getattr(r, "count", None) or 0)
+
+
+def _pk_ids_refs_contrato(contrato_id: int) -> dict:
+    """Reportes/registros SICOE con pk_id_id (bloquean reemplazo total)."""
+    reportes = 0
+    registros = 0
+
+    def _rep():
+        return (
+            supabase.table("so_reportes")
+            .select("id", count="exact")
+            .eq("contrato_id", contrato_id)
+            .not_.is_("pk_id_id", "null")
+            .limit(1)
+            .execute()
+        )
+
+    def _reg():
+        return (
+            supabase.table("so_registros")
+            .select("id", count="exact")
+            .eq("contrato_id", contrato_id)
+            .not_.is_("pk_id_id", "null")
+            .limit(1)
+            .execute()
+        )
+
+    for fn, slot in ((_rep, "reportes"), (_reg, "registros")):
+        try:
+            r = supabase_execute(fn)
+            n = int(getattr(r, "count", None) or 0)
+            if slot == "reportes":
+                reportes = n
+            else:
+                registros = n
+        except Exception:
+            pass
+    return {"reportes": reportes, "registros": registros, "total": reportes + registros}
+
+
+def _pk_ids_maestro_filas(contrato_id: int) -> List[dict]:
+    def _q():
+        return (
+            supabase.table("pk_ids")
+            .select(
+                "id, pk_id, civ, tramo, infraestructura, costado, ubicacion, abs_inicio, abs_final, calzada"
+            )
+            .eq("contrato_id", contrato_id)
+            .order("pk_id")
+            .limit(50000)
+            .execute()
+            .data
+        )
+
+    return supabase_execute(_q) or []
+
+
+def _pk_ids_sicoe_refs_por_db_id(contrato_id: int) -> Dict[int, dict]:
+    """Conteo de reportes/registros SICOE por pk_ids.id."""
+    acc: Dict[int, Dict[str, int]] = {}
+
+    def _bump(pk_db_id, kind: str):
+        if pk_db_id is None:
+            return
+        pid = int(pk_db_id)
+        slot = acc.setdefault(pid, {"reportes": 0, "registros": 0})
+        slot[kind] = slot.get(kind, 0) + 1
+
+    def _rep():
+        return (
+            supabase.table("so_reportes")
+            .select("pk_id_id")
+            .eq("contrato_id", contrato_id)
+            .not_.is_("pk_id_id", "null")
+            .limit(50000)
+            .execute()
+            .data
+        )
+
+    def _reg():
+        return (
+            supabase.table("so_registros")
+            .select("pk_id_id")
+            .eq("contrato_id", contrato_id)
+            .not_.is_("pk_id_id", "null")
+            .limit(50000)
+            .execute()
+            .data
+        )
+
+    for fn, kind in ((_rep, "reportes"), (_reg, "registros")):
+        try:
+            rows = supabase_execute(fn) or []
+            for r in rows:
+                _bump(r.get("pk_id_id"), kind)
+        except Exception:
+            pass
+
+    out: Dict[int, dict] = {}
+    for pid, parts in acc.items():
+        out[pid] = {
+            **parts,
+            "total": int(parts.get("reportes", 0)) + int(parts.get("registros", 0)),
+        }
+    return out
+
+
+def _pk_ids_presupuesto_refs_por_codigo(contrato_id: int) -> Dict[str, dict]:
+    """Filas activas de presupuesto por código CAPA (pk_id texto)."""
+    acc: Dict[str, Dict[str, int]] = {}
+
+    def _q():
+        return (
+            supabase.table("presupuesto")
+            .select("pk_id, tipo_ejecucion")
+            .eq("contrato_id", contrato_id)
+            .eq("dado_de_baja", False)
+            .limit(500000)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(_q) or []
+    except Exception:
+        rows = []
+
+    for r in rows:
+        code = str(r.get("pk_id") or "").strip()
+        if not code:
+            continue
+        slot = acc.setdefault(code, {"items": 0, "presupuesto_obra": 0, "obra_ejecutada": 0})
+        slot["items"] += 1
+        tipo = str(r.get("tipo_ejecucion") or "").strip()
+        if tipo == "Obra Ejecutada":
+            slot["obra_ejecutada"] += 1
+        else:
+            slot["presupuesto_obra"] += 1
+
+    out: Dict[str, dict] = {}
+    for code, parts in acc.items():
+        out[code] = {**parts, "total": int(parts.get("items") or 0)}
+    return out
+
+
+def _pk_ids_panorama_bundle(contrato_id: int) -> dict:
+    maestro = _pk_ids_maestro_filas(contrato_id)
+    sicoe = _pk_ids_sicoe_refs_por_db_id(contrato_id)
+    ppto = _pk_ids_presupuesto_refs_por_codigo(contrato_id)
+    pano = panorama_maestro_pk_ids(maestro, sicoe, ppto)
+    return {
+        "maestro": maestro,
+        "sicoe_refs_por_db_id": sicoe,
+        "presupuesto_refs_por_codigo": ppto,
+        "pano": pano,
+    }
+
+
+def _pk_ids_referenciados_en_obra(contrato_id: int) -> int:
+    """Filas SICOE con pk_id_id apuntando al maestro (impide reemplazo total)."""
+    return int(_pk_ids_refs_contrato(contrato_id).get("total") or 0)
+
+
+def _pk_ids_existentes_por_codigo(contrato_id: int) -> Set[str]:
+    def _q():
+        return (
+            supabase.table("pk_ids")
+            .select("pk_id")
+            .eq("contrato_id", contrato_id)
+            .limit(50000)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    return {str(r.get("pk_id") or "").strip() for r in rows if str(r.get("pk_id") or "").strip()}
+
+
+def _pk_ids_map_id_por_codigo(contrato_id: int) -> Dict[str, int]:
+    def _q():
+        return (
+            supabase.table("pk_ids")
+            .select("id, pk_id")
+            .eq("contrato_id", contrato_id)
+            .limit(50000)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    out: Dict[str, int] = {}
+    for r in rows:
+        code = str(r.get("pk_id") or "").strip()
+        rid = r.get("id")
+        if code and rid is not None:
+            out[code] = int(rid)
+    return out
+
+
+def _payload_pk_update_fields(payload: dict) -> dict:
+    """Campos actualizables del maestro (sin contrato_id ni pk_id)."""
+    return {k: v for k, v in payload.items() if k not in ("contrato_id", "pk_id")}
+
+
+def _sincronizar_pk_ids_desde_csv(contrato_id: int, payloads: List[dict]) -> Tuple[int, int]:
+    """Actualiza filas existentes por CAPA y agrega las nuevas. No elimina."""
+    existentes = _pk_ids_map_id_por_codigo(contrato_id)
+    insertados = 0
+    actualizados = 0
+    nuevos: List[dict] = []
+    for p in payloads:
+        code = str(p.get("pk_id") or "").strip()
+        if not code:
+            continue
+        if code in existentes:
+            upd = _payload_pk_update_fields(p)
+            if upd:
+                db_id = existentes[code]
+
+                def _u(i=db_id, fields=upd):
+                    return supabase.table("pk_ids").update(fields).eq("id", i).execute()
+
+                supabase_execute(_u)
+            actualizados += 1
+        else:
+            nuevos.append(p)
+    if nuevos:
+        _insertar_pk_ids_chunks(nuevos)
+        insertados = len(nuevos)
+    return insertados, actualizados
+
+
+def _insertar_pk_ids_chunks(payloads: List[dict]) -> None:
+    for i in range(0, len(payloads), PK_IDS_INSERT_CHUNK):
+        chunk = payloads[i : i + PK_IDS_INSERT_CHUNK]
+        if not chunk:
+            continue
+
+        def _ins(c=chunk):
+            return supabase.table("pk_ids").insert(c).execute()
+
+        supabase_execute(_ins)
+
+
+@app.get("/admin/contratos/{contrato_id}/pk-ids/resumen")
+def admin_pk_ids_resumen(contrato_id: int, current_user=Depends(get_current_user)):
+    """Cantidad de PK en maestro del contrato (pestaña Admin → Contratos)."""
+    _require_admin_contratos_pk_maestro(current_user)
+
+    def _contrato():
+        return supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute().data
+
+    if not supabase_execute(_contrato):
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    refs = _pk_ids_refs_contrato(contrato_id)
+    return {
+        "contrato_id": contrato_id,
+        "total_pk_ids": _count_pk_ids_maestro_contrato_simple(contrato_id),
+        "columnas_esperadas_csv": list(PK_IDS_CSV_COLUMNAS_ESPERADAS),
+        "sicoe_refs": refs,
+        "reemplazo_bloqueado": refs.get("total", 0) > 0,
+    }
+
+
+@app.post("/admin/contratos/{contrato_id}/pk-ids/validar-csv")
+async def admin_validar_csv_pk_ids(
+    contrato_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Valida estructura del CSV sin persistir."""
+    _require_admin_contratos_pk_maestro(current_user)
+    raw = (await archivo.read()).decode("utf-8-sig", errors="replace")
+    ok, msg, cols, rows = validar_estructura_csv(raw)
+    if not ok:
+        return {
+            "ok": False,
+            "error": msg,
+            "columnas_detectadas": cols,
+            "columnas_esperadas": list(PK_IDS_CSV_COLUMNAS_ESPERADAS),
+        }
+    payloads, info = parse_and_build_payloads(contrato_id, raw)
+    if payloads is None:
+        return {
+            "ok": False,
+            "error": info.get("error") or "Archivo no válido.",
+            "columnas_detectadas": info.get("columnas") or cols,
+            "columnas_esperadas": list(PK_IDS_CSV_COLUMNAS_ESPERADAS),
+        }
+    return {
+        "ok": True,
+        "nombre_archivo": archivo.filename or "",
+        "columnas_detectadas": info.get("columnas") or cols,
+        "columnas_esperadas": list(PK_IDS_CSV_COLUMNAS_ESPERADAS),
+        "filas_csv": info.get("filas_csv"),
+        "filas_utiles": info.get("filas_utiles"),
+        "pk_unicos": info.get("pk_unicos"),
+        "duplicados_capa_en_archivo": info.get("duplicados_capa_en_archivo"),
+        "filas_sin_capa": info.get("filas_sin_capa"),
+        "total_maestro_actual": _count_pk_ids_maestro_contrato_simple(contrato_id),
+        "sicoe_refs": _pk_ids_refs_contrato(contrato_id),
+        "reemplazo_bloqueado": _pk_ids_referenciados_en_obra(contrato_id) > 0,
+    }
+
+
+@app.get("/admin/contratos/{contrato_id}/pk-ids/panorama")
+def admin_pk_ids_panorama(contrato_id: int, current_user=Depends(get_current_user)):
+    """Maestro PK-ID del contrato con conteo SICOE por fila (Admin → Contratos)."""
+    _require_admin_contratos_pk_maestro(current_user)
+
+    def _contrato():
+        return supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute().data
+
+    if not supabase_execute(_contrato):
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+
+    maestro = _pk_ids_maestro_filas(contrato_id)
+    refs = _pk_ids_sicoe_refs_por_db_id(contrato_id)
+    ppto = _pk_ids_presupuesto_refs_por_codigo(contrato_id)
+    pano = panorama_maestro_pk_ids(maestro, refs, ppto)
+    return {
+        "contrato_id": contrato_id,
+        "modo": "maestro",
+        "sicoe_refs_contrato": _pk_ids_refs_contrato(contrato_id),
+        "presupuesto_refs_contrato": {
+            "items": sum(v.get("total", 0) for v in ppto.values()),
+            "pk_distintos": len(ppto),
+        },
+        **pano,
+    }
+
+
+@app.post("/admin/contratos/{contrato_id}/pk-ids/comparar-csv")
+async def admin_comparar_csv_pk_ids(
+    contrato_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Compara CSV vs maestro: nuevos, cambios por columna, PK con SICOE vinculado."""
+    _require_admin_contratos_pk_maestro(current_user)
+
+    def _contrato():
+        return supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute().data
+
+    if not supabase_execute(_contrato):
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+
+    raw = (await archivo.read()).decode("utf-8-sig", errors="replace")
+    payloads, info = parse_and_build_payloads(contrato_id, raw)
+    if payloads is None:
+        raise HTTPException(
+            status_code=400,
+            detail=info.get("error") or "El archivo no cumple la estructura esperada del maestro PK-ID.",
+        )
+
+    maestro = _pk_ids_maestro_filas(contrato_id)
+    refs = _pk_ids_sicoe_refs_por_db_id(contrato_id)
+    ppto = _pk_ids_presupuesto_refs_por_codigo(contrato_id)
+    comp = comparar_csv_con_maestro(payloads, maestro, refs, ppto)
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "modo": "comparar",
+        "nombre_archivo": archivo.filename or "",
+        "sicoe_refs_contrato": _pk_ids_refs_contrato(contrato_id),
+        "presupuesto_refs_contrato": {
+            "items": sum(v.get("total", 0) for v in ppto.values()),
+            "pk_distintos": len(ppto),
+        },
+        "archivo_info": info,
+        **comp,
+    }
+
+
+@app.post("/admin/contratos/{contrato_id}/pk-ids/eliminar-sin-uso")
+def admin_eliminar_pk_ids_sin_uso(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina filas del maestro sin vínculos SICOE ni Presupuesto."""
+    _require_admin_contratos_pk_maestro(current_user)
+
+    def _contrato():
+        return supabase.table("contratos").select("id, numero").eq("id", contrato_id).limit(1).execute().data
+
+    crows = supabase_execute(_contrato)
+    if not crows:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+
+    bundle = _pk_ids_panorama_bundle(contrato_id)
+    eliminables = [f for f in bundle["pano"].get("filas") or [] if f.get("eliminable") and f.get("maestro_id")]
+    if not eliminables:
+        return {
+            "ok": True,
+            "contrato_id": contrato_id,
+            "eliminados": 0,
+            "bloqueados_en_uso": sum(1 for f in bundle["pano"].get("filas") or [] if f.get("en_uso")),
+            "mensaje": "No hay PK eliminables (todos tienen registros SICOE o Presupuesto).",
+        }
+
+    ids = [int(f["maestro_id"]) for f in eliminables]
+    eliminados = 0
+    for db_id in ids:
+        def _del(i=db_id):
+            return (
+                supabase.table("pk_ids")
+                .delete()
+                .eq("id", i)
+                .eq("contrato_id", contrato_id)
+                .execute()
+            )
+
+        try:
+            supabase_execute(_del)
+            eliminados += 1
+        except Exception:
+            pass
+
+    _sicoe_catalogo_cache_invalidate_pk_ids(contrato_id)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "ADMIN",
+            "contrato_pk_ids",
+            str(contrato_id),
+            {"accion": "eliminar_sin_uso", "eliminados": eliminados, "ids": ids[:200]},
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "eliminados": eliminados,
+        "pk_eliminados": [f.get("pk_id") for f in eliminables[:200]],
+        "bloqueados_en_uso": sum(1 for f in bundle["pano"].get("filas") or [] if f.get("en_uso")),
+        "total_despues": _count_pk_ids_maestro_contrato_simple(contrato_id),
+    }
+
+
+@app.delete("/admin/contratos/{contrato_id}/pk-ids/{pk_maestro_id}")
+def admin_eliminar_pk_id(
+    contrato_id: int,
+    pk_maestro_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina un PK del maestro si no tiene vínculos SICOE ni Presupuesto."""
+    _require_admin_contratos_pk_maestro(current_user)
+
+    def _row():
+        return (
+            supabase.table("pk_ids")
+            .select("id, pk_id")
+            .eq("id", pk_maestro_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_row) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="PK no encontrado en el maestro del contrato.")
+
+    row = rows[0]
+    code = str(row.get("pk_id") or "").strip()
+    sicoe = _pk_ids_sicoe_refs_por_db_id(contrato_id).get(int(pk_maestro_id)) or {}
+    ppto = _pk_ids_presupuesto_refs_por_codigo(contrato_id).get(code) or {}
+    if int(sicoe.get("total") or 0) > 0 or int(ppto.get("total") or 0) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede eliminar PK {code}: "
+                f"{sicoe.get('total', 0)} registro(s) SICOE · "
+                f"{ppto.get('total', 0)} ítem(s) Presupuesto."
+            ),
+        )
+
+    def _del():
+        return (
+            supabase.table("pk_ids")
+            .delete()
+            .eq("id", pk_maestro_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+        )
+
+    supabase_execute(_del)
+    _sicoe_catalogo_cache_invalidate_pk_ids(contrato_id)
+    return {"ok": True, "contrato_id": contrato_id, "pk_id": code, "maestro_id": pk_maestro_id}
+
+
+@app.post("/admin/contratos/{contrato_id}/pk-ids/importar-csv")
+async def admin_importar_csv_pk_ids(
+    contrato_id: int,
+    modo: str = Form(...),
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """
+    Carga maestro PK-ID desde CSV.
+    modo: 'agregar' | 'sincronizar' | 'reemplazar'
+    """
+    _require_admin_contratos_pk_maestro(current_user)
+    modo_n = (modo or "").strip().lower()
+    if modo_n not in ("agregar", "sincronizar", "reemplazar"):
+        raise HTTPException(status_code=400, detail="modo debe ser 'agregar', 'sincronizar' o 'reemplazar'.")
+
+    def _contrato():
+        return supabase.table("contratos").select("id, numero").eq("id", contrato_id).limit(1).execute().data
+
+    crows = supabase_execute(_contrato)
+    if not crows:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+
+    raw = (await archivo.read()).decode("utf-8-sig", errors="replace")
+    payloads, info = parse_and_build_payloads(contrato_id, raw)
+    if payloads is None:
+        raise HTTPException(
+            status_code=400,
+            detail=info.get("error") or "El archivo no cumple la estructura esperada del maestro PK-ID.",
+        )
+
+    total_antes = _count_pk_ids_maestro_contrato_simple(contrato_id)
+    insertados = 0
+    actualizados = 0
+    omitidos_existentes = 0
+    eliminados = 0
+
+    if modo_n == "reemplazar":
+        refs = _pk_ids_referenciados_en_obra(contrato_id)
+        if refs > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede reemplazar el maestro: hay {refs} reporte(s)/registro(s) SICOE "
+                    "vinculados a PK del catálogo actual. Use Sincronizar para actualizar datos del CSV "
+                    "sin borrar el catálogo, o Agregar solo para PK nuevos."
+                ),
+            )
+
+        def _del():
+            return supabase.table("pk_ids").delete().eq("contrato_id", contrato_id).execute()
+
+        supabase_execute(_del)
+        eliminados = total_antes
+        _insertar_pk_ids_chunks(payloads)
+        insertados = len(payloads)
+    elif modo_n == "sincronizar":
+        insertados, actualizados = _sincronizar_pk_ids_desde_csv(contrato_id, payloads)
+    else:
+        existentes = _pk_ids_existentes_por_codigo(contrato_id)
+        nuevos = [p for p in payloads if str(p.get("pk_id") or "").strip() not in existentes]
+        omitidos_existentes = len(payloads) - len(nuevos)
+        if nuevos:
+            _insertar_pk_ids_chunks(nuevos)
+        insertados = len(nuevos)
+
+    _sicoe_catalogo_cache_invalidate_pk_ids(contrato_id)
+    total_despues = _count_pk_ids_maestro_contrato_simple(contrato_id)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "ADMIN",
+            "contrato_pk_ids",
+            str(contrato_id),
+            {
+                "modo": modo_n,
+                "archivo": archivo.filename or "",
+                "insertados": insertados,
+                "actualizados": actualizados,
+                "omitidos_existentes": omitidos_existentes,
+                "eliminados_previos": eliminados,
+                "total_antes": total_antes,
+                "total_despues": total_despues,
+                "pk_unicos_archivo": info.get("pk_unicos"),
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "modo": modo_n,
+        "contrato_id": contrato_id,
+        "insertados": insertados,
+        "actualizados": actualizados,
+        "omitidos_existentes": omitidos_existentes,
+        "eliminados_previos": eliminados,
+        "total_antes": total_antes,
+        "total_despues": total_despues,
+        "pk_unicos_archivo": info.get("pk_unicos"),
+        "duplicados_capa_en_archivo": info.get("duplicados_capa_en_archivo"),
+        "filas_sin_capa": info.get("filas_sin_capa"),
     }
 
 

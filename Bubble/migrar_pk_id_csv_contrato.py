@@ -107,6 +107,8 @@ def csv_row_to_payload(contrato_id: int, row: dict) -> dict | None:
     civ = _str(row.get("CIV"))
     tramo = _str(row.get("TRAMO"))
     infra = _str(row.get("INFRAESTRUCTURA"))
+    costado = _str(row.get("COSTADO"))
+    ubicacion = _str(row.get("UBICACION"))
     calzada = _str(row.get("CALZADA"))
     abs_i = _float(row.get("ABS_INICIO"))
     abs_f = _float(row.get("ABS_FINAL"))
@@ -116,6 +118,10 @@ def csv_row_to_payload(contrato_id: int, row: dict) -> dict | None:
         payload["tramo"] = tramo
     if infra:
         payload["infraestructura"] = infra
+    if costado:
+        payload["costado"] = costado
+    if ubicacion:
+        payload["ubicacion"] = ubicacion
     if calzada:
         payload["calzada"] = calzada
     if abs_i is not None:

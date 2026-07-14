@@ -44,12 +44,15 @@ export function invalidateSicoeCatalogoCache(contratoId) {
     inflight.clear()
     return
   }
-  const prefix = `${contratoId}\x1e`
+  const idStr = String(contratoId)
+  const needleMid = `\x1e${idStr}\x1e`
+  const needleEnd = `\x1e${idStr}`
+  const dropKey = (k) => k.includes(needleMid) || k.endsWith(needleEnd)
   for (const k of [...cache.keys()]) {
-    if (k.includes(`\x1e${contratoId}\x1e`) || k.startsWith(prefix)) cache.delete(k)
+    if (dropKey(k)) cache.delete(k)
   }
   for (const k of [...inflight.keys()]) {
-    if (k.includes(`\x1e${contratoId}\x1e`) || k.startsWith(prefix)) inflight.delete(k)
+    if (dropKey(k)) inflight.delete(k)
   }
 }
 
