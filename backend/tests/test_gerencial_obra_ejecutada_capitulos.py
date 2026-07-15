@@ -277,6 +277,45 @@ def test_gerencial_excluye_items_iva(monkeypatch):
     assert rows_iva[0]["cobrado"] == 900_000
 
 
+def test_gerencial_ppto_item_costos_drill_aligned_listado_vu():
+    """Sin V.U. en presupuesto, usa listado_precios (misma regla que popup $ CC)."""
+    rows = [{"cant_total": 10, "vlr_unitario": 0, "revisado": "Aprobado", "costo_directo": 0}]
+    costs = m._gerencial_ppto_item_costos_drill_aligned(rows, listado_vu=10_000.0)
+    assert costs["ap"] == 100_000
+    assert costs["pe"] == 0
+    assert costs["nr"] == 0
+
+
+def test_obra_ejecutada_claracore_no_iguala_cobrado_con_ppto(monkeypatch):
+    """Total ClaraCore del capítulo debe ser suma $ CC, no cobrado."""
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
+    monkeypatch.setattr(
+        m,
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
+            ("7_cap", "7.01"): {
+                "cap_display": "7. SANITARIO",
+                "ap": 100_000.0,
+                "pe": 0.0,
+                "re": 0.0,
+                "nr": 0.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        m,
+        "_dashboard_scan_sicoe_by_item",
+        lambda cid: {
+            ("7_cap", "7.01"): {"ap_c": 50_000.0, "cap_display": "7. SANITARIO"},
+        },
+    )
+    rows = m._gerencial_capitulos_data_obra_ejecutada(1, None)
+    assert len(rows) == 1
+    assert rows[0]["claracore"] == 100_000
+    assert rows[0]["cobrado"] == 50_000
+    assert rows[0]["delta"] == 50_000
+
+
 def test_gerencial_item_es_aiu_fallback_capitulo_ensayos():
     idx = {}
     assert m._gerencial_item_bloque_precio("14_cap", "14.99", "14. ENSAYOS DE LABORATORIO", idx) == "iva"

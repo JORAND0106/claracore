@@ -435,7 +435,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
       <div className="cc-avi-trigger" style={{ position: 'relative' }}>
         <button
           type="button"
-          className={`cc-avi-trigger-btn${fabPressed ? ' cc-avi-trigger-btn--pressed' : ''}${abierto ? ' cc-avi-trigger-btn--open' : ''}`}
+          className={`cc-avi-trigger-btn cc-avi-trigger-btn--compact${fabPressed ? ' cc-avi-trigger-btn--pressed' : ''}${abierto ? ' cc-avi-trigger-btn--open' : ''}`}
           onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
           onMouseDown={() => setFabPressed(true)}
           onMouseUp={() => setFabPressed(false)}
@@ -447,19 +447,17 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
             background: bg,
             color: textColor,
             border: `2px solid ${borderColor}`,
-            borderRadius: '999px',
-            padding: '6px 16px 6px 8px',
+            borderRadius: '12px',
+            padding: '5px 8px 6px',
             cursor: 'pointer',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '8px',
-            minHeight: '36px',
-            fontSize: 'var(--cc-sm)',
-            fontWeight: '700',
-            letterSpacing: '0.02em',
-            lineHeight: 1.1,
-            whiteSpace: 'nowrap',
+            gap: '3px',
+            minWidth: '44px',
+            minHeight: '44px',
+            lineHeight: 1,
             transform: fabPressed ? 'scale(0.98) translateY(1px)' : undefined,
             transition: 'transform 0.12s ease, box-shadow 0.2s ease, border-color 0.15s ease',
             boxShadow: abierto
@@ -467,8 +465,8 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
               : `0 6px 18px rgba(0,0,0,0.1), 0 3px 8px rgba(0,119,182,0.14), inset 0 1px 0 rgba(255,255,255,0.55)`,
           }}
         >
-          <span aria-hidden style={{ position: 'relative', width: '26px', height: '26px', display: 'block', flexShrink: 0 }}>
-            <svg width="26" height="26" viewBox="0 0 40 40" style={{ display: 'block' }}>
+          <span aria-hidden className="cc-avi-trigger-logo" style={{ width: '28px', height: '28px', display: 'block', flexShrink: 0 }}>
+            <svg width="28" height="28" viewBox="0 0 40 40" style={{ display: 'block' }}>
               <defs>
                 <clipPath id="aviHeaderLogoClip">
                   <circle cx="20" cy="20" r="18" />
@@ -484,24 +482,27 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
                 preserveAspectRatio="xMidYMid slice"
               />
             </svg>
-            <span
-              style={{
-                position: 'absolute', bottom: '-2px', right: '-3px',
-                width: '13px', height: '13px', borderRadius: '50%',
-                background: '#00B4C6',
-                border: '1.5px solid #fff',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 1px 3px rgba(0,50,90,0.35)',
-                pointerEvents: 'none',
-              }}
-            >
-              <i className="ti ti-robot" style={{ fontSize: '9px', color: '#fff', lineHeight: 1 }} />
-            </span>
           </span>
-          <span>Asistente</span>
+          <span
+            aria-hidden
+            className="cc-avi-trigger-assistant"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '18px',
+              height: '18px',
+              borderRadius: '50%',
+              background: '#00B4C6',
+              border: '1.5px solid #fff',
+              boxShadow: '0 1px 3px rgba(0,50,90,0.35)',
+            }}
+          >
+            <i className="ti ti-robot" style={{ fontSize: '11px', color: '#fff', lineHeight: 1 }} />
+          </span>
         </button>
         {badgeVisible && !abierto && (
-          <span style={{
+          <span className="cc-avi-trigger-badge" style={{
             position: 'absolute', top: '-3px', right: '-3px',
             width: '16px', height: '16px', borderRadius: '50%',
             background: '#E53E3E', color: '#fff', fontSize: '10px',

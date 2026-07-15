@@ -4491,19 +4491,39 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       setPopup(p => ({ ...p, tipo_precio:tipo, acta_fijacion:"", acta_modificatoria:"", estado_precio:"Pendiente" }));
   };
 
+  const resolverEstadoPrecioGuardado = (p) => {
+    if (!p) return "Pendiente";
+    if (p.tipo_precio === "Precio Contractual") return "Aprobado";
+    if (p.tipo_precio === "Precio No Previsto") {
+      const f = parseFloat(p.acta_fijacion) || 0;
+      const m = parseFloat(p.acta_modificatoria) || 0;
+      return f > 0 && m > 0 ? "Aprobado" : "Pendiente";
+    }
+    return p.estado_precio || "Pendiente";
+  };
+
   const guardarEdicion = async () => {
     if (!popup) return;
     setSaving(true);
     try {
       const payload = { ...popup };
       if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
+      // El backend recalcula estado_precio; no forzar el valor stale del formulario.
+      delete payload.estado_precio;
       const saved = await call("PUT", `/listado-precios/item/${popup.id}`, payload);
       setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
       const [freshStats, freshCant] = await Promise.all([
         call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
         call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
       ]);
-      const merged = { ...popup, ...(saved && typeof saved === "object" ? saved : {}), ...payload };
+      const fromServer = saved && typeof saved === "object" && saved.id ? saved : {};
+      const mergedBase = { ...popup, ...payload, ...fromServer };
+      if (mergedBase.tipo_precio === "Precio Contractual") {
+        mergedBase.acta_fijacion = "Contractual";
+        mergedBase.acta_modificatoria = "";
+      }
+      mergedBase.estado_precio = fromServer.estado_precio || resolverEstadoPrecioGuardado(mergedBase);
+      const { ok: _okIgnored, ...merged } = mergedBase;
       setItems((prev) => prev.map((i) => (i.id === popup.id ? { ...i, ...merged } : i)));
       if (freshCant?.length) setCantidades(freshCant);
       setPopup({ ...merged });

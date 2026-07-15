@@ -141,7 +141,7 @@ import { supabase } from './supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from './realtimeUtils'
 import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
 import { applyClaraThemeTokens } from './theme/adminPanelTheme'
-import { useClaraViewport } from './useClaraViewport'
+import { useClaraViewport, CLARA_BP } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import {
@@ -15928,6 +15928,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     isTablet: dashTablet,
     isDesktop: dashDesktop,
     isLandscapeMobile: dashLandscapeMobile,
+    width: viewportWidth,
+    isLandscape: viewportLandscape,
+    isNavDrawer: viewportNavDrawer,
   } = useClaraViewport()
   /** Portrait ≤767 o teléfono en landscape ≤932: layout de una columna. */
   const dashMobile = dashVpMobile || dashLandscapeMobile
@@ -17586,7 +17589,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         : w > window.innerHeight
       const mobile = w < 768 || (landscape && w <= 932)
       setIsMobileHeader(mobile)
-      if (!mobile) setMobileNavOpen(false)
+      if (w > CLARA_BP.navDrawerMax) setMobileNavOpen(false)
     }
     window.addEventListener('resize', onResize)
     window.addEventListener('orientationchange', onResize)
@@ -17605,7 +17608,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
-    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: isMobileHeader ? '10px 12px' : 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset, gap: 8, position: 'relative', zIndex: 40 },
+    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: viewportNavDrawer ? '10px 12px' : 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset, gap: 8, position: 'relative', zIndex: 40 },
     body: { padding: 'var(--cc-space-5) var(--cc-space-5)', maxWidth: '1400px', margin: '0 auto' },
     topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--cc-space-5)' },
     btnCrear: { background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: 'var(--cc-body)', fontWeight: '600', cursor: 'pointer' },
@@ -17666,15 +17669,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   return (
     <div style={s.app}>
-      <div style={s.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }}>
+      <div className="cc-app-header" style={s.header}>
+        <div
+          className={`cc-app-header-brand${viewportNavDrawer ? ' cc-app-header-brand--drawer' : ''}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }}
+        >
           <img
             src="/CLARA.CORE.png"
             alt="ClaraCore"
             className="cc-brand-logo cc-brand-logo--header"
-            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none', height: isMobileHeader ? 32 : undefined }}
+            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none', height: viewportNavDrawer ? 32 : undefined }}
           />
-          {!isMobileHeader && tieneAccesoContabilidad && (
+          {!viewportNavDrawer && tieneAccesoContabilidad && (
             <button
               type="button"
               onClick={() => setShowContabilidad(true)}
@@ -17701,13 +17707,21 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </span>
             </button>
           )}
-          {!isMobileHeader && usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
-            <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+          {usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
+            <img
+              src={usuario.logo_contratista}
+              alt="Contratista"
+              className={`cc-header-partner-logo${viewportNavDrawer ? ' cc-header-partner-logo--compact' : ''}`}
+            />
           )}
-          {!isMobileHeader && usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
-            <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+          {usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
+            <img
+              src={usuario.logo_interventoria}
+              alt="Interventoría"
+              className={`cc-header-partner-logo${viewportNavDrawer ? ' cc-header-partner-logo--compact' : ''}`}
+            />
           )}
-          {!isMobileHeader && progRibbonEnHeader && (
+          {!viewportNavDrawer && progRibbonEnHeader && (
             <>
               <div style={{ width: 1, height: 28, background: t.border, flexShrink: 0 }} aria-hidden />
               {selectorContratoHeader}
@@ -17715,7 +17729,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </>
           )}
         </div>
-        {isMobileHeader ? (
+        {viewportNavDrawer ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <BuzonNotificaciones
               key={`buzon-m-bar-${usuario?.contrato_id ?? 'x'}`}
@@ -17758,9 +17772,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </button>
             ))}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="cc-header-actions-cluster" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <button
               type="button"
+              className="cc-header-profile-btn"
               onClick={() => onOpenPerfil && onOpenPerfil()}
               title="Editar perfil"
               style={{
@@ -17796,7 +17811,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   '👤'
                 )}
               </span>
-              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+              <span className="cc-header-profile-text" style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
                 <span style={{ color: t.text, fontWeight: '600' }}>{usuario?.nombre}</span>
                 {usuario?.cargo_nombre && (
                   <span style={{ display: 'block', fontSize: 'var(--cc-label)', opacity: 0.75, marginTop: '1px' }}>{usuario.cargo_nombre}</span>
@@ -17807,11 +17822,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} />
             <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} onNavegar={handleNavegar} />
             {canAdmin && (
-              <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
+              <button className="cc-header-admin-btn" onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
                 ⚙ Admin
               </button>
             )}
-            <button onClick={onLogout} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
+            <button className="cc-header-logout-btn" onClick={onLogout} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
               Salir
             </button>
           </div>
@@ -17819,7 +17834,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         )}
       </div>
 
-      {isMobileHeader && (
+      {viewportNavDrawer && (
         <>
           <ReporteErroresBtn
             t={t}
@@ -17840,7 +17855,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         </>
       )}
 
-      {isMobileHeader && mobileNavOpen && (
+      {viewportNavDrawer && mobileNavOpen && (
         <>
           <div
             role="presentation"
@@ -17977,21 +17992,33 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
-                  <span style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>Asistente AVI</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
                   <AVITriggerButton t={t} />
                 </div>
                 <button
                   type="button"
                   onClick={() => { onOpenPerfil && onOpenPerfil(); setMobileNavOpen(false) }}
                   style={{
-                    width: '100%', textAlign: 'left', background: t.bg, border: `1px solid ${t.border}`,
-                    borderRadius: 12, padding: '14px 16px', color: t.text, fontWeight: 600,
-                    cursor: 'pointer', fontSize: 'var(--cc-sm)', minHeight: 48,
+                    flex: 1,
+                    textAlign: 'left',
+                    background: t.bg,
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    color: t.text,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: 'var(--cc-sm)',
+                    minHeight: 48,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
                   }}
                 >
                   👤 Editar perfil
                 </button>
+              </div>
                 {(usuarioPuedeReportarErrores(usuario) || usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador') && (
                 <div style={{ display: 'flex', gap: 8 }}>
                   {usuarioPuedeReportarErrores(usuario) && (
@@ -18204,7 +18231,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ))}
           </div>
         )}
-        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && !isMobileHeader && (
+        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && !viewportNavDrawer && (
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
@@ -18530,28 +18557,30 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   dashKpiLoading={dashRefreshBusy}
                   onRefresh={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
                 />
-                {usuario?._contratos?.length > 1 ? (
-                  <select
-                    value={usuario.contrato_id || ''}
-                    className={dashMobile ? 'cc-dash-touch-select' : undefined}
-                    onChange={async (e) => {
-                      const cid = parseInt(e.target.value, 10)
-                      const contrato = usuario._contratos.find(c => c.id === cid)
-                      if (!contrato) return
-                      if (onCambiarContrato) await onCambiarContrato(contrato)
-                      else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-                    }}
-                    style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: dashMobile ? '10px 12px' : '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: dashMobile ? '100%' : 'min(220px, 42vw)', ...dashTouchSelect }}
-                  >
-                    {!usuario.contrato_id && <option value="">Contrato…</option>}
-                    {usuario._contratos.map(c => (
-                      <option key={c.id} value={c.id}>{c.numero}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <span style={{ fontSize: `${du.sub}px`, color: t.textMuted, whiteSpace: 'nowrap' }}>
-                    📋 {usuario?.contrato_numero || '—'}
-                  </span>
+                {!viewportNavDrawer && (
+                  usuario?._contratos?.length > 1 ? (
+                    <select
+                      value={usuario.contrato_id || ''}
+                      className={dashMobile ? 'cc-dash-touch-select' : undefined}
+                      onChange={async (e) => {
+                        const cid = parseInt(e.target.value, 10)
+                        const contrato = usuario._contratos.find(c => c.id === cid)
+                        if (!contrato) return
+                        if (onCambiarContrato) await onCambiarContrato(contrato)
+                        else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+                      }}
+                      style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: dashMobile ? '10px 12px' : '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: dashMobile ? '100%' : 'min(220px, 42vw)', ...dashTouchSelect }}
+                    >
+                      {!usuario.contrato_id && <option value="">Contrato…</option>}
+                      {usuario._contratos.map(c => (
+                        <option key={c.id} value={c.id}>{c.numero}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span style={{ fontSize: `${du.sub}px`, color: t.textMuted, whiteSpace: 'nowrap' }}>
+                      📋 {usuario?.contrato_numero || '—'}
+                    </span>
+                  )
                 )}
               </div>
             </div>

@@ -8,6 +8,8 @@ export const CLARA_BP = {
   desktopMin: 1025,
   /** Ancho máximo típico de teléfono en landscape (iPhone 14 Pro Max, etc.). */
   landscapeMobileMax: 932,
+  /** Hasta este ancho: header con menú hamburguesa (móvil + tablet). */
+  navDrawerMax: 1366,
 }
 
 function readViewport() {
@@ -19,6 +21,7 @@ function readViewport() {
       isDesktop: true,
       isLandscape: false,
       isLandscapeMobile: false,
+      isNavDrawer: false,
     }
   }
   const width = window.innerWidth
@@ -31,7 +34,12 @@ function readViewport() {
   const isDesktop = width >= CLARA_BP.desktopMin
   /** Teléfono en horizontal: ancho suele superar 767px y romper layouts de una columna. */
   const isLandscapeMobile = isLandscape && width <= CLARA_BP.landscapeMobileMax
-  return { width, isMobile, isTablet, isDesktop, isLandscape, isLandscapeMobile }
+  /** Móvil + tablet: barra superior mínima y menú lateral (hamburguesa). */
+  const isNavDrawer =
+    isMobile ||
+    isLandscapeMobile ||
+    (width >= CLARA_BP.tabletMin && width <= CLARA_BP.navDrawerMax)
+  return { width, isMobile, isTablet, isDesktop, isLandscape, isLandscapeMobile, isNavDrawer }
 }
 
 export function useClaraViewport() {

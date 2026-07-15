@@ -7731,7 +7731,7 @@ def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(ge
     if tipo == "Precio Contractual":
         data["estado_precio"] = "Aprobado"
         data["acta_fijacion"] = "Contractual"
-        data.pop("acta_modificatoria", None)
+        data["acta_modificatoria"] = None
     elif tipo == "Precio No Previsto":
         try:
             f_val = float(data.get("acta_fijacion") or 0)
@@ -7742,7 +7742,18 @@ def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(ge
     supabase.table("listado_precios").update(data).eq("id", item_id).execute()
     registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios", str(item_id),
                   {"tipo_precio": data.get("tipo_precio"), "estado_precio": data.get("estado_precio")})
-    return {"ok": True}
+    # Devolver fila actualizada para que el front no reutilice estado_precio stale del formulario.
+    refreshed = (
+        supabase.table("listado_precios")
+        .select("*")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if refreshed:
+        return refreshed[0]
+    return {"ok": True, "id": item_id, **{k: data[k] for k in ("tipo_precio", "estado_precio", "acta_fijacion", "acta_modificatoria") if k in data}}
 
 @app.delete("/listado-precios/item/{item_id}")
 def delete_precio(item_id: int, current_user=Depends(get_current_user)):
@@ -26630,6 +26641,90 @@ def _listado_precios_tipo_calculo_index(contrato_id: int) -> Dict[Tuple[str, str
     return idx
 
 
+def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """(capítulo_norm, ítem_norm) → fila listado_precios (V.U. y metadatos)."""
+    cached = _dash_agg_cache_get("listado_precios_vu_idx", contrato_id)
+    if cached is not None:
+        return cached
+    idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("listado_precios")
+                .select("capitulo, item_numero, precio_unitario, unidad, descripcion")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item_numero"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in idx:
+                idx[k] = r
+        if len(batch) < 1000:
+            break
+        off += 1000
+    _dash_agg_cache_set("listado_precios_vu_idx", contrato_id, idx)
+    return idx
+
+
+def _ppto_presupuesto_obra_by_cap_item(
+    contrato_id: int, current_user
+) -> Dict[Tuple[str, str], List[dict]]:
+    """Presupuesto de Obra por (cap, ítem) — referencia V.U. alternativa (igual que drill)."""
+    out: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    off = 0
+    filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
+    while True:
+
+        def _b(o=off):
+            q = (
+                supabase.table("presupuesto")
+                .select("capitulo, item, cant_total, vlr_unitario, costo_directo, revisado")
+                .eq("contrato_id", int(contrato_id))
+                .eq("dado_de_baja", False)
+                .eq("tipo_ejecucion", TIPO_PRESUPUESTO_OBRA)
+            )
+            if filtra_interv:
+                q = q.eq("pre_interv_estado", "Aprobado")
+            return q.order("id").range(o, o + 999).execute().data
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item"))
+            if ik:
+                out[(ck, ik)].append(r)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return out
+
+
+def _gerencial_ppto_item_costos_drill_aligned(
+    rows: List[dict],
+    *,
+    listado_vu: Optional[float] = None,
+    alt_rows: Optional[List[dict]] = None,
+) -> Dict[str, float]:
+    """Costos NR|P|R|A alineados con popup drill (listado V.U. + fallback Presupuesto de Obra)."""
+    est, _ = _ppto_metricas_por_estado(rows, listado_vu=listado_vu, alt_rows=alt_rows)
+    return {
+        "ap": float(est["A"]["costo"] or 0),
+        "pe": float(est["P"]["costo"] or 0),
+        "re": float(est["R"]["costo"] or 0),
+        "nr": float(est["NR"]["costo"] or 0),
+    }
+
+
 def _gerencial_item_bloque_precio(
     cap_key: str,
     item_key: str,
@@ -26732,6 +26827,7 @@ def _gerencial_ppto_items(
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Presupuesto agregado por (capítulo_norm, ítem_norm), sin filtrar AIU/IVA."""
     tipo = ppto_tipo_for_vista(vista)
+    obra_ejecutada = parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
     oficial_vid = (
         presupuesto_oficial_version_id(supabase, contrato_id)
         if tipo == TIPO_PRESUPUESTO_OBRA
@@ -26739,6 +26835,12 @@ def _gerencial_ppto_items(
     )
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
     items_raw: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    raw_rows_oe: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    select_cols = (
+        "capitulo, item, cant_total, vlr_unitario, revisado, costo_directo"
+        if obra_ejecutada
+        else "capitulo, item, cant_total, vlr_unitario, revisado"
+    )
     off = 0
     while True:
 
@@ -26754,7 +26856,7 @@ def _gerencial_ppto_items(
             else:
                 q = (
                     supabase.table("presupuesto")
-                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
+                    .select(select_cols)
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("tipo_ejecucion", tipo)
@@ -26765,17 +26867,39 @@ def _gerencial_ppto_items(
 
         batch = supabase_execute(_b) or []
         for r in batch:
-            gerencial_ppto_ingest_row(
-                items_raw,
-                r,
-                rev_map_fn=_matriz_validacion_norm_estado,
-                cap_key_fn=_dash_norm_capitulo_key_py,
-                item_key_fn=_dash_norm_item_key_py,
-                cap_display_fn=_dash_norm_cap,
-            )
+            if obra_ejecutada:
+                ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+                ik = _dash_norm_item_key_py(r.get("item"))
+                if ik:
+                    raw_rows_oe[(ck, ik)].append(r)
+            else:
+                gerencial_ppto_ingest_row(
+                    items_raw,
+                    r,
+                    rev_map_fn=_matriz_validacion_norm_estado,
+                    cap_key_fn=_dash_norm_capitulo_key_py,
+                    item_key_fn=_dash_norm_item_key_py,
+                    cap_display_fn=_dash_norm_cap,
+                )
         if len(batch) < 1000:
             break
         off += 1000
+
+    if obra_ejecutada:
+        listado_vu_idx = _listado_precios_vu_by_cap_item(contrato_id)
+        ppto_obra_alt = _ppto_presupuesto_obra_by_cap_item(contrato_id, current_user)
+        out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for k, rows in raw_rows_oe.items():
+            lp_row = listado_vu_idx.get(k) or {}
+            lp_vu = float(lp_row.get("precio_unitario") or 0) or None
+            alt = ppto_obra_alt.get(k)
+            costs = _gerencial_ppto_item_costos_drill_aligned(
+                rows, listado_vu=lp_vu, alt_rows=alt
+            )
+            cap_disp = _dash_norm_cap(rows[0].get("capitulo"))
+            out[k] = {"cap_display": cap_disp, **costs}
+        return out
+
     return {k: gerencial_ppto_finalize_item(dict(v)) for k, v in items_raw.items()}
 
 
@@ -28207,7 +28331,7 @@ def dashboard_capitulos_financiero_obra(
     vista_n = parse_dash_vista(vista)
     acta_id = _resolve_acta_rpo_id(contrato_id, acta_rpo) if acta_rpo is not None else None
     cache_key = (
-        "dashboard_capitulos_fin_v3",
+        "dashboard_capitulos_fin_v4",
         int(contrato_id),
         vista_n,
         acta_rpo,

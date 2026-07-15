@@ -65,7 +65,8 @@ oficial AS (
 listado AS (
   SELECT public._dash_norm_capitulo_key(lp.capitulo) AS cap_k,
     public._dash_norm_item_key(lp.item_numero) AS it_k,
-    (array_agg(upper(btrim(COALESCE(lp.tipo_calculo, ''))) ORDER BY lp.capitulo, lp.item_numero))[1] AS tc
+    (array_agg(upper(btrim(COALESCE(lp.tipo_calculo, ''))) ORDER BY lp.capitulo, lp.item_numero))[1] AS tc,
+    MAX(COALESCE(lp.precio_unitario, 0)::numeric) AS lp_vu
   FROM public.listado_precios lp
   WHERE lp.contrato_id = p_contrato_id AND public._dash_norm_item_key(lp.item_numero) IS NOT NULL
   GROUP BY 1, 2
@@ -97,10 +98,13 @@ ppto_items AS (
   FROM ppto_raw GROUP BY cap_k, it_k
 ),
 ppto_costs AS (
-  SELECT cap_k, it_k, cap_display,
-    public.dash_costo_agregado(ap_q, vu) AS ap, public.dash_costo_agregado(pe_q, vu) AS pe,
-    public.dash_costo_agregado(re_q, vu) AS re, public.dash_costo_agregado(nr_q, vu) AS nr
-  FROM ppto_items
+  SELECT pi.cap_k, pi.it_k, pi.cap_display,
+    public.dash_costo_agregado(pi.ap_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS ap,
+    public.dash_costo_agregado(pi.pe_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS pe,
+    public.dash_costo_agregado(pi.re_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS re,
+    public.dash_costo_agregado(pi.nr_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS nr
+  FROM ppto_items pi
+  LEFT JOIN listado l ON l.cap_k = pi.cap_k AND l.it_k = pi.it_k
 ),
 sicoe_regs AS (
   SELECT public._dash_norm_capitulo_key(CASE WHEN r.capitulo IS NULL OR btrim(r.capitulo::text) = '' THEN 'Sin capítulo' ELSE r.capitulo::text END) AS cap_k,

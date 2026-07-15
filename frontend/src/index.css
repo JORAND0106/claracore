@@ -33,6 +33,34 @@ img.cc-brand-logo--header {
   max-width: min(340px, 72vw);
   height: 40px;
 }
+
+/* Logos contratista / interventoría en header */
+img.cc-header-partner-logo {
+  display: block;
+  flex-shrink: 0;
+  width: auto;
+  height: 52px;
+  max-width: 140px;
+  object-fit: contain;
+  object-position: center;
+  border-radius: 6px;
+  background: #fff;
+  padding: 3px 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+img.cc-header-partner-logo--compact {
+  height: 28px;
+  max-width: 72px;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.cc-app-header-brand--drawer {
+  gap: 6px !important;
+  min-width: 0;
+  overflow: hidden;
+}
 img.cc-brand-logo--admin {
   max-width: 200px;
   height: 32px;
@@ -50,11 +78,26 @@ img.cc-brand-logo--admin {
   }
 }
 
+/* Botón Asistente AVI — logo arriba + icono asistente abajo */
+.cc-avi-trigger-btn--compact {
+  flex-shrink: 0;
+}
+
+.cc-avi-trigger-btn--compact .cc-avi-trigger-assistant {
+  pointer-events: none;
+}
+
 /* ── Header / shell móvil (< 768px) ── */
 @media (max-width: 767px) {
   img.cc-brand-logo--header {
-    max-width: min(180px, 52vw);
+    max-width: min(160px, 42vw);
     height: 32px;
+  }
+
+  img.cc-header-partner-logo--compact {
+    height: 24px;
+    max-width: 58px;
+    padding: 1px 4px;
   }
 
   .cc-app-header {
