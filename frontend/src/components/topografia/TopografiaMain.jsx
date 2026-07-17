@@ -10,6 +10,9 @@ import TuberiaRegistroDiario from './TuberiaRegistroDiario'
 import AreasForm from './AreasForm'
 import EquiposForm from './EquiposForm'
 import TopoConfirmModal from './TopoConfirmModal'
+import { TopoOfflineProvider, useTopoOffline } from './offline/TopoOfflineContext.jsx'
+import { TopoOfflineStatusBar } from './offline/TopoOfflinePanel.jsx'
+import TopoConflictModal from './offline/TopoConflictModal.jsx'
 import {
   OfflineBadge,
   defaultPermisos,
@@ -135,12 +138,21 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
   const ui = useTopoTheme()
   const { isCompact, isLandscapeMobile } = useTopoViewport()
   const contratoId = usuario?.contrato_id
+  const offline = useTopoOffline()
+  const [conflictActivo, setConflictActivo] = useState(null)
+  const [conflictBusy, setConflictBusy] = useState(false)
   const [submodulo, setSubmodulo] = useState('topo_biblioteca')
   const [navOpen, setNavOpen] = useState(false)
   const [salirModuloPendiente, setSalirModuloPendiente] = useState(null)
   const [guardSalidaBusy, setGuardSalidaBusy] = useState(false)
   const entregaGuardRef = useRef(null)
   const { api, online } = useTopografiaApi(contratoId, token)
+
+  useEffect(() => {
+    if (offline.conflicts?.length && !conflictActivo) {
+      setConflictActivo(offline.conflicts[0])
+    }
+  }, [offline.conflicts, conflictActivo])
 
   const labelActual = useMemo(
     () => ALL_MODS.find((m) => m.id === submodulo)?.label || 'Topografía',
@@ -188,7 +200,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
     const props = { contratoId, token, permisos, usuario }
     switch (submodulo) {
       case 'topo_biblioteca':
-        return <BibliiotecaPuntos {...props} />
+        return <BibliiotecaPuntos {...props} permisos={permisos} />
       case 'topo_poligonal':
         return <PoligonalForm {...props} />
       case 'topo_newpoint':
@@ -292,7 +304,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              <OfflineBadge online={online} />
+              <TopoOfflineStatusBar contratoId={contratoId} compact />
               {alertas > 0 && (
                 <span style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
                   {alertas}
@@ -309,15 +321,23 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
         </div>
       ) : (
         <aside style={{ width: 260, flexShrink: 0, ...ui.card, padding: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
             <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>Topografia</h2>
-            {alertas > 0 && (
-              <span title="Alertas de equipos" style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
-                {alertas}
-              </span>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {alertas > 0 && (
+                <span title="Alertas de equipos" style={{ background: '#dc2626', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 'var(--cc-xs)', fontWeight: 700 }}>
+                  {alertas}
+                </span>
+              )}
+              <TopoOfflineStatusBar contratoId={contratoId} compact={false} />
+            </div>
           </div>
-          <OfflineBadge online={online} />
+          <OfflineBadge
+            online={online}
+            pendingCount={offline.pendingCount}
+            failedCount={offline.failedCount}
+            syncing={offline.syncState === 'syncing'}
+          />
           <div style={{ marginTop: 12 }}>{navContent}</div>
         </aside>
       )}
@@ -340,6 +360,31 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
         >
           Hay cambios sin guardar.
         </TopoConfirmModal>
+      )}
+      {conflictActivo && (
+        <TopoConflictModal
+          conflict={conflictActivo}
+          busy={conflictBusy}
+          onCancel={() => setConflictActivo(null)}
+          onResolveLocal={async () => {
+            setConflictBusy(true)
+            try {
+              await offline.resolveConflict(conflictActivo, true)
+              setConflictActivo(null)
+            } finally {
+              setConflictBusy(false)
+            }
+          }}
+          onResolveServer={async () => {
+            setConflictBusy(true)
+            try {
+              await offline.resolveConflict(conflictActivo, false)
+              setConflictActivo(null)
+            } finally {
+              setConflictBusy(false)
+            }
+          }}
+        />
       )}
     </div>
   )
@@ -376,15 +421,17 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
 
   return (
     <TopoThemeProvider t={t}>
-      <TopografiaLayout
-        usuario={usuario}
-        token={token}
-        permisos={permisos}
-        alertas={alertas}
-        setAlertas={setAlertas}
-        tuberiaSel={tuberiaSel}
-        setTuberiaSel={setTuberiaSel}
-      />
+      <TopoOfflineProvider contratoId={contratoId} token={token}>
+        <TopografiaLayout
+          usuario={usuario}
+          token={token}
+          permisos={permisos}
+          alertas={alertas}
+          setAlertas={setAlertas}
+          tuberiaSel={tuberiaSel}
+          setTuberiaSel={setTuberiaSel}
+        />
+      </TopoOfflineProvider>
     </TopoThemeProvider>
   )
 }

@@ -7890,6 +7890,14 @@ function _permisoTabVisible(p) {
   return !!(p && (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar));
 }
 
+/** Clave de orden A–Z ignorando emoji o símbolos al inicio del label. */
+function _adminTabLabelOrden(label = "") {
+  return String(label)
+    .replace(/^[\s\p{Extended_Pictographic}\p{Emoji_Presentation}]+/gu, "")
+    .trim()
+    .toLocaleLowerCase("es");
+}
+
 /** Orden del panel admin (ids deben coincidir con TAB_FUNCIONES y el contenido renderizado). */
 const ADMIN_PANEL_TABS = [
   { id: "usuarios",  label: "Gestión de Usuarios" },
@@ -7920,7 +7928,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const permsDevOAdmin = isDeveloper || isAdmin ? PERMISOS_ADMIN_TODOS : null;
 
   const TABS = useMemo(() => {
-    return ADMIN_PANEL_TABS.filter((tabItem) => {
+    const filtered = ADMIN_PANEL_TABS.filter((tabItem) => {
       if (isDeveloper) return true;
       if (tabItem.soloDeveloper) return false;
       const funciones = TAB_FUNCIONES[tabItem.id] || [];
@@ -7937,6 +7945,9 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
       if (tabItem.soloAdmin) return false;
       return false;
     });
+    return filtered.sort((a, b) =>
+      _adminTabLabelOrden(a.label).localeCompare(_adminTabLabelOrden(b.label), "es", { sensitivity: "base" }),
+    );
   }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
 
   const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");

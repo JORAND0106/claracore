@@ -1,6 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../../apiBase'
 import { useClaraViewport } from '../../useClaraViewport'
+import {
+  cacheOnlineResponse,
+  handleOfflineMutation,
+  readTopoOffline,
+} from './offline/topoOfflineRouter.js'
+import { useTopoOffline } from './offline/TopoOfflineContext.jsx'
+
+function useTopoOfflineOptional() {
+  return useTopoOffline()
+}
 
 /**
  * Viewport del módulo Topografía.
@@ -404,7 +414,13 @@ export function TopoFieldLabel({ texto, ayuda, color }) {
 
 const DRAFT_KEY = (contratoId, modulo) => `claracore_topo_draft_${contratoId}_${modulo}`
 
+function isNetworkFailure(err) {
+  const msg = String(err?.message || err || '')
+  return /failed to fetch|network|load failed|conectar|HTML/i.test(msg)
+}
+
 export function useTopografiaApi(contratoId, token) {
+  const offlineCtx = useTopoOfflineOptional()
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
 
   useEffect(() => {
@@ -418,46 +434,88 @@ export function useTopografiaApi(contratoId, token) {
     }
   }, [])
 
+  const efectivoOffline = offlineCtx?.efectivoOffline ?? !online
+
   const headers = useMemo(() => ({
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }), [token])
 
   const api = useCallback(async (path, options = {}) => {
-    const url = `${API_BASE}/topografia/${contratoId}${path}`
-    const res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } })
-    const ct = res.headers.get('content-type') || ''
-    const isJson = ct.includes('application/json')
-    const isPdf = ct.includes('application/pdf')
+    const method = (options.method || 'GET').toUpperCase()
+    const [pathOnly, query = ''] = path.split('?')
 
-    if (!res.ok) {
-      let detail = res.statusText
-      if (isJson) {
-        try {
-          const j = await res.json()
-          detail = j.detail || JSON.stringify(j)
-        } catch { /* ignore */ }
-      } else {
+    if (method === 'GET' && (options.headers || {})['Accept'] === 'application/pdf') {
+      if (efectivoOffline) {
+        throw new Error('Exportación PDF no disponible sin conexión.')
+      }
+    }
+
+    // Lecturas offline
+    if (method === 'GET' && efectivoOffline) {
+      const cached = await readTopoOffline(contratoId, pathOnly, query ? `?${query}` : '')
+      if (cached !== undefined) return cached
+      throw new Error('Sin conexión y sin datos en caché para esta consulta.')
+    }
+
+    // Mutaciones offline
+    if (method !== 'GET' && efectivoOffline) {
+      const result = await handleOfflineMutation(contratoId, pathOnly, method, options.body, options.offlineMeta)
+      offlineCtx?.refreshCounts?.()
+      return result
+    }
+
+    const url = `${API_BASE}/topografia/${contratoId}${path}`
+    try {
+      const res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } })
+      const ct = res.headers.get('content-type') || ''
+      const isJson = ct.includes('application/json')
+      const isPdf = ct.includes('application/pdf')
+
+      if (!res.ok) {
+        let detail = res.statusText
+        if (isJson) {
+          try {
+            const j = await res.json()
+            detail = j.detail || JSON.stringify(j)
+          } catch { /* ignore */ }
+        } else {
+          const text = await res.text()
+          if (text.trimStart().startsWith('<!')) {
+            detail = 'No se pudo conectar con el API de Topografia. Verifique que el backend este en :8000 y reinicie Vite tras actualizar el proxy.'
+          } else {
+            detail = text.slice(0, 200)
+          }
+        }
+        throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
+      }
+      if (res.status === 204) return null
+      if (isPdf) return res.blob()
+      if (!isJson) {
         const text = await res.text()
         if (text.trimStart().startsWith('<!')) {
-          detail = 'No se pudo conectar con el API de Topografia. Verifique que el backend este en :8000 y reinicie Vite tras actualizar el proxy.'
-        } else {
-          detail = text.slice(0, 200)
+          throw new Error('El servidor devolvio HTML en lugar de JSON. Reinicie el frontend (Vite) para aplicar el proxy /topografia.')
         }
+        throw new Error(text.slice(0, 200) || 'Respuesta no JSON')
       }
-      throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
-    }
-    if (res.status === 204) return null
-    if (isPdf) return res.blob()
-    if (!isJson) {
-      const text = await res.text()
-      if (text.trimStart().startsWith('<!')) {
-        throw new Error('El servidor devolvio HTML en lugar de JSON. Reinicie el frontend (Vite) para aplicar el proxy /topografia.')
+      const data = await res.json()
+      if (method === 'GET') {
+        await cacheOnlineResponse(contratoId, pathOnly, data)
       }
-      throw new Error(text.slice(0, 200) || 'Respuesta no JSON')
+      return data
+    } catch (e) {
+      if (method === 'GET') {
+        const cached = await readTopoOffline(contratoId, pathOnly, query ? `?${query}` : '')
+        if (cached !== undefined) return cached
+      }
+      if (method !== 'GET' && isNetworkFailure(e)) {
+        const result = await handleOfflineMutation(contratoId, pathOnly, method, options.body, options.offlineMeta)
+        offlineCtx?.refreshCounts?.()
+        return result
+      }
+      throw e
     }
-    return res.json()
-  }, [contratoId, headers])
+  }, [contratoId, headers, efectivoOffline, offlineCtx])
 
   const saveDraft = useCallback((modulo, data) => {
     try {
@@ -480,11 +538,11 @@ export function useTopografiaApi(contratoId, token) {
 
   const syncDraft = useCallback(async (modulo, endpoint, method = 'POST') => {
     const draft = loadDraft(modulo)
-    if (!draft?.data || !online) return null
+    if (!draft?.data || efectivoOffline) return null
     const result = await api(endpoint, { method, body: JSON.stringify(draft.data) })
     clearDraft(modulo)
     return result
-  }, [api, clearDraft, loadDraft, online])
+  }, [api, clearDraft, loadDraft, efectivoOffline])
 
   const downloadPdf = useCallback(async (path, filename) => {
     const blob = await api(path, { method: 'GET', headers: { Accept: 'application/pdf' } })
@@ -499,7 +557,16 @@ export function useTopografiaApi(contratoId, token) {
     URL.revokeObjectURL(url)
   }, [api])
 
-  return { api, online, saveDraft, loadDraft, clearDraft, syncDraft, downloadPdf }
+  return {
+    api,
+    online: !efectivoOffline,
+    efectivoOffline,
+    saveDraft,
+    loadDraft,
+    clearDraft,
+    syncDraft,
+    downloadPdf,
+  }
 }
 
 /** @deprecated Use useTopoTheme() inside Topografía (requiere TopoThemeProvider). */
@@ -544,16 +611,24 @@ export function Semaforo({ ok, labelOk = 'Admisible', labelBad = 'Inadmisible' }
   )
 }
 
-export function OfflineBadge({ online }) {
+export function OfflineBadge({ online, pendingCount = 0, failedCount = 0, syncing = false }) {
+  const label = syncing
+    ? 'Sincronizando…'
+    : online
+      ? (pendingCount > 0 ? `En línea · ${pendingCount} pend.` : 'En línea')
+      : 'Offline'
   return (
     <span style={{
       padding: '3px 8px',
       borderRadius: 999,
       fontSize: 'var(--cc-xs)',
-      background: online ? '#dcfce7' : '#fef3c7',
-      color: online ? '#166534' : '#92400e',
+      background: syncing ? '#dbeafe' : online ? (failedCount > 0 ? '#fee2e2' : pendingCount > 0 ? '#eff6ff' : '#dcfce7') : '#fef3c7',
+      color: syncing ? '#1d4ed8' : online ? (failedCount > 0 ? '#991b1b' : pendingCount > 0 ? '#1d4ed8' : '#166534') : '#92400e',
     }}>
-      {online ? 'En linea' : 'Offline — borrador local'}
+      {label}
+      {failedCount > 0 && !syncing && (
+        <span style={{ marginLeft: 4 }}>({failedCount} fall.)</span>
+      )}
     </span>
   )
 }
