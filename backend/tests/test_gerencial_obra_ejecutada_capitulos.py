@@ -33,6 +33,7 @@ def test_obra_ejecutada_netea_cobrado_negativo_sin_presupuesto(monkeypatch):
                 "pe": 0.0,
                 "re": 0.0,
                 "nr": 0.0,
+                "cc_total": 1_000_000.0,
             },
         },
     )
@@ -62,6 +63,7 @@ def test_obra_ejecutada_presupuesto_suma_todos_estados(monkeypatch):
                 "pe": 200.0,
                 "re": 50.0,
                 "nr": 150.0,
+                "cc_total": 500.0,
             },
         },
     )
@@ -95,6 +97,7 @@ def test_presupuesto_obra_sigue_bolsa_ap_nr(monkeypatch):
                 "pe": 200.0,
                 "re": 50.0,
                 "nr": 150.0,
+                "cc_total": 250.0,
             },
         },
     )
@@ -105,7 +108,11 @@ def test_presupuesto_obra_sigue_bolsa_ap_nr(monkeypatch):
 
 
 def test_pkid_delta_obra_ejecutada_todos_estados():
+    vu = 35_162.0
     row = {
+        "tiene_ppto_obra_ejecutada": True,
+        "item_vu": vu,
+        "sicoe_item_vu": vu,
         "cant_ppto_aprobado_n3": 0,
         "costo_ppto_aprobado_n3": 0,
         "cant_ppto_estado_no_revisado": 50,
@@ -126,6 +133,8 @@ def test_pkid_delta_obra_ejecutada_todos_estados():
 
 def test_pkid_delta_obra_ejecutada_solo_cobrado_iguala():
     row = {
+        "item_vu": 1000.0,
+        "sicoe_item_vu": 1000.0,
         "cant_ppto_aprobado_n3": 0,
         "costo_ppto_aprobado_n3": 0,
         "cant_ppto_estado_no_revisado": 0,
@@ -149,7 +158,10 @@ def test_pkid_delta_obra_ejecutada_solo_cobrado_iguala():
 
 def test_pkid_solo_cobrado_bajo_item_con_ppto_cc_cero():
     """PK solo cobrado dentro de ítem con OE: CC=0 para que la suma PK = total ítem."""
+    vu = 12_364_663 / 19.8
     row = {
+        "item_vu": vu,
+        "sicoe_item_vu": vu,
         "cant_ppto_aprobado_n3": 0,
         "costo_ppto_aprobado_n3": 0,
         "cant_ppto_estado_no_revisado": 0,
@@ -171,27 +183,32 @@ def test_pkid_solo_cobrado_bajo_item_con_ppto_cc_cero():
 
 def test_pkid_sum_coherente_con_item_obra_ejecutada():
     """Suma Cant CC por PK = bolsa OE del ítem; suma Δ = Δ del ítem."""
+    vu1 = 624_478.02
+    vu2 = 624_478.01
     rows = [
         {
             "pk_id": "4600001",
+            "tiene_ppto_obra_ejecutada": True,
+            "item_vu": vu1,
+            "sicoe_item_vu": 624_478.02,
             "cant_a": 12.65,
-            "costo_a": 7_899_647,
             "cant_ppto": 12.65,
-            "costo_ppto": 7_899_647,
             "cant_sicoe_aprobado": 12.94,
-            "costo_sicoe_aprobado": 8_080_746,
         },
         {
             "pk_id": "141018",
+            "tiene_ppto_obra_ejecutada": False,
+            "item_vu": 12_364_663 / 19.8,
+            "sicoe_item_vu": 12_364_663 / 19.8,
             "cant_sicoe_aprobado": 19.8,
             "costo_sicoe_aprobado": 12_364_663,
         },
         {
             "pk_id": "4600010",
+            "tiene_ppto_obra_ejecutada": True,
+            "item_vu": vu2,
             "cant_a": 25.51,
-            "costo_a": 15_930_434,
             "cant_ppto": 25.51,
-            "costo_ppto": 15_930_434,
             "cant_sicoe_aprobado": 0,
             "costo_sicoe_aprobado": 0,
         },
@@ -204,13 +221,17 @@ def test_pkid_sum_coherente_con_item_obra_ejecutada():
     sum_cob_c = sum(float(r.get("costo_cobrado") or r.get("costo_sicoe_aprobado") or 0) for r in rows)
     assert sum_cc_q == pytest.approx(12.65 + 25.51, abs=0.01)
     assert sum_cob_q == pytest.approx(12.94 + 19.8, abs=0.01)
-    assert sum_cc_c == 7_899_647 + 15_930_434
+    assert sum_cc_c == round(12.65 * vu1, 0) + round(25.51 * vu2, 0)
     assert sum(r["delta_cant"] for r in rows) == pytest.approx(sum_cc_q - sum_cob_q, abs=0.02)
     assert sum(r["delta_costo"] for r in rows) == sum_cc_c - sum_cob_c
 
 
 def test_pkid_delta_obra_ejecutada_ppto_vs_cobrado():
+    vu = 624_478.0
     row = {
+        "tiene_ppto_obra_ejecutada": True,
+        "item_vu": vu,
+        "sicoe_item_vu": vu,
         "cant_ppto_aprobado_n3": 12.65,
         "costo_ppto_aprobado_n3": 7_899_647,
         "cant_ppto_estado_no_revisado": 0,
@@ -224,7 +245,7 @@ def test_pkid_delta_obra_ejecutada_ppto_vs_cobrado():
     }
     m._apply_obra_ejecutada_pkid_delta(row)
     assert row["delta_cant"] == pytest.approx(-0.29, abs=0.01)
-    assert row["delta_costo"] == -181_099
+    assert row["delta_costo"] == round(12.65 * vu, 0) - round(12.94 * vu, 0)
 
 
 def test_gerencial_excluye_items_iva(monkeypatch):
@@ -246,6 +267,7 @@ def test_gerencial_excluye_items_iva(monkeypatch):
                 "pe": 0.0,
                 "re": 0.0,
                 "nr": 0.0,
+                "cc_total": 1_000_000.0,
             },
             ("7_cap", "7.01"): {
                 "cap_display": "7. PLUVIAL",
@@ -253,6 +275,7 @@ def test_gerencial_excluye_items_iva(monkeypatch):
                 "pe": 0.0,
                 "re": 0.0,
                 "nr": 0.0,
+                "cc_total": 500_000.0,
             },
         },
     )
@@ -284,6 +307,93 @@ def test_gerencial_ppto_item_costos_drill_aligned_listado_vu():
     assert costs["ap"] == 100_000
     assert costs["pe"] == 0
     assert costs["nr"] == 0
+    assert costs["cc_total"] == 100_000
+
+
+def test_gerencial_ppto_item_costos_drill_aligned_listado_vu_redondeo_unico():
+    """Con V.U. del listado: cc_total = round(Σcant × V.U., 0), no suma de buckets."""
+    vu = 35_162.0
+    rows = [
+        {"cant_total": 0.01, "vlr_unitario": 0, "revisado": "Aprobado", "costo_directo": round(0.01 * vu, 0)},
+        {"cant_total": 0.01, "vlr_unitario": 0, "revisado": "Pendiente", "costo_directo": round(0.01 * vu, 0)},
+        {"cant_total": 0.01, "vlr_unitario": 0, "revisado": "Rechazado", "costo_directo": round(0.01 * vu, 0)},
+        {"cant_total": 0.01, "vlr_unitario": 0, "revisado": "No Revisado", "costo_directo": round(0.01 * vu, 0)},
+    ]
+    costs = m._gerencial_ppto_item_costos_drill_aligned(rows, listado_vu=vu)
+    assert costs["cc_total"] == round(0.04 * vu, 0)
+    assert costs["ap"] + costs["pe"] + costs["re"] + costs["nr"] != costs["cc_total"]
+
+
+def test_capitulos_dos_capitulos_mismo_redondeo(monkeypatch):
+    """Misma regla cc_total en capítulos distintos (no solo Espacio Público)."""
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
+    vu = 35_162.0
+
+    def _items(cid, v, u):
+        return {
+            ("4_cap", "4.01"): {
+                "cap_display": "4. ESPACIO PUBLICO",
+                "ap": 352.0,
+                "pe": 352.0,
+                "re": 352.0,
+                "nr": 352.0,
+                "cc_total": round(0.04 * vu, 0),
+            },
+            ("7_cap", "7.01"): {
+                "cap_display": "7. SANITARIO",
+                "ap": 352.0,
+                "pe": 352.0,
+                "re": 352.0,
+                "nr": 352.0,
+                "cc_total": round(0.04 * vu, 0),
+            },
+        }
+
+    monkeypatch.setattr(m, "_gerencial_ppto_items", _items)
+    monkeypatch.setattr(
+        m,
+        "_dashboard_scan_sicoe_by_item",
+        lambda cid: {
+            ("4_cap", "4.01"): {"ap_c": round(0.04 * vu, 0), "cap_display": "4. ESPACIO PUBLICO"},
+            ("7_cap", "7.01"): {"ap_c": round(0.04 * vu, 0), "cap_display": "7. SANITARIO"},
+        },
+    )
+    rows = m._gerencial_capitulos_data_obra_ejecutada(1, None)
+    by_cap = {r["capitulo"]: r for r in rows}
+    assert len(by_cap) == 2
+    for cap in ("4. ESPACIO PUBLICO", "7. SANITARIO"):
+        assert by_cap[cap]["delta"] == 0
+        assert by_cap[cap]["claracore"] == round(0.04 * vu, 0)
+
+
+def test_capitulos_aggregate_cc_total_no_suma_buckets(monkeypatch):
+    """Vista capítulos: claracore = cc_total, no ap+pe+re+nr (redondeo acumulado)."""
+    monkeypatch.setattr(m, "_listado_precios_tipo_calculo_index", lambda cid: {})
+    monkeypatch.setattr(
+        m,
+        "_gerencial_ppto_items",
+        lambda cid, v, u: {
+            ("1_cap", "1.01"): {
+                "cap_display": "1. X",
+                "ap": 352.0,
+                "pe": 352.0,
+                "re": 352.0,
+                "nr": 352.0,
+                "cc_total": 1406.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        m,
+        "_dashboard_scan_sicoe_by_item",
+        lambda cid: {
+            ("1_cap", "1.01"): {"ap_c": 1406.0, "cap_display": "1. X"},
+        },
+    )
+    rows = m._gerencial_capitulos_data_obra_ejecutada(1, None)
+    assert rows[0]["claracore"] == 1406
+    assert rows[0]["delta"] == 0
+    assert 352 * 4 == 1408
 
 
 def test_obra_ejecutada_claracore_no_iguala_cobrado_con_ppto(monkeypatch):
@@ -299,6 +409,7 @@ def test_obra_ejecutada_claracore_no_iguala_cobrado_con_ppto(monkeypatch):
                 "pe": 0.0,
                 "re": 0.0,
                 "nr": 0.0,
+                "cc_total": 100_000.0,
             },
         },
     )

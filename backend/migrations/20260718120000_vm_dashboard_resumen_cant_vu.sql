@@ -1,82 +1,20 @@
--- Vistas materializadas SICOE + Realtime (Supabase).
--- Ejecutar en SQL Editor DESPUÉS de dashboard_drill_agg.sql y dashboard_resumen_sicoe.sql
--- (requiere _dash_matriz_nivel_max_estado, _dash_norm_capitulo_key, _norm_estado_matriz).
--- Idempotente donde es posible.
+-- Cobrado dashboard: Σ dash_costo_agregado(Σ cantidad, V.U.) por ítem — nunca SUM(costo_directo) por línea.
+-- Requiere public.dash_costo_agregado y helpers de dashboard_drill_agg.sql.
 
--- ── 1. Vista grilla (cabecera reporte + agregados de líneas) ─────────────────
-DROP MATERIALIZED VIEW IF EXISTS public.vm_sicoe_grilla CASCADE;
+CREATE OR REPLACE FUNCTION public.dash_costo_agregado(p_cant numeric, p_vu numeric)
+RETURNS numeric
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE
+    WHEN COALESCE(p_cant, 0) = 0 OR COALESCE(p_vu, 0) = 0 THEN 0::numeric
+    ELSE round(round(COALESCE(p_cant, 0), 2) * COALESCE(p_vu, 0), 0)
+  END;
+$$;
 
-CREATE MATERIALIZED VIEW public.vm_sicoe_grilla AS
-SELECT
-    r.id,
-    r.numero_reporte,
-    r.capitulo,
-    r.tramo,
-    r.calzada AS costado,
-    r.abs_inicio,
-    r.abs_final,
-    r.nodo_ini,
-    r.nodo_fin,
-    r.subcontratista_id,
-    r.acta_rpo_id,
-    r.semana_id,
-    r.estado,
-    r.contrato_id,
-    COUNT(reg.id)::bigint AS total_registros,
-    COALESCE(SUM(reg.costo_directo), 0)::numeric AS costo_directo_total
-FROM public.so_reportes r
-LEFT JOIN public.so_registros reg ON reg.reporte_id = r.id
-GROUP BY
-    r.id, r.numero_reporte, r.capitulo, r.tramo, r.calzada,
-    r.abs_inicio, r.abs_final, r.nodo_ini, r.nodo_fin,
-    r.subcontratista_id, r.acta_rpo_id, r.semana_id, r.estado, r.contrato_id;
+COMMENT ON FUNCTION public.dash_costo_agregado(numeric, numeric) IS
+  'Costo agregado dashboard: round(round(cant,2)×VU, 0). No usar SUM(costo_directo) para totales.';
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_vm_sicoe_grilla_id ON public.vm_sicoe_grilla (id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato ON public.vm_sicoe_grilla (contrato_id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_acta ON public.vm_sicoe_grilla (acta_rpo_id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato_acta ON public.vm_sicoe_grilla (contrato_id, acta_rpo_id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato_semana ON public.vm_sicoe_grilla (contrato_id, semana_id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_num_rep ON public.vm_sicoe_grilla (contrato_id, numero_reporte DESC);
-
--- ── 2. Vista detalle registro (Realtime carpeta abierta) ───────────────────
-DROP MATERIALIZED VIEW IF EXISTS public.vm_sicoe_registro_detalle CASCADE;
-
-CREATE MATERIALIZED VIEW public.vm_sicoe_registro_detalle AS
-SELECT
-    id,
-    numero_registro,
-    reporte_id,
-    contrato_id,
-    capitulo,
-    item_numero,
-    item_descripcion,
-    unidad,
-    vlr_unitario,
-    ancho,
-    espesor,
-    cantidad_total,
-    costo_directo,
-    observacion,
-    abs_inicio,
-    abs_final,
-    nodo_ini,
-    nodo_fin,
-    foto_url,
-    foto_numero,
-    grafico_url,
-    nivel1_estado,
-    nivel2_estado,
-    nivel3_estado,
-    nivel4_estado,
-    nivel5_estado,
-    nivel6_estado
-FROM public.so_registros;
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_vm_sicoe_registro_detalle_id ON public.vm_sicoe_registro_detalle (id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_registro_detalle_reporte ON public.vm_sicoe_registro_detalle (reporte_id);
-CREATE INDEX IF NOT EXISTS idx_vm_sicoe_registro_detalle_contrato ON public.vm_sicoe_registro_detalle (contrato_id);
-
--- ── 3. Vista dashboard por capítulo (SICOE obra; cobrado = Σ cant×VU por ítem) ─
 DROP MATERIALIZED VIEW IF EXISTS public.vm_dashboard_por_acta CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.vm_dashboard_resumen CASCADE;
 
@@ -133,16 +71,16 @@ item_cost AS (
     SELECT
         contrato_id,
         capitulo,
-        public.dash_costo_agregado(ap_q1, public._dash_listado_vu(contrato_id, capitulo, it)) AS c1,
-        public.dash_costo_agregado(ap_q2, public._dash_listado_vu(contrato_id, capitulo, it)) AS c2,
-        public.dash_costo_agregado(ap_q3, public._dash_listado_vu(contrato_id, capitulo, it)) AS c3,
-        public.dash_costo_agregado(ap_q4, public._dash_listado_vu(contrato_id, capitulo, it)) AS c4,
-        public.dash_costo_agregado(ap_q5, public._dash_listado_vu(contrato_id, capitulo, it)) AS c5,
-        public.dash_costo_agregado(ap_q6, public._dash_listado_vu(contrato_id, capitulo, it)) AS c6,
-        public.dash_costo_agregado(nr_q3, public._dash_listado_vu(contrato_id, capitulo, it)) AS nr3,
-        public.dash_costo_agregado(nr_q4, public._dash_listado_vu(contrato_id, capitulo, it)) AS nr4,
-        public.dash_costo_agregado(nr_q5, public._dash_listado_vu(contrato_id, capitulo, it)) AS nr5,
-        public.dash_costo_agregado(nr_q6, public._dash_listado_vu(contrato_id, capitulo, it)) AS nr6
+        public.dash_costo_agregado(ap_q1, vu) AS c1,
+        public.dash_costo_agregado(ap_q2, vu) AS c2,
+        public.dash_costo_agregado(ap_q3, vu) AS c3,
+        public.dash_costo_agregado(ap_q4, vu) AS c4,
+        public.dash_costo_agregado(ap_q5, vu) AS c5,
+        public.dash_costo_agregado(ap_q6, vu) AS c6,
+        public.dash_costo_agregado(nr_q3, vu) AS nr3,
+        public.dash_costo_agregado(nr_q4, vu) AS nr4,
+        public.dash_costo_agregado(nr_q5, vu) AS nr5,
+        public.dash_costo_agregado(nr_q6, vu) AS nr6
     FROM item_agg
 ),
 cap_cob AS (
@@ -194,19 +132,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_vm_dashboard_resumen_cap
 CREATE INDEX IF NOT EXISTS idx_vm_dashboard_resumen_contrato
     ON public.vm_dashboard_resumen (contrato_id);
 
--- ── 3b. Cobro SICOE aprobado por acta RPO (panel Obra por Acta) ─────────────
 CREATE MATERIALIZED VIEW public.vm_dashboard_por_acta AS
 WITH regs AS (
     SELECT
         r.contrato_id,
         r.acta_rpo_id AS aid,
-        public._dash_norm_capitulo_key(
-            CASE
-                WHEN r.capitulo IS NULL OR btrim(r.capitulo::text) = '' THEN 'Sin capítulo'
-                ELSE r.capitulo::text
-            END
-        ) AS cap,
         public._dash_norm_item_key(r.item_numero) AS it,
+        COALESCE(r.vlr_unitario, 0)::numeric AS vu,
         round(COALESCE(r.cantidad_total, 0)::numeric, 2) AS cq,
         public._dash_matriz_nivel_max_estado('nivel1_estado', r.nivel1_estado, r.nivel2_estado, r.nivel3_estado, r.nivel4_estado, r.nivel5_estado, r.nivel6_estado) AS nmax1,
         public._dash_matriz_nivel_max_estado('nivel2_estado', r.nivel1_estado, r.nivel2_estado, r.nivel3_estado, r.nivel4_estado, r.nivel5_estado, r.nivel6_estado) AS nmax2,
@@ -221,8 +153,8 @@ item_agg AS (
     SELECT
         contrato_id,
         aid,
-        cap,
         it,
+        MAX(vu) AS vu,
         SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax1 = 'Aprobado') AS ap_q1,
         SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax2 = 'Aprobado') AS ap_q2,
         SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax3 = 'Aprobado') AS ap_q3,
@@ -231,18 +163,18 @@ item_agg AS (
         SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax6 = 'Aprobado') AS ap_q6
     FROM regs
     WHERE it IS NOT NULL
-    GROUP BY contrato_id, aid, cap, it
+    GROUP BY contrato_id, aid, it
 ),
 item_cost AS (
     SELECT
         contrato_id,
         aid,
-        public.dash_costo_agregado(ap_q1, public._dash_listado_vu(contrato_id, cap, it)) AS c1,
-        public.dash_costo_agregado(ap_q2, public._dash_listado_vu(contrato_id, cap, it)) AS c2,
-        public.dash_costo_agregado(ap_q3, public._dash_listado_vu(contrato_id, cap, it)) AS c3,
-        public.dash_costo_agregado(ap_q4, public._dash_listado_vu(contrato_id, cap, it)) AS c4,
-        public.dash_costo_agregado(ap_q5, public._dash_listado_vu(contrato_id, cap, it)) AS c5,
-        public.dash_costo_agregado(ap_q6, public._dash_listado_vu(contrato_id, cap, it)) AS c6
+        public.dash_costo_agregado(ap_q1, vu) AS c1,
+        public.dash_costo_agregado(ap_q2, vu) AS c2,
+        public.dash_costo_agregado(ap_q3, vu) AS c3,
+        public.dash_costo_agregado(ap_q4, vu) AS c4,
+        public.dash_costo_agregado(ap_q5, vu) AS c5,
+        public.dash_costo_agregado(ap_q6, vu) AS c6
     FROM item_agg
 )
 SELECT
@@ -262,79 +194,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_vm_dashboard_por_acta
 CREATE INDEX IF NOT EXISTS idx_vm_dashboard_por_acta_contrato
     ON public.vm_dashboard_por_acta (contrato_id);
 
--- ── 4. Refresco (CONCURRENTLY requiere índices UNIQUE arriba) ───────────────
-CREATE OR REPLACE FUNCTION public.refresh_vm_sicoe_grilla()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_sicoe_grilla;
-    RETURN NULL;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.refresh_vm_sicoe_registro_detalle()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_sicoe_registro_detalle;
-    RETURN NULL;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.refresh_vm_dashboard_resumen()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_dashboard_resumen;
-    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_dashboard_por_acta;
-    RETURN NULL;
-END;
-$$;
-
--- Triggers síncronos desactivados: cada INSERT/UPDATE/DELETE refrescaba hasta 4 MV (~3–8 s c/u).
--- Refresco batch vía refresh_all_sicoe_materialized_views() + pg_cron (fix_performance_so_registros_fase1.sql).
-DROP TRIGGER IF EXISTS trg_refresh_grilla_reportes ON public.so_reportes;
-DROP TRIGGER IF EXISTS trg_refresh_grilla_registros ON public.so_registros;
-DROP TRIGGER IF EXISTS trg_refresh_registro_detalle ON public.so_registros;
-DROP TRIGGER IF EXISTS trg_refresh_dashboard ON public.so_registros;
-
--- Carga inicial
-REFRESH MATERIALIZED VIEW public.vm_sicoe_registro_detalle;
-REFRESH MATERIALIZED VIEW public.vm_sicoe_grilla;
 REFRESH MATERIALIZED VIEW public.vm_dashboard_resumen;
 REFRESH MATERIALIZED VIEW public.vm_dashboard_por_acta;
 
-GRANT SELECT ON public.vm_sicoe_grilla TO authenticated, service_role;
-GRANT SELECT ON public.vm_sicoe_registro_detalle TO authenticated, service_role;
 GRANT SELECT ON public.vm_dashboard_resumen TO authenticated, service_role;
 GRANT SELECT ON public.vm_dashboard_por_acta TO authenticated, service_role;
 
--- ── 5. Realtime publication ────────────────────────────────────────────────
--- Postgres NO admite materialized views en supabase_realtime.
--- El front escucha so_reportes / so_registros; las MV se refrescan por cron (no por trigger síncrono).
--- Ver backend/sql/realtime_publication_tables.sql
-
-DO $$
-BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.notificaciones;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$
-BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.cad_queue;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-COMMENT ON MATERIALIZED VIEW public.vm_sicoe_grilla IS 'Grilla SICOE Obra: agregados por reporte; Realtime + API /reportes/buscar.';
-COMMENT ON MATERIALIZED VIEW public.vm_sicoe_registro_detalle IS 'Detalle registro para Realtime carpeta abierta.';
-COMMENT ON MATERIALIZED VIEW public.vm_dashboard_resumen IS 'Resumen SICOE por capítulo: cobrado = Σ ítem dash_costo_agregado(Σ cant, V.U.); no SUM(costo_directo).';
+COMMENT ON MATERIALIZED VIEW public.vm_dashboard_resumen IS
+  'Resumen SICOE por capítulo: cobrado = Σ ítem dash_costo_agregado(Σ cant, V.U.); no SUM(costo_directo).';

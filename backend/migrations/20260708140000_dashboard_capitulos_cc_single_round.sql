@@ -1,22 +1,5 @@
--- Panorama financiero por capítulo (AIU + IVA) para dashboard-capitulos-financiero.
--- Requiere: dashboard_drill_agg.sql (_dash_norm_*, dash_costo_agregado, _dash_matriz_nivel_max_estado)
---           rpo_panel_admin_agg.sql (rpo_panel_bloque_capitulo)
-
-CREATE OR REPLACE FUNCTION public._gerencial_item_bloque(
-  p_tipo_calculo text,
-  p_capitulo text
-)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-AS $f$
-  SELECT CASE
-    WHEN upper(btrim(COALESCE(p_tipo_calculo, ''))) = 'IVA' THEN 'iva'
-    WHEN upper(btrim(COALESCE(p_tipo_calculo, ''))) = 'AIU' THEN 'aiu'
-    WHEN public.rpo_panel_bloque_capitulo(p_capitulo) = 'ensayos' THEN 'iva'
-    ELSE 'aiu'
-  END;
-$f$;
+-- Dashboard capitulos-financiero: ClaraCore = round(Σcant × V.U., 0), no suma de buckets redondeados.
+-- Contenido idéntico a backend/sql/dashboard_capitulos_financiero_agg.sql (ppto_costs.cc_total + claracore).
 
 CREATE OR REPLACE FUNCTION public.dashboard_capitulos_financiero_agg(
   p_contrato_id bigint,
@@ -84,18 +67,6 @@ listado AS (
     AND public._dash_norm_item_key(lp.item_numero) IS NOT NULL
   GROUP BY 1, 2
 ),
-ppto_obra_ref AS (
-  SELECT
-    public._dash_norm_capitulo_key(p.capitulo) AS cap_k,
-    public._dash_norm_item_key(p.item) AS it_k,
-    MAX(COALESCE(p.vlr_unitario, 0)::numeric) AS po_vu
-  FROM public.presupuesto p
-  WHERE p.contrato_id = p_contrato_id
-    AND COALESCE(p.dado_de_baja, false) = false
-    AND p.tipo_ejecucion = 'Presupuesto de Obra'
-    AND public._dash_norm_item_key(p.item) IS NOT NULL
-  GROUP BY 1, 2
-),
 ppto_raw AS (
   SELECT
     public._dash_norm_capitulo_key(p.capitulo) AS cap_k,
@@ -159,18 +130,17 @@ ppto_costs AS (
     pi.cap_k,
     pi.it_k,
     pi.cap_display,
-    COALESCE(l.lp_vu, 0) AS vu_eff,
-    public.dash_costo_agregado(pi.ap_q, COALESCE(l.lp_vu, 0)) AS ap,
-    public.dash_costo_agregado(pi.pe_q, COALESCE(l.lp_vu, 0)) AS pe,
-    public.dash_costo_agregado(pi.re_q, COALESCE(l.lp_vu, 0)) AS re,
-    public.dash_costo_agregado(pi.nr_q, COALESCE(l.lp_vu, 0)) AS nr,
+    public.dash_costo_agregado(pi.ap_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS ap,
+    public.dash_costo_agregado(pi.pe_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS pe,
+    public.dash_costo_agregado(pi.re_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS re,
+    public.dash_costo_agregado(pi.nr_q, COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)) AS nr,
     public.dash_costo_agregado(
       CASE
         WHEN (SELECT oe FROM vista_cfg)
           THEN COALESCE(pi.ap_q, 0) + COALESCE(pi.pe_q, 0) + COALESCE(pi.re_q, 0) + COALESCE(pi.nr_q, 0)
         ELSE COALESCE(pi.ap_q, 0) + COALESCE(pi.nr_q, 0)
       END,
-      COALESCE(l.lp_vu, 0)
+      COALESCE(NULLIF(pi.vu, 0), l.lp_vu, 0)
     ) AS cc_total
   FROM ppto_items pi
   LEFT JOIN listado l ON l.cap_k = pi.cap_k AND l.it_k = pi.it_k
@@ -185,7 +155,8 @@ sicoe_regs AS (
     ) AS cap_k,
     public._dash_norm_item_key(r.item_numero) AS it_k,
     public._dash_norm_capitulo(r.capitulo) AS cap_display,
-    round(COALESCE(r.cantidad_total, 0)::numeric, 2) AS cq,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
+    COALESCE(r.cantidad_total, 0)::numeric AS cq,
     public._dash_matriz_nivel_max_estado(
       (SELECT campo_max FROM cfg2),
       r.nivel1_estado, r.nivel2_estado, r.nivel3_estado,
@@ -203,7 +174,7 @@ sicoe_items AS (
     MAX(cap_display) AS cap_display,
     public.dash_costo_agregado(
       SUM(cq) FILTER (WHERE nmax = 'Aprobado'),
-      public._dash_listado_vu(p_contrato_id, cap_k, it_k)
+      MAX(vu)
     ) AS ap_c
   FROM sicoe_regs
   GROUP BY cap_k, it_k
@@ -213,8 +184,6 @@ all_keys AS (
   UNION
   SELECT s.cap_k, s.it_k
   FROM sicoe_items s
-  -- <> 0 (no solo > 0): los registros de reversión "No Previsto" cobran cantidades
-  -- negativas; deben netearse, no descartarse (igual que el drill/Excel).
   WHERE COALESCE(s.ap_c, 0) <> 0
 ),
 item_rows AS (
@@ -281,11 +250,3 @@ SELECT jsonb_build_object(
   'capitulos_iva', COALESCE((SELECT rows FROM cap_json WHERE bloque = 'iva'), '[]'::jsonb)
 );
 $BODY$;
-
-COMMENT ON FUNCTION public.dashboard_capitulos_financiero_agg(bigint, text, boolean, bigint) IS
-  'Dashboard capitulos-financiero: agregación AIU/IVA por capítulo (presupuesto + SICOE aprobado).';
-
-GRANT EXECUTE ON FUNCTION public._gerencial_item_bloque(text, text)
-  TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_capitulos_financiero_agg(bigint, text, boolean, bigint)
-  TO authenticated, service_role;

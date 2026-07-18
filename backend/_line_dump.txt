@@ -1,0 +1,40 @@
+﻿ 280|LANGUAGE plpgsql
+ 281|SECURITY DEFINER
+ 282|SET search_path = public
+ 283|AS $$
+ 284|BEGIN
+ 285|    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_sicoe_registro_detalle;
+ 286|    RETURN NULL;
+ 287|END;
+ 288|$$;
+ 289|
+ 290|CREATE OR REPLACE FUNCTION public.refresh_vm_dashboard_resumen()
+ 291|RETURNS trigger
+ 292|LANGUAGE plpgsql
+ 293|SECURITY DEFINER
+ 294|SET search_path = public
+ 295|AS $$
+ 296|BEGIN
+ 297|    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_dashboard_resumen;
+ 298|    REFRESH MATERIALIZED VIEW CONCURRENTLY public.vm_dashboard_por_acta;
+ 299|    RETURN NULL;
+ 300|END;
+ 301|$$;
+ 302|
+ 303|-- Triggers sÝncronos desactivados: cada INSERT/UPDATE/DELETE refrescaba hasta 4 MV (~3û8 s c/u).
+ 304|-- Refresco batch vÝa refresh_all_sicoe_materialized_views() + pg_cron (fix_performance_so_registros_fase1.sql).
+ 305|DROP TRIGGER IF EXISTS trg_refresh_grilla_reportes ON public.so_reportes;
+ 306|DROP TRIGGER IF EXISTS trg_refresh_grilla_registros ON public.so_registros;
+ 307|DROP TRIGGER IF EXISTS trg_refresh_registro_detalle ON public.so_registros;
+ 308|DROP TRIGGER IF EXISTS trg_refresh_dashboard ON public.so_registros;
+ 309|
+ 310|-- Carga inicial
+ 311|REFRESH MATERIALIZED VIEW public.vm_sicoe_registro_detalle;
+ 312|REFRESH MATERIALIZED VIEW public.vm_sicoe_grilla;
+ 313|REFRESH MATERIALIZED VIEW public.vm_dashboard_resumen;
+ 314|REFRESH MATERIALIZED VIEW public.vm_dashboard_por_acta;
+ 315|
+ 316|GRANT SELECT ON public.vm_sicoe_grilla TO authenticated, service_role;
+ 317|GRANT SELECT ON public.vm_sicoe_registro_detalle TO authenticated, service_role;
+ 318|GRANT SELECT ON public.vm_dashboard_resumen TO authenticated, service_role;
+ 319|GRANT SELECT ON public.vm_dashboard_por_acta TO authenticated, service_role;

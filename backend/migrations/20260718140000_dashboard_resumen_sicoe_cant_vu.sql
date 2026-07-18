@@ -27,7 +27,8 @@ regs AS (
       END
     ) AS cap,
     public._dash_norm_item_key(r.item_numero) AS it,
-    round(COALESCE(r.cantidad_total, 0)::numeric, 2) AS cq,
+    COALESCE(r.vlr_unitario, 0)::numeric AS vu,
+    r.cantidad_total::numeric AS cq,
     r.acta_rpo_id AS aid,
     public._dash_matriz_nivel_max_estado(
       p_campo_nivel_max,
@@ -49,6 +50,7 @@ sicoe_item AS (
     cap,
     it,
     aid,
+    MAX(vu) AS vu,
     SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
     SUM(cq) FILTER (
       WHERE has_item
@@ -64,17 +66,17 @@ sicoe_item AS (
   GROUP BY cap, it, aid
 ),
 tot_cob AS (
-  SELECT COALESCE(SUM(public.dash_costo_agregado(ap_q, public._dash_listado_vu(p_contrato_id, cap, it))), 0)::numeric AS t
+  SELECT COALESCE(SUM(public.dash_costo_agregado(ap_q, vu)), 0)::numeric AS t
   FROM sicoe_item
   WHERE ap_q IS NOT NULL AND ap_q <> 0
 ),
 obra_caps AS (
-  SELECT cap, SUM(public.dash_costo_agregado(ap_q, public._dash_listado_vu(p_contrato_id, cap, it))) AS cob
+  SELECT cap, SUM(public.dash_costo_agregado(ap_q, vu)) AS cob
   FROM sicoe_item
   GROUP BY cap
 ),
 obra_nr_caps AS (
-  SELECT cap, SUM(public.dash_costo_agregado(nr_q, public._dash_listado_vu(p_contrato_id, cap, it))) AS cob_nr
+  SELECT cap, SUM(public.dash_costo_agregado(nr_q, vu)) AS cob_nr
   FROM sicoe_item
   WHERE nr_q IS NOT NULL AND nr_q <> 0
   GROUP BY cap
@@ -92,6 +94,7 @@ ppto_item AS (
     ) AS cap,
     public._dash_norm_item_key(p.item) AS it,
     public._norm_estado_matriz(p.revisado) AS rv,
+    MAX(COALESCE(p.vlr_unitario, 0)::numeric) AS vu,
     SUM(COALESCE(p.cant_total, 0)::numeric) AS cant
   FROM public.presupuesto p
   WHERE p.contrato_id = p_contrato_id
@@ -100,7 +103,7 @@ ppto_item AS (
   GROUP BY 1, 2, 3
 ),
 ppto_estado AS (
-  SELECT cap, rv, SUM(public.dash_costo_agregado(cant, public._dash_listado_vu(p_contrato_id, cap, it))) AS costo
+  SELECT cap, rv, SUM(public.dash_costo_agregado(cant, vu)) AS costo
   FROM ppto_item
   GROUP BY cap, rv
 ),
@@ -123,13 +126,13 @@ tot_ppto_nap AS (
   SELECT COALESCE(SUM(pres_nr), 0)::numeric AS t FROM ppto_nap_cap
 ),
 acta_item AS (
-  SELECT aid, it, SUM(ap_q) AS ap_q, cap
+  SELECT aid, it, MAX(vu) AS vu, SUM(ap_q) AS ap_q
   FROM sicoe_item
   WHERE aid IS NOT NULL AND ap_q IS NOT NULL AND ap_q <> 0
-  GROUP BY aid, it, cap
+  GROUP BY aid, it
 ),
 acta_agg AS (
-  SELECT a.numero_rpo::numeric AS nr, SUM(public.dash_costo_agregado(ai.ap_q, public._dash_listado_vu(p_contrato_id, ai.cap, ai.it))) AS cob
+  SELECT a.numero_rpo::numeric AS nr, SUM(public.dash_costo_agregado(ai.ap_q, ai.vu)) AS cob
   FROM acta_item ai
   INNER JOIN public.actas a ON a.id = ai.aid AND a.contrato_id = p_contrato_id
   GROUP BY a.numero_rpo

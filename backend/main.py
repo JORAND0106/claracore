@@ -4318,6 +4318,9 @@ def _sicoe_registros_q_filtrar_actas_scope(q, contrato_id: int, acta_rpo_ids: Li
     Filtra líneas por acta usando cabecera del reporte (so_reportes.acta_rpo_id).
     Muchos contratos no replican acta_rpo_id en cada so_registros; filtrar solo la columna
     de línea deja la cola de validación vacía aunque haya cantidades pendientes.
+
+    Para totales del panel /analisis usar _sicoe_registros_q_filtrar_actas_linea (acta_rpo_id
+    en so_registros), alineado con validación SQL del usuario.
     """
     if not acta_rpo_ids:
         return q
@@ -4327,6 +4330,16 @@ def _sicoe_registros_q_filtrar_actas_scope(q, contrato_id: int, acta_rpo_ids: Li
     if len(rep_ids) == 1:
         return q.eq("reporte_id", rep_ids[0])
     return q.in_("reporte_id", rep_ids)
+
+
+def _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids: List[int]):
+    """Filtra por so_registros.acta_rpo_id (una fila = un registro, sin ampliar por cabecera)."""
+    if not acta_rpo_ids:
+        return q
+    aids = sorted({int(x) for x in acta_rpo_ids})
+    if len(aids) == 1:
+        return q.eq("acta_rpo_id", aids[0])
+    return q.in_("acta_rpo_id", aids)
 
 
 def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
@@ -17174,7 +17187,7 @@ def _sicoe_analisis_response_cache_key(
                 parts.append((k, s))
         else:
             parts.append((k, v))
-    return ("sicoe_analisis_v1", int(contrato_id), uid, tuple(parts))
+    return ("sicoe_analisis_v3", int(contrato_id), uid, tuple(parts))
 
 
 def _sicoe_analisis_fetch_registros_paginated(build_q):
@@ -17183,11 +17196,23 @@ def _sicoe_analisis_fetch_registros_paginated(build_q):
     Paginación secuencial con ORDER BY id (estable): la versión paralela sin orden
     hacía que el total $ variara entre peticiones con el mismo número de regs.
 
+    PostgREST/Supabase devuelve como máximo ~1000 filas por petición .range().
+    Si PAGE > 1000, la primera página trae 1000 filas, len(batch) < PAGE cortaba el bucle
+    y los totales del panel (p. ej. Acta RPO) quedaban truncados a 1000 regs.
+
     build_q: callable que devuelve el query builder Supabase (sin .range ni .order).
 
-    Variable opcional: SICOE_ANALISIS_PAGE_SIZE (default 2000).
+    Variable opcional: SICOE_ANALISIS_PAGE_SIZE (default 1000, máx. 1000).
     """
-    PAGE = max(200, min(50000, int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", "2000"))))
+    _POSTGREST_PAGE_MAX = 1000
+    PAGE = max(
+        200,
+        min(
+            _POSTGREST_PAGE_MAX,
+            int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", str(_POSTGREST_PAGE_MAX))),
+        ),
+    )
+    max_pages = max(1, int(os.getenv("SICOE_ANALISIS_MAX_PAGES", "500")))
 
     def _page(off: int):
         return supabase_execute(
@@ -17196,14 +17221,14 @@ def _sicoe_analisis_fetch_registros_paginated(build_q):
 
     out: list = []
     off = 0
-    while True:
+    for _ in range(max_pages):
         batch = _page(off)
         if not batch:
             break
         out.extend(batch)
         if len(batch) < PAGE:
             break
-        off += PAGE
+        off += len(batch)
     return _sicoe_dedupe_registros_por_id(out)
 
 
@@ -17527,7 +17552,7 @@ def analisis_registros_obra(
             if _nr is not None:
                 q = q.eq("numero_registro", _nr)
             if _aids_l:
-                q = _sicoe_registros_q_filtrar_actas_scope(q, contrato_id, _aids_l)
+                q = _sicoe_registros_q_filtrar_actas_linea(q, _aids_l)
             if _s_l is not None:
                 q = q.eq("semana_id", _s_l)
             q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
@@ -17557,8 +17582,6 @@ def analisis_registros_obra(
                 q = q.gte("costo_directo", costo_directo_desde)
             if costo_directo_hasta is not None:
                 q = q.lte("costo_directo", costo_directo_hasta)
-            if _aids_l and not _estado_filtro_es_sin_asignar_item(estado):
-                q = _so_reg_item_asignado(q)
             if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
                 _cap_capas = _caps_l[0] if len(_caps_l) == 1 else None
                 q = _so_registros_q_y_capas_validacion(
@@ -17590,6 +17613,8 @@ def analisis_registros_obra(
     except Exception:
         if not registros:
             registros = []
+
+    registros = _sicoe_dedupe_registros_por_id(registros)
 
     if _defer_capas_or_ana and registros:
         registros = _filtrar_registros_validacion_capas_sicoe(
@@ -22860,11 +22885,12 @@ def _rpo_panel_actas_resumen_cached(
 
 
 def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles_activos):
-    vm_hit = _fetch_dashboard_resumen_from_vm(contrato_id, campo_max, niveles_activos)
-    if vm_hit is not None:
-        return vm_hit
+    """RPC dashboard_resumen_sicoe_agg (cant×VU) primero; VM solo si el RPC no responde."""
     raw = _dashboard_resumen_cached(contrato_id, campo_max, niveles_activos)
-    return _parse_rpc_dashboard_resumen_raw(raw)
+    hit = _parse_rpc_dashboard_resumen_raw(raw)
+    if hit is not None:
+        return hit
+    return _fetch_dashboard_resumen_from_vm(contrato_id, campo_max, niveles_activos)
 
 
 def _fetch_dashboard_matriz_vigente_bundle(contrato_id: int, campo_max: str):
@@ -23513,8 +23539,12 @@ from dashboard_presupuesto_vista import (
     sicoe_registro_en_vista,
 )
 from dashboard_costo_agregado import (
+    cantidad_dashboard,
+    cantidad_dashboard_sum,
     costo_agregado_cant_vu,
+    drill_item_costo_total,
     gerencial_ppto_finalize_item,
+    gerencial_item_claracore_costo,
     gerencial_ppto_ingest_row,
     ppto_rows_with_resolved_vu,
     resolve_item_vu,
@@ -23617,7 +23647,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
                     "cap_raw": (r.get("capitulo") or "").strip() or ck,
                     "item_raw": (r.get("item_numero") or "").strip() or ik,
                 }
-            sic[k]["cant"] += float(r.get("cantidad_total") or 0)
+            sic[k]["cant"] += cantidad_dashboard(float(r.get("cantidad_total") or 0))
             sic[k]["cost"] += float(r.get("costo_directo") or 0)
         if len(batch) < 1000:
             break
@@ -23843,11 +23873,12 @@ def _dashboard_scan_sicoe_by_item(
     contrato_id: int, *, acta_id: Optional[int] = None
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Agrega SICOE por (capítulo_norm, ítem_norm) con costos/cantidades aprobados y en cola."""
-    cache_kind = "sicoe_by_item" if acta_id is None else f"sicoe_by_item_acta_{int(acta_id)}"
+    cache_kind = "sicoe_by_item_v2" if acta_id is None else f"sicoe_by_item_v2_acta_{int(acta_id)}"
     cached = _dash_agg_cache_get(cache_kind, contrato_id)
     if cached is not None:
         return cached
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
     off = 0
     while True:
         def _b(o=off, _aid=acta_id):
@@ -23880,10 +23911,7 @@ def _dashboard_scan_sicoe_by_item(
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cq = float(reg.get("cantidad_total") or 0)
-            vu = float(reg.get("vlr_unitario") or 0)
-            if vu > float(sicoe_by_item[k].get("_vu") or 0):
-                sicoe_by_item[k]["_vu"] = vu
+            cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
             nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
             if nfin == "Aprobado":
                 sicoe_by_item[k]["ap_q"] += cq
@@ -23892,8 +23920,11 @@ def _dashboard_scan_sicoe_by_item(
         if len(batch) < 1000:
             break
         off += 1000
-    for sg in sicoe_by_item.values():
-        sicoe_finalize_costs(sg)
+    for (ck, ik), sg in sicoe_by_item.items():
+        lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
+        for qk in ("ap_q", "nr_q"):
+            sg[qk] = cantidad_dashboard(float(sg.get(qk) or 0))
+        sicoe_finalize_costs(sg, listado_vu=lp_vu)
     _dash_agg_cache_set(cache_kind, contrato_id, sicoe_by_item)
     return sicoe_by_item
 
@@ -23912,6 +23943,7 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
             return hit[1]
 
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
 
     def _ingest_batch(batch: List[dict]) -> None:
         for reg in batch or []:
@@ -23929,10 +23961,7 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cq = float(reg.get("cantidad_total") or 0)
-            vu = float(reg.get("vlr_unitario") or 0)
-            if vu > float(sicoe_by_item[k].get("_vu") or 0):
-                sicoe_by_item[k]["_vu"] = vu
+            cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
             nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
             if nfin == "Aprobado":
                 sicoe_by_item[k]["ap_q"] += cq
@@ -23962,10 +23991,13 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
             off += 1000
 
     _scan_pages(use_cap_filter=True)
-    for sg in sicoe_by_item.values():
-        sicoe_finalize_costs(sg)
+    for (ck, ik), sg in sicoe_by_item.items():
+        lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
+        for qk in ("ap_q", "nr_q"):
+            sg[qk] = cantidad_dashboard(float(sg.get(qk) or 0))
+        sicoe_finalize_costs(sg, listado_vu=lp_vu)
     if not sicoe_by_item:
-        full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+        full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
         if full is not None:
             for k, v in full.items():
                 if k[0] == cap_key:
@@ -23988,7 +24020,7 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
         if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
             return hit[1]
 
-    full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         if filtered:
@@ -24000,7 +24032,7 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
     if sicoe_by:
         return sicoe_by
 
-    full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         with _DASH_AGG_CACHE_LOCK:
@@ -24107,7 +24139,7 @@ def _aggregate_pkid_ppto_rows(ppto_rows: List[dict]) -> Tuple[Dict[str, Any], Di
         if not agg_meta[k]["desc"] and r.get("descripcion"):
             agg_meta[k]["desc"] = r["descripcion"]
         rv = _matriz_validacion_norm_estado(r.get("revisado"))
-        cq = float(r.get("cant_total") or 0)
+        cq = cantidad_dashboard(float(r.get("cant_total") or 0))
         cd = float(r.get("costo_directo") or 0)
         if rv == "Aprobado":
             tgt = agg_p_ap
@@ -24318,6 +24350,7 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
         listado_idx, ppto_obra_by = _capitulo_export_vu_context(
             contrato_id, capitulo, DASH_VISTA_OBRA_EJECUTADA, current_user
         )
+    listado_full = _listado_precios_vu_by_cap_item(contrato_id)
     ppto_by: Dict[str, List[dict]] = defaultdict(list)
     for r in _ppto_rows_capitulo_tipo(contrato_id, capitulo, TIPO_OBRA_EJECUTADA, current_user):
         it = _dash_norm_item_key_py(r.get("item"))
@@ -24331,16 +24364,25 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
         ik = _dash_norm_item_key_py(r.get("item") or r.get("nombre"))
         rows_it = ppto_by.get(ik) or []
         if rows_it:
-            lp_vu = float((listado_idx or {}).get(ik, {}).get("precio_unitario") or 0) or None
+            lp_vu = _dash_listado_vu_resolved(
+                contrato_id,
+                capitulo,
+                ik,
+                cap_listado_idx=listado_idx,
+                full_listado_idx=listado_full,
+            )
             alt = (ppto_obra_by or {}).get(ik)
-            est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu, alt_rows=alt)
+            est, unidad, vu = _ppto_metricas_por_estado(
+                rows_it, listado_vu=lp_vu, alt_rows=alt, obra_ejecutada=True
+            )
             rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
-            p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
-            p_cost = costo_agregado_cant_vu(p_cant, resolve_item_vu(rows_it, listado_vu=lp_vu, alt_rows=alt))
+            p_cant = cantidad_dashboard_sum(rows_vu)
+            p_cost = costo_agregado_cant_vu(p_cant, vu)
             desc = next((str(x.get("descripcion") or "").strip() for x in rows_it if x.get("descripcion")), "")
-            estado = _drill_item_estado_fields(est, unidad, {})
+            estado = _drill_item_estado_fields(est, unidad, {}, vu=vu, obra_ejecutada=True)
             r.update(estado)
-            r["cant_ppto"] = round(p_cant, 3)
+            r["item_vu"] = float(vu or 0)
+            r["cant_ppto"] = cantidad_dashboard(p_cant)
             r["presupuesto"] = round(p_cost, 0)
             r["tiene_ppto_obra_ejecutada"] = True
             if desc and not str(r.get("descripcion") or "").strip():
@@ -24354,55 +24396,63 @@ def _hydrate_drill_items_ppto_obra_ejecutada(
 
 
 def _apply_obra_ejecutada_drill_item(row: dict, *, item_tiene_ppto: Optional[bool] = None) -> None:
-    """Obra Ejecutada: con presupuesto → CC = NR+P+R+A; ítem sin ppto → CC := cobrado (Δ=0).
-
-    En tabla PK (`item_tiene_ppto=True`): filas solo cobradas no inflan CC (CC=0, Δ negativo),
-    para que la suma por PK coincida con el total del ítem.
-    """
+    """Obra Ejecutada: CC y cobrado = round(Σcant × V.U., 0); nunca sumar costos por bucket/línea."""
     if not isinstance(row, dict):
         return
-    cant_nr = float(row.get("cant_nr") or 0)
-    cant_p = float(row.get("cant_p") or 0)
-    cant_r = float(row.get("cant_r") or 0)
-    cant_a = float(row.get("cant_a") or 0)
-    costo_nr = float(row.get("costo_nr") or 0)
-    costo_p = float(row.get("costo_p") or 0)
-    costo_r = float(row.get("costo_r") or 0)
-    costo_a = float(row.get("costo_a") or 0)
-    total_q = cant_nr + cant_p + cant_r + cant_a
-    total_c = costo_nr + costo_p + costo_r + costo_a
-    cob_q = float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0)
-    cob_c = float(row.get("costo_cobrado") or row.get("cobrado") or 0)
+    vu_cc = float(row.get("item_vu") or 0)
+    cant_nr = cantidad_dashboard(float(row.get("cant_nr") or 0))
+    cant_p = cantidad_dashboard(float(row.get("cant_p") or 0))
+    cant_r = cantidad_dashboard(float(row.get("cant_r") or 0))
+    cant_a = cantidad_dashboard(float(row.get("cant_a") or 0))
+    total_q = cantidad_dashboard(cant_nr + cant_p + cant_r + cant_a)
+    cob_q = cantidad_dashboard(float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0))
+    vu_cob = float(row.get("sicoe_item_vu") or vu_cc or 0)
+    cob_c = drill_item_costo_total(cob_q, vu_cob)
     tiene_ppto_fila = bool(row.get("tiene_ppto_obra_ejecutada"))
     if item_tiene_ppto is True and not tiene_ppto_fila:
         cc_q = cc_c = 0.0
         row["claracore_igualado_cobro"] = False
     elif tiene_ppto_fila:
-        cc_q = total_q if total_q != 0 else float(row.get("cant_ppto") or 0)
-        cc_c = total_c if total_c != 0 else float(row.get("presupuesto") or row.get("costo_ppto_claracore") or 0)
+        cc_q = cantidad_dashboard(float(row.get("total_claracore_cant") or 0)) or total_q or cantidad_dashboard(
+            float(row.get("cant_ppto") or 0)
+        )
+        cc_c = drill_item_costo_total(
+            cc_q,
+            vu_cc,
+        )
+        row["claracore_igualado_cobro"] = False
     elif cob_q or cob_c:
         cc_q, cc_c = cob_q, cob_c
         row["claracore_igualado_cobro"] = True
     else:
         cc_q = cc_c = 0.0
-    row["total_claracore_cant"] = round(cc_q, 3)
-    row["total_claracore_costo"] = round(cc_c, 2)
-    row["delta_cant"] = round(cc_q - cob_q, 2)
+        row["claracore_igualado_cobro"] = False
+    row["total_claracore_cant"] = cantidad_dashboard(cc_q)
+    row["total_claracore_costo"] = round(cc_c, 0)
+    row["cant_cobrado"] = cantidad_dashboard(cob_q)
+    row["costo_cobrado"] = round(cob_c, 0)
+    row["cobrado"] = round(cob_c, 0)
+    row["delta_cant"] = cantidad_dashboard(cc_q - cob_q)
     row["delta_costo"] = round(cc_c - cob_c, 0)
     row["delta"] = row["delta_costo"]
 
 
 def _apply_presupuesto_obra_drill_item(row: dict) -> None:
-    """Presupuesto de Obra (ítem): bolsa ClaraCore = A + NR; Δ = CC − cobrado."""
+    """Presupuesto de Obra (ítem): CC = round((cant_a+cant_nr) × V.U., 0); cobrado = round(cant × V.U., 0)."""
     if not isinstance(row, dict):
         return
-    cc_q = float(row.get("cant_a") or 0) + float(row.get("cant_nr") or 0)
-    cc_c = float(row.get("costo_a") or 0) + float(row.get("costo_nr") or 0)
-    cob_q = float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0)
-    cob_c = float(row.get("costo_cobrado") or row.get("cobrado") or 0)
-    row["total_claracore_cant"] = round(cc_q, 3)
-    row["total_claracore_costo"] = round(cc_c, 2)
-    row["delta_cant"] = round(cc_q - cob_q, 2)
+    vu = float(row.get("item_vu") or 0)
+    cc_q = cantidad_dashboard(float(row.get("cant_a") or 0) + float(row.get("cant_nr") or 0))
+    cob_q = cantidad_dashboard(float(row.get("cant_cobrado") or row.get("cant_sicoe_aprobado") or 0))
+    vu_cob = float(row.get("sicoe_item_vu") or vu or 0)
+    cc_c = drill_item_costo_total(cc_q, vu)
+    cob_c = drill_item_costo_total(cob_q, vu_cob)
+    row["total_claracore_cant"] = cantidad_dashboard(cc_q)
+    row["total_claracore_costo"] = round(cc_c, 0)
+    row["cant_cobrado"] = cantidad_dashboard(cob_q)
+    row["costo_cobrado"] = round(cob_c, 0)
+    row["cobrado"] = round(cob_c, 0)
+    row["delta_cant"] = cantidad_dashboard(cc_q - cob_q)
     row["delta_costo"] = round(cc_c - cob_c, 0)
     row["delta"] = row["delta_costo"]
 
@@ -24414,8 +24464,6 @@ def _finalize_drill_items_vista(rows: Optional[List[dict]], vista: str) -> List[
         if not isinstance(row, dict):
             continue
         r = dict(row)
-        r["cant_cobrado"] = round(float(r.get("cant_cobrado") or r.get("cant_sicoe_aprobado") or 0), 3)
-        r["costo_cobrado"] = round(float(r.get("costo_cobrado") or r.get("cobrado") or 0), 2)
         if es_oe:
             _apply_obra_ejecutada_drill_item(r)
         else:
@@ -24479,6 +24527,7 @@ def _canonicalize_pkid_tabla_rows(
     *,
     vista: str = "presupuesto_obra",
     item_tiene_ppto_oe: Optional[bool] = None,
+    listado_vu: Optional[float] = None,
 ) -> List[dict]:
     """Unifica alias de PK (id interno vs pk_ids.pk_id) en filas de tabla drill."""
     if not rows:
@@ -24517,6 +24566,11 @@ def _canonicalize_pkid_tabla_rows(
         if not tgt.get("descripcion") and base.get("descripcion"):
             tgt["descripcion"] = base["descripcion"]
     out = list(merged.values())
+    if listado_vu is not None and float(listado_vu) > 0:
+        vu = float(listado_vu)
+        for r in out:
+            r["item_vu"] = vu
+            r["sicoe_item_vu"] = vu
     for r in out:
         _finalize_pkid_tabla_row(r, vista, item_tiene_ppto_oe=item_tiene_ppto_oe)
     return sorted(out, key=lambda x: str(x.get("pk_id") or ""))
@@ -24545,6 +24599,9 @@ def _normalize_pkid_tabla_payload(
         item_tiene_ppto_oe = _item_tiene_ppto_obra_ejecutada(
             int(contrato_id), capitulo or "", item or "", current_user
         )
+    listado_vu: Optional[float] = None
+    if contrato_id and (capitulo or "").strip() and (item or "").strip():
+        listado_vu = _dash_listado_vu_resolved(int(contrato_id), capitulo or "", item or "")
     if contrato_id:
         rows = _canonicalize_pkid_tabla_rows(
             contrato_id,
@@ -24552,6 +24609,7 @@ def _normalize_pkid_tabla_payload(
             alias_map=alias_map,
             vista=vista,
             item_tiene_ppto_oe=item_tiene_ppto_oe,
+            listado_vu=listado_vu,
         )
     elif parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
         for r in rows:
@@ -24711,7 +24769,14 @@ def _merge_drill_rpc_sicoe_vista_ppto(rpc_items: List[dict], ppto_items: List[di
         pap = float((p.get("presupuesto_aprobado_n3") if p else r.get("presupuesto_aprobado_n3")) or 0)
         pnr = float((p.get("presupuesto_no_revisado_n3") if p else r.get("presupuesto_no_revisado_n3")) or 0)
         pp_raw = p.get("presupuesto") if p else r.get("presupuesto")
-        pp_cost = float(pp_raw) if pp_raw not in (None, "") else (pap + pnr)
+        if pp_raw not in (None, ""):
+            pp_cost = float(pp_raw)
+        else:
+            pp_cost = float(
+                (p.get("total_claracore_costo") if p else None)
+                or (p.get("costo_ppto_claracore") if p else None)
+                or 0
+            )
         cob = float(r.get("cobrado") or 0)
         row = {
             "item": ik,
@@ -24762,13 +24827,22 @@ def _overlay_sicoe_on_drill_items(rows: List[dict], sicoe_by: dict, capitulo: st
         sg = sicoe_by.get((cap_key, ik), {}) if ik else {}
         apc = float(sg.get("ap_c") or 0)
         nrc = float(sg.get("nr_c") or 0)
+        ap_q = cantidad_dashboard(float(sg.get("ap_q") or 0))
         rpc_cob = float(r.get("cobrado") or 0)
-        cob = apc if (cap_key, ik) in sicoe_by else rpc_cob
-        r["cobrado"] = round(cob, 2)
         if (cap_key, ik) in sicoe_by:
-            r["sicoe_no_revisado_n3"] = round(nrc, 2)
-            r["cant_sicoe_aprobado"] = round(float(sg.get("ap_q") or 0), 3)
-            r["cant_sicoe_no_revisado"] = round(float(sg.get("nr_q") or 0), 3)
+            cob = apc
+            r["costo_cobrado"] = round(apc, 0)
+            r["sicoe_item_vu"] = float(sg.get("item_vu") or 0)
+            r["listado_vu_ausente"] = bool(sg.get("listado_vu_ausente"))
+            r["listado_vu_encontrado"] = bool(sg.get("listado_vu_encontrado"))
+            r["sicoe_no_revisado_n3"] = round(nrc, 0)
+            r["cant_sicoe_aprobado"] = ap_q
+            r["cant_sicoe_no_revisado"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
+            r["cant_cobrado"] = ap_q
+        else:
+            cob = rpc_cob
+            r["costo_cobrado"] = round(rpc_cob, 0)
+        r["cobrado"] = round(cob, 0)
         pp = float(r.get("presupuesto") or 0)
         r["delta"] = round(pp - cob, 2)
         r["pct"] = round(cob / pp * 100, 1) if pp else 0
@@ -24788,15 +24862,18 @@ def _overlay_sicoe_on_drill_items(rows: List[dict], sicoe_by: dict, capitulo: st
                 "nombre": ik,
                 "descripcion": "",
                 "presupuesto": 0.0,
-                "cobrado": round(cob, 2),
+                "cobrado": round(cob, 0),
+                "costo_cobrado": round(cob, 0),
                 "presupuesto_aprobado_n3": 0.0,
                 "presupuesto_no_revisado_n3": 0.0,
-                "sicoe_no_revisado_n3": round(nrc, 2),
-                "delta": round(-cob, 2),
+                "sicoe_no_revisado_n3": round(nrc, 0),
+                "delta": round(-cob, 0),
                 "pct": 0.0,
                 "cant_ppto": 0.0,
-                "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
-                "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
+                "cant_cobrado": cantidad_dashboard(float(sg.get("ap_q") or 0)),
+                "sicoe_item_vu": float(sg.get("item_vu") or 0),
+                "cant_sicoe_aprobado": cantidad_dashboard(float(sg.get("ap_q") or 0)),
+                "cant_sicoe_no_revisado": cantidad_dashboard(float(sg.get("nr_q") or 0)),
             }
         )
     out.sort(key=lambda x: str(x.get("item") or ""))
@@ -24854,7 +24931,7 @@ def dashboard_resumen_obra(
 ):
     vista_n = parse_dash_vista(vista)
     cache_key = (
-        "dashboard_resumen_endpoint_v1",
+        "dashboard_resumen_endpoint_v3",
         int(contrato_id),
         vista_n,
         _dashboard_resumen_user_cache_key(current_user),
@@ -24874,39 +24951,30 @@ def dashboard_resumen_obra(
         except Exception:
             pass
 
-        # 1. Obra aprobada (Interventoría): agregar desde so_registros con el mismo criterio
-        #    que la matriz / drill (nivel3 ≈ Aprobado), no desde vista_dashboard_resumen,
-        #    para que importaciones con variantes de texto ("APROBADO", espacios, etc.) cuenten.
+        # 1. Obra aprobada: Σ cant × V.U. por ítem (nunca SUM(costo_directo) por línea).
         def _actas_map():
             return supabase.table("actas").select("id, numero_rpo")\
                 .eq("contrato_id", contrato_id).execute().data
         acta_rows = supabase_execute(_actas_map) or []
         acta_id_to_nr = {a["id"]: a.get("numero_rpo") for a in acta_rows if a.get("id") is not None}
+        nr_to_aid = {v: k for k, v in acta_id_to_nr.items() if v is not None}
 
+        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
         total_cobrado = 0.0
-        acta_agg = {}
-        obra_caps = {}
-        off = 0
-        while True:
-            def _batch(o=off):
-                return supabase.table("so_registros").select(
-                    f"capitulo, costo_directo, acta_rpo_id, {SICOE_SELECT_NIVELES_ESTADO}"
-                ).eq("contrato_id", contrato_id).order("id").range(o, o + 999).execute().data
-            batch = supabase_execute(_batch) or []
-            for reg in batch:
-                if _matriz_validacion_norm_estado_nivel_final(reg, contrato_id) != "Aprobado":
-                    continue
-                cd = float(reg.get("costo_directo") or 0)
-                total_cobrado += cd
-                cap = reg.get("capitulo") or "Sin capítulo"
-                obra_caps[cap] = obra_caps.get(cap, 0) + cd
-                aid = reg.get("acta_rpo_id")
-                nr = acta_id_to_nr.get(aid) if aid is not None else None
-                if nr is not None:
-                    acta_agg[nr] = acta_agg.get(nr, 0) + cd
-            if len(batch) < 1000:
-                break
-            off += 1000
+        obra_caps: Dict[str, float] = {}
+        for (ck, _ik), sg in sicoe_by.items():
+            cob = float(sg.get("ap_c") or 0)
+            if not cob:
+                continue
+            total_cobrado += cob
+            obra_caps[ck] = obra_caps.get(ck, 0.0) + cob
+
+        acta_agg: Dict[Any, float] = {}
+        for nr, aid in nr_to_aid.items():
+            if aid is None:
+                continue
+            by_acta = _dashboard_scan_sicoe_by_item(contrato_id, acta_id=int(aid))
+            acta_agg[nr] = sum(float(sg.get("ap_c") or 0) for sg in by_acta.values())
 
         # 2. Presupuesto por capítulo
         def _ppto():
@@ -25030,46 +25098,21 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
     """
     Por capítulo: costo/cant SICOE N3 aprobado, SICOE N3 no revisado (en cola),
     y presupuesto ClaraCore partido por columna revisado (aprobado vs resto).
+    SICOE: agrega por ítem (Σ cant × V.U., un redondeo) — nunca SUM(costo_directo).
     """
-    cached = _dash_agg_cache_get("resumen_caps", contrato_id)
+    cached = _dash_agg_cache_get("resumen_caps_v2", contrato_id)
     if cached is not None:
         return cached
     sicoe_ap_c = defaultdict(float)
     sicoe_ap_q = defaultdict(float)
     sicoe_nr_c = defaultdict(float)
     sicoe_nr_q = defaultdict(float)
-    off = 0
-    while True:
-        def _b(o=off):
-            return (
-                supabase.table("so_registros")
-                .select(
-                    "capitulo, costo_directo, cantidad_total, item_numero, "
-                    f"{SICOE_SELECT_NIVELES_ESTADO}"
-                )
-                .eq("contrato_id", contrato_id)
-                .order("id").range(o, o + 999)
-                .execute()
-                .data
-            )
-
-        batch = supabase_execute(_b) or []
-        for reg in batch:
-            if not (reg.get("item_numero") or "").strip():
-                continue
-            cap = _dash_norm_cap(reg.get("capitulo"))
-            cd = float(reg.get("costo_directo") or 0)
-            cq = float(reg.get("cantidad_total") or 0)
-            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-            if nfin == "Aprobado":
-                sicoe_ap_c[cap] += cd
-                sicoe_ap_q[cap] += cq
-            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
-                sicoe_nr_c[cap] += cd
-                sicoe_nr_q[cap] += cq
-        if len(batch) < 1000:
-            break
-        off += 1000
+    sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
+    for (ck, _ik), sg in sicoe_by.items():
+        sicoe_ap_c[ck] += float(sg.get("ap_c") or 0)
+        sicoe_ap_q[ck] += float(sg.get("ap_q") or 0)
+        sicoe_nr_c[ck] += float(sg.get("nr_c") or 0)
+        sicoe_nr_q[ck] += float(sg.get("nr_q") or 0)
 
     ppto_ap_c = defaultdict(float)
     ppto_nr_c = defaultdict(float)
@@ -25106,7 +25149,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
         "ppto_ap_c": dict(ppto_ap_c),
         "ppto_nr_c": dict(ppto_nr_c),
     }
-    _dash_agg_cache_set("resumen_caps", contrato_id, result)
+    _dash_agg_cache_set("resumen_caps_v2", contrato_id, result)
     return result
 
 
@@ -25156,9 +25199,16 @@ def _ppto_drill_rows_for_vista(
     if listado_idx is None or (parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA and ppto_obra_by is None):
         listado_idx, ppto_obra_by = _capitulo_export_vu_context(contrato_id, cap_raw, vista, current_user)
     if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
+        listado_full = _listado_precios_vu_by_cap_item(contrato_id)
         scan = scan_presupuesto_capitulo_vista(supabase, contrato_id, cap_raw, vista, current_user)
         return drill_items_capitulo_vista(
-            scan, cap_raw, {}, None, listado_idx=listado_idx, ppto_obra_by=ppto_obra_by
+            scan,
+            cap_raw,
+            {},
+            None,
+            listado_idx=listado_idx,
+            ppto_obra_by=ppto_obra_by,
+            listado_full_idx=listado_full,
         )
 
     ppto_by: Dict[str, List[dict]] = {}
@@ -25167,14 +25217,19 @@ def _ppto_drill_rows_for_vista(
         if it:
             ppto_by.setdefault(it, []).append(r)
 
+    listado_full = _listado_precios_vu_by_cap_item(contrato_id)
     rows: List[dict] = []
     for k in sorted(ppto_by.keys(), key=lambda x: str(x)):
         rows_it = ppto_by[k]
-        lp_vu = float((listado_idx or {}).get(k, {}).get("precio_unitario") or 0) or None
-        est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu)
+        lp_vu = _dash_listado_vu_resolved(
+            contrato_id, cap_raw, k, cap_listado_idx=listado_idx, full_listado_idx=listado_full
+        )
+        est, unidad, vu = _ppto_metricas_por_estado(
+            rows_it, listado_vu=lp_vu, alt_rows=alt, obra_ejecutada=False
+        )
         rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu)
-        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
-        p_cost = costo_agregado_cant_vu(p_cant, resolve_item_vu(rows_it, listado_vu=lp_vu))
+        p_cant = cantidad_dashboard_sum(rows_vu)
+        p_cost = costo_agregado_cant_vu(p_cant, vu)
         revsplit = _ppto_costo_por_revisado(rows_vu)
         pap = float(revsplit.get("Aprobado") or 0)
         pnr = (
@@ -25182,19 +25237,22 @@ def _ppto_drill_rows_for_vista(
             + float(revsplit.get("Pendiente") or 0)
             + float(revsplit.get("Rechazado") or 0)
         )
-        cc_cant, cc_cost = _ppto_claracore_split(rows_vu)
+        cc_cant, cc_cost = _ppto_claracore_split(rows_vu, listado_vu=lp_vu)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
-        estado_fields = _drill_item_estado_fields(est, unidad, {})
+        estado_fields = _drill_item_estado_fields(
+            est, unidad, {}, vu=vu, obra_ejecutada=False
+        )
         rows.append(
             {
                 "item": k,
                 "nombre": k,
                 "descripcion": desc,
+                "item_vu": float(vu or 0),
                 "presupuesto": round(p_cost, 0),
                 "presupuesto_aprobado_n3": round(pap, 0),
                 "presupuesto_no_revisado_n3": round(pnr, 0),
-                "cant_ppto": round(p_cant, 3),
-                "cant_ppto_claracore": round(cc_cant, 3),
+                "cant_ppto": cantidad_dashboard(p_cant),
+                "cant_ppto_claracore": cantidad_dashboard(cc_cant),
                 "costo_ppto_claracore": round(cc_cost, 0),
                 **estado_fields,
             }
@@ -25226,6 +25284,8 @@ def _drill_agg_by_item(
             listado_idx=listado_idx, ppto_obra_by=ppto_obra_by,
         )
         out = _merge_drill_rpc_sicoe_vista_ppto(rpc_items, ppto_items)
+        sicoe_by = _dashboard_scan_sicoe_by_item_capitulo(contrato_id, cap_raw)
+        out = _overlay_sicoe_on_drill_items(out, sicoe_by, cap_raw)
         print(
             f"dashboard_drill_items RPC ok cap={cap_raw!r} rpc={len(rpc_items)} out={len(out)} "
             f"ms={int((time.time() - t0) * 1000)}",
@@ -25243,6 +25303,7 @@ def _drill_agg_by_item(
         out = drill_items_capitulo_vista(
             scan, cap_raw, sicoe_by, allowed,
             listado_idx=listado_idx, ppto_obra_by=ppto_obra_by,
+            listado_full_idx=_listado_precios_vu_by_cap_item(contrato_id),
         )
         print(
             f"dashboard_drill_items fallback cap={cap_raw!r} out={len(out or [])} "
@@ -25736,7 +25797,7 @@ def dashboard_drill_obra(
         drill_items_shape = bool(capitulo)
         vista_n = parse_dash_vista(vista)
         resp_key = (
-            "dashboard_drill_v2",
+            "dashboard_drill_v4",
             int(contrato_id),
             vista_n,
             capitulo or "",
@@ -25872,7 +25933,7 @@ def _dashboard_pkid_tabla_obra_core(
         pk_raw = pk_join.get("pk_id")
         pk = _dash_pk_disp_key_py(pk_raw) if pk_raw is not None and str(pk_raw).strip() != "" else _dash_pk_disp_key_py(r.get("pk_id_id"))
         cd = float(r.get("costo_directo") or 0)
-        cq = float(r.get("cantidad_total") or 0)
+        cq = cantidad_dashboard(float(r.get("cantidad_total") or 0))
         nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
         if nfin == "Aprobado":
             if pk not in agg_sicoe_ap:
@@ -26045,11 +26106,11 @@ def _agg_sicoe_costo_filas(rows: List[dict]) -> Tuple[float, float]:
     by_item: Dict[str, Dict[str, float]] = defaultdict(lambda: {"q": 0.0, "vu": 0.0})
     for r in rows:
         ik = _dash_norm_item_key_py(r.get("item_numero") or r.get("item")) or "__"
-        by_item[ik]["q"] += float(r.get("cantidad_total") or r.get("cantidad") or 0)
+        by_item[ik]["q"] += cantidad_dashboard(float(r.get("cantidad_total") or r.get("cantidad") or 0))
         vu = float(r.get("vlr_unitario") or 0)
         if vu > by_item[ik]["vu"]:
             by_item[ik]["vu"] = vu
-    total_q = sum(d["q"] for d in by_item.values())
+    total_q = cantidad_dashboard(sum(d["q"] for d in by_item.values()))
     total_c = sum(costo_agregado_cant_vu(d["q"], d["vu"]) for d in by_item.values())
     return total_q, total_c
 
@@ -26398,7 +26459,7 @@ def _build_pkid_tabla_item_export(
             else _dash_pk_disp_key_py(r.get("pk_id_id"))
         )
         cd = float(r.get("costo_directo") or 0)
-        cq = float(r.get("cantidad_total") or 0)
+        cq = cantidad_dashboard(float(r.get("cantidad_total") or 0))
         nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
         if nfin == "Aprobado":
             if pk not in agg_sicoe_ap:
@@ -26641,9 +26702,32 @@ def _listado_precios_tipo_calculo_index(contrato_id: int) -> Dict[Tuple[str, str
     return idx
 
 
+def _dash_listado_vu_resolved(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    *,
+    cap_listado_idx: Optional[Dict[str, dict]] = None,
+    full_listado_idx: Optional[Dict[Tuple[str, str], dict]] = None,
+) -> Optional[float]:
+    """V.U. vigente del Listado de Precios para (capítulo, ítem). Sin cruzar capítulos."""
+    from dashboard_costo_agregado import listado_vu_for_cap_item
+
+    ik = _dash_norm_item_key_py(item)
+    ck = _dash_norm_capitulo_key_py(capitulo)
+    if full_listado_idx is None:
+        full_listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
+    return listado_vu_for_cap_item(
+        ck,
+        ik,
+        cap_listado_by_item=cap_listado_idx,
+        full_listado_by_cap_item=full_listado_idx,
+    )
+
+
 def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """(capítulo_norm, ítem_norm) → fila listado_precios (V.U. y metadatos)."""
-    cached = _dash_agg_cache_get("listado_precios_vu_idx", contrato_id)
+    cached = _dash_agg_cache_get("listado_precios_vu_idx_v2", contrato_id)
     if cached is not None:
         return cached
     idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -26672,7 +26756,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         if len(batch) < 1000:
             break
         off += 1000
-    _dash_agg_cache_set("listado_precios_vu_idx", contrato_id, idx)
+    _dash_agg_cache_set("listado_precios_vu_idx_v2", contrato_id, idx)
     return idx
 
 
@@ -26714,14 +26798,22 @@ def _gerencial_ppto_item_costos_drill_aligned(
     *,
     listado_vu: Optional[float] = None,
     alt_rows: Optional[List[dict]] = None,
+    obra_ejecutada: bool = True,
 ) -> Dict[str, float]:
-    """Costos NR|P|R|A alineados con popup drill (listado V.U. + fallback Presupuesto de Obra)."""
-    est, _ = _ppto_metricas_por_estado(rows, listado_vu=listado_vu, alt_rows=alt_rows)
+    """Costos NR|P|R|A alineados con popup drill (V.U. exclusivo del Listado de Precios cap+ítem)."""
+    est, _, vu = _ppto_metricas_por_estado(
+        rows, listado_vu=listado_vu, alt_rows=alt_rows, obra_ejecutada=obra_ejecutada
+    )
+    if obra_ejecutada:
+        cc_q = cantidad_dashboard(sum(float(est[k]["cant"]) for k in est))
+    else:
+        cc_q = cantidad_dashboard(float(est["A"]["cant"]) + float(est["NR"]["cant"]))
     return {
         "ap": float(est["A"]["costo"] or 0),
         "pe": float(est["P"]["costo"] or 0),
         "re": float(est["R"]["costo"] or 0),
         "nr": float(est["NR"]["costo"] or 0),
+        "cc_total": costo_agregado_cant_vu(cc_q, vu),
     }
 
 
@@ -26818,7 +26910,9 @@ def _gerencial_ppto_split_por_capitulo(
         if len(batch) < 1000:
             break
         off += 1000
-    agg, allowed = rollup_gerencial_ppto_por_capitulo(items_raw)
+    agg, allowed = rollup_gerencial_ppto_por_capitulo(
+        items_raw, obra_ejecutada=parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA
+    )
     return agg, allowed
 
 
@@ -26834,13 +26928,8 @@ def _gerencial_ppto_items(
         else None
     )
     filtra_interv = _presupuesto_aplica_filtro_interventoria(current_user)
-    items_raw: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    raw_rows_oe: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
-    select_cols = (
-        "capitulo, item, cant_total, vlr_unitario, revisado, costo_directo"
-        if obra_ejecutada
-        else "capitulo, item, cant_total, vlr_unitario, revisado"
-    )
+    raw_by_key: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    select_cols = "capitulo, item, cant_total, vlr_unitario, revisado, costo_directo"
     off = 0
     while True:
 
@@ -26848,7 +26937,7 @@ def _gerencial_ppto_items(
             if oficial_vid:
                 q = (
                     supabase.table("presupuesto_version_items")
-                    .select("capitulo, item, cant_total, vlr_unitario, revisado")
+                    .select(select_cols)
                     .eq("contrato_id", int(contrato_id))
                     .eq("dado_de_baja", False)
                     .eq("version_id", oficial_vid)
@@ -26867,40 +26956,34 @@ def _gerencial_ppto_items(
 
         batch = supabase_execute(_b) or []
         for r in batch:
-            if obra_ejecutada:
-                ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
-                ik = _dash_norm_item_key_py(r.get("item"))
-                if ik:
-                    raw_rows_oe[(ck, ik)].append(r)
-            else:
-                gerencial_ppto_ingest_row(
-                    items_raw,
-                    r,
-                    rev_map_fn=_matriz_validacion_norm_estado,
-                    cap_key_fn=_dash_norm_capitulo_key_py,
-                    item_key_fn=_dash_norm_item_key_py,
-                    cap_display_fn=_dash_norm_cap,
-                )
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item"))
+            if ik:
+                raw_by_key[(ck, ik)].append(r)
         if len(batch) < 1000:
             break
         off += 1000
 
-    if obra_ejecutada:
-        listado_vu_idx = _listado_precios_vu_by_cap_item(contrato_id)
-        ppto_obra_alt = _ppto_presupuesto_obra_by_cap_item(contrato_id, current_user)
-        out: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        for k, rows in raw_rows_oe.items():
-            lp_row = listado_vu_idx.get(k) or {}
-            lp_vu = float(lp_row.get("precio_unitario") or 0) or None
-            alt = ppto_obra_alt.get(k)
-            costs = _gerencial_ppto_item_costos_drill_aligned(
-                rows, listado_vu=lp_vu, alt_rows=alt
-            )
-            cap_disp = _dash_norm_cap(rows[0].get("capitulo"))
-            out[k] = {"cap_display": cap_disp, **costs}
-        return out
-
-    return {k: gerencial_ppto_finalize_item(dict(v)) for k, v in items_raw.items()}
+    listado_vu_idx = _listado_precios_vu_by_cap_item(contrato_id)
+    ppto_obra_alt = (
+        _ppto_presupuesto_obra_by_cap_item(contrato_id, current_user) if obra_ejecutada else {}
+    )
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for k, rows in raw_by_key.items():
+        ck, ik = k
+        cap_disp = _dash_norm_cap(rows[0].get("capitulo"))
+        lp_vu = _dash_listado_vu_resolved(
+            contrato_id, cap_disp or ck, ik, full_listado_idx=listado_vu_idx
+        )
+        alt = ppto_obra_alt.get(k) if obra_ejecutada else None
+        costs = _gerencial_ppto_item_costos_drill_aligned(
+            rows,
+            listado_vu=lp_vu,
+            alt_rows=alt,
+            obra_ejecutada=obra_ejecutada,
+        )
+        out[k] = {"cap_display": cap_disp, **costs}
+    return out
 
 
 def _gerencial_ppto_items_obra_ejecutada(
@@ -26947,7 +27030,7 @@ def _gerencial_capitulos_aggregate(
             pe = float(p.get("pe") or 0)
             re_ = float(p.get("re") or 0)
             nr = float(p.get("nr") or 0)
-            cc = (ap + pe + re_ + nr) if obra_ejecutada else (ap + nr)
+            cc = gerencial_item_claracore_costo(p, obra_ejecutada=obra_ejecutada)
             cap_disp = p.get("cap_display") or ck
         elif cob != 0:
             ap = pe = re_ = nr = 0.0
@@ -28331,7 +28414,7 @@ def dashboard_capitulos_financiero_obra(
     vista_n = parse_dash_vista(vista)
     acta_id = _resolve_acta_rpo_id(contrato_id, acta_rpo) if acta_rpo is not None else None
     cache_key = (
-        "dashboard_capitulos_fin_v4",
+        "dashboard_capitulos_fin_v11",
         int(contrato_id),
         vista_n,
         acta_rpo,
@@ -28340,23 +28423,15 @@ def dashboard_capitulos_financiero_obra(
     if cached is not None:
         return cached
     try:
-        rpc_hit = _dashboard_capitulos_financiero_rpc(
+        # Misma ruta que el drill (Resumen por Ítem): agregación Python con cc_total
+        # y V.U. alineado (listado + Presupuesto de Obra). El RPC SQL se mantiene
+        # para scripts de paridad pero no alimenta la UI (evita divergencias).
+        rows_aiu, rows_iva = _gerencial_capitulos_data_both(
             contrato_id, vista, current_user, acta_id=acta_id
         )
-        if rpc_hit is not None:
-            out = _dashboard_capitulos_financiero_build_response(
-                contrato_id,
-                vista_n,
-                rpc_hit["capitulos_aiu"],
-                rpc_hit["capitulos_iva"],
-            )
-        else:
-            rows_aiu, rows_iva = _gerencial_capitulos_data_both(
-                contrato_id, vista, current_user, acta_id=acta_id
-            )
-            out = _dashboard_capitulos_financiero_build_response(
-                contrato_id, vista_n, rows_aiu, rows_iva
-            )
+        out = _dashboard_capitulos_financiero_build_response(
+            contrato_id, vista_n, rows_aiu, rows_iva
+        )
         _dashboard_response_cache_set(cache_key, out)
         return out
     except Exception as e:

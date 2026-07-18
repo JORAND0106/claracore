@@ -17,14 +17,20 @@ from presupuesto_helpers import (
     presupuesto_oficial_version_id,
 )
 from dashboard_costo_agregado import (
+    cantidad_dashboard,
+    cantidad_dashboard_sum,
     costo_agregado_cant_vu,
     ingest_ppto_resumen_row,
+    listado_vu_for_cap_item,
+    listado_vu_from_index,
+    ppto_cc_total_from_est,
     ppto_claracore_cant_costo,
     ppto_costo_por_estado,
     ppto_rows_with_resolved_vu,
     rollup_ppto_por_capitulo,
     rollup_resumen_item_agg,
     resolve_item_vu,
+    vu_explicit_in_rows,
     vu_item_rows,
 )
 
@@ -94,6 +100,34 @@ def ppto_row_matches_vista(row: dict, vista: Optional[str]) -> bool:
     return got == want
 
 
+def _fetch_listado_vu_index(sb, contrato_id: int) -> Dict[ItemKey, dict]:
+    """(cap_norm, item_norm) → fila listado_precios con precio_unitario vigente."""
+    idx: Dict[ItemKey, dict] = {}
+    off = 0
+    while True:
+        batch = (
+            sb.table("listado_precios")
+            .select("capitulo, item_numero, precio_unitario, unidad, descripcion")
+            .eq("contrato_id", int(contrato_id))
+            .range(off, off + 999)
+            .execute()
+            .data
+            or []
+        )
+        for r in batch:
+            ck = norm_capitulo_key(r.get("capitulo"))
+            ik = norm_item_key(r.get("item_numero"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in idx:
+                idx[k] = r
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return idx
+
+
 def norm_estado_revisado(v: Any) -> str:
     if v is None:
         return "No Revisado"
@@ -117,44 +151,69 @@ def _ppto_metricas_por_estado(
     *,
     listado_vu: Optional[float] = None,
     alt_rows: Optional[List[dict]] = None,
-) -> Tuple[Dict[str, Dict[str, float]], str]:
-    """Cantidad y costo agregado por estado (NR | P | R | A) + unidad."""
-    rows = ppto_rows_with_resolved_vu(rows_it, listado_vu=listado_vu, alt_rows=alt_rows)
-    est = ppto_costo_por_estado(rows, norm_estado_revisado)
+    obra_ejecutada: bool = True,
+) -> Tuple[Dict[str, Dict[str, float]], str, float]:
+    """Cantidad y costo agregado por estado (NR | P | R | A) + unidad + V.U. del listado cap+ítem."""
+    vu = resolve_item_vu(
+        rows_it, listado_vu=listado_vu, alt_rows=alt_rows, listado_only=True
+    )
+    rows = ppto_rows_with_resolved_vu(
+        rows_it, listado_vu=listado_vu, alt_rows=alt_rows, listado_only=True
+    )
+    if vu > 0:
+        rows = [{**r, "vlr_unitario": vu} for r in rows]
+    est = ppto_costo_por_estado(
+        rows, norm_estado_revisado, vu_resolved=vu, listado_only=True
+    )
     und = ""
     for x in rows_it or []:
         u = str(x.get("und") or "").strip()
         if u:
             und = u
             break
-    return est, und
+    return est, und, vu
 
 
-def _drill_item_estado_fields(est: Dict[str, Dict[str, float]], unidad: str, sg: Dict[str, Any]) -> Dict[str, Any]:
-    cob_q = float(sg.get("ap_q") or 0)
+def _ppto_claracore_split(
+    rows_it: List[dict],
+    *,
+    listado_vu: Optional[float] = None,
+    alt_rows: Optional[List[dict]] = None,
+) -> Tuple[float, float]:
+    """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado."""
+    return ppto_claracore_cant_costo(
+        rows_it, norm_estado_revisado, listado_vu=listado_vu, alt_rows=alt_rows, listado_only=True
+    )
+
+
+def _drill_item_estado_fields(
+    est: Dict[str, Dict[str, float]],
+    unidad: str,
+    sg: Dict[str, Any],
+    *,
+    vu: float = 0.0,
+    obra_ejecutada: bool = True,
+) -> Dict[str, Any]:
+    cob_q = cantidad_dashboard(float(sg.get("ap_q") or 0))
     cob_c = float(sg.get("ap_c") or 0)
-    total_q = sum(float(est[k]["cant"]) for k in est)
-    total_c = sum(float(est[k]["costo"]) for k in est)
+    total_q = cantidad_dashboard(sum(float(est[k]["cant"]) for k in est))
+    cc_q = total_q if obra_ejecutada else cantidad_dashboard(float(est["A"]["cant"]) + float(est["NR"]["cant"]))
+    total_c = ppto_cc_total_from_est(est, float(vu or 0), obra_ejecutada=obra_ejecutada)
     return {
         "unidad": unidad,
-        "cant_nr": round(est["NR"]["cant"], 3),
+        "cant_nr": cantidad_dashboard(est["NR"]["cant"]),
         "costo_nr": round(est["NR"]["costo"], 0),
-        "cant_p": round(est["P"]["cant"], 3),
+        "cant_p": cantidad_dashboard(est["P"]["cant"]),
         "costo_p": round(est["P"]["costo"], 0),
-        "cant_r": round(est["R"]["cant"], 3),
+        "cant_r": cantidad_dashboard(est["R"]["cant"]),
         "costo_r": round(est["R"]["costo"], 0),
-        "cant_a": round(est["A"]["cant"], 3),
+        "cant_a": cantidad_dashboard(est["A"]["cant"]),
         "costo_a": round(est["A"]["costo"], 0),
-        "total_claracore_cant": round(total_q, 3),
+        "total_claracore_cant": cantidad_dashboard(cc_q),
         "total_claracore_costo": round(total_c, 0),
-        "cant_cobrado": round(cob_q, 3),
+        "cant_cobrado": cantidad_dashboard(cob_q),
         "costo_cobrado": round(cob_c, 0),
     }
-
-
-def _ppto_claracore_split(rows_it: List[dict]) -> Tuple[float, float]:
-    """(cantidad, costo) de la bolsa ClaraCore = Aprobado + No Revisado."""
-    return ppto_claracore_cant_costo(rows_it, norm_estado_revisado)
 
 
 def norm_item_key(s: Optional[str]) -> str:
@@ -494,10 +553,14 @@ def _scan_live_presupuesto(
         off += 1000
 
     if resumen_only:
-        ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(resumen_item_agg)
+        listado_idx = _fetch_listado_vu_index(sb, contrato_id)
+        ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(
+            resumen_item_agg, listado_idx=listado_idx
+        )
     elif ppto_by_item:
+        listado_idx = _fetch_listado_vu_index(sb, contrato_id)
         ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_ppto_por_capitulo(
-            dict(ppto_by_item), norm_estado_revisado, norm_capitulo_display
+            dict(ppto_by_item), norm_estado_revisado, norm_capitulo_display, listado_idx=listado_idx
         )
 
     por_capitulo = [
@@ -694,7 +757,9 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
             break
         off += 1000
 
-    ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(resumen_item_agg)
+    ppto_ap_c, ppto_nr_c, ppto_total_c = rollup_resumen_item_agg(
+        resumen_item_agg, listado_idx=_fetch_listado_vu_index(sb, contrato_id)
+    )
     por_capitulo = [
         {"capitulo": cap, "costo": round(v, 0), "registros": 0}
         for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
@@ -854,6 +919,7 @@ def drill_items_capitulo_vista(
     *,
     listado_idx: Optional[Dict[str, dict]] = None,
     ppto_obra_by: Optional[Dict[str, List[dict]]] = None,
+    listado_full_idx: Optional[Dict[ItemKey, dict]] = None,
 ) -> List[dict]:
     cap_key = norm_capitulo_key(capitulo)
     ppto_by = scan.get("ppto_by_item") or {}
@@ -875,38 +941,54 @@ def drill_items_capitulo_vista(
     out = []
     for k in sorted(keys, key=lambda x: str(x[1])):
         rows_it = ppto_by.get(k, [])
-        lp_vu = float((listado_idx or {}).get(k[1], {}).get("precio_unitario") or 0) or None
-        alt = (ppto_obra_by or {}).get(k[1])
-        est, unidad = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu, alt_rows=alt)
-        rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
-        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_vu)
-        vu = resolve_item_vu(rows_it, listado_vu=lp_vu, alt_rows=alt)
+        lp_vu = listado_vu_for_cap_item(
+            k[0],
+            k[1],
+            cap_listado_by_item=listado_idx,
+            full_listado_by_cap_item=listado_full_idx,
+        )
+        est, unidad, vu = _ppto_metricas_por_estado(rows_it, listado_vu=lp_vu)
+        rows_vu = ppto_rows_with_resolved_vu(rows_it, listado_vu=lp_vu, listado_only=True)
+        p_cant = cantidad_dashboard_sum(rows_vu)
         p_cost = costo_agregado_cant_vu(p_cant, vu)
         pap = est["A"]["costo"]
         pnr = est["NR"]["costo"] + est["P"]["costo"] + est["R"]["costo"]
-        cc_cant, cc_cost = _ppto_claracore_split(rows_vu)
+        cc_cant, cc_cost = _ppto_claracore_split(rows_vu, listado_vu=lp_vu)
         desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
         sg = sicoe_by_item.get(k, {})
         apc = float(sg.get("ap_c") or 0)
         pp_show = p_cost
-        estado_fields = _drill_item_estado_fields(est, unidad, sg)
+        estado_fields = _drill_item_estado_fields(
+            est, unidad, sg, vu=vu, obra_ejecutada=True
+        )
+        listado_ausente = bool(
+            sg.get("listado_vu_ausente")
+            or (lp_vu is None or float(lp_vu or 0) <= 0)
+            and (float(sg.get("ap_q") or 0) or cc_cant)
+        )
         out.append(
             {
                 "item": k[1],
                 "nombre": k[1],
                 "descripcion": desc,
+                "item_vu": float(vu or 0),
+                "sicoe_item_vu": float(sg.get("item_vu") or 0),
+                "listado_vu_ausente": listado_ausente,
+                "listado_vu_encontrado": bool(lp_vu and float(lp_vu) > 0),
                 "presupuesto": round(pp_show, 0),
                 "cobrado": round(apc, 0),
+                "costo_cobrado": round(apc, 0),
                 "presupuesto_aprobado_n3": round(pap, 0),
                 "presupuesto_no_revisado_n3": round(pnr, 0),
                 "sicoe_no_revisado_n3": round(float(sg.get("nr_c") or 0), 0),
                 "delta": round(pp_show - apc, 0),
                 "pct": round(apc / pp_show * 100, 1) if pp_show else 0,
-                "cant_ppto": round(p_cant, 3),
-                "cant_ppto_claracore": round(cc_cant, 3),
+                "cant_ppto": cantidad_dashboard(p_cant),
+                "cant_ppto_claracore": cantidad_dashboard(cc_cant),
                 "costo_ppto_claracore": round(cc_cost, 0),
-                "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
-                "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
+                "cant_sicoe_aprobado": cantidad_dashboard(float(sg.get("ap_q") or 0)),
+                "cant_sicoe_no_revisado": cantidad_dashboard(float(sg.get("nr_q") or 0)),
+                "cant_cobrado": cantidad_dashboard(float(sg.get("ap_q") or 0)),
                 "tiene_ppto_obra_ejecutada": bool(rows_it),
                 **estado_fields,
             }
@@ -973,14 +1055,14 @@ def liquidacion_items_vista(
     for k in sorted(keys_all, key=lambda x: (x[0], x[1])):
         meta_rows = ppto_by.get(k, [])
         sg = sic.get(k, {"cant": 0.0, "_vu": 0.0, "cap_raw": k[0], "item_raw": k[1]})
-        cant_cob = float(sg["cant"])
+        cant_cob = cantidad_dashboard(float(sg["cant"]))
         cob = costo_agregado_cant_vu(cant_cob, float(sg.get("_vu") or 0))
         cap_raw = meta_rows[0].get("capitulo") if meta_rows else sg.get("cap_raw") or k[0]
         item_raw = meta_rows[0].get("item") if meta_rows else sg.get("item_raw") or k[1]
         desc = next((str(mr["descripcion"])[:400] for mr in meta_rows if mr.get("descripcion")), "")
-        cant_re = sum(float(m.get("cant_total") or 0) for m in meta_rows)
+        cant_re = cantidad_dashboard_sum(meta_rows)
         rec = costo_agregado_cant_vu(cant_re, vu_item_rows(meta_rows))
-        delta_cant = cant_re - cant_cob
+        delta_cant = cantidad_dashboard(cant_re - cant_cob)
         delta_cost = rec - cob
         pct = 999.0 if cob and rec > cob else (round(cob / rec * 100, 1) if rec else 0.0)
         item_rows.append(
@@ -988,11 +1070,11 @@ def liquidacion_items_vista(
                 "capitulo": cap_raw,
                 "nombre": item_raw,
                 "descripcion": desc,
-                "cant_recalc": round(cant_re, 2),
+                "cant_recalc": cantidad_dashboard(cant_re),
                 "recalculado": round(rec, 0),
-                "cant_cobro": round(cant_cob, 2),
+                "cant_cobro": cantidad_dashboard(cant_cob),
                 "cobrado": round(cob, 0),
-                "delta_cant": round(delta_cant, 2),
+                "delta_cant": cantidad_dashboard(delta_cant),
                 "delta_costo": round(delta_cost, 0),
                 "pct": pct,
                 "categoria": "CALCULO" if meta_rows else "EJECUCION",

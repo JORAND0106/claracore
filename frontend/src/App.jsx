@@ -19169,8 +19169,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               if (item.total_claracore_costo != null && item.total_claracore_costo !== '') {
                                 return num(item.total_claracore_costo)
                               }
-                              return num(item.costo_nr) + num(item.costo_p) + num(item.costo_r) + num(item.costo_a)
-                                || num(item.presupuesto) || 0
+                              return num(item.presupuesto) || num(item.costo_ppto_claracore) || 0
                             }
                             return num(item.total_claracore_costo) || cobCost(item)
                           }
@@ -19376,8 +19375,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 return num(row.total_claracore_costo)
                               }
                               if (row.tiene_ppto_obra_ejecutada) {
-                                return num(row.costo_nr) + num(row.costo_p) + num(row.costo_r) + num(row.costo_a)
-                                  || num(row.costo_ppto) || 0
+                                return num(row.presupuesto) || num(row.costo_ppto) || num(row.costo_ppto_claracore) || 0
                               }
                               return cobCost(row)
                             }

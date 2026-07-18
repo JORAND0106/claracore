@@ -82,6 +82,18 @@ def test_registros_q_acta_scope_usa_reporte_ids():
     q.in_.assert_called_once_with("reporte_id", [10, 20])
 
 
+def test_registros_q_acta_linea_usa_acta_rpo_id_columna():
+    q = MagicMock()
+    m._sicoe_registros_q_filtrar_actas_linea(q, [616])
+    q.eq.assert_called_once_with("acta_rpo_id", 616)
+
+
+def test_registros_q_acta_linea_varias_actas():
+    q = MagicMock()
+    m._sicoe_registros_q_filtrar_actas_linea(q, [616, 617])
+    q.in_.assert_called_once_with("acta_rpo_id", [616, 617])
+
+
 def test_costo_matriz_neto_por_item_con_vu_otras_actas():
     regs = [
         {
