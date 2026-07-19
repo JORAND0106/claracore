@@ -792,6 +792,11 @@ class NivelesValidacionContratoPutBody(BaseModel):
     niveles_activos: List[int]
 
 
+class InformePeriodicoCopiaBody(BaseModel):
+    contrato_id: int
+    slot_id: str = Field(..., min_length=12, max_length=32)
+
+
 class ContratoUpdate(BaseModel):
     numero: Optional[str] = None
     objeto: Optional[str] = None
@@ -1617,6 +1622,30 @@ def _cargo_permiso_editar_reporte_cantidades_user_id(
     return _cargo_permiso_reporte_cantidades_user_id(user_id, "editar", contrato_id)
 
 
+_INFORME_PERIODICO_SLOT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{4})$")
+
+
+def _parse_informe_periodico_slot_id(slot_id: str) -> Tuple[str, str]:
+    s = (slot_id or "").strip()
+    m = _INFORME_PERIODICO_SLOT_RE.match(s)
+    if not m:
+        raise HTTPException(
+            status_code=400,
+            detail="slot_id inválido (formato esperado YYYY-MM-DD_HHMM, p. ej. 2026-07-20_0800)",
+        )
+    return m.group(1), m.group(2)
+
+
+def _puede_registrar_informe_periodico_copia(current_user, contrato_id: int) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return False
+    return _cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id)
+
+
 def _cargo_permiso_eliminar_reporte_cantidades_user_id(
     user_id: int, contrato_id: Optional[int] = None
 ) -> bool:
@@ -2257,6 +2286,9 @@ app.include_router(presupuesto_versiones_router)
 
 from filtros_plantillas_routes import router as filtros_plantillas_router
 app.include_router(filtros_plantillas_router)
+
+from notificaciones_email_routes import router as notificaciones_email_router
+app.include_router(notificaciones_email_router)
 
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
@@ -7049,6 +7081,80 @@ def auth_logout(request: Request, current_user=Depends(get_current_user)):
         ip=ip,
     )
     return {"ok": True}
+
+
+@app.post("/informe-periodico/copia")
+def registrar_informe_periodico_copia(
+    body: InformePeriodicoCopiaBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Registra que el usuario copió el panel de validación en una ventana horaria del recordatorio.
+    Una fila por (usuario_id, contrato_id, slot_id); re-copiar actualiza copiado_at.
+    """
+    uid = int(current_user["sub"])
+    cid = int(body.contrato_id)
+    slot_id = body.slot_id.strip()
+    _require_contract_access(current_user, cid)
+    if not _puede_registrar_informe_periodico_copia(current_user, cid):
+        raise HTTPException(
+            status_code=403,
+            detail="Sin permiso de edición en Reporte de Cantidades para este contrato",
+        )
+    slot_fecha, slot_hora = _parse_informe_periodico_slot_id(slot_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    row = {
+        "usuario_id": uid,
+        "contrato_id": cid,
+        "slot_id": slot_id,
+        "slot_fecha": slot_fecha,
+        "slot_hora": slot_hora,
+        "copiado_at": now_iso,
+    }
+
+    def _upsert():
+        return (
+            supabase.table("informe_periodico_copia")
+            .upsert(row, on_conflict="usuario_id,contrato_id,slot_id")
+            .execute()
+        )
+
+    try:
+        supabase_execute(_upsert)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"No se pudo registrar la copia: {e}") from e
+    return {"ok": True, "slot_id": slot_id, "copiado_at": now_iso}
+
+
+@app.get("/informe-periodico/copia/completado")
+def informe_periodico_copia_completado(
+    contrato_id: int,
+    slot_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Indica si el usuario autenticado ya copió el informe en la ventana horaria indicada."""
+    uid = int(current_user["sub"])
+    cid = int(contrato_id)
+    sid = (slot_id or "").strip()
+    _require_contract_access(current_user, cid)
+    _parse_informe_periodico_slot_id(sid)
+
+    def _q():
+        return (
+            supabase.table("informe_periodico_copia")
+            .select("id, copiado_at")
+            .eq("usuario_id", uid)
+            .eq("contrato_id", cid)
+            .eq("slot_id", sid)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    if rows:
+        return {"completado": True, "copiado_at": rows[0].get("copiado_at")}
+    return {"completado": False, "copiado_at": None}
 
 
 @app.post("/auth/solicitar-reset")
@@ -14064,11 +14170,249 @@ class SubprecioCreate(BaseModel):
 class SubprecioUpdate(BaseModel):
     precio_unitario_sub: float
 
+
+def _usuario_subcontratista_id(current_user) -> Optional[int]:
+    """subcontratista_id del usuario autenticado (JWT o tabla usuarios)."""
+    for key in ("subcontratista_id", "sub_id"):
+        raw = current_user.get(key) if isinstance(current_user, dict) else None
+        if raw is not None:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not uid:
+        return None
+    try:
+        rows = (
+            supabase.table("usuarios")
+            .select("subcontratista_id")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if rows and rows[0].get("subcontratista_id") is not None:
+            return int(rows[0]["subcontratista_id"])
+    except Exception:
+        pass
+    return None
+
+
+def _puede_gestionar_subcontratistas_admin(current_user, contrato_id: Optional[int] = None) -> bool:
+    """Admin/desarrollador o matriz «subcontratistas» con ver/editar/crear."""
+    if _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user):
+        return True
+    for flag in ("ver", "editar", "crear"):
+        if _cargo_tiene_permiso_funcion(current_user, "subcontratistas", flag, contrato_id):
+            return True
+    return False
+
+
+def _fetch_subcontratista_row(sub_id: int) -> dict:
+    try:
+        sid = int(sub_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Subcontratista inválido.")
+    sub = (
+        supabase.table("subcontratistas")
+        .select("id, contrato_id, razon_social")
+        .eq("id", sid)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado.")
+    return sub[0]
+
+
+def _require_acceso_precios_subcontratista(
+    current_user,
+    sub_id: int,
+    *,
+    escribir: bool = False,
+) -> dict:
+    """
+    Aislamiento de precios por subcontratista.
+    - Lectura: propio subcontratista_id, o admin con permiso «subcontratistas».
+    - Escritura: solo admin/desarrollador con permiso (no el usuario del sub).
+    """
+    sub = _fetch_subcontratista_row(sub_id)
+    contrato_id = int(sub["contrato_id"])
+    _require_contract_access(current_user, contrato_id)
+    if _puede_gestionar_subcontratistas_admin(current_user, contrato_id):
+        if escribir and not (
+            _es_desarrollador(current_user)
+            or _cargo_tiene_permiso_funcion(current_user, "subcontratistas", "editar", contrato_id)
+            or _cargo_tiene_permiso_funcion(current_user, "subcontratistas", "crear", contrato_id)
+            or _es_admin_o_desarrollador(current_user)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="No tiene permiso para modificar precios de subcontratistas.",
+            )
+        return sub
+    own = _usuario_subcontratista_id(current_user)
+    if escribir:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo personal administrativo puede modificar precios de subcontratistas.",
+        )
+    if own is not None and int(own) == int(sub["id"]):
+        return sub
+    raise HTTPException(
+        status_code=403,
+        detail="No tiene acceso a los precios de otro subcontratista.",
+    )
+
+
+def _require_acceso_cortes_subcontratista(current_user, sub_id: int, *, escribir: bool = False) -> dict:
+    """
+    Cortes: admin subcontratistas, editor SICOE del contrato, o el propio sub (solo lectura).
+    """
+    sub = _fetch_subcontratista_row(sub_id)
+    contrato_id = int(sub["contrato_id"])
+    _require_contract_access(current_user, contrato_id)
+    if _puede_gestionar_subcontratistas_admin(current_user, contrato_id):
+        return sub
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid and _cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id):
+        return sub
+    if escribir:
+        raise HTTPException(status_code=403, detail="No tiene permiso para modificar cortes de subcontratista.")
+    own = _usuario_subcontratista_id(current_user)
+    if own is not None and int(own) == int(sub["id"]):
+        return sub
+    raise HTTPException(status_code=403, detail="No tiene acceso a los cortes de este subcontratista.")
+
+
+def _fecha_fin_periodo_corte(fecha_inicio: date, tipo_periodo: str) -> date:
+    """Calcula fecha_fin a partir de fecha_inicio y periodicidad (misma regla que actualizar_corte)."""
+    tipo = (tipo_periodo or "quincenal").strip().lower()
+    if tipo == "mensual":
+        import calendar
+        dias_mes = calendar.monthrange(fecha_inicio.year, fecha_inicio.month)[1]
+        return fecha_inicio + timedelta(days=dias_mes)
+    return fecha_inicio + timedelta(days=15)
+
+
+def _asegurar_corte_vigente_subcontratista(
+    sub_id: int,
+    *,
+    ref_date: Optional[date] = None,
+    max_periodos: int = 36,
+) -> Optional[dict]:
+    """
+    Garantiza un corte que cubra ref_date (hoy por defecto).
+    Si el último corte ya venció, genera automáticamente los siguientes
+    según tipo_periodo, sin huecos (inicio = fin del anterior).
+    Si no hay ningún corte seed, no inventa el primero (requiere creación inicial).
+    """
+    hoy = ref_date or date.today()
+    today_s = hoy.isoformat()
+
+    def _vigente():
+        return (
+            supabase.table("subcontratista_cortes")
+            .select("*")
+            .eq("subcontratista_id", sub_id)
+            .lte("fecha_inicio", today_s)
+            .gte("fecha_fin", today_s)
+            .order("consecutivo", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    vigentes = supabase_execute(_vigente) or []
+    if vigentes:
+        return vigentes[0]
+
+    cortes = (
+        supabase.table("subcontratista_cortes")
+        .select("*")
+        .eq("subcontratista_id", sub_id)
+        .order("consecutivo", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    ) or []
+    if not cortes:
+        return None
+
+    ultimo = cortes[0]
+    contrato_id = ultimo.get("contrato_id")
+    if contrato_id is None:
+        sub_row = (
+            supabase.table("subcontratistas")
+            .select("contrato_id")
+            .eq("id", sub_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        contrato_id = sub_row[0]["contrato_id"] if sub_row else None
+    if contrato_id is None:
+        return None
+
+    tipo = (ultimo.get("tipo_periodo") or "quincenal").strip().lower() or "quincenal"
+    try:
+        consecutivo = int(ultimo.get("consecutivo") or 0)
+        fi = date.fromisoformat(str(ultimo["fecha_fin"]))
+    except (TypeError, ValueError):
+        return None
+
+    creado = None
+    for _ in range(max_periodos):
+        ff = _fecha_fin_periodo_corte(fi, tipo)
+        if ff <= fi:
+            break
+        consecutivo += 1
+        row = {
+            "subcontratista_id": int(sub_id),
+            "contrato_id": int(contrato_id),
+            "consecutivo": consecutivo,
+            "tipo_periodo": tipo,
+            "fecha_inicio": fi.isoformat(),
+            "fecha_fin": ff.isoformat(),
+        }
+        try:
+            ins = supabase.table("subcontratista_cortes").insert(row).execute()
+            creado = (ins.data or [row])[0]
+        except Exception:
+            # Carrera / duplicado: reintentar lectura del vigente
+            vigentes = supabase_execute(_vigente) or []
+            if vigentes:
+                return vigentes[0]
+            break
+        if fi <= hoy <= ff:
+            return creado
+        fi = ff
+
+    vigentes = supabase_execute(_vigente) or []
+    return vigentes[0] if vigentes else creado
+
+
 @app.get("/subcontratistas/{contrato_id}")
 def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     rows = supabase.table("subcontratistas").select("*").eq("contrato_id", contrato_id).order("razon_social").execute().data
-    return rows or []
+    rows = rows or []
+    # Usuario de un sub sin permiso admin: solo su ficha (evita enumerar otros).
+    if not _puede_gestionar_subcontratistas_admin(current_user, contrato_id):
+        own = _usuario_subcontratista_id(current_user)
+        if own is not None:
+            rows = [r for r in rows if int(r.get("id") or 0) == int(own)]
+        else:
+            rows = []
+    return rows
 
 @app.post("/subcontratistas/{contrato_id}")
 def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
@@ -14099,18 +14443,23 @@ def toggle_activo_subcontratista(sub_id: int, current_user=Depends(get_current_u
 # ── Cortes ──────────────────────────────────────────────────
 @app.get("/subcontratistas/{sub_id}/cortes")
 def listar_cortes(sub_id: int, current_user=Depends(get_current_user)):
+    _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
+    _asegurar_corte_vigente_subcontratista(int(sub_id))
     rows = supabase.table("subcontratista_cortes").select("*").eq("subcontratista_id", sub_id).order("consecutivo").execute().data
     return rows or []
 
 @app.get("/subcontratistas/{sub_id}/proximo-consecutivo")
 def proximo_consecutivo(sub_id: int, current_user=Depends(get_current_user)):
+    _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
     rows = supabase.table("subcontratista_cortes").select("consecutivo").eq("subcontratista_id", sub_id).execute().data
     maximo = max((r["consecutivo"] for r in rows), default=0)
     return {"proximo": maximo + 1}
 
 @app.post("/subcontratistas/{sub_id}/cortes")
 def crear_corte(sub_id: int, body: CorteCreate, current_user=Depends(get_current_user)):
-    from datetime import date
+    sub = _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=True)
+    if not _puede_gestionar_subcontratistas_admin(current_user, int(sub["contrato_id"])):
+        raise HTTPException(status_code=403, detail="Solo administración puede crear cortes manualmente.")
     fi = date.fromisoformat(body.fecha_inicio)
     ff = date.fromisoformat(body.fecha_fin)
     if ff <= fi:
@@ -14125,7 +14474,7 @@ def crear_corte(sub_id: int, body: CorteCreate, current_user=Depends(get_current
                 detail=f"La fecha inicio debe ser exactamente {ultimo_fin.isoformat()} (fecha fin del corte anterior).")
     row = {
         "subcontratista_id": sub_id,
-        "contrato_id": supabase.table("subcontratistas").select("contrato_id").eq("id", sub_id).single().execute().data["contrato_id"],
+        "contrato_id": sub["contrato_id"],
         "consecutivo":   body.consecutivo,
         "tipo_periodo":  body.tipo_periodo,
         "fecha_inicio":  body.fecha_inicio,
@@ -14139,10 +14488,12 @@ def crear_corte(sub_id: int, body: CorteCreate, current_user=Depends(get_current
 
 @app.put("/subcontratistas/cortes/{corte_id}")
 def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_current_user)):
-    from datetime import date, timedelta
     corte = supabase.table("subcontratista_cortes").select("*").eq("id", corte_id).single().execute().data
     if not corte:
         raise HTTPException(status_code=404, detail="Corte no encontrado.")
+    sub_corte = _require_acceso_cortes_subcontratista(current_user, int(corte["subcontratista_id"]), escribir=True)
+    if not _puede_gestionar_subcontratistas_admin(current_user, int(sub_corte["contrato_id"])):
+        raise HTTPException(status_code=403, detail="Solo administración puede editar cortes.")
     nueva_fin = date.fromisoformat(body.fecha_fin)
     supabase.table("subcontratista_cortes").update({"fecha_fin": body.fecha_fin}).eq("id", corte_id).execute()
     siguiente = supabase.table("subcontratista_cortes").select("*")\
@@ -14152,12 +14503,7 @@ def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_
         sig = siguiente[0]
         tipo = sig.get("tipo_periodo", corte.get("tipo_periodo", "quincenal"))
         nueva_fi_sig = nueva_fin
-        if tipo == "quincenal":
-            nueva_ff_sig = nueva_fi_sig + timedelta(days=15)
-        else:
-            import calendar
-            dias_mes = calendar.monthrange(nueva_fi_sig.year, nueva_fi_sig.month)[1]
-            nueva_ff_sig = nueva_fi_sig + timedelta(days=dias_mes)
+        nueva_ff_sig = _fecha_fin_periodo_corte(nueva_fi_sig, tipo)
         supabase.table("subcontratista_cortes").update({
             "fecha_inicio": nueva_fi_sig.isoformat(),
             "fecha_fin": nueva_ff_sig.isoformat(),
@@ -14169,6 +14515,7 @@ def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_
 # ── Precios subcontratista ───────────────────────────────────
 @app.get("/subcontratistas/{sub_id}/precios")
 def listar_precios_sub(sub_id: int, current_user=Depends(get_current_user)):
+    _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
     rows = supabase.table("subcontratista_precios").select(
         "*, listado_precios(capitulo, competencia, item_numero, descripcion, unidad, precio_unitario)"
     ).eq("subcontratista_id", sub_id).execute().data
@@ -14190,9 +14537,7 @@ def listar_precios_sub(sub_id: int, current_user=Depends(get_current_user)):
 
 @app.post("/subcontratistas/{sub_id}/precios")
 def agregar_precio_sub(sub_id: int, body: SubprecioCreate, current_user=Depends(get_current_user)):
-    sub = supabase.table("subcontratistas").select("contrato_id").eq("id", sub_id).single().execute().data
-    if not sub:
-        raise HTTPException(status_code=404, detail="Subcontratista no encontrado.")
+    sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=True)
     existente = supabase.table("listado_precios").select("id").eq("id", body.listado_precio_id)\
         .eq("contrato_id", sub["contrato_id"]).execute().data
     if not existente:
@@ -14210,6 +14555,17 @@ def agregar_precio_sub(sub_id: int, body: SubprecioCreate, current_user=Depends(
 
 @app.put("/subcontratistas/precios/{precio_id}")
 def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=Depends(get_current_user)):
+    prev = (
+        supabase.table("subcontratista_precios")
+        .select("id, subcontratista_id")
+        .eq("id", precio_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not prev:
+        raise HTTPException(status_code=404, detail="Precio de subcontratista no encontrado.")
+    _require_acceso_precios_subcontratista(current_user, int(prev[0]["subcontratista_id"]), escribir=True)
     supabase.table("subcontratista_precios").update({"precio_unitario_sub": body.precio_unitario_sub})\
         .eq("id", precio_id).execute()
     registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "precio_sub", str(precio_id),
@@ -14218,14 +14574,17 @@ def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=De
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")
 def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
-    """Subcontratistas cuyo corte activo vence mañana o hoy."""
-    from datetime import date, timedelta
+    """Subcontratistas cuyo corte activo vence mañana o hoy. Asegura corte vigente al consultar."""
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_gestionar_subcontratistas_admin(current_user, contrato_id):
+        raise HTTPException(status_code=403, detail="No tiene permiso para ver alertas de cortes.")
     hoy = date.today()
     manana = hoy + timedelta(days=1)
     subs = supabase.table("subcontratistas").select("id, razon_social").eq("contrato_id", contrato_id)\
         .eq("activo", True).execute().data or []
     alertas = []
     for s in subs:
+        _asegurar_corte_vigente_subcontratista(int(s["id"]), ref_date=hoy)
         cortes = supabase.table("subcontratista_cortes").select("consecutivo, fecha_fin, tipo_periodo")\
             .eq("subcontratista_id", s["id"]).order("consecutivo", desc=True).limit(1).execute().data
         if cortes:
@@ -18549,21 +18908,8 @@ def _sicoe_resolver_acta_semana_corte(
     corte_id = None
     if subcontratista_id:
         try:
-
-            def _corte():
-                return (
-                    supabase.table("subcontratista_cortes")
-                    .select("id, consecutivo")
-                    .eq("subcontratista_id", subcontratista_id)
-                    .lte("fecha_inicio", today)
-                    .gte("fecha_fin", today)
-                    .limit(1)
-                    .execute()
-                    .data
-                )
-
-            cortes = supabase_execute(_corte)
-            corte_id = cortes[0]["id"] if cortes else None
+            vigente = _asegurar_corte_vigente_subcontratista(int(subcontratista_id))
+            corte_id = vigente.get("id") if vigente else None
         except Exception:
             corte_id = None
 
@@ -20479,7 +20825,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     if _registro_nivel3_aprobado(prev_row):
         # Campos siempre editables aunque el registro esté aprobado en N3
         _CAMPOS_N3_PERMITIDOS = {
-            "corte_id", "reporte_id", "numero_registro",
+            "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
             "foto_url", "foto_numero", "foto_descripcion",
             "grafico_url", "grafico_numero", "grafico_descripcion",
         }
@@ -20487,13 +20833,29 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if otros:
             raise HTTPException(
                 status_code=400,
-                detail="Registro aprobado en el último nivel de validación: solo puede modificarse el corte de subcontratista y la foto/gráfico del registro.",
+                detail="Registro aprobado en el último nivel de validación: solo puede modificarse el subcontratista, el corte y la foto/gráfico del registro.",
             )
         if data.get("reporte_id") is not None and int(data["reporte_id"]) != int(prev_row["reporte_id"]):
             raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado en el último nivel de validación.")
         if data.get("numero_registro") is not None and int(data["numero_registro"]) != int(prev_row["numero_registro"]):
             raise HTTPException(status_code=400, detail="No puede modificarse el número de registro aprobado en el último nivel de validación.")
         data = {k: v for k, v in data.items() if k in _CAMPOS_N3_PERMITIDOS - {"reporte_id", "numero_registro"}}
+        # Si cambia el subcontratista, invalidar corte ajeno y reasignar corte vigente del nuevo sub.
+        if "subcontratista_id" in data:
+            nuevo_sub = data.get("subcontratista_id")
+            prev_sub = prev_row.get("subcontratista_id")
+            try:
+                cambio_sub = (nuevo_sub is None and prev_sub is not None) or (
+                    nuevo_sub is not None and int(nuevo_sub) != int(prev_sub or 0)
+                )
+            except (TypeError, ValueError):
+                cambio_sub = True
+            if cambio_sub:
+                if nuevo_sub:
+                    vigente = _asegurar_corte_vigente_subcontratista(int(nuevo_sub))
+                    data["corte_id"] = vigente.get("id") if vigente else None
+                else:
+                    data["corte_id"] = None
         if not data:
             return prev_row
 
@@ -21228,16 +21590,9 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         sub_id   = reporte.get("subcontratista_id")
         if not corte_id and sub_id:
             try:
-                def _corte():
-                    return supabase.table("subcontratista_cortes")\
-                        .select("id, consecutivo")\
-                        .eq("subcontratista_id", sub_id)\
-                        .lte("fecha_inicio", today)\
-                        .gte("fecha_fin", today)\
-                        .limit(1).execute().data
-                cortes = supabase_execute(_corte)
-                corte_id = cortes[0]["id"] if cortes else None
-            except:
+                vigente = _asegurar_corte_vigente_subcontratista(int(sub_id))
+                corte_id = vigente.get("id") if vigente else None
+            except Exception:
                 corte_id = None
 
         semana_id = reporte.get("semana_id")

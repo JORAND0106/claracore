@@ -64,3 +64,10 @@ export function permisoReporteCantidades(usuario, contratoId) {
   }
   return fuzzy[0]
 }
+
+/** Recordatorio informe periódico: permiso «Reporte de Cantidades» → editar. */
+export function usuarioPuedeEditarRegistrosSicoe(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const p = permisoReporteCantidades(usuario, contratoId)
+  return !!(p?.editar)
+}

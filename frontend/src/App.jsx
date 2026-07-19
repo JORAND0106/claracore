@@ -35,6 +35,9 @@ import ModuloInformes from './ModuloInformes'
 import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
 import ModuloContabilidad from './ModuloContabilidad'
+import InformePeriodicoModal from './components/InformePeriodicoModal'
+import MatrizValidacionSicoePanel from './components/MatrizValidacionSicoePanel'
+import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
 import { BookOpen, Menu, X } from 'lucide-react'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
@@ -2466,13 +2469,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     nivelesContrato?.niveles_activos,
   )
   const editableCampos = puedeEditar && !regSelladoMax
-  const soloCorteNivel3 = puedeEditar && regSelladoMax
+  const soloMetaSubSellado = puedeEditar && regSelladoMax
+  const soloCorteNivel3 = soloMetaSubSellado // alias compat: sellado permite sub + corte
+  const subIdEfectivo = registro.subcontratista_id || reporte.subcontratista_id || null
   // Foto y gráfico: editables siempre que el usuario tenga permiso (no afectan valor ni cantidad)
   const editableFotoGrafico = puedeEditar
 
   useEffect(() => {
     setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
   }, [registro.id, registro.corte_id])
+
+  useEffect(() => {
+    setSubcontratistaSel(registro.subcontratista_id || reporte.subcontratista_id || '')
+  }, [registro.id, registro.subcontratista_id, reporte.subcontratista_id])
 
   useEffect(() => {
     setLocRegistro(sicoeLocFromRegistro(registro, pkIdsHoja))
@@ -2505,15 +2514,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }, [esLocMultiple, contrato_id, capituloHoja, API])
 
   useEffect(() => {
-    if (!soloCorteNivel3 || !reporte.subcontratista_id) {
+    if (!soloMetaSubSellado || !subIdEfectivo) {
       setListaCortes([])
       return
     }
-    fetch(`${API}/subcontratistas/${reporte.subcontratista_id}/cortes`, { headers: hdrs })
+    fetch(`${API}/subcontratistas/${subIdEfectivo}/cortes`, { headers: hdrs })
       .then(r => r.json())
       .then(d => { if (Array.isArray(d)) setListaCortes(d); else setListaCortes([]) })
       .catch(() => setListaCortes([]))
-  }, [soloCorteNivel3, reporte.subcontratista_id, API])
+  }, [soloMetaSubSellado, subIdEfectivo, API])
 
   useEffect(() => {
     setNivelTargetValidacion((prev) => {
@@ -2820,10 +2829,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   useEffect(() => {
     if (!contrato_id || listaSubs.length > 0) return
-    if (!editableCampos && !editandoSub) return
+    if (!editableCampos && !editandoSub && !soloMetaSubSellado) return
     fetch(`${API}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setListaSubs(Array.isArray(d) ? d : [])).catch(() => {})
-  }, [contrato_id, editableCampos, editandoSub, listaSubs.length, hdrs, API])
+  }, [contrato_id, editableCampos, editandoSub, soloMetaSubSellado, listaSubs.length, hdrs, API])
 
 
   const seleccionarItem = (item) => {
@@ -2982,6 +2991,43 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
       }
       setToastMsg('Corte actualizado')
+      try {
+        await new Promise((r) => setTimeout(r, 200))
+        setToastMsg(null)
+        const p = onItemAsignado?.()
+        if (p != null && typeof p.then === 'function') await p
+      } catch {
+        /* noop */
+      }
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setGuardandoCorte(false)
+  }
+
+  const guardarSubSellado = async () => {
+    setGuardandoCorte(true)
+    try {
+      const sid = subcontratistaSel === '' ? null : parseInt(subcontratistaSel, 10)
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify({
+          reporte_id: registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          subcontratista_id: Number.isNaN(sid) ? null : sid,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
+      }
+      const saved = await res.json().catch(() => ({}))
+      if (saved?.corte_id != null) setCorteSel(String(saved.corte_id))
+      else if (saved && 'corte_id' in saved) setCorteSel('')
+      setToastMsg('Subcontratista actualizado')
+      setEditandoSub(false)
       try {
         await new Promise((r) => setTimeout(r, 200))
         setToastMsg(null)
@@ -3290,7 +3336,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
                 📋 {actaNum ? `RPO #${actaNum}` : 'Sin Acta RPO'}
               </span>
-              {soloCorteNivel3 && reporte.subcontratista_id ? (
+              {soloMetaSubSellado && subIdEfectivo ? (
                 <span style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:`${t.textMuted}12`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted }}>
                   <span style={{ marginRight:'4px' }}>📄 Corte subcontratista</span>
                   <select value={corteSel} onChange={e => setCorteSel(e.target.value)}
@@ -3308,14 +3354,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               ) : (
                 <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted }}>
                   📄 {corteNum != null ? `Corte #${corteNum}` : 'Sin Corte'}
-                  {soloCorteNivel3 && !reporte.subcontratista_id && (
-                    <span style={{ fontWeight:'600', fontSize:'var(--cc-caption)', marginLeft:'6px', color:'#d97706' }}>(defina subcontratista en la portada)</span>
+                  {soloMetaSubSellado && !subIdEfectivo && (
+                    <span style={{ fontWeight:'600', fontSize:'var(--cc-caption)', marginLeft:'6px', color:'#d97706' }}>(asigne subcontratista abajo)</span>
                   )}
                 </span>
               )}
             </>)
           })()}
-          {editableCampos ? (
+          {(editableCampos || soloMetaSubSellado) ? (
             editandoSub ? (
               <span style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                 <select value={subcontratistaSel} onChange={e => setSubcontratistaSel(e.target.value)}
@@ -3324,6 +3370,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   {listaSubs.map(s => <option key={s.id} value={s.id}>{labelSubcontratistaOpt(s)}</option>)}
                 </select>
                 <button onClick={async () => {
+                  if (soloMetaSubSellado) {
+                    await guardarSubSellado()
+                    return
+                  }
                   try {
                     await fetch(`${API}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
                       method:'PUT', headers:hdrs,
@@ -3342,7 +3392,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
             ) : (
               <span onClick={() => setEditandoSub(true)} style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#8B5CF6', cursor:'pointer' }}>
-                🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'} ✏️
+                🏢 {(listaSubs.find(s => String(s.id) === String(subIdEfectivo))?.razon_social)
+                  || reporte.subcontratista_nombre
+                  || 'Sin subcontratista'} ✏️
               </span>
             )
           ) : (
@@ -3356,7 +3408,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {regSelladoMax && (
         <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:t.text }}>
           Sellado: el último nivel activo del contrato está aprobado ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})
-          {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el corte de subcontratista (y foto/gráfico si aplica).
+          {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el subcontratista, el corte (y foto/gráfico si aplica).
         </div>
       )}
 
@@ -15893,6 +15945,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [panelFoco, setPanelFoco] = useState(null)
   const [matrizValidacion, setMatrizValidacion] = useState(null)
   const [matrizValidacionLoad, setMatrizValidacionLoad] = useState(false)
+  const [matrizValidacionInforme, setMatrizValidacionInforme] = useState(null)
+  const [matrizValidacionInformeLoad, setMatrizValidacionInformeLoad] = useState(false)
   /** vigente = servidor usa acta del período actual; all = todo el contrato; número = acta explícita */
   const [actaFiltroMatriz, setActaFiltroMatriz] = useState('vigente')
   /** Actas del contrato (misma fuente que módulo actas): RPO + nombre asignado para el dropdown de la matriz */
@@ -16079,16 +16133,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     [API_URL],
   )
 
-  useEffect(() => {
-    if (!contratoIdDash || !dashModuloActivo) {
-      if (!contratoIdDash) setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
+  const cargarNivelesDashContrato = useCallback((signal) => {
+    if (!contratoIdDash) {
+      setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
       return
     }
-    const ac = new AbortController()
-    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/niveles-validacion`, {
+    const fetchOpts = {
       headers: { Authorization: `Bearer ${getToken()}` },
-      signal: ac.signal,
-    })
+    }
+    if (signal) fetchOpts.signal = signal
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/niveles-validacion`, fetchOpts)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!j || typeof j !== 'object') {
@@ -16113,8 +16167,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         })
       })
       .catch(() => setNivelesDashContrato({ ...SICOE_NIVELES_CONTRATO_DEFAULT(), contrato_id: contratoIdDash }))
+  }, [contratoIdDash, API_URL])
+
+  useEffect(() => {
+    if (!contratoIdDash || !dashModuloActivo) {
+      if (!contratoIdDash) setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
+      return
+    }
+    const ac = new AbortController()
+    cargarNivelesDashContrato(ac.signal)
     return () => ac.abort()
-  }, [contratoIdDash, dashModuloActivo])
+  }, [contratoIdDash, dashModuloActivo, cargarNivelesDashContrato])
 
   useEffect(() => {
     const id = dashDetallePpto?.id
@@ -16334,6 +16397,44 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         setMatrizValidacionLoad(false)
       })
   }, [contratoIdDash, actaFiltroMatriz])
+
+  const cargarMatrizInformePeriodico = useCallback((signal) => {
+    if (!contratoIdDash) {
+      setMatrizValidacionInformeLoad(false)
+      return
+    }
+    setMatrizValidacionInformeLoad(true)
+    const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-matriz-validacion`
+    const fetchOpts = {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    }
+    if (signal) fetchOpts.signal = signal
+    fetch(url, fetchOpts)
+      .then(async (r) => {
+        if (!r.ok) {
+          const errTxt = await r.text().catch(() => '')
+          console.warn('[informe-periodico-matriz]', r.status, errTxt?.slice(0, 200))
+          return
+        }
+        const j = await r.json().catch(() => null)
+        if (j && typeof j === 'object') setMatrizValidacionInforme(j)
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return
+        console.warn(err)
+        setMatrizValidacionInforme(null)
+      })
+      .finally(() => {
+        if (signal?.aborted) return
+        setMatrizValidacionInformeLoad(false)
+      })
+  }, [contratoIdDash, API_URL])
+
+  const ensureMatrizInformePeriodico = useCallback(() => {
+    if (!contratoIdDash) return
+    cargarMatrizInformePeriodico()
+    cargarNivelesDashContrato()
+  }, [contratoIdDash, cargarMatrizInformePeriodico, cargarNivelesDashContrato])
 
   useLayoutEffect(() => {
     setActaFiltroMatriz('vigente')
@@ -17522,6 +17623,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
     )
   const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra && !esContador
+
+  const informePeriodico = useInformePeriodicoReminder({
+    usuario,
+    contratoId: contratoIdDash,
+    apiUrl: API_URL,
+    getAuthToken: getToken,
+    moduloActivo,
+    showAdmin,
+    showContabilidad,
+  })
 
   useEffect(() => {
     if (!progRibbonEnHeader) setProgRibbon(null)
@@ -18858,159 +18969,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 position: 'relative',
               }}>
 
-                <div style={{ marginBottom:'12px' }}>
-                  <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
-                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'4px' }}>
-                    Por defecto se usa el acta RPO cuyo período incluye hoy. Control de validación de cantidades ejecutadas (SICOE Obra), independiente del módulo de presupuesto.
-                  </div>
-                  <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'10px' }}>
-                    <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Acta RPO:</span>
-                    <select
-                      className={`cc-dashboard-acta-select cc-dashboard-acta-select--${themeIsDarkChrome(activeTheme) ? 'dark' : 'light'}`}
-                      value={actaFiltroMatriz}
-                      onChange={e => setActaFiltroMatriz(e.target.value)}
-                      style={{
-                        fontSize:`${du.body}px`,
-                        padding:'6px 10px',
-                        borderRadius:'6px',
-                        border:`1px solid ${t.border}`,
-                        background:t.bgCard,
-                        color:t.text,
-                        maxWidth:'min(420px, 100%)',
-                        minHeight:'32px',
-                        cursor:'pointer',
-                        colorScheme: themeIsDarkChrome(activeTheme) ? 'dark' : 'light',
-                      }}
-                    >
-                      {(() => {
-                        const av = matrizValidacion?.acta_vigente
-                        const filtro = matrizValidacion?.filtro
-                        let labVig = '—'
-                        if (matrizValidacionLoad && actaFiltroMatriz === 'vigente') {
-                          labVig = 'Cargando acta en período…'
-                        } else if (filtro === 'sin_vigente_todo_contrato') {
-                          labVig = 'Sin acta RPO en período (todo el contrato)'
-                        } else if (av && av.numero_rpo != null) {
-                          const nom = (av.asignado_nombre || '').trim()
-                          labVig = `Acta RPO ${av.numero_rpo}${nom ? ` · ${nom}` : ''}`
-                        } else {
-                          labVig = 'Sin acta en período'
-                        }
-                        return (
-                          <option value="vigente" style={{ background:t.bgCard, color:t.text }}>{labVig}</option>
-                        )
-                      })()}
-                      <option value="all" style={{ background:t.bgCard, color:t.text }}>Todo el contrato (histórico)</option>
-                      {(() => {
-                        const rpoRows = (actasListaMatriz || []).filter(
-                          a => a && String(a.tipo_grupo || '').toUpperCase() === 'RPO' && a.numero_rpo != null && a.numero_rpo !== ''
-                        )
-                        const nums = rpoRows.map(a => Number(a.numero_rpo)).filter(n => !Number.isNaN(n))
-                        const sorted = nums.length === rpoRows.length
-                          ? [...new Set(nums)].sort((a, b) => b - a)
-                          : [...new Set(rpoRows.map(a => a.numero_rpo))].sort((a, b) => String(b).localeCompare(String(a), undefined, { numeric: true }))
-                        return sorted.map((n) => {
-                          const row = rpoRows.find(r => String(r.numero_rpo) === String(n))
-                          const nom = (row?.asignado_nombre || '').trim()
-                          const lab = `Acta RPO ${n}${nom ? ` · ${nom}` : ''}`
-                          return (
-                            <option key={n} value={String(n)} style={{ background:t.bgCard, color:t.text }}>{lab}</option>
-                          )
-                        })
-                      })()}
-                    </select>
-                    {matrizValidacionLoad && <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Cargando…</span>}
-                  </div>
-                </div>
-                {(() => {
-                  /* Filas pastel: en tema oscuro t.text es claro → ilegible; usar texto oscuro sobre fondo claro */
-                  const textOnPastel = themeIsDarkChrome(activeTheme) ? '#0f172a' : t.text
-                  const naMat = Array.isArray(matrizValidacion?.niveles_activos) && matrizValidacion.niveles_activos.length
-                    ? [...matrizValidacion.niveles_activos].sort((a, b) => a - b)
-                    : (Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
-                      ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
-                      : [1, 2, 3])
-                  const colsMatriz = [...naMat].sort((a, b) => b - a)
-                  const nMinMat = naMat[0] ?? 1
-                  const filas = [
-                    { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
-                    { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
-                    { key: 'pendiente_item', label: `PENDIENTE N${nMinMat}`, bg: '#DBEAFE', dark: false },
-                    { key: 'no_revisado', label: 'NO REVISADOS', bg: '#E9D5FF', dark: false },
-                    { key: 'rechazado', label: 'RECHAZADOS', bg: '#FECACA', dark: false },
-                    { key: 'habilitado', label: 'HABILITADO VALIDACIÓN', bg: '#374151', dark: true },
-                    { key: 'otras_actas', label: 'PENDIENTES OTRAS ACTAS', bg: '#FEF9C3', dark: false },
-                  ]
-                  const emptyBloque = () => {
-                    const z = () => Object.fromEntries(colsMatriz.map((n) => [`nivel${n}`, 0]))
-                    return {
-                      aprobado: z(), pendiente: z(), pendiente_item: z(), no_revisado: z(),
-                      rechazado: z(), habilitado: z(), otras_actas: z(),
-                    }
-                  }
-                  const mergeBloque = (bloque) => {
-                    const e = emptyBloque()
-                    if (!bloque || typeof bloque !== 'object') return e
-                    for (const k of Object.keys(e)) {
-                      if (bloque[k] && typeof bloque[k] === 'object') {
-                        e[k] = { ...e[k], ...bloque[k] }
-                      }
-                    }
-                    return e
-                  }
-                  const renderTabla = (titulo, bloque) => {
-                    const b = mergeBloque(bloque)
-                    return (
-                      <div key={titulo} style={{ marginBottom:'18px' }}>
-                        <div style={{ fontSize:`${du.sub}px`, fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
-                        <div className="cc-dash-table-wrap" style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:`${Math.max(280, 120 + colsMatriz.length * 100)}px` }}>
-                            <thead>
-                              <tr>
-                                <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Estado</th>
-                                {colsMatriz.map((n) => (
-                                  <th key={n} style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px`, whiteSpace:'nowrap' }}>
-                                    {dashMatrizThDesdeNiveles(nivelesDashContrato, n)}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filas.map(row => {
-                                const d = b[row.key] || {}
-                                const tc = row.dark ? '#f9fafb' : textOnPastel
-                                const tcLabel = row.dark ? '#fff' : textOnPastel
-                                return (
-                                  <tr key={row.key} style={{ background: row.bg }}>
-                                    <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:`${du.rowLabel}px` }}>{row.label}</td>
-                                    {colsMatriz.map((n) => (
-                                      <td key={n} style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>
-                                        {fmtD(matrizValorNivel(d, n, row.key === 'pendiente_item'))}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )
-                  }
-                  if (!matrizValidacion && !matrizValidacionLoad) {
-                    return <div style={{ fontSize:`${du.body}px`, color:t.textMuted, padding:'12px 0' }}>Sin datos de validación.</div>
-                  }
-                  return (
-                    <>
-                      <div style={{ marginBottom:'12px', fontSize:`${du.sub}px`, color:t.textMuted, lineHeight:1.35 }}>
-                        Columnas según niveles de validación del contrato ({colsMatriz.slice().sort((a,b)=>a-b).map(n => `N${n}`).join(' · ')}).
-                        En cada fila, el monto en una columna N refleja el estado de validación en ese nivel (con prerequisitos aprobados en niveles inferiores).
-                      </div>
-                      {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
-                      {renderTabla('Ensayos y sondeos directo sin IVA', matrizValidacion?.ensayos_sondeos_directo_sin_iva)}
-                    </>
-                  )
-                })()}
+                <MatrizValidacionSicoePanel
+                  variant="dashboard"
+                  matriz={matrizValidacion}
+                  loading={matrizValidacionLoad}
+                  niveles={nivelesDashContrato}
+                  t={t}
+                  activeTheme={activeTheme}
+                  fontSize={fontSize}
+                  actaFiltroMatriz={actaFiltroMatriz}
+                  actasListaMatriz={actasListaMatriz}
+                  onActaFiltroChange={setActaFiltroMatriz}
+                />
               </div>
               </div>
 
@@ -21332,6 +21302,21 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           logoFilter={themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none'}
         />
       )}
+
+      <InformePeriodicoModal
+        open={informePeriodico.open}
+        t={t}
+        activeTheme={activeTheme}
+        fontSize={fontSize}
+        matriz={matrizValidacionInforme}
+        matrizLoading={matrizValidacionInformeLoad}
+        niveles={nivelesDashContrato}
+        onRefreshData={ensureMatrizInformePeriodico}
+        copiedInModal={informePeriodico.copiedInModal}
+        onDismissWithoutCopy={informePeriodico.dismissWithoutCopy}
+        onCopySuccess={informePeriodico.onCopySuccess}
+        onOk={informePeriodico.onOk}
+      />
     </div>
   )
 }
