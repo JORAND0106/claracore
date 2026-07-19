@@ -1,4 +1,4 @@
--- TEMPORAL — prueba sábado 2026-07-18 (resumen admin 23:22 Bogotá).
+-- TEMPORAL — prueba sábado 2026-07-18 (resumen admin 23:32–23:40 Bogotá).
 -- Extiende pg_cron para incluir sábados. ELIMINAR tras la prueba ejecutando
 -- temp_pg_cron_revertir_sabado_prueba.sql
 

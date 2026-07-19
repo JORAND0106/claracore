@@ -269,7 +269,7 @@ def test_run_due_jobs_fin_de_semana_con_prueba_temp(runner, monkeypatch):
     from notificaciones_email_config import TZ_BOGOTA
 
     r, sb, sent = runner
-    dt = pytz.timezone(TZ_BOGOTA).localize(datetime(2026, 7, 18, 23, 24))
+    dt = pytz.timezone(TZ_BOGOTA).localize(datetime(2026, 7, 18, 23, 35))
     monkeypatch.setattr("notificaciones_email_service._bogota_now", lambda: dt)
     out = r.run_due_jobs()
     assert out.get("fin_de_semana") is True

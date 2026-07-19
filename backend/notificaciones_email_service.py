@@ -495,7 +495,7 @@ class NotificacionesEmailRunner:
         fecha = dt.strftime("%Y-%m-%d")
         results: List[dict] = []
 
-        # TEMPORAL — prueba sáb 2026-07-18 23:22: admin_resumen sin restricción fin de semana
+        # TEMPORAL — prueba sáb 2026-07-18 23:32–23:40: admin_resumen sin restricción fin de semana
         for job in temp_test_admin_jobs_due_now(dt):
             log_key = _slot_log_key(fecha, job)
             try:
