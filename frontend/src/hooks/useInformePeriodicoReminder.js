@@ -103,10 +103,8 @@ export function useInformePeriodicoReminder({
   }, [usuario?.id, contratoId, apiUrl, getAuthToken])
 
   const onOk = useCallback(() => {
-    if (copiedInModal) {
-      setOpen(false)
-    }
-  }, [copiedInModal])
+    setOpen(false)
+  }, [])
 
   return {
     open: open && eligible,

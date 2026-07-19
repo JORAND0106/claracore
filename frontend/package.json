@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:cache": "node --test src/cache/vistaCache.test.js",
-    "test:informe": "node --test src/utils/informePeriodicoSchedule.test.js"
+    "test:informe": "node --test src/utils/informePeriodicoSchedule.test.js src/utils/informePeriodicoCapture.test.js"
   },
   "dependencies": {
     "@microsoft/applicationinsights-web": "^3.4.3",

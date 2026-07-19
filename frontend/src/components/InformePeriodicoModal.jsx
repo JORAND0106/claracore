@@ -1,22 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Copy, Check } from 'lucide-react'
+import { Copy, Check, Download } from 'lucide-react'
 import { getDashTypoUI } from '../typographyScale'
 import MatrizValidacionSicoePanel from './MatrizValidacionSicoePanel'
-
-async function copyCaptureToClipboard(node) {
-  const { toBlob } = await import('html-to-image')
-  const blob = await toBlob(node, {
-    pixelRatio: Math.min(3, window.devicePixelRatio || 2),
-    backgroundColor: '#ffffff',
-    cacheBust: true,
-  })
-  if (!blob) throw new Error('No se pudo generar la imagen')
-  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Portapapeles no disponible en este navegador')
-  }
-  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-}
+import {
+  captureInformePeriodicoBlob,
+  copyInformePeriodicoBlob,
+  downloadInformePeriodicoBlob,
+  informePeriodicoCaptureFilename,
+  isClipboardImageAvailable,
+} from '../utils/informePeriodicoCapture'
 
 export default function InformePeriodicoModal({
   open,
@@ -33,15 +26,17 @@ export default function InformePeriodicoModal({
   onOk,
 }) {
   const captureRef = useRef(null)
-  const [copyBusy, setCopyBusy] = useState(false)
-  const [copyDone, setCopyDone] = useState(false)
-  const [copyError, setCopyError] = useState(null)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareDone, setShareDone] = useState(false)
+  const [shareMethod, setShareMethod] = useState(null)
+  const [shareError, setShareError] = useState(null)
   const du = getDashTypoUI(fontSize)
 
   useEffect(() => {
     if (!open) return
-    setCopyDone(false)
-    setCopyError(null)
+    setShareDone(false)
+    setShareMethod(null)
+    setShareError(null)
     onRefreshData?.()
   }, [open, onRefreshData])
 
@@ -57,27 +52,68 @@ export default function InformePeriodicoModal({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onDismissWithoutCopy])
 
-  const handleCopy = useCallback(async () => {
-    if (!captureRef.current || copyBusy) return
-    setCopyBusy(true)
-    setCopyError(null)
-    try {
-      await copyCaptureToClipboard(captureRef.current)
-      setCopyDone(true)
+  const markShareCompleted = useCallback(
+    (method) => {
+      setShareDone(true)
+      setShareMethod(method)
+      setShareError(null)
       onCopySuccess?.()
-    } catch (err) {
-      setCopyError(err?.message || 'No se pudo copiar la imagen')
-    } finally {
-      setCopyBusy(false)
-    }
-  }, [copyBusy, onCopySuccess])
+    },
+    [onCopySuccess],
+  )
+
+  const runShare = useCallback(
+    async (method) => {
+      if (!captureRef.current || shareBusy) return
+      setShareBusy(true)
+      setShareError(null)
+      try {
+        const blob = await captureInformePeriodicoBlob(captureRef.current)
+        if (method === 'clipboard') {
+          await copyInformePeriodicoBlob(blob)
+        } else {
+          downloadInformePeriodicoBlob(blob, informePeriodicoCaptureFilename())
+        }
+        markShareCompleted(method)
+      } catch (err) {
+        const msg = err?.message || 'No se pudo compartir la imagen'
+        setShareError(
+          method === 'clipboard'
+            ? `${msg} Use «Descargar imagen» para guardar el informe en su dispositivo.`
+            : msg,
+        )
+      } finally {
+        setShareBusy(false)
+      }
+    },
+    [shareBusy, markShareCompleted],
+  )
+
+  const handleCopy = useCallback(() => void runShare('clipboard'), [runShare])
+  const handleDownload = useCallback(() => void runShare('download'), [runShare])
 
   if (!open) return null
 
-  const canCopy = Boolean(matriz) && !matrizLoading
-  const hasCopied = copiedInModal || copyDone
+  const canShare = Boolean(matriz) && !matrizLoading
+  const hasShared = copiedInModal || shareDone
+  const clipboardAvailable = isClipboardImageAvailable()
   const headerTitlePx = Math.round(du.title * 1.65)
   const headerLeadPx = Math.round(du.body * 1.15)
+
+  let statusMessage = 'Copie o descargue la imagen antes de cerrar.'
+  if (shareError) {
+    statusMessage = shareError
+  } else if (hasShared) {
+    statusMessage =
+      shareMethod === 'download'
+        ? 'Imagen descargada. Puede cerrar con OK o haciendo clic fuera del modal.'
+        : 'Imagen copiada. Puede cerrar con OK o haciendo clic fuera del modal.'
+  } else if (matrizLoading) {
+    statusMessage = 'Cargando datos de validación…'
+  } else if (!clipboardAvailable) {
+    statusMessage =
+      'El portapapeles no está disponible aquí. Use «Descargar imagen» y compártala desde su galería o archivos.'
+  }
 
   return createPortal(
     <div
@@ -141,7 +177,8 @@ export default function InformePeriodicoModal({
               maxWidth: '52em',
             }}
           >
-            Comparte el estado de validación del día. Copia la imagen del cuadro siguiente y luego pulsa OK.
+            Comparte el estado de validación del día. Copie la imagen del cuadro siguiente, descárguela
+            si el portapapeles no está disponible, y luego pulse OK.
           </p>
         </div>
 
@@ -173,57 +210,82 @@ export default function InformePeriodicoModal({
             padding: '12px 16px 16px',
             borderTop: `1px solid ${t.border}`,
             display: 'flex',
+            flexWrap: 'wrap',
             alignItems: 'center',
             justifyContent: 'flex-end',
             gap: 12,
           }}
         >
-          {copyError ? (
-            <span style={{ flex: 1, fontSize: du.sub, color: '#dc2626' }}>{copyError}</span>
-          ) : (
-            <span style={{ flex: 1, fontSize: du.sub, color: t.textMuted }}>
-              {hasCopied
-                ? 'Imagen copiada. Puede cerrar con OK o haciendo clic fuera del modal.'
-                : matrizLoading
-                  ? 'Cargando datos de validación…'
-                  : 'Copie la imagen antes de cerrar.'}
-            </span>
-          )}
+          <span
+            style={{
+              flex: '1 1 200px',
+              fontSize: du.sub,
+              color: shareError ? '#dc2626' : t.textMuted,
+            }}
+          >
+            {statusMessage}
+          </span>
+          {clipboardAvailable ? (
+            <button
+              type="button"
+              title="Copiar imagen al portapapeles"
+              aria-label="Copiar imagen al portapapeles"
+              disabled={shareBusy || !canShare}
+              onClick={handleCopy}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 44,
+                height: 44,
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: hasShared && shareMethod === 'clipboard' ? '#dcfce7' : t.bg,
+                color: hasShared && shareMethod === 'clipboard' ? '#15803d' : t.text,
+                cursor: shareBusy || !canShare ? 'wait' : 'pointer',
+              }}
+            >
+              {hasShared && shareMethod === 'clipboard' ? <Check size={22} /> : <Copy size={22} />}
+            </button>
+          ) : null}
           <button
             type="button"
-            title="Copiar imagen al portapapeles"
-            aria-label="Copiar imagen al portapapeles"
-            disabled={copyBusy || !canCopy}
-            onClick={() => void handleCopy()}
+            title="Descargar imagen"
+            aria-label="Descargar imagen"
+            disabled={shareBusy || !canShare}
+            onClick={handleDownload}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              width: 44,
-              height: 44,
+              gap: 8,
+              minHeight: 44,
+              padding: clipboardAvailable ? '0 12px' : '0 14px',
               borderRadius: 10,
               border: `1px solid ${t.border}`,
-              background: hasCopied ? '#dcfce7' : t.bg,
-              color: hasCopied ? '#15803d' : t.text,
-              cursor: copyBusy || !canCopy ? 'wait' : 'pointer',
+              background: hasShared && shareMethod === 'download' ? '#dcfce7' : t.bg,
+              color: hasShared && shareMethod === 'download' ? '#15803d' : t.text,
+              fontWeight: 600,
+              fontSize: du.sub,
+              cursor: shareBusy || !canShare ? 'wait' : 'pointer',
             }}
           >
-            {hasCopied ? <Check size={22} /> : <Copy size={22} />}
+            {hasShared && shareMethod === 'download' ? <Check size={20} /> : <Download size={20} />}
+            {!clipboardAvailable ? 'Descargar imagen' : null}
           </button>
           <button
             type="button"
             onClick={onOk}
-            disabled={!hasCopied}
+            disabled={!hasShared}
             style={{
               minWidth: 88,
               minHeight: 44,
               borderRadius: 10,
               border: 'none',
-              background: hasCopied ? t.primary : t.border,
-              color: hasCopied ? '#fff' : t.textMuted,
+              background: hasShared ? t.primary : t.border,
+              color: hasShared ? '#fff' : t.textMuted,
               fontWeight: 700,
               fontSize: du.body,
-              cursor: hasCopied ? 'pointer' : 'not-allowed',
+              cursor: hasShared ? 'pointer' : 'not-allowed',
             }}
           >
             OK
