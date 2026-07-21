@@ -273,3 +273,242 @@ def build_saludo(nombre: str, acta_rpo: Optional[int]) -> str:
         f"Estimado Ingeniero {html.escape(nombre)}, a continuación ClaraCore te informa "
         f"el estado de las validaciones del Acta #{html.escape(acta_txt)}."
     )
+
+
+def _nivel_matriz_values(matriz: dict, nivel: int) -> Dict[tuple, float]:
+    """Todos los valores de una columna de nivel en la matriz (tablas × filas)."""
+    out: Dict[tuple, float] = {}
+    for table_key, _ in MATRIZ_TABLAS:
+        bloque = matriz.get(table_key) or {}
+        for row_key, *_ in MATRIZ_FILAS:
+            out[(table_key, row_key)] = _matriz_valor(bloque, row_key, nivel)
+    return out
+
+
+def _aprobado_nivel(matriz: dict, nivel: int) -> float:
+    total = 0.0
+    for table_key, _ in MATRIZ_TABLAS:
+        total += _matriz_valor(matriz.get(table_key) or {}, "aprobado", nivel)
+    return total
+
+
+def compute_comparacion_jornada(
+    matriz_manana: dict,
+    matriz_tarde: dict,
+    capitulos_manana: dict,
+    capitulos_tarde: dict,
+) -> dict:
+    """Diferencias entre snapshot de inicio y valores actuales de fin de jornada."""
+    na = sorted(
+        {
+            int(x)
+            for x in (
+                (matriz_tarde.get("niveles_activos") or [])
+                + (matriz_manana.get("niveles_activos") or [])
+                + [1, 2, 3]
+            )
+            if 1 <= int(x) <= 6
+        }
+    )
+    if not na:
+        na = [1, 2, 3]
+
+    aprobado_delta = {
+        n: _aprobado_nivel(matriz_tarde, n) - _aprobado_nivel(matriz_manana, n) for n in na
+    }
+    sin_avance = [
+        n
+        for n in na
+        if _nivel_matriz_values(matriz_manana, n) == _nivel_matriz_values(matriz_tarde, n)
+    ]
+
+    def _cap_rows_diff(cap_m: dict, cap_t: dict, key_rows: str, key_tot: str) -> dict:
+        rows_m = {
+            (r.get("capitulo") or "").strip(): r
+            for r in (cap_m.get(key_rows) or [])
+            if isinstance(r, dict)
+        }
+        rows_t = {
+            (r.get("capitulo") or "").strip(): r
+            for r in (cap_t.get(key_rows) or [])
+            if isinstance(r, dict)
+        }
+        caps = sorted(set(rows_m) | set(rows_t))
+        filas: List[dict] = []
+        for cap in caps:
+            rm = rows_m.get(cap) or {}
+            rt = rows_t.get(cap) or {}
+            cc_m = float(rm.get("claracore") or 0)
+            co_m = float(rm.get("cobrado") or 0)
+            d_m = float(rm.get("delta") if rm.get("delta") is not None else cc_m - co_m)
+            cc_t = float(rt.get("claracore") or 0)
+            co_t = float(rt.get("cobrado") or 0)
+            d_t = float(rt.get("delta") if rt.get("delta") is not None else cc_t - co_t)
+            filas.append(
+                {
+                    "capitulo": cap or "—",
+                    "delta_claracore": cc_t - cc_m,
+                    "delta_cobrado": co_t - co_m,
+                    "delta_delta": d_t - d_m,
+                }
+            )
+        tm = cap_m.get(key_tot) or {}
+        tt = cap_t.get(key_tot) or {}
+        t_cc_m = float(tm.get("claracore") or 0)
+        t_co_m = float(tm.get("cobrado") or 0)
+        t_d_m = float(tm.get("delta") if tm.get("delta") is not None else t_cc_m - t_co_m)
+        t_cc_t = float(tt.get("claracore") or 0)
+        t_co_t = float(tt.get("cobrado") or 0)
+        t_d_t = float(tt.get("delta") if tt.get("delta") is not None else t_cc_t - t_co_t)
+        return {
+            "filas": filas,
+            "totales": {
+                "delta_claracore": t_cc_t - t_cc_m,
+                "delta_cobrado": t_co_t - t_co_m,
+                "delta_delta": t_d_t - t_d_m,
+            },
+        }
+
+    return {
+        "niveles_activos": na,
+        "niveles": matriz_tarde.get("niveles") or matriz_manana.get("niveles") or [],
+        "aprobado_delta": aprobado_delta,
+        "niveles_sin_avance": sin_avance,
+        "capitulos_aiu": _cap_rows_diff(
+            capitulos_manana, capitulos_tarde, "capitulos_aiu", "totales_aiu"
+        ),
+        "capitulos_iva": _cap_rows_diff(
+            capitulos_manana, capitulos_tarde, "capitulos_iva", "totales_iva"
+        ),
+    }
+
+
+def _format_delta_cop(n: float) -> str:
+    sign = "+" if n > 0 else ""
+    return f"{sign}{_format_cop(n)}"
+
+
+def build_narrativa_sin_avance(comparacion: dict) -> str:
+    sin = comparacion.get("niveles_sin_avance") or []
+    if not sin:
+        return ""
+    niveles_info = {"niveles": comparacion.get("niveles") or []}
+    labels = [html.escape(_encabezado_nivel(niveles_info, n)) for n in sin]
+    ns = ", ".join(labels)
+    return (
+        f"<p><strong>Sin actividad de revisión en la jornada:</strong> "
+        f"en {ns} los valores de validación permanecieron idénticos al inicio "
+        f"de la jornada. Esto indica que no hubo movimiento de revisión en "
+        f"esos niveles durante todo el día, lo cual constituye un riesgo "
+        f"adicional a los señalados arriba.</p>"
+    )
+
+
+def _comparacion_capitulos_tabla_html(
+    diff: dict,
+    titulo: str,
+    footer_label: str,
+    header_bg: str,
+) -> str:
+    th = _TH.replace("#f1f5f9", header_bg).replace("#475569", "#ffffff")
+    th_r = th.replace("left", "right")
+    parts = [
+        f'<p style="margin:16px 0 8px;font-weight:700;font-size:14px;">{html.escape(titulo)}</p>',
+        '<table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px;">',
+        "<thead><tr>",
+        f'<th style="{th}">Capítulo</th>',
+        f'<th style="{th_r}">Δ ClaraCore</th>',
+        f'<th style="{th_r}">Δ Cobrado</th>',
+        f'<th style="{th_r}">Δ Δ</th>',
+        "</tr></thead><tbody>",
+    ]
+    for r in diff.get("filas") or []:
+        parts.append("<tr>")
+        parts.append(f'<td style="{_TD}">{html.escape(r.get("capitulo") or "—")}</td>')
+        parts.append(
+            f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(r.get("delta_claracore") or 0)))}</td>'
+        )
+        parts.append(
+            f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(r.get("delta_cobrado") or 0)))}</td>'
+        )
+        parts.append(
+            f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(r.get("delta_delta") or 0)))}</td>'
+        )
+        parts.append("</tr>")
+    tot = diff.get("totales") or {}
+    parts.append(
+        f'<tr style="background:#f1f5f9;font-weight:700;">'
+        f'<td style="{_TD}">{html.escape(footer_label)}</td>'
+        f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(tot.get("delta_claracore") or 0)))}</td>'
+        f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(tot.get("delta_cobrado") or 0)))}</td>'
+        f'<td style="{_TD_R}">{html.escape(_format_delta_cop(float(tot.get("delta_delta") or 0)))}</td>'
+        f"</tr>"
+    )
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def build_comparacion_jornada_html(comparacion: dict) -> Tuple[str, str]:
+    """HTML y texto plano de la comparación inicio vs fin de jornada."""
+    na = comparacion.get("niveles_activos") or [1, 2, 3]
+    cols = sorted(na, reverse=True)
+    niveles_info = {
+        "niveles": comparacion.get("niveles")
+        or [{"nivel": n, "encabezado": f"Nivel {n}"} for n in na],
+    }
+    deltas = comparacion.get("aprobado_delta") or {}
+
+    parts = [
+        '<div style="margin:20px 0;">',
+        "<p>Comparación entre el resumen de <strong>inicio de jornada (9:00)</strong> "
+        "y el estado actual al <strong>cierre (18:00)</strong>:</p>",
+        '<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">',
+        "<thead><tr>",
+        f'<th style="{_TH}">Nivel</th>',
+        f'<th style="{_TH_R}">Aprobado adicional (Δ jornada)</th>',
+        "</tr></thead><tbody>",
+    ]
+    for n in cols:
+        d = float(deltas.get(n) or 0)
+        parts.append("<tr>")
+        parts.append(
+            f'<td style="{_TD}">{html.escape(_encabezado_nivel(niveles_info, n))}</td>'
+        )
+        parts.append(
+            f'<td style="{_TD_R}">{html.escape(_format_delta_cop(d))}</td>'
+        )
+        parts.append("</tr>")
+    parts.append("</tbody></table>")
+    parts.append(
+        _comparacion_capitulos_tabla_html(
+            comparacion.get("capitulos_aiu") or {"filas": [], "totales": {}},
+            "Δ Ppto vs Cobro por capítulo (AIU)",
+            "TOTAL OBRA (AIU)",
+            "#4472C4",
+        )
+    )
+    parts.append(
+        _comparacion_capitulos_tabla_html(
+            comparacion.get("capitulos_iva") or {"filas": [], "totales": {}},
+            "Δ Ppto vs Cobro · IVA",
+            "TOTAL IVA",
+            "#7C3AED",
+        )
+    )
+    parts.append("</div>")
+    html_out = "".join(parts)
+    text = (
+        "Comparación inicio vs fin de jornada: aprobado adicional por nivel "
+        "y cambios en Ppto vs Cobro por capítulo."
+    )
+    return html_out, text
+
+
+def build_comparacion_no_disponible_html() -> str:
+    return (
+        '<p style="margin:20px 0;color:#64748b;font-style:italic;">'
+        "No hay registro de inicio de jornada para este contrato en la fecha "
+        "indicada (por ejemplo, si el correo de las 9:00 no se envió). "
+        "No es posible mostrar la comparación con la mañana."
+        "</p>"
+    )

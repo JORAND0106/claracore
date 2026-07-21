@@ -297,6 +297,14 @@ class NotificacionesEmailRunner:
             except (TypeError, ValueError):
                 continue
             cnum = str(c.get("numero") or cid)
+            try:
+                matriz = self._fetch_matriz(cid) or {}
+            except Exception:
+                _log.exception("Matriz validación falló contrato %s (informe no copiado)", cid)
+                matriz = {
+                    "niveles_activos": self._niveles_contrato(cid),
+                    "acta_rpo": None,
+                }
             for u in self._usuarios_vinculados_contrato(cid):
                 uid = int(u["id"])
                 if not self._permiso_rc(uid, "editar", cid):
@@ -318,7 +326,7 @@ class NotificacionesEmailRunner:
                     omitidos += 1
                     continue
                 subj, txt, html_b = email_informe_no_copiado(
-                    _usuario_display_name(u), cnum, label
+                    _usuario_display_name(u), cnum, label, matriz
                 )
                 en, pn = self._enviar_canales(
                     "informe_no_copiado",
@@ -458,6 +466,57 @@ class NotificacionesEmailRunner:
             capitulos = {}
         return cnum, matriz, capitulos
 
+    def _guardar_resumen_snapshot(
+        self, contrato_id: int, fecha: str, matriz: dict, capitulos: dict
+    ) -> None:
+        row = {
+            "contrato_id": int(contrato_id),
+            "fecha": fecha,
+            "matriz": matriz,
+            "capitulos": capitulos,
+        }
+
+        def _upsert():
+            return (
+                self.supabase.table("notificaciones_email_resumen_snapshot")
+                .upsert(row, on_conflict="contrato_id,fecha")
+                .execute()
+            )
+
+        try:
+            self.supabase_execute(_upsert)
+        except Exception:
+            _log.exception(
+                "No se pudo guardar snapshot resumen contrato %s fecha %s",
+                contrato_id,
+                fecha,
+            )
+
+    def _cargar_resumen_snapshot(
+        self, contrato_id: int, fecha: str
+    ) -> Optional[dict]:
+        def _fetch():
+            return (
+                self.supabase.table("notificaciones_email_resumen_snapshot")
+                .select("matriz, capitulos")
+                .eq("contrato_id", int(contrato_id))
+                .eq("fecha", fecha)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        try:
+            rows = self.supabase_execute(_fetch) or []
+            return rows[0] if rows else None
+        except Exception:
+            _log.exception(
+                "No se pudo cargar snapshot resumen contrato %s fecha %s",
+                contrato_id,
+                fecha,
+            )
+            return None
+
     def run_admin_resumen_prueba_temp(
         self,
         contrato_id: int,
@@ -535,6 +594,12 @@ class NotificacionesEmailRunner:
             except LookupError:
                 continue
 
+            snapshot_manana: Optional[dict] = None
+            if periodo_efectivo == "manana":
+                self._guardar_resumen_snapshot(cid, fecha, matriz, capitulos)
+            else:
+                snapshot_manana = self._cargar_resumen_snapshot(cid, fecha)
+
             for uid in dest_ids:
                 urows = (
                     self.supabase.table("usuarios")
@@ -554,6 +619,7 @@ class NotificacionesEmailRunner:
                     periodo_efectivo,
                     matriz,
                     capitulos,
+                    snapshot_manana=snapshot_manana,
                 )
                 en, pn = self._enviar_canales(
                     "admin_resumen",

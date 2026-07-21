@@ -75,6 +75,7 @@ class _FakeSupabase:
         self.envios: List[dict] = []
         self.rpc_calls: List[tuple] = []
         self.copiados: set[tuple] = set()
+        self.resumen_snapshots: Dict[tuple, dict] = {}
         self.sin_item_counts = {2: 3, 3: 5}
         self.pendiente_counts = {(2, 1): 2, (3, 1): 4}
 
@@ -108,6 +109,9 @@ class _FakeSupabase:
 
     def _run(self, q: _Q):
         if q._table == "contratos":
+            if q._filters.get("id") is not None:
+                cid = int(q._filters["id"])
+                return [c for c in CONTRATOS if int(c["id"]) == cid]
             return CONTRATOS
         if q._table == "usuarios":
             if q._filters.get("contrato_id") is not None:
@@ -149,6 +153,17 @@ class _FakeSupabase:
             if q._upsert_row is not None:
                 self.envios.append(q._upsert_row)
                 return [q._upsert_row]
+            return []
+        if q._table == "notificaciones_email_resumen_snapshot":
+            if q._upsert_row is not None:
+                key = (int(q._upsert_row["contrato_id"]), q._upsert_row["fecha"])
+                self.resumen_snapshots[key] = q._upsert_row
+                return [q._upsert_row]
+            cid = q._filters.get("contrato_id")
+            fecha = q._filters.get("fecha")
+            if cid is not None and fecha is not None:
+                row = self.resumen_snapshots.get((int(cid), fecha))
+                return [row] if row else []
             return []
         return []
 
@@ -284,4 +299,70 @@ def test_admin_resumen_asunto_fin_jornada(runner):
     r, sb, sent = runner
     r.run_admin_resumen("2026-07-21", "tarde", "2026-07-21_tarde")
     assert any("fin de jornada" in s[1] for s in sent)
+
+
+def test_admin_resumen_guarda_snapshot_manana_y_compara_tarde(runner, monkeypatch):
+    r, sb, sent = runner
+    captured_html: List[str] = []
+
+    def _capture(to, subj, txt, html):
+        captured_html.append(html)
+        sent.append((to, subj))
+        return True
+
+    monkeypatch.setattr(
+        "notificaciones_email_service.try_send_notification_email",
+        _capture,
+    )
+
+    r.run_admin_resumen("2026-07-21", "manana", "2026-07-21_manana")
+    assert (2, "2026-07-21") in sb.resumen_snapshots
+    assert (3, "2026-07-21") in sb.resumen_snapshots
+
+    r._fetch_matriz = lambda cid: {
+        **_matriz_con_aprobado(cid, 500000),
+    }
+    r._fetch_capitulos = lambda cid: {
+        "capitulos_aiu": [
+            {"capitulo": "01. Cap", "claracore": 200, "cobrado": 150, "delta": 50},
+        ],
+        "totales_aiu": {"claracore": 200, "cobrado": 150, "delta": 50},
+        "capitulos_iva": [],
+        "totales_iva": {"claracore": 0, "cobrado": 0, "delta": 0},
+    }
+
+    captured_html.clear()
+    sent.clear()
+    r.run_admin_resumen("2026-07-21", "tarde", "2026-07-21_tarde")
+    assert any("Avance durante la jornada" in h for h in captured_html)
+    assert any("Aprobado adicional" in h for h in captured_html)
+    assert any("Δ ClaraCore" in h for h in captured_html)
+    assert any("fin de jornada" in s[1] for s in sent)
+
+
+def _matriz_con_aprobado(cid: int, extra_aprobado: float):
+    return {
+        "acta_rpo": 10,
+        "niveles_activos": [1, 2],
+        "nivel_maximo": 2,
+        "niveles": [{"nivel": 1, "encabezado": "Inspector (N1)"}, {"nivel": 2, "encabezado": "Residente (N2)"}],
+        "obra_ejecutada_directo_sin_aiu": {
+            "aprobado": {"nivel1": extra_aprobado, "nivel2": 0.0},
+            "pendiente": {"nivel1": 0.0, "nivel2": 0.0},
+            "pendiente_item": {"nivel1": 0.0, "nivel2": 0.0},
+            "no_revisado": {"nivel1": 0.0, "nivel2": 0.0},
+            "rechazado": {"nivel1": 0.0, "nivel2": 0.0},
+            "habilitado": {"nivel1": 0.0, "nivel2": 0.0},
+            "otras_actas": {"nivel1": 0.0, "nivel2": 0.0},
+        },
+        "ensayos_sondeos_directo_sin_iva": {
+            "aprobado": {"nivel1": 0.0, "nivel2": 0.0},
+            "pendiente": {"nivel1": 0.0, "nivel2": 0.0},
+            "pendiente_item": {"nivel1": 0.0, "nivel2": 0.0},
+            "no_revisado": {"nivel1": 0.0, "nivel2": 0.0},
+            "rechazado": {"nivel1": 0.0, "nivel2": 0.0},
+            "habilitado": {"nivel1": 0.0, "nivel2": 0.0},
+            "otras_actas": {"nivel1": 0.0, "nivel2": 0.0},
+        },
+    }
 

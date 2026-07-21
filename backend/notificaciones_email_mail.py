@@ -144,7 +144,11 @@ def try_send_notification_email(
         return False
 
 
-def email_informe_no_copiado(nombre: str, contrato_num: str, slot_label: str) -> tuple[str, str, str]:
+def email_informe_no_copiado(
+    nombre: str, contrato_num: str, slot_label: str, matriz: dict
+) -> tuple[str, str, str]:
+    from notificaciones_email_resumen import build_matriz_html
+
     subject = f"ClaraCore — {contrato_num}: informe de validación pendiente ({slot_label})"
     text = (
         f"Hola {nombre},\n\n"
@@ -153,13 +157,18 @@ def email_informe_no_copiado(nombre: str, contrato_num: str, slot_label: str) ->
         f"de Validación por rol.\n\n"
         f"{plataforma_url()}\n"
     )
+    acta_rpo = matriz.get("acta_rpo") if isinstance(matriz, dict) else None
+    acta_hdr = f" · Acta RPO #{acta_rpo}" if acta_rpo is not None else ""
+    matriz_html = build_matriz_html(matriz or {})
     html_body = _wrap_html(
         f"Informe pendiente · {contrato_num}",
         f"<p>Hola <strong>{html.escape(nombre)}</strong>,</p>"
         f"<p>En el contrato <strong>{html.escape(contrato_num)}</strong> aún no has copiado "
         f"el informe de validación del día (ventana <strong>{html.escape(slot_label)}</strong>).</p>"
         f"<p>Ingresa a la plataforma; el modal te permitirá copiar el cuadro "
-        f"«Validación por rol · SICOE Obra».</p>",
+        f"«Validación por rol · SICOE Obra».</p>"
+        f'<h2 style="font-size:16px;margin:24px 0 8px;">Validación por rol · SICOE Obra{html.escape(acta_hdr)}</h2>'
+        f"{matriz_html}",
     )
     return subject, text, html_body
 
@@ -205,13 +214,18 @@ def email_admin_resumen(
     periodo: str,
     matriz: dict,
     capitulos: dict,
+    snapshot_manana: Optional[dict] = None,
 ) -> tuple[str, str, str]:
     from notificaciones_email_resumen import (
         build_capitulos_html,
+        build_comparacion_jornada_html,
+        build_comparacion_no_disponible_html,
         build_intro_cierre,
         build_matriz_html,
         build_narrativa_riesgo,
+        build_narrativa_sin_avance,
         build_saludo,
+        compute_comparacion_jornada,
     )
 
     periodo_label = "inicio de jornada" if periodo == "manana" else "fin de jornada"
@@ -223,24 +237,49 @@ def email_admin_resumen(
     riesgo_html = build_narrativa_riesgo(matriz)
     cap_html, cap_text = build_capitulos_html(capitulos)
 
+    comparacion_html = ""
+    comparacion_text = ""
+    if periodo == "tarde":
+        if snapshot_manana and isinstance(snapshot_manana, dict):
+            mat_m = snapshot_manana.get("matriz") or {}
+            cap_m = snapshot_manana.get("capitulos") or {}
+            comparacion = compute_comparacion_jornada(mat_m, matriz, cap_m, capitulos)
+            comparacion_html, comparacion_text = build_comparacion_jornada_html(comparacion)
+            sin_avance_html = build_narrativa_sin_avance(comparacion)
+            if sin_avance_html:
+                riesgo_html = riesgo_html.replace("</div>", f"{sin_avance_html}</div>", 1)
+        else:
+            comparacion_html = build_comparacion_no_disponible_html()
+
     text = (
         f"Estimado Ingeniero {nombre}, a continuación ClaraCore te informa "
         f"el estado de las validaciones del Acta #{acta_txt}.\n\n"
         f"{intro}\n\nContrato {contrato_num}.\n\n"
         f"Validación por rol (Acta #{acta_txt}).\n\n"
-        f"{cap_text}\n\n{cierre}\n\n{plataforma_url()}\n"
     )
+    if comparacion_text:
+        text += f"{comparacion_text}\n\n"
+    text += f"{cap_text}\n\n{cierre}\n\n{plataforma_url()}\n"
+
+    comparacion_section = ""
+    if periodo == "tarde":
+        comparacion_section = (
+            f'<h2 style="font-size:16px;margin:24px 0 8px;">Avance durante la jornada</h2>'
+            f"{comparacion_html}"
+        )
+
     html_body = _wrap_html(
         f"Resumen {periodo_label} · {contrato_num}",
         f"<p>{build_saludo(nombre, acta_rpo)}</p>"
         f"<p>{html.escape(intro)}</p>"
         f"<p>Contrato <strong>{html.escape(contrato_num)}</strong></p>"
-        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Validación por rol · SICOE Obra</h2>"
+        f'<h2 style="font-size:16px;margin:24px 0 8px;">Validación por rol · SICOE Obra</h2>'
         f"{matriz_html}"
-        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Narrativa de riesgo</h2>"
+        f"{comparacion_section}"
+        f'<h2 style="font-size:16px;margin:24px 0 8px;">Narrativa de riesgo</h2>'
         f"{riesgo_html}"
-        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Ppto vs Cobro por capítulo</h2>"
+        f'<h2 style="font-size:16px;margin:24px 0 8px;">Ppto vs Cobro por capítulo</h2>'
         f"{cap_html}"
-        f"<p style=\"margin-top:20px;\">{html.escape(cierre)}</p>",
+        f'<p style="margin-top:20px;">{html.escape(cierre)}</p>',
     )
     return subject, text, html_body
