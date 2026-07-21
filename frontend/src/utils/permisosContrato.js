@@ -71,3 +71,18 @@ export function usuarioPuedeEditarRegistrosSicoe(usuario, contratoId) {
   const p = permisoReporteCantidades(usuario, contratoId)
   return !!(p?.editar)
 }
+
+/** Web Push: editar o validar SICOE, o cargo Administrador/Desarrollador. */
+export function usuarioDebeSuscribirsePush(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  if (cargo === 'administrador') return true
+  const p = permisoReporteCantidades(usuario, contratoId)
+  return !!(p?.editar || p?.validar)
+}

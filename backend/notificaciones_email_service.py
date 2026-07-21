@@ -23,6 +23,8 @@ from notificaciones_email_mail import (
     smtp_configured,
     try_send_notification_email,
 )
+from notificaciones_push_service import NotificacionesPushSender
+
 _log = logging.getLogger("claracore.notificaciones_email")
 
 
@@ -101,6 +103,7 @@ class NotificacionesEmailRunner:
         self._ids_cargo = ids_cargo_por_nombre
         self._usuarios_cargo = usuarios_activos_por_cargos
         self._vinculado = usuario_vinculado_contrato
+        self._push = NotificacionesPushSender(supabase)
 
     def _fetch_contratos_activos(self) -> List[dict]:
         """Todos los contratos registrados en la plataforma (sin filtro por id)."""
@@ -250,7 +253,12 @@ class NotificacionesEmailRunner:
                 tipo, slot_key, usuario_id, contrato_id, to_addr.strip(), subject, text, html_body, meta=meta
             ):
                 email_n = 1
-        return email_n, 0
+        push_n = 0
+        if self._push.configured():
+            push_n = self._push.enviar_a_usuario(
+                usuario_id, contrato_id, tipo, slot_key, subject, text, meta=meta
+            )
+        return email_n, push_n
 
     def _rpc_count(self, fn: str, params: dict) -> int:
         def _q():
@@ -568,7 +576,7 @@ class NotificacionesEmailRunner:
 
     def run_due_jobs(self, dt: Optional[datetime] = None) -> dict:
         dt = dt or _bogota_now()
-        if not smtp_configured():
+        if not smtp_configured() and not self._push.configured():
             return {"skipped": "sin_canales_configurados", "jobs": []}
 
         fecha = dt.strftime("%Y-%m-%d")

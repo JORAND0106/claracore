@@ -2290,6 +2290,9 @@ app.include_router(filtros_plantillas_router)
 from notificaciones_email_routes import router as notificaciones_email_router
 app.include_router(notificaciones_email_router)
 
+from notificaciones_push_routes import router as notificaciones_push_router
+app.include_router(notificaciones_push_router)
+
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
 

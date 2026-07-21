@@ -40,6 +40,7 @@ import MatrizValidacionSicoePanel from './components/MatrizValidacionSicoePanel'
 // TEMPORAL — eliminar tras validar correo resumen jornada en producción
 import TempPruebaResumenJornadaDev from './components/temp/TempPruebaResumenJornadaDev'
 import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
+import { useWebPushSubscription } from './hooks/useWebPushSubscription'
 import { BookOpen, Menu, X } from 'lucide-react'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
@@ -21345,13 +21346,14 @@ export default function App() {
   const [devPanelView, setDevPanelView] = useState(null) // null | 'gate' | 'open'
   const [usuario, setUsuario] = useState(() => restoreUsuarioFromStorage())
 
-  // ── Registro del Service Worker (offline app shell) ───────────────────────
+  // ── Service Worker (offline + Web Push) ───────────────────────────────────
   useEffect(() => {
-    if (import.meta.env.DEV) return
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
     }
   }, [])
+
+  useWebPushSubscription({ usuario, contratoId: usuario?.contrato_id })
 
   // ── Detección de nueva versión ─────────────────────────────────────────────
   const [hayNuevaVersion, setHayNuevaVersion] = useState(false)

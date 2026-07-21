@@ -4,7 +4,7 @@
  * para que un F5 normal cargue el bundle nuevo tras un deploy;
  * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
  */
-const CACHE_NAME = 'claracore-shell-v6'
+const CACHE_NAME = 'claracore-shell-v7'
 const TILES_CACHE_NAME = 'claracore-tiles-v1'
 
 self.addEventListener('install', (event) => {
@@ -115,5 +115,36 @@ self.addEventListener('fetch', (event) => {
         .catch(() => cached)
       return cached || netFetch
     })
+  )
+})
+
+self.addEventListener('push', (event) => {
+  let payload = { title: 'ClaraCore', body: '', url: '/' }
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() }
+  } catch {
+    /* ignore */
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title || 'ClaraCore', {
+      body: payload.body || '',
+      icon: '/favicon.png',
+      badge: '/favicon.png',
+      data: { url: payload.url || '/' },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = event.notification.data?.url || '/'
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url && 'focus' in client) return client.focus()
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(target)
+      return undefined
+    }),
   )
 })
