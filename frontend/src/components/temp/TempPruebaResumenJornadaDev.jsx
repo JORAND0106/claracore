@@ -3,7 +3,7 @@
  * Eliminar este archivo y tempPruebaResumenJornada.js tras validar en producción.
  */
 import { useCallback, useState } from 'react'
-import { enviarPruebaResumenJornada } from '../utils/tempPruebaResumenJornada'
+import { enviarPruebaResumenJornada } from '../../utils/tempPruebaResumenJornada'
 
 export default function TempPruebaResumenJornadaDev({
   contratoId,
