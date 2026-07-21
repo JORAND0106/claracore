@@ -5907,6 +5907,124 @@ def _destinatarios_notif_nuevo_registro(contrato_id: Optional[int]) -> List[int]
     return sorted(dest)
 
 
+def _ids_rol_por_nombre(nombre_rol: str) -> List[int]:
+    """IDs de roles cuyo nombre coincide (case-insensitive)."""
+    target = (nombre_rol or "").strip().lower()
+    if not target:
+        return []
+    try:
+        rows = supabase.table("roles").select("id, nombre").execute().data or []
+        return [
+            int(r["id"])
+            for r in rows
+            if r.get("id") is not None
+            and ((r.get("nombre") or "").strip().lower() == target)
+        ]
+    except Exception:
+        return []
+
+
+def _usuarios_activos_por_roles(rol_ids: List[int]) -> List[dict]:
+    if not rol_ids:
+        return []
+    try:
+        rows = (
+            supabase.table("usuarios")
+            .select("id, rol_id, contrato_id, activo, estado")
+            .in_("rol_id", rol_ids)
+            .eq("activo", True)
+            .execute()
+            .data
+            or []
+        )
+        return [r for r in rows if (r.get("estado") or "").lower() != "rechazado"]
+    except Exception:
+        return []
+
+
+def _destinatarios_resumen_jornada(contrato_id: Optional[int]) -> List[int]:
+    """
+    Resumen inicio/fin de jornada: Desarrolladores (todos) +
+    Contratista Gerencial vinculado al contrato (por rol, no por permiso admin).
+    """
+    dest: Set[int] = set()
+    for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("desarrollador")):
+        try:
+            dest.add(int(u["id"]))
+        except (TypeError, ValueError, KeyError):
+            pass
+    if contrato_id is None:
+        return sorted(dest)
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return sorted(dest)
+    cg_rol_ids = _ids_rol_por_nombre("contratista gerencial")
+    for u in _usuarios_activos_por_roles(cg_rol_ids):
+        try:
+            uid = int(u["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if _usuario_vinculado_a_contrato(uid, cid):
+            dest.add(uid)
+    return sorted(dest)
+
+
+def _usuario_puede_suscribirse_push(user_id: int) -> bool:
+    """Editar/validar SICOE en algún contrato, o cargo Administrador/Desarrollador."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    dev_ids = set(_ids_cargo_por_nombre("desarrollador"))
+    admin_ids = set(_ids_cargo_por_nombre("administrador"))
+    try:
+        urows = (
+            supabase.table("usuarios")
+            .select("id, cargo_id, contrato_id")
+            .eq("id", uid)
+            .eq("activo", True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return False
+    if not urows:
+        return False
+    u = urows[0]
+    cid_cargo = u.get("cargo_id")
+    if cid_cargo is not None and int(cid_cargo) in dev_ids | admin_ids:
+        return True
+    cids: Set[int] = set()
+    if u.get("contrato_id") is not None:
+        try:
+            cids.add(int(u["contrato_id"]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        uc = (
+            supabase.table("usuario_contratos")
+            .select("contrato_id")
+            .eq("usuario_id", uid)
+            .execute()
+            .data
+            or []
+        )
+        for row in uc:
+            if row.get("contrato_id") is not None:
+                cids.add(int(row["contrato_id"]))
+    except Exception:
+        pass
+    for cid in cids:
+        if _cargo_permiso_reporte_cantidades_user_id(uid, "editar", cid):
+            return True
+        if _cargo_permiso_reporte_cantidades_user_id(uid, "validar", cid):
+            return True
+    return False
+
+
 def _fmt_fecha_hora_registro(created_at) -> str:
     if not created_at:
         return datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
@@ -26132,6 +26250,102 @@ def dashboard_matriz_validacion_obra(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_NOTIF_EMAIL_VIEWER = {"id": 0, "rol_nombre": "Desarrollador", "cargo_nombre": "Desarrollador"}
+
+
+def _parse_matriz_rpc_raw_email(raw):
+    if raw is None:
+        return {}
+    if isinstance(raw, list) and len(raw) > 0:
+        return raw[0] if isinstance(raw[0], dict) else {}
+    if isinstance(raw, dict) and "obra_ejecutada_directo_sin_aiu" in raw:
+        return raw
+    if isinstance(raw, dict):
+        k = next(iter(raw.keys()), None)
+        return raw[k] if k and isinstance(raw.get(k), dict) else raw
+    return {}
+
+
+def _fetch_matriz_validacion_vigente_email(contrato_id: int) -> dict:
+    """Matriz validación acta RPO vigente para correo resumen (sin JWT)."""
+    niveles_activos = _get_niveles_activos_contrato(contrato_id)
+    campo_max = _get_nivel_maximo_contrato(contrato_id)
+    vig = _acta_rpo_vigente_row(contrato_id)
+    acta_id_filtro: Optional[int] = None
+    acta_rpo_resp: Optional[int] = None
+    if vig and vig.get("id") is not None:
+        try:
+            acta_id_filtro = int(vig["id"])
+        except (TypeError, ValueError):
+            acta_id_filtro = None
+    if vig and vig.get("numero_rpo") is not None:
+        try:
+            acta_rpo_resp = int(vig["numero_rpo"])
+        except (TypeError, ValueError):
+            acta_rpo_resp = None
+
+    payload: dict = {}
+    payload_desde_sql = False
+    usar_sql_matriz = bool(niveles_activos) and all(1 <= int(n) <= 6 for n in niveles_activos)
+
+    if acta_id_filtro and usar_sql_matriz:
+        try:
+            raw_bundle, _ = _fetch_dashboard_matriz_vigente_bundle(contrato_id, campo_max)
+            pay = _parse_matriz_rpc_raw_email(raw_bundle)
+            if isinstance(pay, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
+                payload = {k: v for k, v in pay.items() if k != "_vigente"}
+                payload_desde_sql = True
+        except Exception:
+            payload = {}
+
+    if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
+        if usar_sql_matriz and acta_id_filtro:
+            try:
+                def _rpc():
+                    return supabase.rpc(
+                        "dashboard_matriz_validacion_agg",
+                        {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro},
+                    ).execute().data
+
+                payload = _parse_matriz_rpc_raw_email(supabase_execute(_rpc))
+                payload_desde_sql = bool(payload)
+            except Exception:
+                payload = {}
+        if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
+            payload = _dashboard_matriz_validacion_por_niveles(
+                contrato_id, acta_id_filtro, niveles_activos
+            )
+            payload_desde_sql = False
+
+    payload = _matriz_finalizar_payload(payload, niveles_activos, desde_sql_legacy=payload_desde_sql)
+    return {
+        "acta_rpo": acta_rpo_resp,
+        "niveles_activos": niveles_activos,
+        "nivel_maximo": _get_nivel_numero_maximo_contrato(contrato_id),
+        "niveles": [
+            {
+                "nivel": n,
+                "encabezado": NIVEL_VALIDACION_ENCABEZADO.get(n) or f"Nivel {n}",
+            }
+            for n in niveles_activos
+        ],
+        "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu")
+        or _matriz_validacion_empty(niveles_activos),
+        "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva")
+        or _matriz_validacion_empty(niveles_activos),
+    }
+
+
+def _fetch_capitulos_financiero_email(contrato_id: int) -> dict:
+    """Ppto vs Cobro por capítulo (obra ejecutada) para correo resumen."""
+    rows_aiu, rows_iva = _gerencial_capitulos_data_both(
+        contrato_id, DASH_VISTA_OBRA_EJECUTADA, _NOTIF_EMAIL_VIEWER, acta_id=None
+    )
+    return _dashboard_capitulos_financiero_build_response(
+        contrato_id, DASH_VISTA_OBRA_EJECUTADA, rows_aiu, rows_iva
+    )
 
 
 @app.get("/sicoe-obra/{contrato_id}/dashboard-drill")

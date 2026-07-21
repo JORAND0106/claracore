@@ -14,7 +14,6 @@ from notificaciones_email_config import (
     JobRunSpec,
     TZ_BOGOTA,
     all_scheduled_jobs,
-    temp_test_admin_jobs_due_now,
 )
 from notificaciones_email_mail import (
     email_admin_resumen,
@@ -24,7 +23,6 @@ from notificaciones_email_mail import (
     smtp_configured,
     try_send_notification_email,
 )
-
 _log = logging.getLogger("claracore.notificaciones_email")
 
 
@@ -83,7 +81,9 @@ class NotificacionesEmailRunner:
         niveles_activos_contrato: Callable[[int], List[int]],
         acta_rpo_vigente_row: Callable[[int], Optional[dict]],
         es_desarrollador_user_id: Callable[[int], bool],
-        destinatarios_admin_contrato: Callable[[Optional[int]], List[int]],
+        destinatarios_resumen_jornada: Callable[[Optional[int]], List[int]],
+        fetch_matriz_validacion_email: Callable[[int], dict],
+        fetch_capitulos_financiero_email: Callable[[int], dict],
         ids_cargo_por_nombre: Callable[[str], List[int]],
         usuarios_activos_por_cargos: Callable[[List[int]], List[dict]],
         usuario_vinculado_contrato: Callable[[int, int], bool],
@@ -95,7 +95,9 @@ class NotificacionesEmailRunner:
         self._niveles_contrato = niveles_activos_contrato
         self._acta_vigente = acta_rpo_vigente_row
         self._es_dev = es_desarrollador_user_id
-        self._admin_dest = destinatarios_admin_contrato
+        self._resumen_dest = destinatarios_resumen_jornada
+        self._fetch_matriz = fetch_matriz_validacion_email
+        self._fetch_capitulos = fetch_capitulos_financiero_email
         self._ids_cargo = ids_cargo_por_nombre
         self._usuarios_cargo = usuarios_activos_por_cargos
         self._vinculado = usuario_vinculado_contrato
@@ -153,8 +155,6 @@ class NotificacionesEmailRunner:
         out: List[dict] = []
         for r in rows:
             if (r.get("estado") or "").lower() == "rechazado":
-                continue
-            if not (r.get("email") or "").strip():
                 continue
             uid = int(r["id"])
             if not self._vinculado(uid, contrato_id):
@@ -222,12 +222,35 @@ class NotificacionesEmailRunner:
     ) -> bool:
         if self._ya_enviado(tipo, slot_key, usuario_id, contrato_id):
             return False
+        to_addr = (to_addr or "").strip()
+        if not to_addr:
+            return False
         res = try_send_notification_email(to_addr, subject, text, html_body)
         if res is None:
             _log.warning("SMTP no configurado; omitiendo %s → %s", tipo, to_addr)
             return False
         self._registrar_envio(tipo, slot_key, usuario_id, contrato_id, to_addr, bool(res), meta=meta)
         return bool(res)
+
+    def _enviar_canales(
+        self,
+        tipo: str,
+        slot_key: str,
+        usuario_id: int,
+        contrato_id: Optional[int],
+        to_addr: Optional[str],
+        subject: str,
+        text: str,
+        html_body: str,
+        meta: Optional[dict] = None,
+    ) -> tuple[int, int]:
+        email_n = 0
+        if (to_addr or "").strip() and smtp_configured():
+            if self._enviar(
+                tipo, slot_key, usuario_id, contrato_id, to_addr.strip(), subject, text, html_body, meta=meta
+            ):
+                email_n = 1
+        return email_n, 0
 
     def _rpc_count(self, fn: str, params: dict) -> int:
         def _q():
@@ -256,6 +279,7 @@ class NotificacionesEmailRunner:
     def run_informe_no_copiado(self, fecha: str, slot_hora: str, log_key: str) -> dict:
         slot_id = f"{fecha}_{slot_hora}"
         enviados = 0
+        push_enviados = 0
         omitidos = 0
         contratos = self._fetch_contratos_activos()
         label = self._informe_slot_label(slot_hora)
@@ -288,26 +312,29 @@ class NotificacionesEmailRunner:
                 subj, txt, html_b = email_informe_no_copiado(
                     _usuario_display_name(u), cnum, label
                 )
-                if self._enviar(
+                en, pn = self._enviar_canales(
                     "informe_no_copiado",
                     log_key,
                     uid,
                     cid,
-                    u["email"].strip(),
+                    (u.get("email") or "").strip(),
                     subj,
                     txt,
                     html_b,
                     meta={"slot_id": slot_id},
-                ):
-                    enviados += 1
+                )
+                enviados += en
+                push_enviados += pn
         return {
             "contratos_evaluados": len(contratos),
             "enviados": enviados,
+            "push_enviados": push_enviados,
             "omitidos_ya_copiaron": omitidos,
         }
 
     def run_sin_item_asignado(self, log_key: str) -> dict:
         enviados = 0
+        push_enviados = 0
         contratos = self._fetch_contratos_activos()
         for c in contratos:
             try:
@@ -323,22 +350,28 @@ class NotificacionesEmailRunner:
                 if not self._permiso_rc(uid, "editar", cid):
                     continue
                 subj, txt, html_b = email_sin_item_asignado(_usuario_display_name(u), cnum, n)
-                if self._enviar(
+                en, pn = self._enviar_canales(
                     "sin_item_asignado",
                     log_key,
                     uid,
                     cid,
-                    u["email"].strip(),
+                    (u.get("email") or "").strip(),
                     subj,
                     txt,
                     html_b,
                     meta={"n_sin_item": n},
-                ):
-                    enviados += 1
-        return {"contratos_evaluados": len(contratos), "enviados": enviados}
+                )
+                enviados += en
+                push_enviados += pn
+        return {
+            "contratos_evaluados": len(contratos),
+            "enviados": enviados,
+            "push_enviados": push_enviados,
+        }
 
     def run_validacion_pendiente(self, log_key: str) -> dict:
         enviados = 0
+        push_enviados = 0
         contratos = self._fetch_contratos_activos()
         for c in contratos:
             try:
@@ -369,87 +402,130 @@ class NotificacionesEmailRunner:
                 subj, txt, html_b = email_validacion_pendiente(
                     _usuario_display_name(u), cnum, nivel, n
                 )
-                if self._enviar(
+                en, pn = self._enviar_canales(
                     "validacion_pendiente",
                     log_key,
                     uid,
                     cid,
-                    u["email"].strip(),
+                    (u.get("email") or "").strip(),
                     subj,
                     txt,
                     html_b,
                     meta={"nivel": nivel, "n_pendientes": n},
-                ):
-                    enviados += 1
-        return {"contratos_evaluados": len(contratos), "enviados": enviados}
+                )
+                enviados += en
+                push_enviados += pn
+        return {
+            "contratos_evaluados": len(contratos),
+            "enviados": enviados,
+            "push_enviados": push_enviados,
+        }
+
+    def _admin_resumen_cargar_contrato(self, contrato_id: int) -> tuple[str, dict, dict]:
+        """Número de contrato + datos matriz/capítulos (misma lógica que envío programado)."""
+        rows = (
+            self.supabase.table("contratos")
+            .select("id, numero")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            raise LookupError("contrato_no_encontrado")
+        cnum = str(rows[0].get("numero") or contrato_id)
+        try:
+            matriz = self._fetch_matriz(int(contrato_id)) or {}
+        except Exception:
+            _log.exception("Matriz validación falló contrato %s", contrato_id)
+            matriz = {
+                "niveles_activos": self._niveles_contrato(int(contrato_id)),
+                "acta_rpo": None,
+            }
+        try:
+            capitulos = self._fetch_capitulos(int(contrato_id)) or {}
+        except Exception:
+            _log.exception("Capítulos financiero falló contrato %s", contrato_id)
+            capitulos = {}
+        return cnum, matriz, capitulos
+
+    def run_admin_resumen_prueba_temp(
+        self,
+        contrato_id: int,
+        periodo: str,
+        to_email: str,
+        to_nombre: str,
+    ) -> dict:
+        """
+        TEMPORAL — envío bajo demanda del resumen jornada a un único correo de prueba.
+        No notifica destinatarios reales ni Web Push. Eliminar con el endpoint temp.
+        """
+        periodo_efectivo = "manana" if periodo == "manana" else "tarde"
+        cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(contrato_id)
+        subj, txt, html_b = email_admin_resumen(
+            to_nombre,
+            cnum,
+            periodo_efectivo,
+            matriz,
+            capitulos,
+        )
+        to_addr = (to_email or "").strip()
+        if not to_addr:
+            return {
+                "temp_prueba": True,
+                "contrato_id": int(contrato_id),
+                "contrato_numero": cnum,
+                "periodo": periodo_efectivo,
+                "destinatario": None,
+                "acta_rpo": matriz.get("acta_rpo"),
+                "enviado": False,
+                "error": "correo_destino_vacio",
+                "smtp_configurado": smtp_configured(),
+            }
+        if not smtp_configured():
+            return {
+                "temp_prueba": True,
+                "contrato_id": int(contrato_id),
+                "contrato_numero": cnum,
+                "periodo": periodo_efectivo,
+                "destinatario": to_addr,
+                "acta_rpo": matriz.get("acta_rpo"),
+                "enviado": False,
+                "error": "smtp_no_configurado",
+                "smtp_configurado": False,
+            }
+        res = try_send_notification_email(to_addr, subj, txt, html_b)
+        return {
+            "temp_prueba": True,
+            "contrato_id": int(contrato_id),
+            "contrato_numero": cnum,
+            "periodo": periodo_efectivo,
+            "destinatario": to_addr,
+            "acta_rpo": matriz.get("acta_rpo"),
+            "asunto": subj,
+            "enviado": bool(res),
+            "smtp_configurado": True,
+        }
 
     def run_admin_resumen(self, fecha: str, periodo: str, log_key: str) -> dict:
         enviados = 0
-        # prueba_temp usa el mismo contenido que resumen de mañana
-        periodo_efectivo = "manana" if periodo == "prueba_temp" else periodo
-        periodo_label = "mañana" if periodo_efectivo == "manana" else "fin de jornada"
+        push_enviados = 0
+        periodo_efectivo = "manana" if periodo == "manana" else "tarde"
         contratos = self._fetch_contratos_activos()
         for c in contratos:
             try:
                 cid = int(c["id"])
             except (TypeError, ValueError):
                 continue
-            cnum = str(c.get("numero") or cid)
-            dest_ids = self._admin_dest(cid)
+            dest_ids = self._resumen_dest(cid)
             if not dest_ids:
                 continue
 
-            def _dia():
-                return self.supabase.rpc(
-                    "notif_email_registros_dia",
-                    {"p_contrato_id": cid, "p_fecha": fecha},
-                ).execute().data
-
-            dia_rows = self.supabase_execute(_dia) or []
-            n_rep = 0
-            val_rep = 0.0
-            if dia_rows:
-                row0 = dia_rows[0] if isinstance(dia_rows[0], dict) else {}
-                n_rep = int(row0.get("n_reg") or 0)
-                val_rep = float(row0.get("total_valor") or 0)
-
-            vig = self._acta_vigente(cid)
-            acta_id = int(vig["id"]) if vig and vig.get("id") is not None else None
-            na = self._niveles_contrato(cid)
-
-            niveles_lines: List[str] = []
-            niveles_html_parts: List[str] = ["<table style='border-collapse:collapse;font-size:14px;'>"]
-            niveles_html_parts.append(
-                "<tr><th style='text-align:left;padding:4px 8px;'>Nivel</th>"
-                "<th style='padding:4px 8px;'>Aprob. hoy</th>"
-                "<th style='padding:4px 8px;'>Acum. acta vigente</th></tr>"
-            )
-            for n in sorted(na):
-                def _apr(nivel=n):
-                    return self.supabase.rpc(
-                        "notif_email_aprobados_nivel",
-                        {
-                            "p_contrato_id": cid,
-                            "p_fecha": fecha,
-                            "p_acta_id": acta_id,
-                            "p_nivel": nivel,
-                        },
-                    ).execute().data
-
-                apr_rows = self.supabase_execute(_apr) or []
-                dia_n = acum_n = 0
-                if apr_rows and isinstance(apr_rows[0], dict):
-                    dia_n = int(apr_rows[0].get("aprobado_dia") or 0)
-                    acum_n = int(apr_rows[0].get("aprobado_acum") or 0)
-                niveles_lines.append(f"N{n}: aprobados hoy {dia_n}, acumulado acta {acum_n}")
-                niveles_html_parts.append(
-                    f"<tr><td style='padding:4px 8px;'>N{n}</td>"
-                    f"<td style='text-align:center;padding:4px 8px;'>{dia_n}</td>"
-                    f"<td style='text-align:center;padding:4px 8px;'>{acum_n}</td></tr>"
-                )
-            niveles_html_parts.append("</table>")
-            niveles_html = "".join(niveles_html_parts)
-            niveles_text = "\n".join(niveles_lines)
+            try:
+                cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(cid)
+            except LookupError:
+                continue
 
             for uid in dest_ids:
                 urows = (
@@ -461,73 +537,45 @@ class NotificacionesEmailRunner:
                     .data
                     or []
                 )
-                if not urows or not (urows[0].get("email") or "").strip():
+                if not urows:
                     continue
                 u = urows[0]
                 subj, txt, html_b = email_admin_resumen(
                     _usuario_display_name(u),
                     cnum,
-                    periodo_label,
-                    n_rep,
-                    _format_cop(val_rep),
-                    niveles_html,
+                    periodo_efectivo,
+                    matriz,
+                    capitulos,
                 )
-                txt = txt.replace(niveles_html, niveles_text)
-                if self._enviar(
+                en, pn = self._enviar_canales(
                     "admin_resumen",
                     log_key,
                     int(u["id"]),
                     cid,
-                    u["email"].strip(),
+                    (u.get("email") or "").strip(),
                     subj,
                     txt,
                     html_b,
-                    meta={"periodo": periodo, "n_reportados": n_rep},
-                ):
-                    enviados += 1
-        return {"contratos_evaluados": len(contratos), "enviados": enviados}
+                    meta={"periodo": periodo_efectivo, "acta_rpo": matriz.get("acta_rpo")},
+                )
+                enviados += en
+                push_enviados += pn
+        return {
+            "contratos_evaluados": len(contratos),
+            "enviados": enviados,
+            "push_enviados": push_enviados,
+        }
 
     def run_due_jobs(self, dt: Optional[datetime] = None) -> dict:
         dt = dt or _bogota_now()
         if not smtp_configured():
-            return {"skipped": "smtp_no_configurado", "jobs": []}
+            return {"skipped": "sin_canales_configurados", "jobs": []}
 
         fecha = dt.strftime("%Y-%m-%d")
         results: List[dict] = []
 
-        # TEMPORAL — prueba sáb 2026-07-18 23:32–23:40: admin_resumen sin restricción fin de semana
-        for job in temp_test_admin_jobs_due_now(dt):
-            log_key = _slot_log_key(fecha, job)
-            try:
-                stats = self.run_admin_resumen(fecha, job.slot_key, log_key)
-                results.append(
-                    {
-                        "job": job.job_type,
-                        "slot": job.slot_key,
-                        "temp_test": True,
-                        **stats,
-                    }
-                )
-            except Exception as exc:
-                _log.exception("Job prueba temp %s falló", job.slot_key)
-                results.append(
-                    {
-                        "job": job.job_type,
-                        "slot": job.slot_key,
-                        "temp_test": True,
-                        "error": str(exc)[:200],
-                    }
-                )
-
         if not is_weekday_bogota(dt):
-            if not results:
-                return {"skipped": "fin_de_semana", "jobs": []}
-            return {
-                "fecha": fecha,
-                "hora_bogota": dt.strftime("%H:%M"),
-                "fin_de_semana": True,
-                "jobs": results,
-            }
+            return {"skipped": "fin_de_semana", "jobs": []}
 
         for job in jobs_due_now(dt):
             log_key = _slot_log_key(fecha, job)
@@ -565,7 +613,9 @@ def build_runner_from_main(main_module) -> NotificacionesEmailRunner:
         niveles_activos_contrato=m._get_niveles_activos_contrato,
         acta_rpo_vigente_row=m._acta_rpo_vigente_row,
         es_desarrollador_user_id=_es_dev_uid,
-        destinatarios_admin_contrato=m._destinatarios_notif_nuevo_registro,
+        destinatarios_resumen_jornada=m._destinatarios_resumen_jornada,
+        fetch_matriz_validacion_email=m._fetch_matriz_validacion_vigente_email,
+        fetch_capitulos_financiero_email=m._fetch_capitulos_financiero_email,
         ids_cargo_por_nombre=m._ids_cargo_por_nombre,
         usuarios_activos_por_cargos=m._usuarios_activos_por_cargos,
         usuario_vinculado_contrato=m._usuario_vinculado_a_contrato,

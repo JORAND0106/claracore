@@ -176,6 +176,21 @@ def runner(monkeypatch):
     def _admin_dest(cid: int):
         return [100] if cid in (2, 3) else []
 
+    _matriz_stub = {
+        "acta_rpo": 10,
+        "niveles_activos": [1, 2],
+        "nivel_maximo": 2,
+        "niveles": [{"nivel": 1, "encabezado": "Inspector (N1)"}, {"nivel": 2, "encabezado": "Residente (N2)"}],
+        "obra_ejecutada_directo_sin_aiu": {},
+        "ensayos_sondeos_directo_sin_iva": {},
+    }
+    _cap_stub = {
+        "capitulos_aiu": [],
+        "totales_aiu": {"claracore": 0, "cobrado": 0, "delta": 0},
+        "capitulos_iva": [],
+        "totales_iva": {"claracore": 0, "cobrado": 0, "delta": 0},
+    }
+
     r = NotificacionesEmailRunner(
         sb,
         _supabase_execute,
@@ -184,7 +199,9 @@ def runner(monkeypatch):
         niveles_activos_contrato=_niveles,
         acta_rpo_vigente_row=lambda cid: {"id": 1},
         es_desarrollador_user_id=lambda uid: False,
-        destinatarios_admin_contrato=_admin_dest,
+        destinatarios_resumen_jornada=_admin_dest,
+        fetch_matriz_validacion_email=lambda cid: _matriz_stub,
+        fetch_capitulos_financiero_email=lambda cid: _cap_stub,
         ids_cargo_por_nombre=lambda n: [],
         usuarios_activos_por_cargos=lambda ids: [],
         usuario_vinculado_contrato=_vinculado,
@@ -249,31 +266,22 @@ def test_admin_resumen_un_correo_por_contrato(runner):
     assert any("ICCU-CTO-1614-2025" in s for s in subjects)
 
 
-def test_admin_resumen_incluye_desarrolladores(runner, monkeypatch):
-    """Destinatarios admin_resumen usan _destinatarios_notif_nuevo_registro (devs + admins)."""
+def test_admin_resumen_incluye_destinatarios_gerenciales(runner, monkeypatch):
+    """Destinatarios admin_resumen usan _destinatarios_resumen_jornada (devs + CG)."""
     r, sb, sent = runner
 
-    def _admin_dest(cid):
+    def _resumen_dest(cid):
         return [100, 200] if cid in (2, 3) else []
 
-    r._admin_dest = _admin_dest
+    r._resumen_dest = _resumen_dest
     stats = r.run_admin_resumen("2026-07-21", "manana", "2026-07-21_manana")
-    assert stats["enviados"] == 4  # 2 contratos × 2 destinatarios (dev + admin simulados)
+    assert stats["enviados"] == 4  # 2 contratos × 2 destinatarios
     assert len(sent) == 4
+    assert all("inicio de jornada" in s[1] for s in sent)
 
 
-def test_run_due_jobs_fin_de_semana_con_prueba_temp(runner, monkeypatch):
-    import pytz
-    from datetime import datetime
-
-    from notificaciones_email_config import TZ_BOGOTA
-
+def test_admin_resumen_asunto_fin_jornada(runner):
     r, sb, sent = runner
-    dt = pytz.timezone(TZ_BOGOTA).localize(datetime(2026, 7, 18, 23, 35))
-    monkeypatch.setattr("notificaciones_email_service._bogota_now", lambda: dt)
-    out = r.run_due_jobs()
-    assert out.get("fin_de_semana") is True
-    assert len(out["jobs"]) == 1
-    assert out["jobs"][0]["temp_test"] is True
-    assert out["jobs"][0]["slot"] == "prueba_temp"
-    assert out["jobs"][0]["enviados"] >= 1
+    r.run_admin_resumen("2026-07-21", "tarde", "2026-07-21_tarde")
+    assert any("fin de jornada" in s[1] for s in sent)
+

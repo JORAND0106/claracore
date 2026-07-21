@@ -202,25 +202,45 @@ def email_validacion_pendiente(
 def email_admin_resumen(
     nombre: str,
     contrato_num: str,
-    periodo_label: str,
-    n_reportados: int,
-    valor_reportados: str,
-    niveles_html: str,
+    periodo: str,
+    matriz: dict,
+    capitulos: dict,
 ) -> tuple[str, str, str]:
+    from notificaciones_email_resumen import (
+        build_capitulos_html,
+        build_intro_cierre,
+        build_matriz_html,
+        build_narrativa_riesgo,
+        build_saludo,
+    )
+
+    periodo_label = "inicio de jornada" if periodo == "manana" else "fin de jornada"
     subject = f"ClaraCore — Resumen {periodo_label} · {contrato_num}"
+    acta_rpo = matriz.get("acta_rpo")
+    acta_txt = str(acta_rpo) if acta_rpo is not None else "—"
+    intro, cierre = build_intro_cierre(periodo)
+    matriz_html = build_matriz_html(matriz)
+    riesgo_html = build_narrativa_riesgo(matriz)
+    cap_html, cap_text = build_capitulos_html(capitulos)
+
     text = (
-        f"Hola {nombre},\n\nResumen {periodo_label} — contrato {contrato_num}.\n"
-        f"Registros reportados hoy: {n_reportados}\n"
-        f"Valor total: {valor_reportados}\n\n{niveles_html}\n\n{plataforma_url()}\n"
+        f"Estimado Ingeniero {nombre}, a continuación ClaraCore te informa "
+        f"el estado de las validaciones del Acta #{acta_txt}.\n\n"
+        f"{intro}\n\nContrato {contrato_num}.\n\n"
+        f"Validación por rol (Acta #{acta_txt}).\n\n"
+        f"{cap_text}\n\n{cierre}\n\n{plataforma_url()}\n"
     )
     html_body = _wrap_html(
-        f"Resumen administrativo ({periodo_label})",
-        f"<p>Hola <strong>{html.escape(nombre)}</strong>,</p>"
+        f"Resumen {periodo_label} · {contrato_num}",
+        f"<p>{build_saludo(nombre, acta_rpo)}</p>"
+        f"<p>{html.escape(intro)}</p>"
         f"<p>Contrato <strong>{html.escape(contrato_num)}</strong></p>"
-        f"<ul>"
-        f"<li>Registros reportados hoy: <strong>{n_reportados}</strong></li>"
-        f"<li>Valor total: <strong>{html.escape(valor_reportados)}</strong></li>"
-        f"</ul>"
-        f"{niveles_html}",
+        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Validación por rol · SICOE Obra</h2>"
+        f"{matriz_html}"
+        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Narrativa de riesgo</h2>"
+        f"{riesgo_html}"
+        f"<h2 style=\"font-size:16px;margin:24px 0 8px;\">Ppto vs Cobro por capítulo</h2>"
+        f"{cap_html}"
+        f"<p style=\"margin-top:20px;\">{html.escape(cierre)}</p>",
     )
     return subject, text, html_body

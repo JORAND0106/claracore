@@ -6,23 +6,10 @@ export const INFORME_PERIODICO_SLOTS_PROD = [
   { key: '1530', startMinutes: 15 * 60 + 30 },
 ]
 
-/** true en `npm run dev`; false en build prod y en tests node. */
-const IS_VITE_DEV = Boolean(import.meta.env?.DEV)
-
-/**
- * TEMPORAL — solo `npm run dev` (import.meta.env.DEV).
- * Eliminar antes de desplegar a producción.
- * Franja 21:08 para validar el modal fuera del horario laboral en local.
- */
-const INFORME_PERIODICO_SLOTS_DEV_ONLY = IS_VITE_DEV
-  ? [{ key: '2108', startMinutes: 21 * 60 + 8 }]
-  : []
-
-/** Slots activos: producción + prueba local (dev). Ordenados por hora. */
-export const INFORME_PERIODICO_SLOTS = [
-  ...INFORME_PERIODICO_SLOTS_PROD,
-  ...INFORME_PERIODICO_SLOTS_DEV_ONLY,
-].sort((a, b) => a.startMinutes - b.startMinutes)
+/** Slots activos (producción). Ordenados por hora. */
+export const INFORME_PERIODICO_SLOTS = [...INFORME_PERIODICO_SLOTS_PROD].sort(
+  (a, b) => a.startMinutes - b.startMinutes,
+)
 
 const STORAGE_PREFIX = 'cc_informe_periodico_v1'
 
@@ -45,20 +32,12 @@ function formatSlotId(date, slot) {
 
 /**
  * Identificador estable de la ventana horaria activa, p. ej. "2026-07-18_1030".
- * null si fuera de horario o fin de semana (prod).
+ * null si fuera de horario o fin de semana.
  */
 export function getActiveInformePeriodicoSlotId(date = new Date()) {
-  const weekday = isInformePeriodicoWeekday(date)
+  if (!isInformePeriodicoWeekday(date)) return null
+
   const mins = minutesOfDay(date)
-  const devSlot = INFORME_PERIODICO_SLOTS_DEV_ONLY[0]
-
-  // Dev local: fin de semana solo dispara la franja temporal 21:08 (no las de producción).
-  if (!weekday && IS_VITE_DEV && devSlot && mins >= devSlot.startMinutes) {
-    return formatSlotId(date, devSlot)
-  }
-
-  if (!weekday) return null
-
   const first = INFORME_PERIODICO_SLOTS[0].startMinutes
   if (mins < first) return null
   let active = INFORME_PERIODICO_SLOTS[0]

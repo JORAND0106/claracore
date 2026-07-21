@@ -37,6 +37,8 @@ import ModuloInicio from './ModuloInicio'
 import ModuloContabilidad from './ModuloContabilidad'
 import InformePeriodicoModal from './components/InformePeriodicoModal'
 import MatrizValidacionSicoePanel from './components/MatrizValidacionSicoePanel'
+// TEMPORAL — eliminar tras validar correo resumen jornada en producción
+import TempPruebaResumenJornadaDev from './components/temp/TempPruebaResumenJornadaDev'
 import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
 import { BookOpen, Menu, X } from 'lucide-react'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
@@ -18968,6 +18970,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 visibility: 'visible',
                 position: 'relative',
               }}>
+
+                {esUsuarioDesarrollador(usuario) && contratoIdDash ? (
+                  <TempPruebaResumenJornadaDev
+                    contratoId={contratoIdDash}
+                    apiUrl={API_URL}
+                    getToken={getToken}
+                    t={t}
+                    du={du}
+                  />
+                ) : null}
 
                 <MatrizValidacionSicoePanel
                   variant="dashboard"
