@@ -4578,6 +4578,21 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     return merged.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
   }
 
+  /** En vista filtrada, no descartar líneas locales sin ítem (p. ej. «+ Nuevo Registro» recién creadas). */
+  const fusionarRegistrosVistaFiltrada = (prev, incoming) => {
+    const base = Array.isArray(incoming) ? incoming.map((r) => ({ ...r })) : []
+    if (!Array.isArray(prev) || !prev.length) return base
+    const ids = new Set(base.map((r) => String(r.id)))
+    for (const r of prev) {
+      if (ids.has(String(r.id))) continue
+      if (!String(r?.item_numero || '').trim()) {
+        base.push({ ...r })
+        ids.add(String(r.id))
+      }
+    }
+    return base.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
+  }
+
   const propagarReporteGuardado = (patch) => {
     if (!patch || typeof patch !== 'object') return
     setReporte((prev) => ({ ...prev, ...patch }))
@@ -4612,8 +4627,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
     if (Array.isArray(repoProp.registros)) {
       if (vistaFiltrada) {
-        // Vista filtrada: reemplazar (no fusionar). Fusionar reintroducía ítems fuera del filtro (típico en móvil/realtime).
-        setRegistros(repoProp.registros.map((row) => ({ ...row })))
+        // Vista filtrada: no fusionar ítems fuera de filtro, pero conservar locales sin ítem.
+        setRegistros((prev) => fusionarRegistrosVistaFiltrada(prev, repoProp.registros))
         setReporte((prev) => ({ ...prev, registros_vista_filtrada: true }))
       } else if (repoProp.registros.length) {
         setRegistros((prev) => fusionarRegistrosDesdePadre(prev, repoProp.registros))
@@ -4776,7 +4791,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     [registrosVisibles],
   )
   const regsSinAsignar = useMemo(
-    () => registrosVisibles.filter((r) => !r.item_numero),
+    () => registrosVisibles.filter((r) => !String(r?.item_numero || '').trim()),
     [registrosVisibles],
   )
 
@@ -4874,26 +4889,55 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }).map((r) => r.id)
   })()
 
-  const recargar = async () => {
+  const recargar = async (opts = {}) => {
+    const forzarSinFiltros = !!opts.forzarSinFiltros
+    const preservarIds = Array.isArray(opts.preservarIds) ? opts.preservarIds : []
     const seq = ++recargarSeqRef.current
     setRecargando(true)
     try {
       const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
-      // Misma vista que al abrir: si la grilla tiene filtros, recargar con aplicar_filtros_busqueda.
-      const filtrada = typeof urlReporteDetalleFiltradoFn === 'function'
+      // Tras «+ Nuevo Registro» no usar filtros de grilla: el registro sin ítem quedaría fuera y la hoja se cerraría.
+      // Ojo: urlReporteDetalleFn suele venir ya con aplicar_filtros_busqueda; por eso hay URL limpia explícita.
+      const filtrada = (!forzarSinFiltros && typeof urlReporteDetalleFiltradoFn === 'function')
         ? urlReporteDetalleFiltradoFn(reporte.id)
         : null
-      const urlS = filtrada || build(reporte.id)
+      const urlS = forzarSinFiltros
+        ? `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}?ligero=1`
+        : (filtrada || build(reporte.id))
       let res = await fetch(urlS, { headers: hdrs })
       let data = await res.json().catch(() => ({}))
-      if (seq !== recargarSeqRef.current) return null
-      // Descartar si llegó una recarga más reciente mientras esperábamos
       if (seq !== recargarSeqRef.current) return null
       if (!res.ok || !data?.id) return null
       const finalData = { ...data }
       if (seq !== recargarSeqRef.current) return null
-      setReporte(finalData)
-      setRegistros((finalData.registros || []).map((row) => ({ ...row })))
+      setReporte((prev) => ({
+        ...finalData,
+        registros_vista_filtrada: forzarSinFiltros
+          ? false
+          : (filtrada ? true : !!prev.registros_vista_filtrada),
+      }))
+      setRegistros((prev) => {
+        let next = (finalData.registros || []).map((row) => ({ ...row }))
+        const ids = new Set(next.map((r) => String(r.id)))
+        for (const id of preservarIds) {
+          if (ids.has(String(id))) continue
+          const local = prev.find((r) => String(r.id) === String(id))
+          if (local) {
+            next.push({ ...local })
+            ids.add(String(id))
+          }
+        }
+        if (filtrada) {
+          for (const r of prev) {
+            if (ids.has(String(r.id))) continue
+            if (!String(r?.item_numero || '').trim()) {
+              next.push({ ...r })
+              ids.add(String(r.id))
+            }
+          }
+        }
+        return next.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
+      })
       if (Object.prototype.hasOwnProperty.call(data, 'enlace_soporte')) {
         setEnlaces(parseEnlacesSoporteReporte(data.enlace_soporte))
       }
@@ -5209,23 +5253,32 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setCreandoReg(true)
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/nuevo-registro`, { method: 'POST', headers: hdrs })
-      const row = res.ok ? await res.json().catch(() => ({})) : {}
-      if (row?.id != null) {
-        setRegistros((prev) => {
-          if (prev.some((r) => String(r.id) === String(row.id))) return prev
-          return [...prev, { ...row }].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
-        })
-        setTabActiva('sin_asignar')
-        setRegistroExpandido(row.id)
-        const rid = row.id
-        const scrollTo = () =>
-          document.getElementById(`registro-${rid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        requestAnimationFrame(scrollTo)
-        setTimeout(scrollTo, 450)
+      const row = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const detail = typeof row?.detail === 'string' ? row.detail : `Error ${res.status}`
+        throw new Error(detail)
       }
-      void recargar()
-    } catch(e) {}
-    setCreandoReg(false)
+      if (row?.id == null) throw new Error('No se recibió el registro creado.')
+      setRegistros((prev) => {
+        if (prev.some((r) => String(r.id) === String(row.id))) return prev
+        return [...prev, { ...row }].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
+      })
+      setTabActiva('sin_asignar')
+      setRegistroExpandido(row.id)
+      // Recarga sin filtros de grilla + preservar el id: si no, el registro sin ítem desaparece y la hoja se cierra sola.
+      await recargar({ forzarSinFiltros: true, preservarIds: [row.id] })
+      setTabActiva('sin_asignar')
+      setRegistroExpandido(row.id)
+      const rid = row.id
+      const scrollTo = () =>
+        document.getElementById(`registro-${rid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      requestAnimationFrame(scrollTo)
+      setTimeout(scrollTo, 450)
+    } catch (e) {
+      alert(e?.message || 'No se pudo crear el registro.')
+    } finally {
+      setCreandoReg(false)
+    }
   }
 
   const cargarReportesParaMover = async () => {

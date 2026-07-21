@@ -201,6 +201,65 @@ def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
             return True
     return False
 
+
+def _layer_prefijo_del(nombre: str) -> str:
+    """Prefijo del_ sin duplicar si la capa ya lo tiene."""
+    if not nombre:
+        return nombre
+    s = str(nombre).strip()
+    return s if s.startswith("del_") else f"del_{s}"
+
+
+def _encolar_layoff_presupuesto_item(item_id: int, r: dict) -> None:
+    """
+    Encola cambiar_layer (layoff) y actualiza layer_ent/layer_txt en presupuesto.
+    Igual que edición de capítulo/ítem: la operación queda en cad_queue aunque AutoCAD
+    no esté enlazado en este worker; el Agent la procesa al hacer poll.
+    """
+    old_lent = (r.get("layer_ent") or "").strip()
+    old_ltxt = (r.get("layer_txt") or "").strip()
+    ent_handle = (r.get("ent_handle") or "").strip()
+
+    if not old_lent or old_lent.startswith("del_"):
+        return
+    if not ent_handle:
+        return
+
+    new_lent = _layer_prefijo_del(old_lent)
+    new_ltxt = _layer_prefijo_del(old_ltxt) if old_ltxt else f"del_{old_ltxt}"
+
+    try:
+        supabase.table("cad_queue").insert({
+            "contrato_id": r["contrato_id"],
+            "tipo": "cambiar_layer",
+            "estado": "pendiente",
+            "payload": {
+                "ent_handle": ent_handle,
+                "txt_handle": (r.get("txt_handle") or "").strip(),
+                "layer_ent": new_lent,
+                "layer_txt": new_ltxt,
+                "color_hex": "",
+                "rev_block_handle": r.get("rev_block_handle") or "",
+                "layoff": True,
+            },
+        }).execute()
+    except Exception:
+        try:
+            _log_api.warning("dar_baja: falló insert cad_queue item_id=%s", item_id, exc_info=True)
+        except Exception:
+            pass
+
+    try:
+        supabase.table("presupuesto").update({
+            "layer_ent": new_lent,
+            "layer_txt": new_ltxt,
+        }).eq("id", item_id).execute()
+    except Exception:
+        try:
+            _log_api.warning("dar_baja: falló update layers item_id=%s", item_id, exc_info=True)
+        except Exception:
+            pass
+
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 _MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", _MAINTENANCE_SECRET)
 _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", str(_MAINTENANCE_DEFAULT_SECONDS)))
@@ -9838,30 +9897,7 @@ def dar_baja_presupuesto(
         "dado_de_baja": True,
         "updated_at": "now()"
     }).eq("id", item_id).execute()
-    # Cola CAD: renombrar layers con prefijo del_
-    if _dwg_activo(r.get("contrato_id")):
-        old_lent = r.get("layer_ent") or ""
-        old_ltxt = r.get("layer_txt") or ""
-        if old_lent and not old_lent.startswith("del_"):
-            supabase.table("cad_queue").insert({
-                "contrato_id": r["contrato_id"],
-                "tipo": "cambiar_layer",
-                "estado": "pendiente",
-                "payload": {
-                    "ent_handle":  r.get("ent_handle") or "",
-                    "txt_handle":  r.get("txt_handle") or "",
-                    "layer_ent":   f"del_{old_lent}",
-                    "layer_txt":   f"del_{old_ltxt}",
-                    "color_hex":   "",
-                    "rev_block_handle": r.get("rev_block_handle") or "",
-                    "layoff": True
-                }
-            }).execute()
-        # Actualizar layers en la tabla presupuesto también
-        supabase.table("presupuesto").update({
-            "layer_ent": f"del_{old_lent}" if old_lent and not old_lent.startswith("del_") else old_lent,
-            "layer_txt": f"del_{old_ltxt}" if old_ltxt and not old_ltxt.startswith("del_") else old_ltxt,
-        }).eq("id", item_id).execute()
+    _encolar_layoff_presupuesto_item(item_id, r)
     try:
         cid = r.get("contrato_id")
         cinfo = None
