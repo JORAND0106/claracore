@@ -466,6 +466,30 @@ class NotificacionesEmailRunner:
             capitulos = {}
         return cnum, matriz, capitulos
 
+    def _admin_resumen_snapshot_para_periodo(
+        self,
+        contrato_id: int,
+        fecha: str,
+        periodo_efectivo: str,
+        matriz: dict,
+        capitulos: dict,
+    ) -> Optional[dict]:
+        """Guarda (mañana) o carga (tarde) el snapshot de comparación de jornada."""
+        if periodo_efectivo == "manana":
+            self._guardar_resumen_snapshot(contrato_id, fecha, matriz, capitulos)
+            return None
+        return self._cargar_resumen_snapshot(contrato_id, fecha)
+
+    def _admin_resumen_preparar_contrato(
+        self, contrato_id: int, fecha: str, periodo_efectivo: str
+    ) -> tuple[str, dict, dict, Optional[dict]]:
+        """Carga datos del contrato y aplica guardado/lectura de snapshot."""
+        cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(contrato_id)
+        snapshot_manana = self._admin_resumen_snapshot_para_periodo(
+            contrato_id, fecha, periodo_efectivo, matriz, capitulos
+        )
+        return cnum, matriz, capitulos, snapshot_manana
+
     def _guardar_resumen_snapshot(
         self, contrato_id: int, fecha: str, matriz: dict, capitulos: dict
     ) -> None:
@@ -529,13 +553,17 @@ class NotificacionesEmailRunner:
         No notifica destinatarios reales ni Web Push. Eliminar con el endpoint temp.
         """
         periodo_efectivo = "manana" if periodo == "manana" else "tarde"
-        cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(contrato_id)
+        fecha = _bogota_now().strftime("%Y-%m-%d")
+        cnum, matriz, capitulos, snapshot_manana = self._admin_resumen_preparar_contrato(
+            contrato_id, fecha, periodo_efectivo
+        )
         subj, txt, html_b = email_admin_resumen(
             to_nombre,
             cnum,
             periodo_efectivo,
             matriz,
             capitulos,
+            snapshot_manana=snapshot_manana,
         )
         to_addr = (to_email or "").strip()
         if not to_addr:
@@ -590,15 +618,11 @@ class NotificacionesEmailRunner:
                 continue
 
             try:
-                cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(cid)
+                cnum, matriz, capitulos, snapshot_manana = self._admin_resumen_preparar_contrato(
+                    cid, fecha, periodo_efectivo
+                )
             except LookupError:
                 continue
-
-            snapshot_manana: Optional[dict] = None
-            if periodo_efectivo == "manana":
-                self._guardar_resumen_snapshot(cid, fecha, matriz, capitulos)
-            else:
-                snapshot_manana = self._cargar_resumen_snapshot(cid, fecha)
 
             for uid in dest_ids:
                 urows = (

@@ -1,9 +1,13 @@
 """Endpoint temporal de prueba — resumen jornada bajo demanda."""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
+import pytz
 from fastapi import HTTPException
 
+from notificaciones_email_config import TZ_BOGOTA
 from notificaciones_email_service import NotificacionesEmailRunner
 from notificaciones_email_routes import _destinatario_prueba_temp_desarrollador
 
@@ -74,6 +78,39 @@ def test_run_admin_resumen_prueba_temp_contrato_inexistente(runner, monkeypatch)
     monkeypatch.setattr(r, "_admin_resumen_cargar_contrato", _fail)
     with pytest.raises(LookupError):
         r.run_admin_resumen_prueba_temp(9999, "tarde", "dev@test.local", "Dev")
+
+
+def test_run_admin_resumen_prueba_temp_guarda_y_lee_snapshot(runner, monkeypatch):
+    r, sb, sent = runner
+    captured_html: list[str] = []
+    fecha = "2026-07-21"
+
+    monkeypatch.setattr(
+        "notificaciones_email_service._bogota_now",
+        lambda: datetime(2026, 7, 21, 10, 0, tzinfo=pytz.timezone(TZ_BOGOTA)),
+    )
+
+    def _fake_send(to, subj, txt, html):
+        sent.append((to, subj))
+        captured_html.append(html)
+        return True
+
+    monkeypatch.setattr(
+        "notificaciones_email_service.try_send_notification_email",
+        _fake_send,
+    )
+
+    out = r.run_admin_resumen_prueba_temp(2, "manana", "dev@test.local", "Dev Test")
+    assert out["enviado"] is True
+    assert (2, fecha) in sb.resumen_snapshots
+    assert "Avance durante la jornada" not in captured_html[0]
+
+    captured_html.clear()
+    sent.clear()
+    out = r.run_admin_resumen_prueba_temp(2, "tarde", "dev@test.local", "Dev Test")
+    assert out["enviado"] is True
+    assert "Avance durante la jornada" in captured_html[0]
+    assert "No hay registro de inicio de jornada" not in captured_html[0]
 
 
 @pytest.fixture
