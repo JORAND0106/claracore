@@ -1,6 +1,6 @@
 /** Web Push — suscripción del navegador con VAPID. */
 
-import { fetchConFallback } from './fetchConFallback'
+import { fetchConFallback } from '../fetchConFallback'
 
 const PROMPT_DELAY_MS = 45_000
 const PROMPT_STORAGE_PREFIX = 'cc_push_prompt_v1'
