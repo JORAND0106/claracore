@@ -5,35 +5,51 @@ import pytest
 from fastapi import HTTPException
 
 from notificaciones_email_service import NotificacionesEmailRunner
-from notificaciones_email_routes import _resolver_destinatario_prueba_temp
+from notificaciones_email_routes import _destinatario_prueba_temp_desarrollador
 
 
-def test_resolver_destinatario_cron_requiere_email(monkeypatch):
+def test_destinatario_requiere_jwt():
+    with pytest.raises(HTTPException) as exc:
+        _destinatario_prueba_temp_desarrollador(None)
+    assert exc.value.status_code == 403
+
+
+def test_destinatario_rechaza_no_desarrollador(monkeypatch):
     monkeypatch.setattr(
-        "notificaciones_email_routes._cron_secret_ok",
-        lambda s: s == "ok",
+        "main._es_desarrollador",
+        lambda u: False,
     )
     with pytest.raises(HTTPException) as exc:
-        _resolver_destinatario_prueba_temp(
-            email_param=None,
-            x_cron_secret="ok",
-            current_user=None,
-        )
-    assert exc.value.status_code == 422
+        _destinatario_prueba_temp_desarrollador({"sub": "1"})
+    assert exc.value.status_code == 403
 
 
-def test_resolver_destinatario_cron_con_email(monkeypatch):
-    monkeypatch.setattr(
-        "notificaciones_email_routes._cron_secret_ok",
-        lambda s: s == "ok",
-    )
-    email, nombre = _resolver_destinatario_prueba_temp(
-        email_param=" tester@example.com ",
-        x_cron_secret="ok",
-        current_user=None,
-    )
-    assert email == "tester@example.com"
-    assert nombre == "Usuario prueba"
+def test_destinatario_usa_correo_usuario_autenticado(monkeypatch):
+    import main as m
+
+    monkeypatch.setattr(m, "_es_desarrollador", lambda u: True)
+
+    class _Q:
+        def select(self, *_):
+            return self
+
+        def eq(self, *_):
+            return self
+
+        def limit(self, *_):
+            return self
+
+        def execute(self):
+            class _R:
+                data = [{"email": " dev@clara.test ", "nombre": "Dev", "apellidos": "Test"}]
+
+            return _R()
+
+    monkeypatch.setattr(m.supabase, "table", lambda _n: _Q())
+
+    email, nombre = _destinatario_prueba_temp_desarrollador({"sub": "42"})
+    assert email == "dev@clara.test"
+    assert nombre == "Dev Test"
 
 
 def test_run_admin_resumen_prueba_temp_envia_solo_destino(runner, monkeypatch):
