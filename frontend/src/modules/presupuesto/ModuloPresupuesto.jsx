@@ -3311,8 +3311,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     (puedeEditar && [...seleccionados].some(id => editDims[id]))
   ) && ![...seleccionados].some(id => esSellado(registros.find(r => r.id === id)))
 
-  async function ejecutarRecalcular({ skipUndo = false, undoLabel = 'Recálculo masivo' } = {}) {
-    const ids = [...seleccionados]
+  async function ejecutarRecalcular({
+    skipUndo = false,
+    undoLabel = 'Recálculo masivo',
+    capituloOverride,
+    itemOverride,
+    precioOverride,
+    idsOverride,
+  } = {}) {
+    const capAplicar = capituloOverride ?? editCapitulo
+    const itemAplicar = itemOverride ?? editItem
+    const precioAplicar = precioOverride ?? precioSeleccionado
+    const ids = idsOverride ?? [...seleccionados]
     if (aplicaReglasCadPresupuesto) {
       const intentaArea = ids.some((id) => {
         const d = editDims[id]
@@ -3338,7 +3348,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const d = editDims[id]
       return d && ('no_inicio' in d || 'no_final' in d)
     })
-    const tieneItem = !!(editCapitulo || editItem)
+    const tieneItem = !!(capAplicar || itemAplicar)
     if (!tieneItem && !tieneCambioMedidas && !tieneCambioNodos) {
       alert('No hay cambios para aplicar.')
       return
@@ -3412,9 +3422,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
     })
     const body = { ids, dims: dims.length > 0 ? dims : null }
-    if (editCapitulo)   body.capitulo    = editCapitulo
-    if (editItem)       { body.item = editItem; body.descripcion = precioSeleccionado?.descripcion ?? null }
-    if (precioSeleccionado) body.vlr_unitario = precioSeleccionado.precio_unitario
+    if (capAplicar) body.capitulo = capAplicar
+    if (itemAplicar) {
+      body.item = itemAplicar
+      body.descripcion = precioAplicar?.descripcion ?? null
+    }
+    if (precioAplicar) body.vlr_unitario = precioAplicar.precio_unitario
 
     // Calcular resultado esperado localmente y aplicarlo antes del fetch
     const computarFila = (r) => {
@@ -3423,13 +3436,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const ancho   = (dim?.ancho != null ? dim.ancho : (r.ancho ?? 0)) || 0
       const espesor = (dim?.espesor != null ? dim.espesor : (r.espesor ?? 0)) || 0
       const area    = (dim?.area_long_nod != null ? dim.area_long_nod : (r.area_long_nod ?? 0)) || 0
-      const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
+      const vlr     = precioAplicar?.precio_unitario ?? r.vlr_unitario ?? 0
       const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 100) / 100 : Math.round(area * 100) / 100
       const costo   = Math.round(cant * vlr)
       return {
         ...r,
-        ...(editCapitulo && { capitulo: editCapitulo }),
-        ...(editItem && { item: editItem, descripcion: precioSeleccionado?.descripcion ?? r.descripcion }),
+        ...(capAplicar && { capitulo: capAplicar }),
+        ...(itemAplicar && { item: itemAplicar, descripcion: precioAplicar?.descripcion ?? r.descripcion }),
         ...(dim && { ancho, espesor, area_long_nod: area }),
         cant_total:    cant,
         costo_directo: costo,
@@ -3704,15 +3717,31 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }).filter(Boolean)
 
     if (tieneCapItem) {
-      flushSync(() => {
-        setEditCapitulo(cap)
-        setEditItem(it)
-        if (it && precioSeleccionado) {
-          setItemBusqueda(`${precioSeleccionado.item_numero} · ${precioSeleccionado.descripcion || ''}`)
-        }
+      const idsCapItemCambio = ids.filter((id) => {
+        const r = registros.find((x) => x.id === id)
+        if (!r) return false
+        return (cap && cap !== (r.capitulo || '')) || (it && it !== (r.item || ''))
       })
-      setModalConfirm(false)
-      await ejecutarRecalcular({ skipUndo: true })
+      if (!idsCapItemCambio.length && !obs) {
+        throw new Error('Ningún registro editable requiere ese cambio de capítulo/ítem.')
+      }
+      if (idsCapItemCambio.length) {
+        flushSync(() => {
+          setEditCapitulo(cap)
+          setEditItem(it)
+          if (it && precioSeleccionado) {
+            setItemBusqueda(`${precioSeleccionado.item_numero} · ${precioSeleccionado.descripcion || ''}`)
+          }
+        })
+        setModalConfirm(false)
+        await ejecutarRecalcular({
+          skipUndo: true,
+          capituloOverride: cap,
+          itemOverride: it,
+          precioOverride: precioSeleccionado,
+          idsOverride: idsCapItemCambio,
+        })
+      }
     }
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen

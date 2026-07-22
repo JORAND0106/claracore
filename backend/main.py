@@ -5297,6 +5297,48 @@ def _pk_ids_map_id_por_codigo(contrato_id: int) -> Dict[str, int]:
     return out
 
 
+def _pk_ids_ubicacion_por_codigo(contrato_id: int) -> Dict[str, dict]:
+    """Mapa pk_id (CAPA) → tramo/calzada vigentes en el maestro pk_ids."""
+    out: Dict[str, dict] = {}
+    for r in _pk_ids_maestro_filas(contrato_id):
+        code = str(r.get("pk_id") or "").strip()
+        if not code:
+            continue
+        out[code] = {
+            "tramo": r.get("tramo"),
+            "calzada": r.get("calzada"),
+        }
+    return out
+
+
+def _aplicar_ubicacion_presupuesto_desde_pk_ids(row: dict, maestro: Dict[str, dict]) -> bool:
+    """
+    Sobrescribe tramo y calzada desde pk_ids al insertar en presupuesto.
+    Devuelve True si el tramo enviado por el cliente difirió del maestro.
+    """
+    pk = str(row.get("pk_id") or "").strip()
+    if not pk:
+        return False
+    info = maestro.get(pk)
+    if not info:
+        return False
+
+    tramo_corregido = False
+    tramo_nuevo = info.get("tramo")
+    if tramo_nuevo is not None and str(tramo_nuevo).strip():
+        tramo_viejo = str(row.get("tramo") or "").strip()
+        tramo_txt = str(tramo_nuevo).strip()
+        if tramo_viejo != tramo_txt:
+            tramo_corregido = True
+        row["tramo"] = tramo_txt
+
+    calzada_nueva = info.get("calzada")
+    if calzada_nueva is not None and str(calzada_nueva).strip():
+        row["calzada"] = str(calzada_nueva).strip()
+
+    return tramo_corregido
+
+
 def _payload_pk_update_fields(payload: dict) -> dict:
     """Campos actualizables del maestro (sin contrato_id ni pk_id)."""
     return {k: v for k, v in payload.items() if k not in ("contrato_id", "pk_id")}
@@ -10127,10 +10169,14 @@ def bulk_presupuesto(
     if not items:
         return {"insertados": 0}
     BATCH = 500
+    maestro_pk = _pk_ids_ubicacion_por_codigo(contrato_id)
+    tramos_corregidos = 0
     rows = []
     for item in items:
         d = {k: v for k, v in item.dict().items() if v is not None}
         d["contrato_id"] = contrato_id
+        if _aplicar_ubicacion_presupuesto_desde_pk_ids(d, maestro_pk):
+            tramos_corregidos += 1
         rows.append(d)
     insertados = 0
     for i in range(0, len(rows), BATCH):
@@ -10150,6 +10196,7 @@ def bulk_presupuesto(
         pass
     registrar_log(current_user, "IMPORTAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados,
+         "tramos_corregidos_desde_pk_ids": tramos_corregidos,
          "source": (source or "").lower() or None})
     if (source or "").strip().lower() == "sicoe_cad":
         enviados = None
@@ -10163,7 +10210,7 @@ def bulk_presupuesto(
             # Solo el usuario que ejecutó el POST /bulk ve el aviso en la web (JWT sub).
             "user_sub": str(current_user.get("sub") or ""),
         }
-    return {"insertados": insertados}
+    return {"insertados": insertados, "tramos_corregidos_desde_pk_ids": tramos_corregidos}
 
 
 def _text_similarity_best(needle: Optional[str], choices: List[str]) -> Tuple[Optional[str], float]:
@@ -15003,9 +15050,15 @@ def offline_pack(
 
 
 @app.get("/sicoe-obra/{contrato_id}/pk-ids")
-def listar_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
+def listar_pk_ids(
+    contrato_id: int,
+    refresh: bool = False,
+    current_user=Depends(get_current_user),
+):
     _require_contract_access(current_user, contrato_id)
     cache_key = ("pk-ids", int(contrato_id))
+    if refresh:
+        _sicoe_catalogo_cache_invalidate_pk_ids(contrato_id)
     cached = _sicoe_catalogo_cache_get(cache_key)
     if cached is not None:
         return cached

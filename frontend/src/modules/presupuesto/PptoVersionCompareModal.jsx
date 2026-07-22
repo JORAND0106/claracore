@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, Fragment } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
+import { downloadVersionCompareExcel } from './presupuestoVersionCompareExportExcel'
 
 /** Token fresco desde almacenamiento; el prop se congela en el render (ver PptoVersionador). */
 function tokenFresco(fallback) {
@@ -28,6 +29,25 @@ function fmtQty(n) {
   return new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n))
 }
 
+function fmtDelta(prev, curr, { money = false } = {}) {
+  if (prev == null && curr == null) return '—'
+  if (prev == null && curr != null) {
+    const s = money ? formatCOP(Math.abs(Number(curr))) : fmtQty(Math.abs(Number(curr)))
+    return `▲ ${s}`
+  }
+  if (prev != null && curr == null) {
+    const s = money ? formatCOP(Math.abs(Number(prev))) : fmtQty(Math.abs(Number(prev)))
+    return `▼ ${s}`
+  }
+  const p = Number(prev)
+  const c = Number(curr)
+  if (Number.isNaN(p) || Number.isNaN(c)) return '—'
+  const d = c - p
+  if (d === 0) return '—'
+  const s = money ? formatCOP(Math.abs(d)) : fmtQty(Math.abs(d))
+  return d > 0 ? `▲ ${s}` : `▼ ${s}`
+}
+
 function deltaColor(prev, curr, t) {
   if (prev == null || curr == null) return t.textMuted
   const p = Number(prev)
@@ -35,7 +55,7 @@ function deltaColor(prev, curr, t) {
   if (Number.isNaN(p) || Number.isNaN(c)) return t.textMuted
   if (c > p) return '#059669'
   if (c < p) return '#DC2626'
-  return t.text
+  return t.textMuted
 }
 
 function itemTags(existsFlags) {
@@ -47,6 +67,10 @@ function itemTags(existsFlags) {
   return [...tags]
 }
 
+function versionIdsKey(list) {
+  return list.map((v) => String(v.id)).join(',')
+}
+
 const th = { padding: '6px 8px', fontSize: 'var(--cc-caption)', fontWeight: 700, whiteSpace: 'nowrap' }
 const td = { padding: '6px 8px', fontSize: 'var(--cc-sm)', verticalAlign: 'middle' }
 
@@ -54,9 +78,18 @@ const td = { padding: '6px 8px', fontSize: 'var(--cc-sm)', verticalAlign: 'middl
  * Modal de comparación multinivel (capítulos → ítems) con alcance general o por tramo.
  */
 export default function PptoVersionCompareModal({ open, onClose, versions = [], contratoId, token, API, t }) {
+  const openPrevRef = useRef(false)
+  const sessionKeyRef = useRef('')
+
+  /** Versiones congeladas al abrir la sesión; evita resets por recargas del padre. */
+  const [activeVersions, setActiveVersions] = useState([])
+
   const versionesOrd = useMemo(
-    () => [...versions].sort((a, b) => (Number(a.numero_version) || 0) - (Number(b.numero_version) || 0)),
-    [versions],
+    () =>
+      activeVersions.length
+        ? activeVersions
+        : [...versions].sort((a, b) => (Number(a.numero_version) || 0) - (Number(b.numero_version) || 0)),
+    [activeVersions, versions],
   )
 
   const [alcance, setAlcance] = useState('general')
@@ -64,6 +97,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
   const [tramos, setTramos] = useState([])
   const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState(null)
   const [capsByVersion, setCapsByVersion] = useState([])
   const [expandedCap, setExpandedCap] = useState(null)
@@ -71,27 +105,56 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
   const [itemsLoading, setItemsLoading] = useState(null)
   const [aiuByVersion, setAiuByVersion] = useState({})
 
+  const resetSesion = useCallback(
+    (nextVersions) => {
+      setActiveVersions(nextVersions)
+      setAlcance('general')
+      setTramo('')
+      setLoaded(false)
+      setError(null)
+      setCapsByVersion([])
+      setExpandedCap(null)
+      setItemsByCap({})
+      const initAiu = {}
+      nextVersions.forEach((v) => {
+        initAiu[String(v.id)] = v.aiu_porcentaje != null ? String(v.aiu_porcentaje) : '0'
+      })
+      setAiuByVersion(initAiu)
+    },
+    [],
+  )
+
+  /** Solo reinicia al abrir el modal o al cambiar el conjunto de versiones comparadas. */
+  useEffect(() => {
+    if (!open || !contratoId) {
+      openPrevRef.current = false
+      return
+    }
+
+    const sorted = [...versions].sort(
+      (a, b) => (Number(a.numero_version) || 0) - (Number(b.numero_version) || 0),
+    )
+    const nextKey = versionIdsKey(sorted)
+    const abriendo = !openPrevRef.current
+    const nuevasVersiones = openPrevRef.current && sessionKeyRef.current !== nextKey
+
+    openPrevRef.current = true
+    sessionKeyRef.current = nextKey
+
+    if (abriendo || nuevasVersiones) {
+      resetSesion(sorted)
+    }
+  }, [open, contratoId, versions, resetSesion])
+
   useEffect(() => {
     if (!open || !contratoId) return
-    setAlcance('general')
-    setTramo('')
-    setLoaded(false)
-    setError(null)
-    setCapsByVersion([])
-    setExpandedCap(null)
-    setItemsByCap({})
-    const initAiu = {}
-    versionesOrd.forEach((v) => {
-      initAiu[String(v.id)] = v.aiu_porcentaje != null ? String(v.aiu_porcentaje) : '0'
-    })
-    setAiuByVersion(initAiu)
     fetch(`${API}/presupuesto/${contratoId}/maestro-ubicacion-pk`, {
       headers: { Authorization: `Bearer ${tokenFresco(token)}` },
     })
       .then((r) => (r.ok ? r.json() : { tramos: [] }))
       .then((d) => setTramos(Array.isArray(d?.tramos) ? d.tramos : []))
       .catch(() => setTramos([]))
-  }, [open, contratoId, token, API, versionesOrd])
+  }, [open, contratoId, API])
 
   const cargarComparacion = useCallback(async () => {
     if (!contratoId || versionesOrd.length < 2) return
@@ -152,6 +215,25 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
     return out
   }, [capsByVersion, versionesOrd])
 
+  const fetchItemsCapitulo = useCallback(
+    async (capitulo) => {
+      const rows = await Promise.all(
+        versionesOrd.map(async (v) => {
+          const p = new URLSearchParams({ capitulo })
+          if (alcance === 'tramo' && String(tramo).trim()) p.set('tramo', String(tramo).trim())
+          const res = await fetch(
+            `${API}/presupuesto/${contratoId}/versiones/${v.id}/items-lista?${p.toString()}`,
+            { headers: { Authorization: `Bearer ${tokenFresco(token)}` } },
+          )
+          const items = res.ok ? await res.json() : []
+          return { version: v, items: Array.isArray(items) ? items : [] }
+        }),
+      )
+      return rows
+    },
+    [API, alcance, contratoId, token, tramo, versionesOrd],
+  )
+
   const expandirCapitulo = useCallback(
     async (capitulo) => {
       if (expandedCap === capitulo) {
@@ -162,18 +244,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
       if (itemsByCap[capitulo]) return
       setItemsLoading(capitulo)
       try {
-        const rows = await Promise.all(
-          versionesOrd.map(async (v) => {
-            const p = new URLSearchParams({ capitulo })
-            if (alcance === 'tramo' && String(tramo).trim()) p.set('tramo', String(tramo).trim())
-            const res = await fetch(
-              `${API}/presupuesto/${contratoId}/versiones/${v.id}/items-lista?${p.toString()}`,
-              { headers: { Authorization: `Bearer ${tokenFresco(token)}` } },
-            )
-            const items = res.ok ? await res.json() : []
-            return { version: v, items: Array.isArray(items) ? items : [] }
-          }),
-        )
+        const rows = await fetchItemsCapitulo(capitulo)
         setItemsByCap((prev) => ({ ...prev, [capitulo]: rows }))
       } catch {
         window.alert('No se pudieron cargar los ítems del capítulo.')
@@ -181,12 +252,115 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
         setItemsLoading(null)
       }
     },
-    [API, alcance, contratoId, expandedCap, itemsByCap, token, tramo, versionesOrd],
+    [expandedCap, fetchItemsCapitulo, itemsByCap],
   )
+
+  const exportarExcel = useCallback(async () => {
+    if (!loaded || !capitulosUnion.length) return
+    setExporting(true)
+    try {
+      const allItems = { ...itemsByCap }
+      const faltantes = capitulosUnion.filter((cap) => !allItems[cap])
+      if (faltantes.length) {
+        const fetched = await Promise.all(
+          faltantes.map(async (cap) => {
+            const rows = await fetchItemsCapitulo(cap)
+            return [cap, rows]
+          }),
+        )
+        fetched.forEach(([cap, rows]) => {
+          allItems[cap] = rows
+        })
+      }
+
+      const alcanceLabel =
+        alcance === 'tramo' && String(tramo).trim() ? `Tramo: ${String(tramo).trim()}` : 'General'
+
+      await downloadVersionCompareExcel({
+        versionesOrd,
+        capitulosUnion,
+        getCapData,
+        itemsByCap: allItems,
+        alcanceLabel,
+        contratoId,
+      })
+    } catch {
+      window.alert('No se pudo exportar el Excel de comparación.')
+    } finally {
+      setExporting(false)
+    }
+  }, [
+    alcance,
+    capitulosUnion,
+    contratoId,
+    fetchItemsCapitulo,
+    getCapData,
+    itemsByCap,
+    loaded,
+    tramo,
+    versionesOrd,
+  ])
 
   if (!open) return null
 
-  const numSubCols = versionesOrd.length * 2
+  const numSubCols = versionesOrd.length > 0 ? versionesOrd.length * 4 - 2 : 0
+
+  const renderVersionCells = (getValues) =>
+    versionesOrd.map((v, vi) => {
+      const { cant, costo } = getValues(v, vi)
+      const prevV = vi > 0 ? versionesOrd[vi - 1] : null
+      const prevVals = prevV ? getValues(prevV, vi - 1) : { cant: null, costo: null }
+      const cells = []
+
+      cells.push(
+        <Fragment key={`${v.id}-vals`}>
+          <span style={{ ...td, display: 'block', textAlign: 'right', color: cant != null ? t.text : t.textMuted }}>
+            {cant != null ? fmtQty(cant) : '—'}
+          </span>
+          <span style={{ ...td, display: 'block', textAlign: 'right', color: costo != null ? t.text : t.textMuted }}>
+            {costo != null ? formatCOP(costo) : '—'}
+          </span>
+        </Fragment>,
+      )
+
+      if (vi > 0) {
+        cells.push(
+          <Fragment key={`${v.id}-delta`}>
+            <span
+              style={{
+                ...td,
+                display: 'block',
+                textAlign: 'right',
+                color: deltaColor(prevVals.cant, cant, t),
+                fontWeight: 700,
+                fontSize: 'var(--cc-caption)',
+              }}
+            >
+              {fmtDelta(prevVals.cant, cant)}
+            </span>
+            <span
+              style={{
+                ...td,
+                display: 'block',
+                textAlign: 'right',
+                color: deltaColor(prevVals.costo, costo, t),
+                fontWeight: 700,
+                fontSize: 'var(--cc-caption)',
+              }}
+            >
+              {fmtDelta(prevVals.costo, costo, { money: true })}
+            </span>
+          </Fragment>,
+        )
+      }
+
+      const colSpan = vi > 0 ? 4 : 2
+      return (
+        <td key={`pair-${v.id}`} colSpan={colSpan} style={{ padding: 0, borderLeft: `1px solid ${t.border}` }}>
+          <div style={{ display: 'grid', gridTemplateColumns: vi > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr' }}>{cells}</div>
+        </td>
+      )
+    })
 
   return (
     <div
@@ -207,7 +381,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
         className="cc-ppto-modal-sheet"
         style={{
           width: '100%',
-          maxWidth: 1100,
+          maxWidth: 1200,
           maxHeight: '94vh',
           display: 'flex',
           flexDirection: 'column',
@@ -289,6 +463,25 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
             >
               {loading ? '⏳ Cargando…' : loaded ? 'Actualizar comparación' : 'Ver comparación'}
             </button>
+            {loaded && (
+              <button
+                type="button"
+                onClick={() => void exportarExcel()}
+                disabled={exporting}
+                style={{
+                  background: '#0077B618',
+                  color: '#0077B6',
+                  border: '1px solid #0077B6',
+                  borderRadius: 6,
+                  padding: '6px 14px',
+                  fontWeight: 700,
+                  fontSize: 'var(--cc-caption)',
+                  cursor: exporting ? 'wait' : 'pointer',
+                }}
+              >
+                {exporting ? '⏳ Exportando…' : '📥 Excel con fórmulas'}
+              </button>
+            )}
           </div>
           {error && <div style={{ color: '#DC2626', fontSize: 'var(--cc-caption)', marginTop: 8 }}>{error}</div>}
         </div>
@@ -299,14 +492,14 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
               Elija el alcance y pulse «Ver comparación» para cargar capítulos e ítems.
             </div>
           ) : (
-            <table className="cc-ppto-compare-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: Math.max(720, 200 + numSubCols * 110) }}>
+            <table className="cc-ppto-compare-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: Math.max(820, 220 + numSubCols * 100) }}>
               <thead>
                 <tr style={{ background: `${t.primary}12`, position: 'sticky', top: 0, zIndex: 2 }}>
                   <th rowSpan={2} style={{ ...th, textAlign: 'left', minWidth: 200 }}>Capítulo / Ítem</th>
-                  {versionesOrd.map((v) => (
+                  {versionesOrd.map((v, vi) => (
                     <th
                       key={v.id}
-                      colSpan={2}
+                      colSpan={vi > 0 ? 4 : 2}
                       style={{
                         ...th,
                         textAlign: 'center',
@@ -321,11 +514,17 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
                   ))}
                 </tr>
                 <tr style={{ background: `${t.primary}08`, position: 'sticky', top: 28, zIndex: 2 }}>
-                  {versionesOrd.map((v) => (
-                    <th key={`${v.id}-sub`} colSpan={2} style={{ padding: 0, borderLeft: `1px solid ${t.border}` }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                  {versionesOrd.map((v, vi) => (
+                    <th key={`${v.id}-sub`} colSpan={vi > 0 ? 4 : 2} style={{ padding: 0, borderLeft: `1px solid ${t.border}` }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: vi > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr' }}>
                         <span style={{ ...th, display: 'block', textAlign: 'right' }}>Cantidad</span>
                         <span style={{ ...th, display: 'block', textAlign: 'right' }}>Costo dir.</span>
+                        {vi > 0 && (
+                          <>
+                            <span style={{ ...th, display: 'block', textAlign: 'right', color: '#059669' }}>▲ Cant.</span>
+                            <span style={{ ...th, display: 'block', textAlign: 'right', color: '#059669' }}>▲ Costo</span>
+                          </>
+                        )}
                       </div>
                     </th>
                   ))}
@@ -355,26 +554,12 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
                           <span style={{ marginRight: 6 }}>{openRow ? '▼' : '▶'}</span>
                           {cap}
                         </td>
-                        {versionesOrd.map((v, vi) => {
+                        {renderVersionCells((v) => {
                           const data = getCapData(v.id, cap)
-                          const prevV = vi > 0 ? versionesOrd[vi - 1] : null
-                          const prevData = prevV ? getCapData(prevV.id, cap) : null
-                          const cant = data ? Number(data.cant_total) : null
-                          const costo = data ? Math.round(Number(data.costo_total) || 0) : null
-                          const prevCant = prevData ? Number(prevData.cant_total) : null
-                          const prevCosto = prevData ? Math.round(Number(prevData.costo_total) || 0) : null
-                          return (
-                            <td key={`${cap}-${v.id}-pair`} colSpan={2} style={{ padding: 0, borderLeft: `1px solid ${t.border}` }}>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                                <span style={{ ...td, display: 'block', textAlign: 'right', color: data ? deltaColor(prevCant, cant, t) : t.textMuted }}>
-                                  {data ? fmtQty(cant) : '—'}
-                                </span>
-                                <span style={{ ...td, display: 'block', textAlign: 'right', color: data ? deltaColor(prevCosto, costo, t) : t.textMuted }}>
-                                  {data ? formatCOP(costo) : '—'}
-                                </span>
-                              </div>
-                            </td>
-                          )
+                          return {
+                            cant: data ? Number(data.cant_total) : null,
+                            costo: data ? Math.round(Number(data.costo_total) || 0) : null,
+                          }
                         })}
                       </tr>
                       {openRow && itemsLoading === cap && (
@@ -410,27 +595,13 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
                                   </div>
                                 )}
                               </td>
-                              {versionesOrd.map((v, vi) => {
+                              {renderVersionCells((v) => {
                                 const block = itemRows.find((x) => String(x.version.id) === String(v.id))
                                 const hit = block?.items?.find((it) => String(it.item) === itemKey)
-                                const prevBlock = vi > 0 ? itemRows.find((x) => String(x.version.id) === String(versionesOrd[vi - 1].id)) : null
-                                const prevHit = prevBlock?.items?.find((it) => String(it.item) === itemKey)
-                                const cant = hit ? Number(hit.cant_total) : null
-                                const costo = hit ? Math.round(Number(hit.costo_total) || 0) : null
-                                const prevCant = prevHit ? Number(prevHit.cant_total) : null
-                                const prevCosto = prevHit ? Math.round(Number(prevHit.costo_total) || 0) : null
-                                return (
-                                  <td key={`${cap}-${itemKey}-${v.id}`} colSpan={2} style={{ padding: 0, borderLeft: `1px solid ${t.border}` }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                                      <span style={{ ...td, display: 'block', textAlign: 'right', color: hit ? deltaColor(prevCant, cant, t) : t.textMuted }}>
-                                        {hit ? fmtQty(cant) : '—'}
-                                      </span>
-                                      <span style={{ ...td, display: 'block', textAlign: 'right', color: hit ? deltaColor(prevCosto, costo, t) : t.textMuted }}>
-                                        {hit ? formatCOP(costo) : '—'}
-                                      </span>
-                                    </div>
-                                  </td>
-                                )
+                                return {
+                                  cant: hit ? Number(hit.cant_total) : null,
+                                  costo: hit ? Math.round(Number(hit.costo_total) || 0) : null,
+                                }
                               })}
                             </tr>
                           )

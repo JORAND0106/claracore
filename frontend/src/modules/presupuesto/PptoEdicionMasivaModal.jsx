@@ -208,7 +208,7 @@ export default function PptoEdicionMasivaModal({
 }) {
   const ids = useMemo(() => [...seleccionados], [seleccionados])
   const filasSel = useMemo(
-    () => ids.map((id) => registros.find((r) => r.id === id)).filter(Boolean),
+    () => ids.map((id) => registros.find((r) => String(r.id) === String(id))).filter(Boolean),
     [ids, registros],
   )
   const editables = useMemo(() => filasSel.filter((r) => !esSellado(r)), [filasSel, esSellado])
@@ -490,7 +490,7 @@ export default function PptoEdicionMasivaModal({
           background: t.bgCard,
           border: `1px solid ${t.border}`,
           borderRadius: 16,
-          width: 'min(920px, 96vw)',
+          width: 'min(1104px, 96vw)',
           maxHeight: '92vh',
           display: 'flex',
           flexDirection: 'column',
