@@ -6,7 +6,7 @@ import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
-import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../apiBase'
+import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL, logApiFailure } from '../../apiBase'
 import { supabase } from '../../supabaseClient'
 import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
@@ -309,9 +309,11 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
   const [filtroEstado, setFiltroEstado] = useState('')   // filtro permanente de estado de revisión
   const [guardandoBulk, setGuardandoBulk] = useState(false)
+  const [dandoDeBaja, setDandoDeBaja] = useState(false)
   const [undoUltima, setUndoUltima] = useState(null)
   const [deshaciendo, setDeshaciendo] = useState(false)
   const undoSnapRef = useRef(null)
+  const darDeBajaLockRef = useRef(false)
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
@@ -830,6 +832,149 @@ useEffect(() => {
       return false
     }
     return true
+  }
+
+  const logDarBajaDiagnostico = (...partes) => {
+    console.warn('[ClaraCore · Presupuesto · dar de baja]', ...partes)
+  }
+
+  const esRespuestaYaDadoDeBaja = (status, detail) => {
+    if (status !== 400) return false
+    const t = String(detail || '').toLowerCase()
+    return (
+      t.includes('dado de baja')
+      || t.includes('ya estaba')
+      || t.includes('ya se encuentra')
+      || t.includes('operación duplicada')
+      || t.includes('operacion duplicada')
+      || t.includes('ya fue dado')
+      || t.includes('estado inválido')
+      || t.includes('estado invalido')
+    )
+  }
+
+  async function clasificarRespuestaDarBaja(res, id) {
+    if (res.ok) return { estado: 'ok', id }
+    const detail = await leerDetalleErrorRes(res, `HTTP ${res.status}`)
+    if (esRespuestaYaDadoDeBaja(res.status, detail)) {
+      logDarBajaDiagnostico(`Ítem ${id}: ya dado de baja (HTTP ${res.status}) — ${detail}`)
+      return { estado: 'ya_baja', id, detail, status: res.status }
+    }
+    logDarBajaDiagnostico(`Ítem ${id}: error HTTP ${res.status} — ${detail}`)
+    logApiFailure(`presupuesto/dar-baja id=${id}`, new Error(`${res.status}: ${detail}`))
+    return { estado: 'error', id, detail, status: res.status }
+  }
+
+  /**
+   * Una sola ejecución de baja por lote (anti doble-click / concurrencia).
+   * Trata «ya dado de baja» (400) como éxito idempotente, no como fallo bloqueante.
+   */
+  async function ejecutarDarDeBajaLote(ids, {
+    comentario = '',
+    destinatarioId = null,
+    etiquetaComentario = '[BAJA]',
+    resolverReg = (id) => registros.find((r) => r.id === id),
+    alTerminarSeleccion = null,
+  } = {}) {
+    if (darDeBajaLockRef.current) {
+      logDarBajaDiagnostico('Solicitud ignorada: ya hay un lote de baja en curso.')
+      setAvisoSistema({
+        titulo: 'Dar de baja',
+        mensaje: 'Ya hay una operación de baja en curso. Espere a que finalice antes de intentar de nuevo.',
+        tipo: 'warn',
+      })
+      return { cancelado: true, motivo: 'en_curso' }
+    }
+
+    const idsUnicos = [...new Set((ids || []).filter(Boolean))]
+    if (!idsUnicos.length) return { cancelado: true, motivo: 'vacio' }
+
+    const idsPendientes = idsUnicos.filter((id) => !resolverReg(id)?.dado_de_baja)
+    const idsYaLocal = idsUnicos.filter((id) => resolverReg(id)?.dado_de_baja)
+    if (idsYaLocal.length) {
+      logDarBajaDiagnostico(
+        `${idsYaLocal.length} ítem(s) omitidos en cliente (ya marcados dado_de_baja):`,
+        idsYaLocal.join(', '),
+      )
+    }
+    if (!idsPendientes.length) {
+      setAvisoSistema({
+        titulo: 'Dar de baja',
+        mensaje: 'Los ítems seleccionados ya estaban dados de baja.',
+        tipo: 'ok',
+      })
+      if (typeof alTerminarSeleccion === 'function') alTerminarSeleccion()
+      await recargarCapActual()
+      return { ok: 0, yaBaja: idsYaLocal.length, errores: [], cancelado: false }
+    }
+
+    darDeBajaLockRef.current = true
+    setDandoDeBaja(true)
+    logDarBajaDiagnostico(`Inicio lote (${idsPendientes.length} ítem(s)):`, idsPendientes.join(', '))
+
+    const resultados = { ok: 0, yaBaja: idsYaLocal.length, errores: [] }
+
+    try {
+      for (const id of idsPendientes) {
+        const res = await fetch(`${pptoEp().itemDarBaja(id)}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const cls = await clasificarRespuestaDarBaja(res, id)
+        if (cls.estado === 'ok') {
+          resultados.ok += 1
+          if (comentario.trim()) {
+            await crearComentarios([id], 'validacion', `${etiquetaComentario} ${comentario}`, destinatarioId)
+          }
+        } else if (cls.estado === 'ya_baja') {
+          resultados.yaBaja += 1
+        } else {
+          resultados.errores.push(cls)
+        }
+      }
+
+      if (typeof alTerminarSeleccion === 'function') alTerminarSeleccion()
+
+      _lastWriteAtRef.current = Date.now()
+      await recargarCapActual()
+
+      const lineas = []
+      if (resultados.ok > 0) lineas.push(`${resultados.ok} dado(s) de baja correctamente.`)
+      if (resultados.yaBaja > 0) {
+        lineas.push(`${resultados.yaBaja} ya estaba(n) dado(s) de baja (sin reintentar layoff).`)
+      }
+      if (resultados.errores.length > 0) {
+        const detErr = resultados.errores
+          .slice(0, 8)
+          .map((e) => `· ID ${e.id} (HTTP ${e.status}): ${e.detail}`)
+          .join('\n')
+        lineas.push(`${resultados.errores.length} no se pudo(ieron) dar de baja:\n${detErr}`)
+        if (resultados.errores.length > 8) {
+          lineas.push(`… y ${resultados.errores.length - 8} más (ver consola).`)
+        }
+      }
+
+      logDarBajaDiagnostico('Resumen lote:', resultados)
+
+      if (resultados.errores.length > 0) {
+        setAvisoSistema({
+          titulo: 'Dar de baja — resultado parcial',
+          mensaje: lineas.join('\n\n'),
+          tipo: resultados.ok + resultados.yaBaja > 0 ? 'warn' : 'error',
+        })
+      } else if (idsPendientes.length > 1 || resultados.yaBaja > 0) {
+        setAvisoSistema({
+          titulo: 'Dar de baja',
+          mensaje: lineas.join('\n'),
+          tipo: 'ok',
+        })
+      }
+
+      return { ...resultados, cancelado: false }
+    } finally {
+      darDeBajaLockRef.current = false
+      setDandoDeBaja(false)
+    }
   }
   /** Grilla / detalle / tramos: edición si no está sellado, o contratista con permiso que puede reabrir. */
   const puedeEditarFilaPptoNoSelladoOReabrir = (r) => !esSellado(r) || puedeReabrirTrasAprob
@@ -3999,6 +4144,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
 async function darDeBaja(id) {
+    if (dandoDeBaja || darDeBajaLockRef.current) return
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
     let enlazado = dwgEnlazadoRef.current || dwgEnlazado
@@ -4009,24 +4155,21 @@ async function darDeBaja(id) {
         return
       }
     }
-    const comentarioData = await pedirComentario('validacion', true) // obligatorio
+    const comentarioData = await pedirComentario('validacion', true)
     if (comentarioData === null) return
-    const comentario = comentarioData?.mensaje || ''
-    const destinatarioId = comentarioData?.destinatarioId || null
-    const res = await fetch(`${pptoEp().itemDarBaja(id)}`, {
-      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+    await ejecutarDarDeBajaLote([id], {
+      comentario: comentarioData?.mensaje || '',
+      destinatarioId: comentarioData?.destinatarioId || null,
+      etiquetaComentario: '[BAJA]',
+      resolverReg: (iid) => registros.find((rr) => rr.id === iid),
+      alTerminarSeleccion: () => {
+        setSeleccionados((prev) => {
+          const n = new Set(prev)
+          n.delete(id)
+          return n
+        })
+      },
     })
-    if (res.ok) {
-      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioId)
-      await recargarCapActual()
-    } else {
-      try {
-        const d = await res.json()
-        alert(d.detail || 'Error al dar de baja el registro')
-      } catch {
-        alert('Error al dar de baja el registro')
-      }
-    }
   }
 
 async function restaurar(id) {
@@ -4611,28 +4754,33 @@ async function restaurar(id) {
                                 </button>
                               ))}
                               {puedeEliminar && (
-                                <button onClick={async () => {
-                                  const idsBaja = [...selTab].filter(id => {
-                                    const row = regs.find(x => x.id === id)
-                                    return row && !esSellado(row)
-                                  })
-                                  if (idsBaja.length === 0) return
-                                  if (!(await validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id)))) return
-                                  const comentarioData = await pedirComentario('validacion', true)
-                                  if (comentarioData === null) return
-                                  const comentario = comentarioData?.mensaje || ''
-                                  const destinatarioId = comentarioData?.destinatarioId || null
-                                  for (const id of idsBaja) {
-                                    const res = await fetch(`${pptoEp().itemDarBaja(id)}`, {
-                                      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+                                <button
+                                  type="button"
+                                  disabled={dandoDeBaja}
+                                  onClick={async () => {
+                                    if (dandoDeBaja) return
+                                    const idsBaja = [...selTab].filter(id => {
+                                      const row = regs.find(x => x.id === id)
+                                      return row && !esSellado(row)
                                     })
-                                    if (res.ok) await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioId)
-                                  }
-                                  setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
-                                  await recargarCapActual()
-                                }}
-                                  style={{ background:'#EF444418', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-sm)', cursor:'pointer', color:'#EF4444', fontWeight:'700' }}>
-                                  🗑️ Dar de baja ({[...selTab].filter(id => regs.find(x => x.id === id) && !esSellado(regs.find(x => x.id === id))).length})
+                                    if (idsBaja.length === 0) return
+                                    if (!(await validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id)))) return
+                                    const comentarioData = await pedirComentario('validacion', true)
+                                    if (comentarioData === null) return
+                                    await ejecutarDarDeBajaLote(idsBaja, {
+                                      comentario: comentarioData?.mensaje || '',
+                                      destinatarioId: comentarioData?.destinatarioId || null,
+                                      etiquetaComentario: '[BAJA]',
+                                      resolverReg: (id) => regs.find((x) => x.id === id),
+                                      alTerminarSeleccion: () => setSelTramoTab(prev => ({ ...prev, [key]: new Set() })),
+                                    })
+                                  }}
+                                  style={{
+                                    background:'#EF444418', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px',
+                                    fontSize:'var(--cc-sm)', cursor: dandoDeBaja ? 'not-allowed' : 'pointer', color:'#EF4444', fontWeight:'700',
+                                    opacity: dandoDeBaja ? 0.55 : 1,
+                                  }}>
+                                  {dandoDeBaja ? '⏳ Baja en curso…' : `🗑️ Dar de baja (${[...selTab].filter(id => regs.find(x => x.id === id) && !esSellado(regs.find(x => x.id === id))).length})`}
                                 </button>
                               )}
                             </div>
@@ -5470,21 +5618,29 @@ async function restaurar(id) {
 
                       {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
                       {puedeEliminar && !esSellado(r) && (
-                        <button onClick={async () => {
-                          let enlazado = dwgEnlazadoRef.current || dwgEnlazado
-                          if (bloqueaDarDeBajaDesdeWeb(r, enlazado)) {
-                            enlazado = await refrescarDwgEnlazado()
+                        <button
+                          type="button"
+                          disabled={dandoDeBaja}
+                          onClick={async () => {
+                            if (dandoDeBaja) return
+                            let enlazado = dwgEnlazadoRef.current || dwgEnlazado
                             if (bloqueaDarDeBajaDesdeWeb(r, enlazado)) {
-                              window.alert(MSG_BAJA_DESDE_PLANO)
-                              return
+                              enlazado = await refrescarDwgEnlazado()
+                              if (bloqueaDarDeBajaDesdeWeb(r, enlazado)) {
+                                window.alert(MSG_BAJA_DESDE_PLANO)
+                                return
+                              }
                             }
-                          }
-                          if (!window.confirm('¿Dar de baja este registro?')) return
-                          setModalDetallePpto(null); setModalDetallePptoEditable(false)
-                          await darDeBaja(r.id)
-                        }}
-                          style={{ background:'#EF444418', border:'1px solid #EF444444', borderRadius:'8px', padding:'8px 16px', fontSize:'var(--cc-sm)', fontWeight:'700', color:'#EF4444', cursor:'pointer' }}>
-                          🗑️ Dar de baja
+                            if (!window.confirm('¿Dar de baja este registro?')) return
+                            setModalDetallePpto(null); setModalDetallePptoEditable(false)
+                            await darDeBaja(r.id)
+                          }}
+                          style={{
+                            background:'#EF444418', border:'1px solid #EF444444', borderRadius:'8px', padding:'8px 16px',
+                            fontSize:'var(--cc-sm)', fontWeight:'700', color:'#EF4444', cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
+                            opacity: dandoDeBaja ? 0.55 : 1,
+                          }}>
+                          {dandoDeBaja ? '⏳ Baja en curso…' : '🗑️ Dar de baja'}
                         </button>
                       )}
 
@@ -6275,7 +6431,7 @@ async function restaurar(id) {
                   type="button"
                   title={`Deshacer: ${undoUltima.label}`}
                   onClick={() => void deshacerUltimaAccionPresupuesto()}
-                  disabled={deshaciendo || guardandoBulk}
+                  disabled={deshaciendo || guardandoBulk || dandoDeBaja}
                   style={{
                     background: t.bgCard,
                     color: '#B45309',
@@ -6294,27 +6450,33 @@ async function restaurar(id) {
               )}
 
               {puedeEliminar && !verPapelera && seleccionados.size > 1 && (
-                <button onClick={async () => {
-                  const idsBaja = [...seleccionados].filter(id => !esSellado(registros.find(rr => rr.id === id)))
-                  if (idsBaja.length === 0) {
-                    alert('Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden modificarse.')
-                    return
-                  }
-                  if (!(await validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id)))) return
-                  const comentarioData = await pedirComentario('validacion', true)
-                  if (comentarioData === null) return
-                  const comentario = comentarioData?.mensaje || ''
-                  for (const id of idsBaja) {
-                    const res = await fetch(`${pptoEp().itemDarBaja(id)}`, {
-                      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+                <button
+                  type="button"
+                  disabled={dandoDeBaja}
+                  onClick={async () => {
+                    if (dandoDeBaja) return
+                    const idsBaja = [...seleccionados].filter(id => !esSellado(registros.find(rr => rr.id === id)))
+                    if (idsBaja.length === 0) {
+                      alert('Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden modificarse.')
+                      return
+                    }
+                    if (!(await validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id)))) return
+                    const comentarioData = await pedirComentario('validacion', true)
+                    if (comentarioData === null) return
+                    await ejecutarDarDeBajaLote(idsBaja, {
+                      comentario: comentarioData?.mensaje || '',
+                      destinatarioId: comentarioData?.destinatarioId || null,
+                      etiquetaComentario: '[BAJA MASIVA]',
+                      resolverReg: (id) => registros.find((rr) => rr.id === id),
+                      alTerminarSeleccion: () => setSeleccionados(new Set()),
                     })
-                    if (res.ok) await crearComentarios([id], 'validacion', `[BAJA MASIVA] ${comentario}`)
-                  }
-                  setSeleccionados(new Set())
-                  await recargarCapActual()
-                }}
-                style={{ background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
-                  🗑️ Dar de baja ({seleccionados.size})
+                  }}
+                  style={{
+                    background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444',
+                    fontSize:'var(--cc-sm)', fontWeight:'700', cursor: dandoDeBaja ? 'not-allowed' : 'pointer', whiteSpace:'nowrap',
+                    opacity: dandoDeBaja ? 0.55 : 1,
+                  }}>
+                  {dandoDeBaja ? '⏳ Baja en curso…' : `🗑️ Dar de baja (${seleccionados.size})`}
                 </button>
               )}
 
@@ -6529,8 +6691,9 @@ async function restaurar(id) {
                       <button
                         type="button"
                         aria-label="Dar de baja"
-                        title="Dar de baja"
-                        onClick={() => darDeBaja(r.id)}
+                        title={dandoDeBaja ? 'Baja en curso…' : 'Dar de baja'}
+                        disabled={dandoDeBaja}
+                        onClick={() => { if (!dandoDeBaja) void darDeBaja(r.id) }}
                         style={{
                           width: 40,
                           minWidth: 40,
@@ -6542,12 +6705,13 @@ async function restaurar(id) {
                           borderRadius: 8,
                           color: '#EF4444',
                           fontWeight: 700,
-                          cursor: 'pointer',
+                          cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
                           fontSize: 'var(--cc-md)',
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           padding: 0,
+                          opacity: dandoDeBaja ? 0.55 : 1,
                         }}
                       >🗑️</button>
                     )}
@@ -6795,10 +6959,16 @@ async function restaurar(id) {
                     {puedeEliminar && !verPapelera && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                         {seleccionados.has(r.id) && (
-                          <button onClick={() => !esSellado(r) && darDeBaja(r.id)}
-                            title="Dar de baja"
-                            disabled={esSellado(r)}
-                            style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
+                          <button
+                            type="button"
+                            onClick={() => { if (!esSellado(r) && !dandoDeBaja) void darDeBaja(r.id) }}
+                            title={dandoDeBaja ? 'Baja en curso…' : 'Dar de baja'}
+                            disabled={esSellado(r) || dandoDeBaja}
+                            style={{
+                              background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px',
+                              color:'#EF4444', fontSize:'var(--cc-sm)', cursor: (esSellado(r) || dandoDeBaja) ? 'not-allowed' : 'pointer',
+                              opacity: dandoDeBaja ? 0.55 : 1,
+                            }}>
                             🗑️
                           </button>
                         )}
