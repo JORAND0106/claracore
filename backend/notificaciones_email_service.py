@@ -24,6 +24,10 @@ from notificaciones_email_mail import (
     try_send_notification_email,
 )
 from notificaciones_push_service import NotificacionesPushSender
+from usuarios_notif_elegibilidad import (
+    filtrar_usuarios_para_notificaciones_automaticas,
+    usuario_puede_recibir_notificaciones_automaticas,
+)
 
 _log = logging.getLogger("claracore.notificaciones_email")
 
@@ -116,6 +120,7 @@ class NotificacionesEmailRunner:
         )
 
     def _usuarios_vinculados_contrato(self, contrato_id: int) -> List[dict]:
+        """Destinatarios candidatos del contrato: activos y estado Aprobado."""
         uid_set: Set[int] = set()
         try:
             prim = (
@@ -123,6 +128,7 @@ class NotificacionesEmailRunner:
                 .select("id")
                 .eq("contrato_id", contrato_id)
                 .eq("activo", True)
+                .eq("estado", "aprobado")
                 .execute()
                 .data
                 or []
@@ -151,14 +157,13 @@ class NotificacionesEmailRunner:
             .select("id, email, nombre, apellidos, cargo_id, contrato_id, activo, estado")
             .in_("id", list(uid_set))
             .eq("activo", True)
+            .eq("estado", "aprobado")
             .execute()
             .data
             or []
         )
         out: List[dict] = []
-        for r in rows:
-            if (r.get("estado") or "").lower() == "rechazado":
-                continue
+        for r in filtrar_usuarios_para_notificaciones_automaticas(rows):
             uid = int(r["id"])
             if not self._vinculado(uid, contrato_id):
                 continue
@@ -627,8 +632,10 @@ class NotificacionesEmailRunner:
             for uid in dest_ids:
                 urows = (
                     self.supabase.table("usuarios")
-                    .select("id, email, nombre, apellidos")
+                    .select("id, email, nombre, apellidos, estado, activo")
                     .eq("id", uid)
+                    .eq("activo", True)
+                    .eq("estado", "aprobado")
                     .limit(1)
                     .execute()
                     .data
@@ -637,6 +644,8 @@ class NotificacionesEmailRunner:
                 if not urows:
                     continue
                 u = urows[0]
+                if not usuario_puede_recibir_notificaciones_automaticas(u):
+                    continue
                 subj, txt, html_b = email_admin_resumen(
                     _usuario_display_name(u),
                     cnum,

@@ -64,6 +64,10 @@ from azure_blob_storage import (
     sicoe_blob_path,
     upload_blob,
 )
+from usuarios_notif_elegibilidad import (
+    filtrar_usuarios_para_notificaciones_automaticas,
+    usuario_estado_es_aprobado,
+)
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 # Clave: (contrato_id, usuario_id) → timestamp Unix. Nunca mezclar con otro usuario:
@@ -5944,6 +5948,7 @@ def _ids_cargo_por_nombre(nombre_cargo: str) -> List[int]:
 
 
 def _usuarios_activos_por_cargos(cargo_ids: List[int]) -> List[dict]:
+    """Usuarios activos con los cargos dados y estado Aprobado (notif. automáticas)."""
     if not cargo_ids:
         return []
     try:
@@ -5952,11 +5957,12 @@ def _usuarios_activos_por_cargos(cargo_ids: List[int]) -> List[dict]:
             .select("id, cargo_id, contrato_id, activo, estado")
             .in_("cargo_id", cargo_ids)
             .eq("activo", True)
+            .eq("estado", "aprobado")
             .execute()
             .data
             or []
         )
-        return [r for r in rows if (r.get("estado") or "").lower() != "rechazado"]
+        return filtrar_usuarios_para_notificaciones_automaticas(rows)
     except Exception:
         return []
 
@@ -6029,6 +6035,7 @@ def _ids_rol_por_nombre(nombre_rol: str) -> List[int]:
 
 
 def _usuarios_activos_por_roles(rol_ids: List[int]) -> List[dict]:
+    """Usuarios activos con los roles dados y estado Aprobado (notif. automáticas)."""
     if not rol_ids:
         return []
     try:
@@ -6037,11 +6044,12 @@ def _usuarios_activos_por_roles(rol_ids: List[int]) -> List[dict]:
             .select("id, rol_id, contrato_id, activo, estado")
             .in_("rol_id", rol_ids)
             .eq("activo", True)
+            .eq("estado", "aprobado")
             .execute()
             .data
             or []
         )
-        return [r for r in rows if (r.get("estado") or "").lower() != "rechazado"]
+        return filtrar_usuarios_para_notificaciones_automaticas(rows)
     except Exception:
         return []
 
@@ -6075,7 +6083,10 @@ def _destinatarios_resumen_jornada(contrato_id: Optional[int]) -> List[int]:
 
 
 def _usuario_puede_suscribirse_push(user_id: int) -> bool:
-    """Editar/validar SICOE en algún contrato, o cargo Administrador/Desarrollador."""
+    """Editar/validar SICOE en algún contrato, o cargo Administrador/Desarrollador.
+
+    Solo usuarios con estado Aprobado (mismo gate que notificaciones automáticas).
+    """
     try:
         uid = int(user_id)
     except (TypeError, ValueError):
@@ -6085,7 +6096,7 @@ def _usuario_puede_suscribirse_push(user_id: int) -> bool:
     try:
         urows = (
             supabase.table("usuarios")
-            .select("id, cargo_id, contrato_id")
+            .select("id, cargo_id, contrato_id, estado")
             .eq("id", uid)
             .eq("activo", True)
             .limit(1)
@@ -6098,6 +6109,8 @@ def _usuario_puede_suscribirse_push(user_id: int) -> bool:
     if not urows:
         return False
     u = urows[0]
+    if not usuario_estado_es_aprobado(u.get("estado")):
+        return False
     cid_cargo = u.get("cargo_id")
     if cid_cargo is not None and int(cid_cargo) in dev_ids | admin_ids:
         return True
