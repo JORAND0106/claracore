@@ -1,0 +1,144 @@
+# Despliegue manual del backend a Azure App Service (claracore-backend).
+# Replica el flujo de backend/db.ps1: mantenimiento ON → ZIP → az webapp deploy
+# (async) → espera 90s → mantenimiento OFF.
+#
+# Trigger: solo workflow_dispatch (sin deploy automático en push).
+# Protecciones: input "DEPLOY" + GitHub Environment con reviewers requeridos.
+#
+# Secrets necesarios (Settings → Secrets and variables → Actions):
+#   AZURE_CREDENTIALS          JSON del service principal (ver comentario al final del job)
+#   MAINTENANCE_SECRET         mismo valor que usa POST /mantenimiento (claracore_deploy_2026)
+#
+# Environment: crear "production" en Settings → Environments y activar
+# "Required reviewers" para exigir aprobación antes de ejecutar el job.
+
+name: Deploy backend (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Escribe DEPLOY para confirmar despliegue a producción'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy claracore-backend
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Validar confirmación DEPLOY
+        run: |
+          if [ "${{ inputs.confirm }}" != "DEPLOY" ]; then
+            echo "Deploy cancelado: debes escribir exactamente DEPLOY en el input de confirmación."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Activar modo mantenimiento
+        env:
+          MAINTENANCE_SECRET: ${{ secrets.MAINTENANCE_SECRET }}
+        run: |
+          set +e
+          BODY=$(jq -nc \
+            --arg secret "$MAINTENANCE_SECRET" \
+            '{secret:$secret,activo:true,segundos:180,mensaje:"Actualizacion del sistema en curso. Por favor guarda tu trabajo antes de continuar."}')
+          HTTP_CODE=$(curl -sS -o /tmp/maint_on.json -w "%{http_code}" \
+            -X POST "https://claracore-backend.azurewebsites.net/mantenimiento" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Modo mantenimiento activado (HTTP $HTTP_CODE). Esperando 10 segundos..."
+            sleep 10
+          else
+            echo "No se pudo activar mantenimiento (HTTP $HTTP_CODE; backend offline?). Continuando..."
+            cat /tmp/maint_on.json 2>/dev/null || true
+          fi
+
+      - name: Empaquetar backend (mismas exclusiones que db.ps1)
+        run: |
+          set -euo pipefail
+          STAGING="${RUNNER_TEMP}/claracore-backend-deploy-${GITHUB_RUN_ID}"
+          ZIP_PATH="${RUNNER_TEMP}/deploy.zip"
+          rm -rf "$STAGING" "$ZIP_PATH"
+          mkdir -p "$STAGING"
+
+          # Equivalente a robocopy /XD __pycache__ .venv venv .git .pytest_cache .azure
+          # y /XF *.pyc .env deploy.zip
+          rsync -a \
+            --exclude '__pycache__/' \
+            --exclude '.venv/' \
+            --exclude 'venv/' \
+            --exclude '.git/' \
+            --exclude '.pytest_cache/' \
+            --exclude '.azure/' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'deploy.zip' \
+            backend/ "$STAGING/"
+
+          # ZIP con el contenido en la raíz del archivo (como Compress-Archive de staging/*)
+          (cd "$STAGING" && zip -rq "$ZIP_PATH" .)
+          rm -rf "$STAGING"
+
+          echo "Paquete listo: $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"
+          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Subir ZIP a Azure App Service (async)
+        run: |
+          set -euo pipefail
+          az webapp deploy \
+            --name claracore-backend \
+            --resource-group andres_jaimes82_rg_5760 \
+            --src-path "$ZIP_PATH" \
+            --type zip \
+            --async true \
+            --track-status false
+          rm -f "$ZIP_PATH"
+
+      - name: Esperar extracción Kudu (~90 s)
+        run: |
+          echo "Esperando ~90 s para que Kudu termine de extraer y reiniciar (deploy asíncrono)..."
+          sleep 90
+
+      - name: Desactivar modo mantenimiento
+        env:
+          MAINTENANCE_SECRET: ${{ secrets.MAINTENANCE_SECRET }}
+        run: |
+          set +e
+          BODY=$(jq -nc \
+            --arg secret "$MAINTENANCE_SECRET" \
+            '{secret:$secret,activo:false,mensaje:"Actualizacion finalizada. Recargando sistema..."}')
+          HTTP_CODE=$(curl -sS -o /tmp/maint_off.json -w "%{http_code}" \
+            -X POST "https://claracore-backend.azurewebsites.net/mantenimiento" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Modo mantenimiento desactivado (HTTP $HTTP_CODE)."
+          else
+            echo "No se pudo desactivar mantenimiento automáticamente (HTTP $HTTP_CODE)."
+            cat /tmp/maint_off.json 2>/dev/null || true
+          fi
+
+      - name: Deploy completado
+        run: echo "Deploy completado!"
