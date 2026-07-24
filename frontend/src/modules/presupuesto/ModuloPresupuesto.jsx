@@ -6777,7 +6777,7 @@ async function restaurar(id) {
           </div>
         )}
         <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
-          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: 1100 }}>
+          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: 1240 }}>
             <thead style={{ background:t.bg }}>
               <tr>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
@@ -6789,6 +6789,8 @@ async function restaurar(id) {
                 <th style={thStyle}>Und</th>
                 <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
                 <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
+                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa inicio">Abs. Inicio</th>
+                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa final">Abs. Final</th>
                 <th style={thStyle}>Área/Long</th>
                 <th style={thStyle}>Ancho</th>
                 <th style={thStyle}>Espesor</th>
@@ -6852,6 +6854,18 @@ async function restaurar(id) {
                             placeholder="No.Fin"
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_final || '-')}
+                    </td>
+                    <td
+                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={r.abs_inicio != null && String(r.abs_inicio).trim() ? String(r.abs_inicio) : undefined}
+                    >
+                      {r.abs_inicio != null && String(r.abs_inicio).trim() ? r.abs_inicio : '-'}
+                    </td>
+                    <td
+                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={r.abs_final != null && String(r.abs_final).trim() ? String(r.abs_final) : undefined}
+                    >
+                      {r.abs_final != null && String(r.abs_final).trim() ? r.abs_final : '-'}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAreaLongNodInline() && seleccionados.has(r.id) && !esSellado(r)
