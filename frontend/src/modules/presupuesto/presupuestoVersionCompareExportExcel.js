@@ -44,6 +44,10 @@ function prepararHojaCompare(ws) {
 
 const ANCHO_DESC_ITEMS = Math.round(48 * 1.6)
 const ANCHO_DESC_TRAMO = Math.round(42 * 1.6)
+const ANCHO_UND = 8
+const ANCHO_VLR_UNIT = 14
+const LABEL_HEADERS_ITEMS = ['Capítulo / Ítem', 'Und', 'Vlr. unitario']
+const LABEL_COUNT_ITEMS = LABEL_HEADERS_ITEMS.length
 
 function colToLetter(col) {
   let s = ''
@@ -113,6 +117,69 @@ function escribirCeldaDescripcion(ws, rowNum, colNum, text, colWidth) {
   cell.value = text
   estiloDato(cell, { align: 'left', wrapText: true, fill: FILL_ROW })
   ajustarAlturaFilaDescripcion(ws, rowNum, text, colWidth)
+}
+
+function resolverMetaItem(itemRows, itemKey, versionesOrd) {
+  let und = ''
+  let vlrUnitario = null
+
+  for (let vi = versionesOrd.length - 1; vi >= 0; vi -= 1) {
+    const v = versionesOrd[vi]
+    const block = itemRows.find((x) => String(x.version.id) === String(v.id))
+    const it = block?.items?.find((i) => String(i.item) === itemKey)
+    if (!it) continue
+    if (!und && it.und) und = String(it.und).trim()
+    if (vlrUnitario == null && it.vlr_unitario != null && it.vlr_unitario !== '') {
+      vlrUnitario = Math.round(Number(it.vlr_unitario) || 0)
+    }
+  }
+
+  if (!und) {
+    for (const { items } of itemRows) {
+      const it = items.find((i) => String(i.item) === itemKey)
+      if (it?.und) {
+        und = String(it.und).trim()
+        break
+      }
+    }
+  }
+
+  return { und: und || '—', vlr_unitario: vlrUnitario }
+}
+
+function escribirCeldasMetaItem(ws, rowNum, undCol, vlrCol, { und, vlr_unitario: vlrUnitario }) {
+  const cUnd = ws.getRow(rowNum).getCell(undCol)
+  cUnd.value = und || '—'
+  estiloDato(cUnd, { align: 'center' })
+
+  const cVlr = ws.getRow(rowNum).getCell(vlrCol)
+  if (vlrUnitario != null && !Number.isNaN(vlrUnitario)) {
+    cVlr.value = vlrUnitario
+    estiloDato(cVlr, { numFmt: COP_NUM_FMT, align: 'right' })
+  } else {
+    cVlr.value = null
+    estiloDato(cVlr, { align: 'right' })
+  }
+}
+
+function estiloLabelExtraSubtotalCap(cell) {
+  cell.fill = FILL_SUBTOTAL_CAP
+  cell.font = { bold: true, size: 10, color: { argb: CC.white } }
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }
+  bordeCelda(cell, { top: B_HEADER, bottom: B_THIN, left: B_THIN, right: B_THIN })
+}
+
+function estiloLabelExtraSubtotalTramo(cell) {
+  cell.fill = FILL_SUBTOTAL_TRAMO
+  cell.font = { bold: true, size: 11, color: { argb: CC.white } }
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }
+  bordeCelda(cell, { top: B_HEADER, bottom: B_HEADER, left: B_THIN, right: B_THIN })
+}
+
+function estiloLabelExtraTotal(cell) {
+  cell.fill = FILL_TOTAL
+  cell.font = { bold: true, size: 11, color: { argb: CC.white } }
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }
 }
 
 function estiloSubtotalCapLabel(cell) {
@@ -388,7 +455,10 @@ function escribirSubtotalCapitulo(
   ajustarAlturaFilaDescripcion(ws, rowNum, labelText, ANCHO_DESC_TRAMO)
 
   cols.forEach((c, idx) => {
-    if (c.kind === 'label') return
+    if (c.kind === 'label') {
+      if (idx > 0) estiloLabelExtraSubtotalCap(r.getCell(idx + 1))
+      return
+    }
     const cell = r.getCell(idx + 1)
     const hit = costoCols.find((cc) => cc.colNum === idx + 1)
     if (!hit) {
@@ -422,7 +492,10 @@ function escribirSubtotalTramo(ws, rowNum, cols, costoCols, paresDelta, chapterS
   estiloSubtotalTramoLabel(r.getCell(1))
 
   cols.forEach((c, idx) => {
-    if (c.kind === 'label') return
+    if (c.kind === 'label') {
+      if (idx > 0) estiloLabelExtraSubtotalTramo(r.getCell(idx + 1))
+      return
+    }
     const cell = r.getCell(idx + 1)
     const hit = costoCols.find((cc) => cc.colNum === idx + 1)
     if (!hit) {
@@ -476,7 +549,10 @@ function escribirFilaTotalesCostoDirecto(
   r.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
 
   cols.forEach((c, idx) => {
-    if (c.kind === 'label') return
+    if (c.kind === 'label') {
+      if (idx > 0) estiloLabelExtraTotal(r.getCell(idx + 1))
+      return
+    }
     const cell = r.getCell(idx + 1)
     const hit = costoCols.find((cc) => cc.colNum === idx + 1)
     if (!hit) {
@@ -503,7 +579,6 @@ function escribirFilaTotalesCostoDirecto(
 
 function escribirFilaTotalGeneralItems(ws, rowNum, cols, costoCols, paresDelta, subtotalRows) {
   if (!subtotalRows.length) return
-  const firstRow = subtotalRows[0]
   const r = ws.getRow(rowNum)
   r.getCell(1).value = 'TOTAL GENERAL'
   r.getCell(1).fill = FILL_TOTAL
@@ -511,7 +586,10 @@ function escribirFilaTotalGeneralItems(ws, rowNum, cols, costoCols, paresDelta, 
   r.getCell(1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
 
   cols.forEach((c, idx) => {
-    if (c.kind === 'label') return
+    if (c.kind === 'label') {
+      if (idx > 0) estiloLabelExtraTotal(r.getCell(idx + 1))
+      return
+    }
     const cell = r.getCell(idx + 1)
     const hit = costoCols.find((cc) => cc.colNum === idx + 1)
     if (!hit) {
@@ -587,13 +665,15 @@ function escribirHojaCapitulos(ws, versionesOrd, capitulosUnion, getCapData, exp
 
 function escribirHojaItems(ws, versionesOrd, capitulosUnion, itemsByCap, exportCtx) {
   prepararHojaCompare(ws)
-  const totalCols = buildVersionColumnPlan(versionesOrd, 1).length
+  const totalCols = buildVersionColumnPlan(versionesOrd, LABEL_COUNT_ITEMS).length
   const headerRow = escribirEncabezadoInforme(ws, totalCols, {
     ...exportCtx,
     subtituloDestacado: 'Resumen general',
   })
 
-  const { cols, firstDataRow } = escribirEncabezadosCompare(ws, versionesOrd, headerRow)
+  const { cols, firstDataRow } = escribirEncabezadosCompare(ws, versionesOrd, headerRow, {
+    labelHeaders: LABEL_HEADERS_ITEMS,
+  })
   const costoCols = indicesColumnasCosto(cols)
   const paresDelta = paresCostoParaDelta(cols)
   let rowNum = firstDataRow
@@ -619,6 +699,9 @@ function escribirHojaItems(ws, versionesOrd, capitulosUnion, itemsByCap, exportC
       const labelText = desc ? `${cap} · ${itemKey} — ${desc}` : `${cap} · ${itemKey}`
       escribirCeldaDescripcion(ws, rowNum, 1, labelText, ANCHO_DESC_ITEMS)
 
+      const meta = resolverMetaItem(itemRows, itemKey, versionesOrd)
+      escribirCeldasMetaItem(ws, rowNum, 2, 3, meta)
+
       escribirFilaCompare(ws, rowNum, cols, (versionId) => {
         const block = itemRows.find((x) => String(x.version.id) === String(versionId))
         return block?.items?.find((it) => String(it.item) === itemKey) || null
@@ -639,7 +722,7 @@ function escribirHojaItems(ws, versionesOrd, capitulosUnion, itemsByCap, exportC
     escribirFilaTotalGeneralItems(ws, rowNum, cols, costoCols, paresDelta, subtotalRows)
   }
 
-  ajustarAnchosColumnas(ws, versionesOrd, ANCHO_DESC_ITEMS)
+  ajustarAnchosColumnas(ws, versionesOrd, [ANCHO_DESC_ITEMS, ANCHO_UND, ANCHO_VLR_UNIT])
   ws.views = [{ showGridLines: false }]
 }
 
@@ -647,14 +730,14 @@ function escribirHojaItems(ws, versionesOrd, capitulosUnion, itemsByCap, exportC
 function escribirHojaTramo(ws, tramoLabel, block, versionesOrd, exportCtx) {
   prepararHojaCompare(ws)
   const { capitulosUnion, itemsByCap } = block
-  const totalCols = buildVersionColumnPlan(versionesOrd, 1).length
+  const totalCols = buildVersionColumnPlan(versionesOrd, LABEL_COUNT_ITEMS).length
   const headerRow = escribirEncabezadoInforme(ws, totalCols, {
     ...exportCtx,
     subtituloDestacado: `Tramo: ${tramoLabel}`,
   })
 
   const { cols, firstDataRow } = escribirEncabezadosCompare(ws, versionesOrd, headerRow, {
-    labelHeaders: ['Capítulo / Ítem'],
+    labelHeaders: LABEL_HEADERS_ITEMS,
   })
   const costoCols = indicesColumnasCosto(cols)
   const paresDelta = paresCostoParaDelta(cols)
@@ -681,6 +764,9 @@ function escribirHojaTramo(ws, tramoLabel, block, versionesOrd, exportCtx) {
       const labelText = desc ? `${cap} · ${itemKey} — ${desc}` : `${cap} · ${itemKey}`
       escribirCeldaDescripcion(ws, rowNum, 1, labelText, ANCHO_DESC_TRAMO)
 
+      const meta = resolverMetaItem(itemRows, itemKey, versionesOrd)
+      escribirCeldasMetaItem(ws, rowNum, 2, 3, meta)
+
       escribirFilaCompare(ws, rowNum, cols, (versionId) => {
         const blk = itemRows.find((x) => String(x.version.id) === String(versionId))
         return blk?.items?.find((it) => String(it.item) === itemKey) || null
@@ -702,7 +788,7 @@ function escribirHojaTramo(ws, tramoLabel, block, versionesOrd, exportCtx) {
     escribirSubtotalTramo(ws, rowNum, cols, costoCols, paresDelta, chapterSubRows, tramoLabel)
   }
 
-  ajustarAnchosColumnas(ws, versionesOrd, ANCHO_DESC_TRAMO)
+  ajustarAnchosColumnas(ws, versionesOrd, [ANCHO_DESC_TRAMO, ANCHO_UND, ANCHO_VLR_UNIT])
   ws.views = [{ showGridLines: false }]
 }
 
