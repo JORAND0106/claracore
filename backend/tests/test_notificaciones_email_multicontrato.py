@@ -133,6 +133,8 @@ class _FakeSupabase:
                         "email": "admin@test.local",
                         "nombre": "Admin",
                         "apellidos": "Contrato",
+                        "activo": True,
+                        "estado": "aprobado",
                     }
                 ]
             return []

@@ -120,6 +120,15 @@ from ccd_conciliacion import (
     _fetch_cascade_interventoria_actas_rpo,
     matriz_params_contrato,
 )
+from ccd_firma_integridad import (
+    FIRMA_INVALIDADA_MARKER,
+    es_marcador_firma_invalidada,
+    hash_canonico,
+    html_caja_firma_invalidada,
+    html_fo_eo04_firma_invalidada,
+    payload_desde_items_agregados,
+    payload_desde_registros,
+)
 
 # ClaraCore Documentación (CCD): código único por tipo de formato (gestión documental).
 CODIGO_FORMATO_CCD_CC_SUB_001 = "CC-SUB-001"
@@ -1764,6 +1773,214 @@ def _snapshot_to_firma_cfg(snap: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _fetch_registros_integridad_corte(contrato_id: int, corte_id: int) -> List[Dict[str, Any]]:
+    """Mismos registros base que alimentan CC-SUB-001/002 (sub_estado Aprobado)."""
+    sel = (
+        "id, item_numero, item_descripcion, unidad, capitulo, cantidad_total, "
+        "vlr_unitario_subcontratista, sub_estado, foto_url, foto_numero, "
+        "grafico_url, grafico_numero, abs_inicio, abs_final"
+    )
+    try:
+        return (
+            _sb.table("so_registros")
+            .select(sel)
+            .eq("contrato_id", contrato_id)
+            .eq("corte_id", corte_id)
+            .eq("sub_estado", "Aprobado")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        _log.warning("integridad corte: %s", e)
+        return []
+
+
+def _fetch_registros_integridad_contexto(
+    contrato_id: int, contexto_tipo: str, contexto_id: int
+) -> List[Dict[str, Any]]:
+    """Registros que alimentan CC-SEM / CC-MES / gerencia (nivel máx. aprobado)."""
+    if contexto_tipo == "semana":
+        return fetch_registros_conciliacion(_sb, contrato_id, semana_id=contexto_id)
+    if contexto_tipo == "acta_rpo":
+        return fetch_registros_conciliacion(_sb, contrato_id, acta_rpo_id=contexto_id)
+    return []
+
+
+def _payload_contenido_documento(
+    contrato_id: int,
+    formato_codigo: str,
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Payload canónico del contenido fuente del informe (misma base que el PDF).
+    CC-SUB-001 / CC-SEM-001 / CC-MES-001 / CC-GER: ítems agregados.
+    Memorias (*-002) y FO-EO-04: filas de registro (+ medios / imágenes).
+    """
+    fmt = (formato_codigo or "").strip()
+    try:
+        if corte_id is not None:
+            regs = _fetch_registros_integridad_corte(contrato_id, int(corte_id))
+            if fmt == CODIGO_FORMATO_CCD_CC_SUB_002:
+                return payload_desde_registros(
+                    formato_codigo=fmt,
+                    contexto_tipo="corte",
+                    contexto_id=int(corte_id),
+                    registros=regs,
+                )
+            items, total = aggregate_items_conciliacion(
+                [
+                    {
+                        **r,
+                        "vlr_unitario": r.get("vlr_unitario_subcontratista"),
+                        "bloqueado": False,
+                    }
+                    for r in regs
+                ]
+            )
+            # CC-SUB agrega con vlr_unitario_sub en _contexto_corte_sub; alinear claves.
+            for it in items:
+                if it.get("vlr_unitario") is not None and it.get("vlr_unitario_sub") is None:
+                    it["vlr_unitario_sub"] = it.get("vlr_unitario")
+            return payload_desde_items_agregados(
+                formato_codigo=fmt,
+                contexto_tipo="corte",
+                contexto_id=int(corte_id),
+                items=items,
+                total_costo=total,
+            )
+
+        if contexto_tipo and contexto_id is not None:
+            cid = int(contexto_id)
+            if fmt == CODIGO_FORMATO_IDU_FO_EO_04_V2 and contexto_tipo == "acta_rpo":
+                items = _fetch_items_n3_acta(cid, contrato_id)
+                imgs = _fo_eo_04_list_imagenes_acta(contrato_id, cid)
+                return payload_desde_items_agregados(
+                    formato_codigo=fmt,
+                    contexto_tipo=contexto_tipo,
+                    contexto_id=cid,
+                    items=items,
+                    total_costo=sum(float(it.get("cantidad") or 0) for it in items),
+                    extra={
+                        "imagenes": sorted(
+                            [
+                                {
+                                    "item_numero": (im.get("item_numero") or ""),
+                                    "foto_url": (im.get("foto_url") or ""),
+                                    "foto_numero": str(im.get("foto_numero") or ""),
+                                    "grafico_url": (im.get("grafico_url") or ""),
+                                    "grafico_numero": str(im.get("grafico_numero") or ""),
+                                }
+                                for im in imgs
+                            ],
+                            key=lambda x: (
+                                x["item_numero"],
+                                x["foto_numero"],
+                                x["grafico_numero"],
+                            ),
+                        )
+                    },
+                )
+            regs = _fetch_registros_integridad_contexto(contrato_id, contexto_tipo, cid)
+            if fmt in (CODIGO_FORMATO_CCD_CC_SEM_002, CODIGO_FORMATO_CCD_CC_MES_002):
+                # Memorias: ampliar con campos de medio si el select base no los trae.
+                return payload_desde_registros(
+                    formato_codigo=fmt,
+                    contexto_tipo=contexto_tipo,
+                    contexto_id=cid,
+                    registros=regs,
+                )
+            items, total = aggregate_items_conciliacion(regs)
+            return payload_desde_items_agregados(
+                formato_codigo=fmt,
+                contexto_tipo=contexto_tipo,
+                contexto_id=cid,
+                items=items,
+                total_costo=total,
+            )
+    except Exception as e:
+        _log.warning("payload_contenido_documento: %s", e)
+        return None
+    return None
+
+
+def _calcular_contenido_hash_documento(
+    contrato_id: int,
+    formato_codigo: str,
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> Optional[str]:
+    payload = _payload_contenido_documento(
+        contrato_id,
+        formato_codigo,
+        corte_id=corte_id,
+        contexto_tipo=contexto_tipo,
+        contexto_id=contexto_id,
+    )
+    if not payload:
+        return None
+    return hash_canonico(payload)
+
+
+def _contenido_hash_guardado(
+    contrato_id: int,
+    formato_codigo: str,
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> Optional[str]:
+    snap: Optional[Dict[str, Any]] = None
+    if corte_id is not None:
+        snap = _snapshot_key_corte(contrato_id, formato_codigo, int(corte_id))
+    elif contexto_tipo and contexto_id is not None:
+        snap = _snapshot_key_contexto(
+            contrato_id, formato_codigo, contexto_tipo, int(contexto_id)
+        )
+    if not snap:
+        return None
+    h = (snap.get("contenido_hash") or "").strip()
+    return h or None
+
+
+def _firma_contenido_modificado(
+    contrato_id: int,
+    formato_codigo: str,
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> bool:
+    """
+    True si hay hash guardado al firmar y el contenido fuente actual difiere.
+    Sin hash (firmas legacy) → False (no invalidar visualmente).
+    """
+    guardado = _contenido_hash_guardado(
+        contrato_id,
+        formato_codigo,
+        corte_id=corte_id,
+        contexto_tipo=contexto_tipo,
+        contexto_id=contexto_id,
+    )
+    if not guardado:
+        return False
+    actual = _calcular_contenido_hash_documento(
+        contrato_id,
+        formato_codigo,
+        corte_id=corte_id,
+        contexto_tipo=contexto_tipo,
+        contexto_id=contexto_id,
+    )
+    if not actual:
+        return False
+    return actual != guardado
+
+
 def _guardar_snapshot_si_no_existe(
     contrato_id: int,
     formato_codigo: str,
@@ -1772,10 +1989,11 @@ def _guardar_snapshot_si_no_existe(
     corte_id: Optional[int] = None,
     contexto_tipo: Optional[str] = None,
     contexto_id: Optional[int] = None,
+    contenido_hash: Optional[str] = None,
 ) -> None:
     """
-    Guarda un snapshot del config de firmantes la primera vez que se firma un documento.
-    Si ya existe un snapshot, no hace nada (inmutabilidad garantizada).
+    Guarda un snapshot del config de firmantes (+ hash de contenido) la primera vez
+    que se firma un documento. Si ya existe un snapshot, no hace nada (inmutabilidad).
     Silencia cualquier error para no bloquear el flujo principal.
     """
     try:
@@ -1810,11 +2028,14 @@ def _guardar_snapshot_si_no_existe(
             "aprobo_cargo":        fc.get("aprobo_cargo") or None,
             "aprobo_usuario_id":   fc.get("aprobo_usuario_id") or None,
         })
+        if contenido_hash:
+            row["contenido_hash"] = contenido_hash
         _sb.table("ccd_documento_firma_snapshot").insert(row).execute()
         _log.info(
-            "ccd_documento_firma_snapshot: snapshot guardado — formato=%s contrato=%s %s",
+            "ccd_documento_firma_snapshot: snapshot guardado — formato=%s contrato=%s %s hash=%s",
             formato_codigo, contrato_id,
             f"corte={corte_id}" if corte_id else f"{contexto_tipo}={contexto_id}",
+            "si" if contenido_hash else "no",
         )
     except Exception as e:
         _log.warning("ccd_documento_firma_snapshot: no se pudo guardar snapshot: %s", e)
@@ -1910,8 +2131,13 @@ def ccd_registrar_firma_corte(
                 f"Detalle: {e!s}"
             ),
         ) from e
-    # Snapshot inmutable: guardar config de firmantes al momento de la primera firma.
-    _guardar_snapshot_si_no_existe(contrato_id, formato_codigo, fc, corte_id=corte_id)
+    # Snapshot inmutable + hash de contenido al momento de la primera firma.
+    chash = _calcular_contenido_hash_documento(
+        contrato_id, formato_codigo, corte_id=corte_id
+    )
+    _guardar_snapshot_si_no_existe(
+        contrato_id, formato_codigo, fc, corte_id=corte_id, contenido_hash=chash
+    )
     _ccd_enviar_correo_confirmacion_firma(
         current_user, contrato_id, formato_codigo, slot, corte_id=corte_id
     )
@@ -2404,12 +2630,22 @@ def ccd_registrar_firma_contexto(
                 f"Detalle: {e!s}"
             ),
         ) from e
-    # Snapshot inmutable (no aplica a FO-IDU-EO-04-V2: siempre biblioteca viva).
-    if formato_codigo != CODIGO_FORMATO_IDU_FO_EO_04_V2:
-        _guardar_snapshot_si_no_existe(
-            contrato_id, formato_codigo, fc,
-            contexto_tipo=contexto_tipo, contexto_id=contexto_id,
-        )
+    # Snapshot + hash de contenido (también FO-EO-04: el hash vive en snapshot;
+    # la biblioteca de firmantes sigue siendo viva vía _get_firma_cfg_para_documento).
+    chash = _calcular_contenido_hash_documento(
+        contrato_id,
+        formato_codigo,
+        contexto_tipo=contexto_tipo,
+        contexto_id=contexto_id,
+    )
+    _guardar_snapshot_si_no_existe(
+        contrato_id,
+        formato_codigo,
+        fc,
+        contexto_tipo=contexto_tipo,
+        contexto_id=contexto_id,
+        contenido_hash=chash,
+    )
     ref = ""
     if contexto_tipo == "semana":
         sm = _row("so_semanas", "numero_semana", id=contexto_id)
@@ -4692,9 +4928,20 @@ def _firma_data_uri_para_slot_contexto(
     nombre_configurado: str,
     current_user: Optional[dict],
 ) -> Optional[str]:
-    """Firma del slot SOLO desde registro explícito (no autocompleta desde perfil)."""
+    """Firma del slot SOLO desde registro explícito (no autocompleta desde perfil).
+
+    Si el contenido fuente cambió respecto al hash de la primera firma, devuelve
+    FIRMA_INVALIDADA_MARKER para que el PDF muestre el texto de invalidación.
+    """
     reg = _ccd_firma_registro_contexto_get(contrato_id, contexto_tipo, contexto_id, formato_codigo, slot)
     if reg and reg.get("firma_imagen_url"):
+        if _firma_contenido_modificado(
+            contrato_id,
+            formato_codigo,
+            contexto_tipo=contexto_tipo,
+            contexto_id=contexto_id,
+        ):
+            return FIRMA_INVALIDADA_MARKER
         try:
             return _fetch_img_data_uri(reg["firma_imagen_url"])
         except Exception as e:
@@ -4787,10 +5034,16 @@ def _firma_data_uri_para_slot_corte(
     Imagen para Elaboró o Revisó: primero firma registrada en BD; si no hay,
     el usuario asignado a ese slot ve su imagen de perfil al generar/descargar.
     Si no hay usuario_id en config (datos viejos), se intenta coincidencia por nombre.
+
+    Si hay firma registrada y el contenido del informe cambió tras firmar,
+    devuelve FIRMA_INVALIDADA_MARKER (texto en el PDF, sin bloquear descarga).
     """
-    _ = contrato_id  # reservado p. ej. validaciones futuras
     reg = _ccd_firma_registro_get(corte_id, formato_codigo, slot)
     if reg and reg.get("firma_imagen_url"):
+        if _firma_contenido_modificado(
+            contrato_id, formato_codigo, corte_id=corte_id
+        ):
+            return FIRMA_INVALIDADA_MARKER
         try:
             return _fetch_img_data_uri(reg["firma_imagen_url"])
         except Exception as e:
@@ -7818,7 +8071,9 @@ def _html_fo_eo_04_firmas_4(
         bt = f"border-top:1px solid {navy};" if borde_top else ""
         bp = _FO_EO04_FIRMA_BOX
         ip = _FO_EO04_FIRMA_IMG
-        if firma_uri:
+        if es_marcador_firma_invalidada(firma_uri):
+            sig_td = html_fo_eo04_firma_invalidada(box_pt=bp)
+        elif firma_uri:
             src_h = _html_mod.escape(firma_uri, quote=True)
             sig_td = (
                 f'<img src="{src_h}" alt="" style="display:block;margin:0 auto;max-width:100%;width:auto;'
@@ -11216,6 +11471,16 @@ def _html_cc_sub_td_firma_columna(
     td_pad = "padding:1px 3px" if memoria_compact else "padding:3px 5px"
     fs = "6pt" if memoria_compact else "6.5pt"
     img_marg = "margin:0" if memoria_compact else "margin:1px 0 2px 0"
+    if es_marcador_firma_invalidada(firma_data_uri):
+        bp = _CCD_FIRMA_MEM002_BOX_PT if memoria_compact else _CCD_FIRMA_BOX_PT
+        caja = html_caja_firma_invalidada(box_pt=bp, memoria_compact=memoria_compact)
+        return f"""<td style="width:33.33%;{bd};{td_pad};font-size:{fs};vertical-align:top;">
+<div class="ccd-firma-slot-hdr">{etiqueta_hdr}</div>
+<div class="ccd-firma-line"></div>
+{caja}
+<div class="ccd-firma-nombre">{nombre_h}</div>
+<div class="ccd-firma-cargo">{cargo_h}</div>
+</td>"""
     if firma_data_uri:
         bp = _CCD_FIRMA_MEM002_BOX_PT if memoria_compact else _CCD_FIRMA_BOX_PT
         ip = _CCD_FIRMA_MEM002_IMG_INNER_PT if memoria_compact else _CCD_FIRMA_IMG_INNER_PT
