@@ -989,6 +989,7 @@ export default function PptoVersionador({
         token={token}
         API={API}
         t={t}
+        usuario={usuario}
       />
 
       {/* Eliminar — respaldo + confirmación */}

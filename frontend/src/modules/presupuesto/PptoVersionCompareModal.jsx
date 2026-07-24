@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
-import { downloadVersionCompareExcel } from './presupuestoVersionCompareExportExcel'
+import { downloadVersionCompareExcel, fetchVersionCompareTramosData } from './presupuestoVersionCompareExportExcel'
 
 /** Token fresco desde almacenamiento; el prop se congela en el render (ver PptoVersionador). */
 function tokenFresco(fallback) {
@@ -31,16 +31,8 @@ function fmtQty(n) {
 
 function fmtDelta(prev, curr, { money = false } = {}) {
   if (prev == null && curr == null) return '—'
-  if (prev == null && curr != null) {
-    const s = money ? formatCOP(Math.abs(Number(curr))) : fmtQty(Math.abs(Number(curr)))
-    return `▲ ${s}`
-  }
-  if (prev != null && curr == null) {
-    const s = money ? formatCOP(Math.abs(Number(prev))) : fmtQty(Math.abs(Number(prev)))
-    return `▼ ${s}`
-  }
-  const p = Number(prev)
-  const c = Number(curr)
+  const p = prev == null ? 0 : Number(prev)
+  const c = curr == null ? 0 : Number(curr)
   if (Number.isNaN(p) || Number.isNaN(c)) return '—'
   const d = c - p
   if (d === 0) return '—'
@@ -77,7 +69,7 @@ const td = { padding: '6px 8px', fontSize: 'var(--cc-sm)', verticalAlign: 'middl
 /**
  * Modal de comparación multinivel (capítulos → ítems) con alcance general o por tramo.
  */
-export default function PptoVersionCompareModal({ open, onClose, versions = [], contratoId, token, API, t }) {
+export default function PptoVersionCompareModal({ open, onClose, versions = [], contratoId, token, API, t, usuario }) {
   const openPrevRef = useRef(false)
   const sessionKeyRef = useRef('')
 
@@ -273,16 +265,44 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
         })
       }
 
+      const tramosData = await fetchVersionCompareTramosData({
+        API,
+        contratoId,
+        token: tokenFresco(token),
+        versionesOrd,
+        tramosList: tramos,
+      })
+
+      let metaContrato = null
+      try {
+        const resMeta = await fetch(`${API}/contratos/${contratoId}`, {
+          headers: { Authorization: `Bearer ${tokenFresco(token)}` },
+        })
+        if (resMeta.ok) metaContrato = await resMeta.json()
+      } catch {
+        metaContrato = null
+      }
+
       const alcanceLabel =
         alcance === 'tramo' && String(tramo).trim() ? `Tramo: ${String(tramo).trim()}` : 'General'
+
+      const exportadoPor = (() => {
+        if (!usuario) return undefined
+        const nombre = [usuario.nombre, usuario.apellidos].filter(Boolean).join(' ').trim()
+        if (nombre && usuario.email) return `${nombre} (${usuario.email})`
+        return nombre || usuario.email || undefined
+      })()
 
       await downloadVersionCompareExcel({
         versionesOrd,
         capitulosUnion,
         getCapData,
         itemsByCap: allItems,
+        tramosData,
+        metaContrato,
         alcanceLabel,
         contratoId,
+        exportadoPor,
       })
     } catch {
       window.alert('No se pudo exportar el Excel de comparación.')
@@ -298,7 +318,9 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
     itemsByCap,
     loaded,
     tramo,
+    tramos,
     versionesOrd,
+    usuario,
   ])
 
   if (!open) return null
