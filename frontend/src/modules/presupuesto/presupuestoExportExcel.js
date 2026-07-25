@@ -1,9 +1,38 @@
 import ExcelJS from 'exceljs'
+import { buildCompareExcelColors } from '../../utils/exportPalette.js'
 
-const PASTEL_TITLE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDDEFF8' } }
-const PASTEL_META = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF7FB' } }
-const PASTEL_HEADER = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5F4FA' } }
-const PASTEL_TOTAL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1EEF7' } }
+/** Tema activo del export (paleta del contrato). */
+let CC = buildCompareExcelColors()
+let FILL_TITLE = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.title } }
+const FILL_META = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.metaBg } }
+const FILL_HEADER = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.headerBg } }
+let FILL_ROW_PRIMARY = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.rowBg } }
+let FILL_ROW_ALT = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.rowBgAlt } }
+
+function aplicarTemaExportInforme(exportPalette) {
+  CC = buildCompareExcelColors(exportPalette)
+  FILL_TITLE = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.title } }
+  FILL_META.fgColor.argb = CC.metaBg
+  FILL_HEADER.fgColor.argb = CC.headerBg
+  FILL_ROW_PRIMARY = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.rowBg } }
+  FILL_ROW_ALT = { type: 'pattern', pattern: 'solid', fgColor: { argb: CC.rowBgAlt } }
+}
+
+function fillGrillaFila(rowNum) {
+  return rowNum % 2 === 0 ? FILL_ROW_ALT : FILL_ROW_PRIMARY
+}
+
+function textoGrillaFila(rowNum) {
+  return rowNum % 2 === 0 ? CC.rowTextAlt : CC.rowText
+}
+
+function fillTotalesTier(tier) {
+  return tier === 'titulo_1' ? FILL_META : FILL_HEADER
+}
+
+function textoTotalesTier(tier) {
+  return tier === 'titulo_1' ? CC.metaText : CC.headerText
+}
 const COP_NUM_FMT = '"$"#,##0'
 const QTY_NUM_FMT = '#,##0.00'
 const TITLE_ROW_HEIGHT = 54
@@ -114,14 +143,31 @@ function insertarLogoEncabezado(ws, logoImageId) {
   })
 }
 
-function estiloMetaCell(cell, { bold = false, align = 'left' } = {}) {
-  cell.fill = PASTEL_META
-  cell.font = { bold, size: 11, color: { argb: 'FF1F4E70' } }
+function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
+  cell.fill = rowNum != null ? fillGrillaFila(rowNum) : FILL_ROW_PRIMARY
+  cell.font = {
+    bold,
+    size: 11,
+    color: { argb: rowNum != null ? textoGrillaFila(rowNum) : CC.rowText },
+  }
   cell.alignment = { vertical: 'middle', horizontal: align, wrapText: true }
 }
 
-function estiloMetaCellCuadricula(cell, { bold = false, align = 'left' } = {}) {
-  estiloMetaCell(cell, { bold, align })
+function estiloTitulo1Cell(cell, { bold = true, align = 'left', size = 11 } = {}) {
+  cell.fill = FILL_META
+  cell.font = { bold, size, color: { argb: CC.metaText } }
+  cell.alignment = { vertical: 'middle', horizontal: align, indent: align === 'left' ? 1 : 0, wrapText: true }
+}
+
+function estiloTitulo2Cell(cell, { bold = true, align = 'left', size = 11 } = {}) {
+  cell.fill = FILL_HEADER
+  cell.font = { bold, size, color: { argb: CC.headerText } }
+  cell.alignment = { vertical: 'middle', horizontal: align, indent: align === 'left' ? 1 : 0, wrapText: true }
+}
+
+function estiloItemBloqueCell(cell, { bold = false } = {}) {
+  cell.font = { bold, size: 11, color: { argb: CC.rowText } }
+  cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
   cell.border = {
     top: BORDER_OUTLINE,
     left: BORDER_VERT,
@@ -151,7 +197,7 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
   }
 }
 
-function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoImageId = null, { soloCantidad = false } = {}) {
+function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoImageId = null, { soloCantidad = false, totalsTier = 'titulo_2' } = {}) {
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
@@ -161,25 +207,24 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
-  const splitTipo = Math.max(splitContrato + 2, Math.floor(cols * 0.42))
 
   ws.addRow(new Array(cols).fill(''))
   ws.getRow(1).height = tieneLogo ? TITLE_ROW_HEIGHT : TITLE_ROW_HEIGHT_NO_LOGO
 
   if (tieneLogo) {
     ws.mergeCells(1, 1, 1, logoSpan)
-    ws.getCell(1, 1).fill = PASTEL_TITLE
+    ws.getCell(1, 1).fill = FILL_TITLE
     insertarLogoEncabezado(ws, logoImageId)
     ws.mergeCells(1, titleStart, 1, cols)
     ws.getCell(1, titleStart).value = titulo
-    ws.getCell(1, titleStart).fill = PASTEL_TITLE
-    ws.getCell(1, titleStart).font = { bold: true, size: 14, color: { argb: 'FF0F2942' } }
+    ws.getCell(1, titleStart).fill = FILL_TITLE
+    ws.getCell(1, titleStart).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, titleStart).alignment = { horizontal: 'center', vertical: 'middle' }
   } else {
     ws.mergeCells(1, 1, 1, cols)
     ws.getCell(1, 1).value = titulo
-    ws.getCell(1, 1).fill = PASTEL_TITLE
-    ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FF0F2942' } }
+    ws.getCell(1, 1).fill = FILL_TITLE
+    ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' }
   }
 
@@ -191,48 +236,39 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   ws.mergeCells(2, splitContrato + 1, 2, splitContratista)
   ws.mergeCells(2, splitContratista + 1, 2, cols)
   ws.getRow(2).height = 22
-  estiloMetaCell(ws.getCell(2, 1), { bold: true })
-  estiloMetaCell(ws.getCell(2, splitContrato + 1), { bold: true })
-  estiloMetaCell(ws.getCell(2, splitContratista + 1), { bold: true, align: 'right' })
+  estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, splitContrato + 1), { bold: true, rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, splitContratista + 1), { bold: true, align: 'right', rowNum: 2 })
 
   ws.addRow(new Array(cols).fill(''))
-  ws.getCell(3, 1).value = `Interventoría: ${meta.interventoria ?? '—'}`
-  ws.getCell(3, splitContrato + 1).value = `Tipo: ${modoLabel}`
-  ws.getCell(3, splitTipo + 1).value = `Registros: ${totalRegistros ?? 0}`
-  ws.mergeCells(3, 1, 3, splitContrato)
-  ws.mergeCells(3, splitContrato + 1, 3, splitTipo)
-  ws.mergeCells(3, splitTipo + 1, 3, cols)
-  ws.getRow(3).height = 20
-  estiloMetaCell(ws.getCell(3, 1))
-  estiloMetaCell(ws.getCell(3, splitContrato + 1))
-  estiloMetaCell(ws.getCell(3, splitTipo + 1), { align: 'right' })
+  const interventoriaTxt = safeStr(meta.interventoria).trim() || '—'
+  ws.getCell(3, 1).value = `Interventoría: ${interventoriaTxt}`
+  ws.getCell(3, splitContratista + 1).value = `Registros: ${totalRegistros ?? 0}`
+  ws.mergeCells(3, 1, 3, splitContratista)
+  ws.mergeCells(3, splitContratista + 1, 3, cols)
+  ws.getRow(3).height = Math.min(22 + Math.floor(interventoriaTxt.length / 72) * 10, 44)
+  estiloMetaCell(ws.getCell(3, 1), { rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, splitContratista + 1), { align: 'right', rowNum: 3 })
 
   const objeto = meta.objeto ? String(meta.objeto).slice(0, 320) : '—'
   ws.addRow([`Objeto: ${objeto}`])
   ws.mergeCells(4, 1, 4, cols)
   ws.getRow(4).height = Math.min(22 + Math.floor(objeto.length / 80) * 10, 56)
-  estiloMetaCell(ws.getCell(4, 1))
+  estiloMetaCell(ws.getCell(4, 1), { rowNum: 4 })
 
   ws.addRow(['TOTALES DEL INFORME', '', '', soloCantidad ? 'Cant. total ítem:' : 'Cantidad total:', '', soloCantidad ? '' : 'Costo directo total:', ''])
   ws.mergeCells(5, 1, 5, 3)
   ws.mergeCells(5, 4, 5, soloCantidad ? cols : 5)
   if (!soloCantidad) ws.mergeCells(5, 6, 5, cols)
   ws.getRow(5).height = 22
-  ws.getCell(5, 1).fill = PASTEL_TOTAL
-  ws.getCell(5, 1).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-  ws.getCell(5, 1).alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
-  ws.getCell(5, 4).fill = PASTEL_TOTAL
-  ws.getCell(5, 4).font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
-  ws.getCell(5, 4).alignment = { vertical: 'middle', horizontal: 'right' }
-  if (!soloCantidad) {
-    ws.getCell(5, 6).fill = PASTEL_TOTAL
-    ws.getCell(5, 6).font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
-    ws.getCell(5, 6).alignment = { vertical: 'middle', horizontal: 'right' }
-  }
+  const estiloTotales = totalsTier === 'titulo_1' ? estiloTitulo1Cell : estiloTitulo2Cell
+  estiloTotales(ws.getCell(5, 1))
+  estiloTotales(ws.getCell(5, 4), { align: 'right' })
+  if (!soloCantidad) estiloTotales(ws.getCell(5, 6), { align: 'right' })
 
   ws.addRow([])
 
-  return { tableHeaderRow: 7, totalsSummaryRow: 5 }
+  return { tableHeaderRow: 7, totalsSummaryRow: 5, totalsTier }
 }
 
 function completarFormulasTotales(
@@ -245,41 +281,44 @@ function completarFormulasTotales(
   colDisplayCosto = 7,
   colSumaCant = null,
   colSumaCosto = null,
+  totalsTier = 'titulo_1',
 ) {
   if (lastDataRow < firstDataRow) return
   const srcCant = colSumaCant || colDisplayCant
   const sumCant = `SUM(${colToLetter(srcCant)}${firstDataRow}:${colToLetter(srcCant)}${lastDataRow})`
+  const fillTot = fillTotalesTier(totalsTier)
+  const textTot = textoTotalesTier(totalsTier)
 
   ws.getCell(totalsSummaryRow, colDisplayCant).value = { formula: sumCant }
   estiloCantidad(ws.getCell(totalsSummaryRow, colDisplayCant))
-  ws.getCell(totalsSummaryRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-  ws.getCell(totalsSummaryRow, colDisplayCant).fill = PASTEL_TOTAL
+  ws.getCell(totalsSummaryRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
+  ws.getCell(totalsSummaryRow, colDisplayCant).fill = fillTot
 
   if (colDisplayCosto != null) {
     const srcCosto = colSumaCosto || colDisplayCosto
     const sumCosto = `SUM(${colToLetter(srcCosto)}${firstDataRow}:${colToLetter(srcCosto)}${lastDataRow})`
     ws.getCell(totalsSummaryRow, colDisplayCosto).value = { formula: sumCosto }
     estiloMoneda(ws.getCell(totalsSummaryRow, colDisplayCosto))
-    ws.getCell(totalsSummaryRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(totalsSummaryRow, colDisplayCosto).fill = PASTEL_TOTAL
+    ws.getCell(totalsSummaryRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
+    ws.getCell(totalsSummaryRow, colDisplayCosto).fill = fillTot
   }
 
   if (totalsFooterRow) {
     ws.getCell(totalsFooterRow, 1).value = 'TOTALES'
     ws.getCell(totalsFooterRow, colDisplayCant).value = { formula: sumCant }
-    ws.getCell(totalsFooterRow, 1).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(totalsFooterRow, 1).fill = PASTEL_TOTAL
+    ws.getCell(totalsFooterRow, 1).font = { bold: true, size: 11, color: { argb: textTot } }
+    ws.getCell(totalsFooterRow, 1).fill = fillTot
     estiloCantidad(ws.getCell(totalsFooterRow, colDisplayCant))
-    ws.getCell(totalsFooterRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(totalsFooterRow, colDisplayCant).fill = PASTEL_TOTAL
+    ws.getCell(totalsFooterRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
+    ws.getCell(totalsFooterRow, colDisplayCant).fill = fillTot
     if (colDisplayCosto != null) {
       const srcCosto = colSumaCosto || colDisplayCosto
       ws.getCell(totalsFooterRow, colDisplayCosto).value = {
         formula: `SUM(${colToLetter(srcCosto)}${firstDataRow}:${colToLetter(srcCosto)}${lastDataRow})`,
       }
       estiloMoneda(ws.getCell(totalsFooterRow, colDisplayCosto))
-      ws.getCell(totalsFooterRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-      ws.getCell(totalsFooterRow, colDisplayCosto).fill = PASTEL_TOTAL
+      ws.getCell(totalsFooterRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
+      ws.getCell(totalsFooterRow, colDisplayCosto).fill = fillTot
     }
     const maxCol = Math.max(colDisplayCant, colDisplayCosto || 0)
     for (let c = 1; c <= maxCol; c += 1) {
@@ -302,8 +341,8 @@ function colToLetter(col) {
 function estiloFilaHeader(row, colCount) {
   row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
     if (colNumber > colCount) return
-    cell.fill = PASTEL_HEADER
-    cell.font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
+    cell.fill = FILL_HEADER
+    cell.font = { bold: true, size: 11, color: { argb: CC.headerText } }
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
     bordeCeldaTabla(cell, { esHeader: true })
   })
@@ -320,9 +359,12 @@ function estiloCantidad(cell) {
   cell.alignment = { horizontal: 'right', vertical: 'middle' }
 }
 
-function estiloFilaDatos(row, colCount) {
+function estiloFilaDatos(row, colCount, rowNum) {
+  const rn = rowNum ?? row.number ?? 1
   row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
     if (colNumber > colCount) return
+    cell.fill = fillGrillaFila(rn)
+    cell.font = { size: 10, color: { argb: textoGrillaFila(rn) } }
     cell.alignment = {
       horizontal: colNumber >= 5 ? 'right' : 'left',
       vertical: 'middle',
@@ -361,15 +403,15 @@ function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
   ws.mergeCells(startRow, 4, startRow, 5)
   ws.mergeCells(startRow, 6, startRow, cols)
   ws.getRow(startRow).height = 22
-  estiloMetaCellCuadricula(ws.getCell(startRow, 1), { bold: true })
-  estiloMetaCellCuadricula(ws.getCell(startRow, 4), { bold: true })
-  estiloMetaCellCuadricula(ws.getCell(startRow, 6), { bold: true })
+  estiloItemBloqueCell(ws.getCell(startRow, 1), { bold: true })
+  estiloItemBloqueCell(ws.getCell(startRow, 4), { bold: true })
+  estiloItemBloqueCell(ws.getCell(startRow, 6), { bold: true })
 
   const descRow = startRow + 1
   ws.getCell(descRow, 1).value = `Descripción: ${desc}`
   ws.mergeCells(descRow, 1, descRow, cols)
   ws.getRow(descRow).height = Math.min(22 + Math.floor(desc.length / 70) * 10, 48)
-  estiloMetaCellCuadricula(ws.getCell(descRow, 1))
+  estiloItemBloqueCell(ws.getCell(descRow, 1), { bold: true })
 
   return descRow + 1
 }
@@ -467,13 +509,13 @@ function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
   const rightStart = midCol
 
   const estiloTitulo = (cell) => {
-    cell.fill = PASTEL_HEADER
-    cell.font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
+    cell.fill = FILL_HEADER
+    cell.font = { bold: true, size: 11, color: { argb: CC.headerText } }
     cell.alignment = { horizontal: 'center', vertical: 'middle' }
   }
   const estiloLinea = (cell, { resaltar = false } = {}) => {
-    cell.fill = resaltar ? PASTEL_META : PASTEL_FIRMA_BODY
-    cell.font = { size: 10, color: { argb: 'FF1F4E70' } }
+    cell.fill = resaltar ? FILL_ROW_PRIMARY : PASTEL_FIRMA_BODY
+    cell.font = { size: 10, color: { argb: resaltar ? CC.rowText : CC.rowTextAlt } }
     cell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true, indent: 1 }
   }
 
@@ -578,13 +620,13 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const enc = escribirEncabezadoCompacto(
     ws,
     TOTAL_COLS_DET,
-    'CLARACORE - PRESUPUESTO - SOPORTE DE CANTIDADES',
+    'PRESUPUESTO - SOPORTE DE CANTIDADES',
     meta,
-    `Soporte — ${modoLabel}`,
+    modoLabel,
     (itemInfo.registros || []).length,
     generatedAt,
     logoImageId,
-    { soloCantidad: true },
+    { soloCantidad: true, totalsTier: 'titulo_2' },
   )
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
@@ -615,7 +657,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     estiloCantidad(r.getCell(COL_ANCHO))
     estiloCantidad(r.getCell(COL_ESPESOR))
     estiloCantidad(r.getCell(COL_CANT_TOTAL))
-    estiloFilaDatos(r, TOTAL_COLS_DET)
+    estiloFilaDatos(r, TOTAL_COLS_DET, r.number)
   }
 
   let cantTotalRow = null
@@ -628,12 +670,22 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
       formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDetRow}:${colToLetter(COL_CANT_TOTAL)}${lastDetRow})`,
     }
-    ws.getCell(cantTotalRow, 1).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(cantTotalRow, 1).fill = PASTEL_TOTAL
+    estiloTitulo2Cell(ws.getCell(cantTotalRow, 1))
     estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
-    ws.getCell(cantTotalRow, COL_CANT_TOTAL).font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-    ws.getCell(cantTotalRow, COL_CANT_TOTAL).fill = PASTEL_TOTAL
-    completarFormulasTotales(ws, enc.totalsSummaryRow, null, firstDetRow, lastDetRow, 5, null, COL_CANT_TOTAL)
+    ws.getCell(cantTotalRow, COL_CANT_TOTAL).font = { bold: true, size: 11, color: { argb: CC.headerText } }
+    ws.getCell(cantTotalRow, COL_CANT_TOTAL).fill = FILL_HEADER
+    completarFormulasTotales(
+      ws,
+      enc.totalsSummaryRow,
+      null,
+      firstDetRow,
+      lastDetRow,
+      5,
+      null,
+      COL_CANT_TOTAL,
+      null,
+      enc.totalsTier,
+    )
     aplicarBordesTabla(ws, tableRow, cantTotalRow, TOTAL_COLS_DET)
   }
 
@@ -664,15 +716,16 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   aplicarPaginaHorizontal(wsRes)
   aplicarPiePaginaClaraCore(wsRes, claraLogoImageId, meta.numero || meta.contrato, 'Resumen')
 
-  const { tableHeaderRow, totalsSummaryRow } = escribirEncabezadoCompacto(
+  const { tableHeaderRow, totalsSummaryRow, totalsTier } = escribirEncabezadoCompacto(
     wsRes,
     totalColsResumen,
-    'CLARACORE - PRESUPUESTO - RESUMEN DE EXPORTACIÓN',
+    'PRESUPUESTO - RESUMEN DE EXPORTACIÓN',
     meta,
     modoLabel,
     totalRegistros,
     generatedAt,
     logoImageId,
+    { totalsTier: 'titulo_1' },
   )
 
   wsRes.addRow(resumenHeaders)
@@ -706,7 +759,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
 
     r.getCell(7).value = { formula: `ROUND(E${rowNum}*F${rowNum},0)` }
     estiloMoneda(r.getCell(7))
-    estiloFilaDatos(r, totalColsResumen)
+    estiloFilaDatos(r, totalColsResumen, rowNum)
     rowNum += 1
   }
 
@@ -715,7 +768,18 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   if (resumen.length > 0) {
     totalsFooterRow = lastDataRow + 1
     wsRes.addRow(new Array(totalColsResumen).fill(''))
-    completarFormulasTotales(wsRes, totalsSummaryRow, totalsFooterRow, firstDataRow, lastDataRow)
+    completarFormulasTotales(
+      wsRes,
+      totalsSummaryRow,
+      totalsFooterRow,
+      firstDataRow,
+      lastDataRow,
+      6,
+      7,
+      null,
+      null,
+      totalsTier,
+    )
     aplicarBordesTabla(wsRes, tableHeaderRow, totalsFooterRow, totalColsResumen)
   }
 
@@ -797,6 +861,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   const modoLabel = payload?.modo_label || 'Presupuesto'
   const generatedAt = new Date()
   const meta = metaContrato || {}
+  aplicarTemaExportInforme(meta.export_palette)
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore · Presupuesto'
