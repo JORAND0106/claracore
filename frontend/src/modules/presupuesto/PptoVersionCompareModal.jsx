@@ -303,6 +303,7 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
         alcanceLabel,
         contratoId,
         exportadoPor,
+        usuario,
       })
     } catch {
       window.alert('No se pudo exportar el Excel de comparación.')

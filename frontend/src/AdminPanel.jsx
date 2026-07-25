@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
+import { mergeExportPalette, EXPORT_PALETTE_DEFAULTS } from "./utils/exportPalette";
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
@@ -2701,6 +2702,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     logo_contratista: '', logo_interventoria: '', aiu: '', iva: '',
     valor_componente_ambiental: '', valor_componente_social: '', valor_componente_pmt: '', costo_directo_contrato: '',
     costos_adicionales_lista: [],
+    export_palette: { ...EXPORT_PALETTE_DEFAULTS },
   };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
@@ -2866,6 +2868,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       valor_componente_pmt: d.valor_componente_pmt != null ? String(d.valor_componente_pmt) : '',
       costo_directo_contrato: d.costo_directo_contrato != null ? String(d.costo_directo_contrato) : '',
       costos_adicionales_lista,
+      export_palette: mergeExportPalette(d.export_palette),
     });
     setPlanoArchivoLabel(planoLimpio && (planoLimpio.features || []).length ? 'Plano guardado en servidor' : null);
   }

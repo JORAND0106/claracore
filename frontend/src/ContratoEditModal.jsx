@@ -9,10 +9,17 @@ import { buildContratoUiTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
 import CcConfirmModal from "./components/CcConfirmModal";
 import PkIdsCsvPanoramaModal from "./components/PkIdsCsvPanoramaModal";
+import {
+  EXPORT_PALETTE_DEFAULTS,
+  EXPORT_PALETTE_TIERS,
+  mergeExportPalette,
+  setExportPaletteTier,
+} from "./utils/exportPalette";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
   { id: "financiera", label: "Información financiera" },
+  { id: "exportacion", label: "Paleta exportación" },
   { id: "niveles", label: "Niveles de validación", editOnly: true },
   { id: "licencia", label: "Contrato de licenciamiento", devOnly: true, editOnly: true },
   { id: "ordenes", label: "Órdenes de pago", devOnly: true, editOnly: true },
@@ -797,6 +804,114 @@ export default function ContratoEditModal({
             </div>
           )}
 
+          {tab === "exportacion" && (
+            <div>
+              <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>
+                Paleta de colores para exportes
+              </div>
+              <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 16 }}>
+                Define los colores que usarán los formatos Excel y PDF de este contrato (presupuesto, comparador de versiones, etc.).
+                Si no configuras un tono, se usa el valor por defecto del sistema.
+              </div>
+              {(() => {
+                const palette = mergeExportPalette(form.export_palette);
+                return (
+                  <>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: vpMobile ? "1fr" : "1fr 1fr",
+                        gap: 12,
+                        marginBottom: 16,
+                      }}
+                    >
+                      {EXPORT_PALETTE_TIERS.map(({ key, label, hint }) => (
+                        <div
+                          key={key}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8,
+                            background: ui.inputBg,
+                            border: `1.5px solid ${ui.border}`,
+                            borderRadius: 8,
+                            padding: "10px 12px",
+                          }}
+                        >
+                          <span style={{ fontSize: font.sm, fontWeight: 600, color: ui.text }}>{label}</span>
+                          <span style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.35 }}>{hint}</span>
+                          {[
+                            { field: "bg", label: "Fondo" },
+                            { field: "text", label: "Texto" },
+                          ].map(({ field, label: fieldLabel }) => (
+                            <label
+                              key={field}
+                              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}
+                            >
+                              <span style={{ fontSize: font.caption, color: ui.textMuted, minWidth: 42 }}>{fieldLabel}</span>
+                              <input
+                                type="color"
+                                value={palette[key][field]}
+                                onChange={(e) =>
+                                  setForm((f) => ({
+                                    ...f,
+                                    export_palette: setExportPaletteTier(f.export_palette, key, field, e.target.value),
+                                  }))
+                                }
+                                style={{ width: 40, height: 28, padding: 0, border: "none", cursor: "pointer", background: "transparent" }}
+                              />
+                              <code style={{ fontSize: font.caption, color: ui.textMuted }}>{palette[key][field]}</code>
+                            </label>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      style={{
+                        border: `1px solid ${ui.border}`,
+                        borderRadius: 10,
+                        overflow: "hidden",
+                        fontSize: font.caption,
+                      }}
+                    >
+                      {EXPORT_PALETTE_TIERS.map(({ key, label }) => (
+                        <div
+                          key={`prev-${key}`}
+                          style={{
+                            background: palette[key].bg,
+                            color: palette[key].text,
+                            padding: "10px 14px",
+                            fontWeight: key === "encabezado" || key === "titulo_2" ? 700 : 400,
+                            borderBottom: `1px solid ${ui.border}`,
+                          }}
+                        >
+                          Vista previa · {label}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, export_palette: { ...EXPORT_PALETTE_DEFAULTS } }))}
+                      style={{
+                        marginTop: 12,
+                        background: ui.cardSubtle,
+                        border: `1px solid ${ui.tabBorderActive}`,
+                        color: ui.primary,
+                        borderRadius: 8,
+                        padding: "8px 14px",
+                        fontSize: font.sm,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Restaurar colores por defecto
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
           {tab === "niveles" && isEdit && (
             <div>
               <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>Niveles de Validación SICOE</div>
@@ -848,7 +963,7 @@ export default function ContratoEditModal({
           )}
         </div>
 
-        {(tab === "info" || tab === "financiera" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
+        {(tab === "info" || tab === "financiera" || tab === "exportacion" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
           <div
             style={{
               padding: "12px 20px 16px",

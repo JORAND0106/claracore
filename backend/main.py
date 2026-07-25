@@ -823,6 +823,7 @@ class ContratoCreate(BaseModel):
     # Suma legada; si envías costos_adicionales_lista, el API recalcula.
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: List[CostoAdicionalItem] = Field(default_factory=list)
+    export_palette: Optional[Dict[str, Any]] = None
 
 class PermisoUpdate(BaseModel):
     cargo_id: int
@@ -883,6 +884,7 @@ class ContratoUpdate(BaseModel):
     costo_directo_contrato: Optional[float] = None
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: Optional[List[CostoAdicionalItem]] = None
+    export_palette: Optional[Dict[str, Any]] = None
 
 class ListadoPrecioItem(BaseModel):
     capitulo: Optional[str] = None
@@ -4842,7 +4844,7 @@ _CONTRATOS_SELECT_LISTA = (
 _CONTRATOS_SELECT_DETALLE_SIN_PLANO = (
     _CONTRATOS_SELECT_LISTA
     + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
-    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno"
+    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
 )
 # Al editar con include_plano=1, traemos * para no romper si faltan columnas nuevas en un entorno.
 _CONTRATOS_SELECT_DETALLE = "*"
@@ -5778,6 +5780,7 @@ def obtener_contrato(contrato_id: int, include_plano: bool = Query(False)):
     row = r.data[0] if r.data else None
     if not row:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    row["export_palette"] = _export_palette_desde_contrato(row)
     return row
 
 @app.post("/auth/login")
@@ -6755,6 +6758,95 @@ def listar_funciones(current_user=Depends(get_current_user)):
     funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
     return funciones
 
+def _sanitize_export_palette(raw: Any) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    defaults = {
+        "encabezado": {"bg": "#DDEFF8", "text": "#0F2942"},
+        "titulo_1": {"bg": "#EEF7FB", "text": "#0F2942"},
+        "titulo_2": {"bg": "#E5F4FA", "text": "#1F4E70"},
+        "linea_principal": {"bg": "#FFFFFF", "text": "#0F2942"},
+        "linea_secundaria": {"bg": "#F8FAFC", "text": "#0F2942"},
+    }
+    legacy_bg = {
+        "encabezado": "encabezado",
+        "titulo_1": "subtitulos",
+        "titulo_2": "cuerpo_principal",
+        "linea_principal": "cuerpo_principal",
+        "linea_secundaria": "cuerpo_secundario",
+    }
+
+    def _hex(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
+        if not s.startswith("#"):
+            s = f"#{s}"
+        if re.match(r"^#[0-9A-Fa-f]{6}$", s):
+            return s.upper()
+        return None
+
+    out: dict = {}
+    for tier, def_t in defaults.items():
+        block = raw.get(tier)
+        bg = None
+        text = None
+        if isinstance(block, dict):
+            bg = _hex(block.get("bg"))
+            text = _hex(block.get("text"))
+        elif isinstance(block, str):
+            bg = _hex(block)
+        if not bg:
+            bg = _hex(raw.get(legacy_bg.get(tier, "")))
+        if not text:
+            text = _hex(raw.get(f"{tier}_text"))
+        if tier == "linea_secundaria" and not bg and isinstance(raw.get("cuerpos"), dict):
+            bg = _hex(raw["cuerpos"].get("bg"))
+            text = text or _hex(raw["cuerpos"].get("text"))
+        out[tier] = {
+            "bg": bg or def_t["bg"],
+            "text": text or def_t["text"],
+        }
+    return out
+
+
+def _export_palette_desde_contrato(row: dict) -> dict:
+    if not isinstance(row, dict):
+        return _sanitize_export_palette({})
+    if row.get("export_palette"):
+        return _sanitize_export_palette(row.get("export_palette"))
+    cfg = row.get("ccd_firma_config")
+    if isinstance(cfg, dict) and cfg.get("export_palette"):
+        return _sanitize_export_palette(cfg.get("export_palette"))
+    return _sanitize_export_palette({})
+
+
+def _guardar_export_palette_contrato(contrato_id: int, palette: Any) -> None:
+    clean = _sanitize_export_palette(palette or {})
+    rows = (
+        supabase.table("contratos")
+        .select("ccd_firma_config")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    cfg = rows[0].get("ccd_firma_config") if rows else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg = {**cfg, "export_palette": clean}
+    supabase.table("contratos").update({"ccd_firma_config": cfg}).eq("id", contrato_id).execute()
+    try:
+        supabase.table("contratos").update({"export_palette": clean}).eq("id", contrato_id).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "export_palette" not in msg and "pgrst204" not in msg:
+            raise
+
+
 def _normalizar_costos_adicionales_lista(items: List[CostoAdicionalItem]) -> List[dict]:
     out: List[dict] = []
 
@@ -6846,6 +6938,12 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "costos_adicionales_lista": norm,
     }).execute()
     nuevo = result.data[0]
+    if contrato.export_palette is not None:
+        try:
+            _guardar_export_palette_contrato(nuevo["id"], contrato.export_palette)
+        except Exception:
+            pass
+    nuevo["export_palette"] = _export_palette_desde_contrato(nuevo)
     return nuevo
 
 
@@ -6856,9 +6954,15 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
         norm = _normalizar_costos_adicionales_lista(body.costos_adicionales_lista)
         data["costos_adicionales_lista"] = norm
         data["costos_adicionales"] = _suma_costos_adicionales_cop(norm)
-    if not data:
+    palette_payload = None
+    if "export_palette" in data:
+        palette_payload = data.pop("export_palette")
+    if not data and palette_payload is None:
         return {"mensaje": "Sin cambios"}
-    supabase.table("contratos").update(data).eq("id", contrato_id).execute()
+    if data:
+        supabase.table("contratos").update(data).eq("id", contrato_id).execute()
+    if palette_payload is not None:
+        _guardar_export_palette_contrato(contrato_id, palette_payload)
     return {"mensaje": "Contrato actualizado"}
 
 @app.delete("/contratos/{contrato_id}")
@@ -8363,6 +8467,48 @@ def _cargo_puede_prevalidar_interventoria(cargo_nombre: str) -> bool:
     if "residente de costos" in n:
         return True
     if "residente de obra" in n:
+        return True
+    return False
+
+
+def _norm_rol_presupuesto(rol_nombre: str) -> str:
+    import unicodedata
+
+    s = (rol_nombre or "").strip().lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return " ".join(s.split())
+
+
+def _es_rol_contratista_depuracion(rol_nombre: str) -> bool:
+    rol = _norm_rol_presupuesto(rol_nombre)
+    if "intervent" in rol:
+        return False
+    if rol in ("contratista", "operativo contratista"):
+        return True
+    if "contrat" in rol and "gerencial" in rol:
+        return True
+    return False
+
+
+def _es_contratista_gerencial_presupuesto(rol_nombre: str) -> bool:
+    rol = _norm_rol_presupuesto(rol_nombre)
+    return "contrat" in rol and "gerencial" in rol and "intervent" not in rol
+
+
+def _usuario_puede_depuracion_presupuesto(current_user, contrato_id: int) -> bool:
+    """Depuración masiva: validar en matriz + rol contratista (incl. gerencial) + cargo residente o gerencial."""
+    if _es_desarrollador(current_user):
+        return True
+    if not _cargo_permiso_validar_presupuesto(current_user, contrato_id):
+        return False
+    rol = current_user.get("rol_nombre") or ""
+    if not _es_rol_contratista_depuracion(rol):
+        return False
+    cargo = current_user.get("cargo_nombre") or ""
+    if _cargo_puede_prevalidar_interventoria(cargo):
+        return True
+    if _es_contratista_gerencial_presupuesto(rol):
         return True
     return False
 
@@ -10698,17 +10844,13 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
     cargo = (current_user.get("cargo_nombre") or "").strip().lower()
     es_dev = cargo == "desarrollador" or rol == "desarrollador"
     if not es_dev:
-        if not _cargo_permiso_validar_presupuesto(current_user, contrato_id):
+        if not _usuario_puede_depuracion_presupuesto(current_user, contrato_id):
             raise HTTPException(
                 status_code=403,
-                detail="No tiene permiso de validación en «editar registros presupuesto» (matriz de accesos).",
-            )
-        if rol not in ("contratista", "operativo contratista"):
-            raise HTTPException(status_code=403, detail="Solo el contratista puede gestionar la depuración previa.")
-        if not _cargo_puede_prevalidar_interventoria(cargo):
-            raise HTTPException(
-                status_code=403,
-                detail="Solo Residente de Costos u Residente de Obra puede validar esta etapa.",
+                detail=(
+                    "No tiene permiso para depuración masiva. Requiere validar en «editar registros presupuesto», "
+                    "rol contratista (o Contratista Gerencial) y cargo de Residente de Costos/Obra o rol gerencial."
+                ),
             )
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
     rows_prev = (
