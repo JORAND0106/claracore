@@ -3066,8 +3066,8 @@ def _require_sicoe_puede_validar_nivel(
 ) -> None:
     """
     Desarrollador: solo niveles 1–3 (lado contratista), cualquier contrato.
-    Administrador: solo niveles 1–3 y solo si `contrato_id` coincide con el contrato del usuario.
-    Interventoría (N4–N6): sin bypass por administrador; desarrollador no puede validar N4–N6 aquí.
+    Administrador: cualquier nivel activo si tiene «validar» en «reporte de cantidades»
+    y el contrato coincide con el asignado al usuario.
     """
     if _es_desarrollador(current_user):
         if nivel < 1 or nivel > 3:
@@ -3077,10 +3077,10 @@ def _require_sicoe_puede_validar_nivel(
             )
         return
     if _es_cargo_administrador_sicoe(current_user):
-        if nivel < 1 or nivel > 3:
+        if not _cargo_permiso_validar_reporte_cantidades_user_id(user_id, contrato_id):
             raise HTTPException(
                 status_code=403,
-                detail="El administrador solo puede validar niveles 1 a 3 (contratista). Los niveles 4 a 6 corresponden a Interventoría.",
+                detail="No tiene permiso de validación en «Reporte de cantidades» (matriz de accesos).",
             )
         if contrato_id is None:
             raise HTTPException(
@@ -8497,20 +8497,10 @@ def _es_contratista_gerencial_presupuesto(rol_nombre: str) -> bool:
 
 
 def _usuario_puede_depuracion_presupuesto(current_user, contrato_id: int) -> bool:
-    """Depuración masiva: validar en matriz + rol contratista (incl. gerencial) + cargo residente o gerencial."""
+    """Depuración: permiso «validar» en «editar registros presupuesto» (o desarrollador)."""
     if _es_desarrollador(current_user):
         return True
-    if not _cargo_permiso_validar_presupuesto(current_user, contrato_id):
-        return False
-    rol = current_user.get("rol_nombre") or ""
-    if not _es_rol_contratista_depuracion(rol):
-        return False
-    cargo = current_user.get("cargo_nombre") or ""
-    if _cargo_puede_prevalidar_interventoria(cargo):
-        return True
-    if _es_contratista_gerencial_presupuesto(rol):
-        return True
-    return False
+    return _cargo_permiso_validar_presupuesto(current_user, contrato_id)
 
 
 _PRESUPUESTO_TIPO_EJECUCION_DEFAULT = "Presupuesto de Obra"
@@ -10848,8 +10838,8 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "No tiene permiso para depuración masiva. Requiere validar en «editar registros presupuesto», "
-                    "rol contratista (o Contratista Gerencial) y cargo de Residente de Costos/Obra o rol gerencial."
+                    "No tiene permiso para depuración masiva. Requiere la acción «validar» "
+                    "en «editar registros presupuesto» (matriz de accesos)."
                 ),
             )
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"

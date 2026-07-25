@@ -1832,9 +1832,16 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
     usuario?.contrato_id != null &&
     String(usuario.contrato_id).trim() !== '' &&
     parseInt(String(usuario.contrato_id), 10) === parseInt(String(sicoeContratoId), 10)
-  const elevacionValidacionContratistaN1aN3 = esDevUsuario || mismoContratoAdmin
   const permisoValidarSicoe = !!(permRpt?.validar)
-  const puedeValidarBase = esDevUsuario || permisoValidarSicoe || mismoContratoAdmin
+  const puedeValidarBase = esDevUsuario || permisoValidarSicoe
+  const adminValidarEnContrato =
+    esAdminCargo &&
+    permisoValidarSicoe &&
+    sicoeContratoId != null &&
+    usuario?.contrato_id != null &&
+    String(usuario.contrato_id).trim() !== '' &&
+    parseInt(String(usuario.contrato_id), 10) === parseInt(String(sicoeContratoId), 10)
+  const elevacionValidacionContratistaN1aN3 = esDevUsuario
 
   const esContratista = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
@@ -1980,6 +1987,7 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
     puedePrevalidarAntesInterv,
     nivelLlaveReversion,
     elevacionValidacionContratistaN1aN3,
+    adminValidarEnContrato,
   }
 }
 
@@ -2442,9 +2450,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     [nivelesContrato],
   )
   const esDevOAccesoTotal = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0
+  const esSelectorNivelAmplio = esDevOAccesoTotal || nivelInfo.adminValidarEnContrato
   const nivelesValidablesReg = useMemo(() => {
     if (!nivelInfo.puedeValidar) return []
     const naRaw = nivelesContrato?.niveles_activos
+    if (nivelInfo.adminValidarEnContrato) {
+      return nivelesActivosArr.filter((n) => sicoeNivelPrevioAprobado(registro, n, naRaw))
+    }
     if (esDevOAccesoTotal) {
       return nivelesActivosArr.filter((n) => n <= 3 && sicoeNivelPrevioAprobado(registro, n, naRaw))
     }
@@ -2464,6 +2476,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     nivelInfo.puedeValidar,
     nivelInfo.nivelValidacion,
     esDevOAccesoTotal,
+    esSelectorNivelAmplio,
+    nivelInfo.adminValidarEnContrato,
     nivelesContrato,
   ])
   const regSelladoMax = sicoeRegistroSelladoMaxActivo(registro, nivelesContrato)
@@ -3046,7 +3060,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const ejecutarValidacion = (estado) => {
-    const nvEj = esDevOAccesoTotal ? nivelTargetValidacion : nivelInfo.nivelValidacion
+    const nvEj = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
     if (exigeTopoAprobarN2 && nvEj === 2 && estado === 'Aprobado' && !(reporte.puntos || []).length) {
       alert(
         'No puedes aprobar en Nivel 2 sin coordenadas topográficas en la portada de este reporte. ' +
@@ -3060,7 +3074,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const confirmarValidacion = async (comentarioData) => {
-    const nivel = esDevOAccesoTotal ? nivelTargetValidacion : nivelInfo.nivelValidacion
+    const nivel = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
     const nvCom = nivelInfo.nivelValidacionComentario
     // Perfil solo-comentar: registra comentario completo sin cambiar estado.
     if (!nivelInfo.puedeValidar) {
@@ -4078,7 +4092,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Validación ─ */}
       {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
-        const nv = esDevOAccesoTotal ? nivelTargetValidacion : nivelInfo.nivelValidacion
+        const nv = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
         if (nv == null) return null
         const bloqueado = !!registro.bloqueado
         const campoNv = sicoeCampoEstadoNivel(nv)
@@ -4092,7 +4106,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         ]
         return (
           <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-            {esDevOAccesoTotal && nivelesValidablesReg.length > 1 && (
+            {esSelectorNivelAmplio && nivelesValidablesReg.length > 1 && (
               <div style={{ marginBottom:'12px', display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
                 <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>Validar en:</span>
                 <select
@@ -4238,7 +4252,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           t={t} usuario={usuario} registro={registro}
           contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
           estadoValidando={estadoValidando}
-          nivelValidacion={nivelInfo.puedeValidar ? (esDevOAccesoTotal ? nivelTargetValidacion : nivelInfo.nivelValidacion) : nivelInfo.nivelValidacionComentario}
+          nivelValidacion={nivelInfo.puedeValidar ? (esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion) : nivelInfo.nivelValidacionComentario}
           obligatorio={!nivelInfo.puedeValidar || estadoValidando !== 'Aprobado'}
           onConfirmar={confirmarValidacion}
           onCancelar={() => setMostrarPopupValidacion(false)}
@@ -4643,7 +4657,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario, contrato_id)
-  const elevCapCarpeta = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0
+  const elevCapCarpeta = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0 || nivelInfo.adminValidarEnContrato
+  const elevCapLimiteN3Carpeta = elevCapCarpeta && !nivelInfo.adminValidarEnContrato
 
   const encPorNivelHoja = useMemo(
     () => ({
@@ -4660,12 +4675,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     () => nivelesActivosTabla.filter((n) => n <= 3),
     [nivelesActivosTabla],
   )
+  const nivelesOpcMasivoSelectorCarpeta = useMemo(
+    () => (elevCapLimiteN3Carpeta ? nivelesOpcMasivoN1a3 : nivelesActivosTabla),
+    [elevCapLimiteN3Carpeta, nivelesOpcMasivoN1a3, nivelesActivosTabla],
+  )
   useEffect(() => {
-    if (!elevCapCarpeta || !nivelesOpcMasivoN1a3.length) return
-    if (!nivelesOpcMasivoN1a3.includes(nivelMasivoDevAdmin)) {
-      setNivelMasivoDevAdmin(nivelesOpcMasivoN1a3[0])
+    if (!elevCapCarpeta || !nivelesOpcMasivoSelectorCarpeta.length) return
+    if (!nivelesOpcMasivoSelectorCarpeta.includes(nivelMasivoDevAdmin)) {
+      setNivelMasivoDevAdmin(nivelesOpcMasivoSelectorCarpeta[0])
     }
-  }, [elevCapCarpeta, nivelesOpcMasivoN1a3, nivelMasivoDevAdmin])
+  }, [elevCapCarpeta, nivelesOpcMasivoSelectorCarpeta, nivelMasivoDevAdmin])
   const emojiPorNivelSicoe = { 1: '👷', 2: '🏗️', 3: '🏛️', 4: '📐', 5: '🏢', 6: '🛡️' }
 
   useEffect(() => {
@@ -4853,11 +4872,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     nvMasivo != null &&
     nvMasivo !== 0 &&
     (elevCapCarpeta
-      ? nvMasivo >= 1 && nvMasivo <= 3
+      ? elevCapLimiteN3Carpeta
+        ? nvMasivo >= 1 && nvMasivo <= 3
+        : nvMasivo >= 1 && nvMasivo <= 6
       : nvMasivo >= 2 && nvMasivo <= 6)
   const campoValidacionMasivo =
     nvMasivo != null &&
-    (elevCapCarpeta ? nvMasivo >= 1 && nvMasivo <= 3 : nvMasivo >= 2 && nvMasivo <= 6)
+    (elevCapCarpeta
+      ? elevCapLimiteN3Carpeta
+        ? nvMasivo >= 1 && nvMasivo <= 3
+        : nvMasivo >= 1 && nvMasivo <= 6
+      : nvMasivo >= 2 && nvMasivo <= 6)
       ? CAMPO_POR_NIVEL[nvMasivo]
       : null
   const prereqCampoMasivoNv = campoValidacionMasivo ? prereqCampoActivos(campoValidacionMasivo) : null
@@ -4877,8 +4902,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const idsPortadaResumenMasivoElegibles = (() => {
     if (!portadaResumenEstado || !puedeMasivaNivel) return []
     const nv = nvMasivo
-    if (elevCapCarpeta) {
+    if (elevCapLimiteN3Carpeta) {
       if (nv < 1 || nv > 3) return []
+    } else if (elevCapCarpeta) {
+      if (nv < 1 || nv > 6) return []
     } else if (nv < 2 || nv > 6) {
       return []
     }
@@ -5311,7 +5338,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const ejecutarMasivoSeleccion = async (estado, comentarioData, idsOverride = null) => {
     const nv = elevCapCarpeta ? nivelMasivoDevAdmin : nivelInfo.nivelValidacion
     if (nv == null || nv === 0) return
-    if (elevCapCarpeta && (nv < 1 || nv > 3)) return
+    if (elevCapLimiteN3Carpeta && (nv < 1 || nv > 3)) return
+    if (elevCapCarpeta && !elevCapLimiteN3Carpeta && (nv < 1 || nv > 6)) return
     if (!elevCapCarpeta && (nv < 2 || nv > 6)) return
     if (Number(contrato_id) !== 2 && nv === 2 && estado === 'Aprobado' && !(reporte.puntos || []).length) {
       alert(
@@ -7386,7 +7414,8 @@ function ModuloSicoeObra({
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
     [usuario, nivelInfo.esInterventoria, usuario?.rol_nombre],
   )
-  const elevCapPanel = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0
+  const elevCapPanel = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0 || nivelInfo.adminValidarEnContrato
+  const elevCapLimiteN3Panel = elevCapPanel && !nivelInfo.adminValidarEnContrato
   const nivelesActivosPanelSicoe = useMemo(
     () => sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos),
     [nivelesContrato],
@@ -7394,6 +7423,10 @@ function ModuloSicoeObra({
   const nivelesOpcMasivoN1a3Panel = useMemo(
     () => nivelesActivosPanelSicoe.filter((n) => n <= 3),
     [nivelesActivosPanelSicoe],
+  )
+  const nivelesOpcMasivoSelectorPanel = useMemo(
+    () => (elevCapLimiteN3Panel ? nivelesOpcMasivoN1a3Panel : nivelesActivosPanelSicoe),
+    [elevCapLimiteN3Panel, nivelesOpcMasivoN1a3Panel, nivelesActivosPanelSicoe],
   )
   const encPorNivelPanel = useMemo(
     () => ({
@@ -7403,11 +7436,11 @@ function ModuloSicoeObra({
     [nivelesContrato],
   )
   useEffect(() => {
-    if (!elevCapPanel || !nivelesOpcMasivoN1a3Panel.length) return
-    if (!nivelesOpcMasivoN1a3Panel.includes(nivelMasivoPanelContratista)) {
-      setNivelMasivoPanelContratista(nivelesOpcMasivoN1a3Panel[0])
+    if (!elevCapPanel || !nivelesOpcMasivoSelectorPanel.length) return
+    if (!nivelesOpcMasivoSelectorPanel.includes(nivelMasivoPanelContratista)) {
+      setNivelMasivoPanelContratista(nivelesOpcMasivoSelectorPanel[0])
     }
-  }, [elevCapPanel, nivelesOpcMasivoN1a3Panel, nivelMasivoPanelContratista])
+  }, [elevCapPanel, nivelesOpcMasivoSelectorPanel, nivelMasivoPanelContratista])
   const puedeVer    = perm?.ver || nivelInfo.nivelValidacion != null || nivelInfo.nivelValidacionComentario != null
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
@@ -8688,7 +8721,8 @@ function ModuloSicoeObra({
       !contrato_id ||
       nvBody == null ||
       nvBody === 0 ||
-      (elevCapPanel && (nvBody < 1 || nvBody > 3)) ||
+      (elevCapLimiteN3Panel && (nvBody < 1 || nvBody > 3)) ||
+      (elevCapPanel && !elevCapLimiteN3Panel && (nvBody < 1 || nvBody > 6)) ||
       (!elevCapPanel && (nvBody < 2 || nvBody > 6))
     ) {
       return
@@ -8909,7 +8943,8 @@ function ModuloSicoeObra({
       !contrato_id ||
       nvBody == null ||
       nvBody === 0 ||
-      (elevCapPanel && (nvBody < 1 || nvBody > 3)) ||
+      (elevCapLimiteN3Panel && (nvBody < 1 || nvBody > 3)) ||
+      (elevCapPanel && !elevCapLimiteN3Panel && (nvBody < 1 || nvBody > 6)) ||
       (!elevCapPanel && (nvBody < 2 || nvBody > 6))
     )
       return
@@ -8980,7 +9015,9 @@ function ModuloSicoeObra({
     nvMasivoPanelGrilla != null &&
     nvMasivoPanelGrilla !== 0 &&
     (elevCapPanel
-      ? nvMasivoPanelGrilla >= 1 && nvMasivoPanelGrilla <= 3
+      ? elevCapLimiteN3Panel
+        ? nvMasivoPanelGrilla >= 1 && nvMasivoPanelGrilla <= 3
+        : nvMasivoPanelGrilla >= 1 && nvMasivoPanelGrilla <= 6
       : nvMasivoPanelGrilla >= 2 && nvMasivoPanelGrilla <= 6)
   const capasOkValidacionMasiva = sicoeCapasPermitenValidacionMasiva(capasValidacion)
   /** Desarrollador / admin contrato: panel tras búsqueda aunque no haya capa de validación (otros roles sí la exigen). */
@@ -10666,15 +10703,17 @@ function ModuloSicoeObra({
             <div style={{ marginTop: '10px', padding: '10px 12px', background: '#1E293B', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                 <div style={{ flex: '1 1 180px', minWidth: 0 }}>
-                  {elevCapPanel && nivelesOpcMasivoN1a3Panel.length > 1 && (
+                  {elevCapPanel && nivelesOpcMasivoSelectorPanel.length > 1 && (
                     <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 'var(--cc-caption)', color: '#94A3B8', fontWeight: '700' }}>Nivel (contratista, máx. N3):</span>
+                      <span style={{ fontSize: 'var(--cc-caption)', color: '#94A3B8', fontWeight: '700' }}>
+                        {elevCapLimiteN3Panel ? 'Nivel (contratista, máx. N3):' : 'Nivel:'}
+                      </span>
                       <select
                         value={nivelMasivoPanelContratista}
                         onChange={(e) => setNivelMasivoPanelContratista(parseInt(e.target.value, 10))}
                         style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(148,163,184,0.35)', fontSize: 'var(--cc-caption)', fontWeight: '700', color: '#F1F5F9', background: '#0f172a' }}
                       >
-                        {nivelesOpcMasivoN1a3Panel.map((nn) => (
+                        {nivelesOpcMasivoSelectorPanel.map((nn) => (
                           <option key={nn} value={nn}>N{nn} — {encPorNivelPanel[nn] || `Nivel ${nn}`}</option>
                         ))}
                       </select>

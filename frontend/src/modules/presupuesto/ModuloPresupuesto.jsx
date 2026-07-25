@@ -28,8 +28,6 @@ import {
   esDesarrolladorPresupuesto,
   esCargoDesarrolladorPresupuesto,
   esRolContratistaDepuracion,
-  esRolInterventoriaValidacion,
-  esContratistaGerencialPresupuesto,
   preIntervLiberadoParaInterventoria,
 } from './pptoRolesValidacion'
 import {
@@ -1126,28 +1124,16 @@ useEffect(() => {
     }
     return next
   }
-  const puedePrevalidarUI =
-    (esDevPpto
-      || (puedeValidar
-        && esRolContratistaDepuracion(usuario)
-        && !nivelInfo.esInterventoria
-        && (nivelInfo.puedePrevalidarAntesInterv || esContratistaGerencialPresupuesto(usuario))))
-  const puedeValidarInterventoriaUI =
-    esDevPpto || (puedeValidar && esRolInterventoriaValidacion(usuario))
+  const puedePrevalidarUI = esDevPpto || puedeValidar
+  const puedeValidarInterventoriaUI = esDevPpto || puedeValidar
   const puedeValidarInterventoriaRegistro = (r) => {
     if (!puedeValidarInterventoriaUI || esSellado(r)) return false
     if (esDevPpto) return true
     return preIntervLiberadoParaInterventoria(r)
   }
   const puedeTabEditarMasiva = esDevPpto || puedeEditar
-  const puedeTabDepuracionMasiva =
-    esDevPpto
-    || (puedeValidar
-      && esRolContratistaDepuracion(usuario)
-      && !nivelInfo.esInterventoria
-      && (nivelInfo.puedePrevalidarAntesInterv || esContratistaGerencialPresupuesto(usuario)))
-  const puedeTabInterventoriaMasiva =
-    esDevPpto || (puedeValidar && esRolInterventoriaValidacion(usuario))
+  const puedeTabDepuracionMasiva = esDevPpto || puedeValidar
+  const puedeTabInterventoriaMasiva = esDevPpto || puedeValidar
   const puedeAbrirEdicionMasiva =
     puedeTabEditarMasiva || puedeTabDepuracionMasiva || puedeTabInterventoriaMasiva
   const mostrarColumnaDepuracion = !nivelInfo.esInterventoria

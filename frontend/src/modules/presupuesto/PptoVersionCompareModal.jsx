@@ -296,7 +296,6 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
       await downloadVersionCompareExcel({
         versionesOrd,
         capitulosUnion,
-        getCapData,
         itemsByCap: allItems,
         tramosData,
         metaContrato,
@@ -315,7 +314,6 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
     capitulosUnion,
     contratoId,
     fetchItemsCapitulo,
-    getCapData,
     itemsByCap,
     loaded,
     tramo,
@@ -491,18 +489,22 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
                 type="button"
                 onClick={() => void exportarExcel()}
                 disabled={exporting}
+                title="Descargar Excel"
+                aria-label="Descargar Excel"
                 style={{
                   background: '#0077B618',
                   color: '#0077B6',
                   border: '1px solid #0077B6',
                   borderRadius: 6,
-                  padding: '6px 14px',
+                  padding: '6px 10px',
                   fontWeight: 700,
-                  fontSize: 'var(--cc-caption)',
+                  fontSize: 16,
+                  lineHeight: 1,
                   cursor: exporting ? 'wait' : 'pointer',
+                  opacity: exporting ? 0.65 : 1,
                 }}
               >
-                {exporting ? '⏳ Exportando…' : '📥 Excel con fórmulas'}
+                {exporting ? '⏳' : '📥'}
               </button>
             )}
           </div>

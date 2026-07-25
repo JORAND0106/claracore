@@ -42,6 +42,21 @@ const rowH = (h) => Math.max(6, Math.round(h * 0.8))
 
 function prepararHojaCompare(ws) {
   ws.properties.defaultRowHeight = rowH(15)
+  ws.pageSetup = {
+    paperSize: 9,
+    orientation: 'portrait',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    margins: {
+      left: 0.35,
+      right: 0.35,
+      top: 0.45,
+      bottom: 0.52,
+      header: 0.25,
+      footer: 0.42,
+    },
+  }
 }
 
 const ANCHO_ITEM = 12
@@ -622,6 +637,67 @@ function escribirFilaCompare(ws, rowNum, cols, getDataForVersion) {
   escribirFilaCompareItem(ws, rowNum, cols, getDataForVersion, { skipPct: true })
 }
 
+function mapaColumnasPorKey(cols) {
+  const out = {}
+  cols.forEach((c, idx) => {
+    out[c.key] = idx + 1
+  })
+  return out
+}
+
+/** Fila de capítulo = mismos valores que el subtotal del capítulo en la pestaña Ítems. */
+function escribirFilaCapituloDesdeSubtotalItems(
+  ws,
+  rowNum,
+  colsCap,
+  colsItems,
+  itemsSheetName,
+  subtotalRowNum,
+) {
+  const colItemsByKey = mapaColumnasPorKey(colsItems)
+
+  colsCap.forEach((c, idx) => {
+    if (c.kind === 'label') return
+    const srcCol = colItemsByKey[c.key]
+    if (!srcCol) return
+    const cell = ws.getRow(rowNum).getCell(idx + 1)
+    cell.value = {
+      formula: `${sheetFormulaRef(itemsSheetName)}!${colToLetter(srcCol)}${subtotalRowNum}`,
+    }
+
+    if (c.kind === 'cant') {
+      estiloDato(cell, { numFmt: QTY_NUM_FMT, align: 'right', rowNum })
+      return
+    }
+    if (c.kind === 'costo') {
+      estiloDato(cell, { numFmt: COP_NUM_FMT, align: 'right', rowNum })
+      return
+    }
+    if (c.kind === 'delta_cant') {
+      estiloDelta(cell, DELTA_QTY_FMT, rowNum)
+      return
+    }
+    if (c.kind === 'delta_costo') {
+      estiloDelta(cell, DELTA_COP_FMT, rowNum)
+    }
+  })
+}
+
+function planificarSubtotalesItemsHoja(capitulosUnion, itemsByCap, firstDataRow) {
+  const refs = []
+  let rowNum = firstDataRow
+  capitulosUnion.forEach((cap) => {
+    const itemRows = itemsByCap[cap]
+    if (!itemRows) return
+    const itemKeys = unionItemKeysCapitulo(cap, itemsByCap)
+    if (!itemKeys.length) return
+    rowNum += itemKeys.length
+    refs.push({ cap, subtotalRow: rowNum })
+    rowNum += 2
+  })
+  return refs
+}
+
 function indicesColumnasCant(cols) {
   return cols
     .map((c, idx) => ({ ...c, colNum: idx + 1 }))
@@ -1018,7 +1094,13 @@ function escribirHojaItems(
   ws.views = [{ showGridLines: false }]
 }
 
-function escribirHojaCapitulos(ws, versionesOrd, capitulosUnion, getCapData, exportCtx) {
+function escribirHojaCapitulos(
+  ws,
+  versionesOrd,
+  capitulosUnion,
+  exportCtx,
+  { itemsSheetName, colsItems, subtotalesItems = [] } = {},
+) {
   prepararHojaCompare(ws)
   const totalCols = buildVersionColumnPlan(versionesOrd, 1).length
   const headerRow = escribirEncabezadoInforme(ws, totalCols, {
@@ -1031,11 +1113,15 @@ function escribirHojaCapitulos(ws, versionesOrd, capitulosUnion, getCapData, exp
   })
   const costoCols = indicesColumnasCosto(cols)
   const paresDelta = paresCostoParaDelta(cols)
+  const subtotalByCap = new Map(subtotalesItems.map(({ cap, subtotalRow }) => [cap, subtotalRow]))
   let rowNum = firstDataRow
 
   capitulosUnion.forEach((cap) => {
     escribirCeldaDescripcion(ws, rowNum, 1, cap, 36)
-    escribirFilaCompare(ws, rowNum, cols, (versionId) => getCapData(versionId, cap))
+    const subtotalRow = subtotalByCap.get(cap)
+    if (subtotalRow && itemsSheetName && colsItems?.length) {
+      escribirFilaCapituloDesdeSubtotalItems(ws, rowNum, cols, colsItems, itemsSheetName, subtotalRow)
+    }
     rowNum += 1
   })
 
@@ -1266,7 +1352,6 @@ function reservarNombreHoja(baseName, usedNames) {
 export async function downloadVersionCompareExcel({
   versionesOrd,
   capitulosUnion,
-  getCapData,
   itemsByCap,
   tramosData = null,
   metaContrato = null,
@@ -1311,15 +1396,32 @@ export async function downloadVersionCompareExcel({
     ? planificarRefsTramos(wb, tramoEntries, versionesOrd, exportCtx)
     : crearRegistroRefsTramo()
 
-  const wsCap = wb.addWorksheet(reservarNombreHoja('Capítulos', usedNames), {
-    views: [{ showGridLines: false }],
-    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
-  })
-  escribirHojaCapitulos(wsCap, versionesOrd, capitulosUnion, getCapData, exportCtx)
+  const itemsSheetName = reservarNombreHoja('Ítems', usedNames)
+  const capSheetName = reservarNombreHoja('Capítulos', usedNames)
+  const includePctItems = true
+  const colsItems = buildVersionColumnPlan(versionesOrd, LABEL_COUNT_ITEMS, { includePct: includePctItems })
+  const firstDataRowItems = medirFirstDataRowCompare(
+    wb,
+    versionesOrd,
+    LABEL_COUNT_ITEMS,
+    exportCtx,
+    'Resumen general',
+    LABEL_HEADERS_ITEMS,
+    includePctItems,
+  )
+  const subtotalesItems = planificarSubtotalesItemsHoja(capitulosUnion, itemsByCap, firstDataRowItems)
 
-  const wsItems = wb.addWorksheet(reservarNombreHoja('Ítems', usedNames), {
+  const wsCap = wb.addWorksheet(capSheetName, {
     views: [{ showGridLines: false }],
-    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
+  })
+  escribirHojaCapitulos(wsCap, versionesOrd, capitulosUnion, exportCtx, {
+    itemsSheetName,
+    colsItems,
+    subtotalesItems,
+  })
+
+  const wsItems = wb.addWorksheet(itemsSheetName, {
+    views: [{ showGridLines: false }],
   })
   escribirHojaItems(wsItems, versionesOrd, capitulosUnion, itemsByCap, exportCtx, {
     tramoRefs,
@@ -1329,7 +1431,6 @@ export async function downloadVersionCompareExcel({
   tramoEntries.forEach(({ tramoLabel, sheetName, block }) => {
     const ws = wb.addWorksheet(sheetName, {
       views: [{ showGridLines: false }],
-      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
     })
     escribirHojaTramo(ws, tramoLabel, block, versionesOrd, exportCtx, { sheetName, tramoRefs })
   })
