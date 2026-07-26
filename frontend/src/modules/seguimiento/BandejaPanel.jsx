@@ -5,6 +5,7 @@ import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import {
   calcularNivelVencimiento,
+  fechaBaseNivel,
   origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
@@ -136,7 +137,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
               {sorted.map((r) => {
                 const nivel = calcularNivelVencimiento({
                   fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: r.fecha_base_nivel || r.created_at || r.fecha_vencimiento_original,
+                  fechaCreacion: fechaBaseNivel(r),
                 })
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
                 const dest = r.relacion_destinatario === 'referencia'

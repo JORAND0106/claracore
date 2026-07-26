@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
+import ItemDetalleModal from './ItemDetalleModal'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import {
@@ -76,6 +77,7 @@ export default function ActaEditor({
   const [claraIdx, setClaraIdx] = useState(null)
   const [compromisoCtx, setCompromisoCtx] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
+  const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
   const soloLectura = form.estado === 'firmada'
 
   useEffect(() => {
@@ -303,7 +305,7 @@ export default function ActaEditor({
         <button type="button" onClick={onCancel} style={ghost(t)}>{asModal ? 'Cerrar' : 'Volver'}</button>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0 }}>
+      <div style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => (
           <button
             key={tb.id}
@@ -315,9 +317,11 @@ export default function ActaEditor({
               background: 'transparent',
               color: tab === tb.id ? t.primary : t.textMuted,
               fontWeight: tab === tb.id ? 700 : 500,
-              padding: '8px 12px',
+              padding: '8px 14px',
               cursor: 'pointer',
               fontSize: 'var(--cc-sm)',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
             {tb.label}
@@ -447,26 +451,44 @@ export default function ActaEditor({
         {previos.length === 0 ? (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>No hay compromisos abiertos previos.</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {previos.map((c) => (
-              <div key={c.id} style={{
-                display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-                padding: '8px 10px', borderRadius: 8,
-                borderLeft: `4px solid ${ORIGEN_COLOR.compromiso.border}`,
-                background: ORIGEN_COLOR.compromiso.bg,
-              }}>
-                <div style={{ flex: 1, minWidth: 180 }}>
-                  <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-xs)', marginBottom: 2 }}>
-                    {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : 'Acta (sin número)')}
-                    {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
-                  </div>
-                  <div style={{ fontWeight: 600, color: t.text, fontSize: 'var(--cc-body)' }}>{c.titulo}</div>
-                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                    {c.asignado_a_nombre} · vence {fmtFecha(c.fecha_vencimiento)}
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 640 }}>
+              <thead>
+                <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Acta origen</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Compromiso</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Asignado</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Vence</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previos.map((c) => (
+                  <tr
+                    key={c.id}
+                    onClick={() => setDetalleCompromisoId(c.id)}
+                    style={{
+                      cursor: 'pointer',
+                      borderTop: `1px solid ${t.border}`,
+                      background: ORIGEN_COLOR.compromiso.bg,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
+                  >
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
+                      {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : '—')}
+                      {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
+                    </td>
+                    <td style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
+                    <td style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
+                    <td style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
+                    <td style={{ padding: '8px 10px', color: t.textMuted }}>
+                      {ESTADOS.find((x) => x.value === c.estado_gestion)?.label || c.estado_gestion}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
@@ -617,13 +639,33 @@ export default function ActaEditor({
           }}
         />
       )}
+
+      {detalleCompromisoId != null && (
+        <ItemDetalleModal
+          t={t}
+          api={api}
+          itemId={detalleCompromisoId}
+          usuario={usuario}
+          usuarios={usuariosContrato}
+          permisos={permisos}
+          allowEstadoGestion
+          revisionEnActa
+          onClose={() => setDetalleCompromisoId(null)}
+          onChanged={async () => {
+            try {
+              const abiertos = await api.compromisosAbiertos(localActaId || undefined)
+              setPrevios(abiertos || [])
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
     </div>
   )
 
   if (asModal) {
     return (
       <div role="dialog" aria-modal="true" onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 11000, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(980px, 100%)', maxHeight: '92vh', overflow: 'auto', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 20, boxShadow: t.shadow }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(1180px, 98vw)', maxHeight: '92vh', overflow: 'auto', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 20, boxShadow: t.shadow }}>
           {body}
         </div>
       </div>

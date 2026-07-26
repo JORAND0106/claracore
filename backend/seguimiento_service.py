@@ -254,6 +254,58 @@ ITEM_ESTADOS = frozenset({
     "abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado", "reprogramado",
 })
 
+# Caché de capacidades de esquema (migración puede no estar aplicada aún en prod).
+_SCHEMA_CAPS: Dict[str, Optional[bool]] = {
+    "tipo_acta": None,
+    "estado_realizada": None,
+    "fecha_base_nivel": None,
+    "asistente_email": None,
+}
+
+
+def _exc_msg(exc: BaseException) -> str:
+    return str(exc or "").lower()
+
+
+def _is_missing_column_error(exc: BaseException, column: str) -> bool:
+    msg = _exc_msg(exc)
+    col = (column or "").lower()
+    if col not in msg:
+        return False
+    return any(x in msg for x in ("schema cache", "could not find", "column", "pgrst204"))
+
+
+def _schema_has(sb, cap: str) -> bool:
+    """Detecta columnas/valores nuevos; evita fallar si la migración no se aplicó."""
+    cached = _SCHEMA_CAPS.get(cap)
+    if cached is not None:
+        return cached
+    try:
+        if cap == "tipo_acta":
+            sb.table("seguimiento_acta").select("id,tipo_acta").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
+        elif cap == "fecha_base_nivel":
+            sb.table("seguimiento_item").select("id,fecha_base_nivel").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
+        elif cap == "asistente_email":
+            sb.table("seguimiento_acta_asistente").select("id,email").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
+        elif cap == "estado_realizada":
+            # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
+            _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
+        else:
+            _SCHEMA_CAPS[cap] = False
+    except Exception as exc:
+        if cap in ("tipo_acta", "fecha_base_nivel", "asistente_email") and _is_missing_column_error(exc, cap.replace("asistente_", "")):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "asistente_email" and _is_missing_column_error(exc, "email"):
+            _SCHEMA_CAPS[cap] = False
+        else:
+            # Error ambiguo: asumir disponible para no degradar en falso.
+            _SCHEMA_CAPS[cap] = True
+            _log.warning("schema probe %s ambiguo: %s", cap, exc)
+    return bool(_SCHEMA_CAPS.get(cap))
+
 
 def _norm_tipo_acta(raw) -> str:
     t = (raw or "interna").strip().lower()
@@ -272,11 +324,134 @@ def _norm_estado_acta(raw, *, default: str = "borrador") -> str:
     return e
 
 
+def _estado_para_db(sb, estado_canonico: str) -> str:
+    e = _norm_estado_acta(estado_canonico)
+    if e == "realizada" and not _schema_has(sb, "estado_realizada"):
+        return "en_firma"  # CHECK legacy
+    return e
+
+
+def _serialize_orden_del_dia(orden, *, tipo_acta: Optional[str] = None, embed_tipo: bool = False) -> Optional[str]:
+    import json
+
+    payload: Any
+    if isinstance(orden, (list, dict)):
+        payload = orden
+    else:
+        txt = (orden or "").strip()
+        if not txt:
+            payload = []
+        elif txt.startswith("[") or txt.startswith("{"):
+            try:
+                payload = json.loads(txt)
+            except Exception:
+                payload = txt
+        else:
+            payload = txt
+    if embed_tipo and tipo_acta:
+        if isinstance(payload, list):
+            payload = {"v": 2, "tipo_acta": tipo_acta, "orden": payload}
+        elif isinstance(payload, dict):
+            if "orden" in payload or "items" in payload or payload.get("v") == 2:
+                payload = {**payload, "tipo_acta": tipo_acta, "v": payload.get("v") or 2}
+            else:
+                payload = {"v": 2, "tipo_acta": tipo_acta, "orden": payload}
+        else:
+            payload = {"v": 2, "tipo_acta": tipo_acta, "orden": str(payload)}
+    if isinstance(payload, (list, dict)):
+        return json.dumps(payload, ensure_ascii=False)
+    return (str(payload).strip() or None)
+
+
+def _parse_orden_y_tipo(raw) -> tuple:
+    """Devuelve (orden_para_ui, tipo_acta_opcional) soportando envoltorio v2."""
+    import json
+
+    if raw is None:
+        return None, None
+    if isinstance(raw, list):
+        return raw, None
+    if isinstance(raw, dict):
+        if "orden" in raw or raw.get("v") == 2:
+            return raw.get("orden", raw.get("items", [])), raw.get("tipo_acta")
+        return raw, raw.get("tipo_acta")
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    if s.startswith("{") or s.startswith("["):
+        try:
+            parsed = json.loads(s)
+            return _parse_orden_y_tipo(parsed)
+        except Exception:
+            return s, None
+    return s, None
+
+
+def _enrich_acta_row(acta: dict) -> dict:
+    """Normaliza estado/tipo/orden aunque la migración no esté aplicada."""
+    if not acta:
+        return acta
+    orden_ui, tipo_embedded = _parse_orden_y_tipo(acta.get("orden_del_dia"))
+    if orden_ui is not None and not isinstance(orden_ui, str):
+        import json
+        acta["orden_del_dia"] = json.dumps(orden_ui, ensure_ascii=False) if not isinstance(orden_ui, str) else orden_ui
+        # Mantener checklist como JSON string o dejar lista? Frontend parseOrdenDia acepta ambos.
+        if isinstance(orden_ui, (list, dict)):
+            acta["orden_del_dia"] = json.dumps(orden_ui, ensure_ascii=False)
+    tipo = acta.get("tipo_acta") or tipo_embedded or "interna"
+    try:
+        acta["tipo_acta"] = _norm_tipo_acta(tipo)
+    except ValueError:
+        acta["tipo_acta"] = "interna"
+    try:
+        acta["estado"] = _norm_estado_acta(acta.get("estado") or "borrador")
+    except ValueError:
+        acta["estado"] = "borrador"
+    return acta
+
+
 def _require_elaborador(data: dict, user_id: int) -> tuple:
     elaborador_id = data.get("elaborador_id")
     if elaborador_id in (None, "", 0, "0"):
         raise ValueError("El elaborador es obligatorio")
     return int(elaborador_id)
+
+
+def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_id: Optional[int] = None) -> list:
+    """Insert/update con reintento si faltan columnas o el CHECK de estado es legacy."""
+    attempt = dict(row)
+    last_exc: Optional[BaseException] = None
+    for _ in range(5):
+        try:
+            if acta_id is not None:
+                q = sb.table("seguimiento_acta").update(attempt).eq("id", int(acta_id))
+                if contrato_id is not None:
+                    q = q.eq("contrato_id", int(contrato_id))
+                return q.execute().data or []
+            return sb.table("seguimiento_acta").insert(attempt).execute().data or []
+        except Exception as exc:
+            last_exc = exc
+            changed = False
+            if "tipo_acta" in attempt and _is_missing_column_error(exc, "tipo_acta"):
+                _SCHEMA_CAPS["tipo_acta"] = False
+                tipo = attempt.pop("tipo_acta", None)
+                attempt["orden_del_dia"] = _serialize_orden_del_dia(
+                    attempt.get("orden_del_dia"),
+                    tipo_acta=tipo,
+                    embed_tipo=True,
+                )
+                changed = True
+            if attempt.get("estado") == "realizada" and (
+                "realizada" in _exc_msg(exc) or "check" in _exc_msg(exc) or "violates" in _exc_msg(exc)
+            ):
+                _SCHEMA_CAPS["estado_realizada"] = False
+                attempt["estado"] = "en_firma"
+                changed = True
+            if not changed:
+                raise
+    if last_exc:
+        raise last_exc
+    raise ValueError("No se pudo persistir el acta")
 
 
 def list_actas(
@@ -295,12 +470,15 @@ def list_actas(
         .eq("contrato_id", int(contrato_id))
         .order("consecutivo", desc=True)
     )
+    estado_db = None
     if estado:
         try:
-            query = query.eq("estado", _norm_estado_acta(estado))
+            estado_db = _estado_para_db(sb, estado)
+            # Filtrar ambos valores canónicos en memoria si hay mapeo legacy
         except ValueError:
-            pass
-    if tipo_acta:
+            estado_db = None
+    # Solo filtrar tipo en SQL si la columna existe
+    if tipo_acta and _schema_has(sb, "tipo_acta"):
         try:
             query = query.eq("tipo_acta", _norm_tipo_acta(tipo_acta))
         except ValueError:
@@ -310,9 +488,16 @@ def list_actas(
     if fecha_hasta:
         query = query.lte("fecha_reunion", str(fecha_hasta)[:10])
     rows = query.limit(500).execute().data or []
+    out = [_enrich_acta_row(dict(r)) for r in rows]
+    if estado:
+        want = _norm_estado_acta(estado)
+        out = [r for r in out if _norm_estado_acta(r.get("estado") or "borrador") == want]
+    if tipo_acta:
+        want_t = _norm_tipo_acta(tipo_acta)
+        out = [r for r in out if _norm_tipo_acta(r.get("tipo_acta") or "interna") == want_t]
     if not (q or "").strip():
-        return rows
-    return _filtrar_actas_por_keywords(sb, rows, q)
+        return out
+    return _filtrar_actas_por_keywords(sb, out, q)
 
 
 def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
@@ -331,14 +516,27 @@ def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
         .data
         or []
     )
-    asistentes = (
-        sb.table("seguimiento_acta_asistente")
-        .select("acta_id,nombre,cargo,entidad,email")
-        .in_("acta_id", ids)
-        .execute()
-        .data
-        or []
-    )
+    asis_cols = "acta_id,nombre,cargo,entidad"
+    if _schema_has(sb, "asistente_email"):
+        asis_cols += ",email"
+    try:
+        asistentes = (
+            sb.table("seguimiento_acta_asistente")
+            .select(asis_cols)
+            .in_("acta_id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        asistentes = (
+            sb.table("seguimiento_acta_asistente")
+            .select("acta_id,nombre,cargo,entidad")
+            .in_("acta_id", ids)
+            .execute()
+            .data
+            or []
+        )
     by_id: Dict[int, List[str]] = {i: [] for i in ids}
     for idea in ideas:
         by_id.setdefault(int(idea["acta_id"]), []).append(str(idea.get("texto") or ""))
@@ -376,7 +574,7 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
     rows = q.limit(1).execute().data or []
     if not rows:
         raise ValueError("Acta no encontrada")
-    acta = rows[0]
+    acta = _enrich_acta_row(dict(rows[0]))
     aid = int(acta["id"])
     acta["asistentes"] = (
         sb.table("seguimiento_acta_asistente").select("*").eq("acta_id", aid).order("orden").execute().data or []
@@ -443,15 +641,13 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     if not elab:
         raise ValueError("El elaborador debe ser un usuario registrado del contrato")
     tipo = _norm_tipo_acta(data.get("tipo_acta"))
-    estado = _norm_estado_acta(data.get("estado"), default="borrador")
-    if estado != "borrador" and not elaborador_id:
-        raise ValueError("El elaborador es obligatorio para avanzar de Borrador")
-    orden = data.get("orden_del_dia")
-    if isinstance(orden, (list, dict)):
-        import json
-        orden_txt = json.dumps(orden, ensure_ascii=False)
-    else:
-        orden_txt = (orden or "").strip() or None
+    estado = _estado_para_db(sb, data.get("estado") or "borrador")
+    has_tipo = _schema_has(sb, "tipo_acta")
+    orden_txt = _serialize_orden_del_dia(
+        data.get("orden_del_dia"),
+        tipo_acta=tipo,
+        embed_tipo=not has_tipo,
+    )
     row = {
         "contrato_id": int(contrato_id),
         "consecutivo": consec,
@@ -460,12 +656,13 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
         "orden_del_dia": orden_txt,
         "elaborador_id": int(elaborador_id),
         "elaborador_nombre": data.get("elaborador_nombre") or _nombre_usuario(elab),
-        "tipo_acta": tipo,
         "estado": estado,
         "created_by": int(user_id),
         "updated_at": _now_utc().isoformat(),
     }
-    ins = sb.table("seguimiento_acta").insert(row).execute().data
+    if has_tipo:
+        row["tipo_acta"] = tipo
+    ins = _persist_acta_row(sb, row)
     if not ins:
         raise ValueError("No se pudo crear el acta")
     acta = ins[0]
@@ -486,15 +683,22 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
     for k in ("ubicacion", "elaborador_nombre"):
         if k in data:
             patch[k] = (data.get(k) or "").strip() or None
+    tipo = None
     if "tipo_acta" in data and data.get("tipo_acta"):
-        patch["tipo_acta"] = _norm_tipo_acta(data.get("tipo_acta"))
-    if "orden_del_dia" in data:
-        orden = data.get("orden_del_dia")
-        if isinstance(orden, (list, dict)):
-            import json
-            patch["orden_del_dia"] = json.dumps(orden, ensure_ascii=False)
-        else:
-            patch["orden_del_dia"] = (orden or "").strip() or None
+        tipo = _norm_tipo_acta(data.get("tipo_acta"))
+    elif acta.get("tipo_acta"):
+        tipo = _norm_tipo_acta(acta.get("tipo_acta"))
+    has_tipo = _schema_has(sb, "tipo_acta")
+    if tipo and has_tipo:
+        patch["tipo_acta"] = tipo
+    if "orden_del_dia" in data or (tipo and not has_tipo):
+        orden = data.get("orden_del_dia") if "orden_del_dia" in data else acta.get("orden_del_dia")
+        # Si viene del acta enriquecida, puede ser JSON string de checklist
+        patch["orden_del_dia"] = _serialize_orden_del_dia(
+            orden,
+            tipo_acta=tipo,
+            embed_tipo=not has_tipo,
+        )
     elaborador_id = None
     if "elaborador_id" in data:
         if data.get("elaborador_id") in (None, "", 0, "0"):
@@ -506,19 +710,13 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
             raise ValueError("El elaborador debe ser un usuario registrado del contrato")
         if not data.get("elaborador_nombre"):
             patch["elaborador_nombre"] = _nombre_usuario(elab)
-    # Validar elaborador presente al guardar / cambiar estado
     elab_final = elaborador_id or acta.get("elaborador_id")
     if not elab_final:
         raise ValueError("El elaborador es obligatorio")
     if "estado" in data and data["estado"]:
         nuevo = _norm_estado_acta(data["estado"])
-        actual = _norm_estado_acta(acta.get("estado") or "borrador")
-        if nuevo != actual:
-            if nuevo == "firmada" and actual != "firmada":
-                # Solo el flujo de firmas marca firmada; permitir si ya hay firmas completas
-                pass
-            patch["estado"] = nuevo
-    sb.table("seguimiento_acta").update(patch).eq("id", int(acta_id)).eq("contrato_id", int(contrato_id)).execute()
+        patch["estado"] = _estado_para_db(sb, nuevo)
+    _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
     if "asistentes" in data:
         _sync_asistentes(sb, acta_id, data.get("asistentes") or [])
     if "ideas" in data:
@@ -531,21 +729,33 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
 def _sync_asistentes(sb, acta_id: int, asistentes: list) -> None:
     sb.table("seguimiento_acta_asistente").delete().eq("acta_id", int(acta_id)).execute()
     rows = []
+    include_email = _schema_has(sb, "asistente_email")
     for i, a in enumerate(asistentes or []):
         nombre = (a.get("nombre") or "").strip()
         if not nombre:
             continue
-        rows.append({
+        row = {
             "acta_id": int(acta_id),
             "nombre": nombre,
             "cargo": (a.get("cargo") or "").strip() or None,
             "entidad": (a.get("entidad") or "").strip() or None,
-            "email": (a.get("email") or "").strip() or None,
             "usuario_id": int(a["usuario_id"]) if a.get("usuario_id") else None,
             "orden": int(a.get("orden") if a.get("orden") is not None else i),
-        })
+        }
+        if include_email:
+            row["email"] = (a.get("email") or "").strip() or None
+        rows.append(row)
     if rows:
-        sb.table("seguimiento_acta_asistente").insert(rows).execute()
+        try:
+            sb.table("seguimiento_acta_asistente").insert(rows).execute()
+        except Exception as exc:
+            if include_email and _is_missing_column_error(exc, "email"):
+                _SCHEMA_CAPS["asistente_email"] = False
+                for r in rows:
+                    r.pop("email", None)
+                sb.table("seguimiento_acta_asistente").insert(rows).execute()
+            else:
+                raise
 
 
 def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
@@ -765,11 +975,24 @@ def actualizar_estado_gestion(
         patch = {
             "estado_gestion": "reprogramado",
             "fecha_vencimiento": fv.isoformat(),
-            "fecha_base_nivel": hoy.isoformat(),
             "hora_vencimiento": _norm_hora(hora_vencimiento) if hora_vencimiento is not None else item.get("hora_vencimiento"),
             "updated_at": _now_utc().isoformat(),
         }
-        sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        if _schema_has(sb, "fecha_base_nivel"):
+            patch["fecha_base_nivel"] = hoy.isoformat()
+        try:
+            sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        except Exception as exc:
+            if "fecha_base_nivel" in patch and _is_missing_column_error(exc, "fecha_base_nivel"):
+                _SCHEMA_CAPS["fecha_base_nivel"] = False
+                patch.pop("fecha_base_nivel", None)
+                # Fallback: reinicio de nivel vía campos_libres
+                libres = dict(item.get("campos_libres") or {})
+                libres["nivel_desde"] = hoy.isoformat()
+                patch["campos_libres"] = libres
+                sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+            else:
+                raise
         _registrar_evento(sb, item_id, "reprogramado", user_id, {
             "estado": "reprogramado",
             "fecha_vencimiento": fv.isoformat(),

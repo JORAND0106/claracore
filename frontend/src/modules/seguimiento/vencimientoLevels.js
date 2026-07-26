@@ -65,6 +65,23 @@ export function metaNivelVencimiento(nivel) {
   return VENCIMIENTO_NIVELES.find((x) => x.key === n) || null
 }
 
+/**
+ * Fecha base para el cálculo de nivel de vencimiento.
+ * Prioriza columna dedicada; si no existe (migración pendiente), usa
+ * `campos_libres.nivel_desde` y luego created_at / vencimiento original.
+ */
+export function fechaBaseNivel(item) {
+  if (!item) return null
+  const libres = item.campos_libres && typeof item.campos_libres === 'object'
+    ? item.campos_libres
+    : {}
+  return item.fecha_base_nivel
+    || libres.nivel_desde
+    || item.created_at
+    || item.fecha_vencimiento_original
+    || null
+}
+
 /** Ordenación: más crítico / más próximo primero; sin fecha al final. */
 export function sortByProximidadVencimiento(rows) {
   return [...(rows || [])].sort((a, b) => {
