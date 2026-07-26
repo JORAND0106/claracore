@@ -52,6 +52,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         id: it.id,
         texto: it.texto || '',
         hecho: !!it.hecho,
+        estado_gestion: it.estado_gestion || (it.hecho ? 'cumplido' : 'abierto'),
         fecha: it.fecha || null,
         hora: it.hora || null,
         notas: it.notas || '',

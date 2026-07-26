@@ -965,6 +965,14 @@ def actualizar_estado_gestion(
     item = get_item(sb, item_id)
     if contrato_id is not None and item.get("contrato_id") and int(item["contrato_id"]) != int(contrato_id):
         raise ValueError("El ítem no pertenece al contrato")
+    # Tareas con checklist: el estado global se deriva del avance de sub-ítems
+    if item.get("origen") == "tarea" and estado != "reprogramado":
+        ck = (item.get("campos_libres") or {}).get("checklist") if isinstance(item.get("campos_libres"), dict) else None
+        if isinstance(ck, list) and len(ck) > 0:
+            raise ValueError(
+                "El estado de la tarea se calcula según el avance de sus sub-ítems. "
+                "Actualice el estado de cada sub-ítem en la checklist."
+            )
     if estado == "reprogramado":
         if item.get("origen") != "tarea":
             raise ValueError("Reprogramar solo aplica a tareas personales")
@@ -1047,8 +1055,51 @@ def _normalizar_imagen_ref(raw) -> Optional[dict]:
     return out
 
 
+def _norm_estado_subitem(raw, *, hecho: bool = False) -> str:
+    e = (raw or "").strip().lower()
+    if e in ITEM_ESTADOS:
+        return e
+    if hecho:
+        return "cumplido"
+    return "abierto"
+
+
+def _avance_desde_checklist(checklist: List[dict]) -> tuple:
+    """
+    Retorna (pct|None, estado_tarea).
+    Cancelados fuera de numerador y denominador. 100% ⇒ cumplido.
+    """
+    items = checklist or []
+    if not items:
+        return None, "abierto"
+    validos = [
+        it for it in items
+        if _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho"))) != "cancelado"
+    ]
+    if not validos:
+        return None, "cancelado"
+    cumplidos = sum(
+        1 for it in validos
+        if _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho"))) == "cumplido"
+    )
+    pct = int(round(100.0 * cumplidos / len(validos)))
+    if pct >= 100:
+        estado = "cumplido"
+    elif cumplidos > 0:
+        estado = "parcial"
+    elif any(
+        _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho")))
+        in ("en_progreso", "parcial", "reprogramado", "vencido")
+        for it in validos
+    ):
+        estado = "en_progreso"
+    else:
+        estado = "abierto"
+    return pct, estado
+
+
 def _normalizar_checklist_tarea(raw) -> List[dict]:
-    """Sub-ítems: texto, hecho, fecha/hora, imagen soporte, esquema, notas y enlace."""
+    """Sub-ítems: texto, estado_gestion propio, fecha/hora, imagen, esquema, notas y enlace."""
     if not isinstance(raw, list):
         return []
     out: List[dict] = []
@@ -1067,10 +1118,18 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             esquema["kind"] = "esquema"
         notas_item = it.get("notas") if it.get("notas") is not None else it.get("comentario")
         enlace = (it.get("enlace") or it.get("link") or "").strip()
+        hecho = bool(it.get("hecho") or it.get("done") or it.get("checked"))
+        estado = _norm_estado_subitem(it.get("estado_gestion"), hecho=hecho)
+        # Mantener hecho alineado con cumplido
+        if estado == "cumplido":
+            hecho = True
+        elif estado != "cumplido":
+            hecho = False
         out.append({
             "id": str(cid)[:40],
             "texto": texto[:2000],
-            "hecho": bool(it.get("hecho") or it.get("done") or it.get("checked")),
+            "hecho": hecho,
+            "estado_gestion": estado,
             "fecha": fecha.isoformat() if fecha else None,
             "hora": hora,
             "imagen": imagen,
@@ -1123,6 +1182,8 @@ def _normalizar_campos_libres_tarea(raw) -> dict:
     base.pop("notas", None)
     if "checklist" in base:
         base["checklist"] = _normalizar_checklist_tarea(base.get("checklist"))
+        pct, _estado = _avance_desde_checklist(base["checklist"])
+        base["avance_pct"] = pct
     return base
 
 
@@ -1247,11 +1308,12 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         relacion = None
         referido_id = None
 
+    _pct_init, estado_agg = _avance_desde_checklist(campos.get("checklist") or [])
     row = {
         "origen": "tarea",
         "titulo": titulo[:500],
         "descripcion": descripcion,
-        "estado_gestion": data.get("estado_gestion") or "abierto",
+        "estado_gestion": data.get("estado_gestion") or estado_agg or "abierto",
         "asignado_a_id": asignado_id,
         "asignado_a_nombre": asignado_nombre,
         "created_by": int(user_id),
@@ -1343,6 +1405,10 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
             patch["fecha_vencimiento"] = None
             patch["hora_vencimiento"] = None
         patch["descripcion"] = _descripcion_desde_checklist(campos.get("checklist") or [])
+        # Estado de la tarea = agregación del avance de sub-ítems
+        if "checklist" in incoming or campos.get("checklist") is not None:
+            _pct, estado_agg = _avance_desde_checklist(campos.get("checklist") or [])
+            patch["estado_gestion"] = estado_agg
     if "descripcion" in data and "campos_libres" not in data:
         patch["descripcion"] = (data.get("descripcion") or "").strip() or None
     if "fecha_vencimiento" in data and "campos_libres" not in data:
@@ -1486,8 +1552,12 @@ def get_item_detalle(sb, item_id: int) -> dict:
                 "texto": item.get("descripcion"),
                 "fecha": item.get("fecha_vencimiento"),
                 "hora": item.get("hora_vencimiento"),
+                "estado_gestion": item.get("estado_gestion") or "abierto",
             }])
-            item["campos_libres"] = libres
+        pct, _est = _avance_desde_checklist(libres.get("checklist") or [])
+        libres["avance_pct"] = pct
+        item["campos_libres"] = libres
+        item["avance_pct"] = pct
         item = _enrich_tarea_media(item)
     return item
 
@@ -1523,6 +1593,20 @@ def list_bandeja(
     if fecha_hasta:
         query = query.lte("fecha_vencimiento", str(fecha_hasta)[:10])
     rows = query.limit(800).execute().data or []
+
+    # Derivar estado/avance de tareas desde checklist (cancelados excluidos del %)
+    for r in rows:
+        if r.get("origen") != "tarea":
+            continue
+        libres = dict(r.get("campos_libres") or {}) if isinstance(r.get("campos_libres"), dict) else {}
+        ck = libres.get("checklist") if isinstance(libres.get("checklist"), list) else []
+        if not ck:
+            continue
+        pct, est = _avance_desde_checklist(ck)
+        libres["avance_pct"] = pct
+        r["campos_libres"] = libres
+        r["avance_pct"] = pct
+        r["estado_gestion"] = est
 
     out = []
     for r in rows:

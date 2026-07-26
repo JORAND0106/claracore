@@ -4,6 +4,7 @@ import TareaChecklistEditor, { seedChecklistFromItem } from './TareaChecklistEdi
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
 
 export default function ItemDetalleModal({
@@ -79,6 +80,8 @@ export default function ItemDetalleModal({
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
+  const avance = esTarea ? calcularAvanceTarea(checklist.length ? checklist : item) : null
+  const tieneChecklist = esTarea && (checklist.length > 0 || (item.campos_libres?.checklist || []).length > 0)
   const puedeEditarTarea = esTarea && permisos?.editar && (soyCreador || soyResponsable || esDev)
   const estadosDisponibles = ESTADOS_GESTION.filter((x) => {
     if (x.value === 'reprogramado') return esTarea
@@ -88,6 +91,8 @@ export default function ItemDetalleModal({
     if (!permisos?.editar) return false
     if (allowEstadoGestion === true) return true
     if (allowEstadoGestion === false) return false
+    // Tareas con checklist: estado por sub-ítem (solo reprogramar global queda aquí)
+    if (esTarea && tieneChecklist) return false
     return esTarea
   })()
 
@@ -120,6 +125,7 @@ export default function ItemDetalleModal({
         id: it.id,
         texto: it.texto || '',
         hecho: !!it.hecho,
+        estado_gestion: it.estado_gestion || (it.hecho ? 'cumplido' : 'abierto'),
         fecha: it.fecha || null,
         hora: it.hora || null,
         notas: it.notas || '',
@@ -176,7 +182,8 @@ export default function ItemDetalleModal({
           {item.asignado_a_nombre || '—'}
           {item.referido_a_nombre ? ` · ref: ${item.referido_a_nombre}` : ''}
           {' · '}vence {fmtFechaHora(due.fecha || item.fecha_vencimiento, due.hora || item.hora_vencimiento)}
-          {' · '}{item.estado_gestion}
+          {' · '}{esTarea && avance ? `avance ${labelAvance(avance)}` : item.estado_gestion}
+          {esTarea && avance?.pct === 100 ? ' · Cumplida' : ''}
           {' · '}{tipoLaborLabel(item, usuario?.id)}
         </div>
       </div>
@@ -207,6 +214,56 @@ export default function ItemDetalleModal({
         <p style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--cc-body)', color: t.text }}>
           {item.descripcion || 'Sin descripción'}
         </p>
+      )}
+
+      {esTarea && tieneChecklist && (
+        <div style={{
+          margin: '12px 0', padding: '8px 10px', borderRadius: 8,
+          border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+          fontSize: 'var(--cc-sm)', color: t.textMuted,
+        }}>
+          Estado de la tarea: <b style={{ color: t.text }}>{avance?.estadoTarea || item.estado_gestion}</b>
+          {' · '}avance {labelAvance(avance)}.
+          Se marca Cumplida en bandeja solo al 100% (cancelados excluidos del cálculo).
+          Use el estado de cada sub-ítem; puede reprogramar la fecha global abajo si aplica.
+        </div>
+      )}
+
+      {esTarea && tieneChecklist && permisos?.editar && (
+        <div style={{ margin: '10px 0' }}>
+          <label style={lbl(t)}>Reprogramar vencimiento de la tarea</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+            <div>
+              <label style={lbl(t)}>Nueva fecha *</label>
+              <input type="date" value={fechaReprog} onChange={(e) => setFechaReprog(e.target.value)} style={inp(t)} />
+            </div>
+            <div>
+              <label style={lbl(t)}>Hora</label>
+              <input type="time" value={horaReprog} onChange={(e) => setHoraReprog(e.target.value)} style={inp(t)} />
+            </div>
+            <button
+              type="button"
+              disabled={busy || !fechaReprog}
+              style={{ ...primary(t), opacity: fechaReprog ? 1 : 0.45 }}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await api.patchEstado(item.id, 'reprogramado', {
+                    nueva_fecha_vencimiento: fechaReprog,
+                    hora_vencimiento: horaReprog || null,
+                  })
+                  setFechaReprog('')
+                  setHoraReprog('')
+                  await reload()
+                  onChanged?.()
+                } catch (err) { setError(err.message) }
+                finally { setBusy(false) }
+              }}
+            >
+              Reprogramar
+            </button>
+          </div>
+        </div>
       )}
 
       {puedeEditarEstado && (

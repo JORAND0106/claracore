@@ -1,14 +1,18 @@
 import { useRef, useState } from 'react'
 import EsquemaEditorModal from './EsquemaEditorModal'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
+import { ESTADOS_GESTION } from './seguimientoTheme'
+import { calcularAvanceTarea, normEstadoSubitem } from './tareaAvance'
 
 /** Editor de checklist: único contenedor de contenido de la tarea personal. */
 export function newChecklistItem(partial = {}) {
   const id = partial.id || `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const estado = normEstadoSubitem(partial.estado_gestion, { hecho: !!partial.hecho })
   return {
     id,
     texto: partial.texto || '',
-    hecho: !!partial.hecho,
+    hecho: estado === 'cumplido',
+    estado_gestion: estado,
     fecha: partial.fecha || '',
     hora: partial.hora || '',
     imagen: partial.imagen || null,
@@ -27,6 +31,7 @@ export function seedChecklistFromItem(item) {
       id: it.id,
       texto: it.texto || '',
       hecho: !!it.hecho,
+      estado_gestion: it.estado_gestion,
       fecha: it.fecha ? String(it.fecha).slice(0, 10) : '',
       hora: it.hora ? String(it.hora).slice(0, 5) : '',
       imagen: it.imagen || null,
@@ -40,6 +45,7 @@ export function seedChecklistFromItem(item) {
   if ((item?.descripcion || '').trim()) {
     return [newChecklistItem({
       texto: item.descripcion,
+      estado_gestion: item.estado_gestion || 'abierto',
       fecha: item.fecha_vencimiento ? String(item.fecha_vencimiento).slice(0, 10) : '',
       hora: item.hora_vencimiento ? String(item.hora_vencimiento).slice(0, 5) : '',
     })]
@@ -57,9 +63,22 @@ export default function TareaChecklistEditor({
   const items = Array.isArray(value) ? value : []
   const fileRefs = useRef({})
   const [esquemaIdx, setEsquemaIdx] = useState(null)
+  const avance = calcularAvanceTarea(items)
 
   const setAt = (idx, patch) => {
-    const next = items.map((it, i) => (i === idx ? { ...it, ...patch } : it))
+    const next = items.map((it, i) => {
+      if (i !== idx) return it
+      const merged = { ...it, ...patch }
+      if ('estado_gestion' in patch) {
+        const est = normEstadoSubitem(patch.estado_gestion)
+        merged.estado_gestion = est
+        merged.hecho = est === 'cumplido'
+      } else if ('hecho' in patch) {
+        merged.estado_gestion = patch.hecho ? 'cumplido' : (it.estado_gestion === 'cumplido' ? 'abierto' : it.estado_gestion)
+        merged.hecho = !!patch.hecho
+      }
+      return merged
+    })
     onChange?.(next)
   }
 
@@ -90,6 +109,34 @@ export default function TareaChecklistEditor({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {items.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          padding: '8px 12px', borderRadius: 8, border: `1px solid ${t.border}`,
+          background: t.bgCard || t.bg, fontSize: 'var(--cc-sm)', color: t.text,
+        }}>
+          <b>Avance de la tarea:</b>
+          <span style={{ fontWeight: 700, color: avance.pct === 100 ? 'var(--cc-color-positive,#0f766e)' : t.primary }}>
+            {avance.pct == null ? '—' : `${avance.pct}%`}
+          </span>
+          <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+            {avance.cumplidos}/{avance.validos} sub-ítems cumplidos
+            {avance.pct === 100 ? ' · Cumplida' : ''}
+            {' · '}cancelados excluidos del %
+          </span>
+          <div style={{
+            flex: '1 1 120px', height: 8, borderRadius: 999, background: `${t.border}`,
+            overflow: 'hidden', minWidth: 80,
+          }}>
+            <div style={{
+              width: `${avance.pct || 0}%`, height: '100%',
+              background: avance.pct === 100 ? 'var(--cc-color-positive,#0f766e)' : t.primary,
+            }}
+            />
+          </div>
+        </div>
+      )}
+
       {items.length === 0 && (
         <div style={{
           padding: 14, borderRadius: 10, border: `1px dashed ${t.border}`,
@@ -102,6 +149,7 @@ export default function TareaChecklistEditor({
       {items.map((it, idx) => {
         const srcImg = imagenSrc(it.imagen)
         const srcEsquema = imagenSrc(it.esquema)
+        const est = normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
         return (
           <div
             key={it.id}
@@ -113,33 +161,41 @@ export default function TareaChecklistEditor({
             }}
           >
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-              <input
-                type="checkbox"
-                checked={!!it.hecho}
-                disabled={disabled}
-                onChange={(e) => setAt(idx, { hecho: e.target.checked })}
-                style={{ marginTop: 10, width: 18, height: 18, cursor: disabled ? 'default' : 'pointer' }}
-                title="Hecho"
-              />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <input
-                  disabled={disabled}
-                  value={it.texto}
-                  onChange={(e) => setAt(idx, { texto: e.target.value })}
-                  placeholder={`Título del sub-ítem ${idx + 1}`}
-                  style={{
-                    ...inp(t),
-                    fontWeight: 600,
-                    textDecoration: it.hecho ? 'line-through' : 'none',
-                    opacity: it.hecho ? 0.75 : 1,
-                  }}
-                />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <input
+                    disabled={disabled}
+                    value={it.texto}
+                    onChange={(e) => setAt(idx, { texto: e.target.value })}
+                    placeholder={`Título del sub-ítem ${idx + 1}`}
+                    style={{
+                      ...inp(t),
+                      flex: '1 1 220px',
+                      fontWeight: 600,
+                      textDecoration: est === 'cumplido' ? 'line-through' : 'none',
+                      opacity: est === 'cumplido' ? 0.75 : 1,
+                    }}
+                  />
+                  <label style={{ ...lblInline(t), gap: 4 }}>
+                    <span>Estado</span>
+                    <select
+                      disabled={disabled}
+                      value={est}
+                      onChange={(e) => setAt(idx, { estado_gestion: e.target.value })}
+                      style={{ ...inp(t), width: 'auto', minWidth: 140, padding: '6px 8px' }}
+                    >
+                      {ESTADOS_GESTION.map((x) => (
+                        <option key={x.value} value={x.value}>{x.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
 
                 <div style={{
                   display: 'flex',
                   flexWrap: 'wrap',
                   gap: 8,
-                  marginTop: 8,
+                  marginTop: 0,
                   alignItems: 'center',
                 }}>
                   <label style={{ ...lblInline(t), gap: 4 }}>
