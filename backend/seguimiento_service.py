@@ -1098,8 +1098,64 @@ def _avance_desde_checklist(checklist: List[dict]) -> tuple:
     return pct, estado
 
 
+def _normalizar_tabla_subitem(raw) -> Optional[dict]:
+    """Tabla editable embebida en un sub-ítem: {rows, cols, cells[][]}."""
+    if not isinstance(raw, dict):
+        return None
+    cells_in = raw.get("cells")
+    if not isinstance(cells_in, list) or not cells_in:
+        return None
+    rows = max(1, min(30, int(raw.get("rows") or len(cells_in) or 1)))
+    first_row = cells_in[0] if isinstance(cells_in[0], list) else []
+    cols = max(1, min(20, int(raw.get("cols") or (len(first_row) if first_row else 1))))
+    cells: List[List[str]] = []
+    for i in range(rows):
+        src = cells_in[i] if i < len(cells_in) and isinstance(cells_in[i], list) else []
+        row: List[str] = []
+        for j in range(cols):
+            val = src[j] if j < len(src) else ""
+            row.append(str(val)[:2000] if val is not None else "")
+        cells.append(row)
+    return {"rows": rows, "cols": cols, "cells": cells}
+
+
+def _normalizar_comentarios_subitem(raw) -> List[dict]:
+    """Comentarios independientes por sub-ítem (no son los comentarios del ítem bandeja)."""
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        mensaje = (c.get("mensaje") or c.get("texto") or "").strip()
+        if not mensaje:
+            continue
+        cid = str(c.get("id") or _new_checklist_id())[:40]
+        autor_nombre = (c.get("autor_nombre") or c.get("autor") or "").strip()[:200]
+        autor_id = c.get("autor_id")
+        try:
+            autor_id = int(autor_id) if autor_id is not None else None
+        except Exception:
+            autor_id = None
+        created = c.get("created_at")
+        if created is not None:
+            created = str(created)[:40]
+        else:
+            created = datetime.now(timezone.utc).isoformat()
+        out.append({
+            "id": cid,
+            "mensaje": mensaje[:4000],
+            "autor_nombre": autor_nombre,
+            "autor_id": autor_id,
+            "created_at": created,
+        })
+        if len(out) >= 200:
+            break
+    return out
+
+
 def _normalizar_checklist_tarea(raw) -> List[dict]:
-    """Sub-ítems: texto, estado_gestion propio, fecha/hora, imagen, esquema, notas y enlace."""
+    """Sub-ítems: texto, estado, fecha/hora, imagen, esquema, tabla, notas, enlace y comentarios."""
     if not isinstance(raw, list):
         return []
     out: List[dict] = []
@@ -1125,6 +1181,8 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             hecho = True
         elif estado != "cumplido":
             hecho = False
+        tabla = _normalizar_tabla_subitem(it.get("tabla"))
+        comentarios = _normalizar_comentarios_subitem(it.get("comentarios"))
         out.append({
             "id": str(cid)[:40],
             "texto": texto[:2000],
@@ -1134,8 +1192,10 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             "hora": hora,
             "imagen": imagen,
             "esquema": esquema,
+            "tabla": tabla,
             "notas": (str(notas_item)[:4000] if notas_item is not None else "") or "",
             "enlace": enlace[:2000] if enlace else "",
+            "comentarios": comentarios,
             "orden": int(it.get("orden") if it.get("orden") is not None else i),
         })
     out.sort(key=lambda x: x.get("orden") or 0)

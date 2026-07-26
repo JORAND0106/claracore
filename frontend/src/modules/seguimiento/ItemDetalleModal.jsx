@@ -130,6 +130,8 @@ export default function ItemDetalleModal({
         hora: it.hora || null,
         notas: it.notas || '',
         enlace: it.enlace || '',
+        tabla: it.tabla || null,
+        comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
         // Media nueva (pending) se sube después; la persistida se conserva en merge backend
         imagen: it.imagen?.pending ? null : (it.imagen || null),
         esquema: it.esquema?.pending ? null : (it.esquema || null),
@@ -207,6 +209,7 @@ export default function ItemDetalleModal({
             t={t}
             value={checklist}
             disabled={!puedeEditarTarea}
+            usuario={usuario}
             onChange={(next) => { setChecklist(next); setChecklistDirty(true) }}
           />
         </section>
@@ -225,44 +228,7 @@ export default function ItemDetalleModal({
           Estado de la tarea: <b style={{ color: t.text }}>{avance?.estadoTarea || item.estado_gestion}</b>
           {' · '}avance {labelAvance(avance)}.
           Se marca Cumplida en bandeja solo al 100% (cancelados excluidos del cálculo).
-          Use el estado de cada sub-ítem; puede reprogramar la fecha global abajo si aplica.
-        </div>
-      )}
-
-      {esTarea && tieneChecklist && permisos?.editar && (
-        <div style={{ margin: '10px 0' }}>
-          <label style={lbl(t)}>Reprogramar vencimiento de la tarea</label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end' }}>
-            <div>
-              <label style={lbl(t)}>Nueva fecha *</label>
-              <input type="date" value={fechaReprog} onChange={(e) => setFechaReprog(e.target.value)} style={inp(t)} />
-            </div>
-            <div>
-              <label style={lbl(t)}>Hora</label>
-              <input type="time" value={horaReprog} onChange={(e) => setHoraReprog(e.target.value)} style={inp(t)} />
-            </div>
-            <button
-              type="button"
-              disabled={busy || !fechaReprog}
-              style={{ ...primary(t), opacity: fechaReprog ? 1 : 0.45 }}
-              onClick={async () => {
-                setBusy(true)
-                try {
-                  await api.patchEstado(item.id, 'reprogramado', {
-                    nueva_fecha_vencimiento: fechaReprog,
-                    hora_vencimiento: horaReprog || null,
-                  })
-                  setFechaReprog('')
-                  setHoraReprog('')
-                  await reload()
-                  onChanged?.()
-                } catch (err) { setError(err.message) }
-                finally { setBusy(false) }
-              }}
-            >
-              Reprogramar
-            </button>
-          </div>
+          Estado y reprogramación se gestionan en cada sub-ítem.
         </div>
       )}
 

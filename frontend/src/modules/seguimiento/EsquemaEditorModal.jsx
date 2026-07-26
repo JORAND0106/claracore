@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  createHatchRegionFromClick,
+  drawHatchRegion,
+  makeHatchPattern,
+  preloadHatchRegions,
+} from './esquemaHatch'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -9,6 +15,7 @@ const HATCHES = [
 ]
 
 const TOOLS = [
+  { id: 'paneo', label: 'Paneo', Icon: IconPaneo },
   { id: 'lapiz', label: 'Lápiz', Icon: IconLapiz },
   { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
   { id: 'linea', label: 'Línea', Icon: IconLinea },
@@ -16,7 +23,7 @@ const TOOLS = [
   { id: 'rect', label: 'Rectángulo', Icon: IconRect },
   { id: 'elipse', label: 'Elipse', Icon: IconElipse },
   { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
-  { id: 'hatch', label: 'Relleno hatch', Icon: IconHatch },
+  { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
   { id: 'mover', label: 'Mover / rotar', Icon: IconMover },
 ]
 
@@ -53,6 +60,8 @@ export default function EsquemaEditorModal({
   const lastPt = useRef(null)
   const draftRef = useRef(null)
   const dragRef = useRef(null) // { id, mode: 'move'|'rotate', ox, oy, startAngle, baseRot }
+  const panRef = useRef({ x: 0, y: 0 })
+  const panDragRef = useRef(null)
   const toolRef = useRef('lapiz')
   const colorRef = useRef('#1e293b')
   const widthRef = useRef(3)
@@ -69,6 +78,7 @@ export default function EsquemaEditorModal({
   const [canUndo, setCanUndo] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [panTick, setPanTick] = useState(0)
 
   toolRef.current = tool
   colorRef.current = color
@@ -97,10 +107,13 @@ export default function EsquemaEditorModal({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, w, h)
+    ctx.save()
+    ctx.translate(panRef.current.x, panRef.current.y)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
     for (const obj of list) drawObject(ctx, obj, obj.id === selectedId)
-  }, [selectedId])
+    ctx.restore()
+  }, [selectedId, panTick])
 
   const setupCanvas = useCallback(() => {
     const c = canvasRef.current
@@ -143,13 +156,16 @@ export default function EsquemaEditorModal({
     requestAnimationFrame(() => redraw())
   }, [initialDataUri, redraw])
 
-  useEffect(() => { redraw(draftRef.current) }, [selectedId, redraw])
+  useEffect(() => { redraw(draftRef.current) }, [selectedId, redraw, panTick])
 
   const posFromEvent = (e) => {
     const c = canvasRef.current
     const r = c.getBoundingClientRect()
     const src = e.touches?.[0] || e.changedTouches?.[0] || e
-    return { x: src.clientX - r.left, y: src.clientY - r.top }
+    return {
+      x: src.clientX - r.left - panRef.current.x,
+      y: src.clientY - r.top - panRef.current.y,
+    }
   }
 
   const applyMeasureToShape = (shape, toolId, a, b) => {
@@ -212,6 +228,17 @@ export default function EsquemaEditorModal({
     startPt.current = p
     lastPt.current = p
 
+    if (currentTool === 'paneo') {
+      const src = e.touches?.[0] || e
+      panDragRef.current = {
+        startX: src.clientX,
+        startY: src.clientY,
+        originX: panRef.current.x,
+        originY: panRef.current.y,
+      }
+      return
+    }
+
     if (currentTool === 'mover') {
       const hit = hitTest(p)
       if (hit) {
@@ -236,14 +263,24 @@ export default function EsquemaEditorModal({
     }
 
     if (currentTool === 'hatch') {
-      const hit = hitTest(p)
-      if (hit && ['rect', 'elipse', 'triangulo'].includes(hit.type)) {
+      // Flood-fill de la subregión cerrada bajo el clic (líneas/figuras = fronteras)
+      const region = createHatchRegionFromClick(
+        objectsRef.current,
+        p.x,
+        p.y,
+        hatchRef.current,
+        colorRef.current,
+      )
+      if (region) {
         pushHistory()
-        objectsRef.current = objectsRef.current.map((o) => (
-          o.id === hit.id ? { ...o, hatch: hatchRef.current } : o
-        ))
-        setSelectedId(hit.id)
+        const withId = { ...region, id: uid() }
+        objectsRef.current = [...objectsRef.current, withId]
+        setSelectedId(withId.id)
         setDirty(true)
+        // Redibujar cuando la máscara esté lista
+        const img = new Image()
+        img.onload = () => redraw()
+        img.src = withId.maskDataUri
         redraw()
       }
       drawing.current = false
@@ -282,9 +319,21 @@ export default function EsquemaEditorModal({
   const onPointerMove = (e) => {
     if (!drawing.current) return
     e.preventDefault()
+    const currentTool = toolRef.current
+
+    if (currentTool === 'paneo' && panDragRef.current) {
+      const src = e.touches?.[0] || e
+      const d = panDragRef.current
+      panRef.current = {
+        x: d.originX + (src.clientX - d.startX),
+        y: d.originY + (src.clientY - d.startY),
+      }
+      setPanTick((n) => n + 1)
+      return
+    }
+
     const p = posFromEvent(e)
     lastPt.current = p
-    const currentTool = toolRef.current
 
     if (currentTool === 'mover' && dragRef.current) {
       const d = dragRef.current
@@ -334,6 +383,11 @@ export default function EsquemaEditorModal({
     try { canvasRef.current.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
     const currentTool = toolRef.current
     const p = posFromEvent(e)
+
+    if (currentTool === 'paneo') {
+      panDragRef.current = null
+      return
+    }
 
     if (currentTool === 'mover') {
       dragRef.current = null
@@ -435,9 +489,10 @@ export default function EsquemaEditorModal({
   const guardar = async () => {
     setBusy(true)
     try {
-      // Raster final sin resaltado de selección
+      // Raster final sin resaltado de selección (incluye hatch por región)
       const prevSel = selectedId
       setSelectedId(null)
+      await preloadHatchRegions(objectsRef.current)
       await new Promise((r) => requestAnimationFrame(r))
       const c = canvasRef.current
       const dpr = window.devicePixelRatio || 1
@@ -446,7 +501,10 @@ export default function EsquemaEditorModal({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, w, h)
+      ctx.save()
+      ctx.translate(panRef.current.x, panRef.current.y)
       for (const obj of objectsRef.current) drawObject(ctx, obj, false)
+      ctx.restore()
       const dataUrl = c.toDataURL('image/png')
       setSelectedId(prevSel)
       await onSave?.(dataUrl)
@@ -564,7 +622,8 @@ export default function EsquemaEditorModal({
             ref={canvasRef}
             style={{
               display: 'block', width: '100%', height: '100%',
-              background: '#fff', borderRadius: 8, touchAction: 'none', cursor: tool === 'mover' ? 'move' : 'crosshair',
+              background: '#fff', borderRadius: 8, touchAction: 'none',
+              cursor: tool === 'paneo' ? 'grab' : tool === 'mover' ? 'move' : tool === 'hatch' ? 'cell' : 'crosshair',
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -573,8 +632,8 @@ export default function EsquemaEditorModal({
           />
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Deshacer revierte la última acción. Mover/rotar: arrastre la figura (Alt/Shift = rotar). Hatch: elija textura y pulse una figura cerrada.
-          Medida: longitud (línea/flecha) o ancho (cajas); se aplica al dibujar o con «Aplicar medida».
+          Paneo: desplaza la vista sin dibujar. Hatch: pulse la subregión cerrada a rellenar (líneas y figuras actúan como fronteras).
+          Mover/rotar: arrastre la figura (Alt/Shift = rotar). Medida: longitud (línea/flecha) o ancho (cajas).
         </div>
       </div>
     </div>
@@ -588,6 +647,18 @@ function drawObject(ctx, obj, selected) {
   ctx.save()
   if (obj.type === 'image') {
     drawImageObj(ctx, obj)
+    ctx.restore()
+    return
+  }
+  if (obj.type === 'hatchRegion') {
+    drawHatchRegion(ctx, obj)
+    if (selected) {
+      ctx.strokeStyle = '#2563eb'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
+      ctx.setLineDash([])
+    }
     ctx.restore()
     return
   }
@@ -722,29 +793,6 @@ function fillHatch(ctx, obj) {
   ctx.restore()
 }
 
-function makeHatchPattern(ctx, kind, color) {
-  const c = document.createElement('canvas')
-  c.width = 10
-  c.height = 10
-  const g = c.getContext('2d')
-  g.strokeStyle = color
-  g.fillStyle = color
-  g.lineWidth = 1
-  const k = Number(kind) || 0
-  if (k === 0) {
-    g.beginPath(); g.moveTo(0, 10); g.lineTo(10, 0); g.stroke()
-  } else if (k === 1) {
-    g.beginPath(); g.moveTo(0, 0); g.lineTo(10, 10); g.stroke()
-  } else if (k === 2) {
-    g.beginPath(); g.moveTo(0, 10); g.lineTo(10, 0); g.moveTo(0, 0); g.lineTo(10, 10); g.stroke()
-  } else if (k === 3) {
-    g.beginPath(); g.arc(5, 5, 1.2, 0, Math.PI * 2); g.fill()
-  } else {
-    g.beginPath(); g.moveTo(0, 5); g.lineTo(10, 5); g.stroke()
-  }
-  return ctx.createPattern(c, 'repeat')
-}
-
 function objectCenter(obj) {
   if (obj.type === 'stroke') {
     const pts = obj.points || []
@@ -752,6 +800,9 @@ function objectCenter(obj) {
     const sx = pts.reduce((s, p) => s + p.x, 0)
     const sy = pts.reduce((s, p) => s + p.y, 0)
     return { x: sx / pts.length, y: sy / pts.length }
+  }
+  if (obj.type === 'hatchRegion') {
+    return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
   }
   if (obj.type === 'image') return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
   return { x: ((obj.x1 || 0) + (obj.x2 || 0)) / 2, y: ((obj.y1 || 0) + (obj.y2 || 0)) / 2 }
@@ -767,6 +818,9 @@ function objectBounds(obj) {
       minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y)
     }
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  if (obj.type === 'hatchRegion') {
+    return { x: obj.x || 0, y: obj.y || 0, w: obj.w || 0, h: obj.h || 0 }
   }
   if (obj.x1 == null) return null
   const x = Math.min(obj.x1, obj.x2)
@@ -784,6 +838,9 @@ function pointInObject(p, obj) {
 function translateObject(obj, dx, dy) {
   if (obj.type === 'stroke') {
     return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+  }
+  if (obj.type === 'hatchRegion') {
+    return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   }
   if (obj.type === 'image') {
     return { ...obj, fit: false, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
@@ -816,6 +873,15 @@ function iconBtn(t, active) {
 
 function iconProps() {
   return { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+}
+function IconPaneo() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M9 11V6a2 2 0 1 1 4 0v1" />
+      <path d="M13 7V5a2 2 0 1 1 4 0v6" />
+      <path d="M17 11V9a2 2 0 1 1 4 0v5a7 7 0 0 1-7 7h-1a7 7 0 0 1-6.2-3.7L5 14a2 2 0 0 1 2.7-2.8L9 12" />
+    </svg>
+  )
 }
 function IconLapiz() { return <svg {...iconProps()}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg> }
 function IconBorrador() { return <svg {...iconProps()}><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></svg> }
