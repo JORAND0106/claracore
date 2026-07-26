@@ -43,6 +43,8 @@ export function listaGraficosRegistro(reg) {
 export function etiquetaOrigenGrafico(origen) {
   if (origen === 'mapa') return 'Plano automático'
   if (origen === 'manual') return 'Carga manual'
+  if (origen === 'esquema') return 'Esquema a mano'
+  if (origen === 'galeria') return 'Galería'
   return 'Gráfico'
 }
 

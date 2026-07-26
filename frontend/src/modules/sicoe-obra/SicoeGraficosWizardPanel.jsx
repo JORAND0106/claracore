@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import { agregarEntradaGraficoHistorial, fmtFechaGrafico, etiquetaOrigenGrafico } from './sicoeGraficosHelpers'
 
@@ -46,6 +47,7 @@ export default function SicoeGraficosWizardPanel({
 }) {
   const [idx, setIdx] = useState(0)
   const [subiendo, setSubiendo] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
   const lista = Array.isArray(graficos) ? graficos : []
   const safeIdx = Math.min(idx, Math.max(0, lista.length - 1))
   const actual = lista[safeIdx] || null
@@ -60,8 +62,9 @@ export default function SicoeGraficosWizardPanel({
     setIdx(lista.length)
   }
 
-  const subirArchivo = async (file) => {
+  const subirArchivo = async (file, opts = {}) => {
     if (!file || subiendo) return
+    const origen = opts.origen || 'manual'
     setSubiendo(true)
     try {
       const prepared = await prepararImagenParaUpload(file)
@@ -83,12 +86,29 @@ export default function SicoeGraficosWizardPanel({
         url: data.url,
         numero: data.numero ?? numero,
         creado_en: new Date().toISOString(),
-        origen: 'manual',
+        origen,
       })
     } catch (err) {
       alert('Error subiendo gráfico: ' + (err?.message || String(err)))
     } finally {
       setSubiendo(false)
+    }
+  }
+
+  const guardarEsquemaComoGrafico = async (dataUrl) => {
+    if (!dataUrl || subiendo) return
+    try {
+      const resp = await fetch(dataUrl)
+      const blob = await resp.blob()
+      const file = new File(
+        [blob],
+        `esquema_${Date.now()}.png`,
+        { type: blob.type || 'image/png' },
+      )
+      setEsquemaOpen(false)
+      await subirArchivo(file, { origen: 'esquema' })
+    } catch (err) {
+      alert('Error guardando esquema: ' + (err?.message || String(err)))
     }
   }
 
@@ -205,11 +225,24 @@ export default function SicoeGraficosWizardPanel({
             disabled={subiendo}
             onChange={(e) => {
               const f = e.target.files?.[0]
-              if (f) void subirArchivo(f)
+              if (f) void subirArchivo(f, { origen: 'manual' })
               e.target.value = ''
             }}
           />
         </label>
+        <button
+          type="button"
+          disabled={subiendo}
+          onClick={() => setEsquemaOpen(true)}
+          style={{
+            background: 'transparent', border: `1px solid ${t.border}`, color: t.textMuted,
+            borderRadius: '6px', padding: '5px 12px', fontSize: 'var(--cc-label)',
+            cursor: subiendo ? 'wait' : 'pointer', fontWeight: 600,
+          }}
+          title="Crear esquema a mano (mismo editor que Seguimiento)"
+        >
+          ✎ Crear esquema
+        </button>
         {actual && (
           <button
             type="button"
@@ -227,6 +260,16 @@ export default function SicoeGraficosWizardPanel({
         <div style={{ color: '#10B981', fontSize: 'var(--cc-sm)', marginTop: '6px' }}>
           ✅ {lista.length} gráfico{lista.length !== 1 ? 's' : ''} — se asignarán a los registros de este lote
         </div>
+      )}
+
+      {esquemaOpen && (
+        <EsquemaEditorModal
+          t={t}
+          title="Crear esquema · gráfico del registro"
+          initialDataUri={null}
+          onClose={() => setEsquemaOpen(false)}
+          onSave={guardarEsquemaComoGrafico}
+        />
       )}
     </div>
   )
