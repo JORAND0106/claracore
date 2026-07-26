@@ -187,6 +187,221 @@ class FirmaBody(BaseModel):
     asistente_id: int
 
 
+# ── Bandeja (sin contrato obligatorio — tareas personales) ───────────────────
+
+@router.get("/bandeja")
+def route_bandeja(
+    estado: Optional[str] = Query(None),
+    responsable_id: Optional[int] = Query(None),
+    contrato_id: Optional[int] = Query(None),
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    origen: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "ver")
+    if contrato_id is not None:
+        _check_contrato(current_user, contrato_id)
+    return list_bandeja(
+        supabase,
+        _uid(current_user),
+        current_user,
+        estado=estado,
+        responsable_id=responsable_id,
+        contrato_id=contrato_id,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        origen=origen,
+    )
+
+
+@router.get("/bandeja/widget")
+def route_bandeja_widget(
+    contrato_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Misma bandeja recortada para el widget de inicio."""
+    if not tiene_permiso_seguimiento(current_user, "ver"):
+        return []
+    if contrato_id is not None:
+        try:
+            _check_contrato(current_user, contrato_id)
+        except HTTPException:
+            return []
+    rows = list_bandeja(
+        supabase,
+        _uid(current_user),
+        current_user,
+        contrato_id=contrato_id,
+        estado=None,
+    )
+    abiertos = [r for r in rows if r.get("estado_gestion") in ("abierto", "en_progreso", "parcial", "vencido")]
+    return abiertos[:20]
+
+
+@router.get("/items/{item_id}")
+def route_get_item(item_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    try:
+        return get_item_detalle(supabase, item_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/items/{item_id}/estado")
+def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return actualizar_estado_gestion(supabase, item_id, body.estado_gestion, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/items/{item_id}/comentarios")
+def route_comentario(item_id: int, body: ComentarioBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    try:
+        return agregar_comentario(supabase, item_id, body.mensaje, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/items/{item_id}/evidencia")
+async def route_evidencia(
+    item_id: int,
+    archivo: UploadFile = File(...),
+    notas: Optional[str] = Form(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "editar")
+    content = await archivo.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    try:
+        return cargar_evidencia(
+            supabase,
+            item_id,
+            _uid(current_user),
+            nombre_archivo=archivo.filename or "evidencia.bin",
+            content=content,
+            mime_type=archivo.content_type or "application/octet-stream",
+            notas=notas,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/items/{item_id}/justificacion")
+def route_solicitar_justificacion(
+    item_id: int, body: JustificacionBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return solicitar_justificacion(
+            supabase,
+            item_id,
+            _uid(current_user),
+            body.motivo,
+            body.nueva_fecha_vencimiento,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/justificaciones/{justificacion_id}/revisar")
+def route_revisar_justificacion(
+    justificacion_id: int, body: RevisarJustificacionBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "validar")
+    try:
+        return revisar_justificacion(
+            supabase,
+            justificacion_id,
+            _uid(current_user),
+            body.aprobar,
+            body.comentario,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+# ── Tareas ───────────────────────────────────────────────────────────────────
+
+@router.post("/tareas")
+def route_crear_tarea(body: TareaCreateBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "crear")
+    try:
+        row = crear_tarea(supabase, body.model_dump(), _uid(current_user))
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_tarea", str(row["id"]), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.put("/tareas/{item_id}")
+def route_update_tarea(item_id: int, body: TareaUpdateBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return update_tarea(
+            supabase,
+            item_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/tareas/{item_id}/imagen")
+def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return adjuntar_imagen_tarea_base64(
+            supabase,
+            item_id,
+            _uid(current_user),
+            body.nombre,
+            body.data_base64,
+            body.mime_type or "image/png",
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+# ── Clara redacción ──────────────────────────────────────────────────────────
+
+@router.post("/redaccion-clara")
+async def route_redaccion_clara(body: RedaccionClaraBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return await redaccion_asistida_clara(
+            supabase,
+            str(_uid(current_user)),
+            body.texto,
+            body.instruccion,
+            body.historial,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("redaccion-clara: %s", exc)
+        raise HTTPException(status_code=502, detail="Clara no está disponible en este momento.") from exc
+
+
+# ── Cron vencimientos ──────────────────────────────────────────────────────
+
+@router.post("/internal/cron/vencimientos")
+def route_cron_vencimientos(
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    if not _cron_secret_ok(x_cron_secret):
+        raise HTTPException(status_code=401, detail="Cron secret inválido")
+    return procesar_vencimientos_y_llamados(supabase)
+
 # ── Actas ────────────────────────────────────────────────────────────────────
 
 @router.get("/{contrato_id}/actas")
@@ -321,202 +536,3 @@ def route_firmar_acta(
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
-
-
-# ── Bandeja (sin contrato obligatorio — tareas personales) ───────────────────
-
-@router.get("/bandeja")
-def route_bandeja(
-    estado: Optional[str] = Query(None),
-    responsable_id: Optional[int] = Query(None),
-    contrato_id: Optional[int] = Query(None),
-    fecha_desde: Optional[str] = Query(None),
-    fecha_hasta: Optional[str] = Query(None),
-    origen: Optional[str] = Query(None),
-    current_user=Depends(get_current_user),
-):
-    require_permiso_seguimiento(current_user, "ver")
-    if contrato_id is not None:
-        _check_contrato(current_user, contrato_id)
-    return list_bandeja(
-        supabase,
-        _uid(current_user),
-        current_user,
-        estado=estado,
-        responsable_id=responsable_id,
-        contrato_id=contrato_id,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        origen=origen,
-    )
-
-
-@router.get("/bandeja/widget")
-def route_bandeja_widget(
-    contrato_id: Optional[int] = Query(None),
-    current_user=Depends(get_current_user),
-):
-    """Misma bandeja recortada para el widget de inicio."""
-    if not tiene_permiso_seguimiento(current_user, "ver"):
-        return []
-    if contrato_id is not None:
-        try:
-            _check_contrato(current_user, contrato_id)
-        except HTTPException:
-            return []
-    rows = list_bandeja(
-        supabase,
-        _uid(current_user),
-        current_user,
-        contrato_id=contrato_id,
-        estado=None,
-    )
-    abiertos = [r for r in rows if r.get("estado_gestion") in ("abierto", "en_progreso", "parcial", "vencido")]
-    return abiertos[:20]
-
-
-@router.get("/items/{item_id}")
-def route_get_item(item_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    try:
-        return get_item_detalle(supabase, item_id)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.patch("/items/{item_id}/estado")
-def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "editar")
-    try:
-        return actualizar_estado_gestion(supabase, item_id, body.estado_gestion, _uid(current_user))
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/items/{item_id}/comentarios")
-def route_comentario(item_id: int, body: ComentarioBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    try:
-        return agregar_comentario(supabase, item_id, body.mensaje, _uid(current_user))
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/items/{item_id}/evidencia")
-async def route_evidencia(
-    item_id: int,
-    archivo: UploadFile = File(...),
-    notas: Optional[str] = Form(None),
-    current_user=Depends(get_current_user),
-):
-    require_permiso_seguimiento(current_user, "editar")
-    content = await archivo.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Archivo vacío")
-    try:
-        return cargar_evidencia(
-            supabase,
-            item_id,
-            _uid(current_user),
-            nombre_archivo=archivo.filename or "evidencia.bin",
-            content=content,
-            mime_type=archivo.content_type or "application/octet-stream",
-            notas=notas,
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/items/{item_id}/justificacion")
-def route_solicitar_justificacion(
-    item_id: int, body: JustificacionBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "editar")
-    try:
-        return solicitar_justificacion(
-            supabase, item_id, _uid(current_user), body.motivo, body.nueva_fecha_vencimiento
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/justificaciones/{justificacion_id}/revisar")
-def route_revisar_justificacion(
-    justificacion_id: int, body: RevisarJustificacionBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "validar")
-    try:
-        return revisar_justificacion(
-            supabase, justificacion_id, _uid(current_user), body.aprobar, body.comentario
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-# ── Tareas ───────────────────────────────────────────────────────────────────
-
-@router.post("/tareas")
-def route_crear_tarea(body: TareaCreateBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "crear")
-    try:
-        row = crear_tarea(supabase, body.model_dump(), _uid(current_user))
-        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_tarea", str(row["id"]), {})
-        return row
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.put("/tareas/{item_id}")
-def route_update_tarea(item_id: int, body: TareaUpdateBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "editar")
-    try:
-        return update_tarea(supabase, item_id, body.model_dump(exclude_unset=True), _uid(current_user))
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/tareas/{item_id}/imagen")
-def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "editar")
-    try:
-        return adjuntar_imagen_tarea_base64(
-            supabase,
-            item_id,
-            _uid(current_user),
-            body.nombre,
-            body.data_base64,
-            body.mime_type or "image/png",
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-# ── Clara redacción ──────────────────────────────────────────────────────────
-
-@router.post("/redaccion-clara")
-async def route_redaccion_clara(body: RedaccionClaraBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "editar")
-    try:
-        return await redaccion_asistida_clara(
-            supabase,
-            str(_uid(current_user)),
-            body.texto,
-            body.instruccion,
-            body.historial,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.exception("redaccion-clara: %s", exc)
-        raise HTTPException(status_code=502, detail="Clara no está disponible en este momento.") from exc
-
-
-# ── Cron vencimientos ──────────────────────────────────────────────────────
-
-@router.post("/internal/cron/vencimientos")
-def route_cron_vencimientos(
-    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
-):
-    if not _cron_secret_ok(x_cron_secret):
-        raise HTTPException(status_code=401, detail="Cron secret inválido")
-    return procesar_vencimientos_y_llamados(supabase)

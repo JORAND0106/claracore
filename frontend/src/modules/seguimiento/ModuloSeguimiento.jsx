@@ -156,7 +156,13 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       </div>
 
       {tab === 'bandeja' && (
-        <BandejaPanel t={t} api={api} usuario={usuario} permisos={permisos} />
+        <BandejaPanel
+          t={t}
+          api={api}
+          usuario={usuario}
+          usuarios={usuariosContrato}
+          permisos={permisos}
+        />
       )}
 
       {tab === 'actas' && (
