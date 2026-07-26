@@ -363,6 +363,37 @@ export const REPORTE_ERRORES_JERARQUIA = {
     },
   },
 
+  seguimiento: {
+    label: 'Seguimiento',
+    ubicaciones: {
+      bandeja: {
+        label: 'Bandeja unificada',
+        sectores: {
+          listado: 'Listado de compromisos y tareas',
+          filtros: 'Filtros (estado, responsable, fechas)',
+          detalle_compromiso: 'Detalle de compromiso de acta',
+          detalle_tarea: 'Detalle de tarea personal',
+        },
+      },
+      actas: {
+        label: 'Actas de reunión',
+        sectores: {
+          formulario: 'Formulario de acta (encabezado / asistentes)',
+          ideas: 'Ideas centrales y redacción con Clara',
+          compromisos_previos: 'Panel de compromisos abiertos previos',
+          pdf_firma: 'Vista previa PDF y firmas',
+        },
+      },
+      widget_inicio: {
+        label: 'Widget en Inicio',
+        sectores: {
+          listado: 'Listado compacto del widget',
+          navegacion: 'Enlace Abrir Seguimiento',
+        },
+      },
+    },
+  },
+
   programacion: {
     label: 'Programación',
     ubicaciones: {
@@ -610,6 +641,7 @@ export const MODULO_CTX_A_MENU = {
   sicoe_obra: 'sicoe_obra',
   informes: 'informes',
   almacen: 'almacen',
+  seguimiento: 'seguimiento',
   programacion: 'programacion',
   topografia: 'topografia',
   semaforo: 'semaforo',

@@ -2376,6 +2376,9 @@ app.include_router(almacen_router)
 from catalogo_insumos_routes import router as catalogo_insumos_router
 app.include_router(catalogo_insumos_router)
 
+from seguimiento_routes import router as seguimiento_router
+app.include_router(seguimiento_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
     BienvenidaEmailError,
@@ -6728,6 +6731,7 @@ def listar_funciones(current_user=Depends(get_current_user)):
         {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
         {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
         {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
+        {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]

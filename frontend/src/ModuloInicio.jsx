@@ -4,6 +4,7 @@ import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
 import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
+import SeguimientoWidget from './components/inicio/SeguimientoWidget.jsx'
 
 function useInicioMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
@@ -1402,6 +1403,7 @@ export default function ModuloInicio({
   puedePublicarNovedades = false,
   token = null,
   esContador = false,
+  onIrSeguimiento,
 }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
@@ -1509,6 +1511,17 @@ export default function ModuloInicio({
           {/* ── Zona 3: ficha del contrato ── */}
           <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
             <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
+          </div>
+
+          {/* ── Zona 4: bandeja Seguimiento (compromisos + tareas) ── */}
+          <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
+            <SeguimientoWidget
+              t={t}
+              fs={fs}
+              usuario={usuario}
+              token={token}
+              onIrSeguimiento={onIrSeguimiento}
+            />
           </div>
         </>
       )}
