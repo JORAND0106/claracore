@@ -59,6 +59,16 @@ export function getModulosVisiblesReporte(usuario) {
     },
     { key: 'almacen', label: 'Almacén', visible: true },
     {
+      key: 'seguimiento',
+      label: 'Seguimiento',
+      visible:
+        esDeveloper ||
+        esAdminCargo ||
+        (usuario?.permisos || []).some(
+          (p) => (p.funcion_nombre || '').toLowerCase() === 'seguimiento' && p.ver,
+        ),
+    },
+    {
       key: 'programacion',
       label: 'Programación',
       visible: progPermisos.ver,

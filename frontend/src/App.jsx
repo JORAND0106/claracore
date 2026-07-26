@@ -136,6 +136,8 @@ import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import AlmacenMain from './almacen/AlmacenMain'
+import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
+import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
@@ -17166,7 +17168,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       } catch {}
       return
     }
-    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard', ALMACEN:'almacen', almacen:'almacen' }
+    const modMap = {
+      PRESUPUESTO: 'presupuesto',
+      COBRO: 'sicoe_obra',
+      AUTH: 'dashboard',
+      ALMACEN: 'almacen',
+      almacen: 'almacen',
+      SEGUIMIENTO: 'seguimiento',
+      seguimiento: 'seguimiento',
+    }
     setModuloActivo(modMap[notif.modulo] || modulo || 'dashboard')
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
@@ -17713,6 +17723,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeValidarAlmacen = esDeveloper || almacenPerm.validar
   const puedeExportarAlmacen = esDeveloper || almacenPerm.exportar
   const almacenVerEconomicos = esDeveloper || almacenAcceso.verEconomicos
+  const seguimientoAcceso = accesoSeguimiento(usuario, usuario?.contrato_id)
+  const tienePermisoSeguimiento = esDeveloper || (!seguimientoAcceso.bloqueado && seguimientoAcceso.ver)
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
@@ -18357,6 +18369,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['informes',     '📄', 'Informes',       !esContador && tienePermisoInformesCcd],
             ['almacen',      '🏪', 'Almacén',        !esContador && tienePermisoAlmacen],
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
+            ['seguimiento',  '📌', 'Seguimiento',    !esContador && tienePermisoSeguimiento],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
@@ -18410,6 +18423,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ['informes', '📄', 'Informes', !esContador && tienePermisoInformesCcd],
               ['almacen', '🏪', 'Almacén', !esContador && tienePermisoAlmacen],
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
+              ['seguimiento', '📌', 'Seguim.', !esContador && tienePermisoSeguimiento],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
@@ -18471,6 +18485,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             puedePublicarNovedades={puedePublicarNovedadesInicio}
             token={getToken()}
             esContador={esContador}
+            onIrSeguimiento={tienePermisoSeguimiento ? () => setModuloActivo('seguimiento') : undefined}
           />
         )}
         {moduloActivo === 'dashboard' && (() => {
@@ -21349,6 +21364,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
             </div>
           )
+        )}
+        {moduloActivo === 'seguimiento' && (
+          <ModuloSeguimiento
+            key={`seguimiento-${usuario?.contrato_id ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            contratoId={usuario?.contrato_id}
+          />
         )}
         {moduloActivo === 'semaforo' && (
           <ModuloPlanoSemaforo key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
