@@ -111,6 +111,8 @@ export default function EsquemaEditorModal({
   const widthRef = useRef(3)
   const hatchRef = useRef(0)
   const measureRef = useRef('')
+  const pointersRef = useRef(new Map()) // pointerId → { x, y } (pantalla, para pellizco)
+  const pinchRef = useRef(null) // { dist0, zoom0, midX, midY, pan0 }
 
   const [tool, setTool] = useState('lapiz')
   const [color, setColor] = useState('#1e293b')
@@ -125,6 +127,7 @@ export default function EsquemaEditorModal({
   const [panTick, setPanTick] = useState(0)
   const [zoomPct, setZoomPct] = useState(100)
   const selectedIdRef = useRef(null)
+  const redrawRef = useRef(() => {})
 
   toolRef.current = tool
   colorRef.current = color
@@ -179,6 +182,8 @@ export default function EsquemaEditorModal({
     ctx.restore()
   }, [selectedId, panTick])
 
+  redrawRef.current = redraw
+
   const setupCanvas = useCallback(() => {
     const c = canvasRef.current
     const wrap = wrapRef.current
@@ -190,75 +195,147 @@ export default function EsquemaEditorModal({
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
     c.style.height = `${h}px`
-    redraw()
-  }, [redraw])
+    redrawRef.current()
+  }, [])
 
   useEffect(() => {
     setupCanvas()
     const ro = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => { if (!drawing.current) setupCanvas() })
+      ? new ResizeObserver(() => { if (!drawing.current && !pinchRef.current) setupCanvas() })
       : null
     if (ro && wrapRef.current) ro.observe(wrapRef.current)
     return () => ro?.disconnect()
   }, [setupCanvas])
 
+  // IMPORTANTE: no depender de `redraw` aquí. Si se incluye, cada pan/zoom/selección
+  // recrea el callback y este efecto vacía objectsRef → el lienzo deja de dibujar.
   useEffect(() => {
     panRef.current = { x: 0, y: 0 }
     zoomRef.current = 1
     setZoomPct(100)
+    setSelectedId(null)
+    draftRef.current = null
+    drawing.current = false
+    pinchRef.current = null
+    pointersRef.current.clear()
     if (!initialDataUri) {
       objectsRef.current = []
-      historyRef.current = []
-      setCanUndo(false)
-      setDirty(false)
-      requestAnimationFrame(() => redraw())
-      return
+    } else {
+      objectsRef.current = [{
+        id: uid(),
+        type: 'image',
+        dataUri: initialDataUri,
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+        fit: true,
+      }]
     }
-    objectsRef.current = [{
-      id: uid(),
-      type: 'image',
-      dataUri: initialDataUri,
-      x: 0,
-      y: 0,
-      w: 0,
-      h: 0,
-      fit: true,
-    }]
     historyRef.current = []
     setCanUndo(false)
     setDirty(false)
-    requestAnimationFrame(() => redraw())
-  }, [initialDataUri, redraw])
+    requestAnimationFrame(() => redrawRef.current())
+  }, [initialDataUri])
 
   useEffect(() => { redraw(draftRef.current) }, [selectedId, redraw, panTick])
 
-  const posFromEvent = (e) => {
+  // Zoom con rueda/scroll: listener nativo no-pasivo para poder preventDefault
+  // (evita scroll de página y no depende de Ctrl/⌘).
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return undefined
+    const onWheelNative = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (pinchRef.current || drawing.current) return
+      const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
+      const r = c.getBoundingClientRect()
+      const screenX = e.clientX - r.left
+      const screenY = e.clientY - r.top
+      const z0 = zoomRef.current || 1
+      const z1 = Math.max(0.25, Math.min(4, z0 * factor))
+      if (Math.abs(z1 - z0) < 0.0005) return
+      const wx = (screenX - panRef.current.x) / z0
+      const wy = (screenY - panRef.current.y) / z0
+      panRef.current = {
+        x: screenX - wx * z1,
+        y: screenY - wy * z1,
+      }
+      zoomRef.current = z1
+      setZoomPct(Math.round(z1 * 100))
+      setPanTick((n) => n + 1)
+    }
+    c.addEventListener('wheel', onWheelNative, { passive: false })
+    return () => c.removeEventListener('wheel', onWheelNative)
+  }, [])
+
+  const screenPosFromEvent = (e) => {
     const c = canvasRef.current
     const r = c.getBoundingClientRect()
     const src = e.touches?.[0] || e.changedTouches?.[0] || e
+    return { x: src.clientX - r.left, y: src.clientY - r.top }
+  }
+
+  const posFromEvent = (e) => {
+    const s = screenPosFromEvent(e)
     const z = zoomRef.current || 1
     return {
-      x: (src.clientX - r.left - panRef.current.x) / z,
-      y: (src.clientY - r.top - panRef.current.y) / z,
+      x: (s.x - panRef.current.x) / z,
+      y: (s.y - panRef.current.y) / z,
     }
   }
 
-  const setZoomAroundCenter = (nextZoom) => {
+  /** Zoom anclado a un punto de pantalla (centro del pellizco o cursor del scroll). */
+  const setZoomAtScreenPoint = (nextZoom, screenX, screenY) => {
     const z0 = zoomRef.current || 1
     const z1 = Math.max(0.25, Math.min(4, nextZoom))
-    if (Math.abs(z1 - z0) < 0.001) return
-    const { w, h } = cssSize()
-    const cx = w / 2
-    const cy = h / 2
-    const wx = (cx - panRef.current.x) / z0
-    const wy = (cy - panRef.current.y) / z0
+    if (Math.abs(z1 - z0) < 0.0005) return
+    const wx = (screenX - panRef.current.x) / z0
+    const wy = (screenY - panRef.current.y) / z0
     panRef.current = {
-      x: cx - wx * z1,
-      y: cy - wy * z1,
+      x: screenX - wx * z1,
+      y: screenY - wy * z1,
     }
     zoomRef.current = z1
     setZoomPct(Math.round(z1 * 100))
     setPanTick((n) => n + 1)
+  }
+
+  const setZoomAroundCenter = (nextZoom) => {
+    const { w, h } = cssSize()
+    setZoomAtScreenPoint(nextZoom, w / 2, h / 2)
+  }
+
+  const pointerDistance = () => {
+    const pts = [...pointersRef.current.values()]
+    if (pts.length < 2) return 0
+    return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+  }
+
+  const pointerMidpoint = () => {
+    const pts = [...pointersRef.current.values()]
+    if (pts.length < 2) return { x: 0, y: 0 }
+    return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+  }
+
+  const beginPinchIfNeeded = () => {
+    if (pointersRef.current.size !== 2) return
+    const dist = pointerDistance()
+    if (dist < 8) return
+    // Cancelar cualquier trazo en curso: el pellizco no debe dibujar
+    drawing.current = false
+    draftRef.current = null
+    dragRef.current = null
+    panDragRef.current = null
+    const mid = pointerMidpoint()
+    pinchRef.current = {
+      dist0: dist,
+      zoom0: zoomRef.current || 1,
+      midX: mid.x,
+      midY: mid.y,
+      pan0: { ...panRef.current },
+    }
   }
 
   const applyMeasureToShape = (shape, toolId, a, b) => {
@@ -315,6 +392,16 @@ export default function EsquemaEditorModal({
     e.preventDefault()
     const c = canvasRef.current
     c.setPointerCapture?.(e.pointerId)
+    const screen = screenPosFromEvent(e)
+    pointersRef.current.set(e.pointerId, screen)
+
+    // Dos dedos → pellizco (zoom). No iniciar dibujo ni pan con el segundo puntero.
+    if (pointersRef.current.size >= 2) {
+      beginPinchIfNeeded()
+      return
+    }
+    if (pinchRef.current) return
+
     const p = posFromEvent(e)
     const currentTool = toolRef.current
     drawing.current = true
@@ -438,6 +525,31 @@ export default function EsquemaEditorModal({
   }
 
   const onPointerMove = (e) => {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, screenPosFromEvent(e))
+    }
+
+    // Pellizco: zoom anclado al punto medio; pan sigue el centro del gesto
+    if (pinchRef.current && pointersRef.current.size >= 2) {
+      e.preventDefault()
+      const distNow = pointerDistance()
+      if (distNow >= 8) {
+        const pinch = pinchRef.current
+        const mid = pointerMidpoint()
+        const z1 = Math.max(0.25, Math.min(4, pinch.zoom0 * (distNow / pinch.dist0)))
+        const wx = (pinch.midX - pinch.pan0.x) / pinch.zoom0
+        const wy = (pinch.midY - pinch.pan0.y) / pinch.zoom0
+        panRef.current = {
+          x: mid.x - wx * z1,
+          y: mid.y - wy * z1,
+        }
+        zoomRef.current = z1
+        setZoomPct(Math.round(z1 * 100))
+        setPanTick((n) => n + 1)
+      }
+      return
+    }
+
     if (!drawing.current) return
     e.preventDefault()
     const currentTool = toolRef.current
@@ -498,10 +610,23 @@ export default function EsquemaEditorModal({
   }
 
   const onPointerUp = (e) => {
+    pointersRef.current.delete(e.pointerId)
+    try { canvasRef.current.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+
+    // Fin de pellizco: al quedar menos de 2 punteros, liberar el gesto
+    if (pinchRef.current) {
+      e.preventDefault()
+      if (pointersRef.current.size < 2) {
+        pinchRef.current = null
+        drawing.current = false
+        draftRef.current = null
+      }
+      return
+    }
+
     if (!drawing.current) return
     e.preventDefault()
     drawing.current = false
-    try { canvasRef.current.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
     const currentTool = toolRef.current
     const p = posFromEvent(e)
 
@@ -890,12 +1015,6 @@ export default function EsquemaEditorModal({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            onWheel={(e) => {
-              if (!(e.ctrlKey || e.metaKey)) return
-              e.preventDefault()
-              const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
-              setZoomAroundCenter(zoomRef.current * factor)
-            }}
           />
           {editingTabla && selectedObj && (
             <TablaOverlay
@@ -918,7 +1037,7 @@ export default function EsquemaEditorModal({
           )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Zoom: botones −/+ o Ctrl/⌘ + rueda. Paneo independiente del zoom.
+          Zoom: rueda/scroll del mouse, pellizco con dos dedos (táctil) o botones −/+. Paneo con la herramienta de mano.
           Seleccionar → Mover/rotar (Alt/Shift = rotar). Dimensiones: ver barra superior.
         </div>
       </div>
