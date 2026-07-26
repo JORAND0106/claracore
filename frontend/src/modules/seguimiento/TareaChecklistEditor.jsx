@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import EsquemaEditorModal from './EsquemaEditorModal'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
 import { calcularAvanceTarea, normEstadoSubitem } from './tareaAvance'
