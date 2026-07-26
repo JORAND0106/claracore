@@ -27,11 +27,15 @@ from seguimiento_service import (
     create_acta,
     crear_compromiso_desde_idea,
     crear_tarea,
+    destinar_item,
+    eliminar_acta,
+    eliminar_item,
     generar_preview_pdf_acta,
     get_acta,
     get_item_detalle,
     list_actas,
     list_bandeja,
+    list_usuarios_contrato_enriquecidos,
     procesar_vencimientos_y_llamados,
     proximo_consecutivo,
     redaccion_asistida_clara,
@@ -80,6 +84,7 @@ class AsistenteBody(BaseModel):
     nombre: str = Field(..., min_length=1)
     cargo: Optional[str] = None
     entidad: Optional[str] = None
+    email: Optional[str] = None
     usuario_id: Optional[int] = None
     orden: Optional[int] = None
 
@@ -100,18 +105,19 @@ class ApartadoBody(BaseModel):
 class ActaCreateBody(BaseModel):
     fecha_reunion: str
     ubicacion: Optional[str] = None
-    orden_del_dia: Optional[str] = None
+    orden_del_dia: Optional[Any] = None  # texto legacy o checklist JSON
     elaborador_id: Optional[int] = None
     elaborador_nombre: Optional[str] = None
     asistentes: List[AsistenteBody] = Field(default_factory=list)
     ideas: List[IdeaBody] = Field(default_factory=list)
     apartados: List[ApartadoBody] = Field(default_factory=list)
+    estado: Optional[str] = None
 
 
 class ActaUpdateBody(BaseModel):
     fecha_reunion: Optional[str] = None
     ubicacion: Optional[str] = None
-    orden_del_dia: Optional[str] = None
+    orden_del_dia: Optional[Any] = None
     elaborador_id: Optional[int] = None
     elaborador_nombre: Optional[str] = None
     estado: Optional[str] = None
@@ -124,12 +130,19 @@ class IdeaTextoBody(BaseModel):
     texto: str = ""
 
 
+class AsignadoCompromisoBody(BaseModel):
+    asignado_a_id: int
+    asignado_a_nombre: Optional[str] = None
+
+
 class CompromisoCreateBody(BaseModel):
     solicitante_id: Optional[int] = None
     solicitante_nombre: Optional[str] = None
-    asignado_a_id: int
+    asignado_a_id: Optional[int] = None
     asignado_a_nombre: Optional[str] = None
+    asignados: Optional[List[AsignadoCompromisoBody]] = None
     fecha_vencimiento: str
+    hora_vencimiento: Optional[str] = None
     titulo: Optional[str] = None
     redaccion: Optional[str] = None
     descripcion: Optional[str] = None
@@ -139,21 +152,34 @@ class EstadoGestionBody(BaseModel):
     estado_gestion: str = Field(..., min_length=3)
 
 
+class DestinarBody(BaseModel):
+    destinatario_id: int
+    destinatario_nombre: Optional[str] = None
+    relacion_destinatario: str = Field(..., description="asignacion | referencia")
+    modo: Optional[str] = None
+
+
 class TareaCreateBody(BaseModel):
     titulo: str = Field(..., min_length=1)
     descripcion: Optional[str] = None
     fecha_vencimiento: Optional[str] = None
+    hora_vencimiento: Optional[str] = None
     estado_gestion: Optional[str] = "abierto"
     campos_libres: Optional[Dict[str, Any]] = None
     imagenes: Optional[List[Any]] = None
     asignado_a_id: Optional[int] = None
     asignado_a_nombre: Optional[str] = None
+    destinatario_id: Optional[int] = None
+    referido_a_id: Optional[int] = None
+    referido_a_nombre: Optional[str] = None
+    relacion_destinatario: Optional[str] = None
 
 
 class TareaUpdateBody(BaseModel):
     titulo: Optional[str] = None
     descripcion: Optional[str] = None
     fecha_vencimiento: Optional[str] = None
+    hora_vencimiento: Optional[str] = None
     estado_gestion: Optional[str] = None
     campos_libres: Optional[Dict[str, Any]] = None
     imagenes: Optional[List[Any]] = None
@@ -199,6 +225,7 @@ def route_bandeja(
     fecha_desde: Optional[str] = Query(None),
     fecha_hasta: Optional[str] = Query(None),
     origen: Optional[str] = Query(None),
+    incluir_cerrados: bool = Query(False),
     current_user=Depends(get_current_user),
 ):
     require_permiso_seguimiento(current_user, "ver")
@@ -214,6 +241,7 @@ def route_bandeja(
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         origen=origen,
+        incluir_cerrados=incluir_cerrados,
     )
 
 
@@ -255,6 +283,34 @@ def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depend
     require_permiso_seguimiento(current_user, "editar")
     try:
         return actualizar_estado_gestion(supabase, item_id, body.estado_gestion, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/items/{item_id}/destinar")
+def route_destinar_item(item_id: int, body: DestinarBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        row = destinar_item(
+            supabase,
+            item_id,
+            _uid(current_user),
+            current_user,
+            body.model_dump(),
+        )
+        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_item_destinar", str(item_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/items/{item_id}")
+def route_eliminar_item(item_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "eliminar")
+    try:
+        row = eliminar_item(supabase, item_id, current_user)
+        registrar_log(current_user, "ELIMINAR", "SEGUIMIENTO", "seguimiento_item", str(item_id), {})
+        return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -406,6 +462,13 @@ def route_cron_vencimientos(
 
 # ── Actas ────────────────────────────────────────────────────────────────────
 
+@router.get("/{contrato_id}/usuarios")
+def route_usuarios_contrato(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_usuarios_contrato_enriquecidos(supabase, contrato_id)
+
+
 @router.get("/{contrato_id}/actas")
 def route_list_actas(contrato_id: int, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "ver")
@@ -505,7 +568,20 @@ def route_crear_compromiso(
         row = crear_compromiso_desde_idea(
             supabase, contrato_id, acta_id, idea_id, body.model_dump(), _uid(current_user)
         )
-        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", str(row["id"]), {})
+        log_id = str(row.get("id") or (row.get("items") or [{}])[0].get("id") or idea_id)
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", log_id, {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/actas/{acta_id}")
+def route_eliminar_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "eliminar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = eliminar_acta(supabase, contrato_id, acta_id, current_user)
+        registrar_log(current_user, "ELIMINAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc

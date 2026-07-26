@@ -29,3 +29,12 @@ export function fmtFecha(iso) {
   if (!y || !m || !d) return s
   return `${d}/${m}/${y}`
 }
+
+export function fmtFechaHora(fecha, hora) {
+  const f = fmtFecha(fecha)
+  if (!hora) return f
+  return `${f} ${String(hora).slice(0, 5)}`
+}
+
+/** Estados seleccionables en el detalle (sin opción vacía «Todos»). */
+export const ESTADOS_GESTION = ESTADOS.filter((x) => x.value)

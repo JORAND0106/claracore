@@ -1,33 +1,55 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { nombreUser } from './UserSearchSelect'
 
 export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = [], onClose, onSubmit }) {
   const [form, setForm] = useState({
     solicitante_id: usuario?.id || '',
-    asignado_a_id: '',
     fecha_vencimiento: '',
+    hora_vencimiento: '',
     redaccion: textoIdea || '',
   })
+  const [asignadosIds, setAsignadosIds] = useState([])
+  const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
+  const filtrados = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    const base = usuarios.filter((u) => !asignadosIds.includes(Number(u.id)))
+    if (!s) return base.slice(0, 40)
+    return base.filter((u) => {
+      const n = nombreUser(u).toLowerCase()
+      return n.includes(s) || String(u.email || '').toLowerCase().includes(s)
+    }).slice(0, 40)
+  }, [usuarios, q, asignadosIds])
+
+  const asignados = usuarios.filter((u) => asignadosIds.includes(Number(u.id)))
+
+  const toggle = (id) => {
+    const n = Number(id)
+    setAsignadosIds((arr) => (arr.includes(n) ? arr.filter((x) => x !== n) : [...arr, n]))
+  }
+
   const guardar = async () => {
-    if (!form.asignado_a_id || !form.fecha_vencimiento || !form.redaccion.trim()) {
-      setError('Complete solicitante, asignado, vencimiento y redacción.')
+    if (!asignadosIds.length || !form.fecha_vencimiento || !form.redaccion.trim()) {
+      setError('Seleccione al menos un asignado, vencimiento y redacción.')
       return
     }
     setBusy(true)
     setError('')
     try {
-      const asig = usuarios.find((u) => String(u.id) === String(form.asignado_a_id))
       const sol = usuarios.find((u) => String(u.id) === String(form.solicitante_id)) || usuario
       await onSubmit({
         solicitante_id: Number(form.solicitante_id) || usuario?.id,
         solicitante_nombre: nombreUser(sol),
-        asignado_a_id: Number(form.asignado_a_id),
-        asignado_a_nombre: nombreUser(asig),
+        asignados: asignados.map((u) => ({
+          asignado_a_id: Number(u.id),
+          asignado_a_nombre: nombreUser(u),
+        })),
         fecha_vencimiento: form.fecha_vencimiento,
+        hora_vencimiento: form.hora_vencimiento || null,
         redaccion: form.redaccion.trim(),
         titulo: form.redaccion.trim().slice(0, 200),
         descripcion: form.redaccion.trim(),
@@ -54,8 +76,8 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(560px, 100%)', background: t.bgCard, border: `1px solid ${t.border}`,
-          borderRadius: 12, padding: 20, boxShadow: t.shadow,
+          width: 'min(620px, 100%)', background: t.bgCard, border: `1px solid ${t.border}`,
+          borderRadius: 12, padding: 20, boxShadow: t.shadow, maxHeight: '92vh', overflow: 'auto',
         }}
       >
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text, marginBottom: 12 }}>
@@ -69,17 +91,60 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
             ))}
           </select>
         </Field>
-        <Field t={t} label="A quién se asigna">
-          <select value={form.asignado_a_id} onChange={(e) => set('asignado_a_id', e.target.value)} style={inp(t)}>
-            <option value="">Seleccione…</option>
-            {usuarios.map((u) => (
-              <option key={u.id} value={u.id}>{nombreUser(u)}</option>
+        <Field t={t} label="A quién o a quiénes se asigna">
+          {asignados.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {asignados.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => toggle(u.id)}
+                  style={{
+                    border: `1px solid ${t.primary}`, borderRadius: 8, padding: '4px 8px',
+                    background: `${t.primary}18`, color: t.text, cursor: 'pointer', fontSize: 'var(--cc-xs)',
+                  }}
+                >
+                  {nombreUser(u)} ✕
+                </button>
+              ))}
+            </div>
+          )}
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar usuarios…"
+            style={{ ...inp(t), marginBottom: 6 }}
+          />
+          <div style={{
+            maxHeight: 160, overflow: 'auto', border: `1px solid ${t.border}`,
+            borderRadius: 8, background: t.bg || t.bgCard,
+          }}>
+            {filtrados.map((u) => (
+              <label
+                key={u.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+                  borderBottom: `1px solid ${t.border}`, cursor: 'pointer', fontSize: 'var(--cc-sm)', color: t.text,
+                }}
+              >
+                <input type="checkbox" checked={asignadosIds.includes(Number(u.id))} onChange={() => toggle(u.id)} />
+                <span>{nombreUser(u)}</span>
+                <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>{u.cargo_nombre || u.email || ''}</span>
+              </label>
             ))}
-          </select>
+            {filtrados.length === 0 && (
+              <div style={{ padding: 10, color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin coincidencias</div>
+            )}
+          </div>
         </Field>
-        <Field t={t} label="Fecha de vencimiento">
-          <input type="date" value={form.fecha_vencimiento} onChange={(e) => set('fecha_vencimiento', e.target.value)} style={inp(t)} />
-        </Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <Field t={t} label="Fecha de vencimiento">
+            <input type="date" value={form.fecha_vencimiento} onChange={(e) => set('fecha_vencimiento', e.target.value)} style={inp(t)} />
+          </Field>
+          <Field t={t} label="Hora (opcional)">
+            <input type="time" value={form.hora_vencimiento} onChange={(e) => set('hora_vencimiento', e.target.value)} style={inp(t)} />
+          </Field>
+        </div>
         <Field t={t} label="Redacción del compromiso">
           <textarea rows={5} value={form.redaccion} onChange={(e) => set('redaccion', e.target.value)} style={inp(t)} />
         </Field>
@@ -102,10 +167,6 @@ function Field({ t, label, children }) {
       {children}
     </div>
   )
-}
-function nombreUser(u) {
-  if (!u) return ''
-  return `${u.nombre || ''} ${u.apellidos || ''}`.trim() || u.email || `#${u.id}`
 }
 function inp(t) {
   return {

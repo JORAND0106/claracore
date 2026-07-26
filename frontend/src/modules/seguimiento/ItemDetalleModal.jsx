@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
-import { estrellasTexto } from './PriorityStars'
-import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
+import UserSearchSelect, { nombreUser } from './UserSearchSelect'
+import VencimientoIcon from './VencimientoIcon'
+import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { calcularNivelVencimiento, tipoLaborLabel } from './vencimientoLevels'
 
-export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, onClose, onChanged }) {
+export default function ItemDetalleModal({
+  t, api, itemId, usuario, usuarios = [], permisos, onClose, onChanged,
+}) {
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -11,12 +15,16 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
   const [justForm, setJustForm] = useState({ motivo: '', nueva_fecha_vencimiento: '' })
   const [pdfUrl, setPdfUrl] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [estadoSel, setEstadoSel] = useState('')
+  const [destCtx, setDestCtx] = useState(null) // { user, modoPendiente }
+  const [destPick, setDestPick] = useState(null)
 
   const reload = async () => {
     setLoading(true)
     try {
       const d = await api.getItem(itemId)
       setItem(d)
+      setEstadoSel('')
       if (d.origen === 'compromiso' && d.acta_id) {
         try {
           const blob = await api.pdfActaBlob(d.acta_id)
@@ -47,9 +55,41 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
 
   const origen = ORIGEN_COLOR[item.origen] || ORIGEN_COLOR.tarea
   const esCompromiso = item.origen === 'compromiso'
-  const esDev = esDesarrolladorUsuario(usuario)
+  const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
   const soyResponsable = esDev || Number(item.asignado_a_id) === Number(usuario?.id)
   const soySolicitante = esDev || Number(item.solicitante_id) === Number(usuario?.id)
+  const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
+  const nivel = calcularNivelVencimiento({
+    fechaVencimiento: item.fecha_vencimiento,
+    fechaCreacion: item.created_at || item.fecha_vencimiento_original,
+  })
+  const imagenes = Array.isArray(item.imagenes) ? item.imagenes : []
+
+  const abrirImagen = (im) => {
+    const url = im.data_uri || im.url || im.blob_url
+    if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  const confirmarDestino = async (modo) => {
+    if (!destPick) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.destinarItem(item.id, {
+        destinatario_id: destPick.id,
+        destinatario_nombre: nombreUser(destPick),
+        relacion_destinatario: modo,
+      })
+      setDestCtx(null)
+      setDestPick(null)
+      await reload()
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'No se pudo destinar')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <Overlay t={t} onClose={onClose}>
@@ -58,19 +98,16 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
         paddingLeft: 12, marginBottom: 12,
       }}>
         <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: origen.border }}>{origen.label}</div>
-        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>
-          {estrellasTexto(item.campos_libres?.prioridad) ? (
-            <span style={{ color: t.warning || '#D97706', marginRight: 8, fontSize: 'var(--cc-body)' }}>
-              {estrellasTexto(item.campos_libres?.prioridad)}
-            </span>
-          ) : null}
-          {item.titulo}
+        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <VencimientoIcon nivel={nivel} showLabel t={t} />
+          <span>#{item.consecutivo ?? item.id} · {item.titulo}</span>
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          {item.asignado_a_nombre || '—'} · vence {fmtFecha(item.fecha_vencimiento)} · {item.estado_gestion}
-          {item.campos_libres?.destinatario_tentativo_nombre
-            ? ` · tentativo: ${item.campos_libres.destinatario_tentativo_nombre}`
-            : ''}
+          {item.asignado_a_nombre || '—'}
+          {item.referido_a_nombre ? ` · ref: ${item.referido_a_nombre}` : ''}
+          {' · '}vence {fmtFechaHora(item.fecha_vencimiento, item.hora_vencimiento)}
+          {' · '}{item.estado_gestion}
+          {' · '}{tipoLaborLabel(item, usuario?.id)}
         </div>
       </div>
 
@@ -80,25 +117,123 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
         {item.descripcion || 'Sin descripción'}
       </p>
 
+      {imagenes.length > 0 && (
+        <section style={{ marginTop: 12 }}>
+          <h4 style={h4(t)}>Imágenes adjuntas</h4>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {imagenes.map((im, i) => {
+              const src = im.data_uri || im.url
+              if (!src) {
+                return <span key={i} style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{im.nombre || `imagen ${i + 1}`}</span>
+              }
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => abrirImagen(im)}
+                  title="Abrir en pestaña nueva"
+                  style={{
+                    padding: 0, border: `1px solid ${t.border}`, borderRadius: 6,
+                    background: 'transparent', cursor: 'pointer', overflow: 'hidden',
+                  }}
+                >
+                  <img src={src} alt={im.nombre || ''} style={{ display: 'block', width: 96, height: 72, objectFit: 'cover' }} />
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       {permisos?.editar && (
-        <div style={{ margin: '10px 0' }}>
+        <div style={{ margin: '14px 0' }}>
           <label style={lbl(t)}>Estado de gestión</label>
-          <select
-            value={item.estado_gestion}
-            onChange={async (e) => {
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+            {ESTADOS_GESTION.map((x) => (
+              <label
+                key={x.value}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '6px 10px', borderRadius: 8, cursor: 'pointer',
+                  border: `1px solid ${estadoSel === x.value ? t.primary : t.border}`,
+                  background: estadoSel === x.value ? `${t.primary}18` : 'transparent',
+                  fontSize: 'var(--cc-sm)', color: t.text,
+                }}
+              >
+                <input
+                  type="radio"
+                  name={`estado-${item.id}`}
+                  value={x.value}
+                  checked={estadoSel === x.value}
+                  onChange={() => setEstadoSel(x.value)}
+                />
+                {x.label}
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={busy || !estadoSel}
+            style={{
+              ...primary(t),
+              opacity: estadoSel ? 1 : 0.45,
+              cursor: estadoSel ? 'pointer' : 'not-allowed',
+            }}
+            onClick={async () => {
+              setBusy(true)
               try {
-                await api.patchEstado(item.id, e.target.value)
+                await api.patchEstado(item.id, estadoSel)
                 await reload()
                 onChanged?.()
               } catch (err) { setError(err.message) }
+              finally { setBusy(false) }
             }}
-            style={inp(t)}
           >
-            {ESTADOS.filter((x) => x.value).map((x) => (
-              <option key={x.value} value={x.value}>{x.label}</option>
-            ))}
-          </select>
+            Guardar estado
+          </button>
         </div>
+      )}
+
+      {(soyCreador || esDev) && permisos?.editar && (
+        <section style={{ marginTop: 12 }}>
+          <h4 style={h4(t)}>Asignar o enviar referencia</h4>
+          <UserSearchSelect
+            t={t}
+            usuarios={usuarios}
+            mode="strict"
+            placeholder="Buscar destinatario…"
+            style={inp(t)}
+            onSelect={(u) => {
+              setDestPick(u)
+              if (u) setDestCtx({ user: u })
+            }}
+          />
+          {destCtx?.user && (
+            <div style={{
+              marginTop: 10, padding: 12, borderRadius: 8,
+              border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+              fontSize: 'var(--cc-sm)', color: t.text,
+            }}>
+              <div style={{ marginBottom: 8 }}>
+                ¿Cómo desea enviar «{item.titulo}» a {nombreUser(destCtx.user)}?
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button type="button" disabled={busy} style={primary(t)} onClick={() => confirmarDestino('asignacion')}>
+                  Asignación formal
+                </button>
+                <button type="button" disabled={busy} style={ghost(t)} onClick={() => confirmarDestino('referencia')}>
+                  Solo referencia
+                </button>
+                <button type="button" style={ghost(t)} onClick={() => { setDestCtx(null); setDestPick(null) }}>
+                  Cancelar
+                </button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                En ambos casos el ítem permanece visible en su bandeja y aparece en la del destinatario.
+              </div>
+            </div>
+          )}
+        </section>
       )}
 
       {esCompromiso && (
@@ -198,6 +333,7 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
                 await api.solicitarJustificacion(item.id, justForm)
                 setJustForm({ motivo: '', nueva_fecha_vencimiento: '' })
                 await reload()
+                onChanged?.()
               } catch (e) { setError(e.message) }
             }}
           >
@@ -228,23 +364,24 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
         </section>
       )}
 
-      {!esCompromiso && Array.isArray(item.imagenes) && item.imagenes.length > 0 && (
-        <section style={{ marginTop: 16 }}>
-          <h4 style={h4(t)}>Imágenes</h4>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {item.imagenes.map((im, i) => (
-              im.data_uri ? (
-                <img key={i} src={im.data_uri} alt="" style={{ maxWidth: 120, maxHeight: 90, borderRadius: 6, border: `1px solid ${t.border}` }} />
-              ) : (
-                <span key={i} style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{im.nombre}</span>
-              )
-            ))}
-          </div>
-        </section>
-      )}
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-        <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
+        {esDev && (
+          <button
+            type="button"
+            style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }}
+            onClick={async () => {
+              if (!window.confirm('¿Eliminar definitivamente este ítem? Esta acción no se puede deshacer.')) return
+              try {
+                await api.deleteItem(item.id)
+                onChanged?.()
+                onClose?.()
+              } catch (e) { setError(e.message) }
+            }}
+          >
+            Eliminar definitivamente
+          </button>
+        )}
+        <button type="button" onClick={onClose} style={{ ...ghost(t), marginLeft: 'auto' }}>Cerrar</button>
       </div>
     </Overlay>
   )

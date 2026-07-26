@@ -46,18 +46,23 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     const cid = contratoId ?? usuario?.contrato_id
     if (!cid || !token) return
     try {
-      const sig = apiFetchSignal(20000)
-      // Reutiliza endpoint legacy de actas RPO para listar usuarios del contrato
-      const res = await fetch(`${API_BASE}/actas/${cid}/usuarios-contrato`, {
-        headers: { Authorization: `Bearer ${token}` },
-        ...(sig ? { signal: sig } : {}),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setUsuariosContrato(Array.isArray(data) ? data : [])
-      }
-    } catch { /* ignore */ }
-  }, [contratoId, usuario?.contrato_id, token])
+      const data = await api.listUsuarios()
+      setUsuariosContrato(Array.isArray(data) ? data : [])
+    } catch {
+      // Fallback legacy
+      try {
+        const sig = apiFetchSignal(20000)
+        const res = await fetch(`${API_BASE}/actas/${cid}/usuarios-contrato`, {
+          headers: { Authorization: `Bearer ${token}` },
+          ...(sig ? { signal: sig } : {}),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setUsuariosContrato(Array.isArray(data) ? data : [])
+        }
+      } catch { /* ignore */ }
+    }
+  }, [api, contratoId, usuario?.contrato_id, token])
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -101,12 +106,25 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         usuariosContrato={usuariosContrato}
         actaId={editingActaId}
         permisos={permisos}
-        onCancel={() => { setCreating(false); setEditingActaId(null) }}
-        onSaved={async () => {
-          setCreating(false)
-          setEditingActaId(null)
+        onCancel={() => { setCreating(false); setEditingActaId(null); loadActas() }}
+        onSaved={async (row, meta) => {
+          if (meta?.deleted) {
+            setCreating(false)
+            setEditingActaId(null)
+            await loadActas()
+            setTab('actas')
+            return
+          }
+          if (row?.id) {
+            setCreating(false)
+            setEditingActaId(row.id)
+          }
           await loadActas()
-          setTab('actas')
+          if (!meta?.stay) {
+            setCreating(false)
+            setEditingActaId(null)
+            setTab('actas')
+          }
         }}
       />
     )
