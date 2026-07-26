@@ -57,7 +57,6 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         hora: it.hora || null,
         notas: it.notas || '',
         enlace: it.enlace || '',
-        tabla: it.tabla || null,
         comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
       }))
       const payload = {

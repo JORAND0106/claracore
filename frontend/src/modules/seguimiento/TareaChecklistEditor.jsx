@@ -14,32 +14,6 @@ const ESTADO_SHORT = {
   cancelado: 'Cancel.',
 }
 
-function emptyTabla(rows = 2, cols = 3) {
-  const r = Math.max(1, Math.min(30, Number(rows) || 2))
-  const c = Math.max(1, Math.min(20, Number(cols) || 3))
-  return {
-    rows: r,
-    cols: c,
-    cells: Array.from({ length: r }, () => Array.from({ length: c }, () => '')),
-  }
-}
-
-function normalizeTabla(raw) {
-  if (!raw || typeof raw !== 'object') return null
-  const rows = Math.max(1, Math.min(30, Number(raw.rows) || (raw.cells?.length) || 0))
-  const cols = Math.max(1, Math.min(20, Number(raw.cols) || (raw.cells?.[0]?.length) || 0))
-  if (!rows || !cols) return null
-  const cells = []
-  for (let i = 0; i < rows; i += 1) {
-    const row = []
-    for (let j = 0; j < cols; j += 1) {
-      row.push(String(raw.cells?.[i]?.[j] ?? ''))
-    }
-    cells.push(row)
-  }
-  return { rows, cols, cells }
-}
-
 function normalizeComentarios(raw) {
   if (!Array.isArray(raw)) return []
   return raw
@@ -69,7 +43,6 @@ export function newChecklistItem(partial = {}) {
     esquema: partial.esquema || null,
     notas: partial.notas || '',
     enlace: partial.enlace || '',
-    tabla: normalizeTabla(partial.tabla) || null,
     comentarios: normalizeComentarios(partial.comentarios),
     orden: partial.orden ?? 0,
   }
@@ -90,7 +63,6 @@ export function seedChecklistFromItem(item) {
       esquema: it.esquema || null,
       notas: it.notas || it.comentario || '',
       enlace: it.enlace || it.link || '',
-      tabla: it.tabla || null,
       comentarios: it.comentarios || [],
       orden: it.orden ?? i,
     }))
@@ -162,29 +134,6 @@ export default function TareaChecklistEditor({
       })
     }
     reader.readAsDataURL(file)
-  }
-
-  const setTablaCell = (idx, r, c, text) => {
-    const it = items[idx]
-    const tabla = normalizeTabla(it.tabla) || emptyTabla()
-    const cells = tabla.cells.map((row, ri) => row.map((cell, ci) => (ri === r && ci === c ? text : cell)))
-    setAt(idx, { tabla: { ...tabla, cells } })
-  }
-
-  const resizeTabla = (idx, dRows, dCols) => {
-    const it = items[idx]
-    const base = normalizeTabla(it.tabla) || emptyTabla()
-    const rows = Math.max(1, Math.min(30, base.rows + dRows))
-    const cols = Math.max(1, Math.min(20, base.cols + dCols))
-    const cells = []
-    for (let i = 0; i < rows; i += 1) {
-      const row = []
-      for (let j = 0; j < cols; j += 1) {
-        row.push(base.cells?.[i]?.[j] ?? '')
-      }
-      cells.push(row)
-    }
-    setAt(idx, { tabla: { rows, cols, cells } })
   }
 
   const addComentario = (idx) => {
@@ -263,7 +212,6 @@ export default function TareaChecklistEditor({
         const srcImg = imagenSrc(it.imagen)
         const srcEsquema = imagenSrc(it.esquema)
         const est = normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
-        const tabla = normalizeTabla(it.tabla)
         const comentarios = normalizeComentarios(it.comentarios)
         return (
           <div
@@ -333,7 +281,7 @@ export default function TareaChecklistEditor({
                   )}
                 </div>
 
-                {/* Fecha/hora + acciones compactas (imagen/esquema/reprogramar) */}
+                {/* Fecha/hora (+ reprogramación en la misma línea) y acciones compactas */}
                 <div style={{
                   display: 'flex',
                   flexWrap: 'wrap',
@@ -361,6 +309,35 @@ export default function TareaChecklistEditor({
                     />
                   </label>
 
+                  {reprogIdx === idx && !disabled && (
+                    <>
+                      <label style={{ ...lblInline(t), gap: 4 }}>
+                        <span>Reprog.</span>
+                        <input
+                          type="date"
+                          value={reprogFecha}
+                          onChange={(e) => setReprogFecha(e.target.value)}
+                          style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
+                        />
+                      </label>
+                      <input
+                        type="time"
+                        value={reprogHora}
+                        onChange={(e) => setReprogHora(e.target.value)}
+                        style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
+                      />
+                      <button
+                        type="button"
+                        disabled={!reprogFecha}
+                        style={{ ...chip(t, true), opacity: reprogFecha ? 1 : 0.45 }}
+                        onClick={() => aplicarReprogramacion(idx)}
+                      >
+                        Aplicar
+                      </button>
+                      <button type="button" style={chip(t)} onClick={() => setReprogIdx(null)}>Cancelar</button>
+                    </>
+                  )}
+
                   <div style={{
                     marginLeft: 'auto', display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center',
                   }}>
@@ -384,7 +361,7 @@ export default function TareaChecklistEditor({
                     )}
                     <button
                       type="button"
-                      style={chip(t)}
+                      style={{ ...chip(t), opacity: srcImg ? 1 : 0.4 }}
                       disabled={!srcImg}
                       title={srcImg ? 'Abrir imagen de soporte' : 'Sin imagen'}
                       onClick={() => {
@@ -400,17 +377,17 @@ export default function TareaChecklistEditor({
                         Esquema
                       </button>
                     )}
-                    {srcEsquema && (
-                      <button
-                        type="button"
-                        style={chip(t)}
-                        onClick={() => {
-                          if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
-                        }}
-                      >
-                        Ver esquema
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      style={{ ...chip(t), opacity: srcEsquema ? 1 : 0.4 }}
+                      disabled={!srcEsquema}
+                      title={srcEsquema ? 'Abrir esquema' : 'Sin esquema'}
+                      onClick={() => {
+                        if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
+                      }}
+                    >
+                      Ver esquema
+                    </button>
                     {!disabled && (
                       <button
                         type="button"
@@ -432,115 +409,6 @@ export default function TareaChecklistEditor({
                       <button type="button" style={chip(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
                     )}
                   </div>
-                </div>
-
-                {reprogIdx === idx && !disabled && (
-                  <div style={{
-                    marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    padding: '6px 8px', borderRadius: 8, border: `1px solid ${t.border}`,
-                    background: t.bgCard || '#fff',
-                  }}>
-                    <span style={{ fontSize: 11, color: t.textMuted }}>Nueva fecha</span>
-                    <input
-                      type="date"
-                      value={reprogFecha}
-                      onChange={(e) => setReprogFecha(e.target.value)}
-                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '4px 6px', fontSize: 12 }}
-                    />
-                    <input
-                      type="time"
-                      value={reprogHora}
-                      onChange={(e) => setReprogHora(e.target.value)}
-                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '4px 6px', fontSize: 12 }}
-                    />
-                    <button
-                      type="button"
-                      disabled={!reprogFecha}
-                      style={{ ...chip(t, true), opacity: reprogFecha ? 1 : 0.45 }}
-                      onClick={() => aplicarReprogramacion(idx)}
-                    >
-                      Aplicar
-                    </button>
-                    <button type="button" style={chip(t)} onClick={() => setReprogIdx(null)}>Cancelar</button>
-                  </div>
-                )}
-
-                {(srcImg || srcEsquema) && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-                    {srcImg && (
-                      <button type="button" onClick={() => openImageInNewTab(it.imagen)} style={thumbBtn(t)} title="Ver imagen">
-                        <img src={srcImg} alt="soporte" style={thumbImg} />
-                        <span style={thumbCap(t)}>Soporte</span>
-                      </button>
-                    )}
-                    {srcEsquema && (
-                      <button type="button" onClick={() => openImageInNewTab(it.esquema)} style={thumbBtn(t)} title="Ver esquema">
-                        <img src={srcEsquema} alt="esquema" style={{ ...thumbImg, objectFit: 'contain', background: '#fff' }} />
-                        <span style={thumbCap(t)}>Esquema</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Tabla editable */}
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
-                    <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>Tabla de datos</span>
-                    {!disabled && !tabla && (
-                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { tabla: emptyTabla(2, 3) })}>
-                        + Insertar tabla
-                      </button>
-                    )}
-                    {!disabled && tabla && (
-                      <>
-                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 1, 0)}>+ Fila</button>
-                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, -1, 0)} disabled={tabla.rows <= 1}>− Fila</button>
-                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 0, 1)}>+ Col</button>
-                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 0, -1)} disabled={tabla.cols <= 1}>− Col</button>
-                        <button type="button" style={chip(t)} onClick={() => setAt(idx, { tabla: null })}>Quitar tabla</button>
-                      </>
-                    )}
-                  </div>
-                  {tabla && (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{
-                        borderCollapse: 'collapse', width: '100%', minWidth: tabla.cols * 80,
-                        fontSize: 'var(--cc-sm)',
-                      }}>
-                        <tbody>
-                          {tabla.cells.map((row, ri) => (
-                            <tr key={`r${ri}`}>
-                              {row.map((cell, ci) => (
-                                <td
-                                  key={`c${ci}`}
-                                  style={{
-                                    border: `1px solid ${t.border}`,
-                                    padding: 0,
-                                    background: t.bgCard || '#fff',
-                                    minWidth: 72,
-                                  }}
-                                >
-                                  <textarea
-                                    disabled={disabled}
-                                    rows={1}
-                                    value={cell}
-                                    onChange={(e) => setTablaCell(idx, ri, ci, e.target.value)}
-                                    style={{
-                                      width: '100%', boxSizing: 'border-box', border: 'none',
-                                      resize: 'vertical', minHeight: 32, padding: '6px 8px',
-                                      fontSize: 'var(--cc-sm)', background: 'transparent',
-                                      color: t.text, fontFamily: 'inherit',
-                                    }}
-                                  />
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
                 </div>
 
                 <div style={{ marginTop: 10 }}>
@@ -709,14 +577,4 @@ function primary(t) {
     border: 'none', borderRadius: 8, padding: '8px 12px',
     cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
   }
-}
-const thumbImg = { display: 'block', width: 112, height: 72, objectFit: 'cover' }
-function thumbBtn(t) {
-  return {
-    padding: 0, border: `1px solid ${t.border}`, borderRadius: 6,
-    background: 'transparent', cursor: 'pointer', overflow: 'hidden', textAlign: 'left',
-  }
-}
-function thumbCap(t) {
-  return { display: 'block', fontSize: 10, padding: '2px 6px', color: t.textMuted }
 }
