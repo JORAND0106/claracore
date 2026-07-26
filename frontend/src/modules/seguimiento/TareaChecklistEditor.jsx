@@ -136,22 +136,32 @@ export default function TareaChecklistEditor({
                 />
 
                 <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  display: 'flex',
+                  flexWrap: 'wrap',
                   gap: 8,
                   marginTop: 8,
+                  alignItems: 'center',
                 }}>
-                  <div>
-                    <label style={lbl(t)}>Fecha vencimiento</label>
-                    <input type="date" disabled={disabled} value={it.fecha || ''} onChange={(e) => setAt(idx, { fecha: e.target.value })} style={inp(t)} />
-                  </div>
-                  <div>
-                    <label style={lbl(t)}>Hora</label>
-                    <input type="time" disabled={disabled} value={it.hora || ''} onChange={(e) => setAt(idx, { hora: e.target.value })} style={inp(t)} />
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, alignItems: 'center' }}>
+                  <label style={{ ...lblInline(t), gap: 4 }}>
+                    <span>Fecha</span>
+                    <input
+                      type="date"
+                      disabled={disabled}
+                      value={it.fecha || ''}
+                      onChange={(e) => setAt(idx, { fecha: e.target.value })}
+                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '6px 8px' }}
+                    />
+                  </label>
+                  <label style={{ ...lblInline(t), gap: 4 }}>
+                    <span>Hora</span>
+                    <input
+                      type="time"
+                      disabled={disabled}
+                      value={it.hora || ''}
+                      onChange={(e) => setAt(idx, { hora: e.target.value })}
+                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '6px 8px' }}
+                    />
+                  </label>
                   {!disabled && (
                     <>
                       <input
@@ -165,14 +175,14 @@ export default function TareaChecklistEditor({
                           e.target.value = ''
                         }}
                       />
-                      <button type="button" style={ghost(t)} onClick={() => fileRefs.current[it.id]?.click()}>
+                      <button type="button" style={ghostCompact(t)} onClick={() => fileRefs.current[it.id]?.click()}>
                         {srcImg ? 'Cambiar imagen' : 'Cargar imagen'}
                       </button>
                     </>
                   )}
                   <button
                     type="button"
-                    style={ghost(t)}
+                    style={ghostCompact(t)}
                     disabled={!srcImg}
                     title={srcImg ? 'Abrir imagen de soporte' : 'Sin imagen de soporte'}
                     onClick={() => {
@@ -184,14 +194,14 @@ export default function TareaChecklistEditor({
                     Ver imagen
                   </button>
                   {!disabled && (
-                    <button type="button" style={primary(t)} onClick={() => setEsquemaIdx(idx)}>
+                    <button type="button" style={primaryCompact(t)} onClick={() => setEsquemaIdx(idx)}>
                       Crear esquema
                     </button>
                   )}
                   {srcEsquema && (
                     <button
                       type="button"
-                      style={ghost(t)}
+                      style={ghostCompact(t)}
                       onClick={() => {
                         if (!openImageInNewTab(it.esquema)) {
                           window.alert('No se pudo abrir el esquema.')
@@ -202,10 +212,10 @@ export default function TareaChecklistEditor({
                     </button>
                   )}
                   {!disabled && srcImg && (
-                    <button type="button" style={ghost(t)} onClick={() => setAt(idx, { imagen: null })}>Quitar imagen</button>
+                    <button type="button" style={ghostCompact(t)} onClick={() => setAt(idx, { imagen: null })}>Quitar imagen</button>
                   )}
                   {!disabled && srcEsquema && (
-                    <button type="button" style={ghost(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
+                    <button type="button" style={ghostCompact(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
                   )}
                 </div>
 
@@ -301,6 +311,12 @@ export default function TareaChecklistEditor({
 function lbl(t) {
   return { display: 'block', fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600, marginBottom: 4 }
 }
+function lblInline(t) {
+  return {
+    display: 'inline-flex', alignItems: 'center',
+    fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600, margin: 0,
+  }
+}
 function inp(t) {
   return {
     width: '100%', boxSizing: 'border-box', fontSize: 'var(--cc-input)',
@@ -314,11 +330,17 @@ function ghost(t) {
     cursor: 'pointer', background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)',
   }
 }
+function ghostCompact(t) {
+  return { ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', whiteSpace: 'nowrap' }
+}
 function primary(t) {
   return {
     border: 'none', borderRadius: 8, padding: '8px 12px',
     cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
   }
+}
+function primaryCompact(t) {
+  return { ...primary(t), padding: '6px 10px', fontSize: 'var(--cc-xs)', whiteSpace: 'nowrap' }
 }
 const thumbImg = { display: 'block', width: 112, height: 72, objectFit: 'cover' }
 function thumbBtn(t) {
