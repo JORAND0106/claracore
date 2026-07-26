@@ -4,6 +4,56 @@ import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
 import { calcularAvanceTarea, normEstadoSubitem } from './tareaAvance'
 
+const ESTADO_SHORT = {
+  abierto: 'Abierto',
+  en_progreso: 'Progreso',
+  parcial: 'Parcial',
+  reprogramado: 'Reprog.',
+  cumplido: 'Cumplido',
+  vencido: 'Vencido',
+  cancelado: 'Cancel.',
+}
+
+function emptyTabla(rows = 2, cols = 3) {
+  const r = Math.max(1, Math.min(30, Number(rows) || 2))
+  const c = Math.max(1, Math.min(20, Number(cols) || 3))
+  return {
+    rows: r,
+    cols: c,
+    cells: Array.from({ length: r }, () => Array.from({ length: c }, () => '')),
+  }
+}
+
+function normalizeTabla(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const rows = Math.max(1, Math.min(30, Number(raw.rows) || (raw.cells?.length) || 0))
+  const cols = Math.max(1, Math.min(20, Number(raw.cols) || (raw.cells?.[0]?.length) || 0))
+  if (!rows || !cols) return null
+  const cells = []
+  for (let i = 0; i < rows; i += 1) {
+    const row = []
+    for (let j = 0; j < cols; j += 1) {
+      row.push(String(raw.cells?.[i]?.[j] ?? ''))
+    }
+    cells.push(row)
+  }
+  return { rows, cols, cells }
+}
+
+function normalizeComentarios(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((c) => c && typeof c === 'object')
+    .map((c) => ({
+      id: String(c.id || `cm${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`),
+      mensaje: String(c.mensaje || c.texto || '').slice(0, 4000),
+      autor_nombre: String(c.autor_nombre || c.autor || '').slice(0, 200),
+      autor_id: c.autor_id != null ? Number(c.autor_id) : null,
+      created_at: c.created_at || new Date().toISOString(),
+    }))
+    .filter((c) => c.mensaje.trim())
+}
+
 /** Editor de checklist: único contenedor de contenido de la tarea personal. */
 export function newChecklistItem(partial = {}) {
   const id = partial.id || `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -19,6 +69,8 @@ export function newChecklistItem(partial = {}) {
     esquema: partial.esquema || null,
     notas: partial.notas || '',
     enlace: partial.enlace || '',
+    tabla: normalizeTabla(partial.tabla) || null,
+    comentarios: normalizeComentarios(partial.comentarios),
     orden: partial.orden ?? 0,
   }
 }
@@ -38,10 +90,11 @@ export function seedChecklistFromItem(item) {
       esquema: it.esquema || null,
       notas: it.notas || it.comentario || '',
       enlace: it.enlace || it.link || '',
+      tabla: it.tabla || null,
+      comentarios: it.comentarios || [],
       orden: it.orden ?? i,
     }))
   }
-  // Migración suave: descripción legacy → un sub-ítem (solo si existía)
   if ((item?.descripcion || '').trim()) {
     return [newChecklistItem({
       texto: item.descripcion,
@@ -58,11 +111,15 @@ export default function TareaChecklistEditor({
   value = [],
   onChange,
   disabled = false,
+  usuario = null,
 }) {
-  // Controlado: no inventar ítems sintéticos en cada render (rompe el “agregar”)
   const items = Array.isArray(value) ? value : []
   const fileRefs = useRef({})
   const [esquemaIdx, setEsquemaIdx] = useState(null)
+  const [reprogIdx, setReprogIdx] = useState(null)
+  const [reprogFecha, setReprogFecha] = useState('')
+  const [reprogHora, setReprogHora] = useState('')
+  const [draftComments, setDraftComments] = useState({})
   const avance = calcularAvanceTarea(items)
 
   const setAt = (idx, patch) => {
@@ -105,6 +162,62 @@ export default function TareaChecklistEditor({
       })
     }
     reader.readAsDataURL(file)
+  }
+
+  const setTablaCell = (idx, r, c, text) => {
+    const it = items[idx]
+    const tabla = normalizeTabla(it.tabla) || emptyTabla()
+    const cells = tabla.cells.map((row, ri) => row.map((cell, ci) => (ri === r && ci === c ? text : cell)))
+    setAt(idx, { tabla: { ...tabla, cells } })
+  }
+
+  const resizeTabla = (idx, dRows, dCols) => {
+    const it = items[idx]
+    const base = normalizeTabla(it.tabla) || emptyTabla()
+    const rows = Math.max(1, Math.min(30, base.rows + dRows))
+    const cols = Math.max(1, Math.min(20, base.cols + dCols))
+    const cells = []
+    for (let i = 0; i < rows; i += 1) {
+      const row = []
+      for (let j = 0; j < cols; j += 1) {
+        row.push(base.cells?.[i]?.[j] ?? '')
+      }
+      cells.push(row)
+    }
+    setAt(idx, { tabla: { rows, cols, cells } })
+  }
+
+  const addComentario = (idx) => {
+    const msg = String(draftComments[idx] || '').trim()
+    if (!msg) return
+    const it = items[idx]
+    const prev = normalizeComentarios(it.comentarios)
+    const entry = {
+      id: `cm${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      mensaje: msg.slice(0, 4000),
+      autor_nombre: usuario?.nombre || usuario?.name || usuario?.email || 'Usuario',
+      autor_id: usuario?.id != null ? Number(usuario.id) : null,
+      created_at: new Date().toISOString(),
+    }
+    setAt(idx, { comentarios: [...prev, entry] })
+    setDraftComments((d) => ({ ...d, [idx]: '' }))
+  }
+
+  const removeComentario = (idx, commentId) => {
+    const it = items[idx]
+    setAt(idx, { comentarios: normalizeComentarios(it.comentarios).filter((c) => c.id !== commentId) })
+  }
+
+  const aplicarReprogramacion = (idx) => {
+    if (!reprogFecha) return
+    setAt(idx, {
+      fecha: reprogFecha,
+      hora: reprogHora || '',
+      estado_gestion: 'reprogramado',
+    })
+    setReprogIdx(null)
+    setReprogFecha('')
+    setReprogHora('')
   }
 
   return (
@@ -150,6 +263,8 @@ export default function TareaChecklistEditor({
         const srcImg = imagenSrc(it.imagen)
         const srcEsquema = imagenSrc(it.esquema)
         const est = normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
+        const tabla = normalizeTabla(it.tabla)
+        const comentarios = normalizeComentarios(it.comentarios)
         return (
           <div
             key={it.id}
@@ -160,9 +275,12 @@ export default function TareaChecklistEditor({
               background: t.bg || `${t.primary}06`,
             }}
           >
-            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                {/* Título + estado radio compacto en la misma línea */}
+                <div style={{
+                  display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8,
+                }}>
                   <input
                     disabled={disabled}
                     value={it.texto}
@@ -170,32 +288,56 @@ export default function TareaChecklistEditor({
                     placeholder={`Título del sub-ítem ${idx + 1}`}
                     style={{
                       ...inp(t),
-                      flex: '1 1 220px',
+                      flex: '1 1 180px',
+                      minWidth: 140,
                       fontWeight: 600,
                       textDecoration: est === 'cumplido' ? 'line-through' : 'none',
                       opacity: est === 'cumplido' ? 0.75 : 1,
                     }}
                   />
-                  <label style={{ ...lblInline(t), gap: 4 }}>
-                    <span>Estado</span>
-                    <select
-                      disabled={disabled}
-                      value={est}
-                      onChange={(e) => setAt(idx, { estado_gestion: e.target.value })}
-                      style={{ ...inp(t), width: 'auto', minWidth: 140, padding: '6px 8px' }}
-                    >
-                      {ESTADOS_GESTION.map((x) => (
-                        <option key={x.value} value={x.value}>{x.label}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <div
+                    role="radiogroup"
+                    aria-label="Estado de gestión"
+                    style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
+                  >
+                    {ESTADOS_GESTION.map((x) => {
+                      const active = est === x.value
+                      return (
+                        <button
+                          key={x.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          disabled={disabled}
+                          title={x.label}
+                          onClick={() => setAt(idx, { estado_gestion: x.value })}
+                          style={{
+                            border: `1px solid ${active ? t.primary : t.border}`,
+                            background: active ? `${t.primary}18` : 'transparent',
+                            color: active ? t.primary : t.textMuted,
+                            borderRadius: 6,
+                            padding: '3px 7px',
+                            fontSize: 11,
+                            fontWeight: active ? 700 : 500,
+                            cursor: disabled ? 'default' : 'pointer',
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          {ESTADO_SHORT[x.value] || x.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {!disabled && (
+                    <button type="button" style={ghostTiny(t)} title="Quitar sub-ítem" onClick={() => removeAt(idx)}>✕</button>
+                  )}
                 </div>
 
+                {/* Fecha/hora + acciones compactas (imagen/esquema/reprogramar) */}
                 <div style={{
                   display: 'flex',
                   flexWrap: 'wrap',
-                  gap: 8,
-                  marginTop: 0,
+                  gap: 6,
                   alignItems: 'center',
                 }}>
                   <label style={{ ...lblInline(t), gap: 4 }}>
@@ -205,7 +347,7 @@ export default function TareaChecklistEditor({
                       disabled={disabled}
                       value={it.fecha || ''}
                       onChange={(e) => setAt(idx, { fecha: e.target.value })}
-                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '6px 8px' }}
+                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
                     />
                   </label>
                   <label style={{ ...lblInline(t), gap: 4 }}>
@@ -215,65 +357,114 @@ export default function TareaChecklistEditor({
                       disabled={disabled}
                       value={it.hora || ''}
                       onChange={(e) => setAt(idx, { hora: e.target.value })}
-                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '6px 8px' }}
+                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
                     />
                   </label>
-                  {!disabled && (
-                    <>
-                      <input
-                        ref={(el) => { fileRefs.current[it.id] = el }}
-                        type="file"
-                        accept="image/*"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          if (f) fileToSoporte(f, idx)
-                          e.target.value = ''
-                        }}
-                      />
-                      <button type="button" style={ghostCompact(t)} onClick={() => fileRefs.current[it.id]?.click()}>
-                        {srcImg ? 'Cambiar imagen' : 'Cargar imagen'}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    style={ghostCompact(t)}
-                    disabled={!srcImg}
-                    title={srcImg ? 'Abrir imagen de soporte' : 'Sin imagen de soporte'}
-                    onClick={() => {
-                      if (!openImageInNewTab(it.imagen)) {
-                        window.alert('No se pudo abrir la imagen. Vuelva a cargarla o guarde el sub-ítem e intente de nuevo.')
-                      }
-                    }}
-                  >
-                    Ver imagen
-                  </button>
-                  {!disabled && (
-                    <button type="button" style={primaryCompact(t)} onClick={() => setEsquemaIdx(idx)}>
-                      Crear esquema
-                    </button>
-                  )}
-                  {srcEsquema && (
+
+                  <div style={{
+                    marginLeft: 'auto', display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center',
+                  }}>
+                    {!disabled && (
+                      <>
+                        <input
+                          ref={(el) => { fileRefs.current[it.id] = el }}
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            if (f) fileToSoporte(f, idx)
+                            e.target.value = ''
+                          }}
+                        />
+                        <button type="button" style={chip(t)} onClick={() => fileRefs.current[it.id]?.click()}>
+                          {srcImg ? 'Cambiar img' : 'Imagen'}
+                        </button>
+                      </>
+                    )}
                     <button
                       type="button"
-                      style={ghostCompact(t)}
+                      style={chip(t)}
+                      disabled={!srcImg}
+                      title={srcImg ? 'Abrir imagen de soporte' : 'Sin imagen'}
                       onClick={() => {
-                        if (!openImageInNewTab(it.esquema)) {
-                          window.alert('No se pudo abrir el esquema.')
+                        if (!openImageInNewTab(it.imagen)) {
+                          window.alert('No se pudo abrir la imagen.')
                         }
                       }}
                     >
-                      Ver esquema
+                      Ver imagen
                     </button>
-                  )}
-                  {!disabled && srcImg && (
-                    <button type="button" style={ghostCompact(t)} onClick={() => setAt(idx, { imagen: null })}>Quitar imagen</button>
-                  )}
-                  {!disabled && srcEsquema && (
-                    <button type="button" style={ghostCompact(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
-                  )}
+                    {!disabled && (
+                      <button type="button" style={chip(t, true)} onClick={() => setEsquemaIdx(idx)}>
+                        Esquema
+                      </button>
+                    )}
+                    {srcEsquema && (
+                      <button
+                        type="button"
+                        style={chip(t)}
+                        onClick={() => {
+                          if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
+                        }}
+                      >
+                        Ver esquema
+                      </button>
+                    )}
+                    {!disabled && (
+                      <button
+                        type="button"
+                        style={chip(t)}
+                        title="Reprogramar este sub-ítem"
+                        onClick={() => {
+                          setReprogIdx(reprogIdx === idx ? null : idx)
+                          setReprogFecha(it.fecha || '')
+                          setReprogHora(it.hora || '')
+                        }}
+                      >
+                        Reprogramar
+                      </button>
+                    )}
+                    {!disabled && srcImg && (
+                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { imagen: null })}>Quitar img</button>
+                    )}
+                    {!disabled && srcEsquema && (
+                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
+                    )}
+                  </div>
                 </div>
+
+                {reprogIdx === idx && !disabled && (
+                  <div style={{
+                    marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    padding: '6px 8px', borderRadius: 8, border: `1px solid ${t.border}`,
+                    background: t.bgCard || '#fff',
+                  }}>
+                    <span style={{ fontSize: 11, color: t.textMuted }}>Nueva fecha</span>
+                    <input
+                      type="date"
+                      value={reprogFecha}
+                      onChange={(e) => setReprogFecha(e.target.value)}
+                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '4px 6px', fontSize: 12 }}
+                    />
+                    <input
+                      type="time"
+                      value={reprogHora}
+                      onChange={(e) => setReprogHora(e.target.value)}
+                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '4px 6px', fontSize: 12 }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!reprogFecha}
+                      style={{ ...chip(t, true), opacity: reprogFecha ? 1 : 0.45 }}
+                      onClick={() => aplicarReprogramacion(idx)}
+                    >
+                      Aplicar
+                    </button>
+                    <button type="button" style={chip(t)} onClick={() => setReprogIdx(null)}>Cancelar</button>
+                  </div>
+                )}
 
                 {(srcImg || srcEsquema) && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
@@ -292,14 +483,74 @@ export default function TareaChecklistEditor({
                   </div>
                 )}
 
+                {/* Tabla editable */}
                 <div style={{ marginTop: 10 }}>
-                  <label style={lbl(t)}>Notas / comentario</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>Tabla de datos</span>
+                    {!disabled && !tabla && (
+                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { tabla: emptyTabla(2, 3) })}>
+                        + Insertar tabla
+                      </button>
+                    )}
+                    {!disabled && tabla && (
+                      <>
+                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 1, 0)}>+ Fila</button>
+                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, -1, 0)} disabled={tabla.rows <= 1}>− Fila</button>
+                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 0, 1)}>+ Col</button>
+                        <button type="button" style={chip(t)} onClick={() => resizeTabla(idx, 0, -1)} disabled={tabla.cols <= 1}>− Col</button>
+                        <button type="button" style={chip(t)} onClick={() => setAt(idx, { tabla: null })}>Quitar tabla</button>
+                      </>
+                    )}
+                  </div>
+                  {tabla && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{
+                        borderCollapse: 'collapse', width: '100%', minWidth: tabla.cols * 80,
+                        fontSize: 'var(--cc-sm)',
+                      }}>
+                        <tbody>
+                          {tabla.cells.map((row, ri) => (
+                            <tr key={`r${ri}`}>
+                              {row.map((cell, ci) => (
+                                <td
+                                  key={`c${ci}`}
+                                  style={{
+                                    border: `1px solid ${t.border}`,
+                                    padding: 0,
+                                    background: t.bgCard || '#fff',
+                                    minWidth: 72,
+                                  }}
+                                >
+                                  <textarea
+                                    disabled={disabled}
+                                    rows={1}
+                                    value={cell}
+                                    onChange={(e) => setTablaCell(idx, ri, ci, e.target.value)}
+                                    style={{
+                                      width: '100%', boxSizing: 'border-box', border: 'none',
+                                      resize: 'vertical', minHeight: 32, padding: '6px 8px',
+                                      fontSize: 'var(--cc-sm)', background: 'transparent',
+                                      color: t.text, fontFamily: 'inherit',
+                                    }}
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <label style={lbl(t)}>Notas</label>
                   <textarea
                     rows={2}
                     disabled={disabled}
                     value={it.notas || ''}
                     onChange={(e) => setAt(idx, { notas: e.target.value })}
-                    placeholder="Comentario propio de este sub-ítem…"
+                    placeholder="Notas propias de este sub-ítem…"
                     style={{ ...inp(t), resize: 'vertical' }}
                   />
                 </div>
@@ -324,10 +575,63 @@ export default function TareaChecklistEditor({
                     </a>
                   )}
                 </div>
+
+                {/* Comentarios individuales del sub-ítem */}
+                <div style={{ marginTop: 10 }}>
+                  <label style={lbl(t)}>Comentarios del sub-ítem</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {comentarios.length === 0 && (
+                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>Sin comentarios aún.</div>
+                    )}
+                    {comentarios.map((c) => (
+                      <div
+                        key={c.id}
+                        style={{
+                          border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 8px',
+                          background: t.bgCard || '#fff', fontSize: 'var(--cc-xs)', color: t.text,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
+                          <span style={{ fontWeight: 700 }}>{c.autor_nombre || 'Usuario'}</span>
+                          <span style={{ color: t.textMuted }}>
+                            {c.created_at ? String(c.created_at).slice(0, 16).replace('T', ' ') : ''}
+                            {!disabled && (
+                              <button
+                                type="button"
+                                style={{ ...ghostTiny(t), marginLeft: 6 }}
+                                title="Eliminar comentario"
+                                onClick={() => removeComentario(idx, c.id)}
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </span>
+                        </div>
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{c.mensaje}</div>
+                      </div>
+                    ))}
+                    {!disabled && (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                        <textarea
+                          rows={2}
+                          value={draftComments[idx] || ''}
+                          onChange={(e) => setDraftComments((d) => ({ ...d, [idx]: e.target.value }))}
+                          placeholder="Escribir comentario de este sub-ítem…"
+                          style={{ ...inp(t), resize: 'vertical', flex: 1 }}
+                        />
+                        <button
+                          type="button"
+                          style={chip(t, true)}
+                          disabled={!(draftComments[idx] || '').trim()}
+                          onClick={() => addComentario(idx)}
+                        >
+                          Comentar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              {!disabled && (
-                <button type="button" style={ghost(t)} title="Quitar sub-ítem" onClick={() => removeAt(idx)}>✕</button>
-              )}
             </div>
           </div>
         )
@@ -380,23 +684,31 @@ function inp(t) {
     background: t.bgCard || t.bg || '#fff', color: t.text,
   }
 }
-function ghost(t) {
+function chip(t, primaryTone = false) {
   return {
-    border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px',
-    cursor: 'pointer', background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)',
+    border: `1px solid ${primaryTone ? t.primary : t.border}`,
+    borderRadius: 6,
+    padding: '4px 8px',
+    cursor: 'pointer',
+    background: primaryTone ? `${t.primary}14` : 'transparent',
+    color: primaryTone ? t.primary : t.text,
+    fontSize: 11,
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    lineHeight: 1.2,
   }
 }
-function ghostCompact(t) {
-  return { ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', whiteSpace: 'nowrap' }
+function ghostTiny(t) {
+  return {
+    border: 'none', background: 'transparent', cursor: 'pointer',
+    color: t.textMuted, fontSize: 12, padding: '2px 4px',
+  }
 }
 function primary(t) {
   return {
     border: 'none', borderRadius: 8, padding: '8px 12px',
     cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
   }
-}
-function primaryCompact(t) {
-  return { ...primary(t), padding: '6px 10px', fontSize: 'var(--cc-xs)', whiteSpace: 'nowrap' }
 }
 const thumbImg = { display: 'block', width: 112, height: 72, objectFit: 'cover' }
 function thumbBtn(t) {

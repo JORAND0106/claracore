@@ -57,6 +57,8 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         hora: it.hora || null,
         notas: it.notas || '',
         enlace: it.enlace || '',
+        tabla: it.tabla || null,
+        comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
       }))
       const payload = {
         titulo: titulo.trim(),
@@ -143,7 +145,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           </div>
         </div>
         <div style={{ marginBottom: 16 }}>
-          <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} />
+          <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} usuario={usuario} />
         </div>
 
         <label style={lbl(t)}>Destinatario (opcional)</label>
