@@ -1016,13 +1016,185 @@ def actualizar_estado_gestion(
 
 # ── Tareas personales ────────────────────────────────────────────────────────
 
+def _new_checklist_id() -> str:
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
+def _normalizar_imagen_ref(raw) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    nombre = (raw.get("nombre") or "imagen.png").strip()[:120] or "imagen.png"
+    blob_path = raw.get("blob_path") or None
+    data_uri = raw.get("data_uri") or None
+    # Si hay blob en Azure, no persistir data_uri (solo se enriquece al leer)
+    if blob_path and data_uri:
+        data_uri = None
+    out = {
+        "nombre": nombre,
+        "blob_path": blob_path,
+        "data_uri": data_uri,
+        "mime_type": raw.get("mime_type") or "image/png",
+        "created_at": raw.get("created_at") or _now_utc().isoformat(),
+    }
+    if raw.get("kind"):
+        out["kind"] = raw["kind"]
+    if not out["blob_path"] and not out["data_uri"] and not raw.get("url"):
+        return None
+    if raw.get("url") and not out["data_uri"] and not out["blob_path"]:
+        out["url"] = raw["url"]
+    return out
+
+
+def _normalizar_checklist_tarea(raw) -> List[dict]:
+    """Lista de sub-ítems: texto, hecho, fecha/hora propias e imagen opcional."""
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for i, it in enumerate(raw):
+        if not isinstance(it, dict):
+            continue
+        texto = (it.get("texto") or it.get("text") or "").strip()
+        cid = (it.get("id") or it.get("key") or _new_checklist_id())
+        fecha = _parse_date(it.get("fecha") or it.get("fecha_vencimiento"))
+        hora = _norm_hora(it.get("hora") or it.get("hora_vencimiento"))
+        imagen = _normalizar_imagen_ref(it.get("imagen") or it.get("image"))
+        # También aceptar arreglo corto de imágenes (usa la primera)
+        if imagen is None and isinstance(it.get("imagenes"), list) and it["imagenes"]:
+            imagen = _normalizar_imagen_ref(it["imagenes"][0])
+        out.append({
+            "id": str(cid)[:40],
+            "texto": texto[:2000],
+            "hecho": bool(it.get("hecho") or it.get("done") or it.get("checked")),
+            "fecha": fecha.isoformat() if fecha else None,
+            "hora": hora,
+            "imagen": imagen,
+            "orden": int(it.get("orden") if it.get("orden") is not None else i),
+        })
+    out.sort(key=lambda x: x.get("orden") or 0)
+    for i, it in enumerate(out):
+        it["orden"] = i
+    return out
+
+
+def _fecha_proxima_checklist(checklist: List[dict]) -> tuple:
+    """Devuelve (fecha_iso, hora) del sub-ítem con vencimiento más próximo."""
+    best_ts = None
+    best = (None, None)
+    for it in checklist or []:
+        f = _parse_date(it.get("fecha"))
+        if not f:
+            continue
+        h = _norm_hora(it.get("hora")) or "23:59"
+        try:
+            hh, mm = [int(x) for x in h.split(":")[:2]]
+        except Exception:
+            hh, mm = 23, 59
+        ts = datetime(f.year, f.month, f.day, hh, mm)
+        if best_ts is None or ts < best_ts:
+            best_ts = ts
+            best = (f.isoformat(), _norm_hora(it.get("hora")))
+    return best
+
+
+def _descripcion_desde_checklist(checklist: List[dict]) -> Optional[str]:
+    parts = [str(it.get("texto") or "").strip() for it in (checklist or []) if str(it.get("texto") or "").strip()]
+    if not parts:
+        return None
+    return "\n".join(f"{'☑' if it.get('hecho') else '☐'} {it.get('texto')}" for it in checklist if str(it.get("texto") or "").strip())
+
+
 def _normalizar_campos_libres_tarea(raw) -> dict:
-    """Campos libres de tarea (notas, etc.). La prioridad por estrellas quedó deprecada."""
+    """Campos libres de tarea: notas, checklist, dibujos. Prioridad estrellas deprecada."""
     base = dict(raw) if isinstance(raw, dict) else {}
     base.pop("prioridad", None)
     base.pop("destinatario_tentativo_id", None)
     base.pop("destinatario_tentativo_nombre", None)
+    if "checklist" in base:
+        base["checklist"] = _normalizar_checklist_tarea(base.get("checklist"))
+    if "dibujos" in base:
+        dibs = base.get("dibujos") if isinstance(base.get("dibujos"), list) else []
+        base["dibujos"] = [x for x in (_normalizar_imagen_ref(d) for d in dibs) if x]
+        for d in base["dibujos"]:
+            d["kind"] = "dibujo"
+    if "notas" in base and base["notas"] is not None:
+        base["notas"] = str(base["notas"])[:4000]
     return base
+
+
+def _enrich_imagen_preview(im: Optional[dict]) -> Optional[dict]:
+    """Asegura data_uri/url para previsualizar adjuntos guardados solo con blob_path."""
+    if not im or not isinstance(im, dict):
+        return im
+    out = dict(im)
+    if out.get("data_uri") or out.get("url"):
+        return out
+    path = (out.get("blob_path") or "").strip()
+    if not path or path.startswith("data:"):
+        if path.startswith("data:") and not out.get("data_uri"):
+            out["data_uri"] = path
+        return out
+    try:
+        from azure_blob_storage import download_blob_bytes_private
+
+        content = download_blob_bytes_private(path)
+        if len(content) > 2_500_000:
+            # Demasiado grande para embeber; el cliente verá solo el nombre.
+            return out
+        mime = out.get("mime_type") or "image/png"
+        out["data_uri"] = f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+    except Exception as exc:
+        _log.warning("preview imagen tarea %s: %s", path, exc)
+    return out
+
+
+def _enrich_tarea_media(item: dict) -> dict:
+    if not item or item.get("origen") != "tarea":
+        return item
+    imgs = item.get("imagenes") or []
+    if isinstance(imgs, list):
+        item["imagenes"] = [_enrich_imagen_preview(x) or x for x in imgs if isinstance(x, dict)]
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    if isinstance(libres.get("dibujos"), list):
+        libres["dibujos"] = [_enrich_imagen_preview(x) or x for x in libres["dibujos"] if isinstance(x, dict)]
+    if isinstance(libres.get("checklist"), list):
+        ck = []
+        for it in libres["checklist"]:
+            if not isinstance(it, dict):
+                continue
+            row = dict(it)
+            if row.get("imagen"):
+                row["imagen"] = _enrich_imagen_preview(row["imagen"])
+            ck.append(row)
+        libres["checklist"] = ck
+    item["campos_libres"] = libres
+    return item
+
+
+def _store_imagen_bytes(item_id: int, nombre: str, content: bytes, mime: str) -> dict:
+    from azure_blob_storage import upload_blob_private
+
+    safe = re.sub(r"[^\w.\-]", "_", (nombre or "imagen.png").strip())[:120]
+    ts = _now_utc().strftime("%Y%m%dT%H%M%SZ")
+    blob_path = f"seguimiento-tareas/{int(item_id)}/{ts}_{safe}"
+    data_uri = None
+    stored_path = None
+    try:
+        upload_blob_private(blob_path, content, content_type=mime or "image/png", overwrite=True)
+        stored_path = blob_path
+        # Embebido corto para preview inmediata (evita depender de Azure en el GET)
+        if len(content) <= 1_200_000:
+            data_uri = f"data:{(mime or 'image/png')};base64,{base64.b64encode(content).decode('ascii')}"
+    except Exception:
+        data_uri = f"data:{(mime or 'image/png')};base64,{base64.b64encode(content).decode('ascii')}"
+    return {
+        "nombre": safe,
+        "blob_path": stored_path,
+        "data_uri": data_uri,
+        "mime_type": mime or "image/png",
+        "created_at": _now_utc().isoformat(),
+    }
 
 
 def crear_tarea(sb, data: dict, user_id: int) -> dict:
@@ -1030,11 +1202,23 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     titulo = (data.get("titulo") or "").strip()
     if not titulo:
         raise ValueError("El título de la tarea es obligatorio")
-    fv = _parse_date(data.get("fecha_vencimiento"))
-    hora = _norm_hora(data.get("hora_vencimiento"))
     imagenes = data.get("imagenes") or []
     if not isinstance(imagenes, list):
         imagenes = []
+    campos = _normalizar_campos_libres_tarea(data.get("campos_libres"))
+    # Semilla de checklist desde descripción legacy si no viene checklist
+    if not campos.get("checklist") and (data.get("descripcion") or "").strip():
+        campos["checklist"] = _normalizar_checklist_tarea([{
+            "texto": (data.get("descripcion") or "").strip(),
+            "fecha": data.get("fecha_vencimiento"),
+            "hora": data.get("hora_vencimiento"),
+        }])
+    fv_ck, hora_ck = _fecha_proxima_checklist(campos.get("checklist") or [])
+    fv = _parse_date(data.get("fecha_vencimiento")) or (_parse_date(fv_ck) if fv_ck else None)
+    if fv_ck:
+        fv = _parse_date(fv_ck)
+    hora = hora_ck if fv_ck else _norm_hora(data.get("hora_vencimiento"))
+    descripcion = (data.get("descripcion") or "").strip() or _descripcion_desde_checklist(campos.get("checklist") or [])
     consec = _proximo_consecutivo_item(sb, origen="tarea", user_id=user_id)
     relacion = data.get("relacion_destinatario")
     referido_id = data.get("referido_a_id") or data.get("destinatario_id")
@@ -1061,7 +1245,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     row = {
         "origen": "tarea",
         "titulo": titulo[:500],
-        "descripcion": (data.get("descripcion") or "").strip() or None,
+        "descripcion": descripcion,
         "estado_gestion": data.get("estado_gestion") or "abierto",
         "asignado_a_id": asignado_id,
         "asignado_a_nombre": asignado_nombre,
@@ -1072,7 +1256,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         "relacion_destinatario": relacion,
         "referido_a_id": referido_id,
         "referido_a_nombre": referido_nombre,
-        "campos_libres": _normalizar_campos_libres_tarea(data.get("campos_libres")),
+        "campos_libres": campos,
         "imagenes": imagenes,
         "updated_at": _now_utc().isoformat(),
     }
@@ -1114,27 +1298,60 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         if not t:
             raise ValueError("Título obligatorio")
         patch["titulo"] = t[:500]
-    if "descripcion" in data:
-        patch["descripcion"] = (data.get("descripcion") or "").strip() or None
     if "estado_gestion" in data:
         patch["estado_gestion"] = data["estado_gestion"]
-    if "fecha_vencimiento" in data:
+    if "campos_libres" in data:
+        # Merge: no borrar dibujos/checklist si el cliente envía parcial sin ellos
+        prev = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+        incoming = dict(data.get("campos_libres") or {}) if isinstance(data.get("campos_libres"), dict) else {}
+        merged = {**prev, **incoming}
+        if "checklist" not in incoming and "checklist" in prev:
+            merged["checklist"] = prev["checklist"]
+        if "dibujos" not in incoming and "dibujos" in prev:
+            merged["dibujos"] = prev["dibujos"]
+        campos = _normalizar_campos_libres_tarea(merged)
+        patch["campos_libres"] = campos
+        fv_ck, hora_ck = _fecha_proxima_checklist(campos.get("checklist") or [])
+        if fv_ck:
+            patch["fecha_vencimiento"] = fv_ck
+            patch["hora_vencimiento"] = hora_ck
+        patch["descripcion"] = _descripcion_desde_checklist(campos.get("checklist") or [])
+    if "descripcion" in data and "campos_libres" not in data:
+        patch["descripcion"] = (data.get("descripcion") or "").strip() or None
+    if "fecha_vencimiento" in data and "campos_libres" not in data:
         fv = _parse_date(data.get("fecha_vencimiento"))
         patch["fecha_vencimiento"] = fv.isoformat() if fv else None
-    if "hora_vencimiento" in data:
+    if "hora_vencimiento" in data and "campos_libres" not in data:
         patch["hora_vencimiento"] = _norm_hora(data.get("hora_vencimiento"))
-    if "campos_libres" in data:
-        patch["campos_libres"] = _normalizar_campos_libres_tarea(data.get("campos_libres"))
     if "imagenes" in data:
         patch["imagenes"] = data.get("imagenes") or []
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
-    return get_item(sb, item_id)
+    return get_item_detalle(sb, item_id)
 
 
-def adjuntar_imagen_tarea_base64(sb, item_id: int, user_id: int, nombre: str, data_b64: str, mime: str = "image/png") -> dict:
+def adjuntar_imagen_tarea_base64(
+    sb,
+    item_id: int,
+    user_id: int,
+    nombre: str,
+    data_b64: str,
+    mime: str = "image/png",
+    *,
+    destino: str = "adjunto",
+    checklist_id: Optional[str] = None,
+) -> dict:
+    """
+    destino:
+      - adjunto: imagenes[] de la tarea
+      - dibujo: campos_libres.dibujos[]
+      - checklist: imagen del sub-ítem (checklist_id)
+    """
     item = get_item(sb, item_id)
     if item.get("origen") != "tarea":
         raise ValueError("Solo aplica a tareas personales")
+    dest = (destino or "adjunto").strip().lower()
+    if dest not in ("adjunto", "dibujo", "checklist"):
+        raise ValueError("destino debe ser adjunto, dibujo o checklist")
     raw = data_b64
     if "," in raw and raw.strip().startswith("data:"):
         header, raw = raw.split(",", 1)
@@ -1147,20 +1364,43 @@ def adjuntar_imagen_tarea_base64(sb, item_id: int, user_id: int, nombre: str, da
         raise ValueError("Imagen inválida") from exc
     if len(content) > 8_000_000:
         raise ValueError("La imagen supera 8 MB")
-    from azure_blob_storage import upload_blob_private
 
-    safe = re.sub(r"[^\w.\-]", "_", (nombre or "imagen.png").strip())[:120]
-    ts = _now_utc().strftime("%Y%m%dT%H%M%SZ")
-    blob_path = f"seguimiento-tareas/{int(item_id)}/{ts}_{safe}"
-    try:
-        upload_blob_private(blob_path, content, content_type=mime or "image/png", overwrite=True)
-    except Exception:
-        # Fallback: guardar data-uri en jsonb si blob no disponible (dev)
-        blob_path = f"data:{(mime or 'image/png')};base64,{base64.b64encode(content).decode('ascii')}"
-    imgs = list(item.get("imagenes") or [])
-    imgs.append({"nombre": safe, "blob_path": blob_path if not str(blob_path).startswith("data:") else None, "data_uri": blob_path if str(blob_path).startswith("data:") else None, "mime_type": mime, "created_at": _now_utc().isoformat()})
-    sb.table("seguimiento_item").update({"imagenes": imgs, "updated_at": _now_utc().isoformat()}).eq("id", int(item_id)).execute()
-    return get_item(sb, item_id)
+    ref = _store_imagen_bytes(item_id, nombre, content, mime or "image/png")
+    patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
+
+    if dest == "adjunto":
+        imgs = list(item.get("imagenes") or [])
+        imgs.append(ref)
+        patch["imagenes"] = imgs
+    else:
+        libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+        if dest == "dibujo":
+            ref["kind"] = "dibujo"
+            dibujos = list(libres.get("dibujos") or [])
+            dibujos.append(ref)
+            libres["dibujos"] = dibujos
+        else:
+            cid = (checklist_id or "").strip()
+            if not cid:
+                raise ValueError("checklist_id es obligatorio para imagen de sub-ítem")
+            checklist = _normalizar_checklist_tarea(libres.get("checklist") or [])
+            found = False
+            for it in checklist:
+                if str(it.get("id")) == cid:
+                    it["imagen"] = ref
+                    found = True
+                    break
+            if not found:
+                raise ValueError("Sub-ítem de checklist no encontrado")
+            libres["checklist"] = checklist
+            fv_ck, hora_ck = _fecha_proxima_checklist(checklist)
+            if fv_ck:
+                patch["fecha_vencimiento"] = fv_ck
+                patch["hora_vencimiento"] = hora_ck
+        patch["campos_libres"] = _normalizar_campos_libres_tarea(libres)
+
+    sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    return get_item_detalle(sb, item_id)
 
 
 # ── Bandeja / detalle ────────────────────────────────────────────────────────
@@ -1216,6 +1456,17 @@ def get_item_detalle(sb, item_id: int) -> dict:
             item["acta"] = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
         except ValueError:
             item["acta"] = None
+    if item.get("origen") == "tarea":
+        # Migración suave: descripción legacy → checklist de un ítem
+        libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+        if not libres.get("checklist") and (item.get("descripcion") or "").strip():
+            libres["checklist"] = _normalizar_checklist_tarea([{
+                "texto": item.get("descripcion"),
+                "fecha": item.get("fecha_vencimiento"),
+                "hora": item.get("hora_vencimiento"),
+            }])
+            item["campos_libres"] = libres
+        item = _enrich_tarea_media(item)
     return item
 
 

@@ -4,6 +4,8 @@
  */
 import {
   calcularNivelVencimiento,
+  fechaVencimientoEfectiva,
+  nivelVencimientoItem,
   sortByProximidadVencimiento,
 } from './vencimientoLevels.js'
 
@@ -57,5 +59,26 @@ const sorted = sortByProximidadVencimiento([
   { id: 3, fecha_vencimiento: '2026-08-05', hora_vencimiento: '18:00' },
 ])
 assert(sorted[0].id === 2 && sorted[1].id === 3 && sorted[2].id === 1, 'orden por proximidad')
+
+// Tarea: vencimiento efectivo = checklist más próxima
+const due = fechaVencimientoEfectiva({
+  origen: 'tarea',
+  fecha_vencimiento: '2026-09-01',
+  campos_libres: {
+    checklist: [
+      { texto: 'A', fecha: '2026-08-20', hora: '18:00' },
+      { texto: 'B', fecha: '2026-08-12', hora: '09:00' },
+      { texto: 'C', fecha: null },
+    ],
+  },
+})
+assert(due.fecha === '2026-08-12' && due.hora === '09:00', 'checklist más próxima')
+
+const nivelCk = nivelVencimientoItem({
+  origen: 'tarea',
+  created_at: '2026-08-05',
+  campos_libres: { checklist: [{ fecha: '2026-08-10' }] },
+}, new Date(2026, 7, 10))
+assert(nivelCk === 5, 'nivel desde checklist en día de vencimiento')
 
 console.log('vencimientoLevels.test.mjs OK')

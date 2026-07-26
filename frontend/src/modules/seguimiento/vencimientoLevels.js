@@ -82,16 +82,60 @@ export function fechaBaseNivel(item) {
     || null
 }
 
+/**
+ * Para tareas personales: vencimiento efectivo = sub-ítem de checklist
+ * con fecha más próxima. Compromisos y fallback: fecha_vencimiento del ítem.
+ */
+export function fechaVencimientoEfectiva(item) {
+  if (!item) return { fecha: null, hora: null }
+  if (item.origen === 'tarea') {
+    const libres = item.campos_libres && typeof item.campos_libres === 'object'
+      ? item.campos_libres
+      : {}
+    const checklist = Array.isArray(libres.checklist) ? libres.checklist : []
+    let best = null
+    for (const it of checklist) {
+      const f = parseDateOnly(it?.fecha)
+      if (!f) continue
+      const ts = f.getTime() + _horaMs(it?.hora)
+      if (!best || ts < best.ts) {
+        best = {
+          ts,
+          fecha: String(it.fecha).slice(0, 10),
+          hora: it.hora ? String(it.hora).slice(0, 5) : null,
+        }
+      }
+    }
+    if (best) return { fecha: best.fecha, hora: best.hora }
+  }
+  return {
+    fecha: item.fecha_vencimiento ? String(item.fecha_vencimiento).slice(0, 10) : null,
+    hora: item.hora_vencimiento ? String(item.hora_vencimiento).slice(0, 5) : null,
+  }
+}
+
+/** Nivel de vencimiento usando la fecha efectiva (checklist más próxima en tareas). */
+export function nivelVencimientoItem(item, hoy = hoyBogotaDate()) {
+  const due = fechaVencimientoEfectiva(item)
+  return calcularNivelVencimiento({
+    fechaVencimiento: due.fecha,
+    fechaCreacion: fechaBaseNivel(item),
+    hoy,
+  })
+}
+
 /** Ordenación: más crítico / más próximo primero; sin fecha al final. */
 export function sortByProximidadVencimiento(rows) {
   return [...(rows || [])].sort((a, b) => {
-    const da = parseDateOnly(a.fecha_vencimiento)
-    const db = parseDateOnly(b.fecha_vencimiento)
+    const ea = fechaVencimientoEfectiva(a)
+    const eb = fechaVencimientoEfectiva(b)
+    const da = parseDateOnly(ea.fecha)
+    const db = parseDateOnly(eb.fecha)
     if (!da && !db) return (Number(b.id) || 0) - (Number(a.id) || 0)
     if (!da) return 1
     if (!db) return -1
-    const ta = da.getTime() + _horaMs(a.hora_vencimiento)
-    const tb = db.getTime() + _horaMs(b.hora_vencimiento)
+    const ta = da.getTime() + _horaMs(ea.hora)
+    const tb = db.getTime() + _horaMs(eb.hora)
     if (ta !== tb) return ta - tb
     return (Number(a.id) || 0) - (Number(b.id) || 0)
   })

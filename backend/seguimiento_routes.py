@@ -193,6 +193,8 @@ class ImagenBase64Body(BaseModel):
     nombre: str = "imagen.png"
     data_base64: str = Field(..., min_length=8)
     mime_type: Optional[str] = "image/png"
+    destino: Optional[str] = Field("adjunto", description="adjunto | dibujo | checklist")
+    checklist_id: Optional[str] = None
 
 
 class ComentarioBody(BaseModel):
@@ -438,6 +440,8 @@ def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depend
             body.nombre,
             body.data_base64,
             body.mime_type or "image/png",
+            destino=body.destino or "adjunto",
+            checklist_id=body.checklist_id,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
