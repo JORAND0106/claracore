@@ -193,7 +193,10 @@ class ImagenBase64Body(BaseModel):
     nombre: str = "imagen.png"
     data_base64: str = Field(..., min_length=8)
     mime_type: Optional[str] = "image/png"
-    destino: Optional[str] = Field("adjunto", description="adjunto | dibujo | checklist")
+    destino: Optional[str] = Field(
+        "checklist",
+        description="checklist (imagen soporte) | checklist_esquema (dibujo del sub-ítem)",
+    )
     checklist_id: Optional[str] = None
 
 

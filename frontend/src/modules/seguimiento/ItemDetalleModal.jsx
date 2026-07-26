@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
-import DibujoCanvas from './DibujoCanvas'
 import TareaChecklistEditor, { seedChecklistFromItem } from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
-
-function imagenSrc(im) {
-  if (!im) return null
-  return im.data_uri || im.url || im.blob_url || null
-}
 
 export default function ItemDetalleModal({
   t, api, itemId, usuario, usuarios = [], permisos, onClose, onChanged,
@@ -30,14 +24,12 @@ export default function ItemDetalleModal({
   const [destCtx, setDestCtx] = useState(null)
   const [destPick, setDestPick] = useState(null)
   const [checklist, setChecklist] = useState([])
-  const [notas, setNotas] = useState('')
   const [checklistDirty, setChecklistDirty] = useState(false)
 
   const applyItem = (d) => {
     setItem(d)
     if (d?.origen === 'tarea') {
       setChecklist(seedChecklistFromItem(d))
-      setNotas(d.campos_libres?.notas || '')
       setChecklistDirty(false)
     }
   }
@@ -87,8 +79,6 @@ export default function ItemDetalleModal({
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
-  const imagenes = Array.isArray(item.imagenes) ? item.imagenes : []
-  const dibujos = Array.isArray(item.campos_libres?.dibujos) ? item.campos_libres.dibujos : []
   const puedeEditarTarea = esTarea && permisos?.editar && (soyCreador || soyResponsable || esDev)
   const estadosDisponibles = ESTADOS_GESTION.filter((x) => {
     if (x.value === 'reprogramado') return esTarea
@@ -100,11 +90,6 @@ export default function ItemDetalleModal({
     if (allowEstadoGestion === false) return false
     return esTarea
   })()
-
-  const abrirImagen = (im) => {
-    const url = imagenSrc(im)
-    if (url) window.open(url, '_blank', 'noopener,noreferrer')
-  }
 
   const confirmarDestino = async (modo) => {
     if (!destPick) return
@@ -137,16 +122,14 @@ export default function ItemDetalleModal({
         hecho: !!it.hecho,
         fecha: it.fecha || null,
         hora: it.hora || null,
-        // Imágenes nuevas (pending) se suben después; las ya persistidas se conservan
+        notas: it.notas || '',
+        enlace: it.enlace || '',
+        // Media nueva (pending) se sube después; la persistida se conserva en merge backend
         imagen: it.imagen?.pending ? null : (it.imagen || null),
+        esquema: it.esquema?.pending ? null : (it.esquema || null),
       }))
       const updated = await api.updateTarea(item.id, {
-        campos_libres: {
-          ...(item.campos_libres || {}),
-          notas,
-          checklist: checklistPayload,
-          dibujos: item.campos_libres?.dibujos || [],
-        },
+        campos_libres: { checklist: checklistPayload },
       })
       for (const it of checklist) {
         if (it.imagen?.pending && it.imagen?.data_uri) {
@@ -155,6 +138,15 @@ export default function ItemDetalleModal({
             data_base64: it.imagen.data_uri,
             mime_type: it.imagen.mime_type || 'image/png',
             destino: 'checklist',
+            checklist_id: it.id,
+          })
+        }
+        if (it.esquema?.pending && it.esquema?.data_uri) {
+          await api.pegarImagenTarea(item.id, {
+            nombre: it.esquema.nombre || `esquema-${it.id}.png`,
+            data_base64: it.esquema.data_uri,
+            mime_type: 'image/png',
+            destino: 'checklist_esquema',
             checklist_id: it.id,
           })
         }
@@ -167,26 +159,6 @@ export default function ItemDetalleModal({
     } finally {
       setBusy(false)
     }
-  }
-
-  const pegarAdjunto = async (file) => {
-    if (!file || !puedeEditarTarea) return
-    const reader = new FileReader()
-    reader.onload = async () => {
-      setBusy(true)
-      try {
-        await api.pegarImagenTarea(item.id, {
-          nombre: file.name || `adjunto-${Date.now()}.png`,
-          data_base64: reader.result,
-          mime_type: file.type || 'image/png',
-          destino: 'adjunto',
-        })
-        await reload()
-        onChanged?.()
-      } catch (e) { setError(e.message) }
-      finally { setBusy(false) }
-    }
-    reader.readAsDataURL(file)
   }
 
   return (
@@ -217,9 +189,12 @@ export default function ItemDetalleModal({
             <h4 style={h4(t)}>Checklist</h4>
             {puedeEditarTarea && checklistDirty && (
               <button type="button" disabled={busy} style={primary(t)} onClick={guardarChecklist}>
-                {busy ? 'Guardando…' : 'Guardar checklist y notas'}
+                {busy ? 'Guardando…' : 'Guardar checklist'}
               </button>
             )}
+          </div>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Todo el contenido (imagen, esquema, notas y enlace) vive en cada sub-ítem. Puede agregar tantos como necesite.
           </div>
           <TareaChecklistEditor
             t={t}
@@ -232,119 +207,6 @@ export default function ItemDetalleModal({
         <p style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--cc-body)', color: t.text }}>
           {item.descripcion || 'Sin descripción'}
         </p>
-      )}
-
-      <section style={{ marginTop: 14 }}>
-        <h4 style={h4(t)}>Imágenes adjuntas</h4>
-        {imagenes.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin imágenes adjuntas.</div>
-        ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {imagenes.map((im, i) => {
-              const src = imagenSrc(im)
-              if (!src) {
-                return (
-                  <span key={i} style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '8px 10px', border: `1px dashed ${t.border}`, borderRadius: 6 }}>
-                    {im.nombre || `imagen ${i + 1}`} (sin vista previa)
-                  </span>
-                )
-              }
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => abrirImagen(im)}
-                  title="Abrir en pestaña nueva"
-                  style={{
-                    padding: 0, border: `1px solid ${t.border}`, borderRadius: 6,
-                    background: 'transparent', cursor: 'pointer', overflow: 'hidden',
-                  }}
-                >
-                  <img src={src} alt={im.nombre || ''} style={{ display: 'block', width: 120, height: 90, objectFit: 'cover' }} />
-                </button>
-              )
-            })}
-          </div>
-        )}
-        {esTarea && puedeEditarTarea && (
-          <div style={{ marginTop: 8 }}>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) pegarAdjunto(f)
-                e.target.value = ''
-              }}
-            />
-          </div>
-        )}
-      </section>
-
-      {esTarea && (
-        <>
-          <section style={{ marginTop: 16 }}>
-            <h4 style={h4(t)}>Notas libres</h4>
-            <input
-              value={notas}
-              disabled={!puedeEditarTarea}
-              onChange={(e) => { setNotas(e.target.value); setChecklistDirty(true) }}
-              style={inp(t)}
-              placeholder="Recordatorios, enlaces, etc."
-            />
-          </section>
-
-          <section style={{ marginTop: 16 }}>
-            <h4 style={h4(t)}>Dibujo a mano</h4>
-            {puedeEditarTarea && (
-              <DibujoCanvas
-                t={t}
-                disabled={busy}
-                onSave={async (dataUrl) => {
-                  setBusy(true)
-                  setError('')
-                  try {
-                    await api.pegarImagenTarea(item.id, {
-                      nombre: `dibujo-${Date.now()}.png`,
-                      data_base64: dataUrl,
-                      mime_type: 'image/png',
-                      destino: 'dibujo',
-                    })
-                    await reload()
-                    onChanged?.()
-                  } catch (e) { setError(e.message) }
-                  finally { setBusy(false) }
-                }}
-              />
-            )}
-            {dibujos.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                {dibujos.map((im, i) => {
-                  const src = imagenSrc(im)
-                  if (!src) {
-                    return <span key={i} style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{im.nombre || `dibujo ${i + 1}`}</span>
-                  }
-                  return (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => abrirImagen(im)}
-                      style={{
-                        padding: 0, border: `1px solid ${t.border}`, borderRadius: 6,
-                        background: 'transparent', cursor: 'pointer', overflow: 'hidden',
-                      }}
-                    >
-                      <img src={src} alt={im.nombre || 'dibujo'} style={{ display: 'block', width: 140, height: 100, objectFit: 'contain', background: '#fff' }} />
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-            {!puedeEditarTarea && dibujos.length === 0 && (
-              <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin dibujos.</div>
-            )}
-          </section>
-        </>
       )}
 
       {puedeEditarEstado && (
