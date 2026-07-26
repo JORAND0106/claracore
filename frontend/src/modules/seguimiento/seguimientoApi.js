@@ -123,7 +123,10 @@ export function createSeguimientoApi(contratoId, token) {
       send('POST', `/seguimiento/items/${itemId}/justificacion`, body),
     revisarJustificacion: (justId, body) =>
       send('POST', `/seguimiento/justificaciones/${justId}/revisar`, body),
-    crearTarea: (body) => send('POST', '/seguimiento/tareas', body),
+    crearTarea: (body) => send('POST', '/seguimiento/tareas', {
+      ...body,
+      contrato_id: body?.contrato_id ?? cid,
+    }),
     updateTarea: (itemId, body) => send('PUT', `/seguimiento/tareas/${itemId}`, body),
     pegarImagenTarea: (itemId, body) => send('POST', `/seguimiento/tareas/${itemId}/imagen`, body),
     redaccionClara: (body) => send('POST', '/seguimiento/redaccion-clara', body, 120000),

@@ -46,10 +46,10 @@ def test_permiso_seguimiento_desarrollador_via_helper(monkeypatch):
     assert calls["n"] >= 3
 
 
-def test_list_bandeja_desarrollador_ve_todos(monkeypatch):
+def _fake_bandeja_q(rows):
     class FakeQ:
-        def __init__(self, rows):
-            self._rows = rows
+        def __init__(self, data):
+            self._rows = data
 
         def select(self, *_a, **_k):
             return self
@@ -66,61 +66,73 @@ def test_list_bandeja_desarrollador_ve_todos(monkeypatch):
         def lte(self, *_a, **_k):
             return self
 
+        def in_(self, *_a, **_k):
+            return self
+
         def limit(self, *_a, **_k):
             return self
 
         def execute(self):
             return type("R", (), {"data": self._rows})()
 
+    return FakeQ(rows)
+
+
+def test_list_bandeja_desarrollador_ve_todos(monkeypatch):
+    items = [
+        {"id": 1, "origen": "compromiso", "asignado_a_id": 99, "created_by": 88, "solicitante_id": 77, "contrato_id": 3},
+        {"id": 2, "origen": "tarea", "asignado_a_id": 55, "created_by": 55, "solicitante_id": None, "contrato_id": 3},
+        {"id": 3, "origen": "tarea", "asignado_a_id": 55, "created_by": 55, "solicitante_id": None, "contrato_id": 9},
+    ]
+
     class FakeSb:
-        def table(self, _name):
-            return FakeQ(
-                [
-                    {"id": 1, "origen": "compromiso", "asignado_a_id": 99, "created_by": 88, "solicitante_id": 77, "contrato_id": 3},
-                    {"id": 2, "origen": "tarea", "asignado_a_id": 55, "created_by": 55, "solicitante_id": None, "contrato_id": None},
-                ]
-            )
+        def table(self, name):
+            if name == "seguimiento_item":
+                return _fake_bandeja_q(items)
+            return _fake_bandeja_q([])
 
     monkeypatch.setattr(svc, "_usuario_row", lambda _sb, _uid: {"id": 1, "rol_id": 1})
     monkeypatch.setattr(svc, "es_desarrollador_seguimiento", lambda _u: True)
+    # Sin filtro de contrato: ve todo (compat)
     rows = svc.list_bandeja(FakeSb(), 1, {"sub": "1", "cargo_nombre": "Desarrollador"})
-    assert {r["id"] for r in rows} == {1, 2}
+    assert {r["id"] for r in rows} == {1, 2, 3}
+    # Con contrato activo: solo ítems de ese contrato (también Desarrollador)
+    rows_c3 = svc.list_bandeja(
+        FakeSb(), 1, {"sub": "1", "cargo_nombre": "Desarrollador"}, contrato_id=3,
+    )
+    assert {r["id"] for r in rows_c3} == {1, 2}
+
+
+def test_list_bandeja_excluye_tareas_sin_contrato_al_filtrar(monkeypatch):
+    items = [
+        {"id": 1, "origen": "tarea", "asignado_a_id": 1, "created_by": 1, "solicitante_id": None, "contrato_id": None},
+        {"id": 2, "origen": "tarea", "asignado_a_id": 1, "created_by": 1, "solicitante_id": None, "contrato_id": 5},
+    ]
+
+    class FakeSb:
+        def table(self, name):
+            if name == "seguimiento_item":
+                return _fake_bandeja_q(items)
+            return _fake_bandeja_q([])
+
+    monkeypatch.setattr(svc, "_usuario_row", lambda _sb, _uid: {"id": 1, "rol_id": 5})
+    monkeypatch.setattr(svc, "es_desarrollador_seguimiento", lambda _u: False)
+    monkeypatch.setattr(svc, "es_contratista_gerencial", lambda *_a, **_k: False)
+    rows = svc.list_bandeja(FakeSb(), 1, {"sub": "1"}, contrato_id=5)
+    assert [r["id"] for r in rows] == [2]
 
 
 def test_list_bandeja_usuario_normal_filtra_ownership(monkeypatch):
-    class FakeQ:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def select(self, *_a, **_k):
-            return self
-
-        def order(self, *_a, **_k):
-            return self
-
-        def eq(self, *_a, **_k):
-            return self
-
-        def gte(self, *_a, **_k):
-            return self
-
-        def lte(self, *_a, **_k):
-            return self
-
-        def limit(self, *_a, **_k):
-            return self
-
-        def execute(self):
-            return type("R", (), {"data": self._rows})()
+    items = [
+        {"id": 1, "origen": "compromiso", "asignado_a_id": 1, "created_by": 2, "solicitante_id": 2, "contrato_id": 3},
+        {"id": 2, "origen": "tarea", "asignado_a_id": 55, "created_by": 55, "solicitante_id": None, "contrato_id": None},
+    ]
 
     class FakeSb:
-        def table(self, _name):
-            return FakeQ(
-                [
-                    {"id": 1, "origen": "compromiso", "asignado_a_id": 1, "created_by": 2, "solicitante_id": 2, "contrato_id": 3},
-                    {"id": 2, "origen": "tarea", "asignado_a_id": 55, "created_by": 55, "solicitante_id": None, "contrato_id": None},
-                ]
-            )
+        def table(self, name):
+            if name == "seguimiento_item":
+                return _fake_bandeja_q(items)
+            return _fake_bandeja_q([])
 
     monkeypatch.setattr(svc, "_usuario_row", lambda _sb, _uid: {"id": 1, "rol_id": 5})
     monkeypatch.setattr(svc, "es_desarrollador_seguimiento", lambda _u: False)
@@ -253,6 +265,7 @@ def test_update_tarea_desarrollador_ajena(monkeypatch):
             "descripcion": (sb.updated or {}).get("descripcion"),
         },
     )
+    monkeypatch.setattr(svc, "get_item_detalle", lambda _sb, iid: {"id": iid, "ok": True})
     row = svc.update_tarea(
         sb,
         5,

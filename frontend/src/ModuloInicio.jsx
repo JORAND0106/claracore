@@ -1468,7 +1468,19 @@ export default function ModuloInicio({
           {/* ── Zona 1: clima ── */}
           <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
-          {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
+          {/* ── Zona 2: bandeja Seguimiento (bajo el clima, visible) ── */}
+          <div style={{ marginBottom: isMobile ? '14px' : '16px' }}>
+            <SeguimientoWidget
+              t={t}
+              fs={fs}
+              usuario={usuario}
+              token={token}
+              contratoId={contratoId}
+              onIrSeguimiento={onIrSeguimiento}
+            />
+          </div>
+
+          {/* ── Zona 3: saludo + cita + novedades | carrusel ── */}
           <div
             className="cc-inicio-main-grid"
             style={{
@@ -1508,20 +1520,9 @@ export default function ModuloInicio({
             </div>
           </div>
 
-          {/* ── Zona 3: ficha del contrato ── */}
+          {/* ── Zona 4: ficha del contrato ── */}
           <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
             <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
-          </div>
-
-          {/* ── Zona 4: bandeja Seguimiento (compromisos + tareas) ── */}
-          <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
-            <SeguimientoWidget
-              t={t}
-              fs={fs}
-              usuario={usuario}
-              token={token}
-              onIrSeguimiento={onIrSeguimiento}
-            />
           </div>
         </>
       )}

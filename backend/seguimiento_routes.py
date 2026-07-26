@@ -177,6 +177,7 @@ class TareaCreateBody(BaseModel):
     referido_a_id: Optional[int] = None
     referido_a_nombre: Optional[str] = None
     relacion_destinatario: Optional[str] = None
+    contrato_id: Optional[int] = None
 
 
 class TareaUpdateBody(BaseModel):
@@ -261,14 +262,15 @@ def route_bandeja_widget(
     contrato_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    """Misma bandeja recortada para el widget de inicio."""
+    """Misma bandeja recortada para el widget de inicio (siempre filtrada por contrato)."""
     if not tiene_permiso_seguimiento(current_user, "ver"):
         return []
-    if contrato_id is not None:
-        try:
-            _check_contrato(current_user, contrato_id)
-        except HTTPException:
-            return []
+    if contrato_id is None:
+        return []
+    try:
+        _check_contrato(current_user, contrato_id)
+    except HTTPException:
+        return []
     rows = list_bandeja(
         supabase,
         _uid(current_user),
@@ -409,8 +411,12 @@ def route_revisar_justificacion(
 @router.post("/tareas")
 def route_crear_tarea(body: TareaCreateBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "crear")
+    payload = body.model_dump()
+    cid = payload.get("contrato_id")
+    if cid is not None:
+        _check_contrato(current_user, int(cid))
     try:
-        row = crear_tarea(supabase, body.model_dump(), _uid(current_user))
+        row = crear_tarea(supabase, payload, _uid(current_user))
         registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_tarea", str(row["id"]), {})
         return row
     except ValueError as exc:
