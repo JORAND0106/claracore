@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import PriorityStars from './PriorityStars'
+import UserSearchSelect, { nombreUser } from './UserSearchSelect'
+import VencimientoIcon from './VencimientoIcon'
+import { calcularNivelVencimiento } from './vencimientoLevels'
 
-function nombreUser(u) {
-  if (!u) return ''
-  return `${u.nombre || ''} ${u.apellidos || ''}`.trim() || u.email || `#${u.id}`
-}
-
-/** Formulario de tarea personal con Ctrl+V de imágenes. */
+/** Formulario de tarea personal con Ctrl+V de imágenes y destino formal/referencia. */
 export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
   const [form, setForm] = useState({
     titulo: '',
     descripcion: '',
     fecha_vencimiento: '',
-    prioridad: 0,
-    destinatario_tentativo_id: '',
+    hora_vencimiento: '',
+    destinatario_id: '',
     campos_libres: { notas: '' },
   })
+  const [destUser, setDestUser] = useState(null)
+  const [askModo, setAskModo] = useState(false)
   const [pendientesImg, setPendientesImg] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -47,27 +46,33 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
     return () => el.removeEventListener('paste', onPaste)
   }, [])
 
-  const guardar = async () => {
-    if (!form.titulo.trim()) {
-      setError('Indique un título')
-      return
-    }
+  const nivelPreview = form.fecha_vencimiento
+    ? calcularNivelVencimiento({
+      fechaVencimiento: form.fecha_vencimiento,
+      fechaCreacion: new Date().toISOString().slice(0, 10),
+    })
+    : null
+
+  const crearConModo = async (relacion) => {
     setBusy(true)
     setError('')
     try {
-      const dest = usuarios.find((u) => String(u.id) === String(form.destinatario_tentativo_id))
-      const row = await api.crearTarea({
+      const payload = {
         titulo: form.titulo.trim(),
         descripcion: form.descripcion,
         fecha_vencimiento: form.fecha_vencimiento || null,
+        hora_vencimiento: form.hora_vencimiento || null,
         campos_libres: {
           ...(form.campos_libres || {}),
           notas: form.campos_libres?.notas || '',
-          prioridad: form.prioridad || 0,
-          destinatario_tentativo_id: dest ? dest.id : null,
-          destinatario_tentativo_nombre: dest ? nombreUser(dest) : null,
         },
-      })
+      }
+      if (destUser && relacion) {
+        payload.relacion_destinatario = relacion
+        payload.destinatario_id = destUser.id
+        payload.referido_a_nombre = nombreUser(destUser)
+      }
+      const row = await api.crearTarea(payload)
       for (const im of pendientesImg) {
         await api.pegarImagenTarea(row.id, {
           nombre: im.nombre,
@@ -81,7 +86,20 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
       setError(e.message || 'No se pudo crear')
     } finally {
       setBusy(false)
+      setAskModo(false)
     }
+  }
+
+  const guardar = async () => {
+    if (!form.titulo.trim()) {
+      setError('Indique un título')
+      return
+    }
+    if (destUser) {
+      setAskModo(true)
+      return
+    }
+    await crearConModo(null)
   }
 
   return (
@@ -115,8 +133,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           Nueva tarea personal
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 20, lineHeight: 1.45 }}>
-          Organice pendientes propios. Pegue imágenes con Ctrl+V dentro de esta ventana.
-          Un destinatario tentativo es solo una nota de interés: no crea compromiso ni envía notificaciones.
+          Organice pendientes propios. Pegue imágenes con Ctrl+V. El nivel de vencimiento reemplaza la prioridad por estrellas.
         </div>
 
         <label style={lbl(t)}>Título</label>
@@ -138,81 +155,50 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           gap: 16,
           marginBottom: 14,
         }}>
           <div>
-            <label style={lbl(t)}>Prioridad</label>
-            <div style={{ padding: '8px 0' }}>
-              <PriorityStars
-                t={t}
-                value={form.prioridad}
-                onChange={(prioridad) => setForm((f) => ({ ...f, prioridad }))}
-              />
-            </div>
+            <label style={lbl(t)}>Fecha de vencimiento</label>
+            <input
+              type="date"
+              value={form.fecha_vencimiento}
+              onChange={(e) => setForm((f) => ({ ...f, fecha_vencimiento: e.target.value }))}
+              style={inp(t)}
+            />
           </div>
           <div>
-            <label style={lbl(t)}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span aria-hidden="true" title="Fecha de entrega o cumplimiento">📅</span>
-                Fecha de vencimiento
-                <span
-                  title="Fecha de entrega o cumplimiento del pendiente — no es una fecha informativa cualquiera."
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 18,
-                    height: 18,
-                    borderRadius: 9,
-                    border: `1px solid ${t.border}`,
-                    fontSize: 11,
-                    color: t.textMuted,
-                    cursor: 'help',
-                    fontWeight: 700,
-                  }}
-                >
-                  ?
-                </span>
-              </span>
-            </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                aria-hidden="true"
-                title="Fecha de entrega o cumplimiento del pendiente"
-                style={{ fontSize: '1.2rem', lineHeight: 1 }}
-              >
-                📅
-              </span>
-              <input
-                type="date"
-                value={form.fecha_vencimiento}
-                onChange={(e) => setForm((f) => ({ ...f, fecha_vencimiento: e.target.value }))}
-                style={{ ...inp(t), flex: 1 }}
-                title="Fecha de entrega o cumplimiento del pendiente — no es una fecha informativa cualquiera."
-              />
-            </div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
-              Opcional. Corresponde a la fecha de entrega o cumplimiento.
+            <label style={lbl(t)}>Hora de entrega (opcional)</label>
+            <input
+              type="time"
+              value={form.hora_vencimiento}
+              onChange={(e) => setForm((f) => ({ ...f, hora_vencimiento: e.target.value }))}
+              style={inp(t)}
+            />
+          </div>
+          <div>
+            <label style={lbl(t)}>Nivel de vencimiento</label>
+            <div style={{ paddingTop: 8 }}>
+              <VencimientoIcon nivel={nivelPreview} showLabel t={t} />
             </div>
           </div>
         </div>
 
-        <label style={lbl(t)}>Destinatario tentativo (opcional)</label>
-        <select
-          value={form.destinatario_tentativo_id}
-          onChange={(e) => setForm((f) => ({ ...f, destinatario_tentativo_id: e.target.value }))}
+        <label style={lbl(t)}>Destinatario (opcional)</label>
+        <UserSearchSelect
+          t={t}
+          usuarios={usuarios}
+          mode="strict"
+          placeholder="Buscar usuario del contrato…"
           style={{ ...inp(t), marginBottom: 6 }}
-        >
-          <option value="">Nadie en particular</option>
-          {usuarios.map((u) => (
-            <option key={u.id} value={u.id}>{nombreUser(u)}</option>
-          ))}
-        </select>
+          onSelect={(u) => {
+            setDestUser(u)
+            setForm((f) => ({ ...f, destinatario_id: u?.id || '' }))
+          }}
+        />
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 14, lineHeight: 1.4 }}>
-          Indica a quién podría interesar o involucrar esta tarea. No la convierte en compromiso formal
-          ni dispara notificaciones obligatorias.
+          Al guardar se le preguntará si es asignación formal o solo referencia. En ambos casos permanece en su bandeja.
         </div>
 
         <label style={lbl(t)}>Notas libres</label>
@@ -228,6 +214,27 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
             {pendientesImg.map((im, i) => (
               <img key={i} src={im.data_uri} alt="" style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: `1px solid ${t.border}` }} />
             ))}
+          </div>
+        )}
+
+        {askModo && destUser && (
+          <div style={{
+            marginBottom: 14, padding: 12, borderRadius: 8,
+            border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+            fontSize: 'var(--cc-sm)', color: t.text,
+          }}>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>
+              ¿Asignar formalmente a {nombreUser(destUser)} o solo enviarla como referencia?
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" disabled={busy} style={primary(t)} onClick={() => crearConModo('asignacion')}>
+                Asignación formal
+              </button>
+              <button type="button" disabled={busy} style={ghost(t)} onClick={() => crearConModo('referencia')}>
+                Solo referencia
+              </button>
+              <button type="button" style={ghost(t)} onClick={() => setAskModo(false)}>Cancelar</button>
+            </div>
           </div>
         )}
 

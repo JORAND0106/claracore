@@ -310,20 +310,29 @@ def compromisos_abiertos_contrato(sb, contrato_id: int, excluir_acta_id: Optiona
 
 
 def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
-    u = _usuario_row(sb, user_id)
     consec = proximo_consecutivo(sb, contrato_id)
     fecha = _parse_date(data.get("fecha_reunion")) or _now_bogota().date()
     elaborador_id = data.get("elaborador_id") or user_id
-    elab = _usuario_row(sb, int(elaborador_id)) if elaborador_id else u
+    if not elaborador_id:
+        raise ValueError("El elaborador debe ser un usuario registrado del contrato")
+    elab = _usuario_row(sb, int(elaborador_id))
+    if not elab:
+        raise ValueError("El elaborador debe ser un usuario registrado del contrato")
+    orden = data.get("orden_del_dia")
+    if isinstance(orden, (list, dict)):
+        import json
+        orden_txt = json.dumps(orden, ensure_ascii=False)
+    else:
+        orden_txt = (orden or "").strip() or None
     row = {
         "contrato_id": int(contrato_id),
         "consecutivo": consec,
         "fecha_reunion": fecha.isoformat(),
         "ubicacion": (data.get("ubicacion") or "").strip() or None,
-        "orden_del_dia": (data.get("orden_del_dia") or "").strip() or None,
-        "elaborador_id": int(elaborador_id) if elaborador_id else None,
+        "orden_del_dia": orden_txt,
+        "elaborador_id": int(elaborador_id),
         "elaborador_nombre": data.get("elaborador_nombre") or _nombre_usuario(elab),
-        "estado": "borrador",
+        "estado": data.get("estado") if data.get("estado") in ("borrador", "en_firma", "firmada", "cerrada") else "borrador",
         "created_by": int(user_id),
         "updated_at": _now_utc().isoformat(),
     }
@@ -345,13 +354,22 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
     if "fecha_reunion" in data and data["fecha_reunion"]:
         patch["fecha_reunion"] = (_parse_date(data["fecha_reunion"]) or date.today()).isoformat()
-    for k in ("ubicacion", "orden_del_dia", "elaborador_nombre"):
+    for k in ("ubicacion", "elaborador_nombre"):
         if k in data:
             patch[k] = (data.get(k) or "").strip() or None
+    if "orden_del_dia" in data:
+        orden = data.get("orden_del_dia")
+        if isinstance(orden, (list, dict)):
+            import json
+            patch["orden_del_dia"] = json.dumps(orden, ensure_ascii=False)
+        else:
+            patch["orden_del_dia"] = (orden or "").strip() or None
     if "elaborador_id" in data and data["elaborador_id"]:
         patch["elaborador_id"] = int(data["elaborador_id"])
+        elab = _usuario_row(sb, int(data["elaborador_id"]))
+        if not elab:
+            raise ValueError("El elaborador debe ser un usuario registrado del contrato")
         if not data.get("elaborador_nombre"):
-            elab = _usuario_row(sb, int(data["elaborador_id"]))
             patch["elaborador_nombre"] = _nombre_usuario(elab)
     if "estado" in data and data["estado"] in ("borrador", "en_firma", "firmada", "cerrada"):
         patch["estado"] = data["estado"]
@@ -377,6 +395,7 @@ def _sync_asistentes(sb, acta_id: int, asistentes: list) -> None:
             "nombre": nombre,
             "cargo": (a.get("cargo") or "").strip() or None,
             "entidad": (a.get("entidad") or "").strip() or None,
+            "email": (a.get("email") or "").strip() or None,
             "usuario_id": int(a["usuario_id"]) if a.get("usuario_id") else None,
             "orden": int(a.get("orden") if a.get("orden") is not None else i),
         })
@@ -477,7 +496,45 @@ def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
 
 # ── Compromisos ──────────────────────────────────────────────────────────────
 
+def _proximo_consecutivo_item(sb, *, origen: str, user_id: Optional[int] = None, contrato_id: Optional[int] = None) -> int:
+    q = sb.table("seguimiento_item").select("consecutivo").eq("origen", origen).not_.is_("consecutivo", "null")
+    if origen == "tarea" and user_id is not None:
+        q = q.eq("created_by", int(user_id))
+    if origen == "compromiso" and contrato_id is not None:
+        q = q.eq("contrato_id", int(contrato_id))
+    rows = q.order("consecutivo", desc=True).limit(1).execute().data or []
+    if not rows:
+        return 1
+    return int(rows[0].get("consecutivo") or 0) + 1
+
+
+def _norm_hora(raw) -> Optional[str]:
+    if raw is None or raw == "":
+        return None
+    s = str(raw).strip()
+    if len(s) >= 5 and s[2] == ":":
+        return s[:5]
+    return None
+
+
 def crear_compromiso_desde_idea(sb, contrato_id: int, acta_id: int, idea_id: int, data: dict, user_id: int) -> dict:
+    """Crea uno o varios compromisos (uno por asignado)."""
+    asignados = data.get("asignados") or []
+    if not asignados and data.get("asignado_a_id"):
+        asignados = [{
+            "asignado_a_id": data["asignado_a_id"],
+            "asignado_a_nombre": data.get("asignado_a_nombre"),
+        }]
+    if not asignados:
+        raise ValueError("Debe indicar al menos un asignado")
+    created = []
+    for a in asignados:
+        payload = {**data, **a}
+        created.append(_crear_un_compromiso(sb, contrato_id, acta_id, idea_id, payload, user_id))
+    return created[0] if len(created) == 1 else {"items": created, "count": len(created)}
+
+
+def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data: dict, user_id: int) -> dict:
     acta = get_acta(sb, acta_id, contrato_id)
     ideas = {int(i["id"]): i for i in acta.get("ideas") or []}
     if int(idea_id) not in ideas:
@@ -497,6 +554,8 @@ def crear_compromiso_desde_idea(sb, contrato_id: int, acta_id: int, idea_id: int
     if not titulo:
         raise ValueError("Debe indicar la redacción del compromiso")
     descripcion = (data.get("descripcion") or data.get("redaccion") or titulo).strip()
+    hora = _norm_hora(data.get("hora_vencimiento"))
+    consec = _proximo_consecutivo_item(sb, origen="compromiso", contrato_id=contrato_id)
     row = {
         "origen": "compromiso",
         "titulo": titulo[:500],
@@ -507,12 +566,15 @@ def crear_compromiso_desde_idea(sb, contrato_id: int, acta_id: int, idea_id: int
         "created_by": int(user_id),
         "fecha_vencimiento": fv.isoformat(),
         "fecha_vencimiento_original": fv.isoformat(),
+        "hora_vencimiento": hora,
         "fecha_limite_gracia": limite.astimezone(timezone.utc).isoformat(),
         "contrato_id": int(contrato_id),
         "acta_id": int(acta_id),
         "idea_id": int(idea_id),
         "solicitante_id": solicitante_id,
         "solicitante_nombre": data.get("solicitante_nombre") or _nombre_usuario(solicitante),
+        "consecutivo": consec,
+        "relacion_destinatario": "asignacion",
         "updated_at": _now_utc().isoformat(),
     }
     ins = sb.table("seguimiento_item").insert(row).execute().data
@@ -557,26 +619,11 @@ def actualizar_estado_gestion(sb, item_id: int, estado: str, user_id: int, *, co
 # ── Tareas personales ────────────────────────────────────────────────────────
 
 def _normalizar_campos_libres_tarea(raw) -> dict:
-    """Prioridad (0–3) y destinatario tentativo — informativos; no generan notificaciones."""
+    """Campos libres de tarea (notas, etc.). La prioridad por estrellas quedó deprecada."""
     base = dict(raw) if isinstance(raw, dict) else {}
-    try:
-        pri = int(base.get("prioridad") if base.get("prioridad") is not None else 0)
-    except (TypeError, ValueError):
-        pri = 0
-    base["prioridad"] = max(0, min(3, pri))
-    dest_id = base.get("destinatario_tentativo_id")
-    if dest_id in (None, "", 0, "0"):
-        base["destinatario_tentativo_id"] = None
-        base["destinatario_tentativo_nombre"] = None
-    else:
-        try:
-            base["destinatario_tentativo_id"] = int(dest_id)
-        except (TypeError, ValueError):
-            base["destinatario_tentativo_id"] = None
-            base["destinatario_tentativo_nombre"] = None
-        else:
-            nombre = (base.get("destinatario_tentativo_nombre") or "").strip() or None
-            base["destinatario_tentativo_nombre"] = nombre
+    base.pop("prioridad", None)
+    base.pop("destinatario_tentativo_id", None)
+    base.pop("destinatario_tentativo_nombre", None)
     return base
 
 
@@ -586,18 +633,47 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     if not titulo:
         raise ValueError("El título de la tarea es obligatorio")
     fv = _parse_date(data.get("fecha_vencimiento"))
+    hora = _norm_hora(data.get("hora_vencimiento"))
     imagenes = data.get("imagenes") or []
     if not isinstance(imagenes, list):
         imagenes = []
+    consec = _proximo_consecutivo_item(sb, origen="tarea", user_id=user_id)
+    relacion = data.get("relacion_destinatario")
+    referido_id = data.get("referido_a_id") or data.get("destinatario_id")
+    asignado_id = int(data.get("asignado_a_id") or user_id)
+    asignado_nombre = data.get("asignado_a_nombre") or _nombre_usuario(u)
+    referido_nombre = None
+    if relacion == "asignacion" and referido_id:
+        dest = _usuario_row(sb, int(referido_id))
+        if not dest:
+            raise ValueError("Destinatario no encontrado")
+        asignado_id = int(referido_id)
+        asignado_nombre = data.get("referido_a_nombre") or _nombre_usuario(dest)
+        referido_id = None
+    elif relacion == "referencia" and referido_id:
+        dest = _usuario_row(sb, int(referido_id))
+        if not dest:
+            raise ValueError("Destinatario no encontrado")
+        referido_nombre = data.get("referido_a_nombre") or _nombre_usuario(dest)
+        referido_id = int(referido_id)
+    else:
+        relacion = None
+        referido_id = None
+
     row = {
         "origen": "tarea",
         "titulo": titulo[:500],
         "descripcion": (data.get("descripcion") or "").strip() or None,
         "estado_gestion": data.get("estado_gestion") or "abierto",
-        "asignado_a_id": int(data.get("asignado_a_id") or user_id),
-        "asignado_a_nombre": data.get("asignado_a_nombre") or _nombre_usuario(u),
+        "asignado_a_id": asignado_id,
+        "asignado_a_nombre": asignado_nombre,
         "created_by": int(user_id),
         "fecha_vencimiento": fv.isoformat() if fv else None,
+        "hora_vencimiento": hora,
+        "consecutivo": consec,
+        "relacion_destinatario": relacion,
+        "referido_a_id": referido_id,
+        "referido_a_nombre": referido_nombre,
         "campos_libres": _normalizar_campos_libres_tarea(data.get("campos_libres")),
         "imagenes": imagenes,
         "updated_at": _now_utc().isoformat(),
@@ -606,7 +682,20 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     if not ins:
         raise ValueError("No se pudo crear la tarea")
     item = ins[0]
-    _registrar_evento(sb, int(item["id"]), "tarea_creada", user_id)
+    _registrar_evento(sb, int(item["id"]), "tarea_creada", user_id, {"relacion": relacion})
+    notify_id = asignado_id if relacion == "asignacion" else referido_id
+    if notify_id and int(notify_id) != int(user_id):
+        tipo_msg = "asignó formalmente" if relacion == "asignacion" else "compartió como referencia"
+        _notificar(
+            sb,
+            destinatario_id=int(notify_id),
+            remitente_id=user_id,
+            asunto=f"Tarea: {titulo[:80]}",
+            mensaje=f"Se le {tipo_msg} la tarea «{titulo}».",
+            contrato_id=None,
+            entidad_tipo="seguimiento_tarea",
+            entidad_id=str(item["id"]),
+        )
     return item
 
 
@@ -634,6 +723,8 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
     if "fecha_vencimiento" in data:
         fv = _parse_date(data.get("fecha_vencimiento"))
         patch["fecha_vencimiento"] = fv.isoformat() if fv else None
+    if "hora_vencimiento" in data:
+        patch["hora_vencimiento"] = _norm_hora(data.get("hora_vencimiento"))
     if "campos_libres" in data:
         patch["campos_libres"] = _normalizar_campos_libres_tarea(data.get("campos_libres"))
     if "imagenes" in data:
@@ -742,6 +833,7 @@ def list_bandeja(
     fecha_hasta: Optional[str] = None,
     origen: Optional[str] = None,
     incluir_equipo: bool = True,
+    incluir_cerrados: bool = False,
 ) -> List[dict]:
     u = _usuario_row(sb, user_id)
     es_dev = es_desarrollador_seguimiento(current_user)
@@ -749,7 +841,6 @@ def list_bandeja(
     if not es_dev and incluir_equipo and es_contratista_gerencial(u, current_user):
         visible_ids |= ids_usuarios_bajo_gestion(sb, user_id, contrato_id or (u or {}).get("contrato_id"))
 
-    # Fetch broad then filter en Python (tareas personales no tienen contrato_id).
     q = sb.table("seguimiento_item").select("*").order("fecha_vencimiento", nullsfirst=False).order("created_at", desc=True)
     if origen in ("compromiso", "tarea"):
         q = q.eq("origen", origen)
@@ -763,28 +854,142 @@ def list_bandeja(
 
     out = []
     for r in rows:
-        # Contrato: compromisos del contrato + tareas personales (sin contrato)
+        if not incluir_cerrados and not estado:
+            if r.get("estado_gestion") in ("cumplido", "cancelado"):
+                continue
         if contrato_id is not None:
             if r.get("origen") == "compromiso" and int(r.get("contrato_id") or 0) != int(contrato_id):
                 continue
             if r.get("origen") == "tarea" and r.get("contrato_id") not in (None, ""):
-                # Tareas ligadas por error a otro contrato
                 if int(r.get("contrato_id") or 0) != int(contrato_id):
                     continue
         aid = r.get("asignado_a_id")
         cid_creator = r.get("created_by")
+        referido = r.get("referido_a_id")
         if responsable_id is not None and int(aid or 0) != int(responsable_id):
             continue
-        # Desarrollador: visibilidad total (como en el resto de módulos).
         if es_dev:
             out.append(r)
             continue
-        # Visibilidad: asignado, creador, o equipo bajo gerencial
-        if int(aid or 0) not in visible_ids and int(cid_creator or 0) not in visible_ids:
-            if int(r.get("solicitante_id") or 0) == int(user_id):
-                out.append(r)
+        if (
+            int(aid or 0) in visible_ids
+            or int(cid_creator or 0) in visible_ids
+            or int(referido or 0) in visible_ids
+            or int(r.get("solicitante_id") or 0) == int(user_id)
+        ):
+            out.append(r)
             continue
-        out.append(r)
+    # Proximidad de vencimiento (más cercano primero)
+    def _sort_key(item):
+        fv = item.get("fecha_vencimiento") or "9999-12-31"
+        hv = item.get("hora_vencimiento") or "23:59"
+        return (str(fv)[:10], str(hv)[:5], int(item.get("id") or 0))
+
+    out.sort(key=_sort_key)
+    return out
+
+
+def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict) -> dict:
+    """Asignación formal o envío por referencia a un destinatario."""
+    item = get_item(sb, item_id)
+    es_dev = es_desarrollador_seguimiento(current_user)
+    if (
+        not es_dev
+        and int(item.get("created_by") or 0) != int(user_id)
+        and int(item.get("asignado_a_id") or 0) != int(user_id)
+    ):
+        raise ValueError("No puede destinar este ítem")
+    modo = (data.get("relacion_destinatario") or data.get("modo") or "").strip().lower()
+    if modo not in ("asignacion", "referencia"):
+        raise ValueError("Indique si es asignación formal o referencia")
+    dest_id = int(data["destinatario_id"])
+    dest = _usuario_row(sb, dest_id)
+    if not dest:
+        raise ValueError("Destinatario no encontrado")
+    nombre = data.get("destinatario_nombre") or _nombre_usuario(dest)
+    patch: Dict[str, Any] = {
+        "relacion_destinatario": modo,
+        "updated_at": _now_utc().isoformat(),
+    }
+    if modo == "asignacion":
+        patch["asignado_a_id"] = dest_id
+        patch["asignado_a_nombre"] = nombre
+        patch["referido_a_id"] = None
+        patch["referido_a_nombre"] = None
+    else:
+        patch["referido_a_id"] = dest_id
+        patch["referido_a_nombre"] = nombre
+    sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    _registrar_evento(sb, item_id, f"destinar_{modo}", user_id, {"destinatario_id": dest_id})
+    _notificar(
+        sb,
+        destinatario_id=dest_id,
+        remitente_id=user_id,
+        asunto=f"{'Asignación' if modo == 'asignacion' else 'Referencia'}: {item.get('titulo')}",
+        mensaje=(
+            f"Se le {'asignó formalmente' if modo == 'asignacion' else 'compartió como referencia'} "
+            f"el ítem «{item.get('titulo')}»."
+        ),
+        contrato_id=item.get("contrato_id"),
+        entidad_tipo="seguimiento_item",
+        entidad_id=str(item_id),
+    )
+    return get_item_detalle(sb, item_id)
+
+
+def eliminar_item(sb, item_id: int, current_user: dict) -> dict:
+    if not es_desarrollador_seguimiento(current_user):
+        raise ValueError("Solo el rol Desarrollador puede eliminar definitivamente")
+    item = get_item(sb, item_id)
+    sb.table("seguimiento_item").delete().eq("id", int(item_id)).execute()
+    return {"ok": True, "id": item_id, "origen": item.get("origen")}
+
+
+def eliminar_acta(sb, contrato_id: int, acta_id: int, current_user: dict) -> dict:
+    if not es_desarrollador_seguimiento(current_user):
+        raise ValueError("Solo el rol Desarrollador puede eliminar definitivamente")
+    get_acta(sb, acta_id, contrato_id)
+    # Desvincular compromisos (no borrar ítems de bandeja automáticamente)
+    sb.table("seguimiento_item").update({
+        "acta_id": None,
+        "updated_at": _now_utc().isoformat(),
+    }).eq("acta_id", int(acta_id)).execute()
+    sb.table("seguimiento_acta").delete().eq("id", int(acta_id)).eq("contrato_id", int(contrato_id)).execute()
+    return {"ok": True, "id": acta_id}
+
+
+def list_usuarios_contrato_enriquecidos(sb, contrato_id: int) -> List[dict]:
+    """Usuarios del contrato con cargo y empresa (contratista del contrato)."""
+    ct = sb.table("contratos").select("id, contratista, numero").eq("id", int(contrato_id)).limit(1).execute().data or []
+    empresa = (ct[0].get("contratista") if ct else None) or None
+    uc = sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", int(contrato_id)).execute().data or []
+    ids_uc = [r["usuario_id"] for r in uc]
+    principales = sb.table("usuarios").select("id").eq("contrato_id", int(contrato_id)).execute().data or []
+    todos_ids = list({*(ids_uc or []), *[p["id"] for p in principales]})
+    if not todos_ids:
+        return []
+    users = (
+        sb.table("usuarios")
+        .select("id, nombre, apellidos, email, cargo_id, activo")
+        .in_("id", todos_ids)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    cargo_ids = list({u["cargo_id"] for u in users if u.get("cargo_id")})
+    cargos = {}
+    if cargo_ids:
+        crows = sb.table("cargos").select("id, nombre").in_("id", cargo_ids).execute().data or []
+        cargos = {c["id"]: c.get("nombre") for c in crows}
+    out = []
+    for u in users:
+        out.append({
+            **u,
+            "cargo_nombre": cargos.get(u.get("cargo_id")) or "",
+            "empresa": empresa or "",
+        })
+    out.sort(key=lambda x: f"{x.get('nombre') or ''} {x.get('apellidos') or ''}".lower())
     return out
 
 

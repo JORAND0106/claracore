@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import ItemDetalleModal from './ItemDetalleModal'
-import { estrellasTexto } from './PriorityStars'
 import TareaFormModal from './TareaFormModal'
-import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
+import VencimientoIcon from './VencimientoIcon'
+import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import {
+  calcularNivelVencimiento,
+  sortByProximidadVencimiento,
+  tipoLaborLabel,
+} from './vencimientoLevels'
 
 export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false }) {
   const [rows, setRows] = useState([])
@@ -14,6 +19,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     fecha_desde: '',
     fecha_hasta: '',
     responsable_id: '',
+    incluir_cerrados: false,
   })
   const [detalleId, setDetalleId] = useState(null)
   const [showTarea, setShowTarea] = useState(false)
@@ -23,7 +29,13 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     setError('')
     try {
       const params = {}
-      Object.entries(filtros).forEach(([k, v]) => { if (v) params[k] = v })
+      Object.entries(filtros).forEach(([k, v]) => {
+        if (v === true || v === false) {
+          if (v) params[k] = 'true'
+          return
+        }
+        if (v) params[k] = v
+      })
       const data = await api.listBandeja(params)
       setRows(Array.isArray(data) ? data : [])
     } catch (e) {
@@ -35,6 +47,9 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
   }, [api, filtros])
 
   useEffect(() => { load() }, [load])
+
+  const sorted = useMemo(() => sortByProximidadVencimiento(rows), [rows])
+  const uid = usuario?.id
 
   return (
     <div>
@@ -60,6 +75,14 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           <Filter t={t} label="Hasta">
             <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={inp(t)} />
           </Filter>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4 }}>
+            <input
+              type="checkbox"
+              checked={!!filtros.incluir_cerrados}
+              onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
+            />
+            Incluir cumplidos / cancelados
+          </label>
           <button type="button" onClick={load} style={ghost(t)}>Actualizar</button>
           {permisos?.crear && (
             <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
@@ -81,48 +104,55 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)' }}>{error}</div>}
       {loading ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>Cargando bandeja…</div>
-      ) : rows.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>No hay ítems en la bandeja.</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map((r) => {
-            const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-            return (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => setDetalleId(r.id)}
-                style={{
-                  textAlign: 'left', cursor: 'pointer',
-                  border: `1px solid ${t.border}`,
-                  borderLeft: `5px solid ${o.border}`,
-                  background: o.bg,
-                  borderRadius: 10,
-                  padding: '10px 12px',
-                  color: t.text,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-body)' }}>
-                    {estrellasTexto(r.campos_libres?.prioridad) ? (
-                      <span style={{ color: t.warning || '#D97706', marginRight: 6, fontSize: 'var(--cc-sm)' }}>
-                        {estrellasTexto(r.campos_libres?.prioridad)}
-                      </span>
-                    ) : null}
-                    {r.titulo}
-                  </div>
-                  <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: o.border }}>{o.label}</span>
-                </div>
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2 }}>
-                  {r.asignado_a_nombre || '—'} · {r.estado_gestion} · vence {fmtFecha(r.fecha_vencimiento)}
-                  {r.acta_id ? ` · acta #${r.acta_id}` : ''}
-                  {r.campos_libres?.destinatario_tentativo_nombre
-                    ? ` · tentativo: ${r.campos_libres.destinatario_tentativo_nombre}`
-                    : ''}
-                </div>
-              </button>
-            )
-          })}
+        <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 820 }}>
+            <thead>
+              <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
+                <th style={th}>#</th>
+                <th style={th}>Creación</th>
+                <th style={th}>Vencimiento</th>
+                <th style={th}>Nivel</th>
+                <th style={th}>Tema</th>
+                <th style={th}>Destinatario</th>
+                <th style={th}>Tipo de labor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => {
+                const nivel = calcularNivelVencimiento({
+                  fechaVencimiento: r.fecha_vencimiento,
+                  fechaCreacion: r.created_at || r.fecha_vencimiento_original,
+                })
+                const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
+                const dest = r.relacion_destinatario === 'referencia'
+                  ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
+                  : (r.asignado_a_nombre || '—')
+                return (
+                  <tr
+                    key={r.id}
+                    onClick={() => setDetalleId(r.id)}
+                    style={{ cursor: 'pointer', borderTop: `1px solid ${t.border}`, background: o.bg }}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
+                  >
+                    <td style={td}>{r.consecutivo ?? r.id}</td>
+                    <td style={td}>{fmtFecha(r.created_at)}</td>
+                    <td style={td}>{fmtFechaHora(r.fecha_vencimiento, r.hora_vencimiento)}</td>
+                    <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
+                    <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 280 }}>
+                      <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
+                      {r.titulo}
+                    </td>
+                    <td style={td}>{dest}</td>
+                    <td style={td}>{tipoLaborLabel(r, uid)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -132,6 +162,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           api={api}
           itemId={detalleId}
           usuario={usuario}
+          usuarios={usuarios}
           permisos={permisos}
           onClose={() => setDetalleId(null)}
           onChanged={load}
@@ -150,6 +181,9 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     </div>
   )
 }
+
+const th = { padding: '10px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
+const td = { padding: '10px 8px', verticalAlign: 'middle', color: 'inherit' }
 
 function Filter({ t, label, children }) {
   return (

@@ -1,7 +1,28 @@
 import { useEffect, useState } from 'react'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
+import UbicacionAutocomplete from './UbicacionAutocomplete'
+import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
+
+function parseOrdenDia(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((x, i) => (
+      typeof x === 'object'
+        ? { texto: x.texto || x.titulo || '', hecho: !!(x.hecho || x.checked || x.done), key: x.key || i }
+        : { texto: String(x), hecho: false, key: i }
+    ))
+  }
+  if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+    try {
+      return parseOrdenDia(JSON.parse(raw))
+    } catch { /* fallthrough */ }
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.split(/\n+/).filter(Boolean).map((texto, i) => ({ texto, hecho: false, key: i }))
+  }
+  return [{ texto: '', hecho: false, key: 0 }]
+}
 
 export default function ActaEditor({
   t,
@@ -16,17 +37,20 @@ export default function ActaEditor({
   const [loading, setLoading] = useState(!!actaId)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
   const [consecutivo, setConsecutivo] = useState(null)
   const [previos, setPrevios] = useState([])
+  const [localActaId, setLocalActaId] = useState(actaId)
   const [form, setForm] = useState({
     fecha_reunion: new Date().toISOString().slice(0, 10),
     ubicacion: '',
-    orden_del_dia: '',
+    orden_items: [{ texto: '', hecho: false, key: 0 }],
     elaborador_id: usuario?.id || null,
     elaborador_nombre: nombre(usuario),
-    asistentes: [{ nombre: '', cargo: '', entidad: '' }],
+    asistentes: [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }],
     ideas: [{ texto: '' }],
     apartados: [{ titulo: '', contenido: '' }],
+    estado: 'borrador',
   })
   const [claraIdx, setClaraIdx] = useState(null)
   const [compromisoCtx, setCompromisoCtx] = useState(null)
@@ -40,24 +64,31 @@ export default function ActaEditor({
           setLoading(true)
           const a = await api.getActa(actaId)
           if (cancelled) return
+          setLocalActaId(a.id)
           setConsecutivo(a.consecutivo)
           setForm({
             fecha_reunion: String(a.fecha_reunion || '').slice(0, 10),
             ubicacion: a.ubicacion || '',
-            orden_del_dia: a.orden_del_dia || '',
+            orden_items: parseOrdenDia(a.orden_del_dia),
             elaborador_id: a.elaborador_id,
             elaborador_nombre: a.elaborador_nombre || '',
             asistentes: (a.asistentes || []).length
               ? a.asistentes.map((x) => ({
-                id: x.id, nombre: x.nombre || '', cargo: x.cargo || '', entidad: x.entidad || '', usuario_id: x.usuario_id,
+                id: x.id,
+                nombre: x.nombre || '',
+                cargo: x.cargo || '',
+                entidad: x.entidad || '',
+                email: x.email || '',
+                usuario_id: x.usuario_id,
               }))
-              : [{ nombre: '', cargo: '', entidad: '' }],
+              : [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }],
             ideas: (a.ideas || []).length
               ? a.ideas.map((x) => ({ id: x.id, texto: x.texto || '', orden: x.orden }))
               : [{ texto: '' }],
             apartados: (a.apartados || []).length
               ? a.apartados.map((x) => ({ id: x.id, titulo: x.titulo || '', contenido: x.contenido || '' }))
               : [{ titulo: '', contenido: '' }],
+            estado: a.estado || 'borrador',
           })
           const abiertos = await api.compromisosAbiertos(actaId)
           if (!cancelled) setPrevios(abiertos || [])
@@ -83,20 +114,69 @@ export default function ActaEditor({
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
-  const guardar = async () => {
+  const buildPayload = (extra = {}) => ({
+    fecha_reunion: form.fecha_reunion,
+    ubicacion: form.ubicacion,
+    orden_del_dia: (form.orden_items || [])
+      .filter((x) => (x.texto || '').trim())
+      .map((x) => ({ texto: x.texto.trim(), hecho: !!x.hecho })),
+    elaborador_id: form.elaborador_id,
+    elaborador_nombre: form.elaborador_nombre,
+    asistentes: form.asistentes.filter((a) => a.nombre.trim()),
+    ideas: form.ideas.filter((i) => (i.texto || '').trim() || i.id),
+    apartados: form.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
+    ...extra,
+  })
+
+  const applySavedActa = (row) => {
+    setLocalActaId(row.id)
+    setConsecutivo(row.consecutivo)
+    setForm((f) => ({
+      ...f,
+      estado: row.estado || f.estado,
+      elaborador_id: row.elaborador_id,
+      elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
+      asistentes: (row.asistentes || []).length
+        ? row.asistentes.map((x) => ({
+          id: x.id,
+          nombre: x.nombre || '',
+          cargo: x.cargo || '',
+          entidad: x.entidad || '',
+          email: x.email || '',
+          usuario_id: x.usuario_id,
+        }))
+        : f.asistentes,
+      ideas: (row.ideas || []).length
+        ? row.ideas.map((x) => ({ id: x.id, texto: x.texto || '', orden: x.orden }))
+        : f.ideas,
+      apartados: (row.apartados || []).length
+        ? row.apartados.map((x) => ({ id: x.id, titulo: x.titulo || '', contenido: x.contenido || '' }))
+        : f.apartados,
+      orden_items: parseOrdenDia(row.orden_del_dia),
+    }))
+    return row
+  }
+
+  /** Guarda (crea o actualiza) y deja el acta e ideas con id listos para compromisos. */
+  const persistActa = async (extra = {}) => {
+    if (!form.elaborador_id) {
+      throw new Error('Seleccione un elaborador registrado en el contrato')
+    }
+    const payload = buildPayload(extra)
+    const row = localActaId
+      ? await api.updateActa(localActaId, payload)
+      : await api.createActa(payload)
+    return applySavedActa(row)
+  }
+
+  const guardar = async ({ enviar = false } = {}) => {
     setSaving(true)
     setError('')
+    setOkMsg('')
     try {
-      const payload = {
-        ...form,
-        asistentes: form.asistentes.filter((a) => a.nombre.trim()),
-        ideas: form.ideas.filter((i) => (i.texto || '').trim() || i.id),
-        apartados: form.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
-      }
-      const row = actaId
-        ? await api.updateActa(actaId, payload)
-        : await api.createActa(payload)
-      onSaved?.(row)
+      const row = await persistActa(enviar ? { estado: 'en_firma' } : {})
+      setOkMsg(enviar ? 'Acta enviada (en firma).' : 'Acta guardada correctamente.')
+      onSaved?.(row, { stay: true, enviada: enviar })
     } catch (e) {
       setError(e.message || 'No se pudo guardar')
     } finally {
@@ -104,13 +184,43 @@ export default function ActaEditor({
     }
   }
 
-  const previewPdf = async () => {
-    if (!actaId) {
-      setError('Guarde el acta antes de generar la vista previa PDF.')
-      return
+  const ensureReadyForCompromiso = async (ideaIdxHint, textoHint) => {
+    // Asegura texto local y guarda para obtener ids
+    let ideas = [...form.ideas]
+    if (ideaIdxHint != null && textoHint != null) {
+      ideas[ideaIdxHint] = { ...ideas[ideaIdxHint], texto: textoHint }
+      setField('ideas', ideas)
     }
+    const row = await persistActa()
+    const ideaLocal = ideas[ideaIdxHint]
+    let ideaId = ideaLocal?.id
+    if (!ideaId && ideaIdxHint != null) {
+      // match por orden / texto tras guardar
+      const saved = row.ideas || []
+      const byTexto = saved.find((x) => (x.texto || '').trim() === (textoHint || ideaLocal?.texto || '').trim())
+      ideaId = byTexto?.id || saved[ideaIdxHint]?.id
+    }
+    if (!ideaId) throw new Error('No se pudo identificar la idea tras guardar el acta')
+    return { actaId: row.id, ideaId, texto: textoHint || ideaLocal?.texto || '' }
+  }
+
+  const abrirCompromiso = async (ideaIdx, texto) => {
+    setSaving(true)
+    setError('')
     try {
-      const blob = await api.pdfActaBlob(actaId)
+      const ctx = await ensureReadyForCompromiso(ideaIdx, texto)
+      setCompromisoCtx(ctx)
+    } catch (e) {
+      setError(e.message || 'No se pudo preparar el compromiso')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const previewPdf = async () => {
+    try {
+      const row = localActaId ? await persistActa() : await persistActa()
+      const blob = await api.pdfActaBlob(row.id)
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
       setPdfUrl(URL.createObjectURL(blob))
     } catch (e) {
@@ -120,14 +230,14 @@ export default function ActaEditor({
 
   const firmar = async (asistenteId) => {
     try {
-      await api.firmarActa(actaId, asistenteId)
-      const a = await api.getActa(actaId)
-      setForm((f) => ({
-        ...f,
-        asistentes: (a.asistentes || []).map((x) => ({
-          id: x.id, nombre: x.nombre || '', cargo: x.cargo || '', entidad: x.entidad || '', usuario_id: x.usuario_id,
-        })),
-      }))
+      let aid = localActaId
+      if (!aid) {
+        const row = await persistActa()
+        aid = row.id
+      }
+      await api.firmarActa(aid, asistenteId)
+      const a = await api.getActa(aid)
+      applySavedActa(a)
     } catch (e) {
       setError(e.message || 'No se pudo firmar')
     }
@@ -145,17 +255,40 @@ export default function ActaEditor({
             Acta de reunión {consecutivo != null ? `Nº ${consecutivo}` : ''}
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Numeración consecutiva del contrato · hereda tema y tipografía de la plataforma
+            Estado: {form.estado || 'borrador'} · numeración consecutiva del contrato
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={onCancel} style={ghost(t)}>Volver</button>
-          {actaId && (
-            <button type="button" onClick={previewPdf} style={ghost(t)}>Vista previa PDF</button>
+          {(permisos?.crear || permisos?.editar) && (
+            <button type="button" disabled={saving} onClick={previewPdf} style={ghost(t)}>Vista previa PDF</button>
           )}
           {(permisos?.crear || permisos?.editar) && (
-            <button type="button" disabled={saving} onClick={guardar} style={primary(t)}>
-              {saving ? 'Guardando…' : (actaId ? 'Guardar cambios' : 'Crear acta')}
+            <button type="button" disabled={saving} onClick={() => guardar({ enviar: false })} style={primary(t)}>
+              {saving ? 'Guardando…' : 'Guardar acta'}
+            </button>
+          )}
+          {(permisos?.crear || permisos?.editar) && (
+            <button type="button" disabled={saving} onClick={() => guardar({ enviar: true })} style={primary(t)}>
+              Enviar acta
+            </button>
+          )}
+          {permisos?.esDesarrollador && localActaId && (
+            <button
+              type="button"
+              style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }}
+              onClick={async () => {
+                if (!window.confirm('¿Eliminar definitivamente esta acta?')) return
+                try {
+                  await api.deleteActa(localActaId)
+                  onCancel?.()
+                  onSaved?.(null, { deleted: true })
+                } catch (e) {
+                  setError(e.message)
+                }
+              }}
+            >
+              Eliminar
             </button>
           )}
         </div>
@@ -168,8 +301,14 @@ export default function ActaEditor({
           color: t.text, padding: '8px 12px', borderRadius: 8, fontSize: 'var(--cc-sm)',
         }}>{error}</div>
       )}
+      {okMsg && (
+        <div style={{
+          background: 'color-mix(in srgb, var(--cc-color-positive,#0f766e) 12%, transparent)',
+          border: '1px solid var(--cc-color-positive,#0f766e)',
+          color: t.text, padding: '8px 12px', borderRadius: 8, fontSize: 'var(--cc-sm)',
+        }}>{okMsg}</div>
+      )}
 
-      {/* Encabezado */}
       <section style={card(t)}>
         <h3 style={h3(t)}>Encabezado</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
@@ -177,18 +316,79 @@ export default function ActaEditor({
             <input type="date" value={form.fecha_reunion} onChange={(e) => setField('fecha_reunion', e.target.value)} style={inp(t)} />
           </Field>
           <Field t={t} label="Ubicación">
-            <input value={form.ubicacion} onChange={(e) => setField('ubicacion', e.target.value)} style={inp(t)} />
+            <UbicacionAutocomplete
+              t={t}
+              value={form.ubicacion}
+              onChange={(v) => setField('ubicacion', v)}
+              style={inp(t)}
+            />
           </Field>
           <Field t={t} label="Elaborador">
-            <input value={form.elaborador_nombre} onChange={(e) => setField('elaborador_nombre', e.target.value)} style={inp(t)} />
+            <UserSearchSelect
+              t={t}
+              usuarios={usuariosContrato}
+              mode="strict"
+              valueId={form.elaborador_id}
+              valueNombre={form.elaborador_nombre}
+              placeholder="Buscar usuario del contrato…"
+              style={inp(t)}
+              onSelect={(u) => {
+                if (!u) {
+                  setForm((f) => ({ ...f, elaborador_id: null, elaborador_nombre: '' }))
+                  return
+                }
+                setForm((f) => ({
+                  ...f,
+                  elaborador_id: u.id,
+                  elaborador_nombre: nombreUser(u),
+                }))
+              }}
+            />
           </Field>
         </div>
         <Field t={t} label="Orden del día">
-          <textarea rows={3} value={form.orden_del_dia} onChange={(e) => setField('orden_del_dia', e.target.value)} style={inp(t)} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(form.orden_items || []).map((it, idx) => (
+              <div key={it.key ?? idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={!!it.hecho}
+                  onChange={(e) => {
+                    const next = [...form.orden_items]
+                    next[idx] = { ...it, hecho: e.target.checked }
+                    setField('orden_items', next)
+                  }}
+                />
+                <input
+                  value={it.texto}
+                  placeholder={`Punto ${idx + 1}`}
+                  onChange={(e) => {
+                    const next = [...form.orden_items]
+                    next[idx] = { ...it, texto: e.target.value }
+                    setField('orden_items', next)
+                  }}
+                  style={{ ...inp(t), flex: 1 }}
+                />
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onClick={() => setField('orden_items', form.orden_items.filter((_, i) => i !== idx))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              style={ghost(t)}
+              onClick={() => setField('orden_items', [...form.orden_items, { texto: '', hecho: false, key: Date.now() }])}
+            >
+              + Agregar punto
+            </button>
+          </div>
         </Field>
       </section>
 
-      {/* Compromisos previos abiertos */}
       <section style={card(t)}>
         <h3 style={h3(t)}>Compromisos abiertos de actas anteriores</h3>
         {previos.length === 0 ? (
@@ -233,31 +433,60 @@ export default function ActaEditor({
         )}
       </section>
 
-      {/* Asistentes */}
       <section style={card(t)}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Asistentes</h3>
           <button
             type="button"
             style={ghost(t)}
-            onClick={() => setField('asistentes', [...form.asistentes, { nombre: '', cargo: '', entidad: '' }])}
+            onClick={() => setField('asistentes', [...form.asistentes, { nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }])}
           >
             + Asistente
           </button>
         </div>
         {form.asistentes.map((a, idx) => (
-          <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr 1.4fr auto', gap: 8, marginBottom: 8 }}>
-            <input placeholder="Nombre" value={a.nombre} onChange={(e) => {
-              const next = [...form.asistentes]; next[idx] = { ...a, nombre: e.target.value }; setField('asistentes', next)
-            }} style={inp(t)} />
+          <div key={idx} style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(180px,2fr) 1fr 1fr 1.2fr auto',
+            gap: 8, marginBottom: 10, alignItems: 'start',
+          }}>
+            <UserSearchSelect
+              t={t}
+              usuarios={usuariosContrato}
+              mode="free"
+              valueId={a.usuario_id}
+              valueNombre={a.nombre}
+              placeholder="Buscar o digitar nombre…"
+              style={inp(t)}
+              onSelect={(u) => {
+                const next = [...form.asistentes]
+                next[idx] = {
+                  ...a,
+                  usuario_id: u.id,
+                  nombre: nombreUser(u),
+                  cargo: u.cargo_nombre || a.cargo || '',
+                  entidad: u.empresa || a.entidad || '',
+                  email: u.email || a.email || '',
+                }
+                setField('asistentes', next)
+              }}
+              onFreeConfirm={({ nombre }) => {
+                const next = [...form.asistentes]
+                next[idx] = { ...a, usuario_id: null, nombre }
+                setField('asistentes', next)
+              }}
+            />
             <input placeholder="Cargo" value={a.cargo} onChange={(e) => {
               const next = [...form.asistentes]; next[idx] = { ...a, cargo: e.target.value }; setField('asistentes', next)
             }} style={inp(t)} />
             <input placeholder="Entidad / empresa" value={a.entidad} onChange={(e) => {
               const next = [...form.asistentes]; next[idx] = { ...a, entidad: e.target.value }; setField('asistentes', next)
             }} style={inp(t)} />
+            <input placeholder="Correo" value={a.email || ''} onChange={(e) => {
+              const next = [...form.asistentes]; next[idx] = { ...a, email: e.target.value }; setField('asistentes', next)
+            }} style={inp(t)} />
             <div style={{ display: 'flex', gap: 4 }}>
-              {actaId && a.id && permisos?.validar && (
+              {localActaId && a.id && permisos?.validar && (
                 <button type="button" title="Firmar con firma de perfil" onClick={() => firmar(a.id)} style={ghost(t)}>✎</button>
               )}
               <button type="button" onClick={() => {
@@ -268,7 +497,6 @@ export default function ActaEditor({
         ))}
       </section>
 
-      {/* Ideas centrales */}
       <section style={card(t)}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Ideas centrales</h3>
@@ -285,7 +513,7 @@ export default function ActaEditor({
             marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}`,
           }}>
             <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>
-              Idea {idx + 1}
+              Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}
             </div>
             <textarea
               rows={4}
@@ -297,15 +525,16 @@ export default function ActaEditor({
               }}
               style={inp(t)}
             />
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
               <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>
                 Redactar con Clara
               </button>
-              {actaId && idea.id && permisos?.crear && (
+              {permisos?.crear && (
                 <button
                   type="button"
                   style={ghost(t)}
-                  onClick={() => setCompromisoCtx({ ideaId: idea.id, texto: idea.texto })}
+                  disabled={saving || !(idea.texto || '').trim()}
+                  onClick={() => abrirCompromiso(idx, idea.texto)}
                 >
                   Generar compromiso
                 </button>
@@ -322,7 +551,6 @@ export default function ActaEditor({
         ))}
       </section>
 
-      {/* Apartados libres */}
       <section style={card(t)}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Apartados adicionales</h3>
@@ -376,18 +604,13 @@ export default function ActaEditor({
             setField('ideas', next)
             setClaraIdx(null)
           }}
-          onGenerarCompromiso={(texto) => {
-            const idea = form.ideas[claraIdx]
+          onGenerarCompromiso={async (texto) => {
+            const idx = claraIdx
             const next = [...form.ideas]
-            next[claraIdx] = { ...idea, texto }
+            next[idx] = { ...next[idx], texto }
             setField('ideas', next)
-            const ideaId = idea?.id
             setClaraIdx(null)
-            if (!actaId || !ideaId) {
-              setError('Guarde el acta (para obtener id de idea) antes de generar el compromiso.')
-              return
-            }
-            setCompromisoCtx({ ideaId, texto })
+            await abrirCompromiso(idx, texto)
           }}
         />
       )}
@@ -400,10 +623,10 @@ export default function ActaEditor({
           usuarios={usuariosContrato}
           onClose={() => setCompromisoCtx(null)}
           onSubmit={async (body) => {
-            await api.crearCompromiso(actaId, compromisoCtx.ideaId, body)
+            await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
             setCompromisoCtx(null)
             setError('')
-            alert('Compromiso incorporado a la bandeja unificada.')
+            setOkMsg('Compromiso incorporado a la bandeja unificada.')
           }}
         />
       )}

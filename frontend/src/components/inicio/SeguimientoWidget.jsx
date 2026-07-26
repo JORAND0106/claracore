@@ -3,6 +3,8 @@ import { createSeguimientoApi } from '../../modules/seguimiento/seguimientoApi'
 import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos'
 import { ORIGEN_COLOR, fmtFecha } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
+import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
+import { calcularNivelVencimiento } from '../../modules/seguimiento/vencimientoLevels'
 
 /**
  * Widget de inicio: refleja la misma bandeja unificada (visibilidad por rol incluida).
@@ -88,6 +90,10 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.slice(0, 8).map((r) => {
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
+                const nivel = calcularNivelVencimiento({
+                  fechaVencimiento: r.fecha_vencimiento,
+                  fechaCreacion: r.created_at || r.fecha_vencimiento_original,
+                })
                 return (
                   <button
                     key={r.id}
@@ -103,7 +109,10 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
                       color: t.text,
                     }}
                   >
-                    <div style={{ fontWeight: 600, fontSize: bodySize }}>{r.titulo}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <VencimientoIcon nivel={nivel} size="1rem" t={t} />
+                      <div style={{ fontWeight: 600, fontSize: bodySize, flex: 1 }}>{r.titulo}</div>
+                    </div>
                     <div style={{ fontSize: smSize, color: t.textMuted }}>
                       {r.asignado_a_nombre} · {fmtFecha(r.fecha_vencimiento)} · {r.estado_gestion}
                     </div>

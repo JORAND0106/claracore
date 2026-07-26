@@ -17,6 +17,35 @@ def _esc(val) -> str:
     return html.escape(str(val or ""))
 
 
+def _orden_del_dia_html(raw) -> str:
+    """Renderiza checklist JSON o texto libre legacy."""
+    import json
+
+    items = None
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, str) and raw.strip().startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                items = parsed
+        except Exception:
+            items = None
+    if items is not None:
+        rows = []
+        for it in items:
+            if isinstance(it, dict):
+                texto = it.get("texto") or it.get("titulo") or ""
+                done = bool(it.get("hecho") or it.get("checked") or it.get("done"))
+            else:
+                texto = str(it)
+                done = False
+            mark = "☑" if done else "☐"
+            rows.append(f"<div style='margin:2pt 0;'>{mark} {_esc(texto)}</div>")
+        return "".join(rows) or "<div style='color:#94a3b8;'>—</div>"
+    return f"<div style='white-space:pre-wrap;'>{_esc(raw or '—')}</div>"
+
+
 def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: list) -> str:
     """Hash canónico del contenido del acta (integridad previa a firma)."""
     parts = [
@@ -31,6 +60,7 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
             str(a.get("nombre") or ""),
             str(a.get("cargo") or ""),
             str(a.get("entidad") or ""),
+            str(a.get("email") or ""),
         ]))
     for i in ideas or []:
         parts.append(str(i.get("texto") or ""))
@@ -83,10 +113,11 @@ def generar_pdf_acta(
         f"<td style='padding:3pt 4pt;border:0.4pt solid {_BORDE};'>{_esc(a.get('nombre'))}</td>"
         f"<td style='padding:3pt 4pt;border:0.4pt solid {_BORDE};'>{_esc(a.get('cargo'))}</td>"
         f"<td style='padding:3pt 4pt;border:0.4pt solid {_BORDE};'>{_esc(a.get('entidad'))}</td>"
+        f"<td style='padding:3pt 4pt;border:0.4pt solid {_BORDE};'>{_esc(a.get('email'))}</td>"
         f"</tr>"
         for a in (asistentes or [])
     ) or (
-        f"<tr><td colspan='3' style='padding:4pt;border:0.4pt solid {_BORDE};color:#94a3b8;'>"
+        f"<tr><td colspan='4' style='padding:4pt;border:0.4pt solid {_BORDE};color:#94a3b8;'>"
         "Sin asistentes registrados</td></tr>"
     )
 
@@ -168,7 +199,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
 </table>
 
 <h2>Orden del día</h2>
-<div style="white-space:pre-wrap;">{_esc(acta.get('orden_del_dia') or '—')}</div>
+{_orden_del_dia_html(acta.get('orden_del_dia'))}
 
 <h2>Asistentes</h2>
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:8pt;">
@@ -176,6 +207,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
 <th style="padding:3pt 4pt;border:0.4pt solid {_BORDE};text-align:left;">Nombre</th>
 <th style="padding:3pt 4pt;border:0.4pt solid {_BORDE};text-align:left;">Cargo</th>
 <th style="padding:3pt 4pt;border:0.4pt solid {_BORDE};text-align:left;">Entidad / Empresa</th>
+<th style="padding:3pt 4pt;border:0.4pt solid {_BORDE};text-align:left;">Correo</th>
 </tr>
 {asis_rows}
 </table>

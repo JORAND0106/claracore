@@ -51,12 +51,14 @@ export function createSeguimientoApi(contratoId, token) {
 
   return {
     listActas: () => get(`/seguimiento/${cid}/actas`),
+    listUsuarios: () => get(`/seguimiento/${cid}/usuarios`),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
     compromisosAbiertos: (excluirActaId) =>
       get(`/seguimiento/${cid}/compromisos-abiertos${excluirActaId ? `?excluir_acta_id=${excluirActaId}` : ''}`),
     getActa: (actaId) => get(`/seguimiento/${cid}/actas/${actaId}`),
     createActa: (body) => send('POST', `/seguimiento/${cid}/actas`, body),
     updateActa: (actaId, body) => send('PUT', `/seguimiento/${cid}/actas/${actaId}`, body),
+    deleteActa: (actaId) => send('DELETE', `/seguimiento/${cid}/actas/${actaId}`),
     addIdea: (actaId, texto = '') => send('POST', `/seguimiento/${cid}/actas/${actaId}/ideas`, { texto }),
     updateIdea: (ideaId, texto) => send('PUT', `/seguimiento/${cid}/ideas/${ideaId}`, { texto }),
     crearCompromiso: (actaId, ideaId, body) =>
@@ -75,7 +77,7 @@ export function createSeguimientoApi(contratoId, token) {
     listBandeja: (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {
-        if (v != null && v !== '') q.set(k, v)
+        if (v != null && v !== '') q.set(k, String(v))
       })
       if (cid != null && params.contrato_id == null) q.set('contrato_id', cid)
       const qs = q.toString()
@@ -85,6 +87,8 @@ export function createSeguimientoApi(contratoId, token) {
     getItem: (itemId) => get(`/seguimiento/items/${itemId}`),
     patchEstado: (itemId, estado_gestion) =>
       send('PATCH', `/seguimiento/items/${itemId}/estado`, { estado_gestion }),
+    destinarItem: (itemId, body) => send('POST', `/seguimiento/items/${itemId}/destinar`, body),
+    deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),
     async uploadEvidencia(itemId, file, notas = '') {
       const fd = new FormData()
