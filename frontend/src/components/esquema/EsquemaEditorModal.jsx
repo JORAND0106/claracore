@@ -104,6 +104,7 @@ export default function EsquemaEditorModal({
   const draftRef = useRef(null)
   const dragRef = useRef(null) // { id, mode: 'move'|'rotate', ox, oy, startAngle, baseRot }
   const panRef = useRef({ x: 0, y: 0 })
+  const zoomRef = useRef(1)
   const panDragRef = useRef(null)
   const toolRef = useRef('lapiz')
   const colorRef = useRef('#1e293b')
@@ -122,6 +123,7 @@ export default function EsquemaEditorModal({
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [panTick, setPanTick] = useState(0)
+  const [zoomPct, setZoomPct] = useState(100)
   const selectedIdRef = useRef(null)
 
   toolRef.current = tool
@@ -163,6 +165,7 @@ export default function EsquemaEditorModal({
     ctx.fillRect(0, 0, w, h)
     ctx.save()
     ctx.translate(panRef.current.x, panRef.current.y)
+    ctx.scale(zoomRef.current, zoomRef.current)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
     const hideTablaTextId = (
@@ -200,7 +203,17 @@ export default function EsquemaEditorModal({
   }, [setupCanvas])
 
   useEffect(() => {
-    if (!initialDataUri) return
+    panRef.current = { x: 0, y: 0 }
+    zoomRef.current = 1
+    setZoomPct(100)
+    if (!initialDataUri) {
+      objectsRef.current = []
+      historyRef.current = []
+      setCanUndo(false)
+      setDirty(false)
+      requestAnimationFrame(() => redraw())
+      return
+    }
     objectsRef.current = [{
       id: uid(),
       type: 'image',
@@ -223,10 +236,29 @@ export default function EsquemaEditorModal({
     const c = canvasRef.current
     const r = c.getBoundingClientRect()
     const src = e.touches?.[0] || e.changedTouches?.[0] || e
+    const z = zoomRef.current || 1
     return {
-      x: src.clientX - r.left - panRef.current.x,
-      y: src.clientY - r.top - panRef.current.y,
+      x: (src.clientX - r.left - panRef.current.x) / z,
+      y: (src.clientY - r.top - panRef.current.y) / z,
     }
+  }
+
+  const setZoomAroundCenter = (nextZoom) => {
+    const z0 = zoomRef.current || 1
+    const z1 = Math.max(0.25, Math.min(4, nextZoom))
+    if (Math.abs(z1 - z0) < 0.001) return
+    const { w, h } = cssSize()
+    const cx = w / 2
+    const cy = h / 2
+    const wx = (cx - panRef.current.x) / z0
+    const wy = (cy - panRef.current.y) / z0
+    panRef.current = {
+      x: cx - wx * z1,
+      y: cy - wy * z1,
+    }
+    zoomRef.current = z1
+    setZoomPct(Math.round(z1 * 100))
+    setPanTick((n) => n + 1)
   }
 
   const applyMeasureToShape = (shape, toolId, a, b) => {
@@ -592,6 +624,7 @@ export default function EsquemaEditorModal({
       ctx.fillRect(0, 0, w, h)
       ctx.save()
       ctx.translate(panRef.current.x, panRef.current.y)
+      ctx.scale(zoomRef.current, zoomRef.current)
       for (const obj of objectsRef.current) drawObject(ctx, obj, false, {})
       ctx.restore()
       const dataUrl = c.toDataURL('image/png')
@@ -660,6 +693,33 @@ export default function EsquemaEditorModal({
               </button>
             )
           })}
+          <button
+            type="button"
+            title="Alejar (zoom out)"
+            aria-label="Alejar"
+            onClick={() => setZoomAroundCenter(zoomRef.current / 1.25)}
+            style={iconBtn(t, false)}
+          >
+            <IconZoomOut />
+          </button>
+          <button
+            type="button"
+            title="Acercar (zoom in)"
+            aria-label="Acercar"
+            onClick={() => setZoomAroundCenter(zoomRef.current * 1.25)}
+            style={iconBtn(t, false)}
+          >
+            <IconZoomIn />
+          </button>
+          <button
+            type="button"
+            title="Restablecer zoom 100%"
+            aria-label="Zoom 100%"
+            onClick={() => setZoomAroundCenter(1)}
+            style={{ ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', minWidth: 52 }}
+          >
+            {zoomPct}%
+          </button>
           <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Color">
             <input type="color" value={color} onChange={(e) => setColor(e.target.value)} disabled={tool === 'borrador'} />
           </label>
@@ -677,23 +737,6 @@ export default function EsquemaEditorModal({
                 <option key={h.id} value={h.id}>{h.label}</option>
               ))}
             </select>
-          )}
-          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Medida deseada al crear (unidades de pantalla)">
-            Medida
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={measureInput}
-              onChange={(e) => setMeasureInput(e.target.value)}
-              placeholder="auto"
-              style={{ width: 72, padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, fontSize: 'var(--cc-xs)', color: t.text, background: t.bgCard }}
-            />
-          </label>
-          {selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && (
-            <button type="button" style={ghost(t)} onClick={applyMeasureToSelected} title="Aplicar medida a la figura seleccionada">
-              Aplicar medida
-            </button>
           )}
           {selectedObj?.type === 'tabla' && (
             <>
@@ -761,9 +804,6 @@ export default function EsquemaEditorModal({
               </button>
             </>
           )}
-          {liveMeasure && (
-            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>Actual: {liveMeasure}</span>
-          )}
           <button type="button" style={ghost(t)} onClick={clearAll}>Limpiar</button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
@@ -772,6 +812,68 @@ export default function EsquemaEditorModal({
             </button>
           </div>
         </div>
+
+        {/* Barra de dimensiones: flujo explícito para digitar y aplicar medida */}
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+          padding: '8px 14px', borderBottom: `1px solid ${t.border}`,
+          background: `${t.primary}08`, flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 800, color: t.text }}>Dimensiones</span>
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600,
+          }}
+          >
+            Valor deseado
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={measureInput}
+              onChange={(e) => setMeasureInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  applyMeasureToSelected()
+                }
+              }}
+              placeholder="ej. 120"
+              title="Longitud (línea/flecha) o ancho (rectángulo/elipse/triángulo), en unidades de pantalla"
+              style={{
+                width: 88, padding: '5px 8px', borderRadius: 6,
+                border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
+                color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
+              }}
+            />
+            <span style={{ color: t.textMuted }}>u.p.</span>
+          </label>
+          <button
+            type="button"
+            disabled={!(selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && Number(String(measureInput).replace(',', '.')) > 0)}
+            onClick={applyMeasureToSelected}
+            title="Ajusta la figura ya seleccionada al valor digitado"
+            style={{
+              ...primary(t),
+              padding: '6px 12px',
+              fontSize: 'var(--cc-xs)',
+              opacity: (selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && Number(String(measureInput).replace(',', '.')) > 0) ? 1 : 0.4,
+            }}
+          >
+            Aplicar a selección
+          </button>
+          <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, flex: '1 1 220px', lineHeight: 1.35 }}>
+            {selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type)
+              ? (Number(String(measureInput).replace(',', '.')) > 0
+                ? `Figura seleccionada lista: pulse «Aplicar a selección» o Enter para fijar ${measureInput} u.p.`
+                : 'Figura seleccionada: digite el valor y pulse «Aplicar a selección».')
+              : (Number(String(measureInput).replace(',', '.')) > 0
+                ? `Al dibujar la próxima línea/flecha/caja se usará ${measureInput} u.p. automáticamente.`
+                : '1) Digite el valor. 2a) Dibuje la figura (se aplica sola) o 2b) Seleccione una figura existente y pulse «Aplicar a selección».')}
+            {liveMeasure ? ` · Arrastre actual: ${liveMeasure}` : ''}
+          </span>
+        </div>
+
         <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: '#e2e8f0', padding: 10, position: 'relative' }}>
           <canvas
             ref={canvasRef}
@@ -788,12 +890,19 @@ export default function EsquemaEditorModal({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onWheel={(e) => {
+              if (!(e.ctrlKey || e.metaKey)) return
+              e.preventDefault()
+              const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
+              setZoomAroundCenter(zoomRef.current * factor)
+            }}
           />
           {editingTabla && selectedObj && (
             <TablaOverlay
-              key={`${selectedObj.id}-${selectedObj.rows}-${selectedObj.cols}`}
+              key={`${selectedObj.id}-${selectedObj.rows}-${selectedObj.cols}-${zoomPct}`}
               obj={selectedObj}
               pan={panRef.current}
+              zoom={zoomRef.current}
               canvasEl={canvasRef.current}
               onCellChange={(ri, ci, text) => {
                 objectsRef.current = objectsRef.current.map((o) => {
@@ -809,8 +918,8 @@ export default function EsquemaEditorModal({
           )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Seleccionar: elija un elemento. Mover/rotar actúa solo sobre la selección (Alt/Shift = rotar).
-          Tabla: pulse el lienzo para insertar; edite celdas con Seleccionar. Paneo y hatch sin cambios.
+          Zoom: botones −/+ o Ctrl/⌘ + rueda. Paneo independiente del zoom.
+          Seleccionar → Mover/rotar (Alt/Shift = rotar). Dimensiones: ver barra superior.
         </div>
       </div>
     </div>
@@ -1096,24 +1205,25 @@ function translateObject(obj, dx, dy) {
 }
 
 /** Overlay HTML para editar celdas de la tabla seleccionada (teclado/táctil). */
-function TablaOverlay({ obj, pan, canvasEl, onCellChange }) {
+function TablaOverlay({ obj, pan, zoom = 1, canvasEl, onCellChange }) {
   const [cells, setCells] = useState(() => cloneScene(obj.cells || []))
   useEffect(() => {
     setCells(cloneScene(obj.cells || []))
   }, [obj.id, obj.rows, obj.cols])
 
   if (!obj || !canvasEl) return null
+  const z = zoom || 1
   const { rows, cols, cellW, cellH, w, h } = tablaSize(obj)
-  const left = (canvasEl.offsetLeft || 0) + (pan?.x || 0) + (obj.x || 0)
-  const top = (canvasEl.offsetTop || 0) + (pan?.y || 0) + (obj.y || 0)
+  const left = (canvasEl.offsetLeft || 0) + (pan?.x || 0) + (obj.x || 0) * z
+  const top = (canvasEl.offsetTop || 0) + (pan?.y || 0) + (obj.y || 0) * z
   return (
     <div
       style={{
         position: 'absolute',
         left,
         top,
-        width: w,
-        height: h,
+        width: w * z,
+        height: h * z,
         zIndex: 2,
         pointerEvents: 'auto',
       }}
@@ -1130,7 +1240,7 @@ function TablaOverlay({ obj, pan, canvasEl, onCellChange }) {
                 <td
                   key={ci}
                   style={{
-                    width: cellW, height: cellH, padding: 0,
+                    width: cellW * z, height: cellH * z, padding: 0,
                     border: '1px solid transparent', verticalAlign: 'middle',
                   }}
                 >
@@ -1191,6 +1301,25 @@ function IconSeleccion() {
       <path d="M4 14h2v4h4v2H4v-6Z" />
       <path d="M18 14h2v6h-6v-2h4v-4Z" />
       <path d="m9 15 2-7 2 7 3 1-7 3-1-3Z" />
+    </svg>
+  )
+}
+function IconZoomIn() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+      <path d="M11 8v6" />
+      <path d="M8 11h6" />
+    </svg>
+  )
+}
+function IconZoomOut() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+      <path d="M8 11h6" />
     </svg>
   )
 }
