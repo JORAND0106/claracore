@@ -108,6 +108,7 @@ class ActaCreateBody(BaseModel):
     orden_del_dia: Optional[Any] = None  # texto legacy o checklist JSON
     elaborador_id: Optional[int] = None
     elaborador_nombre: Optional[str] = None
+    tipo_acta: Optional[str] = "interna"
     asistentes: List[AsistenteBody] = Field(default_factory=list)
     ideas: List[IdeaBody] = Field(default_factory=list)
     apartados: List[ApartadoBody] = Field(default_factory=list)
@@ -120,6 +121,7 @@ class ActaUpdateBody(BaseModel):
     orden_del_dia: Optional[Any] = None
     elaborador_id: Optional[int] = None
     elaborador_nombre: Optional[str] = None
+    tipo_acta: Optional[str] = None
     estado: Optional[str] = None
     asistentes: Optional[List[AsistenteBody]] = None
     ideas: Optional[List[IdeaBody]] = None
@@ -150,6 +152,8 @@ class CompromisoCreateBody(BaseModel):
 
 class EstadoGestionBody(BaseModel):
     estado_gestion: str = Field(..., min_length=3)
+    nueva_fecha_vencimiento: Optional[str] = None
+    hora_vencimiento: Optional[str] = None
 
 
 class DestinarBody(BaseModel):
@@ -226,6 +230,7 @@ def route_bandeja(
     fecha_hasta: Optional[str] = Query(None),
     origen: Optional[str] = Query(None),
     incluir_cerrados: bool = Query(False),
+    q: Optional[str] = Query(None, description="Buscador de palabras clave"),
     current_user=Depends(get_current_user),
 ):
     require_permiso_seguimiento(current_user, "ver")
@@ -242,6 +247,7 @@ def route_bandeja(
         fecha_hasta=fecha_hasta,
         origen=origen,
         incluir_cerrados=incluir_cerrados,
+        q=q,
     )
 
 
@@ -265,7 +271,7 @@ def route_bandeja_widget(
         contrato_id=contrato_id,
         estado=None,
     )
-    abiertos = [r for r in rows if r.get("estado_gestion") in ("abierto", "en_progreso", "parcial", "vencido")]
+    abiertos = [r for r in rows if r.get("estado_gestion") in ("abierto", "en_progreso", "parcial", "vencido", "reprogramado")]
     return abiertos[:20]
 
 
@@ -282,7 +288,14 @@ def route_get_item(item_id: int, current_user=Depends(get_current_user)):
 def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "editar")
     try:
-        return actualizar_estado_gestion(supabase, item_id, body.estado_gestion, _uid(current_user))
+        return actualizar_estado_gestion(
+            supabase,
+            item_id,
+            body.estado_gestion,
+            _uid(current_user),
+            nueva_fecha_vencimiento=body.nueva_fecha_vencimiento,
+            hora_vencimiento=body.hora_vencimiento,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -470,10 +483,26 @@ def route_usuarios_contrato(contrato_id: int, current_user=Depends(get_current_u
 
 
 @router.get("/{contrato_id}/actas")
-def route_list_actas(contrato_id: int, current_user=Depends(get_current_user)):
+def route_list_actas(
+    contrato_id: int,
+    estado: Optional[str] = Query(None),
+    tipo_acta: Optional[str] = Query(None),
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Buscador de palabras clave sobre contenido del acta"),
+    current_user=Depends(get_current_user),
+):
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
-    return list_actas(supabase, contrato_id)
+    return list_actas(
+        supabase,
+        contrato_id,
+        estado=estado,
+        tipo_acta=tipo_acta,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        q=q,
+    )
 
 
 @router.get("/{contrato_id}/actas/proximo-consecutivo")

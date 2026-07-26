@@ -16,6 +16,8 @@ export default function ItemDetalleModal({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [busy, setBusy] = useState(false)
   const [estadoSel, setEstadoSel] = useState('')
+  const [fechaReprog, setFechaReprog] = useState('')
+  const [horaReprog, setHoraReprog] = useState('')
   const [destCtx, setDestCtx] = useState(null) // { user, modoPendiente }
   const [destPick, setDestPick] = useState(null)
 
@@ -55,15 +57,20 @@ export default function ItemDetalleModal({
 
   const origen = ORIGEN_COLOR[item.origen] || ORIGEN_COLOR.tarea
   const esCompromiso = item.origen === 'compromiso'
+  const esTarea = item.origen === 'tarea'
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
   const soyResponsable = esDev || Number(item.asignado_a_id) === Number(usuario?.id)
   const soySolicitante = esDev || Number(item.solicitante_id) === Number(usuario?.id)
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
   const nivel = calcularNivelVencimiento({
     fechaVencimiento: item.fecha_vencimiento,
-    fechaCreacion: item.created_at || item.fecha_vencimiento_original,
+    fechaCreacion: item.fecha_base_nivel || item.created_at || item.fecha_vencimiento_original,
   })
   const imagenes = Array.isArray(item.imagenes) ? item.imagenes : []
+  const estadosDisponibles = ESTADOS_GESTION.filter((x) => {
+    if (x.value === 'reprogramado') return esTarea
+    return true
+  })
 
   const abrirImagen = (im) => {
     const url = im.data_uri || im.url || im.blob_url
@@ -149,7 +156,7 @@ export default function ItemDetalleModal({
         <div style={{ margin: '14px 0' }}>
           <label style={lbl(t)}>Estado de gestión</label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-            {ESTADOS_GESTION.map((x) => (
+            {estadosDisponibles.map((x) => (
               <label
                 key={x.value}
                 style={{
@@ -171,18 +178,35 @@ export default function ItemDetalleModal({
               </label>
             ))}
           </div>
+          {estadoSel === 'reprogramado' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <div>
+                <label style={lbl(t)}>Nueva fecha de vencimiento *</label>
+                <input type="date" value={fechaReprog} onChange={(e) => setFechaReprog(e.target.value)} style={inp(t)} />
+              </div>
+              <div>
+                <label style={lbl(t)}>Hora (opcional)</label>
+                <input type="time" value={horaReprog} onChange={(e) => setHoraReprog(e.target.value)} style={inp(t)} />
+              </div>
+            </div>
+          )}
           <button
             type="button"
-            disabled={busy || !estadoSel}
+            disabled={busy || !estadoSel || (estadoSel === 'reprogramado' && !fechaReprog)}
             style={{
               ...primary(t),
-              opacity: estadoSel ? 1 : 0.45,
-              cursor: estadoSel ? 'pointer' : 'not-allowed',
+              opacity: (estadoSel && (estadoSel !== 'reprogramado' || fechaReprog)) ? 1 : 0.45,
+              cursor: (estadoSel && (estadoSel !== 'reprogramado' || fechaReprog)) ? 'pointer' : 'not-allowed',
             }}
             onClick={async () => {
               setBusy(true)
               try {
-                await api.patchEstado(item.id, estadoSel)
+                const extra = estadoSel === 'reprogramado'
+                  ? { nueva_fecha_vencimiento: fechaReprog, hora_vencimiento: horaReprog || null }
+                  : {}
+                await api.patchEstado(item.id, estadoSel, extra)
+                setFechaReprog('')
+                setHoraReprog('')
                 await reload()
                 onChanged?.()
               } catch (err) { setError(err.message) }

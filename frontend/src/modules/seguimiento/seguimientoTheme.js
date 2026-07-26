@@ -17,10 +17,40 @@ export const ESTADOS = [
   { value: 'abierto', label: 'Abierto' },
   { value: 'en_progreso', label: 'En progreso' },
   { value: 'parcial', label: 'Parcial' },
+  { value: 'reprogramado', label: 'Reprogramado' },
   { value: 'cumplido', label: 'Cumplido' },
   { value: 'vencido', label: 'Vencido' },
   { value: 'cancelado', label: 'Cancelado' },
 ]
+
+export const ACTA_ESTADOS = [
+  { value: '', label: 'Todos' },
+  { value: 'borrador', label: 'Borrador' },
+  { value: 'realizada', label: 'Realizada' },
+  { value: 'firmada', label: 'Firmada' },
+]
+
+export const ACTA_TIPOS = [
+  { value: '', label: 'Todos' },
+  { value: 'interna', label: 'Interna' },
+  { value: 'externa', label: 'Externa' },
+]
+
+export function labelEstadoActa(estado) {
+  const e = String(estado || '').toLowerCase()
+  if (e === 'en_firma' || e === 'cerrada') return 'Realizada'
+  return ACTA_ESTADOS.find((x) => x.value === e)?.label || estado || '—'
+}
+
+export function labelTipoActa(tipo) {
+  const t = String(tipo || '').toLowerCase()
+  return ACTA_TIPOS.find((x) => x.value === t)?.label || (tipo || '—')
+}
+
+export function numeroActaLabel(consecutivo) {
+  if (consecutivo == null || consecutivo === '') return '—'
+  return `Acta Nº ${consecutivo}`
+}
 
 export function fmtFecha(iso) {
   if (!iso) return '—'

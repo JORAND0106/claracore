@@ -3,6 +3,7 @@ import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE, apiFetchSignal } from '../../apiBase'
 import ActaEditor from './ActaEditor'
+import ActasRepositorio from './ActasRepositorio'
 import BandejaPanel from './BandejaPanel'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
@@ -23,24 +24,12 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   )
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const [tab, setTab] = useState('bandeja')
-  const [actas, setActas] = useState([])
   const [usuariosContrato, setUsuariosContrato] = useState([])
   const [editingActaId, setEditingActaId] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [repoKey, setRepoKey] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
-  const [tick, setTick] = useState(0)
-
-  const loadActas = useCallback(async () => {
-    if (!permisos.ver) return
-    try {
-      const list = await api.listActas()
-      setActas(list || [])
-      setUpdatedAt(Date.now())
-    } catch {
-      setActas([])
-    }
-  }, [api, permisos.ver])
 
   const loadUsuarios = useCallback(async () => {
     const cid = contratoId ?? usuario?.contrato_id
@@ -49,7 +38,6 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       const data = await api.listUsuarios()
       setUsuariosContrato(Array.isArray(data) ? data : [])
     } catch {
-      // Fallback legacy
       try {
         const sig = apiFetchSignal(20000)
         const res = await fetch(`${API_BASE}/actas/${cid}/usuarios-contrato`, {
@@ -66,10 +54,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
-    setTick((n) => n + 1)
-    await loadActas()
+    setRepoKey((n) => n + 1)
+    setUpdatedAt(Date.now())
+    await loadUsuarios()
     setRefreshBusy(false)
-  }, [loadActas])
+  }, [loadUsuarios])
 
   useEffect(() => {
     setModuloRefresh({
@@ -82,9 +71,9 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    loadActas()
     loadUsuarios()
-  }, [loadActas, loadUsuarios, tick])
+    setUpdatedAt(Date.now())
+  }, [loadUsuarios])
 
   if (permisos.bloqueado) {
     return (
@@ -94,39 +83,6 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Seguimiento» (acción Ver).
         </div>
       </div>
-    )
-  }
-
-  if (creating || editingActaId != null) {
-    return (
-      <ActaEditor
-        t={t}
-        api={api}
-        usuario={usuario}
-        usuariosContrato={usuariosContrato}
-        actaId={editingActaId}
-        permisos={permisos}
-        onCancel={() => { setCreating(false); setEditingActaId(null); loadActas() }}
-        onSaved={async (row, meta) => {
-          if (meta?.deleted) {
-            setCreating(false)
-            setEditingActaId(null)
-            await loadActas()
-            setTab('actas')
-            return
-          }
-          if (row?.id) {
-            setCreating(false)
-            setEditingActaId(row.id)
-          }
-          await loadActas()
-          if (!meta?.stay) {
-            setCreating(false)
-            setEditingActaId(null)
-            setTab('actas')
-          }
-        }}
-      />
     )
   }
 
@@ -184,47 +140,41 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       )}
 
       {tab === 'actas' && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-            {permisos.crear && (
-              <button
-                type="button"
-                onClick={() => setCreating(true)}
-                style={{
-                  border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer',
-                  background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
-                }}
-              >
-                + Nueva acta
-              </button>
-            )}
-          </div>
-          {actas.length === 0 ? (
-            <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>Aún no hay actas de reunión.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {actas.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => setEditingActaId(a.id)}
-                  style={{
-                    textAlign: 'left', cursor: 'pointer',
-                    background: t.bgCard, border: `1px solid ${t.border}`,
-                    borderRadius: 10, padding: '12px 14px', color: t.text,
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-body)' }}>
-                    Acta Nº {a.consecutivo}
-                  </div>
-                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                    {String(a.fecha_reunion || '').slice(0, 10)} · {a.ubicacion || 'Sin ubicación'} · {a.estado}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <ActasRepositorio
+          key={repoKey}
+          t={t}
+          api={api}
+          permisos={permisos}
+          onNueva={() => { setCreating(true); setEditingActaId(null) }}
+          onAbrir={(id) => { setEditingActaId(id); setCreating(false) }}
+        />
+      )}
+
+      {(creating || editingActaId != null) && (
+        <ActaEditor
+          t={t}
+          api={api}
+          usuario={usuario}
+          usuariosContrato={usuariosContrato}
+          actaId={editingActaId}
+          permisos={permisos}
+          asModal
+          onCancel={() => { setCreating(false); setEditingActaId(null); setRepoKey((n) => n + 1) }}
+          onSaved={async (row, meta) => {
+            if (meta?.deleted) {
+              setCreating(false)
+              setEditingActaId(null)
+              setRepoKey((n) => n + 1)
+              setTab('actas')
+              return
+            }
+            if (row?.id) {
+              setCreating(false)
+              setEditingActaId(row.id)
+            }
+            setRepoKey((n) => n + 1)
+          }}
+        />
       )}
     </div>
   )

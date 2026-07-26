@@ -5,6 +5,7 @@ import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import {
   calcularNivelVencimiento,
+  origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
 } from './vencimientoLevels'
@@ -20,6 +21,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     fecha_hasta: '',
     responsable_id: '',
     incluir_cerrados: false,
+    q: '',
   })
   const [detalleId, setDetalleId] = useState(null)
   const [showTarea, setShowTarea] = useState(false)
@@ -57,6 +59,15 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
         }}>
+          <Filter t={t} label="Palabras clave">
+            <input
+              value={filtros.q}
+              onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === 'Enter') load() }}
+              placeholder="Título, descripción, notas…"
+              style={{ ...inp(t), minWidth: 200 }}
+            />
+          </Filter>
           <Filter t={t} label="Estado">
             <select value={filtros.estado} onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))} style={inp(t)}>
               {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
@@ -83,7 +94,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             />
             Incluir cumplidos / cancelados
           </label>
-          <button type="button" onClick={load} style={ghost(t)}>Actualizar</button>
+          <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
           {permisos?.crear && (
             <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
           )}
@@ -108,7 +119,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>No hay ítems en la bandeja.</div>
       ) : (
         <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 820 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 900 }}>
             <thead>
               <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>#</th>
@@ -117,6 +128,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                 <th style={th}>Nivel</th>
                 <th style={th}>Tema</th>
                 <th style={th}>Destinatario</th>
+                <th style={th}>Origen / remitente</th>
                 <th style={th}>Tipo de labor</th>
               </tr>
             </thead>
@@ -124,7 +136,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
               {sorted.map((r) => {
                 const nivel = calcularNivelVencimiento({
                   fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: r.created_at || r.fecha_vencimiento_original,
+                  fechaCreacion: r.fecha_base_nivel || r.created_at || r.fecha_vencimiento_original,
                 })
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
                 const dest = r.relacion_destinatario === 'referencia'
@@ -142,11 +154,12 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                     <td style={td}>{fmtFecha(r.created_at)}</td>
                     <td style={td}>{fmtFechaHora(r.fecha_vencimiento, r.hora_vencimiento)}</td>
                     <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
-                    <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 280 }}>
+                    <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
                       <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
                       {r.titulo}
                     </td>
                     <td style={td}>{dest}</td>
+                    <td style={td}>{origenRemitenteLabel(r, uid)}</td>
                     <td style={td}>{tipoLaborLabel(r, uid)}</td>
                   </tr>
                 )
