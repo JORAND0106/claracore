@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import ItemDetalleModal from './ItemDetalleModal'
+import { estrellasTexto } from './PriorityStars'
 import TareaFormModal from './TareaFormModal'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
 
-export default function BandejaPanel({ t, api, usuario, permisos, compact = false }) {
+export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -102,12 +103,22 @@ export default function BandejaPanel({ t, api, usuario, permisos, compact = fals
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-body)' }}>{r.titulo}</div>
+                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-body)' }}>
+                    {estrellasTexto(r.campos_libres?.prioridad) ? (
+                      <span style={{ color: t.warning || '#D97706', marginRight: 6, fontSize: 'var(--cc-sm)' }}>
+                        {estrellasTexto(r.campos_libres?.prioridad)}
+                      </span>
+                    ) : null}
+                    {r.titulo}
+                  </div>
                   <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: o.border }}>{o.label}</span>
                 </div>
                 <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2 }}>
                   {r.asignado_a_nombre || '—'} · {r.estado_gestion} · vence {fmtFecha(r.fecha_vencimiento)}
                   {r.acta_id ? ` · acta #${r.acta_id}` : ''}
+                  {r.campos_libres?.destinatario_tentativo_nombre
+                    ? ` · tentativo: ${r.campos_libres.destinatario_tentativo_nombre}`
+                    : ''}
                 </div>
               </button>
             )
@@ -130,6 +141,8 @@ export default function BandejaPanel({ t, api, usuario, permisos, compact = fals
         <TareaFormModal
           t={t}
           api={api}
+          usuario={usuario}
+          usuarios={usuarios}
           onClose={() => setShowTarea(false)}
           onCreated={() => { setShowTarea(false); load() }}
         />

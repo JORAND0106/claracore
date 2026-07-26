@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
+import { estrellasTexto } from './PriorityStars'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
 
 export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, onClose, onChanged }) {
@@ -57,9 +58,19 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
         paddingLeft: 12, marginBottom: 12,
       }}>
         <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: origen.border }}>{origen.label}</div>
-        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>{item.titulo}</div>
+        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>
+          {estrellasTexto(item.campos_libres?.prioridad) ? (
+            <span style={{ color: t.warning || '#D97706', marginRight: 8, fontSize: 'var(--cc-body)' }}>
+              {estrellasTexto(item.campos_libres?.prioridad)}
+            </span>
+          ) : null}
+          {item.titulo}
+        </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
           {item.asignado_a_nombre || '—'} · vence {fmtFecha(item.fecha_vencimiento)} · {item.estado_gestion}
+          {item.campos_libres?.destinatario_tentativo_nombre
+            ? ` · tentativo: ${item.campos_libres.destinatario_tentativo_nombre}`
+            : ''}
         </div>
       </div>
 

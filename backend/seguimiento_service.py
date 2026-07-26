@@ -556,6 +556,30 @@ def actualizar_estado_gestion(sb, item_id: int, estado: str, user_id: int, *, co
 
 # ── Tareas personales ────────────────────────────────────────────────────────
 
+def _normalizar_campos_libres_tarea(raw) -> dict:
+    """Prioridad (0–3) y destinatario tentativo — informativos; no generan notificaciones."""
+    base = dict(raw) if isinstance(raw, dict) else {}
+    try:
+        pri = int(base.get("prioridad") if base.get("prioridad") is not None else 0)
+    except (TypeError, ValueError):
+        pri = 0
+    base["prioridad"] = max(0, min(3, pri))
+    dest_id = base.get("destinatario_tentativo_id")
+    if dest_id in (None, "", 0, "0"):
+        base["destinatario_tentativo_id"] = None
+        base["destinatario_tentativo_nombre"] = None
+    else:
+        try:
+            base["destinatario_tentativo_id"] = int(dest_id)
+        except (TypeError, ValueError):
+            base["destinatario_tentativo_id"] = None
+            base["destinatario_tentativo_nombre"] = None
+        else:
+            nombre = (base.get("destinatario_tentativo_nombre") or "").strip() or None
+            base["destinatario_tentativo_nombre"] = nombre
+    return base
+
+
 def crear_tarea(sb, data: dict, user_id: int) -> dict:
     u = _usuario_row(sb, user_id)
     titulo = (data.get("titulo") or "").strip()
@@ -574,7 +598,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         "asignado_a_nombre": data.get("asignado_a_nombre") or _nombre_usuario(u),
         "created_by": int(user_id),
         "fecha_vencimiento": fv.isoformat() if fv else None,
-        "campos_libres": data.get("campos_libres") or {},
+        "campos_libres": _normalizar_campos_libres_tarea(data.get("campos_libres")),
         "imagenes": imagenes,
         "updated_at": _now_utc().isoformat(),
     }
@@ -611,7 +635,7 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         fv = _parse_date(data.get("fecha_vencimiento"))
         patch["fecha_vencimiento"] = fv.isoformat() if fv else None
     if "campos_libres" in data:
-        patch["campos_libres"] = data.get("campos_libres") or {}
+        patch["campos_libres"] = _normalizar_campos_libres_tarea(data.get("campos_libres"))
     if "imagenes" in data:
         patch["imagenes"] = data.get("imagenes") or []
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()

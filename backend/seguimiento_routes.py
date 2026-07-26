@@ -187,142 +187,6 @@ class FirmaBody(BaseModel):
     asistente_id: int
 
 
-# ── Actas ────────────────────────────────────────────────────────────────────
-
-@router.get("/{contrato_id}/actas")
-def route_list_actas(contrato_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    _check_contrato(current_user, contrato_id)
-    return list_actas(supabase, contrato_id)
-
-
-@router.get("/{contrato_id}/actas/proximo-consecutivo")
-def route_proximo_consecutivo(contrato_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    _check_contrato(current_user, contrato_id)
-    return {"consecutivo": proximo_consecutivo(supabase, contrato_id)}
-
-
-@router.get("/{contrato_id}/compromisos-abiertos")
-def route_compromisos_abiertos(
-    contrato_id: int,
-    excluir_acta_id: Optional[int] = Query(None),
-    current_user=Depends(get_current_user),
-):
-    require_permiso_seguimiento(current_user, "ver")
-    _check_contrato(current_user, contrato_id)
-    return compromisos_abiertos_contrato(supabase, contrato_id, excluir_acta_id)
-
-
-@router.post("/{contrato_id}/actas")
-def route_create_acta(contrato_id: int, body: ActaCreateBody, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "crear")
-    _check_contrato(current_user, contrato_id)
-    try:
-        row = create_acta(supabase, contrato_id, body.model_dump(), _uid(current_user))
-        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_acta", str(row["id"]), {})
-        return row
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.get("/{contrato_id}/actas/{acta_id}")
-def route_get_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    _check_contrato(current_user, contrato_id)
-    try:
-        return get_acta(supabase, acta_id, contrato_id)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.put("/{contrato_id}/actas/{acta_id}")
-def route_update_acta(
-    contrato_id: int, acta_id: int, body: ActaUpdateBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "editar")
-    _check_contrato(current_user, contrato_id)
-    try:
-        row = update_acta(supabase, contrato_id, acta_id, body.model_dump(exclude_unset=True), _uid(current_user))
-        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
-        return row
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/{contrato_id}/actas/{acta_id}/ideas")
-def route_add_idea(
-    contrato_id: int, acta_id: int, body: IdeaTextoBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "editar")
-    _check_contrato(current_user, contrato_id)
-    try:
-        return add_idea(supabase, contrato_id, acta_id, body.texto)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.put("/{contrato_id}/ideas/{idea_id}")
-def route_update_idea(
-    contrato_id: int, idea_id: int, body: IdeaTextoBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "editar")
-    _check_contrato(current_user, contrato_id)
-    try:
-        return update_idea(supabase, contrato_id, idea_id, body.texto)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.post("/{contrato_id}/actas/{acta_id}/ideas/{idea_id}/compromiso")
-def route_crear_compromiso(
-    contrato_id: int,
-    acta_id: int,
-    idea_id: int,
-    body: CompromisoCreateBody,
-    current_user=Depends(get_current_user),
-):
-    require_permiso_seguimiento(current_user, "crear")
-    _check_contrato(current_user, contrato_id)
-    try:
-        row = crear_compromiso_desde_idea(
-            supabase, contrato_id, acta_id, idea_id, body.model_dump(), _uid(current_user)
-        )
-        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", str(row["id"]), {})
-        return row
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-@router.get("/{contrato_id}/actas/{acta_id}/pdf")
-def route_pdf_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "ver")
-    _check_contrato(current_user, contrato_id)
-    try:
-        pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-    return StreamingResponse(
-        io.BytesIO(pdf),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="acta_seguimiento_{acta_id}.pdf"'},
-    )
-
-
-@router.post("/{contrato_id}/actas/{acta_id}/firmar")
-def route_firmar_acta(
-    contrato_id: int, acta_id: int, body: FirmaBody, current_user=Depends(get_current_user)
-):
-    require_permiso_seguimiento(current_user, "validar")
-    _check_contrato(current_user, contrato_id)
-    try:
-        row = registrar_firma_asistente(supabase, contrato_id, acta_id, body.asistente_id, _uid(current_user))
-        registrar_log(current_user, "FIRMAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
-        return row
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
 # ── Bandeja (sin contrato obligatorio — tareas personales) ───────────────────
 
 @router.get("/bandeja")
@@ -537,3 +401,138 @@ def route_cron_vencimientos(
     if not _cron_secret_ok(x_cron_secret):
         raise HTTPException(status_code=401, detail="Cron secret inválido")
     return procesar_vencimientos_y_llamados(supabase)
+
+# ── Actas ────────────────────────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/actas")
+def route_list_actas(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_actas(supabase, contrato_id)
+
+
+@router.get("/{contrato_id}/actas/proximo-consecutivo")
+def route_proximo_consecutivo(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return {"consecutivo": proximo_consecutivo(supabase, contrato_id)}
+
+
+@router.get("/{contrato_id}/compromisos-abiertos")
+def route_compromisos_abiertos(
+    contrato_id: int,
+    excluir_acta_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return compromisos_abiertos_contrato(supabase, contrato_id, excluir_acta_id)
+
+
+@router.post("/{contrato_id}/actas")
+def route_create_acta(contrato_id: int, body: ActaCreateBody, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = create_acta(supabase, contrato_id, body.model_dump(), _uid(current_user))
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_acta", str(row["id"]), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/actas/{acta_id}")
+def route_get_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return get_acta(supabase, acta_id, contrato_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.put("/{contrato_id}/actas/{acta_id}")
+def route_update_acta(
+    contrato_id: int, acta_id: int, body: ActaUpdateBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = update_acta(supabase, contrato_id, acta_id, body.model_dump(exclude_unset=True), _uid(current_user))
+        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/ideas")
+def route_add_idea(
+    contrato_id: int, acta_id: int, body: IdeaTextoBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return add_idea(supabase, contrato_id, acta_id, body.texto)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.put("/{contrato_id}/ideas/{idea_id}")
+def route_update_idea(
+    contrato_id: int, idea_id: int, body: IdeaTextoBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return update_idea(supabase, contrato_id, idea_id, body.texto)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/ideas/{idea_id}/compromiso")
+def route_crear_compromiso(
+    contrato_id: int,
+    acta_id: int,
+    idea_id: int,
+    body: CompromisoCreateBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = crear_compromiso_desde_idea(
+            supabase, contrato_id, acta_id, idea_id, body.model_dump(), _uid(current_user)
+        )
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", str(row["id"]), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/actas/{acta_id}/pdf")
+def route_pdf_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="acta_seguimiento_{acta_id}.pdf"'},
+    )
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/firmar")
+def route_firmar_acta(
+    contrato_id: int, acta_id: int, body: FirmaBody, current_user=Depends(get_current_user)
+):
+    require_permiso_seguimiento(current_user, "validar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = registrar_firma_asistente(supabase, contrato_id, acta_id, body.asistente_id, _uid(current_user))
+        registrar_log(current_user, "FIRMAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
