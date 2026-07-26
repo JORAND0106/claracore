@@ -1,6 +1,6 @@
-# Despliega SOLO la carpeta backend al App Service Linux (claracore-backend).
-# Reemplaza azure-backend-app-service.yml (quedó disabled_manually y dejó prod sin Seguimiento).
-# Requisitos: secreto AZURE_WEBAPP_PUBLISH_PROFILE + Startup Command sin "cd backend":
+# Publica ./backend en App Service claracore-backend.
+# Secreto: AZURE_WEBAPP_PUBLISH_PROFILE
+# Startup Command en Azure:
 #   python -m uvicorn main:app --host 0.0.0.0 --port $PORT
 name: Deploy backend on push
 
@@ -13,12 +13,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Deploy to Azure Web App
+      - name: Deploy backend package to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
           app-name: claracore-backend

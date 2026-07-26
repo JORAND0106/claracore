@@ -1,0 +1,15 @@
+# OBSOLETO. Quedó disabled_manually y dejó prod sin /seguimiento/*.
+# Usar: .github/workflows/deploy-backend-on-push.yml
+name: Deploy backend to Azure App Service (obsolete)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  obsolete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Este workflow está obsoleto
+        run: |
+          echo "Usar el workflow 'Deploy backend on push' (deploy-backend-on-push.yml)."
+          exit 1
