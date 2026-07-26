@@ -1328,6 +1328,16 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     titulo = (data.get("titulo") or "").strip()
     if not titulo:
         raise ValueError("El título de la tarea es obligatorio")
+    # Tareas personales quedan aisladas al contrato activo de la plataforma
+    raw_cid = data.get("contrato_id")
+    if raw_cid is None or raw_cid == "":
+        raw_cid = (u or {}).get("contrato_id")
+    try:
+        contrato_id = int(raw_cid) if raw_cid is not None and raw_cid != "" else None
+    except (TypeError, ValueError):
+        contrato_id = None
+    if contrato_id is None:
+        raise ValueError("contrato_id es obligatorio para crear la tarea en el contrato activo")
     imagenes = data.get("imagenes") or []
     if not isinstance(imagenes, list):
         imagenes = []
@@ -1377,6 +1387,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         "asignado_a_id": asignado_id,
         "asignado_a_nombre": asignado_nombre,
         "created_by": int(user_id),
+        "contrato_id": int(contrato_id),
         "fecha_vencimiento": fv.isoformat() if fv else None,
         "hora_vencimiento": hora,
         "consecutivo": consec,
@@ -1391,7 +1402,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     if not ins:
         raise ValueError("No se pudo crear la tarea")
     item = ins[0]
-    _registrar_evento(sb, int(item["id"]), "tarea_creada", user_id, {"relacion": relacion})
+    _registrar_evento(sb, int(item["id"]), "tarea_creada", user_id, {"relacion": relacion, "contrato_id": contrato_id})
     notify_id = asignado_id if relacion == "asignacion" else referido_id
     if notify_id and int(notify_id) != int(user_id):
         tipo_msg = "asignó formalmente" if relacion == "asignacion" else "compartió como referencia"
@@ -1401,7 +1412,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
             remitente_id=user_id,
             asunto=f"Tarea: {titulo[:80]}",
             mensaje=f"Se le {tipo_msg} la tarea «{titulo}».",
-            contrato_id=None,
+            contrato_id=int(contrato_id),
             entidad_tipo="seguimiento_tarea",
             entidad_id=str(item["id"]),
         )
@@ -1673,17 +1684,23 @@ def list_bandeja(
         if not incluir_cerrados and not estado:
             if r.get("estado_gestion") in ("cumplido", "cancelado"):
                 continue
+        # Aislamiento por contrato activo (también Desarrollador):
+        # compromisos y tareas deben pertenecer al contrato seleccionado.
         if contrato_id is not None:
-            if r.get("origen") == "compromiso" and int(r.get("contrato_id") or 0) != int(contrato_id):
+            item_cid = r.get("contrato_id")
+            if item_cid is None or item_cid == "":
                 continue
-            if r.get("origen") == "tarea" and r.get("contrato_id") not in (None, ""):
-                if int(r.get("contrato_id") or 0) != int(contrato_id):
+            try:
+                if int(item_cid) != int(contrato_id):
                     continue
+            except (TypeError, ValueError):
+                continue
         aid = r.get("asignado_a_id")
         cid_creator = r.get("created_by")
         referido = r.get("referido_a_id")
         if responsable_id is not None and int(aid or 0) != int(responsable_id):
             continue
+        # Desarrollador ve todos los ítems del contrato activo (no cross-contrato).
         if es_dev:
             out.append(r)
             continue

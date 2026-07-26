@@ -8,16 +8,18 @@ import { fechaVencimientoEfectiva, nivelVencimientoItem } from '../../modules/se
 
 /**
  * Widget de inicio: refleja la misma bandeja unificada (visibilidad por rol incluida).
+ * Filtra siempre por el contrato activo de la plataforma.
  * Hereda tema (t) y tipografía (fs / CSS vars --cc-*).
  */
-export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimiento }) {
+export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, onIrSeguimiento }) {
+  const cid = contratoId ?? usuario?.contrato_id
   const permisos = useMemo(
-    () => accesoSeguimiento(usuario, usuario?.contrato_id),
-    [usuario],
+    () => accesoSeguimiento(usuario, cid),
+    [usuario, cid],
   )
   const api = useMemo(
-    () => createSeguimientoApi(usuario?.contrato_id, token),
-    [usuario?.contrato_id, token],
+    () => createSeguimientoApi(cid, token),
+    [cid, token],
   )
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -25,7 +27,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
   const [abierto, setAbierto] = useState(true)
 
   useEffect(() => {
-    if (!permisos.ver || !token) {
+    if (!permisos.ver || !token || cid == null || cid === '') {
       setLoading(false)
       setRows([])
       return
@@ -37,9 +39,9 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
       .catch(() => { if (!cancelled) setRows([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [api, permisos.ver, token])
+  }, [api, permisos.ver, token, cid])
 
-  if (!permisos.ver) return null
+  if (!permisos.ver || cid == null || cid === '') return null
 
   const titleSize = fs?.novedadTitulo || fs?.titulo || 'var(--cc-title)'
   const bodySize = fs?.base || 'var(--cc-body)'
