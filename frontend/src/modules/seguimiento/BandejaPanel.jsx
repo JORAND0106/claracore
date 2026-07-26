@@ -3,6 +3,7 @@ import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import {
   fechaVencimientoEfectiva,
   nivelVencimientoItem,
@@ -127,6 +128,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                 <th style={th}>Creación</th>
                 <th style={th}>Vencimiento</th>
                 <th style={th}>Nivel</th>
+                <th style={th}>Estado / avance</th>
                 <th style={th}>Tema</th>
                 <th style={th}>Destinatario</th>
                 <th style={th}>Origen / remitente</th>
@@ -141,6 +143,10 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                 const dest = r.relacion_destinatario === 'referencia'
                   ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
                   : (r.asignado_a_nombre || '—')
+                const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
+                const estadoLabel = r.origen === 'tarea' && avance?.pct != null
+                  ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)
+                  : (ESTADOS.find((x) => x.value === r.estado_gestion)?.label || r.estado_gestion || '—')
                 return (
                   <tr
                     key={r.id}
@@ -153,6 +159,16 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                     <td style={td}>{fmtFecha(r.created_at)}</td>
                     <td style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
                     <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
+                    <td style={{
+                      ...td,
+                      fontWeight: 700,
+                      color: (r.origen === 'tarea' ? avance?.pct === 100 : r.estado_gestion === 'cumplido')
+                        ? 'var(--cc-color-positive,#0f766e)'
+                        : t.text,
+                    }}
+                    >
+                      {estadoLabel}
+                    </td>
                     <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
                       <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
                       {r.titulo}

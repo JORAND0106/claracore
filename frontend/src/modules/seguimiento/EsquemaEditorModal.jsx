@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-/** Herramientas con icono SVG + tooltip (title). */
+const HATCHES = [
+  { id: 0, label: 'Diagonal /' },
+  { id: 1, label: 'Diagonal \\' },
+  { id: 2, label: 'Cruzado' },
+  { id: 3, label: 'Puntos' },
+  { id: 4, label: 'Horizontal' },
+]
+
 const TOOLS = [
   { id: 'lapiz', label: 'Lápiz', Icon: IconLapiz },
   { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
@@ -9,13 +16,26 @@ const TOOLS = [
   { id: 'rect', label: 'Rectángulo', Icon: IconRect },
   { id: 'elipse', label: 'Elipse', Icon: IconElipse },
   { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
+  { id: 'hatch', label: 'Relleno hatch', Icon: IconHatch },
+  { id: 'mover', label: 'Mover / rotar', Icon: IconMover },
 ]
 
 const SHAPE_TOOLS = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo'])
 
+function uid() {
+  return `o${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
+}
+
+function dist(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y)
+}
+
+function cloneScene(objs) {
+  return JSON.parse(JSON.stringify(objs || []))
+}
+
 /**
- * Editor de esquema (tamaño alineado al popup de nueva tarea).
- * Figuras: preview durante el arrastre y commit al soltar (pointer capture).
+ * Editor vectorial de esquema: undo, mover/rotar, hatch, medidas editables al crear.
  */
 export default function EsquemaEditorModal({
   t,
@@ -26,216 +46,236 @@ export default function EsquemaEditorModal({
 }) {
   const canvasRef = useRef(null)
   const wrapRef = useRef(null)
+  const objectsRef = useRef([])
+  const historyRef = useRef([])
   const drawing = useRef(false)
   const startPt = useRef(null)
   const lastPt = useRef(null)
-  const snapshot = useRef(null)
+  const draftRef = useRef(null)
+  const dragRef = useRef(null) // { id, mode: 'move'|'rotate', ox, oy, startAngle, baseRot }
   const toolRef = useRef('lapiz')
   const colorRef = useRef('#1e293b')
   const widthRef = useRef(3)
+  const hatchRef = useRef(0)
+  const measureRef = useRef('')
+
   const [tool, setTool] = useState('lapiz')
   const [color, setColor] = useState('#1e293b')
   const [width, setWidth] = useState(3)
+  const [hatch, setHatch] = useState(0)
+  const [measureInput, setMeasureInput] = useState('')
+  const [selectedId, setSelectedId] = useState(null)
+  const [liveMeasure, setLiveMeasure] = useState('')
+  const [canUndo, setCanUndo] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
 
   toolRef.current = tool
   colorRef.current = color
   widthRef.current = width
+  hatchRef.current = hatch
+  measureRef.current = measureInput
 
   const cssSize = () => {
     const c = canvasRef.current
     return { w: c?.clientWidth || 0, h: c?.clientHeight || 0 }
   }
 
-  const setupCanvas = useCallback((preserve = true) => {
+  const pushHistory = () => {
+    historyRef.current.push(cloneScene(objectsRef.current))
+    if (historyRef.current.length > 40) historyRef.current.shift()
+    setCanUndo(historyRef.current.length > 0)
+  }
+
+  const redraw = useCallback((extraDraft = null) => {
+    const c = canvasRef.current
+    if (!c) return
+    const dpr = window.devicePixelRatio || 1
+    const { w, h } = cssSize()
+    if (!w || !h) return
+    const ctx = c.getContext('2d')
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    const list = [...objectsRef.current]
+    if (extraDraft) list.push(extraDraft)
+    for (const obj of list) drawObject(ctx, obj, obj.id === selectedId)
+  }, [selectedId])
+
+  const setupCanvas = useCallback(() => {
     const c = canvasRef.current
     const wrap = wrapRef.current
     if (!c || !wrap) return
     const dpr = window.devicePixelRatio || 1
     const w = Math.max(480, wrap.clientWidth)
     const h = Math.max(360, wrap.clientHeight)
-    let prev = null
-    if (preserve && c.width > 0) {
-      try { prev = c.toDataURL('image/png') } catch { /* ignore */ }
-    }
     c.width = Math.floor(w * dpr)
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
     c.style.height = `${h}px`
-    const ctx = c.getContext('2d')
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, w, h)
-    if (prev && prev.length > 100) {
-      const img = new Image()
-      img.onload = () => ctx.drawImage(img, 0, 0, w, h)
-      img.src = prev
-    }
-  }, [])
+    redraw()
+  }, [redraw])
 
   useEffect(() => {
-    setupCanvas(false)
+    setupCanvas()
     const ro = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => { if (!drawing.current) setupCanvas(true) })
+      ? new ResizeObserver(() => { if (!drawing.current) setupCanvas() })
       : null
     if (ro && wrapRef.current) ro.observe(wrapRef.current)
-    const onWin = () => { if (!drawing.current) setupCanvas(true) }
-    window.addEventListener('resize', onWin)
-    return () => {
-      ro?.disconnect()
-      window.removeEventListener('resize', onWin)
-    }
+    return () => ro?.disconnect()
   }, [setupCanvas])
 
   useEffect(() => {
     if (!initialDataUri) return
-    const c = canvasRef.current
-    if (!c) return
-    const paint = () => {
-      const ctx = c.getContext('2d')
-      const { w, h } = cssSize()
-      const img = new Image()
-      img.onload = () => {
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, w, h)
-        ctx.drawImage(img, 0, 0, w, h)
-        setDirty(false)
-      }
-      img.src = initialDataUri
-    }
-    // Esperar un frame a que el canvas tenga tamaño
-    requestAnimationFrame(paint)
-  }, [initialDataUri])
+    objectsRef.current = [{
+      id: uid(),
+      type: 'image',
+      dataUri: initialDataUri,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      fit: true,
+    }]
+    historyRef.current = []
+    setCanUndo(false)
+    setDirty(false)
+    requestAnimationFrame(() => redraw())
+  }, [initialDataUri, redraw])
+
+  useEffect(() => { redraw(draftRef.current) }, [selectedId, redraw])
 
   const posFromEvent = (e) => {
     const c = canvasRef.current
     const r = c.getBoundingClientRect()
     const src = e.touches?.[0] || e.changedTouches?.[0] || e
-    return {
-      x: src.clientX - r.left,
-      y: src.clientY - r.top,
-    }
+    return { x: src.clientX - r.left, y: src.clientY - r.top }
   }
 
-  const applyStrokeStyle = (ctx, isEraser) => {
-    const w = widthRef.current
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    ctx.lineWidth = isEraser ? Math.max(8, w * 3) : w
-    if (isEraser) {
-      ctx.globalCompositeOperation = 'destination-out'
-      ctx.strokeStyle = 'rgba(0,0,0,1)'
-    } else {
-      ctx.globalCompositeOperation = 'source-over'
-      ctx.strokeStyle = colorRef.current
-      ctx.fillStyle = colorRef.current
-    }
-  }
+  const applyMeasureToShape = (shape, toolId, a, b) => {
+    const raw = String(measureRef.current || '').trim().replace(',', '.')
+    const val = Number(raw)
+    if (!Number.isFinite(val) || val <= 0) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
 
-  const drawShape = (ctx, toolId, a, b) => {
-    applyStrokeStyle(ctx, false)
-    if (toolId === 'linea') {
-      ctx.beginPath()
-      ctx.moveTo(a.x, a.y)
-      ctx.lineTo(b.x, b.y)
-      ctx.stroke()
-      return
-    }
-    if (toolId === 'flecha') {
-      ctx.beginPath()
-      ctx.moveTo(a.x, a.y)
-      ctx.lineTo(b.x, b.y)
-      ctx.stroke()
+    if (toolId === 'linea' || toolId === 'flecha') {
       const ang = Math.atan2(b.y - a.y, b.x - a.x)
-      const len = 12 + widthRef.current * 2
-      ctx.beginPath()
-      ctx.moveTo(b.x, b.y)
-      ctx.lineTo(b.x - len * Math.cos(ang - 0.4), b.y - len * Math.sin(ang - 0.4))
-      ctx.lineTo(b.x - len * Math.cos(ang + 0.4), b.y - len * Math.sin(ang + 0.4))
-      ctx.closePath()
-      ctx.fill()
-      return
+      return {
+        ...shape,
+        x1: a.x,
+        y1: a.y,
+        x2: a.x + Math.cos(ang) * val,
+        y2: a.y + Math.sin(ang) * val,
+      }
     }
-    if (toolId === 'rect') {
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
-      return
-    }
-    if (toolId === 'elipse') {
-      const cx = (a.x + b.x) / 2
-      const cy = (a.y + b.y) / 2
-      const rx = Math.max(Math.abs(b.x - a.x) / 2, 0.5)
-      const ry = Math.max(Math.abs(b.y - a.y) / 2, 0.5)
-      ctx.beginPath()
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
-      ctx.stroke()
-      return
-    }
-    if (toolId === 'triangulo') {
-      const midX = (a.x + b.x) / 2
-      ctx.beginPath()
-      ctx.moveTo(midX, a.y)
-      ctx.lineTo(b.x, b.y)
-      ctx.lineTo(a.x, b.y)
-      ctx.closePath()
-      ctx.stroke()
+    // Cajas: val = ancho; alto proporcional al arrastre (mín. 1)
+    const signX = b.x >= a.x ? 1 : -1
+    const signY = b.y >= a.y ? 1 : -1
+    const dragH = Math.abs(b.y - a.y) || val
+    const dragW = Math.abs(b.x - a.x) || val
+    const ratio = dragW > 0 ? dragH / dragW : 1
+    const height = Math.max(1, val * ratio)
+    return {
+      ...shape,
+      x1: a.x,
+      y1: a.y,
+      x2: a.x + signX * val,
+      y2: a.y + signY * height,
     }
   }
 
-  const restoreSnapshot = () => {
-    const c = canvasRef.current
-    if (!c || !snapshot.current) return
-    c.getContext('2d').putImageData(snapshot.current, 0, 0)
-  }
-
-  const captureSnapshot = () => {
-    const c = canvasRef.current
-    const ctx = c.getContext('2d')
-    // ImageData en píxeles de dispositivo (incluye buffer completo)
-    snapshot.current = ctx.getImageData(0, 0, c.width, c.height)
-  }
-
-  const paintShapePreview = (a, b) => {
-    const c = canvasRef.current
-    const ctx = c.getContext('2d')
-    restoreSnapshot()
-    // Reaplicar transform tras putImageData
-    const dpr = window.devicePixelRatio || 1
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    drawShape(ctx, toolRef.current, a, b)
-  }
-
-  const commitShape = (a, b) => {
-    if (!a || !b) return
-    const dx = Math.abs(b.x - a.x)
-    const dy = Math.abs(b.y - a.y)
-    if (dx < 2 && dy < 2) {
-      // trazo degenerado: restaurar sin dibujar
-      restoreSnapshot()
-      const dpr = window.devicePixelRatio || 1
-      canvasRef.current.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0)
-      return
+  const measureLabelFor = (toolId, a, b) => {
+    if (toolId === 'linea' || toolId === 'flecha') {
+      return `${Math.round(dist(a, b))}`
     }
-    paintShapePreview(a, b)
-    setDirty(true)
+    const w = Math.round(Math.abs(b.x - a.x))
+    const h = Math.round(Math.abs(b.y - a.y))
+    return `${w} × ${h}`
+  }
+
+  const hitTest = (p) => {
+    const objs = objectsRef.current
+    for (let i = objs.length - 1; i >= 0; i -= 1) {
+      const o = objs[i]
+      if (o.type === 'image' && o.fit) continue
+      if (pointInObject(p, o)) return o
+    }
+    return null
   }
 
   const onPointerDown = (e) => {
     e.preventDefault()
     const c = canvasRef.current
     c.setPointerCapture?.(e.pointerId)
-    drawing.current = true
     const p = posFromEvent(e)
+    const currentTool = toolRef.current
+    drawing.current = true
     startPt.current = p
     lastPt.current = p
-    const ctx = c.getContext('2d')
-    const currentTool = toolRef.current
+
+    if (currentTool === 'mover') {
+      const hit = hitTest(p)
+      if (hit) {
+        setSelectedId(hit.id)
+        const center = objectCenter(hit)
+        const rotating = e.altKey || e.shiftKey
+        dragRef.current = {
+          id: hit.id,
+          mode: rotating ? 'rotate' : 'move',
+          ox: p.x,
+          oy: p.y,
+          startAngle: Math.atan2(p.y - center.y, p.x - center.x),
+          baseRot: hit.rotation || 0,
+          origin: cloneScene([hit])[0],
+        }
+        pushHistory()
+      } else {
+        setSelectedId(null)
+        dragRef.current = null
+      }
+      return
+    }
+
+    if (currentTool === 'hatch') {
+      const hit = hitTest(p)
+      if (hit && ['rect', 'elipse', 'triangulo'].includes(hit.type)) {
+        pushHistory()
+        objectsRef.current = objectsRef.current.map((o) => (
+          o.id === hit.id ? { ...o, hatch: hatchRef.current } : o
+        ))
+        setSelectedId(hit.id)
+        setDirty(true)
+        redraw()
+      }
+      drawing.current = false
+      return
+    }
+
     if (currentTool === 'lapiz' || currentTool === 'borrador') {
-      applyStrokeStyle(ctx, currentTool === 'borrador')
-      ctx.beginPath()
-      ctx.moveTo(p.x, p.y)
-    } else if (SHAPE_TOOLS.has(currentTool)) {
-      captureSnapshot()
+      draftRef.current = {
+        id: uid(),
+        type: 'stroke',
+        points: [p],
+        color: colorRef.current,
+        width: widthRef.current,
+        erase: currentTool === 'borrador',
+      }
+      return
+    }
+
+    if (SHAPE_TOOLS.has(currentTool)) {
+      draftRef.current = {
+        id: uid(),
+        type: currentTool,
+        x1: p.x,
+        y1: p.y,
+        x2: p.x,
+        y2: p.y,
+        color: colorRef.current,
+        width: widthRef.current,
+        rotation: 0,
+        hatch: null,
+        label: '0',
+      }
     }
   }
 
@@ -245,18 +285,45 @@ export default function EsquemaEditorModal({
     const p = posFromEvent(e)
     lastPt.current = p
     const currentTool = toolRef.current
-    const ctx = canvasRef.current.getContext('2d')
-    if (currentTool === 'lapiz' || currentTool === 'borrador') {
-      applyStrokeStyle(ctx, currentTool === 'borrador')
-      ctx.lineTo(p.x, p.y)
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(p.x, p.y)
+
+    if (currentTool === 'mover' && dragRef.current) {
+      const d = dragRef.current
+      objectsRef.current = objectsRef.current.map((o) => {
+        if (o.id !== d.id) return o
+        if (d.mode === 'move') {
+          return translateObject(d.origin, p.x - d.ox, p.y - d.oy)
+        }
+        const center = objectCenter(d.origin)
+        const ang = Math.atan2(p.y - center.y, p.x - center.x)
+        return { ...o, rotation: d.baseRot + (ang - d.startAngle) }
+      })
       setDirty(true)
+      redraw()
       return
     }
-    if (SHAPE_TOOLS.has(currentTool) && startPt.current) {
-      paintShapePreview(startPt.current, p)
+
+    if ((currentTool === 'lapiz' || currentTool === 'borrador') && draftRef.current) {
+      draftRef.current = {
+        ...draftRef.current,
+        points: [...draftRef.current.points, p],
+      }
+      redraw(draftRef.current)
+      return
+    }
+
+    if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+      let shape = {
+        ...draftRef.current,
+        x1: startPt.current.x,
+        y1: startPt.current.y,
+        x2: p.x,
+        y2: p.y,
+      }
+      shape = applyMeasureToShape(shape, currentTool, startPt.current, p)
+      shape.label = measureLabelFor(currentTool, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 })
+      draftRef.current = shape
+      setLiveMeasure(shape.label)
+      redraw(shape)
     }
   }
 
@@ -267,35 +334,121 @@ export default function EsquemaEditorModal({
     try { canvasRef.current.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
     const currentTool = toolRef.current
     const p = posFromEvent(e)
-    lastPt.current = p
-    if (currentTool === 'lapiz' || currentTool === 'borrador') {
-      canvasRef.current.getContext('2d').globalCompositeOperation = 'source-over'
-      startPt.current = null
+
+    if (currentTool === 'mover') {
+      dragRef.current = null
       return
     }
-    if (SHAPE_TOOLS.has(currentTool) && startPt.current) {
-      commitShape(startPt.current, p)
+
+    if ((currentTool === 'lapiz' || currentTool === 'borrador') && draftRef.current) {
+      if ((draftRef.current.points || []).length > 1) {
+        pushHistory()
+        objectsRef.current = [...objectsRef.current, draftRef.current]
+        setDirty(true)
+      }
+      draftRef.current = null
+      redraw()
+      return
     }
-    startPt.current = null
-    snapshot.current = null
+
+    if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+      let shape = applyMeasureToShape(
+        { ...draftRef.current },
+        currentTool,
+        startPt.current,
+        p,
+      )
+      const a = { x: shape.x1, y: shape.y1 }
+      const b = { x: shape.x2, y: shape.y2 }
+      if (dist(a, b) < 3 && !Number(measureRef.current)) {
+        draftRef.current = null
+        setLiveMeasure('')
+        redraw()
+        return
+      }
+      shape.label = measureLabelFor(currentTool, a, b)
+      pushHistory()
+      objectsRef.current = [...objectsRef.current, shape]
+      setSelectedId(shape.id)
+      setLiveMeasure(shape.label)
+      setDirty(true)
+      draftRef.current = null
+      redraw()
+    }
+  }
+
+  const undo = () => {
+    if (!historyRef.current.length) return
+    objectsRef.current = historyRef.current.pop()
+    setCanUndo(historyRef.current.length > 0)
+    setSelectedId(null)
+    setDirty(true)
+    redraw()
   }
 
   const clearAll = () => {
-    const c = canvasRef.current
-    const ctx = c.getContext('2d')
-    const dpr = window.devicePixelRatio || 1
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.globalCompositeOperation = 'source-over'
-    const { w, h } = cssSize()
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, w, h)
+    pushHistory()
+    objectsRef.current = []
+    setSelectedId(null)
     setDirty(true)
+    redraw()
   }
+
+  const applyMeasureToSelected = () => {
+    const id = selectedId
+    if (!id) return
+    const obj = objectsRef.current.find((o) => o.id === id)
+    if (!obj || !SHAPE_TOOLS.has(obj.type)) return
+    const raw = String(measureInput || '').trim().replace(',', '.')
+    const val = Number(raw)
+    if (!Number.isFinite(val) || val <= 0) return
+    pushHistory()
+    measureRef.current = String(val)
+    const a = { x: obj.x1, y: obj.y1 }
+    const b = { x: obj.x2, y: obj.y2 }
+    const dir = (b.x === a.x && b.y === a.y) ? { x: a.x + 1, y: a.y } : b
+    const shaped = applyMeasureToShape(obj, obj.type, a, dir)
+    shaped.label = measureLabelFor(obj.type, { x: shaped.x1, y: shaped.y1 }, { x: shaped.x2, y: shaped.y2 })
+    objectsRef.current = objectsRef.current.map((o) => (o.id === id ? shaped : o))
+    setLiveMeasure(shaped.label)
+    setDirty(true)
+    redraw()
+  }
+
+  // Reaplicar medida al cambiar el input si hay figura en borrador o seleccionada recién creada
+  useEffect(() => {
+    measureRef.current = measureInput
+    if (draftRef.current && startPt.current && lastPt.current && SHAPE_TOOLS.has(toolRef.current)) {
+      let shape = applyMeasureToShape(
+        { ...draftRef.current },
+        toolRef.current,
+        startPt.current,
+        lastPt.current,
+      )
+      shape.label = measureLabelFor(toolRef.current, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 })
+      draftRef.current = shape
+      setLiveMeasure(shape.label)
+      redraw(shape)
+    }
+  }, [measureInput, redraw])
 
   const guardar = async () => {
     setBusy(true)
     try {
-      const dataUrl = canvasRef.current.toDataURL('image/png')
+      // Raster final sin resaltado de selección
+      const prevSel = selectedId
+      setSelectedId(null)
+      await new Promise((r) => requestAnimationFrame(r))
+      const c = canvasRef.current
+      const dpr = window.devicePixelRatio || 1
+      const { w, h } = cssSize()
+      const ctx = c.getContext('2d')
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, w, h)
+      for (const obj of objectsRef.current) drawObject(ctx, obj, false)
+      const dataUrl = c.toDataURL('image/png')
+      setSelectedId(prevSel)
       await onSave?.(dataUrl)
     } finally {
       setBusy(false)
@@ -330,10 +483,20 @@ export default function EsquemaEditorModal({
         }}
       >
         <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-          padding: '12px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+          display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+          padding: '10px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
         }}>
           <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
+          <button
+            type="button"
+            title="Deshacer"
+            aria-label="Deshacer"
+            disabled={!canUndo}
+            onClick={undo}
+            style={{ ...iconBtn(t, false), opacity: canUndo ? 1 : 0.4 }}
+          >
+            <IconUndo />
+          </button>
           {TOOLS.map((tb) => {
             const active = tool === tb.id
             const Icon = tb.Icon
@@ -344,25 +507,50 @@ export default function EsquemaEditorModal({
                 title={tb.label}
                 aria-label={tb.label}
                 onClick={() => setTool(tb.id)}
-                style={{
-                  width: 36, height: 36, padding: 0,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  borderRadius: 8, cursor: 'pointer',
-                  border: `1px solid ${active ? t.primary : t.border}`,
-                  background: active ? `${t.primary}18` : 'transparent',
-                  color: active ? t.primary : t.text,
-                }}
+                style={iconBtn(t, active)}
               >
                 <Icon />
               </button>
             )
           })}
-          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 6, alignItems: 'center' }} title="Color">
+          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Color">
             <input type="color" value={color} onChange={(e) => setColor(e.target.value)} disabled={tool === 'borrador'} />
           </label>
-          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 6, alignItems: 'center' }} title="Grosor">
-            <input type="range" min={1} max={16} step={0.5} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 80 }} />
+          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Grosor">
+            <input type="range" min={1} max={16} step={0.5} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 72 }} />
           </label>
+          {(tool === 'hatch' || tool === 'rect' || tool === 'elipse' || tool === 'triangulo') && (
+            <select
+              title="Textura hatch"
+              value={hatch}
+              onChange={(e) => setHatch(Number(e.target.value))}
+              style={{ fontSize: 'var(--cc-xs)', padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, color: t.text, background: t.bgCard }}
+            >
+              {HATCHES.map((h) => (
+                <option key={h.id} value={h.id}>{h.label}</option>
+              ))}
+            </select>
+          )}
+          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Medida deseada al crear (unidades de pantalla)">
+            Medida
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={measureInput}
+              onChange={(e) => setMeasureInput(e.target.value)}
+              placeholder="auto"
+              style={{ width: 72, padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, fontSize: 'var(--cc-xs)', color: t.text, background: t.bgCard }}
+            />
+          </label>
+          {selectedId && (
+            <button type="button" style={ghost(t)} onClick={applyMeasureToSelected} title="Aplicar medida a la figura seleccionada">
+              Aplicar medida
+            </button>
+          )}
+          {liveMeasure && (
+            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>Actual: {liveMeasure}</span>
+          )}
           <button type="button" style={ghost(t)} onClick={clearAll}>Limpiar</button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
@@ -376,7 +564,7 @@ export default function EsquemaEditorModal({
             ref={canvasRef}
             style={{
               display: 'block', width: '100%', height: '100%',
-              background: '#fff', borderRadius: 8, touchAction: 'none', cursor: 'crosshair',
+              background: '#fff', borderRadius: 8, touchAction: 'none', cursor: tool === 'mover' ? 'move' : 'crosshair',
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -385,11 +573,228 @@ export default function EsquemaEditorModal({
           />
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          El esquema se guarda como PNG de este sub-ítem y no reemplaza la imagen de soporte.
+          Deshacer revierte la última acción. Mover/rotar: arrastre la figura (Alt/Shift = rotar). Hatch: elija textura y pulse una figura cerrada.
+          Medida: longitud (línea/flecha) o ancho (cajas); se aplica al dibujar o con «Aplicar medida».
         </div>
       </div>
     </div>
   )
+}
+
+/* ─── Dibujo de objetos ─────────────────────────────────────────────────── */
+
+function drawObject(ctx, obj, selected) {
+  if (!obj) return
+  ctx.save()
+  if (obj.type === 'image') {
+    drawImageObj(ctx, obj)
+    ctx.restore()
+    return
+  }
+  const center = objectCenter(obj)
+  if (obj.rotation) {
+    ctx.translate(center.x, center.y)
+    ctx.rotate(obj.rotation)
+    ctx.translate(-center.x, -center.y)
+  }
+  if (obj.type === 'stroke') {
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
+    ctx.globalCompositeOperation = obj.erase ? 'destination-out' : 'source-over'
+    ctx.strokeStyle = obj.color || '#1e293b'
+    const pts = obj.points || []
+    if (pts.length) {
+      ctx.beginPath()
+      ctx.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+      ctx.stroke()
+    }
+  } else if (SHAPE_TOOLS.has(obj.type) || obj.type === 'linea' || obj.type === 'flecha') {
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.strokeStyle = obj.color || '#1e293b'
+    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.lineWidth = obj.width || 3
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    const a = { x: obj.x1, y: obj.y1 }
+    const b = { x: obj.x2, y: obj.y2 }
+    if (obj.hatch != null && ['rect', 'elipse', 'triangulo'].includes(obj.type)) {
+      fillHatch(ctx, obj)
+    }
+    if (obj.type === 'linea' || obj.type === 'flecha') {
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+      if (obj.type === 'flecha') {
+        const ang = Math.atan2(b.y - a.y, b.x - a.x)
+        const len = 12 + (obj.width || 3) * 2
+        ctx.beginPath()
+        ctx.moveTo(b.x, b.y)
+        ctx.lineTo(b.x - len * Math.cos(ang - 0.4), b.y - len * Math.sin(ang - 0.4))
+        ctx.lineTo(b.x - len * Math.cos(ang + 0.4), b.y - len * Math.sin(ang + 0.4))
+        ctx.closePath()
+        ctx.fill()
+      }
+    } else if (obj.type === 'rect') {
+      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
+    } else if (obj.type === 'elipse') {
+      const cx = (a.x + b.x) / 2
+      const cy = (a.y + b.y) / 2
+      ctx.beginPath()
+      ctx.ellipse(cx, cy, Math.max(Math.abs(b.x - a.x) / 2, 0.5), Math.max(Math.abs(b.y - a.y) / 2, 0.5), 0, 0, Math.PI * 2)
+      ctx.stroke()
+    } else if (obj.type === 'triangulo') {
+      const midX = (a.x + b.x) / 2
+      ctx.beginPath()
+      ctx.moveTo(midX, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.lineTo(a.x, b.y)
+      ctx.closePath()
+      ctx.stroke()
+    }
+    if (obj.label) {
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.font = '11px sans-serif'
+      ctx.fillStyle = '#334155'
+      ctx.fillText(String(obj.label), (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 6)
+    }
+  }
+  if (selected) {
+    ctx.globalCompositeOperation = 'source-over'
+    const bb = objectBounds(obj)
+    if (bb) {
+      ctx.strokeStyle = '#2563eb'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8)
+      ctx.setLineDash([])
+    }
+  }
+  ctx.restore()
+}
+
+function drawImageObj(ctx, obj) {
+  const cache = drawImageObj._cache || (drawImageObj._cache = {})
+  const key = obj.dataUri
+  const paint = (image) => {
+    const dpr = window.devicePixelRatio || 1
+    const cw = ctx.canvas.width / dpr
+    const ch = ctx.canvas.height / dpr
+    if (obj.fit) ctx.drawImage(image, 0, 0, cw, ch)
+    else ctx.drawImage(image, obj.x || 0, obj.y || 0, obj.w || image.width, obj.h || image.height)
+  }
+  if (cache[key]?.complete && cache[key].naturalWidth) {
+    paint(cache[key])
+    return
+  }
+  const image = new Image()
+  cache[key] = image
+  image.onload = () => paint(image)
+  image.src = key
+}
+
+function pathForClosed(ctx, obj) {
+  const a = { x: obj.x1, y: obj.y1 }
+  const b = { x: obj.x2, y: obj.y2 }
+  ctx.beginPath()
+  if (obj.type === 'rect') {
+    ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y)
+  } else if (obj.type === 'elipse') {
+    ctx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2, Math.max(Math.abs(b.x - a.x) / 2, 0.5), Math.max(Math.abs(b.y - a.y) / 2, 0.5), 0, 0, Math.PI * 2)
+  } else if (obj.type === 'triangulo') {
+    const midX = (a.x + b.x) / 2
+    ctx.moveTo(midX, a.y)
+    ctx.lineTo(b.x, b.y)
+    ctx.lineTo(a.x, b.y)
+    ctx.closePath()
+  }
+}
+
+function fillHatch(ctx, obj) {
+  const pattern = makeHatchPattern(ctx, obj.hatch, obj.color || '#1e293b')
+  if (!pattern) return
+  ctx.save()
+  pathForClosed(ctx, obj)
+  ctx.fillStyle = pattern
+  ctx.fill()
+  ctx.restore()
+}
+
+function makeHatchPattern(ctx, kind, color) {
+  const c = document.createElement('canvas')
+  c.width = 10
+  c.height = 10
+  const g = c.getContext('2d')
+  g.strokeStyle = color
+  g.fillStyle = color
+  g.lineWidth = 1
+  const k = Number(kind) || 0
+  if (k === 0) {
+    g.beginPath(); g.moveTo(0, 10); g.lineTo(10, 0); g.stroke()
+  } else if (k === 1) {
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(10, 10); g.stroke()
+  } else if (k === 2) {
+    g.beginPath(); g.moveTo(0, 10); g.lineTo(10, 0); g.moveTo(0, 0); g.lineTo(10, 10); g.stroke()
+  } else if (k === 3) {
+    g.beginPath(); g.arc(5, 5, 1.2, 0, Math.PI * 2); g.fill()
+  } else {
+    g.beginPath(); g.moveTo(0, 5); g.lineTo(10, 5); g.stroke()
+  }
+  return ctx.createPattern(c, 'repeat')
+}
+
+function objectCenter(obj) {
+  if (obj.type === 'stroke') {
+    const pts = obj.points || []
+    if (!pts.length) return { x: 0, y: 0 }
+    const sx = pts.reduce((s, p) => s + p.x, 0)
+    const sy = pts.reduce((s, p) => s + p.y, 0)
+    return { x: sx / pts.length, y: sy / pts.length }
+  }
+  if (obj.type === 'image') return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
+  return { x: ((obj.x1 || 0) + (obj.x2 || 0)) / 2, y: ((obj.y1 || 0) + (obj.y2 || 0)) / 2 }
+}
+
+function objectBounds(obj) {
+  if (obj.type === 'stroke') {
+    const pts = obj.points || []
+    if (!pts.length) return null
+    let minX = pts[0].x; let maxX = pts[0].x; let minY = pts[0].y; let maxY = pts[0].y
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y)
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  if (obj.x1 == null) return null
+  const x = Math.min(obj.x1, obj.x2)
+  const y = Math.min(obj.y1, obj.y2)
+  return { x, y, w: Math.abs(obj.x2 - obj.x1), h: Math.abs(obj.y2 - obj.y1) }
+}
+
+function pointInObject(p, obj) {
+  const bb = objectBounds(obj)
+  if (!bb) return false
+  const pad = 8
+  return p.x >= bb.x - pad && p.x <= bb.x + bb.w + pad && p.y >= bb.y - pad && p.y <= bb.y + bb.h + pad
+}
+
+function translateObject(obj, dx, dy) {
+  if (obj.type === 'stroke') {
+    return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+  }
+  if (obj.type === 'image') {
+    return { ...obj, fit: false, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
+  }
+  return {
+    ...obj,
+    x1: obj.x1 + dx,
+    y1: obj.y1 + dy,
+    x2: obj.x2 + dx,
+    y2: obj.y2 + dy,
+  }
 }
 
 function primary(t) {
@@ -398,61 +803,27 @@ function primary(t) {
 function ghost(t) {
   return { border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)' }
 }
+function iconBtn(t, active) {
+  return {
+    width: 34, height: 34, padding: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 8, cursor: 'pointer',
+    border: `1px solid ${active ? t.primary : t.border}`,
+    background: active ? `${t.primary}18` : 'transparent',
+    color: active ? t.primary : t.text,
+  }
+}
 
 function iconProps() {
   return { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
 }
-
-function IconLapiz() {
-  return (
-    <svg {...iconProps()}>
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  )
-}
-function IconBorrador() {
-  return (
-    <svg {...iconProps()}>
-      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
-      <path d="M22 21H7" />
-      <path d="m5 11 9 9" />
-    </svg>
-  )
-}
-function IconLinea() {
-  return (
-    <svg {...iconProps()}>
-      <path d="M4 18 20 6" />
-    </svg>
-  )
-}
-function IconFlecha() {
-  return (
-    <svg {...iconProps()}>
-      <path d="M5 12h14" />
-      <path d="m13 6 6 6-6 6" />
-    </svg>
-  )
-}
-function IconRect() {
-  return (
-    <svg {...iconProps()}>
-      <rect x="4" y="6" width="16" height="12" rx="1" />
-    </svg>
-  )
-}
-function IconElipse() {
-  return (
-    <svg {...iconProps()}>
-      <ellipse cx="12" cy="12" rx="9" ry="6" />
-    </svg>
-  )
-}
-function IconTriangulo() {
-  return (
-    <svg {...iconProps()}>
-      <path d="M12 4 21 19H3Z" />
-    </svg>
-  )
-}
+function IconLapiz() { return <svg {...iconProps()}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg> }
+function IconBorrador() { return <svg {...iconProps()}><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></svg> }
+function IconLinea() { return <svg {...iconProps()}><path d="M4 18 20 6" /></svg> }
+function IconFlecha() { return <svg {...iconProps()}><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg> }
+function IconRect() { return <svg {...iconProps()}><rect x="4" y="6" width="16" height="12" rx="1" /></svg> }
+function IconElipse() { return <svg {...iconProps()}><ellipse cx="12" cy="12" rx="9" ry="6" /></svg> }
+function IconTriangulo() { return <svg {...iconProps()}><path d="M12 4 21 19H3Z" /></svg> }
+function IconHatch() { return <svg {...iconProps()}><path d="M4 20 20 4" /><path d="M4 14 14 4" /><path d="M10 20 20 10" /></svg> }
+function IconMover() { return <svg {...iconProps()}><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="M15 19 12 22l-3-3" /><path d="M19 9 22 12l-3 3" /><path d="M2 12h20" /><path d="M12 2v20" /></svg> }
+function IconUndo() { return <svg {...iconProps()}><path d="M3 7v6h6" /><path d="M3 13a9 9 0 1 0 3-7.7L3 7" /></svg> }
