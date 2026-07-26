@@ -4,8 +4,8 @@ import TareaFormModal from './TareaFormModal'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import {
-  calcularNivelVencimiento,
-  fechaBaseNivel,
+  fechaVencimientoEfectiva,
+  nivelVencimientoItem,
   origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
@@ -135,10 +135,8 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             </thead>
             <tbody>
               {sorted.map((r) => {
-                const nivel = calcularNivelVencimiento({
-                  fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: fechaBaseNivel(r),
-                })
+                const nivel = nivelVencimientoItem(r)
+                const due = fechaVencimientoEfectiva(r)
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
                 const dest = r.relacion_destinatario === 'referencia'
                   ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
@@ -153,7 +151,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                   >
                     <td style={td}>{r.consecutivo ?? r.id}</td>
                     <td style={td}>{fmtFecha(r.created_at)}</td>
-                    <td style={td}>{fmtFechaHora(r.fecha_vencimiento, r.hora_vencimiento)}</td>
+                    <td style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
                     <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
                     <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
                       <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>

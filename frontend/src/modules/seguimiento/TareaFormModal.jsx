@@ -1,21 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
+import DibujoCanvas from './DibujoCanvas'
+import TareaChecklistEditor, { newChecklistItem } from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
-import { calcularNivelVencimiento } from './vencimientoLevels'
+import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
 
-/** Formulario de tarea personal con Ctrl+V de imágenes y destino formal/referencia. */
+/** Formulario de tarea personal: checklist con fechas/capturas, Ctrl+V y dibujo a mano. */
 export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
   const [form, setForm] = useState({
     titulo: '',
-    descripcion: '',
-    fecha_vencimiento: '',
-    hora_vencimiento: '',
     destinatario_id: '',
     campos_libres: { notas: '' },
   })
+  const [checklist, setChecklist] = useState([newChecklistItem()])
   const [destUser, setDestUser] = useState(null)
   const [askModo, setAskModo] = useState(false)
   const [pendientesImg, setPendientesImg] = useState([])
+  const [pendientesDibujo, setPendientesDibujo] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const zoneRef = useRef(null)
@@ -46,9 +47,10 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
     return () => el.removeEventListener('paste', onPaste)
   }, [])
 
-  const nivelPreview = form.fecha_vencimiento
+  const duePreview = fechaVencimientoEfectiva({ origen: 'tarea', campos_libres: { checklist } })
+  const nivelPreview = duePreview.fecha
     ? calcularNivelVencimiento({
-      fechaVencimiento: form.fecha_vencimiento,
+      fechaVencimiento: duePreview.fecha,
       fechaCreacion: new Date().toISOString().slice(0, 10),
     })
     : null
@@ -57,14 +59,21 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
     setBusy(true)
     setError('')
     try {
+      const checklistClean = checklist.map((it) => ({
+        id: it.id,
+        texto: it.texto || '',
+        hecho: !!it.hecho,
+        fecha: it.fecha || null,
+        hora: it.hora || null,
+        // imagen se sube después para no inflar el POST inicial
+      }))
       const payload = {
         titulo: form.titulo.trim(),
-        descripcion: form.descripcion,
-        fecha_vencimiento: form.fecha_vencimiento || null,
-        hora_vencimiento: form.hora_vencimiento || null,
+        fecha_vencimiento: duePreview.fecha || null,
+        hora_vencimiento: duePreview.hora || null,
         campos_libres: {
-          ...(form.campos_libres || {}),
           notas: form.campos_libres?.notas || '',
+          checklist: checklistClean,
         },
       }
       if (destUser && relacion) {
@@ -73,11 +82,32 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         payload.referido_a_nombre = nombreUser(destUser)
       }
       const row = await api.crearTarea(payload)
+
+      for (const it of checklist) {
+        if (it.imagen?.data_uri || it.imagen?.pending) {
+          await api.pegarImagenTarea(row.id, {
+            nombre: it.imagen.nombre || `checklist-${it.id}.png`,
+            data_base64: it.imagen.data_uri,
+            mime_type: it.imagen.mime_type || 'image/png',
+            destino: 'checklist',
+            checklist_id: it.id,
+          })
+        }
+      }
       for (const im of pendientesImg) {
         await api.pegarImagenTarea(row.id, {
           nombre: im.nombre,
           data_base64: im.data_uri,
           mime_type: im.mime_type,
+          destino: 'adjunto',
+        })
+      }
+      for (const dib of pendientesDibujo) {
+        await api.pegarImagenTarea(row.id, {
+          nombre: dib.nombre || `dibujo-${Date.now()}.png`,
+          data_base64: dib.data_uri,
+          mime_type: 'image/png',
+          destino: 'dibujo',
         })
       }
       onCreated?.(row)
@@ -93,6 +123,10 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
   const guardar = async () => {
     if (!form.titulo.trim()) {
       setError('Indique un título')
+      return
+    }
+    if (!checklist.some((it) => (it.texto || '').trim())) {
+      setError('Agregue al menos un sub-ítem con texto')
       return
     }
     if (destUser) {
@@ -118,7 +152,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         tabIndex={0}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(820px, 100%)',
+          width: 'min(1640px, 98vw)',
           maxHeight: '92vh',
           overflow: 'auto',
           background: t.bgCard,
@@ -133,7 +167,8 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           Nueva tarea personal
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 20, lineHeight: 1.45 }}>
-          Organice pendientes propios. Pegue imágenes con Ctrl+V. El nivel de vencimiento reemplaza la prioridad por estrellas.
+          Descomponga la tarea en sub-ítems con fecha, hora y captura propias. El nivel de vencimiento
+          de la bandeja usa siempre el sub-ítem más próximo. Pegue imágenes adjuntas con Ctrl+V.
         </div>
 
         <label style={lbl(t)}>Título</label>
@@ -144,45 +179,17 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           placeholder="¿Qué hay que hacer?"
         />
 
-        <label style={lbl(t)}>Descripción</label>
-        <textarea
-          rows={5}
-          value={form.descripcion}
-          onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
-          style={{ ...inp(t), marginBottom: 14, minHeight: 120, resize: 'vertical' }}
-          placeholder="Detalle, contexto o pasos…"
-        />
-
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: 16,
-          marginBottom: 14,
-        }}>
-          <div>
-            <label style={lbl(t)}>Fecha de vencimiento</label>
-            <input
-              type="date"
-              value={form.fecha_vencimiento}
-              onChange={(e) => setForm((f) => ({ ...f, fecha_vencimiento: e.target.value }))}
-              style={inp(t)}
-            />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
+          <label style={{ ...lbl(t), marginBottom: 0 }}>Checklist / descripción</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+              Vence {duePreview.fecha || '—'}{duePreview.hora ? ` ${duePreview.hora}` : ''}
+            </span>
+            <VencimientoIcon nivel={nivelPreview} showLabel t={t} />
           </div>
-          <div>
-            <label style={lbl(t)}>Hora de entrega (opcional)</label>
-            <input
-              type="time"
-              value={form.hora_vencimiento}
-              onChange={(e) => setForm((f) => ({ ...f, hora_vencimiento: e.target.value }))}
-              style={inp(t)}
-            />
-          </div>
-          <div>
-            <label style={lbl(t)}>Nivel de vencimiento</label>
-            <div style={{ paddingTop: 8 }}>
-              <VencimientoIcon nivel={nivelPreview} showLabel t={t} />
-            </div>
-          </div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} />
         </div>
 
         <label style={lbl(t)}>Destinatario (opcional)</label>
@@ -209,11 +216,34 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           placeholder="Recordatorios, enlaces, etc."
         />
 
+        <label style={lbl(t)}>Dibujo a mano</label>
+        <div style={{ marginBottom: 14 }}>
+          <DibujoCanvas
+            t={t}
+            onSave={(dataUrl) => {
+              setPendientesDibujo((arr) => [
+                ...arr,
+                { nombre: `dibujo-${Date.now()}.png`, data_uri: dataUrl, mime_type: 'image/png' },
+              ])
+            }}
+          />
+          {pendientesDibujo.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
+              {pendientesDibujo.map((im, i) => (
+                <img key={i} src={im.data_uri} alt="" style={{ maxWidth: 140, maxHeight: 100, borderRadius: 8, border: `1px solid ${t.border}` }} />
+              ))}
+            </div>
+          )}
+        </div>
+
         {pendientesImg.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
-            {pendientesImg.map((im, i) => (
-              <img key={i} src={im.data_uri} alt="" style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: `1px solid ${t.border}` }} />
-            ))}
+          <div style={{ marginBottom: 12 }}>
+            <label style={lbl(t)}>Imágenes adjuntas (Ctrl+V)</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {pendientesImg.map((im, i) => (
+                <img key={i} src={im.data_uri} alt="" style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: `1px solid ${t.border}` }} />
+              ))}
+            </div>
           </div>
         )}
 

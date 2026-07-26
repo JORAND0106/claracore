@@ -4,7 +4,7 @@ import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos
 import { ORIGEN_COLOR, fmtFecha } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
-import { calcularNivelVencimiento, fechaBaseNivel } from '../../modules/seguimiento/vencimientoLevels'
+import { fechaVencimientoEfectiva, nivelVencimientoItem } from '../../modules/seguimiento/vencimientoLevels'
 
 /**
  * Widget de inicio: refleja la misma bandeja unificada (visibilidad por rol incluida).
@@ -90,10 +90,8 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.slice(0, 8).map((r) => {
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                const nivel = calcularNivelVencimiento({
-                  fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: fechaBaseNivel(r),
-                })
+                const nivel = nivelVencimientoItem(r)
+                const due = fechaVencimientoEfectiva(r)
                 return (
                   <button
                     key={r.id}
@@ -114,7 +112,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
                       <div style={{ fontWeight: 600, fontSize: bodySize, flex: 1 }}>{r.titulo}</div>
                     </div>
                     <div style={{ fontSize: smSize, color: t.textMuted }}>
-                      {r.asignado_a_nombre} · {fmtFecha(r.fecha_vencimiento)} · {r.estado_gestion}
+                      {r.asignado_a_nombre} · {fmtFecha(due.fecha || r.fecha_vencimiento)} · {r.estado_gestion}
                     </div>
                   </button>
                 )
