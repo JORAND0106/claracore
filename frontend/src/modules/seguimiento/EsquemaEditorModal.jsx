@@ -15,6 +15,7 @@ const HATCHES = [
 ]
 
 const TOOLS = [
+  { id: 'seleccion', label: 'Seleccionar', Icon: IconSeleccion },
   { id: 'paneo', label: 'Paneo', Icon: IconPaneo },
   { id: 'lapiz', label: 'Lápiz', Icon: IconLapiz },
   { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
@@ -23,9 +24,51 @@ const TOOLS = [
   { id: 'rect', label: 'Rectángulo', Icon: IconRect },
   { id: 'elipse', label: 'Elipse', Icon: IconElipse },
   { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
+  { id: 'tabla', label: 'Tabla', Icon: IconTabla },
   { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
   { id: 'mover', label: 'Mover / rotar', Icon: IconMover },
 ]
+
+function createTablaAt(x, y, rows = 2, cols = 3) {
+  const r = Math.max(1, Math.min(20, rows))
+  const c = Math.max(1, Math.min(12, cols))
+  return {
+    id: uid(),
+    type: 'tabla',
+    x,
+    y,
+    cellW: 78,
+    cellH: 30,
+    rows: r,
+    cols: c,
+    cells: Array.from({ length: r }, () => Array.from({ length: c }, () => '')),
+    color: '#1e293b',
+    rotation: 0,
+  }
+}
+
+function tablaSize(obj) {
+  const cols = Math.max(1, obj.cols || (obj.cells?.[0]?.length) || 1)
+  const rows = Math.max(1, obj.rows || (obj.cells?.length) || 1)
+  const cellW = obj.cellW || 78
+  const cellH = obj.cellH || 30
+  return { w: cols * cellW, h: rows * cellH, cols, rows, cellW, cellH }
+}
+
+function resizeTablaObj(obj, dRows, dCols) {
+  const { rows, cols, cellW, cellH } = tablaSize(obj)
+  const nextRows = Math.max(1, Math.min(20, rows + dRows))
+  const nextCols = Math.max(1, Math.min(12, cols + dCols))
+  const cells = []
+  for (let i = 0; i < nextRows; i += 1) {
+    const row = []
+    for (let j = 0; j < nextCols; j += 1) {
+      row.push(obj.cells?.[i]?.[j] ?? '')
+    }
+    cells.push(row)
+  }
+  return { ...obj, rows: nextRows, cols: nextCols, cellW, cellH, cells }
+}
 
 const SHAPE_TOOLS = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo'])
 
@@ -79,12 +122,23 @@ export default function EsquemaEditorModal({
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [panTick, setPanTick] = useState(0)
+  const selectedIdRef = useRef(null)
 
   toolRef.current = tool
   colorRef.current = color
   widthRef.current = width
   hatchRef.current = hatch
   measureRef.current = measureInput
+  selectedIdRef.current = selectedId
+
+  const selectedObj = selectedId
+    ? (objectsRef.current.find((o) => o.id === selectedId) || null)
+    : null
+  const editingTabla = (
+    selectedObj?.type === 'tabla'
+    && (tool === 'seleccion' || tool === 'tabla')
+    && !selectedObj.rotation
+  )
 
   const cssSize = () => {
     const c = canvasRef.current
@@ -111,7 +165,14 @@ export default function EsquemaEditorModal({
     ctx.translate(panRef.current.x, panRef.current.y)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
-    for (const obj of list) drawObject(ctx, obj, obj.id === selectedId)
+    const hideTablaTextId = (
+      toolRef.current === 'seleccion' || toolRef.current === 'tabla'
+    ) ? selectedId : null
+    for (const obj of list) {
+      drawObject(ctx, obj, obj.id === selectedId, {
+        skipTablaText: obj.type === 'tabla' && obj.id === hideTablaTextId,
+      })
+    }
     ctx.restore()
   }, [selectedId, panTick])
 
@@ -239,26 +300,54 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (currentTool === 'mover') {
+    if (currentTool === 'seleccion') {
       const hit = hitTest(p)
-      if (hit) {
+      setSelectedId(hit ? hit.id : null)
+      drawing.current = false
+      redraw()
+      return
+    }
+
+    if (currentTool === 'tabla') {
+      const hit = hitTest(p)
+      if (hit?.type === 'tabla') {
         setSelectedId(hit.id)
-        const center = objectCenter(hit)
-        const rotating = e.altKey || e.shiftKey
-        dragRef.current = {
-          id: hit.id,
-          mode: rotating ? 'rotate' : 'move',
-          ox: p.x,
-          oy: p.y,
-          startAngle: Math.atan2(p.y - center.y, p.x - center.x),
-          baseRot: hit.rotation || 0,
-          origin: cloneScene([hit])[0],
-        }
-        pushHistory()
-      } else {
-        setSelectedId(null)
-        dragRef.current = null
+        drawing.current = false
+        redraw()
+        return
       }
+      pushHistory()
+      const table = createTablaAt(p.x, p.y)
+      objectsRef.current = [...objectsRef.current, table]
+      setSelectedId(table.id)
+      setDirty(true)
+      drawing.current = false
+      redraw()
+      return
+    }
+
+    if (currentTool === 'mover') {
+      // Requiere selección previa con la herramienta «Seleccionar»
+      const selId = selectedIdRef.current
+      const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
+      if (!sel || !pointInObject(p, sel)) {
+        dragRef.current = null
+        drawing.current = false
+        return
+      }
+      const center = objectCenter(sel)
+      // Las tablas se mueven; la rotación se omite para no desalinear el overlay de celdas
+      const rotating = (e.altKey || e.shiftKey) && sel.type !== 'tabla'
+      dragRef.current = {
+        id: sel.id,
+        mode: rotating ? 'rotate' : 'move',
+        ox: p.x,
+        oy: p.y,
+        startAngle: Math.atan2(p.y - center.y, p.x - center.x),
+        baseRot: sel.rotation || 0,
+        origin: cloneScene([sel])[0],
+      }
+      pushHistory()
       return
     }
 
@@ -503,7 +592,7 @@ export default function EsquemaEditorModal({
       ctx.fillRect(0, 0, w, h)
       ctx.save()
       ctx.translate(panRef.current.x, panRef.current.y)
-      for (const obj of objectsRef.current) drawObject(ctx, obj, false)
+      for (const obj of objectsRef.current) drawObject(ctx, obj, false, {})
       ctx.restore()
       const dataUrl = c.toDataURL('image/png')
       setSelectedId(prevSel)
@@ -601,10 +690,76 @@ export default function EsquemaEditorModal({
               style={{ width: 72, padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, fontSize: 'var(--cc-xs)', color: t.text, background: t.bgCard }}
             />
           </label>
-          {selectedId && (
+          {selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && (
             <button type="button" style={ghost(t)} onClick={applyMeasureToSelected} title="Aplicar medida a la figura seleccionada">
               Aplicar medida
             </button>
+          )}
+          {selectedObj?.type === 'tabla' && (
+            <>
+              <button
+                type="button"
+                style={ghost(t)}
+                title="Agregar fila"
+                onClick={() => {
+                  pushHistory()
+                  objectsRef.current = objectsRef.current.map((o) => (
+                    o.id === selectedId ? resizeTablaObj(o, 1, 0) : o
+                  ))
+                  setDirty(true)
+                  setPanTick((n) => n + 1)
+                }}
+              >
+                + Fila
+              </button>
+              <button
+                type="button"
+                style={ghost(t)}
+                title="Quitar fila"
+                disabled={(selectedObj.rows || 1) <= 1}
+                onClick={() => {
+                  pushHistory()
+                  objectsRef.current = objectsRef.current.map((o) => (
+                    o.id === selectedId ? resizeTablaObj(o, -1, 0) : o
+                  ))
+                  setDirty(true)
+                  setPanTick((n) => n + 1)
+                }}
+              >
+                − Fila
+              </button>
+              <button
+                type="button"
+                style={ghost(t)}
+                title="Agregar columna"
+                onClick={() => {
+                  pushHistory()
+                  objectsRef.current = objectsRef.current.map((o) => (
+                    o.id === selectedId ? resizeTablaObj(o, 0, 1) : o
+                  ))
+                  setDirty(true)
+                  setPanTick((n) => n + 1)
+                }}
+              >
+                + Col
+              </button>
+              <button
+                type="button"
+                style={ghost(t)}
+                title="Quitar columna"
+                disabled={(selectedObj.cols || 1) <= 1}
+                onClick={() => {
+                  pushHistory()
+                  objectsRef.current = objectsRef.current.map((o) => (
+                    o.id === selectedId ? resizeTablaObj(o, 0, -1) : o
+                  ))
+                  setDirty(true)
+                  setPanTick((n) => n + 1)
+                }}
+              >
+                − Col
+              </button>
+            </>
           )}
           {liveMeasure && (
             <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>Actual: {liveMeasure}</span>
@@ -617,23 +772,45 @@ export default function EsquemaEditorModal({
             </button>
           </div>
         </div>
-        <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: '#e2e8f0', padding: 10 }}>
+        <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: '#e2e8f0', padding: 10, position: 'relative' }}>
           <canvas
             ref={canvasRef}
             style={{
               display: 'block', width: '100%', height: '100%',
               background: '#fff', borderRadius: 8, touchAction: 'none',
-              cursor: tool === 'paneo' ? 'grab' : tool === 'mover' ? 'move' : tool === 'hatch' ? 'cell' : 'crosshair',
+              cursor: tool === 'paneo' ? 'grab'
+                : tool === 'seleccion' ? 'default'
+                  : tool === 'mover' ? 'move'
+                    : tool === 'hatch' || tool === 'tabla' ? 'cell'
+                      : 'crosshair',
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
           />
+          {editingTabla && selectedObj && (
+            <TablaOverlay
+              key={`${selectedObj.id}-${selectedObj.rows}-${selectedObj.cols}`}
+              obj={selectedObj}
+              pan={panRef.current}
+              canvasEl={canvasRef.current}
+              onCellChange={(ri, ci, text) => {
+                objectsRef.current = objectsRef.current.map((o) => {
+                  if (o.id !== selectedObj.id) return o
+                  const cells = (o.cells || []).map((row, r) => (
+                    row.map((cell, c) => (r === ri && c === ci ? text : cell))
+                  ))
+                  return { ...o, cells }
+                })
+                setDirty(true)
+              }}
+            />
+          )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Paneo: desplaza la vista sin dibujar. Hatch: pulse la subregión cerrada a rellenar (líneas y figuras actúan como fronteras).
-          Mover/rotar: arrastre la figura (Alt/Shift = rotar). Medida: longitud (línea/flecha) o ancho (cajas).
+          Seleccionar: elija un elemento. Mover/rotar actúa solo sobre la selección (Alt/Shift = rotar).
+          Tabla: pulse el lienzo para insertar; edite celdas con Seleccionar. Paneo y hatch sin cambios.
         </div>
       </div>
     </div>
@@ -642,7 +819,7 @@ export default function EsquemaEditorModal({
 
 /* ─── Dibujo de objetos ─────────────────────────────────────────────────── */
 
-function drawObject(ctx, obj, selected) {
+function drawObject(ctx, obj, selected, opts = {}) {
   if (!obj) return
   ctx.save()
   if (obj.type === 'image') {
@@ -657,6 +834,25 @@ function drawObject(ctx, obj, selected) {
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
+      ctx.setLineDash([])
+    }
+    ctx.restore()
+    return
+  }
+  if (obj.type === 'tabla') {
+    const center = objectCenter(obj)
+    if (obj.rotation) {
+      ctx.translate(center.x, center.y)
+      ctx.rotate(obj.rotation)
+      ctx.translate(-center.x, -center.y)
+    }
+    drawTabla(ctx, obj, { skipText: !!opts.skipTablaText })
+    if (selected) {
+      const { w, h } = tablaSize(obj)
+      ctx.strokeStyle = '#2563eb'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, w + 8, h + 8)
       ctx.setLineDash([])
     }
     ctx.restore()
@@ -793,6 +989,43 @@ function fillHatch(ctx, obj) {
   ctx.restore()
 }
 
+function drawTabla(ctx, obj, { skipText = false } = {}) {
+  const { w, h, rows, cols, cellW, cellH } = tablaSize(obj)
+  const x = obj.x || 0
+  const y = obj.y || 0
+  ctx.save()
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(x, y, w, h)
+  ctx.strokeStyle = obj.color || '#1e293b'
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(x, y, w, h)
+  for (let i = 1; i < rows; i += 1) {
+    const yy = y + i * cellH
+    ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + w, yy); ctx.stroke()
+  }
+  for (let j = 1; j < cols; j += 1) {
+    const xx = x + j * cellW
+    ctx.beginPath(); ctx.moveTo(xx, y); ctx.lineTo(xx, y + h); ctx.stroke()
+  }
+  if (!skipText) {
+    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.font = '12px sans-serif'
+    ctx.textBaseline = 'middle'
+    for (let i = 0; i < rows; i += 1) {
+      for (let j = 0; j < cols; j += 1) {
+        const text = String(obj.cells?.[i]?.[j] ?? '')
+        if (!text) continue
+        const cx = x + j * cellW + 4
+        const cy = y + i * cellH + cellH / 2
+        const maxW = cellW - 8
+        ctx.fillText(text.length > 18 ? `${text.slice(0, 17)}…` : text, cx, cy, maxW)
+      }
+    }
+  }
+  ctx.restore()
+}
+
 function objectCenter(obj) {
   if (obj.type === 'stroke') {
     const pts = obj.points || []
@@ -800,6 +1033,10 @@ function objectCenter(obj) {
     const sx = pts.reduce((s, p) => s + p.x, 0)
     const sy = pts.reduce((s, p) => s + p.y, 0)
     return { x: sx / pts.length, y: sy / pts.length }
+  }
+  if (obj.type === 'tabla') {
+    const { w, h } = tablaSize(obj)
+    return { x: (obj.x || 0) + w / 2, y: (obj.y || 0) + h / 2 }
   }
   if (obj.type === 'hatchRegion') {
     return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
@@ -818,6 +1055,10 @@ function objectBounds(obj) {
       minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y)
     }
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  if (obj.type === 'tabla') {
+    const { w, h } = tablaSize(obj)
+    return { x: obj.x || 0, y: obj.y || 0, w, h }
   }
   if (obj.type === 'hatchRegion') {
     return { x: obj.x || 0, y: obj.y || 0, w: obj.w || 0, h: obj.h || 0 }
@@ -839,7 +1080,7 @@ function translateObject(obj, dx, dy) {
   if (obj.type === 'stroke') {
     return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }
   }
-  if (obj.type === 'hatchRegion') {
+  if (obj.type === 'tabla' || obj.type === 'hatchRegion') {
     return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   }
   if (obj.type === 'image') {
@@ -852,6 +1093,74 @@ function translateObject(obj, dx, dy) {
     x2: obj.x2 + dx,
     y2: obj.y2 + dy,
   }
+}
+
+/** Overlay HTML para editar celdas de la tabla seleccionada (teclado/táctil). */
+function TablaOverlay({ obj, pan, canvasEl, onCellChange }) {
+  const [cells, setCells] = useState(() => cloneScene(obj.cells || []))
+  useEffect(() => {
+    setCells(cloneScene(obj.cells || []))
+  }, [obj.id, obj.rows, obj.cols])
+
+  if (!obj || !canvasEl) return null
+  const { rows, cols, cellW, cellH, w, h } = tablaSize(obj)
+  const left = (canvasEl.offsetLeft || 0) + (pan?.x || 0) + (obj.x || 0)
+  const top = (canvasEl.offsetTop || 0) + (pan?.y || 0) + (obj.y || 0)
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left,
+        top,
+        width: w,
+        height: h,
+        zIndex: 2,
+        pointerEvents: 'auto',
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <table style={{
+        width: '100%', height: '100%', borderCollapse: 'collapse',
+        tableLayout: 'fixed', background: 'transparent',
+      }}>
+        <tbody>
+          {Array.from({ length: rows }, (_, ri) => (
+            <tr key={ri}>
+              {Array.from({ length: cols }, (_, ci) => (
+                <td
+                  key={ci}
+                  style={{
+                    width: cellW, height: cellH, padding: 0,
+                    border: '1px solid transparent', verticalAlign: 'middle',
+                  }}
+                >
+                  <input
+                    value={cells?.[ri]?.[ci] ?? ''}
+                    onChange={(e) => {
+                      const text = e.target.value
+                      setCells((prev) => {
+                        const next = (prev || []).map((row, r) => (
+                          (row || []).map((cell, c) => (r === ri && c === ci ? text : cell))
+                        ))
+                        return next
+                      })
+                      onCellChange(ri, ci, text)
+                    }}
+                    style={{
+                      width: '100%', height: '100%', boxSizing: 'border-box',
+                      border: 'none', background: 'rgba(255,255,255,0.92)',
+                      fontSize: 12, padding: '2px 4px', color: '#0f172a',
+                      outline: '1px solid #93c5fd',
+                    }}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 function primary(t) {
@@ -873,6 +1182,28 @@ function iconBtn(t, active) {
 
 function iconProps() {
   return { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+}
+function IconSeleccion() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 4h6v2H6v4H4V4Z" />
+      <path d="M14 4h6v6h-2V6h-4V4Z" />
+      <path d="M4 14h2v4h4v2H4v-6Z" />
+      <path d="M18 14h2v6h-6v-2h4v-4Z" />
+      <path d="m9 15 2-7 2 7 3 1-7 3-1-3Z" />
+    </svg>
+  )
+}
+function IconTabla() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="3" y="4" width="18" height="16" rx="1" />
+      <path d="M3 10h18" />
+      <path d="M3 15h18" />
+      <path d="M9 4v16" />
+      <path d="M15 4v16" />
+    </svg>
+  )
 }
 function IconPaneo() {
   return (

@@ -130,7 +130,6 @@ export default function ItemDetalleModal({
         hora: it.hora || null,
         notas: it.notas || '',
         enlace: it.enlace || '',
-        tabla: it.tabla || null,
         comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
         // Media nueva (pending) se sube después; la persistida se conserva en merge backend
         imagen: it.imagen?.pending ? null : (it.imagen || null),
