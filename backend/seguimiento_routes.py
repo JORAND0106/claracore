@@ -443,7 +443,7 @@ def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depend
             body.nombre,
             body.data_base64,
             body.mime_type or "image/png",
-            destino=body.destino or "adjunto",
+            destino=body.destino or "checklist",
             checklist_id=body.checklist_id,
         )
     except ValueError as exc:
