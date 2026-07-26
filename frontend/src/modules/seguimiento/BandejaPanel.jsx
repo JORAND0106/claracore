@@ -66,7 +66,12 @@ export default function BandejaPanel({ t, api, usuario, permisos, compact = fals
         </div>
       )}
 
-      {permisos?.esGerencial && !compact && (
+      {permisos?.esDesarrollador && !compact && (
+        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
+          Vista Desarrollador: acceso completo a compromisos, tareas, justificaciones y aprobaciones.
+        </div>
+      )}
+      {permisos?.esGerencial && !permisos?.esDesarrollador && !compact && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista gerencial: incluye compromisos y tareas de usuarios bajo su gestión.
         </div>

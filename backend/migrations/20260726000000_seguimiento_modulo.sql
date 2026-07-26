@@ -9,6 +9,50 @@ WHERE NOT EXISTS (
      OR (f.codigo IS NOT NULL AND upper(trim(f.codigo::text)) = 'SEGUIMIENTO')
 );
 
+-- Permisos seed: cargo Desarrollador → Seguimiento (todas las acciones).
+INSERT INTO public.permisos (
+  cargo_id, funcion_id,
+  ver, crear, editar, eliminar, validar, exportar,
+  contrato_id
+)
+SELECT
+  c.id,
+  f.id,
+  true, true, true, true, true, true,
+  NULL
+FROM public.cargos c
+CROSS JOIN public.funciones f
+WHERE lower(trim(c.nombre)) = 'desarrollador'
+  AND (
+    lower(trim(f.nombre)) = 'seguimiento'
+    OR (f.codigo IS NOT NULL AND upper(trim(f.codigo::text)) = 'SEGUIMIENTO')
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.permisos p
+    WHERE p.cargo_id = c.id
+      AND p.funcion_id = f.id
+      AND p.contrato_id IS NULL
+  );
+
+UPDATE public.permisos p
+SET
+  ver = true,
+  crear = true,
+  editar = true,
+  eliminar = true,
+  validar = true,
+  exportar = true
+FROM public.cargos c
+JOIN public.funciones f ON true
+WHERE p.cargo_id = c.id
+  AND p.funcion_id = f.id
+  AND lower(trim(c.nombre)) = 'desarrollador'
+  AND (
+    lower(trim(f.nombre)) = 'seguimiento'
+    OR (f.codigo IS NOT NULL AND upper(trim(f.codigo::text)) = 'SEGUIMIENTO')
+  );
+
 -- ── Actas de reunión ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.seguimiento_acta (
   id                  bigserial PRIMARY KEY,

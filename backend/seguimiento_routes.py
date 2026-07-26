@@ -422,6 +422,7 @@ async def route_evidencia(
             content=content,
             mime_type=archivo.content_type or "application/octet-stream",
             notas=notas,
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -434,7 +435,12 @@ def route_solicitar_justificacion(
     require_permiso_seguimiento(current_user, "editar")
     try:
         return solicitar_justificacion(
-            supabase, item_id, _uid(current_user), body.motivo, body.nueva_fecha_vencimiento
+            supabase,
+            item_id,
+            _uid(current_user),
+            body.motivo,
+            body.nueva_fecha_vencimiento,
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -447,7 +453,12 @@ def route_revisar_justificacion(
     require_permiso_seguimiento(current_user, "validar")
     try:
         return revisar_justificacion(
-            supabase, justificacion_id, _uid(current_user), body.aprobar, body.comentario
+            supabase,
+            justificacion_id,
+            _uid(current_user),
+            body.aprobar,
+            body.comentario,
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -470,7 +481,13 @@ def route_crear_tarea(body: TareaCreateBody, current_user=Depends(get_current_us
 def route_update_tarea(item_id: int, body: TareaUpdateBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "editar")
     try:
-        return update_tarea(supabase, item_id, body.model_dump(exclude_unset=True), _uid(current_user))
+        return update_tarea(
+            supabase,
+            item_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

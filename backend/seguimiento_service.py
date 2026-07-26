@@ -120,6 +120,20 @@ def es_contratista_gerencial(user_row: Optional[dict], current_user: Optional[di
     return False
 
 
+def es_desarrollador_seguimiento(current_user: Optional[dict] = None) -> bool:
+    """Mismo criterio que main._es_desarrollador: acceso pleno sin ownership."""
+    if not current_user:
+        return False
+    try:
+        from main import _es_desarrollador
+
+        return bool(_es_desarrollador(current_user))
+    except Exception:
+        rol = (current_user.get("rol_nombre") or "").strip().lower()
+        cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+        return rol == "desarrollador" or cargo == "desarrollador"
+
+
 def ids_usuarios_bajo_gestion(sb, gerencial_id: int, contrato_id: Optional[int] = None) -> Set[int]:
     """Usuarios del mismo contrato con rol Operativo/Contratista (bajo gerencial)."""
     g = _usuario_row(sb, gerencial_id)
@@ -572,11 +586,16 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     return item
 
 
-def update_tarea(sb, item_id: int, data: dict, user_id: int) -> dict:
+def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optional[dict] = None) -> dict:
     item = get_item(sb, item_id)
     if item.get("origen") != "tarea":
         raise ValueError("El ítem no es una tarea personal")
-    if int(item.get("created_by") or 0) != int(user_id) and int(item.get("asignado_a_id") or 0) != int(user_id):
+    es_dev = es_desarrollador_seguimiento(current_user)
+    if (
+        not es_dev
+        and int(item.get("created_by") or 0) != int(user_id)
+        and int(item.get("asignado_a_id") or 0) != int(user_id)
+    ):
         raise ValueError("No puede editar esta tarea")
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
     if "titulo" in data:
@@ -701,8 +720,9 @@ def list_bandeja(
     incluir_equipo: bool = True,
 ) -> List[dict]:
     u = _usuario_row(sb, user_id)
+    es_dev = es_desarrollador_seguimiento(current_user)
     visible_ids: Set[int] = {int(user_id)}
-    if incluir_equipo and es_contratista_gerencial(u, current_user):
+    if not es_dev and incluir_equipo and es_contratista_gerencial(u, current_user):
         visible_ids |= ids_usuarios_bajo_gestion(sb, user_id, contrato_id or (u or {}).get("contrato_id"))
 
     # Fetch broad then filter en Python (tareas personales no tienen contrato_id).
@@ -730,6 +750,10 @@ def list_bandeja(
         aid = r.get("asignado_a_id")
         cid_creator = r.get("created_by")
         if responsable_id is not None and int(aid or 0) != int(responsable_id):
+            continue
+        # Desarrollador: visibilidad total (como en el resto de módulos).
+        if es_dev:
+            out.append(r)
             continue
         # Visibilidad: asignado, creador, o equipo bajo gerencial
         if int(aid or 0) not in visible_ids and int(cid_creator or 0) not in visible_ids:
@@ -783,9 +807,13 @@ def cargar_evidencia(
     content: bytes,
     mime_type: str = "application/octet-stream",
     notas: Optional[str] = None,
+    current_user: Optional[dict] = None,
 ) -> dict:
     item = get_item(sb, item_id)
-    if int(item.get("asignado_a_id") or 0) != int(user_id):
+    if (
+        int(item.get("asignado_a_id") or 0) != int(user_id)
+        and not es_desarrollador_seguimiento(current_user)
+    ):
         raise ValueError("Solo el responsable puede cargar evidencia")
     safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "evidencia").strip())[:120]
     ts = _now_utc().strftime("%Y%m%dT%H%M%SZ")
@@ -822,11 +850,21 @@ def cargar_evidencia(
 
 # ── Justificaciones ──────────────────────────────────────────────────────────
 
-def solicitar_justificacion(sb, item_id: int, user_id: int, motivo: str, nueva_fecha: str) -> dict:
+def solicitar_justificacion(
+    sb,
+    item_id: int,
+    user_id: int,
+    motivo: str,
+    nueva_fecha: str,
+    current_user: Optional[dict] = None,
+) -> dict:
     item = get_item(sb, item_id)
     if item.get("origen") != "compromiso":
         raise ValueError("Solo aplica a compromisos de acta")
-    if int(item.get("asignado_a_id") or 0) != int(user_id):
+    if (
+        int(item.get("asignado_a_id") or 0) != int(user_id)
+        and not es_desarrollador_seguimiento(current_user)
+    ):
         raise ValueError("Solo el responsable puede solicitar justificación")
     fv = _parse_date(nueva_fecha)
     if not fv:
@@ -858,7 +896,14 @@ def solicitar_justificacion(sb, item_id: int, user_id: int, motivo: str, nueva_f
     return ins[0]
 
 
-def revisar_justificacion(sb, justificacion_id: int, user_id: int, aprobar: bool, comentario: Optional[str] = None) -> dict:
+def revisar_justificacion(
+    sb,
+    justificacion_id: int,
+    user_id: int,
+    aprobar: bool,
+    comentario: Optional[str] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
     rows = sb.table("seguimiento_justificacion").select("*").eq("id", int(justificacion_id)).limit(1).execute().data or []
     if not rows:
         raise ValueError("Justificación no encontrada")
@@ -866,7 +911,10 @@ def revisar_justificacion(sb, justificacion_id: int, user_id: int, aprobar: bool
     if just.get("estado") != "pendiente":
         raise ValueError("La justificación ya fue revisada")
     item = get_item(sb, int(just["item_id"]))
-    if int(item.get("solicitante_id") or 0) != int(user_id):
+    if (
+        int(item.get("solicitante_id") or 0) != int(user_id)
+        and not es_desarrollador_seguimiento(current_user)
+    ):
         raise ValueError("Solo quien delegó el compromiso puede aprobar o rechazar")
     estado = "aprobada" if aprobar else "rechazada"
     sb.table("seguimiento_justificacion").update({

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
 
 export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, onClose, onChanged }) {
@@ -45,8 +46,9 @@ export default function ItemDetalleModal({ t, api, itemId, usuario, permisos, on
 
   const origen = ORIGEN_COLOR[item.origen] || ORIGEN_COLOR.tarea
   const esCompromiso = item.origen === 'compromiso'
-  const soyResponsable = Number(item.asignado_a_id) === Number(usuario?.id)
-  const soySolicitante = Number(item.solicitante_id) === Number(usuario?.id)
+  const esDev = esDesarrolladorUsuario(usuario)
+  const soyResponsable = esDev || Number(item.asignado_a_id) === Number(usuario?.id)
+  const soySolicitante = esDev || Number(item.solicitante_id) === Number(usuario?.id)
 
   return (
     <Overlay t={t} onClose={onClose}>

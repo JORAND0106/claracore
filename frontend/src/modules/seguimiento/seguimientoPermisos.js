@@ -12,6 +12,7 @@ export function accesoSeguimiento(usuario, contratoId) {
       validar: true,
       exportar: true,
       bloqueado: false,
+      esDesarrollador: true,
       esGerencial: esContratistaGerencial(usuario),
     }
   }
@@ -24,6 +25,7 @@ export function accesoSeguimiento(usuario, contratoId) {
     validar: !!p?.validar,
     exportar: !!p?.exportar,
     bloqueado: !p?.ver,
+    esDesarrollador: false,
     esGerencial: esContratistaGerencial(usuario),
   }
 }
