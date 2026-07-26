@@ -58,9 +58,16 @@ PASO 5 — Quitar el segundo deploy que pelea (solo una vez)
   Sigue viendo el estado en GitHub → Actions.
 
 PASO 6 — Subir el workflow al repo
-  Haz commit y push del archivo:
-  .github/workflows/azure-backend-app-service.yml
-  Mira Actions: debe aparecer un job verde. Luego prueba:
+  El deploy automático del backend es el workflow:
+    .github/workflows/deploy-backend-on-push.yml
+  Nombre en Actions: "Deploy backend on push"
+  (El antiguo azure-backend-app-service.yml quedó obsoleto tras quedar
+  disabled_manually y no publicar Seguimiento a producción.)
+
+  Tras un push a main que toque backend/**, mira Actions: debe aparecer un job verde.
+  También puedes lanzarlo a mano (workflow_dispatch) desde la pestaña Actions.
+  Luego prueba:
   https://claracore-backend.azurewebsites.net/healthz
+  y que OpenAPI liste rutas /seguimiento/* .
 
 NOTA: El workflow Static Web Apps del frontend NO se toca; sigue publicando claracore.co desde /frontend.

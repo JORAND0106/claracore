@@ -1,6 +1,8 @@
 """
 Rutas HTTP — módulo Seguimiento.
 Prefijo: /seguimiento
+
+Registrado en main.py vía include_router(seguimiento_router).
 """
 from __future__ import annotations
 
