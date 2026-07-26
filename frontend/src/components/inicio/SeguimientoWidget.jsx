@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createSeguimientoApi } from '../../modules/seguimiento/seguimientoApi'
 import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos'
-import { ORIGEN_COLOR, fmtFecha } from '../../modules/seguimiento/seguimientoTheme'
+import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
-import { fechaVencimientoEfectiva, nivelVencimientoItem } from '../../modules/seguimiento/vencimientoLevels'
+import { calcularAvanceTarea, labelAvance } from '../../modules/seguimiento/tareaAvance'
+import {
+  fechaVencimientoEfectiva,
+  nivelVencimientoItem,
+  origenRemitenteLabel,
+  sortByProximidadVencimiento,
+  tipoLaborLabel,
+} from '../../modules/seguimiento/vencimientoLevels'
 
 /**
- * Widget de inicio: refleja la misma bandeja unificada (visibilidad por rol incluida).
- * Filtra siempre por el contrato activo de la plataforma.
- * Hereda tema (t) y tipografía (fs / CSS vars --cc-*).
+ * Widget de inicio: misma grilla de columnas que la bandeja completa,
+ * filtrada por el contrato activo.
  */
 export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, onIrSeguimiento }) {
   const cid = contratoId ?? usuario?.contrato_id
@@ -40,6 +46,9 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [api, permisos.ver, token, cid])
+
+  const sorted = useMemo(() => sortByProximidadVencimiento(rows), [rows])
+  const uid = usuario?.id
 
   if (!permisos.ver || cid == null || cid === '') return null
 
@@ -86,39 +95,74 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
         <div style={{ padding: '0 14px 14px' }}>
           {loading ? (
             <div style={{ fontSize: bodySize, color: t.textMuted }}>Cargando…</div>
-          ) : rows.length === 0 ? (
+          ) : sorted.length === 0 ? (
             <div style={{ fontSize: bodySize, color: t.textMuted }}>Sin pendientes.</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {rows.slice(0, 8).map((r) => {
-                const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                const nivel = nivelVencimientoItem(r)
-                const due = fechaVencimientoEfectiva(r)
-                return (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => setDetalleId(r.id)}
-                    style={{
-                      textAlign: 'left', cursor: 'pointer',
-                      border: `1px solid ${t.border}`,
-                      borderLeft: `4px solid ${o.border}`,
-                      background: o.bg,
-                      borderRadius: 8,
-                      padding: '8px 10px',
-                      color: t.text,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <VencimientoIcon nivel={nivel} size="1rem" t={t} />
-                      <div style={{ fontWeight: 600, fontSize: bodySize, flex: 1 }}>{r.titulo}</div>
-                    </div>
-                    <div style={{ fontSize: smSize, color: t.textMuted }}>
-                      {r.asignado_a_nombre} · {fmtFecha(due.fecha || r.fecha_vencimiento)} · {r.estado_gestion}
-                    </div>
-                  </button>
-                )
-              })}
+            <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+              <table style={{
+                width: '100%', borderCollapse: 'collapse',
+                fontSize: smSize, minWidth: 860,
+              }}
+              >
+                <thead>
+                  <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
+                    <th style={th}>#</th>
+                    <th style={th}>Creación</th>
+                    <th style={th}>Vencimiento</th>
+                    <th style={th}>Nivel</th>
+                    <th style={th}>Estado / avance</th>
+                    <th style={th}>Tema</th>
+                    <th style={th}>Destinatario</th>
+                    <th style={th}>Origen / remitente</th>
+                    <th style={th}>Tipo de labor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.slice(0, 12).map((r) => {
+                    const nivel = nivelVencimientoItem(r)
+                    const due = fechaVencimientoEfectiva(r)
+                    const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
+                    const dest = r.relacion_destinatario === 'referencia'
+                      ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
+                      : (r.asignado_a_nombre || '—')
+                    const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
+                    const estadoLabel = r.origen === 'tarea' && avance?.pct != null
+                      ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)
+                      : (ESTADOS.find((x) => x.value === r.estado_gestion)?.label || r.estado_gestion || '—')
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={() => setDetalleId(r.id)}
+                        style={{ cursor: 'pointer', borderTop: `1px solid ${t.border}`, background: o.bg }}
+                        onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
+                      >
+                        <td style={td}>{r.consecutivo ?? r.id}</td>
+                        <td style={td}>{fmtFecha(r.created_at)}</td>
+                        <td style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
+                        <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
+                        <td style={{
+                          ...td,
+                          fontWeight: 700,
+                          color: (r.origen === 'tarea' ? avance?.pct === 100 : r.estado_gestion === 'cumplido')
+                            ? 'var(--cc-color-positive,#0f766e)'
+                            : t.text,
+                        }}
+                        >
+                          {estadoLabel}
+                        </td>
+                        <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
+                          <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
+                          {r.titulo}
+                        </td>
+                        <td style={td}>{dest}</td>
+                        <td style={td}>{origenRemitenteLabel(r, uid)}</td>
+                        <td style={td}>{tipoLaborLabel(r, uid)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
           {typeof onIrSeguimiento === 'function' && (
@@ -153,3 +197,6 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
     </div>
   )
 }
+
+const th = { padding: '8px 6px', fontWeight: 700, whiteSpace: 'nowrap' }
+const td = { padding: '8px 6px', verticalAlign: 'middle', color: 'inherit' }
