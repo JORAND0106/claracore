@@ -248,16 +248,125 @@ def proximo_consecutivo(sb, contrato_id: int) -> int:
     return int(rows[0].get("consecutivo") or 0) + 1
 
 
-def list_actas(sb, contrato_id: int) -> List[dict]:
-    return (
+ACTA_ESTADOS = frozenset({"borrador", "realizada", "firmada"})
+ACTA_TIPOS = frozenset({"interna", "externa"})
+ITEM_ESTADOS = frozenset({
+    "abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado", "reprogramado",
+})
+
+
+def _norm_tipo_acta(raw) -> str:
+    t = (raw or "interna").strip().lower()
+    if t not in ACTA_TIPOS:
+        raise ValueError("El tipo de acta debe ser Interna o Externa")
+    return t
+
+
+def _norm_estado_acta(raw, *, default: str = "borrador") -> str:
+    e = (raw or default).strip().lower()
+    # Compatibilidad con estados legacy
+    if e in ("en_firma", "cerrada"):
+        e = "realizada"
+    if e not in ACTA_ESTADOS:
+        raise ValueError("Estado de acta no válido (borrador, realizada, firmada)")
+    return e
+
+
+def _require_elaborador(data: dict, user_id: int) -> tuple:
+    elaborador_id = data.get("elaborador_id")
+    if elaborador_id in (None, "", 0, "0"):
+        raise ValueError("El elaborador es obligatorio")
+    return int(elaborador_id)
+
+
+def list_actas(
+    sb,
+    contrato_id: int,
+    *,
+    estado: Optional[str] = None,
+    tipo_acta: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    q: Optional[str] = None,
+) -> List[dict]:
+    query = (
         sb.table("seguimiento_acta")
         .select("*")
         .eq("contrato_id", int(contrato_id))
         .order("consecutivo", desc=True)
+    )
+    if estado:
+        try:
+            query = query.eq("estado", _norm_estado_acta(estado))
+        except ValueError:
+            pass
+    if tipo_acta:
+        try:
+            query = query.eq("tipo_acta", _norm_tipo_acta(tipo_acta))
+        except ValueError:
+            pass
+    if fecha_desde:
+        query = query.gte("fecha_reunion", str(fecha_desde)[:10])
+    if fecha_hasta:
+        query = query.lte("fecha_reunion", str(fecha_hasta)[:10])
+    rows = query.limit(500).execute().data or []
+    if not (q or "").strip():
+        return rows
+    return _filtrar_actas_por_keywords(sb, rows, q)
+
+
+def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
+    tokens = [t for t in re.split(r"[\s,.;:]+", (q or "").lower()) if len(t) >= 2]
+    if not tokens:
+        return rows
+    ids = [int(r["id"]) for r in rows]
+    if not ids:
+        return []
+    ideas = sb.table("seguimiento_acta_idea").select("acta_id,texto").in_("acta_id", ids).execute().data or []
+    apartados = (
+        sb.table("seguimiento_acta_apartado")
+        .select("acta_id,titulo,contenido")
+        .in_("acta_id", ids)
         .execute()
         .data
         or []
     )
+    asistentes = (
+        sb.table("seguimiento_acta_asistente")
+        .select("acta_id,nombre,cargo,entidad,email")
+        .in_("acta_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    by_id: Dict[int, List[str]] = {i: [] for i in ids}
+    for idea in ideas:
+        by_id.setdefault(int(idea["acta_id"]), []).append(str(idea.get("texto") or ""))
+    for ap in apartados:
+        by_id.setdefault(int(ap["acta_id"]), []).extend([
+            str(ap.get("titulo") or ""),
+            str(ap.get("contenido") or ""),
+        ])
+    for a in asistentes:
+        by_id.setdefault(int(a["acta_id"]), []).extend([
+            str(a.get("nombre") or ""),
+            str(a.get("cargo") or ""),
+            str(a.get("entidad") or ""),
+            str(a.get("email") or ""),
+        ])
+    out = []
+    for r in rows:
+        corpus = " ".join([
+            str(r.get("ubicacion") or ""),
+            str(r.get("elaborador_nombre") or ""),
+            str(r.get("orden_del_dia") or ""),
+            str(r.get("tipo_acta") or ""),
+            str(r.get("consecutivo") or ""),
+            *by_id.get(int(r["id"]), []),
+        ]).lower()
+        if all(t in corpus for t in tokens):
+            out.append(r)
+    return out
 
 
 def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
@@ -300,24 +409,43 @@ def compromisos_abiertos_contrato(sb, contrato_id: int, excluir_acta_id: Optiona
         .select("*")
         .eq("contrato_id", int(contrato_id))
         .eq("origen", "compromiso")
-        .in_("estado_gestion", ["abierto", "en_progreso", "parcial", "vencido"])
+        .in_("estado_gestion", ["abierto", "en_progreso", "parcial", "vencido", "reprogramado"])
         .order("fecha_vencimiento")
     )
     rows = q.execute().data or []
     if excluir_acta_id is not None:
         rows = [r for r in rows if int(r.get("acta_id") or 0) != int(excluir_acta_id)]
+    acta_ids = list({int(r["acta_id"]) for r in rows if r.get("acta_id")})
+    actas_map: Dict[int, dict] = {}
+    if acta_ids:
+        arows = (
+            sb.table("seguimiento_acta")
+            .select("id, consecutivo, fecha_reunion")
+            .in_("id", acta_ids)
+            .execute()
+            .data
+            or []
+        )
+        actas_map = {int(a["id"]): a for a in arows}
+    for r in rows:
+        a = actas_map.get(int(r["acta_id"])) if r.get("acta_id") else None
+        r["acta_consecutivo"] = a.get("consecutivo") if a else None
+        r["acta_fecha"] = a.get("fecha_reunion") if a else None
+        r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
     return rows
 
 
 def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     consec = proximo_consecutivo(sb, contrato_id)
     fecha = _parse_date(data.get("fecha_reunion")) or _now_bogota().date()
-    elaborador_id = data.get("elaborador_id") or user_id
-    if not elaborador_id:
-        raise ValueError("El elaborador debe ser un usuario registrado del contrato")
+    elaborador_id = _require_elaborador(data, user_id)
     elab = _usuario_row(sb, int(elaborador_id))
     if not elab:
         raise ValueError("El elaborador debe ser un usuario registrado del contrato")
+    tipo = _norm_tipo_acta(data.get("tipo_acta"))
+    estado = _norm_estado_acta(data.get("estado"), default="borrador")
+    if estado != "borrador" and not elaborador_id:
+        raise ValueError("El elaborador es obligatorio para avanzar de Borrador")
     orden = data.get("orden_del_dia")
     if isinstance(orden, (list, dict)):
         import json
@@ -332,7 +460,8 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
         "orden_del_dia": orden_txt,
         "elaborador_id": int(elaborador_id),
         "elaborador_nombre": data.get("elaborador_nombre") or _nombre_usuario(elab),
-        "estado": data.get("estado") if data.get("estado") in ("borrador", "en_firma", "firmada", "cerrada") else "borrador",
+        "tipo_acta": tipo,
+        "estado": estado,
         "created_by": int(user_id),
         "updated_at": _now_utc().isoformat(),
     }
@@ -357,6 +486,8 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
     for k in ("ubicacion", "elaborador_nombre"):
         if k in data:
             patch[k] = (data.get(k) or "").strip() or None
+    if "tipo_acta" in data and data.get("tipo_acta"):
+        patch["tipo_acta"] = _norm_tipo_acta(data.get("tipo_acta"))
     if "orden_del_dia" in data:
         orden = data.get("orden_del_dia")
         if isinstance(orden, (list, dict)):
@@ -364,15 +495,29 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
             patch["orden_del_dia"] = json.dumps(orden, ensure_ascii=False)
         else:
             patch["orden_del_dia"] = (orden or "").strip() or None
-    if "elaborador_id" in data and data["elaborador_id"]:
-        patch["elaborador_id"] = int(data["elaborador_id"])
-        elab = _usuario_row(sb, int(data["elaborador_id"]))
+    elaborador_id = None
+    if "elaborador_id" in data:
+        if data.get("elaborador_id") in (None, "", 0, "0"):
+            raise ValueError("El elaborador es obligatorio")
+        elaborador_id = int(data["elaborador_id"])
+        patch["elaborador_id"] = elaborador_id
+        elab = _usuario_row(sb, elaborador_id)
         if not elab:
             raise ValueError("El elaborador debe ser un usuario registrado del contrato")
         if not data.get("elaborador_nombre"):
             patch["elaborador_nombre"] = _nombre_usuario(elab)
-    if "estado" in data and data["estado"] in ("borrador", "en_firma", "firmada", "cerrada"):
-        patch["estado"] = data["estado"]
+    # Validar elaborador presente al guardar / cambiar estado
+    elab_final = elaborador_id or acta.get("elaborador_id")
+    if not elab_final:
+        raise ValueError("El elaborador es obligatorio")
+    if "estado" in data and data["estado"]:
+        nuevo = _norm_estado_acta(data["estado"])
+        actual = _norm_estado_acta(acta.get("estado") or "borrador")
+        if nuevo != actual:
+            if nuevo == "firmada" and actual != "firmada":
+                # Solo el flujo de firmas marca firmada; permitir si ya hay firmas completas
+                pass
+            patch["estado"] = nuevo
     sb.table("seguimiento_acta").update(patch).eq("id", int(acta_id)).eq("contrato_id", int(contrato_id)).execute()
     if "asistentes" in data:
         _sync_asistentes(sb, acta_id, data.get("asistentes") or [])
@@ -595,13 +740,43 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
     return item
 
 
-def actualizar_estado_gestion(sb, item_id: int, estado: str, user_id: int, *, contrato_id: Optional[int] = None) -> dict:
-    allowed = {"abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado"}
-    if estado not in allowed:
+def actualizar_estado_gestion(
+    sb,
+    item_id: int,
+    estado: str,
+    user_id: int,
+    *,
+    contrato_id: Optional[int] = None,
+    nueva_fecha_vencimiento: Optional[str] = None,
+    hora_vencimiento: Optional[str] = None,
+) -> dict:
+    if estado not in ITEM_ESTADOS:
         raise ValueError("Estado de gestión no válido")
     item = get_item(sb, item_id)
     if contrato_id is not None and item.get("contrato_id") and int(item["contrato_id"]) != int(contrato_id):
         raise ValueError("El ítem no pertenece al contrato")
+    if estado == "reprogramado":
+        if item.get("origen") != "tarea":
+            raise ValueError("Reprogramar solo aplica a tareas personales")
+        fv = _parse_date(nueva_fecha_vencimiento)
+        if not fv:
+            raise ValueError("Indique la nueva fecha de vencimiento para reprogramar")
+        hoy = _now_bogota().date()
+        patch = {
+            "estado_gestion": "reprogramado",
+            "fecha_vencimiento": fv.isoformat(),
+            "fecha_base_nivel": hoy.isoformat(),
+            "hora_vencimiento": _norm_hora(hora_vencimiento) if hora_vencimiento is not None else item.get("hora_vencimiento"),
+            "updated_at": _now_utc().isoformat(),
+        }
+        sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        _registrar_evento(sb, item_id, "reprogramado", user_id, {
+            "estado": "reprogramado",
+            "fecha_vencimiento": fv.isoformat(),
+            "fecha_anterior": item.get("fecha_vencimiento"),
+        })
+        return get_item(sb, item_id)
+
     patch = {"estado_gestion": estado, "updated_at": _now_utc().isoformat()}
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
     tipo = {
@@ -834,6 +1009,7 @@ def list_bandeja(
     origen: Optional[str] = None,
     incluir_equipo: bool = True,
     incluir_cerrados: bool = False,
+    q: Optional[str] = None,
 ) -> List[dict]:
     u = _usuario_row(sb, user_id)
     es_dev = es_desarrollador_seguimiento(current_user)
@@ -841,16 +1017,16 @@ def list_bandeja(
     if not es_dev and incluir_equipo and es_contratista_gerencial(u, current_user):
         visible_ids |= ids_usuarios_bajo_gestion(sb, user_id, contrato_id or (u or {}).get("contrato_id"))
 
-    q = sb.table("seguimiento_item").select("*").order("fecha_vencimiento", nullsfirst=False).order("created_at", desc=True)
+    query = sb.table("seguimiento_item").select("*").order("fecha_vencimiento", nullsfirst=False).order("created_at", desc=True)
     if origen in ("compromiso", "tarea"):
-        q = q.eq("origen", origen)
+        query = query.eq("origen", origen)
     if estado:
-        q = q.eq("estado_gestion", estado)
+        query = query.eq("estado_gestion", estado)
     if fecha_desde:
-        q = q.gte("fecha_vencimiento", str(fecha_desde)[:10])
+        query = query.gte("fecha_vencimiento", str(fecha_desde)[:10])
     if fecha_hasta:
-        q = q.lte("fecha_vencimiento", str(fecha_hasta)[:10])
-    rows = q.limit(800).execute().data or []
+        query = query.lte("fecha_vencimiento", str(fecha_hasta)[:10])
+    rows = query.limit(800).execute().data or []
 
     out = []
     for r in rows:
@@ -879,7 +1055,53 @@ def list_bandeja(
         ):
             out.append(r)
             continue
-    # Proximidad de vencimiento (más cercano primero)
+
+    # Enriquecer compromisos con datos del acta de origen
+    acta_ids = list({int(r["acta_id"]) for r in out if r.get("acta_id") and r.get("origen") == "compromiso"})
+    actas_map: Dict[int, dict] = {}
+    if acta_ids:
+        arows = (
+            sb.table("seguimiento_acta")
+            .select("id, consecutivo, fecha_reunion")
+            .in_("id", acta_ids)
+            .execute()
+            .data
+            or []
+        )
+        actas_map = {int(a["id"]): a for a in arows}
+    creator_ids = list({int(r["created_by"]) for r in out if r.get("created_by")})
+    creators: Dict[int, dict] = {}
+    if creator_ids:
+        crows = sb.table("usuarios").select("id, nombre, apellidos").in_("id", creator_ids).execute().data or []
+        creators = {int(c["id"]): c for c in crows}
+    for r in out:
+        if r.get("acta_id") and r.get("origen") == "compromiso":
+            a = actas_map.get(int(r["acta_id"]))
+            if a:
+                r["acta_consecutivo"] = a.get("consecutivo")
+                r["acta_fecha"] = a.get("fecha_reunion")
+                r["acta_numero"] = f"Acta Nº {a.get('consecutivo')}"
+        if r.get("created_by") and not r.get("created_by_nombre"):
+            c = creators.get(int(r["created_by"]))
+            if c:
+                r["created_by_nombre"] = _nombre_usuario(c)
+
+    if (q or "").strip():
+        tokens = [t for t in re.split(r"[\s,.;:]+", q.lower()) if len(t) >= 2]
+        if tokens:
+            filtered = []
+            for r in out:
+                corpus = " ".join([
+                    str(r.get("titulo") or ""),
+                    str(r.get("descripcion") or ""),
+                    str((r.get("campos_libres") or {}).get("notas") or ""),
+                    str(r.get("asignado_a_nombre") or ""),
+                    str(r.get("acta_numero") or ""),
+                ]).lower()
+                if all(t in corpus for t in tokens):
+                    filtered.append(r)
+            out = filtered
+
     def _sort_key(item):
         fv = item.get("fecha_vencimiento") or "9999-12-31"
         hv = item.get("hora_vencimiento") or "23:59"
@@ -1195,22 +1417,47 @@ def _contrato(sb, contrato_id: int) -> dict:
 
 def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
     acta = get_acta(sb, acta_id, contrato_id)
-    contrato = _contrato(sb, contrato_id)
-    h = contenido_hash_acta(acta, acta.get("asistentes"), acta.get("ideas"), acta.get("apartados"))
-    sb.table("seguimiento_acta").update({"contenido_hash": h, "updated_at": _now_utc().isoformat()}).eq("id", int(acta_id)).execute()
-    return generar_pdf_acta(
-        contrato,
-        acta,
-        acta.get("asistentes") or [],
-        acta.get("ideas") or [],
-        acta.get("apartados") or [],
-        firmas=acta.get("firmas") or [],
-        compromisos=acta.get("compromisos") or [],
-    )
+    try:
+        contrato = _contrato(sb, contrato_id)
+    except Exception:
+        contrato = {"id": contrato_id}
+    try:
+        h = contenido_hash_acta(acta, acta.get("asistentes"), acta.get("ideas"), acta.get("apartados"))
+        sb.table("seguimiento_acta").update({"contenido_hash": h, "updated_at": _now_utc().isoformat()}).eq("id", int(acta_id)).execute()
+    except Exception as exc:
+        _log.warning("contenido_hash acta=%s: %s", acta_id, exc)
+    try:
+        return generar_pdf_acta(
+            contrato,
+            acta,
+            acta.get("asistentes") or [],
+            acta.get("ideas") or [],
+            acta.get("apartados") or [],
+            firmas=acta.get("firmas") or [],
+            compromisos=acta.get("compromisos") or [],
+        )
+    except Exception as exc:
+        _log.exception("PDF acta %s: %s", acta_id, exc)
+        # Reintento sin firmas/imágenes remotas
+        acta_safe = {**acta, "ubicacion": acta.get("ubicacion"), "elaborador_nombre": acta.get("elaborador_nombre")}
+        return generar_pdf_acta(
+            {"id": contrato_id, "numero": (contrato or {}).get("numero")},
+            acta_safe,
+            [
+                {**a, "id": a.get("id")}
+                for a in (acta.get("asistentes") or [])
+            ],
+            acta.get("ideas") or [],
+            acta.get("apartados") or [],
+            firmas=[],
+            compromisos=acta.get("compromisos") or [],
+        )
 
 
 def registrar_firma_asistente(sb, contrato_id: int, acta_id: int, asistente_id: int, user_id: int) -> dict:
     acta = get_acta(sb, acta_id, contrato_id)
+    if _norm_estado_acta(acta.get("estado") or "borrador") == "borrador":
+        raise ValueError("Marque el acta como Realizada antes de registrar firmas")
     asis = next((a for a in (acta.get("asistentes") or []) if int(a["id"]) == int(asistente_id)), None)
     if not asis:
         raise ValueError("Asistente no encontrado en el acta")
@@ -1218,7 +1465,6 @@ def registrar_firma_asistente(sb, contrato_id: int, acta_id: int, asistente_id: 
     firma_url = (u or {}).get("firma_imagen_url")
     if not firma_url:
         raise ValueError("El usuario no tiene imagen de firma en su perfil")
-    # Upsert-like
     existing = (
         sb.table("seguimiento_firma_registro")
         .select("id")
@@ -1241,8 +1487,6 @@ def registrar_firma_asistente(sb, contrato_id: int, acta_id: int, asistente_id: 
         sb.table("seguimiento_firma_registro").update(payload).eq("id", int(existing[0]["id"])).execute()
     else:
         sb.table("seguimiento_firma_registro").insert(payload).execute()
-    if acta.get("estado") == "borrador":
-        sb.table("seguimiento_acta").update({"estado": "en_firma", "updated_at": _now_utc().isoformat()}).eq("id", int(acta_id)).execute()
     # Si todos firmaron → firmada
     firmas = sb.table("seguimiento_firma_registro").select("asistente_id").eq("acta_id", int(acta_id)).execute().data or []
     firmados = {int(f["asistente_id"]) for f in firmas if f.get("asistente_id")}

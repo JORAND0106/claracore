@@ -50,7 +50,14 @@ export function createSeguimientoApi(contratoId, token) {
   }
 
   return {
-    listActas: () => get(`/seguimiento/${cid}/actas`),
+    listActas: (params = {}) => {
+      const q = new URLSearchParams()
+      Object.entries(params).forEach(([k, v]) => {
+        if (v != null && v !== '') q.set(k, String(v))
+      })
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/actas${qs ? `?${qs}` : ''}`)
+    },
     listUsuarios: () => get(`/seguimiento/${cid}/usuarios`),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
     compromisosAbiertos: (excluirActaId) =>
@@ -71,8 +78,17 @@ export function createSeguimientoApi(contratoId, token) {
         headers: authHeaders(t, false),
         ...(sig ? { signal: sig } : {}),
       })
-      if (!res.ok) throw new Error(`PDF ${res.status}`)
-      return res.blob()
+      if (!res.ok) {
+        let detail = `No se pudo generar el PDF (${res.status})`
+        try {
+          const j = await res.json()
+          if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+        } catch { /* ignore */ }
+        throw new Error(detail)
+      }
+      const buf = await res.arrayBuffer()
+      if (!buf || buf.byteLength < 20) throw new Error('El PDF generado está vacío')
+      return new Blob([buf], { type: 'application/pdf' })
     },
     listBandeja: (params = {}) => {
       const q = new URLSearchParams()
@@ -85,8 +101,8 @@ export function createSeguimientoApi(contratoId, token) {
     },
     listWidget: () => get(`/seguimiento/bandeja/widget${cid != null ? `?contrato_id=${cid}` : ''}`),
     getItem: (itemId) => get(`/seguimiento/items/${itemId}`),
-    patchEstado: (itemId, estado_gestion) =>
-      send('PATCH', `/seguimiento/items/${itemId}/estado`, { estado_gestion }),
+    patchEstado: (itemId, estado_gestion, extra = {}) =>
+      send('PATCH', `/seguimiento/items/${itemId}/estado`, { estado_gestion, ...extra }),
     destinarItem: (itemId, body) => send('POST', `/seguimiento/items/${itemId}/destinar`, body),
     deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),

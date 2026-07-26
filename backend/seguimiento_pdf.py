@@ -103,10 +103,20 @@ def generar_pdf_acta(
     compromisos = compromisos or []
     firma_by_asistente = {int(f["asistente_id"]): f for f in firmas if f.get("asistente_id") is not None}
 
-    logo = _html_logo_pdf(contrato or {}, max_h=40)
-    num_ct = _esc((contrato or {}).get("numero") or contrato.get("id"))
+    logo = ""
+    try:
+        logo = _html_logo_pdf(contrato or {}, max_h=40) or ""
+    except Exception:
+        logo = ""
+    num_ct = _esc((contrato or {}).get("numero") or (contrato or {}).get("id"))
     consec = acta.get("consecutivo") or "—"
     fecha = fmt_fecha_bogota(acta.get("fecha_reunion"))
+    tipo = _esc({"interna": "Interna", "externa": "Externa"}.get(
+        str(acta.get("tipo_acta") or "").lower(), acta.get("tipo_acta") or "—"
+    ))
+    estado_lbl = _esc({"borrador": "Borrador", "realizada": "Realizada", "firmada": "Firmada"}.get(
+        str(acta.get("estado") or "").lower(), acta.get("estado") or "—"
+    ))
 
     asis_rows = "".join(
         f"<tr>"
@@ -164,10 +174,17 @@ def generar_pdf_acta(
 
     firma_cells = []
     for a in asistentes or []:
-        fr = firma_by_asistente.get(int(a["id"])) if a.get("id") is not None else None
+        fr = None
+        try:
+            fr = firma_by_asistente.get(int(a["id"])) if a.get("id") is not None else None
+        except Exception:
+            fr = None
         uri = ""
         if fr and fr.get("firma_imagen_url"):
-            uri = firma_url_a_data_uri(fr.get("firma_imagen_url"))
+            try:
+                uri = firma_url_a_data_uri(fr.get("firma_imagen_url")) or ""
+            except Exception:
+                uri = ""
         firma_cells.append(_firma_celda("Firma", a.get("nombre"), a.get("cargo"), a.get("entidad"), uri))
 
     firmas_rows = ""
@@ -189,7 +206,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
   <td width="80">{logo}</td>
   <td>
     <h1>Acta de reunión Nº { _esc(consec) }</h1>
-    <div style="font-size:8pt;color:#475569;">Contrato {_esc(num_ct)} · {fecha}</div>
+    <div style="font-size:8pt;color:#475569;">Contrato {_esc(num_ct)} · {fecha} · {tipo} · {estado_lbl}</div>
   </td>
 </tr></table>
 

@@ -115,3 +115,51 @@ export function tipoLaborLabel(item, usuarioId) {
   if (Number(item.asignado_a_id) === Number(usuarioId)) return 'Debo entregar'
   return 'Tarea'
 }
+
+/**
+ * Columna de origen/remitente:
+ * - Compromiso de acta → Acta Nº X · fecha
+ * - Tarea personal (creador = destinatario) → —
+ * - Tarea enviada por otro → nombre de quien la envió
+ */
+export function origenRemitenteLabel(item, usuarioId) {
+  if (!item) return '—'
+  if (item.origen === 'compromiso' && item.acta_id) {
+    const num = item.acta_numero
+      || (item.acta_consecutivo != null ? `Acta Nº ${item.acta_consecutivo}` : null)
+      || (item.acta?.consecutivo != null ? `Acta Nº ${item.acta.consecutivo}` : `Acta #${item.acta_id}`)
+    const fecha = item.acta_fecha || item.acta?.fecha_reunion
+    if (fecha) {
+      const s = String(fecha).slice(0, 10)
+      const [y, m, d] = s.split('-')
+      const f = y && m && d ? `${d}/${m}/${y}` : s
+      return `${num} · ${f}`
+    }
+    return num
+  }
+  const creatorId = Number(item.created_by || 0)
+  const assigneeId = Number(item.asignado_a_id || 0)
+  const referidoId = Number(item.referido_a_id || 0)
+  const uid = Number(usuarioId || 0)
+  const esPersonalEstricta = creatorId
+    && creatorId === assigneeId
+    && !referidoId
+    && item.relacion_destinatario !== 'asignacion'
+    && item.relacion_destinatario !== 'referencia'
+  if (esPersonalEstricta) return '—'
+
+  const enviadaPorOtro = (
+    (item.relacion_destinatario === 'asignacion' && assigneeId === uid && creatorId !== uid)
+    || (item.relacion_destinatario === 'referencia' && referidoId === uid && creatorId !== uid)
+    || (assigneeId === uid && creatorId && creatorId !== uid)
+  )
+  if (enviadaPorOtro) {
+    return item.solicitante_nombre
+      || item.created_by_nombre
+      || (creatorId ? `Usuario #${creatorId}` : '—')
+  }
+  if (creatorId && creatorId !== uid && (assigneeId === uid || referidoId === uid)) {
+    return item.created_by_nombre || item.solicitante_nombre || `Usuario #${creatorId}`
+  }
+  return '—'
+}

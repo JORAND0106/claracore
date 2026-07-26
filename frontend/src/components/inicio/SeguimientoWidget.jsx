@@ -92,7 +92,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
                 const nivel = calcularNivelVencimiento({
                   fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: r.created_at || r.fecha_vencimiento_original,
+                  fechaCreacion: r.fecha_base_nivel || r.created_at || r.fecha_vencimiento_original,
                 })
                 return (
                   <button
