@@ -3,10 +3,12 @@ import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
-import { calcularNivelVencimiento, tipoLaborLabel } from './vencimientoLevels'
+import { calcularNivelVencimiento, fechaBaseNivel, tipoLaborLabel } from './vencimientoLevels'
 
 export default function ItemDetalleModal({
   t, api, itemId, usuario, usuarios = [], permisos, onClose, onChanged,
+  allowEstadoGestion = null, // null = auto (solo tareas); true/false fuerza
+  revisionEnActa = false, // revisión de compromisos en el siguiente comité
 }) {
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -64,13 +66,20 @@ export default function ItemDetalleModal({
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
   const nivel = calcularNivelVencimiento({
     fechaVencimiento: item.fecha_vencimiento,
-    fechaCreacion: item.fecha_base_nivel || item.created_at || item.fecha_vencimiento_original,
+    fechaCreacion: fechaBaseNivel(item),
   })
   const imagenes = Array.isArray(item.imagenes) ? item.imagenes : []
   const estadosDisponibles = ESTADOS_GESTION.filter((x) => {
     if (x.value === 'reprogramado') return esTarea
     return true
   })
+  const puedeEditarEstado = (() => {
+    if (!permisos?.editar) return false
+    if (allowEstadoGestion === true) return true
+    if (allowEstadoGestion === false) return false
+    // Por defecto: solo tareas personales (no autocalificación de compromisos desde bandeja)
+    return esTarea
+  })()
 
   const abrirImagen = (im) => {
     const url = im.data_uri || im.url || im.blob_url
@@ -152,9 +161,16 @@ export default function ItemDetalleModal({
         </section>
       )}
 
-      {permisos?.editar && (
+      {puedeEditarEstado && (
         <div style={{ margin: '14px 0' }}>
-          <label style={lbl(t)}>Estado de gestión</label>
+          <label style={lbl(t)}>
+            {revisionEnActa ? 'Estado de gestión (revisión en comité)' : 'Estado de gestión'}
+          </label>
+          {revisionEnActa && (
+            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+              Defina aquí el resultado del compromiso al revisarlo en esta acta. El responsable no puede autocalificarse desde la bandeja.
+            </div>
+          )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
             {estadosDisponibles.map((x) => (
               <label
@@ -215,6 +231,17 @@ export default function ItemDetalleModal({
           >
             Guardar estado
           </button>
+        </div>
+      )}
+
+      {esCompromiso && !puedeEditarEstado && (
+        <div style={{
+          margin: '12px 0', padding: '8px 10px', borderRadius: 8,
+          border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+          fontSize: 'var(--cc-sm)', color: t.textMuted,
+        }}>
+          Estado actual: <b style={{ color: t.text }}>{item.estado_gestion}</b>.
+          La calificación de compromisos de acta se define en la revisión del siguiente comité, no desde la bandeja.
         </div>
       )}
 

@@ -624,6 +624,11 @@ def route_pdf_acta(contrato_id: int, acta_id: int, current_user=Depends(get_curr
         pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("pdf acta %s: %s", acta_id, exc)
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+    if not pdf:
+        raise HTTPException(status_code=500, detail="El PDF generado está vacío")
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",

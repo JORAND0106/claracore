@@ -4,7 +4,7 @@ import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos
 import { ORIGEN_COLOR, fmtFecha } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
-import { calcularNivelVencimiento } from '../../modules/seguimiento/vencimientoLevels'
+import { calcularNivelVencimiento, fechaBaseNivel } from '../../modules/seguimiento/vencimientoLevels'
 
 /**
  * Widget de inicio: refleja la misma bandeja unificada (visibilidad por rol incluida).
@@ -92,7 +92,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, onIrSeguimien
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
                 const nivel = calcularNivelVencimiento({
                   fechaVencimiento: r.fecha_vencimiento,
-                  fechaCreacion: r.fecha_base_nivel || r.created_at || r.fecha_vencimiento_original,
+                  fechaCreacion: fechaBaseNivel(r),
                 })
                 return (
                   <button
