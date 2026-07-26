@@ -1048,7 +1048,7 @@ def _normalizar_imagen_ref(raw) -> Optional[dict]:
 
 
 def _normalizar_checklist_tarea(raw) -> List[dict]:
-    """Lista de sub-ítems: texto, hecho, fecha/hora propias e imagen opcional."""
+    """Sub-ítems: texto, hecho, fecha/hora, imagen soporte, esquema, notas y enlace."""
     if not isinstance(raw, list):
         return []
     out: List[dict] = []
@@ -1060,9 +1060,13 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
         fecha = _parse_date(it.get("fecha") or it.get("fecha_vencimiento"))
         hora = _norm_hora(it.get("hora") or it.get("hora_vencimiento"))
         imagen = _normalizar_imagen_ref(it.get("imagen") or it.get("image"))
-        # También aceptar arreglo corto de imágenes (usa la primera)
         if imagen is None and isinstance(it.get("imagenes"), list) and it["imagenes"]:
             imagen = _normalizar_imagen_ref(it["imagenes"][0])
+        esquema = _normalizar_imagen_ref(it.get("esquema") or it.get("dibujo_item"))
+        if esquema:
+            esquema["kind"] = "esquema"
+        notas_item = it.get("notas") if it.get("notas") is not None else it.get("comentario")
+        enlace = (it.get("enlace") or it.get("link") or "").strip()
         out.append({
             "id": str(cid)[:40],
             "texto": texto[:2000],
@@ -1070,6 +1074,9 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             "fecha": fecha.isoformat() if fecha else None,
             "hora": hora,
             "imagen": imagen,
+            "esquema": esquema,
+            "notas": (str(notas_item)[:4000] if notas_item is not None else "") or "",
+            "enlace": enlace[:2000] if enlace else "",
             "orden": int(it.get("orden") if it.get("orden") is not None else i),
         })
     out.sort(key=lambda x: x.get("orden") or 0)
@@ -1106,20 +1113,16 @@ def _descripcion_desde_checklist(checklist: List[dict]) -> Optional[str]:
 
 
 def _normalizar_campos_libres_tarea(raw) -> dict:
-    """Campos libres de tarea: notas, checklist, dibujos. Prioridad estrellas deprecada."""
+    """Campos libres de tarea: checklist es el contenedor de contenido (imagen/esquema/notas/enlace por sub-ítem)."""
     base = dict(raw) if isinstance(raw, dict) else {}
     base.pop("prioridad", None)
     base.pop("destinatario_tentativo_id", None)
     base.pop("destinatario_tentativo_nombre", None)
+    # Contenido general deprecado: vive en cada sub-ítem
+    base.pop("dibujos", None)
+    base.pop("notas", None)
     if "checklist" in base:
         base["checklist"] = _normalizar_checklist_tarea(base.get("checklist"))
-    if "dibujos" in base:
-        dibs = base.get("dibujos") if isinstance(base.get("dibujos"), list) else []
-        base["dibujos"] = [x for x in (_normalizar_imagen_ref(d) for d in dibs) if x]
-        for d in base["dibujos"]:
-            d["kind"] = "dibujo"
-    if "notas" in base and base["notas"] is not None:
-        base["notas"] = str(base["notas"])[:4000]
     return base
 
 
@@ -1156,8 +1159,8 @@ def _enrich_tarea_media(item: dict) -> dict:
     if isinstance(imgs, list):
         item["imagenes"] = [_enrich_imagen_preview(x) or x for x in imgs if isinstance(x, dict)]
     libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
-    if isinstance(libres.get("dibujos"), list):
-        libres["dibujos"] = [_enrich_imagen_preview(x) or x for x in libres["dibujos"] if isinstance(x, dict)]
+    # dibujos/notas a nivel tarea quedan deprecados; no se enriquecen
+    libres.pop("dibujos", None)
     if isinstance(libres.get("checklist"), list):
         ck = []
         for it in libres["checklist"]:
@@ -1166,6 +1169,8 @@ def _enrich_tarea_media(item: dict) -> dict:
             row = dict(it)
             if row.get("imagen"):
                 row["imagen"] = _enrich_imagen_preview(row["imagen"])
+            if row.get("esquema"):
+                row["esquema"] = _enrich_imagen_preview(row["esquema"])
             ck.append(row)
         libres["checklist"] = ck
     item["campos_libres"] = libres
@@ -1301,20 +1306,42 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
     if "estado_gestion" in data:
         patch["estado_gestion"] = data["estado_gestion"]
     if "campos_libres" in data:
-        # Merge: no borrar dibujos/checklist si el cliente envía parcial sin ellos
         prev = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
         incoming = dict(data.get("campos_libres") or {}) if isinstance(data.get("campos_libres"), dict) else {}
         merged = {**prev, **incoming}
         if "checklist" not in incoming and "checklist" in prev:
             merged["checklist"] = prev["checklist"]
-        if "dibujos" not in incoming and "dibujos" in prev:
-            merged["dibujos"] = prev["dibujos"]
+        # Al actualizar checklist, fusionar imagen/esquema ya persistidos si el cliente los omite
+        if "checklist" in incoming and isinstance(prev.get("checklist"), list):
+            prev_by_id = {
+                str(x.get("id")): x
+                for x in prev.get("checklist") or []
+                if isinstance(x, dict) and x.get("id")
+            }
+            merged_ck = []
+            for it in incoming.get("checklist") or []:
+                if not isinstance(it, dict):
+                    continue
+                row = dict(it)
+                old = prev_by_id.get(str(row.get("id") or ""))
+                if old:
+                    # Solo restaurar si el cliente omitió la clave (null = borrado explícito)
+                    if "imagen" not in it and old.get("imagen"):
+                        row["imagen"] = old["imagen"]
+                    if "esquema" not in it and old.get("esquema"):
+                        row["esquema"] = old["esquema"]
+                merged_ck.append(row)
+            merged["checklist"] = merged_ck
         campos = _normalizar_campos_libres_tarea(merged)
         patch["campos_libres"] = campos
         fv_ck, hora_ck = _fecha_proxima_checklist(campos.get("checklist") or [])
         if fv_ck:
             patch["fecha_vencimiento"] = fv_ck
             patch["hora_vencimiento"] = hora_ck
+        elif "checklist" in incoming:
+            # Sin fechas en checklist: limpiar vencimiento derivado
+            patch["fecha_vencimiento"] = None
+            patch["hora_vencimiento"] = None
         patch["descripcion"] = _descripcion_desde_checklist(campos.get("checklist") or [])
     if "descripcion" in data and "campos_libres" not in data:
         patch["descripcion"] = (data.get("descripcion") or "").strip() or None
@@ -1342,16 +1369,21 @@ def adjuntar_imagen_tarea_base64(
 ) -> dict:
     """
     destino:
-      - adjunto: imagenes[] de la tarea
-      - dibujo: campos_libres.dibujos[]
-      - checklist: imagen del sub-ítem (checklist_id)
+      - checklist: imagen/pantallazo de soporte del sub-ítem
+      - checklist_esquema: esquema dibujado a mano del sub-ítem (no sustituye imagen)
     """
     item = get_item(sb, item_id)
     if item.get("origen") != "tarea":
         raise ValueError("Solo aplica a tareas personales")
-    dest = (destino or "adjunto").strip().lower()
-    if dest not in ("adjunto", "dibujo", "checklist"):
-        raise ValueError("destino debe ser adjunto, dibujo o checklist")
+    dest = (destino or "checklist").strip().lower()
+    # Compat: adjunto/dibujo generales → se redirigen a checklist si hay checklist_id
+    if dest in ("adjunto", "dibujo"):
+        dest = "checklist_esquema" if dest == "dibujo" else "checklist"
+    if dest not in ("checklist", "checklist_esquema"):
+        raise ValueError("destino debe ser checklist o checklist_esquema")
+    cid = (checklist_id or "").strip()
+    if not cid:
+        raise ValueError("checklist_id es obligatorio: el contenido se asocia a un sub-ítem")
     raw = data_b64
     if "," in raw and raw.strip().startswith("data:"):
         header, raw = raw.split(",", 1)
@@ -1366,38 +1398,28 @@ def adjuntar_imagen_tarea_base64(
         raise ValueError("La imagen supera 8 MB")
 
     ref = _store_imagen_bytes(item_id, nombre, content, mime or "image/png")
+    if dest == "checklist_esquema":
+        ref["kind"] = "esquema"
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
-
-    if dest == "adjunto":
-        imgs = list(item.get("imagenes") or [])
-        imgs.append(ref)
-        patch["imagenes"] = imgs
-    else:
-        libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
-        if dest == "dibujo":
-            ref["kind"] = "dibujo"
-            dibujos = list(libres.get("dibujos") or [])
-            dibujos.append(ref)
-            libres["dibujos"] = dibujos
-        else:
-            cid = (checklist_id or "").strip()
-            if not cid:
-                raise ValueError("checklist_id es obligatorio para imagen de sub-ítem")
-            checklist = _normalizar_checklist_tarea(libres.get("checklist") or [])
-            found = False
-            for it in checklist:
-                if str(it.get("id")) == cid:
-                    it["imagen"] = ref
-                    found = True
-                    break
-            if not found:
-                raise ValueError("Sub-ítem de checklist no encontrado")
-            libres["checklist"] = checklist
-            fv_ck, hora_ck = _fecha_proxima_checklist(checklist)
-            if fv_ck:
-                patch["fecha_vencimiento"] = fv_ck
-                patch["hora_vencimiento"] = hora_ck
-        patch["campos_libres"] = _normalizar_campos_libres_tarea(libres)
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    checklist = _normalizar_checklist_tarea(libres.get("checklist") or [])
+    found = False
+    for it in checklist:
+        if str(it.get("id")) == cid:
+            if dest == "checklist_esquema":
+                it["esquema"] = ref
+            else:
+                it["imagen"] = ref
+            found = True
+            break
+    if not found:
+        raise ValueError("Sub-ítem de checklist no encontrado")
+    libres["checklist"] = checklist
+    fv_ck, hora_ck = _fecha_proxima_checklist(checklist)
+    if fv_ck:
+        patch["fecha_vencimiento"] = fv_ck
+        patch["hora_vencimiento"] = hora_ck
+    patch["campos_libres"] = _normalizar_campos_libres_tarea(libres)
 
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
     return get_item_detalle(sb, item_id)

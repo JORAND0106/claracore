@@ -193,7 +193,10 @@ class ImagenBase64Body(BaseModel):
     nombre: str = "imagen.png"
     data_base64: str = Field(..., min_length=8)
     mime_type: Optional[str] = "image/png"
-    destino: Optional[str] = Field("adjunto", description="adjunto | dibujo | checklist")
+    destino: Optional[str] = Field(
+        "checklist",
+        description="checklist (imagen soporte) | checklist_esquema (dibujo del sub-ítem)",
+    )
     checklist_id: Optional[str] = None
 
 
@@ -440,7 +443,7 @@ def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depend
             body.nombre,
             body.data_base64,
             body.mime_type or "image/png",
-            destino=body.destino or "adjunto",
+            destino=body.destino or "checklist",
             checklist_id=body.checklist_id,
         )
     except ValueError as exc:
