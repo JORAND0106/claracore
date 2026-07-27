@@ -265,36 +265,6 @@ export default function TareaChecklistEditor({
                       opacity: est === 'cumplido' ? 0.75 : 1,
                     }}
                   />
-<<<<<<< HEAD
-                  <div
-                    role="radiogroup"
-                    aria-label="Estado de gestión"
-                    className="cc-seguim-checklist-estados"
-                    style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
-                  >
-                    {ESTADOS_GESTION.map((x) => {
-                      const active = est === x.value
-                      return (
-                        <button
-                          key={x.value}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          disabled={disabled}
-                          title={x.label}
-                          onClick={() => setAt(idx, { estado_gestion: x.value })}
-                          style={{
-                            border: `1px solid ${active ? t.primary : t.border}`,
-                            background: active ? `${t.primary}18` : 'transparent',
-                            color: active ? t.primary : t.textMuted,
-                            borderRadius: 6,
-                            padding: '3px 7px',
-                            fontSize: 11,
-                            fontWeight: active ? 700 : 500,
-                            cursor: disabled ? 'default' : 'pointer',
-                            lineHeight: 1.2,
-                          }}
-=======
                   {multi ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                       <div style={{ fontSize: 11, color: t.textMuted }}>
@@ -304,8 +274,8 @@ export default function TareaChecklistEditor({
                         <div
                           role="radiogroup"
                           aria-label="Mi estado en este sub-ítem"
+                          className="cc-seguim-checklist-estados"
                           style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
->>>>>>> 094437974045b7bc4c92efb8fa8fc95aa36a97a5
                         >
                           <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Mi parte:</span>
                           {ESTADOS_GESTION.map((x) => {
@@ -361,6 +331,7 @@ export default function TareaChecklistEditor({
                     <div
                       role="radiogroup"
                       aria-label="Estado de gestión"
+                      className="cc-seguim-checklist-estados"
                       style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
                     >
                       {ESTADOS_GESTION.map((x) => {

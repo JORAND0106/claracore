@@ -5,19 +5,14 @@ import VencimientoIcon from './VencimientoIcon'
 import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
-<<<<<<< HEAD
-/** Crear tarea personal: basta el título; la checklist se puede completar después. */
-export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated, viewportCompact: viewportCompactProp }) {
-  const viewportCompactHook = useSeguimientoCompact()
-  const viewportCompact = viewportCompactProp ?? viewportCompactHook
-=======
 /**
  * Formulario de nueva tarea:
  * - Personal o delegada a uno/varios usuarios (asignación formal colectiva).
  * - Referencia sigue siendo un solo destinatario (fuera del multi-cumplimiento).
  */
-export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
->>>>>>> 094437974045b7bc4c92efb8fa8fc95aa36a97a5
+export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated, viewportCompact: viewportCompactProp }) {
+  const viewportCompactHook = useSeguimientoCompact()
+  const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [titulo, setTitulo] = useState('')
   const [checklist, setChecklist] = useState([])
   const [destinoTipo, setDestinoTipo] = useState('personal') // 'personal' | 'delegar'

@@ -97,19 +97,12 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             />
             Incluir cumplidos / cancelados
           </label>
-<<<<<<< HEAD
           <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
             {permisos?.crear && (
-              <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
+              <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Nueva tarea</button>
             )}
           </div>
-=======
-          <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
-          {permisos?.crear && (
-            <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Nueva tarea</button>
-          )}
->>>>>>> 094437974045b7bc4c92efb8fa8fc95aa36a97a5
         </div>
       )}
 
