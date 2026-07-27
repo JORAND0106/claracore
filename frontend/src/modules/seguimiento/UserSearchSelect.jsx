@@ -58,7 +58,8 @@ export default function UserSearchSelect({
         const n = nombreUser(u).toLowerCase()
         const e = (u.email || '').toLowerCase()
         const c = (u.cargo_nombre || '').toLowerCase()
-        return n.includes(s) || e.includes(s) || c.includes(s)
+        const emp = (u.empresa || '').toLowerCase()
+        return n.includes(s) || e.includes(s) || c.includes(s) || emp.includes(s)
       }).slice(0, 30)
     return base
   }, [usuarios, q])
@@ -158,7 +159,7 @@ export default function UserSearchSelect({
         >
           {filtrados.map((u) => (
             <button
-              key={u.id}
+              key={u.es_externo ? `ext-${u.externo_id}` : u.id}
               type="button"
               role="option"
               onMouseDown={(e) => { e.preventDefault(); pick(u) }}
@@ -168,7 +169,14 @@ export default function UserSearchSelect({
                 padding: '8px 10px', cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
               }}
             >
-              <div style={{ fontWeight: 600 }}>{nombreUser(u)}</div>
+              <div style={{ fontWeight: 600 }}>
+                {nombreUser(u)}
+                {u.es_externo ? (
+                  <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                    · Externo
+                  </span>
+                ) : null}
+              </div>
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
                 {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
               </div>
