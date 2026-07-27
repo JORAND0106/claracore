@@ -643,6 +643,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "asistente_email": None,
     "contacto_externo": None,
     "idea_quien_dijo": None,
+    "asignado_externo_id": None,
 }
 
 
@@ -679,6 +680,9 @@ def _schema_has(sb, cap: str) -> bool:
         elif cap == "idea_quien_dijo":
             sb.table("seguimiento_acta_idea").select("id,quien_dijo").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "asignado_externo_id":
+            sb.table("seguimiento_item").select("id,asignado_externo_id").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -691,6 +695,8 @@ def _schema_has(sb, cap: str) -> bool:
         elif cap == "asistente_email" and _is_missing_column_error(exc, "email"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "idea_quien_dijo" and _is_missing_column_error(exc, "quien_dijo"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "asignado_externo_id" and _is_missing_column_error(exc, "asignado_externo_id"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
             "seguimiento_contacto_externo" in msg
@@ -1465,12 +1471,75 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
     ideas = {int(i["id"]): i for i in acta.get("ideas") or []}
     if int(idea_id) not in ideas:
         raise ValueError("La idea no pertenece al acta")
-    asignado_id = int(data["asignado_a_id"])
+
+    # Atribución de origen: el compromiso proviene del acta/comité, no del operador.
+    consec = acta.get("consecutivo")
+    acta_label = f"Acta Nº {consec}" if consec is not None else "Compromiso de Comité"
+    solicitante_nombre = f"Compromiso de Comité · {acta_label}" if consec is not None else "Compromiso de Comité"
     solicitante_id = int(data.get("solicitante_id") or user_id)
-    asignado = _usuario_row(sb, asignado_id)
-    solicitante = _usuario_row(sb, solicitante_id)
-    if not asignado:
-        raise ValueError("Usuario asignado no encontrado")
+
+    raw_aid = data.get("asignado_a_id")
+    externo_id = data.get("asignado_externo_id")
+    es_externo = bool(data.get("es_externo")) or (externo_id is not None)
+    nombre_asig = (data.get("asignado_a_nombre") or "").strip() or None
+
+    # IDs negativos del front = contacto externo sintético (-externo_id)
+    if raw_aid is not None and str(raw_aid) != "" and int(raw_aid) < 0:
+        externo_id = abs(int(raw_aid))
+        es_externo = True
+        raw_aid = None
+
+    asignado_id = None
+    asignado = None
+    if not es_externo and raw_aid is not None and str(raw_aid) != "":
+        asignado_id = int(raw_aid)
+        asignado = _usuario_row(sb, asignado_id)
+        if not asignado:
+            raise ValueError("Usuario asignado no encontrado")
+        nombre_asig = nombre_asig or _nombre_usuario(asignado)
+    else:
+        es_externo = True
+        if not nombre_asig and externo_id:
+            # Resolver nombre desde catálogo
+            try:
+                rows = (
+                    sb.table("seguimiento_contacto_externo")
+                    .select("id,nombre,cargo,entidad,email")
+                    .eq("id", int(externo_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if rows:
+                    nombre_asig = (rows[0].get("nombre") or "").strip() or None
+            except Exception:
+                pass
+        if not nombre_asig:
+            raise ValueError("Indique el nombre del asignado externo")
+        # Asegurar fila en catálogo si aún no hay id
+        if not externo_id:
+            ext = upsert_contacto_externo(
+                sb,
+                int(contrato_id),
+                nombre=nombre_asig,
+                cargo=data.get("asignado_cargo"),
+                entidad=data.get("asignado_entidad"),
+                email=data.get("asignado_email"),
+            )
+            if ext and ext.get("id"):
+                externo_id = int(ext["id"])
+        if not externo_id:
+            raise ValueError(
+                "No se pudo registrar el contacto externo como asignado. "
+                "Verifique que la migración de contactos externos esté aplicada."
+            )
+        if not _schema_has(sb, "asignado_externo_id"):
+            raise ValueError(
+                "La asignación a contactos externos requiere actualizar el esquema "
+                "(columna asignado_externo_id)."
+            )
+
     fv = _parse_date(data.get("fecha_vencimiento"))
     if not fv:
         raise ValueError("Fecha de vencimiento requerida")
@@ -1481,14 +1550,14 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
         raise ValueError("Debe indicar la redacción del compromiso")
     descripcion = (data.get("descripcion") or data.get("redaccion") or titulo).strip()
     hora = _norm_hora(data.get("hora_vencimiento"))
-    consec = _proximo_consecutivo_item(sb, origen="compromiso", contrato_id=contrato_id)
+    consec_item = _proximo_consecutivo_item(sb, origen="compromiso", contrato_id=contrato_id)
     row = {
         "origen": "compromiso",
         "titulo": titulo[:500],
         "descripcion": descripcion,
         "estado_gestion": "abierto",
         "asignado_a_id": asignado_id,
-        "asignado_a_nombre": data.get("asignado_a_nombre") or _nombre_usuario(asignado),
+        "asignado_a_nombre": nombre_asig,
         "created_by": int(user_id),
         "fecha_vencimiento": fv.isoformat(),
         "fecha_vencimiento_original": fv.isoformat(),
@@ -1498,28 +1567,45 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
         "acta_id": int(acta_id),
         "idea_id": int(idea_id),
         "solicitante_id": solicitante_id,
-        "solicitante_nombre": data.get("solicitante_nombre") or _nombre_usuario(solicitante),
-        "consecutivo": consec,
+        "solicitante_nombre": solicitante_nombre,
+        "consecutivo": consec_item,
         "relacion_destinatario": "asignacion",
         "updated_at": _now_utc().isoformat(),
     }
-    ins = sb.table("seguimiento_item").insert(row).execute().data
+    if es_externo and externo_id is not None and _schema_has(sb, "asignado_externo_id"):
+        row["asignado_externo_id"] = int(externo_id)
+        # Metadato auxiliar para bandeja/UI
+        row["campos_libres"] = {
+            "asignado_externo": True,
+            "externo_id": int(externo_id),
+        }
+
+    try:
+        ins = sb.table("seguimiento_item").insert(row).execute().data
+    except Exception as exc:
+        if es_externo and _is_missing_column_error(exc, "asignado_externo_id"):
+            _SCHEMA_CAPS["asignado_externo_id"] = False
+            raise ValueError(
+                "No se pueden asignar contactos externos hasta aplicar la migración de esquema."
+            ) from exc
+        raise
     if not ins:
         raise ValueError("No se pudo crear el compromiso")
     item = ins[0]
     _registrar_evento(sb, int(item["id"]), "compromiso_creado", user_id, {"acta_id": acta_id, "idea_id": idea_id})
-    # Notificación inmediata al asignado (no espera Realizada/Firmada del acta)
-    _notificar_compromiso_asignado(
-        sb,
-        destinatario_id=asignado_id,
-        remitente_id=user_id,
-        titulo=titulo,
-        fecha_vencimiento=fv.isoformat(),
-        contrato_id=contrato_id,
-        item_id=item["id"],
-        acta=acta,
-        reasignacion=False,
-    )
+    # Notificación inmediata solo a usuarios reales de plataforma
+    if asignado_id:
+        _notificar_compromiso_asignado(
+            sb,
+            destinatario_id=asignado_id,
+            remitente_id=user_id,
+            titulo=titulo,
+            fecha_vencimiento=fv.isoformat(),
+            contrato_id=contrato_id,
+            item_id=item["id"],
+            acta=acta,
+            reasignacion=False,
+        )
     return item
 
 

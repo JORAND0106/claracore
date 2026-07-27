@@ -137,8 +137,13 @@ class IdeaTextoBody(BaseModel):
 
 
 class AsignadoCompromisoBody(BaseModel):
-    asignado_a_id: int
+    asignado_a_id: Optional[int] = None
     asignado_a_nombre: Optional[str] = None
+    asignado_externo_id: Optional[int] = None
+    es_externo: Optional[bool] = None
+    asignado_cargo: Optional[str] = None
+    asignado_entidad: Optional[str] = None
+    asignado_email: Optional[str] = None
 
 
 class CompromisoCreateBody(BaseModel):
@@ -146,6 +151,8 @@ class CompromisoCreateBody(BaseModel):
     solicitante_nombre: Optional[str] = None
     asignado_a_id: Optional[int] = None
     asignado_a_nombre: Optional[str] = None
+    asignado_externo_id: Optional[int] = None
+    es_externo: Optional[bool] = None
     asignados: Optional[List[AsignadoCompromisoBody]] = None
     fecha_vencimiento: str
     hora_vencimiento: Optional[str] = None

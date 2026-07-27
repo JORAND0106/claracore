@@ -962,12 +962,14 @@ export default function ActaEditor({
           usuario={usuario}
           textoIdea={compromisoCtx.texto}
           usuarios={usuariosContrato}
+          asistentesActa={form.asistentes || []}
+          actaConsecutivo={consecutivo}
           onClose={() => setCompromisoCtx(null)}
           onSubmit={async (body) => {
             await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
             setCompromisoCtx(null)
             setError('')
-            setOkMsg('Compromiso incorporado a la bandeja. Los asignados ya fueron notificados.')
+            setOkMsg('Compromiso incorporado a la bandeja.')
             try {
               const abiertos = await api.compromisosAbiertos(localActaId || undefined)
               setPrevios(abiertos || [])
