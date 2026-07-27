@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import CcTitleTooltips from './components/CcTitleTooltips.jsx'
 import { applyClaraTypography } from './typographyScale'
 import { initBrowserTelemetry } from './telemetry/browserTelemetry'
 
@@ -15,6 +16,7 @@ initBrowserTelemetry()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
+    <CcTitleTooltips />
     <App />
   </StrictMode>,
 )

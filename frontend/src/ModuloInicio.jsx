@@ -4,6 +4,7 @@ import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
 import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
+import SeguimientoWidget from './components/inicio/SeguimientoWidget.jsx'
 
 function useInicioMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
@@ -1402,6 +1403,7 @@ export default function ModuloInicio({
   puedePublicarNovedades = false,
   token = null,
   esContador = false,
+  onIrSeguimiento,
 }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
@@ -1466,7 +1468,19 @@ export default function ModuloInicio({
           {/* ── Zona 1: clima ── */}
           <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
-          {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
+          {/* ── Zona 2: bandeja Seguimiento (bajo el clima, visible) ── */}
+          <div style={{ marginBottom: isMobile ? '14px' : '16px' }}>
+            <SeguimientoWidget
+              t={t}
+              fs={fs}
+              usuario={usuario}
+              token={token}
+              contratoId={contratoId}
+              onIrSeguimiento={onIrSeguimiento}
+            />
+          </div>
+
+          {/* ── Zona 3: saludo + cita + novedades | carrusel ── */}
           <div
             className="cc-inicio-main-grid"
             style={{
@@ -1506,7 +1520,7 @@ export default function ModuloInicio({
             </div>
           </div>
 
-          {/* ── Zona 3: ficha del contrato ── */}
+          {/* ── Zona 4: ficha del contrato ── */}
           <div style={{ marginBottom: isMobile ? '16px' : '20px' }}>
             <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
           </div>

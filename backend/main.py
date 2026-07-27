@@ -2377,6 +2377,9 @@ app.include_router(almacen_router)
 from catalogo_insumos_routes import router as catalogo_insumos_router
 app.include_router(catalogo_insumos_router)
 
+from seguimiento_routes import router as seguimiento_router
+app.include_router(seguimiento_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
     BienvenidaEmailError,
@@ -5867,6 +5870,7 @@ def login(request: Request, body: LoginRequest):
 
     # Cargar permisos del cargo para control de acceso en el panel
     permisos = []
+    funciones_rows = []
     if usuario.get("cargo_id"):
         permisos_raw = _permisos_rows_para_cargo(
             int(usuario["cargo_id"]),
@@ -5881,6 +5885,15 @@ def login(request: Request, body: LoginRequest):
         or (rol_nombre or "").strip().lower() == "desarrollador"
     )
     if es_dev_login:
+        # Asegura «Seguimiento» (y demás requeridas) en `funciones` para filas sintéticas.
+        try:
+            funciones_rows = _ensure_funciones_requeridas()
+        except Exception:
+            if not funciones_rows:
+                try:
+                    funciones_rows = supabase.table("funciones").select("id, nombre").execute().data or []
+                except Exception:
+                    funciones_rows = []
         permisos = _permisos_desarrollador_acceso_total(
             permisos, funciones_rows, usuario.get("cargo_id")
         )
@@ -6455,11 +6468,14 @@ def get_mi_usuario(
         or (rol_nombre or "").strip().lower() == "desarrollador"
     )
     if es_dev_me:
-        if not funciones_rows:
-            try:
-                funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
-            except Exception:
-                funciones_rows = []
+        try:
+            funciones_rows = _ensure_funciones_requeridas(sb)
+        except Exception:
+            if not funciones_rows:
+                try:
+                    funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
+                except Exception:
+                    funciones_rows = []
         permisos = _permisos_desarrollador_acceso_total(
             permisos, funciones_rows, u.get("cargo_id")
         )
@@ -6711,53 +6727,60 @@ def crear_usuario(usuario: UsuarioCreate, current_user=Depends(get_current_user)
 def listar_categorias(current_user=Depends(get_current_user)):
     return supabase.table("categorias").select("*").execute().data
 
-@app.get("/funciones")
-def listar_funciones(current_user=Depends(get_current_user)):
-    funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
+_FUNCIONES_REQUERIDAS = (
+    {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
+    {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
+    {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
+    {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
+    {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
+    {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
+    {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
+)
+
+
+def _ensure_funciones_requeridas(sb=None) -> list:
+    """Inserta funciones base faltantes (p. ej. Seguimiento) sin paso manual en Supabase."""
+    sb = sb or supabase
+    funciones = sb.table("funciones").select("*").order("nombre").execute().data or []
     existentes = {(f.get("nombre") or "").strip().lower() for f in funciones}
     codigos_existentes = {
         str((f.get("codigo") or "")).strip().upper()
         for f in funciones
         if f.get("codigo") is not None and str(f.get("codigo")).strip() != ""
     }
-    # Asegurar filas base (Dashboard, Informes CCD). En producción el INSERT vía API a veces
-    # falla por RLS o restricciones; en ese caso ejecutar backend/sql/funcion_informes_ccd.sql en Supabase.
-    requeridas = [
-        {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
-        {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
-        {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
-        {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
-        {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
-        {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
-    ]
-    for req in requeridas:
+    # En producción el INSERT vía API a veces falla por RLS; fallback: sql/seguimiento_modulo.sql
+    for req in _FUNCIONES_REQUERIDAS:
         nombre_funcion = req["nombre"]
         cod = str(req.get("codigo") or "").strip().upper()
         if nombre_funcion.lower() in existentes or (cod and cod in codigos_existentes):
             continue
         try:
-            supabase.table("funciones").insert(req).execute()
+            sb.table("funciones").insert(req).execute()
             existentes.add(nombre_funcion.lower())
             if cod:
                 codigos_existentes.add(cod)
         except Exception as e:
             try:
-                supabase.table("funciones").upsert(req, on_conflict="codigo").execute()
+                sb.table("funciones").upsert(req, on_conflict="codigo").execute()
                 existentes.add(nombre_funcion.lower())
                 if cod:
                     codigos_existentes.add(cod)
             except Exception as e2:
                 _log_api.warning(
-                    "/funciones: no se pudo insertar ni upsert '%s' (%s). "
-                    "Si falta en el panel admin, ejecuta backend/sql/funcion_informes_ccd.sql en Supabase. "
-                    "insert_err=%s | upsert_err=%s",
+                    "funciones requeridas: no se pudo insertar ni upsert '%s' (%s). "
+                    "Si falta en el panel admin, ejecuta backend/sql/seguimiento_modulo.sql "
+                    "(u homólogo) en Supabase. insert_err=%s | upsert_err=%s",
                     nombre_funcion,
                     req.get("codigo"),
                     e,
                     e2,
                 )
-    funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
-    return funciones
+    return sb.table("funciones").select("*").order("nombre").execute().data or []
+
+
+@app.get("/funciones")
+def listar_funciones(current_user=Depends(get_current_user)):
+    return _ensure_funciones_requeridas()
 
 def _sanitize_export_palette(raw: Any) -> dict:
     if not isinstance(raw, dict):

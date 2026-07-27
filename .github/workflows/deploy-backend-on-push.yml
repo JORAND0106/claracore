@@ -1,0 +1,27 @@
+# Publica ./backend en App Service claracore-backend.
+# Secreto: AZURE_WEBAPP_PUBLISH_PROFILE
+# Startup Command en Azure:
+#   python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+name: Deploy backend on push
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-backend-on-push.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy backend package to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: claracore-backend
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: ./backend

@@ -27,6 +27,7 @@ MODULOS_VALIDOS = frozenset({
     "notificaciones",
     "sicoecad",
     "topografia",
+    "seguimiento",
     "general",
 })
 
@@ -75,6 +76,12 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
         "Topografía web: menú lateral con Puntos y circuitos (Biblioteca, Poligonal, NewPoint, Nivelación), "
         "Vías (Configuración DG, Entrega DG Obra) y Otros (Tubería, Áreas, Equipos). Puntos verificados "
         "alimentan nivelaciones y amarres; poligonales selladas publican coordenadas en biblioteca."
+    ),
+    "seguimiento": (
+        "Seguimiento: actas de reunión (asistentes, ideas centrales, apartados libres, PDF y firma), "
+        "generación de compromisos desde ideas con asistencia de redacción de Clara, y bandeja unificada "
+        "de compromisos de acta + tareas personales. Vencimientos con gracia en días hábiles (calendario "
+        "de Programación) y justificaciones aprobadas por quien delegó."
     ),
     "general": "Sin módulo específico detectado; responde de forma general sobre ClaraCore.",
 }
@@ -971,6 +978,9 @@ Módulos complementarios (solo si el contrato/permiso los tiene):
 - Informes CCD: cortes subcontratista, memoria de ítem, firmas digitales.
 - Guías: manuales por módulo en base de datos (seeds SQL); no hay menú lateral «Guías» — la ayuda en pantalla es Clara (botón flotante) con el conocimiento de este prompt.
 - Almacén de Obra: solicitudes de materiales, órdenes de compra, entradas e inventario (ver sección 15).
+- Seguimiento: actas de reunión, compromisos generados desde ideas centrales (redacción con Clara),
+  bandeja unificada de compromisos + tareas personales, widget en Inicio, vencimientos con gracia en días hábiles
+  (calendario de Programación) y llamados de atención automáticos.
 - SST, Ensayos, Auditor SST: documentación de seguridad y salud en el trabajo con IA en auditoría.
 
 12. SicoeCAD — Plugin de AutoCAD que sincroniza con ClaraCore
@@ -1481,7 +1491,7 @@ FORMATO DE RESPUESTA
 - No menciones Anthropic, Claude, tokens ni detalles internos del modelo.
 - No des consejos legales ni normativos definitivos sobre contratación estatal; orienta sobre cómo registrar o consultar en ClaraCore.
 - Respuestas concisas: máximo 5 puntos o 150 palabras salvo que el usuario pida explícitamente más detalle. Prefiere listas cortas sobre párrafos largos. Nunca uses headers markdown (##) en las respuestas — solo listas simples con guión.
-- Cuando menciones módulos de ClaraCore, escríbelos en negrita: **Presupuesto**, **SICOE**, **Dashboard**, **Programación de Obra**, **Topografía**, **Almacén**, **Catálogo de insumos**, **Panel Admin**, etc.
+- Cuando menciones módulos de ClaraCore, escríbelos en negrita: **Presupuesto**, **SICOE**, **Dashboard**, **Programación de Obra**, **Topografía**, **Almacén**, **Seguimiento**, **Catálogo de insumos**, **Panel Admin**, etc.
 - Puedes usar emojis con moderación para hacer las respuestas más amigables (máximo 5 por respuesta).
 - Cuando una pregunta pueda tener respuesta en varios módulos, menciónalos todos — no omitas módulos relevantes.
 - Nunca escribas "SICOE Web" — siempre solo "SICOE".
@@ -2078,6 +2088,7 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         "Si es «topografia», prioriza el submódulo (Poligonal, NewPoint, Nivelación, Configuración DG, Entrega DG); "
         "explique biblioteca, cartera, validación N1/N2 y PDF. "
         "Si es «almacen», guíe Solicitudes/Entradas/Inventario; insumos vienen del Catálogo admin. "
+        "Si es «seguimiento», guíe actas (ideas centrales + Clara), compromisos, bandeja unificada y tareas personales. "
         "Si es «admin» y pregunta por materiales/insumos, use pestaña Catálogo de insumos. "
         "Barra superior del dashboard (todos los módulos): perfil, botón 🛟 reporte de errores/mejoras (todos los usuarios), "
         "Headset soporte técnico (solo Desarrollador), campana 🔔 notificaciones, botón Clara. "
