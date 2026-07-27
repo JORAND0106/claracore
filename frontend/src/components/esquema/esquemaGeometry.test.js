@@ -47,4 +47,20 @@ describe('esquemaGeometry', () => {
     assert.equal(hit.x, 40)
     assert.equal(hit.y, 0)
   })
+
+  it('does not edge-project by default when starting a stroke', () => {
+    const objs = [{ id: '1', type: 'linea', x1: 0, y1: 0, x2: 100, y2: 0 }]
+    // Punto sobre el borde que no es extremo ni medio discreto
+    const along = findSnap({ x: 33, y: 4 }, objs, { threshold: 8, allowEdgeProject: false })
+    assert.equal(along, null)
+    const withProject = findSnap({ x: 33, y: 4 }, objs, { threshold: 8, allowEdgeProject: true })
+    assert.ok(withProject)
+    assert.equal(Math.round(withProject.x), 33)
+  })
+
+  it('ignores snaps outside threshold', () => {
+    const objs = [{ id: '1', type: 'linea', x1: 0, y1: 0, x2: 100, y2: 0 }]
+    const hit = findSnap({ x: 20, y: 20 }, objs, { threshold: 6 })
+    assert.equal(hit, null)
+  })
 })
