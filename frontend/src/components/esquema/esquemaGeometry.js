@@ -261,6 +261,8 @@ export function findSnap(p, objects, {
   excludeId = null,
   threshold = 12,
   fromPoint = null,
+  /** Si true, proyecta sobre bordes al iniciar trazo (más intrusivo). Por defecto off. */
+  allowEdgeProject = false,
 } = {}) {
   const { points, segments } = collectSnapGeometry(objects, excludeId)
   let best = null
@@ -268,24 +270,23 @@ export function findSnap(p, objects, {
 
   for (const pt of points) {
     const d = Math.hypot(p.x - pt.x, p.y - pt.y)
-    // Prioridad: extremo > medio (ligera ventaja a extremos)
-    const score = d - (pt.kind === 'end' ? 0.5 : 0)
-    if (score < bestD) {
+    // Prioridad leve a extremos sin ampliar el umbral
+    const score = d - (pt.kind === 'end' ? 0.01 : 0)
+    if (d <= threshold && score < bestD) {
       bestD = score
       best = { x: pt.x, y: pt.y, kind: pt.kind }
     }
   }
 
   if (fromPoint) {
+    // ⊥ un poco más exigente que extremo/medio: requiere acercarse de forma evidente al pie
+    const perpThresh = threshold * 0.85
     for (const seg of segments) {
-      // Pie de la perpendicular desde el origen del trazo sobre el segmento.
-      // Se engancha cuando el cursor se acerca a ese pie (construcción ⊥).
       const { foot, t } = distPointSeg(fromPoint, seg.a, seg.b)
-      if (t < -0.05 || t > 1.05) continue
+      if (t < 0 || t > 1) continue
       const dCursor = Math.hypot(p.x - foot.x, p.y - foot.y)
-      if (dCursor >= bestD) continue
-      // Evitar snap ⊥ degenerado (origen ya sobre el segmento)
-      if (Math.hypot(foot.x - fromPoint.x, foot.y - fromPoint.y) < 2) continue
+      if (dCursor > perpThresh || dCursor >= bestD) continue
+      if (Math.hypot(foot.x - fromPoint.x, foot.y - fromPoint.y) < 4) continue
       bestD = dCursor
       best = {
         x: foot.x,
@@ -294,12 +295,10 @@ export function findSnap(p, objects, {
         guide: { a: { ...fromPoint }, b: { ...foot }, seg },
       }
     }
-  } else {
-    // Sin fromPoint: enganche a proyección sobre segmento (útil al iniciar trazo)
+  } else if (allowEdgeProject) {
     for (const seg of segments) {
       const { foot, d, t } = distPointSeg(p, seg.a, seg.b)
-      if (d >= bestD) continue
-      // Evitar duplicar extremos (ya cubiertos)
+      if (d >= bestD || d > threshold) continue
       if (t <= 0.02 || t >= 0.98) continue
       bestD = d
       best = { x: foot.x, y: foot.y, kind: 'mid', guide: { a: seg.a, b: seg.b } }

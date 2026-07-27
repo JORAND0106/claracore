@@ -129,6 +129,8 @@ export default function EsquemaEditorModal({
   const clipboardRef = useRef(null)
   const copySelectedRef = useRef(() => false)
   const pasteClipboardRef = useRef(() => false)
+  // Medida solo restringe el trazo si el usuario la digitó (no al sincronizar desde selección)
+  const measureArmedRef = useRef(false)
 
   const [tool, setTool] = useState('lapiz')
   const [color, setColor] = useState('#1e293b')
@@ -145,6 +147,7 @@ export default function EsquemaEditorModal({
   const [zoomPct, setZoomPct] = useState(100)
   const [hoverCursor, setHoverCursor] = useState(null)
   const [hasClipboard, setHasClipboard] = useState(false)
+  const [measureArmed, setMeasureArmed] = useState(false)
   const selectedIdRef = useRef(null)
   const redrawRef = useRef(() => {})
 
@@ -369,7 +372,20 @@ export default function EsquemaEditorModal({
     }
   }
 
-  const applyMeasureToShape = (shape, toolId, a, b) => {
+  const setMeasureArmedBoth = (armed) => {
+    measureArmedRef.current = !!armed
+    setMeasureArmed(!!armed)
+  }
+
+  const armMeasureFromInputs = (w = measureWRef.current, h = measureHRef.current) => {
+    setMeasureArmedBoth(!!(parsePositive(w) || parsePositive(h)))
+  }
+
+  const applyMeasureToShape = (shape, toolId, a, b, { force = false } = {}) => {
+    // Sin medida digitada a propósito → trazo 100 % libre (como antes del sistema de medidas)
+    if (!force && !measureArmedRef.current) {
+      return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    }
     const wVal = parsePositive(measureWRef.current)
     const hVal = parsePositive(measureHRef.current)
     const signX = b.x >= a.x ? 1 : -1
@@ -425,12 +441,16 @@ export default function EsquemaEditorModal({
     return `${w} × ${h}`
   }
 
-  const snapThreshold = () => 14 / (zoomRef.current || 1)
+  // Snap solo con intención clara: ~6–7 px de pantalla (no ~14). Manijas usan umbral aparte.
+  const snapThreshold = () => 6.5 / (zoomRef.current || 1)
+  const handleHitThreshold = () => 10 / (zoomRef.current || 1)
 
   const snapWorldPoint = (p, { fromPoint = null } = {}) => {
     const hit = findSnap(p, objectsRef.current, {
       threshold: snapThreshold(),
       fromPoint,
+      // Solo puntos discretos + ⊥; sin proyección continua sobre bordes al iniciar
+      allowEdgeProject: false,
     })
     snapRef.current = hit
     return hit ? { x: hit.x, y: hit.y } : p
@@ -438,6 +458,8 @@ export default function EsquemaEditorModal({
 
   const syncMeasureFromObject = (obj) => {
     if (!obj || !SHAPE_TOOLS.has(obj.type)) return
+    // Rellena la barra para «Aplicar a selección», pero NO arma la medida del próximo trazo
+    setMeasureArmedBoth(false)
     if (LINE_TOOLS.has(obj.type)) {
       setMeasureW(String(Math.round(dist({ x: obj.x1, y: obj.y1 }, { x: obj.x2, y: obj.y2 }))))
       setMeasureH('')
@@ -506,7 +528,7 @@ export default function EsquemaEditorModal({
     if (currentTool === 'seleccion' || currentTool === 'mover') {
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
-      const handle = sel ? hitResizeHandle(p, sel, snapThreshold()) : null
+      const handle = sel ? hitResizeHandle(p, sel, handleHitThreshold()) : null
       if (handle) {
         dragRef.current = {
           id: sel.id,
@@ -540,7 +562,7 @@ export default function EsquemaEditorModal({
       if (hit && SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
       // Si el clic cae en manija de la figura recién seleccionada, iniciar resize
       if (hit) {
-        const handle = hitResizeHandle(p, hit, snapThreshold())
+        const handle = hitResizeHandle(p, hit, handleHitThreshold())
         if (handle) {
           dragRef.current = {
             id: hit.id,
@@ -699,21 +721,17 @@ export default function EsquemaEditorModal({
     const raw = posFromEvent(e)
     const currentTool = toolRef.current
 
-    // Hover de manijas (cursor) cuando no se dibuja
+    // Hover de manijas (cursor) cuando no se dibuja — sin preview de snap (evita interferir)
     if (!drawing.current) {
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
       if (sel && (currentTool === 'seleccion' || currentTool === 'mover')) {
-        const handle = hitResizeHandle(raw, sel, snapThreshold())
+        const handle = hitResizeHandle(raw, sel, handleHitThreshold())
         setHoverCursor(handle ? cursorForHandle(handle.id) : null)
       } else {
         setHoverCursor(null)
       }
-      // Vista previa de snap al acercarse con herramienta de figura
-      if (SHAPE_TOOLS.has(currentTool)) {
-        snapWorldPoint(raw)
-        redraw(draftRef.current)
-      } else if (snapRef.current) {
+      if (snapRef.current) {
         snapRef.current = null
         redraw()
       }
@@ -733,14 +751,14 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Redimensionado por manijas
+    // Redimensionado por manijas (sin snap: el arrastre debe ser libre)
     if (dragRef.current?.mode === 'resize') {
       const d = dragRef.current
-      const snapped = snapWorldPoint(raw)
-      lastPt.current = snapped
+      lastPt.current = raw
+      snapRef.current = null
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
-        const next = applyResizeHandle(d.origin, d.handle, snapped)
+        const next = applyResizeHandle(d.origin, d.handle, raw)
         if (SHAPE_TOOLS.has(next.type)) {
           next.label = measureLabelFor(
             next.type,
@@ -867,7 +885,7 @@ export default function EsquemaEditorModal({
       )
       const a = { x: shape.x1, y: shape.y1 }
       const b = { x: shape.x2, y: shape.y2 }
-      const hasMeasure = !!(parsePositive(measureWRef.current) || parsePositive(measureHRef.current))
+      const hasMeasure = measureArmedRef.current && !!(parsePositive(measureWRef.current) || parsePositive(measureHRef.current))
       if (dist(a, b) < 3 && !hasMeasure) {
         draftRef.current = null
         setLiveMeasure('')
@@ -923,9 +941,11 @@ export default function EsquemaEditorModal({
     const a = { x: obj.x1, y: obj.y1 }
     const b = { x: obj.x2, y: obj.y2 }
     const dir = (b.x === a.x && b.y === a.y) ? { x: a.x + 1, y: a.y } : b
-    const shaped = applyMeasureToShape(obj, obj.type, a, dir)
+    // force: aplicar aunque la barra se haya rellenado al seleccionar (sin armar el próximo trazo)
+    const shaped = applyMeasureToShape(obj, obj.type, a, dir, { force: true })
     shaped.label = measureLabelFor(obj.type, { x: shaped.x1, y: shaped.y1 }, { x: shaped.x2, y: shaped.y2 })
     objectsRef.current = objectsRef.current.map((o) => (o.id === id ? shaped : o))
+    setMeasureArmedBoth(false)
     setLiveMeasure(shaped.label)
     setDirty(true)
     redraw()
@@ -937,11 +957,17 @@ export default function EsquemaEditorModal({
     return !!parsePositive(measureW)
   })()
 
-  // Reaplicar medida al cambiar el input si hay figura en borrador
+  // Reaplicar medida al cambiar el input solo si está armada (digitada por el usuario)
   useEffect(() => {
     measureWRef.current = measureW
     measureHRef.current = measureH
-    if (draftRef.current && startPt.current && lastPt.current && SHAPE_TOOLS.has(toolRef.current)) {
+    if (
+      measureArmedRef.current
+      && draftRef.current
+      && startPt.current
+      && lastPt.current
+      && SHAPE_TOOLS.has(toolRef.current)
+    ) {
       let shape = applyMeasureToShape(
         { ...draftRef.current },
         toolRef.current,
@@ -1175,23 +1201,33 @@ export default function EsquemaEditorModal({
           )}
           <button
             type="button"
-            style={ghost(t)}
             title="Copiar selección (Ctrl/⌘+C)"
+            aria-label="Copiar selección"
             disabled={!selectedId || selectedObj?.type === 'image'}
             onClick={() => copySelected()}
+            style={{ ...iconBtn(t, false), opacity: (!selectedId || selectedObj?.type === 'image') ? 0.4 : 1 }}
           >
-            Copiar
+            <IconCopiar />
           </button>
           <button
             type="button"
-            style={ghost(t)}
             title="Pegar (Ctrl/⌘+V)"
+            aria-label="Pegar"
             disabled={!hasClipboard}
             onClick={() => pasteClipboard()}
+            style={{ ...iconBtn(t, false), opacity: hasClipboard ? 1 : 0.4 }}
           >
-            Pegar
+            <IconPegar />
           </button>
-          <button type="button" style={ghost(t)} onClick={clearAll}>Limpiar</button>
+          <button
+            type="button"
+            title="Limpiar lienzo"
+            aria-label="Limpiar lienzo"
+            onClick={clearAll}
+            style={iconBtn(t, false)}
+          >
+            <IconLimpiar />
+          </button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
             <button type="button" disabled={busy || !dirty} style={{ ...primary(t), opacity: dirty ? 1 : 0.45 }} onClick={guardar}>
@@ -1220,7 +1256,10 @@ export default function EsquemaEditorModal({
                   min={1}
                   step={1}
                   value={measureW}
-                  onChange={(e) => setMeasureW(e.target.value)}
+                  onChange={(e) => {
+                    setMeasureW(e.target.value)
+                    armMeasureFromInputs(e.target.value, measureHRef.current)
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
@@ -1228,7 +1267,7 @@ export default function EsquemaEditorModal({
                     }
                   }}
                   placeholder="ej. 120"
-                  title="Ancho (eje X) en unidades de pantalla"
+                  title="Ancho (eje X). Solo restringe el trazo si usted lo digita."
                   style={{
                     width: 72, padding: '5px 8px', borderRadius: 6,
                     border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
@@ -1247,7 +1286,10 @@ export default function EsquemaEditorModal({
                   min={1}
                   step={1}
                   value={measureH}
-                  onChange={(e) => setMeasureH(e.target.value)}
+                  onChange={(e) => {
+                    setMeasureH(e.target.value)
+                    armMeasureFromInputs(measureWRef.current, e.target.value)
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
@@ -1255,7 +1297,7 @@ export default function EsquemaEditorModal({
                     }
                   }}
                   placeholder="ej. 80"
-                  title="Alto (eje Y / eje menor) en unidades de pantalla"
+                  title="Alto (eje Y). Solo restringe el trazo si usted lo digita."
                   style={{
                     width: 72, padding: '5px 8px', borderRadius: 6,
                     border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
@@ -1277,7 +1319,10 @@ export default function EsquemaEditorModal({
                 min={1}
                 step={1}
                 value={measureW}
-                onChange={(e) => setMeasureW(e.target.value)}
+                onChange={(e) => {
+                  setMeasureW(e.target.value)
+                  armMeasureFromInputs(e.target.value, measureHRef.current)
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
@@ -1285,7 +1330,7 @@ export default function EsquemaEditorModal({
                   }
                 }}
                 placeholder="ej. 120"
-                title="Longitud (línea/flecha) o ancho (triángulo), en unidades de pantalla"
+                title="Longitud o ancho. Solo restringe el trazo si usted lo digita."
                 style={{
                   width: 88, padding: '5px 8px', borderRadius: 6,
                   border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
@@ -1310,17 +1355,13 @@ export default function EsquemaEditorModal({
             Aplicar a selección
           </button>
           <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, flex: '1 1 220px', lineHeight: 1.35 }}>
-            {needsBoxMeasure
-              ? (parsePositive(measureW) || parsePositive(measureH)
-                ? `Rect/elipse: ancho ${measureW || 'arrastre'} × alto ${measureH || 'arrastre'} u.p.`
-                : 'Rectángulo/elipse: digite ancho y alto independientes (p. ej. 120 × 80).')
+            {measureArmed && (parsePositive(measureW) || parsePositive(measureH))
+              ? (needsBoxMeasure
+                ? `Medida activa al dibujar: ${measureW || 'arrastre'} × ${measureH || 'arrastre'} u.p. (borre los campos para trazo libre).`
+                : `Medida activa al dibujar: ${measureW} u.p. (borre el campo para trazo libre).`)
               : (selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type)
-                ? (parsePositive(measureW)
-                  ? `Figura seleccionada: pulse «Aplicar a selección» o Enter (${measureW} u.p.).`
-                  : 'Figura seleccionada: digite el valor y pulse «Aplicar a selección».')
-                : (parsePositive(measureW)
-                  ? `Al dibujar se usará ${measureW} u.p. automáticamente.`
-                  : 'Digite medida, dibuje, o seleccione y aplique. Manijas = redimensionar. Snap: extremo/medio/⊥.'))}
+                ? 'Figura seleccionada: digite o ajuste el valor y pulse «Aplicar a selección». El trazo nuevo sigue libre.'
+                : 'Trazo libre por defecto. Digite una medida solo si desea fijarla. Snap: acérquese a extremo/medio/⊥.')}
             {liveMeasure ? ` · Arrastre actual: ${liveMeasure}` : ''}
           </span>
         </div>
@@ -1364,8 +1405,8 @@ export default function EsquemaEditorModal({
           )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Zoom: rueda/scroll o pellizco. Copiar/pegar: Ctrl/⌘+C / V o botones. Selección: manijas para redimensionar.
-          Snap al dibujar: extremo (círculo), medio (cuadrado), perpendicular (rombo). Dimensiones rect/elipse: ancho × alto.
+          Zoom: rueda/scroll o pellizco. Copiar/pegar/limpiar: iconos o Ctrl/⌘+C / V. Selección: manijas para redimensionar.
+          Trazo libre por defecto. Medida y snap (extremo/medio/⊥) solo si usted los busca; acérquese al punto guía para enganchar.
         </div>
       </div>
     </div>
@@ -1805,3 +1846,30 @@ function IconTriangulo() { return <svg {...iconProps()}><path d="M12 4 21 19H3Z"
 function IconHatch() { return <svg {...iconProps()}><path d="M4 20 20 4" /><path d="M4 14 14 4" /><path d="M10 20 20 10" /></svg> }
 function IconMover() { return <svg {...iconProps()}><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="M15 19 12 22l-3-3" /><path d="M19 9 22 12l-3 3" /><path d="M2 12h20" /><path d="M12 2v20" /></svg> }
 function IconUndo() { return <svg {...iconProps()}><path d="M3 7v6h6" /><path d="M3 13a9 9 0 1 0 3-7.7L3 7" /></svg> }
+function IconCopiar() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="9" y="9" width="11" height="11" rx="1.5" />
+      <path d="M5 15V5a1 1 0 0 1 1-1h10" />
+    </svg>
+  )
+}
+function IconPegar() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M8 4h2a2 2 0 0 1 4 0h2a1 1 0 0 1 1 1v2H7V5a1 1 0 0 1 1-1Z" />
+      <path d="M7 7h10v13H7Z" />
+    </svg>
+  )
+}
+function IconLimpiar() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M7 7v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  )
+}
