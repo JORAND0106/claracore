@@ -83,6 +83,19 @@ def test_sync_ideas_persists_quien_dijo(monkeypatch):
     assert store["last_insert"]["acta_id"] == 7
 
 
+def test_sync_ideas_acepta_alias_interviniente(monkeypatch):
+    store = {"ideas": [], "_seq": 10}
+    sb = _FakeSB(store)
+    _SCHEMA_CAPS["idea_quien_dijo"] = True
+    monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: True)
+
+    _sync_ideas(sb, 7, [
+        {"texto": "Idea", "interviniente": " Luis Gómez "},
+    ])
+
+    assert store["last_insert"]["quien_dijo"] == "Luis Gómez"
+
+
 def test_sync_ideas_omits_quien_cuando_schema_ausente(monkeypatch):
     store = {"ideas": [], "_seq": 10}
     sb = _FakeSB(store)

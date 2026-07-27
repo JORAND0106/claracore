@@ -136,7 +136,7 @@ def generar_pdf_acta(
         quien = (idea.get("quien_dijo") or "").strip()
         quien_line = (
             f"<div style='font-size:8.5pt;color:#64748b;margin:2pt 0 4pt;'>"
-            f"Quién dijo: {_esc(quien)}</div>"
+            f"Interviniente: {_esc(quien)}</div>"
             if quien else ""
         )
         ideas_html += (
