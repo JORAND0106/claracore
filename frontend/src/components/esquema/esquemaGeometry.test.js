@@ -63,4 +63,15 @@ describe('esquemaGeometry', () => {
     const hit = findSnap({ x: 20, y: 20 }, objs, { threshold: 6 })
     assert.equal(hit, null)
   })
+
+  it('texto resize keeps opposite corner', () => {
+    const origin = { type: 'texto', x: 10, y: 20, w: 100, h: 40, text: 'Hi' }
+    const next = applyResizeHandle(origin, 'se', { x: 150, y: 90 })
+    assert.equal(next.x, 10)
+    assert.equal(next.y, 20)
+    assert.equal(next.w, 140)
+    assert.equal(next.h, 70)
+    const handles = getResizeHandles(origin)
+    assert.equal(handles.length, 8)
+  })
 })

@@ -36,6 +36,7 @@ const TOOLS = [
   { id: 'elipse', label: 'Elipse', Icon: IconElipse },
   { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
   { id: 'tabla', label: 'Tabla', Icon: IconTabla },
+  { id: 'texto', label: 'Texto', Icon: IconTexto },
   { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
   { id: 'mover', label: 'Mover / rotar', Icon: IconMover },
 ]
@@ -54,6 +55,22 @@ function createTablaAt(x, y, rows = 2, cols = 3) {
     cols: c,
     cells: Array.from({ length: r }, () => Array.from({ length: c }, () => '')),
     color: '#1e293b',
+    rotation: 0,
+  }
+}
+
+/** Caja de texto libre sobre el lienzo (edición vía overlay HTML nativo). */
+function createTextoAt(x, y, color = '#1e293b') {
+  return {
+    id: uid(),
+    type: 'texto',
+    x,
+    y,
+    w: 180,
+    h: 56,
+    text: '',
+    color: color || '#1e293b',
+    fontSize: 16,
     rotation: 0,
   }
 }
@@ -167,6 +184,11 @@ export default function EsquemaEditorModal({
     && (tool === 'seleccion' || tool === 'tabla')
     && !selectedObj.rotation
   )
+  const editingTexto = (
+    selectedObj?.type === 'texto'
+    && (tool === 'seleccion' || tool === 'texto')
+    && !selectedObj.rotation
+  )
   const needsBoxMeasure = (
     BOX_TOOLS.has(tool)
     || (selectedObj && BOX_TOOLS.has(selectedObj.type))
@@ -203,12 +225,15 @@ export default function EsquemaEditorModal({
     ctx.scale(zoomRef.current, zoomRef.current)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
-    const hideTablaTextId = (
-      toolRef.current === 'seleccion' || toolRef.current === 'tabla'
+    const hideOverlayTextId = (
+      toolRef.current === 'seleccion'
+      || toolRef.current === 'tabla'
+      || toolRef.current === 'texto'
     ) ? selectedId : null
     for (const obj of list) {
       drawObject(ctx, obj, obj.id === selectedId, {
-        skipTablaText: obj.type === 'tabla' && obj.id === hideTablaTextId,
+        skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTextId,
+        skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
       })
     }
@@ -602,6 +627,24 @@ export default function EsquemaEditorModal({
       return
     }
 
+    if (currentTool === 'texto') {
+      const hit = hitTest(p)
+      if (hit?.type === 'texto') {
+        setSelectedId(hit.id)
+        drawing.current = false
+        redraw()
+        return
+      }
+      pushHistory()
+      const box = createTextoAt(p.x, p.y, colorRef.current)
+      objectsRef.current = [...objectsRef.current, box]
+      setSelectedId(box.id)
+      setDirty(true)
+      drawing.current = false
+      redraw()
+      return
+    }
+
     if (currentTool === 'mover') {
       // Requiere selección previa con la herramienta «Seleccionar»
       const selId = selectedIdRef.current
@@ -612,8 +655,8 @@ export default function EsquemaEditorModal({
         return
       }
       const center = objectCenter(sel)
-      // Las tablas se mueven; la rotación se omite para no desalinear el overlay de celdas
-      const rotating = (e.altKey || e.shiftKey) && sel.type !== 'tabla'
+      // Tabla/texto: sin rotación para no desalinear el overlay HTML de edición
+      const rotating = (e.altKey || e.shiftKey) && sel.type !== 'tabla' && sel.type !== 'texto'
       dragRef.current = {
         id: sel.id,
         mode: rotating ? 'rotate' : 'move',
@@ -1376,8 +1419,9 @@ export default function EsquemaEditorModal({
                 || (tool === 'paneo' ? 'grab'
                   : tool === 'seleccion' ? 'default'
                     : tool === 'mover' ? 'move'
-                      : tool === 'hatch' || tool === 'tabla' ? 'cell'
-                        : 'crosshair'),
+                      : tool === 'texto' ? 'text'
+                        : tool === 'hatch' || tool === 'tabla' ? 'cell'
+                          : 'crosshair'),
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -1403,10 +1447,25 @@ export default function EsquemaEditorModal({
               }}
             />
           )}
+          {editingTexto && selectedObj && (
+            <TextoOverlay
+              key={`${selectedObj.id}-${selectedObj.w}-${selectedObj.h}-${zoomPct}`}
+              obj={selectedObj}
+              pan={panRef.current}
+              zoom={zoomRef.current}
+              canvasEl={canvasRef.current}
+              onTextChange={(text) => {
+                objectsRef.current = objectsRef.current.map((o) => (
+                  o.id === selectedObj.id ? { ...o, text } : o
+                ))
+                setDirty(true)
+              }}
+            />
+          )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Zoom: rueda/scroll o pellizco. Copiar/pegar/limpiar: iconos o Ctrl/⌘+C / V. Selección: manijas para redimensionar.
-          Trazo libre por defecto. Medida y snap (extremo/medio/⊥) solo si usted los busca; acérquese al punto guía para enganchar.
+          Zoom: rueda/scroll o pellizco. Texto: icono «T» → toque el lienzo → escriba (mayúsculas según su teclado).
+          Copiar/pegar/limpiar: iconos o Ctrl/⌘+C / V. Selección: manijas para redimensionar.
         </div>
       </div>
     </div>
@@ -1450,6 +1509,25 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, w + 8, h + 8)
+      ctx.setLineDash([])
+      drawResizeHandles(ctx, obj, opts.zoom || 1)
+    }
+    ctx.restore()
+    return
+  }
+  if (obj.type === 'texto') {
+    const center = objectCenter(obj)
+    if (obj.rotation) {
+      ctx.translate(center.x, center.y)
+      ctx.rotate(obj.rotation)
+      ctx.translate(-center.x, -center.y)
+    }
+    drawTexto(ctx, obj, { skipText: !!opts.skipTextoText })
+    if (selected) {
+      ctx.strokeStyle = '#2563eb'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
       ctx.setLineDash([])
       drawResizeHandles(ctx, obj, opts.zoom || 1)
     }
@@ -1628,6 +1706,64 @@ function drawTabla(ctx, obj, { skipText = false } = {}) {
   ctx.restore()
 }
 
+function wrapTextoLines(ctx, text, maxWidth) {
+  const raw = String(text ?? '')
+  if (!raw) return []
+  const paragraphs = raw.split('\n')
+  const lines = []
+  for (const para of paragraphs) {
+    if (!para) {
+      lines.push('')
+      continue
+    }
+    const words = para.split(/(\s+)/)
+    let line = ''
+    for (const word of words) {
+      const trial = line + word
+      if (line && ctx.measureText(trial).width > maxWidth) {
+        lines.push(line)
+        line = word.trimStart()
+      } else {
+        line = trial
+      }
+    }
+    lines.push(line)
+  }
+  return lines
+}
+
+function drawTexto(ctx, obj, { skipText = false } = {}) {
+  const x = obj.x || 0
+  const y = obj.y || 0
+  const w = Math.max(24, obj.w || 180)
+  const h = Math.max(20, obj.h || 56)
+  const fontSize = Math.max(10, obj.fontSize || 16)
+  ctx.save()
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([3, 3])
+  ctx.strokeRect(x, y, w, h)
+  ctx.setLineDash([])
+  if (!skipText) {
+    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.font = `${fontSize}px sans-serif`
+    ctx.textBaseline = 'top'
+    ctx.textAlign = 'left'
+    const pad = 4
+    const lines = wrapTextoLines(ctx, obj.text, Math.max(8, w - pad * 2))
+    const lineH = fontSize * 1.25
+    let yy = y + pad
+    const maxY = y + h - pad
+    for (const line of lines) {
+      if (yy + lineH > maxY + fontSize * 0.25) break
+      ctx.fillText(line, x + pad, yy)
+      yy += lineH
+    }
+  }
+  ctx.restore()
+}
+
 function objectCenter(obj) {
   if (obj.type === 'stroke') {
     const pts = obj.points || []
@@ -1640,7 +1776,7 @@ function objectCenter(obj) {
     const { w, h } = tablaSize(obj)
     return { x: (obj.x || 0) + w / 2, y: (obj.y || 0) + h / 2 }
   }
-  if (obj.type === 'hatchRegion') {
+  if (obj.type === 'texto' || obj.type === 'hatchRegion') {
     return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
   }
   if (obj.type === 'image') return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
@@ -1662,7 +1798,7 @@ function objectBounds(obj) {
     const { w, h } = tablaSize(obj)
     return { x: obj.x || 0, y: obj.y || 0, w, h }
   }
-  if (obj.type === 'hatchRegion') {
+  if (obj.type === 'texto' || obj.type === 'hatchRegion') {
     return { x: obj.x || 0, y: obj.y || 0, w: obj.w || 0, h: obj.h || 0 }
   }
   if (obj.x1 == null) return null
@@ -1682,7 +1818,7 @@ function translateObject(obj, dx, dy) {
   if (obj.type === 'stroke') {
     return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }
   }
-  if (obj.type === 'tabla' || obj.type === 'hatchRegion') {
+  if (obj.type === 'tabla' || obj.type === 'hatchRegion' || obj.type === 'texto') {
     return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   }
   if (obj.type === 'image') {
@@ -1766,6 +1902,89 @@ function TablaOverlay({ obj, pan, zoom = 1, canvasEl, onCellChange }) {
   )
 }
 
+/**
+ * Overlay de texto: <textarea> nativo para que Shift/Bloq Mayús / teclado en pantalla
+ * y la capitalización del SO se apliquen sin transformación del editor.
+ */
+function TextoOverlay({ obj, pan, zoom = 1, canvasEl, onTextChange }) {
+  const ref = useRef(null)
+  const [value, setValue] = useState(() => String(obj?.text ?? ''))
+
+  useEffect(() => {
+    setValue(String(obj?.text ?? ''))
+  }, [obj.id])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return undefined
+    const t = window.setTimeout(() => {
+      el.focus()
+      const len = el.value.length
+      try { el.setSelectionRange(len, len) } catch { /* ignore */ }
+    }, 30)
+    return () => window.clearTimeout(t)
+  }, [obj.id])
+
+  if (!obj || !canvasEl) return null
+  const z = zoom || 1
+  const w = Math.max(24, obj.w || 180)
+  const h = Math.max(20, obj.h || 56)
+  const fontSize = Math.max(10, (obj.fontSize || 16) * z)
+  const left = (canvasEl.offsetLeft || 0) + (pan?.x || 0) + (obj.x || 0) * z
+  const top = (canvasEl.offsetTop || 0) + (pan?.y || 0) + (obj.y || 0) * z
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left,
+        top,
+        width: w * z,
+        height: h * z,
+        zIndex: 2,
+        pointerEvents: 'auto',
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <textarea
+        ref={ref}
+        value={value}
+        // Entrada fiel al teclado del dispositivo: sin text-transform ni forzar casing.
+        // autoCorrect off evita correcciones no deseadas; autoCapitalize sin forzar
+        // (omitido) deja que el SO móvil aplique su propia capitalización si el usuario la usa.
+        autoCorrect="off"
+        spellCheck={false}
+        enterKeyHint="enter"
+        onChange={(e) => {
+          const text = e.target.value
+          setValue(text)
+          onTextChange(text)
+        }}
+        placeholder="Escriba aquí…"
+        style={{
+          width: '100%',
+          height: '100%',
+          boxSizing: 'border-box',
+          margin: 0,
+          padding: `${4 * z}px`,
+          border: '1px solid #93c5fd',
+          borderRadius: 4,
+          background: 'rgba(255,255,255,0.96)',
+          color: obj.color || '#0f172a',
+          fontSize,
+          fontFamily: 'sans-serif',
+          lineHeight: 1.25,
+          resize: 'none',
+          textTransform: 'none',
+          WebkitTextFillColor: obj.color || '#0f172a',
+          outline: 'none',
+          overflow: 'auto',
+        }}
+      />
+    </div>
+  )
+}
+
 function primary(t) {
   return { border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)' }
 }
@@ -1824,6 +2043,15 @@ function IconTabla() {
       <path d="M3 15h18" />
       <path d="M9 4v16" />
       <path d="M15 4v16" />
+    </svg>
+  )
+}
+function IconTexto() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 5h16" />
+      <path d="M12 5v14" />
+      <path d="M8 19h8" />
     </svg>
   )
 }
