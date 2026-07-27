@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAnchoredDropdown } from './useAnchoredDropdown'
 
@@ -8,16 +8,21 @@ import { useAnchoredDropdown } from './useAnchoredDropdown'
  *
  * Sugerencias en portal (fixed) para no quedar recortadas por overflow:auto
  * del modal de acta (pestaña Encabezado).
+ * Los fallos de red/CORS de geocoders externos se silencian (no rompen el acta).
  */
 export default function UbicacionAutocomplete({ t, value, onChange, style }) {
+  const listId = useId()
   const [q, setQ] = useState(value || '')
   const [opts, setOpts] = useState([])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [highlight, setHighlight] = useState(-1)
   const timer = useRef(null)
+  const abortRef = useRef(null)
   const wrap = useRef(null)
   const inputRef = useRef(null)
   const listRef = useRef(null)
+  const reqSeq = useRef(0)
 
   const listOpen = open && opts.length > 0
   const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 280 })
@@ -30,36 +35,98 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
       setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      if (timer.current) clearTimeout(timer.current)
+      try { abortRef.current?.abort() } catch { /* ignore */ }
+    }
   }, [])
+
+  useEffect(() => {
+    setHighlight(-1)
+  }, [q, open, opts.length])
+
+  useEffect(() => {
+    if (highlight < 0 || !listRef.current) return
+    const el = listRef.current.querySelector(`[data-opt-idx="${highlight}"]`)
+    try { el?.scrollIntoView({ block: 'nearest' }) } catch { /* ignore */ }
+  }, [highlight])
+
+  const pick = (o) => {
+    setQ(o.label)
+    onChange?.(o.label, o)
+    setOpen(false)
+    setHighlight(-1)
+  }
 
   const buscar = (text) => {
     setQ(text)
     onChange?.(text)
     if (timer.current) clearTimeout(timer.current)
+    try { abortRef.current?.abort() } catch { /* ignore */ }
     if (!text || text.trim().length < 2) {
       setOpts([])
       setOpen(false)
+      setBusy(false)
       return
     }
     timer.current = setTimeout(async () => {
+      const seq = ++reqSeq.current
+      const ac = typeof AbortController !== 'undefined' ? new AbortController() : null
+      abortRef.current = ac
       setBusy(true)
       try {
-        const list = await searchPlacesColombia(text.trim())
+        const list = await searchPlacesColombia(text.trim(), ac?.signal)
+        if (seq !== reqSeq.current) return
         setOpts(list)
         setOpen(list.length > 0)
-      } catch {
+      } catch (e) {
+        if (e?.name === 'AbortError') return
+        if (seq !== reqSeq.current) return
         setOpts([])
       } finally {
-        setBusy(false)
+        if (seq === reqSeq.current) setBusy(false)
       }
     }, 280)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape' && open) {
+      e.preventDefault()
+      setOpen(false)
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open && opts.length) setOpen(true)
+      setHighlight((h) => {
+        const max = Math.max(0, opts.length - 1)
+        return h < 0 ? 0 : Math.min(max, h + 1)
+      })
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open && opts.length) setOpen(true)
+      setHighlight((h) => {
+        const max = Math.max(0, opts.length - 1)
+        if (h < 0) return max
+        return Math.max(0, h - 1)
+      })
+      return
+    }
+    if (e.key === 'Enter' && listOpen && highlight >= 0 && opts[highlight]) {
+      e.preventDefault()
+      pick(opts[highlight])
+    }
   }
 
   const listbox = listOpen && dropdownStyle && typeof document !== 'undefined'
     ? createPortal(
       <div
         ref={listRef}
+        id={listId}
+        role="listbox"
         style={{
           ...dropdownStyle,
           background: t.bgCard,
@@ -70,19 +137,22 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
           WebkitOverflowScrolling: 'touch',
         }}
       >
-        {opts.map((o) => (
+        {opts.map((o, idx) => (
           <button
             key={o.id}
             type="button"
+            role="option"
+            data-opt-idx={idx}
+            aria-selected={idx === highlight}
             onPointerDown={(e) => {
               e.preventDefault()
-              setQ(o.label)
-              onChange?.(o.label, o)
-              setOpen(false)
+              pick(o)
             }}
+            onMouseEnter={() => setHighlight(idx)}
             style={{
               display: 'block', width: '100%', textAlign: 'left', border: 'none',
-              background: 'transparent', padding: '8px 10px', cursor: 'pointer',
+              background: idx === highlight ? `${t.primary}28` : 'transparent',
+              padding: '8px 10px', cursor: 'pointer',
               color: t.text, fontSize: 'var(--cc-sm)', borderBottom: `1px solid ${t.border}`,
             }}
           >
@@ -100,10 +170,15 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
         ref={inputRef}
         value={q}
         onChange={(e) => buscar(e.target.value)}
+        onKeyDown={onKeyDown}
         onFocus={() => { if (opts.length) setOpen(true) }}
         placeholder="Buscar dirección, barrio, municipio o lugar en Colombia…"
         style={style}
         autoComplete="off"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={listOpen}
+        aria-controls={listId}
       />
       {busy && (
         <div style={{ position: 'absolute', right: 10, top: 10, fontSize: 'var(--cc-xs)', color: t.textMuted }}>…</div>
@@ -125,32 +200,39 @@ function dedupe(list) {
   return out
 }
 
-async function searchPlacesColombia(query) {
+async function safeGeocode(fn) {
+  try {
+    return await fn()
+  } catch {
+    return []
+  }
+}
+
+async function searchPlacesColombia(query, signal) {
   const q = query.includes('Colombia') || query.includes('colombia')
     ? query
     : `${query}, Colombia`
-  const results = await Promise.allSettled([
-    searchMapbox(q),
-    searchNominatim(q),
-    searchPhoton(q),
+  const results = await Promise.all([
+    safeGeocode(() => searchMapbox(q, signal)),
+    safeGeocode(() => searchNominatim(q, signal)),
+    safeGeocode(() => searchPhoton(q, signal)),
   ])
   const merged = []
   for (const r of results) {
-    if (r.status === 'fulfilled' && Array.isArray(r.value)) merged.push(...r.value)
+    if (Array.isArray(r)) merged.push(...r)
   }
   return dedupe(merged).slice(0, 15)
 }
 
-async function searchMapbox(query) {
+async function searchMapbox(query, signal) {
   const token = import.meta.env.VITE_MAPBOX_TOKEN
   if (!token) return []
-  // Sin filtro types restrictivo para reconocer más lugares (vías, veredas, POI, regiones).
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`
     + `?access_token=${encodeURIComponent(token)}`
     + `&country=co&language=es&limit=10`
-    + `&proximity=-74.0721,4.7110` // Bogotá como sesgo geográfico
-  const r = await fetch(url)
-  if (!r.ok) throw new Error('geocode')
+    + `&proximity=-74.0721,4.7110`
+  const r = await fetch(url, signal ? { signal } : undefined)
+  if (!r.ok) return []
   const j = await r.json()
   return (j.features || []).map((f) => ({
     id: `mb-${f.id}`,
@@ -160,13 +242,14 @@ async function searchMapbox(query) {
   }))
 }
 
-async function searchNominatim(query) {
+async function searchNominatim(query, signal) {
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}`
     + `&format=json&addressdetails=1&limit=10&countrycodes=co&accept-language=es`
   const r = await fetch(url, {
     headers: { 'Accept-Language': 'es', 'User-Agent': 'ClaraCore/1.0 (seguimiento actas)' },
+    ...(signal ? { signal } : {}),
   })
-  if (!r.ok) throw new Error('nominatim')
+  if (!r.ok) return []
   const j = await r.json()
   return (Array.isArray(j) ? j : []).map((f) => ({
     id: `nom-${f.place_id}`,
@@ -176,11 +259,11 @@ async function searchNominatim(query) {
   }))
 }
 
-async function searchPhoton(query) {
+async function searchPhoton(query, signal) {
   const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}`
     + `&limit=10&lang=es&lat=4.711&lon=-74.072`
-  const r = await fetch(url)
-  if (!r.ok) throw new Error('photon')
+  const r = await fetch(url, signal ? { signal } : undefined)
+  if (!r.ok) return []
   const j = await r.json()
   return (j.features || [])
     .filter((f) => {

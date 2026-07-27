@@ -57,10 +57,8 @@ export default function IdeaClaraModal({
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
       }}
-      onClick={onClose}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(720px, 100%)',
           maxHeight: '90vh',

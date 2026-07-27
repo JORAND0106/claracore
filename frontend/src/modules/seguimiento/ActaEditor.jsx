@@ -63,6 +63,76 @@ function mapAsistenteFromApi(x, prev = null) {
   }
 }
 
+function isAbortLike(e) {
+  const name = e?.name || ''
+  const msg = String(e?.message || e || '')
+  return name === 'AbortError' || name === 'TimeoutError'
+    || /aborted|timeout|signal is aborted/i.test(msg)
+}
+
+function friendlyFetchError(e, fallback = 'Error de red') {
+  if (isAbortLike(e)) return 'La solicitud tardó demasiado. Intente de nuevo.'
+  const msg = String(e?.message || '')
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+    return 'No se pudo conectar con el servidor. Verifique su conexión e intente de nuevo.'
+  }
+  return msg || fallback
+}
+
+/** Tras guardar: aporta IDs del servidor sin pisar el texto local ni filas vacías. */
+function mergeAsistenteIds(local = [], server = []) {
+  if (!Array.isArray(server) || !server.length) return local
+  const used = new Set()
+  return local.map((row) => {
+    let match = null
+    if (row.id != null) match = server.find((s) => Number(s.id) === Number(row.id))
+    if (!match && row.usuario_id) {
+      match = server.find((s) => !used.has(s.id) && Number(s.usuario_id) === Number(row.usuario_id))
+    }
+    if (!match && (row.nombre || '').trim()) {
+      const n = row.nombre.trim().toLowerCase()
+      match = server.find((s) => !used.has(s.id) && String(s.nombre || '').trim().toLowerCase() === n)
+    }
+    if (!match) return row
+    used.add(match.id)
+    return { ...row, id: match.id, externo_id: row.externo_id ?? match.externo_id ?? null }
+  })
+}
+
+function mergeIdeaIds(local = [], server = []) {
+  if (!Array.isArray(server) || !server.length) return local
+  const used = new Set()
+  return local.map((row, idx) => {
+    let match = null
+    if (row.id != null) match = server.find((s) => Number(s.id) === Number(row.id))
+    if (!match && (row.texto || '').trim()) {
+      const t = row.texto.trim()
+      match = server.find((s) => !used.has(s.id) && String(s.texto || '').trim() === t)
+    }
+    if (!match && server[idx] && !used.has(server[idx].id)) match = server[idx]
+    if (!match) return row
+    used.add(match.id)
+    return { ...row, id: match.id, orden: match.orden ?? row.orden }
+  })
+}
+
+function mergeApartadoIds(local = [], server = []) {
+  if (!Array.isArray(server) || !server.length) return local
+  const used = new Set()
+  return local.map((row, idx) => {
+    let match = null
+    if (row.id != null) match = server.find((s) => Number(s.id) === Number(row.id))
+    if (!match && (row.titulo || '').trim()) {
+      const t = row.titulo.trim().toLowerCase()
+      match = server.find((s) => !used.has(s.id) && String(s.titulo || '').trim().toLowerCase() === t)
+    }
+    if (!match && server[idx] && !used.has(server[idx].id)) match = server[idx]
+    if (!match) return row
+    used.add(match.id)
+    return { ...row, id: match.id }
+  })
+}
+
 function parseOrdenDia(raw) {
   if (Array.isArray(raw)) {
     return raw.map((x, i) => (
@@ -122,19 +192,34 @@ export default function ActaEditor({
   const soloLectura = form.estado === 'firmada'
   /** Evita re-hidratar desde API cuando el padre pasa actaId tras el primer guardado local. */
   const skipServerHydrateRef = useRef(false)
+  /** Acta ya hidratada en esta sesión del popup — no volver a pisar el formulario. */
+  const hydratedActaIdRef = useRef(null)
+  const apiRef = useRef(api)
+  apiRef.current = api
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      const client = apiRef.current
       if (skipServerHydrateRef.current) {
         skipServerHydrateRef.current = false
+        hydratedActaIdRef.current = actaId
         if (!cancelled) setLoading(false)
+        return
+      }
+      // Misma acta ya cargada: no refrescar (evita pérdida de datos por re-render / nueva ref de api).
+      if (actaId != null && hydratedActaIdRef.current === actaId) {
+        if (!cancelled) setLoading(false)
+        return
+      }
+      // Nueva acta en blanco: hidratar metadatos una sola vez por montaje.
+      if (actaId == null && hydratedActaIdRef.current === 'new') {
         return
       }
       try {
         if (actaId) {
           setLoading(true)
-          const a = await api.getActa(actaId)
+          const a = await client.getActa(actaId)
           if (cancelled) return
           setLocalActaId(a.id)
           setConsecutivo(a.consecutivo)
@@ -166,25 +251,36 @@ export default function ActaEditor({
               : [emptyApartado()],
             estado: (a.estado === 'en_firma' || a.estado === 'cerrada') ? 'realizada' : (a.estado || 'borrador'),
           })
-          const abiertos = await api.compromisosAbiertos(actaId)
-          if (!cancelled) setPrevios(abiertos || [])
+          hydratedActaIdRef.current = a.id
+          try {
+            const abiertos = await client.compromisosAbiertos(actaId)
+            if (!cancelled) setPrevios(abiertos || [])
+          } catch (e) {
+            if (!cancelled && !isAbortLike(e)) {
+              console.warn('[ActaEditor] compromisos abiertos', e?.message || e)
+            }
+          }
         } else {
           const [prox, abiertos] = await Promise.all([
-            api.proximoConsecutivo(),
-            api.compromisosAbiertos(),
+            client.proximoConsecutivo(),
+            client.compromisosAbiertos().catch((e) => {
+              if (!isAbortLike(e)) console.warn('[ActaEditor] compromisos abiertos', e?.message || e)
+              return []
+            }),
           ])
           if (cancelled) return
-          setConsecutivo(prox.consecutivo)
+          setConsecutivo(prox?.consecutivo ?? null)
           setPrevios(abiertos || [])
+          hydratedActaIdRef.current = 'new'
         }
       } catch (e) {
-        if (!cancelled) setError(e.message || 'Error cargando acta')
+        if (!cancelled && !isAbortLike(e)) setError(friendlyFetchError(e, 'Error cargando acta'))
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
-  }, [actaId, api])
+  }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
 
@@ -203,55 +299,49 @@ export default function ActaEditor({
       .map((x) => ({ texto: x.texto.trim(), hecho: !!x.hecho })),
     elaborador_id: formSrc.elaborador_id,
     elaborador_nombre: formSrc.elaborador_nombre,
-    asistentes: formSrc.asistentes.filter((a) => a.nombre.trim()),
-    ideas: formSrc.ideas.filter((i) => (i.texto || '').trim() || i.id),
-    apartados: formSrc.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
+    asistentes: (formSrc.asistentes || [])
+      .filter((a) => (a.nombre || '').trim())
+      .map((a) => ({
+        id: a.id || undefined,
+        nombre: a.nombre.trim(),
+        cargo: (a.cargo || '').trim() || null,
+        entidad: (a.entidad || '').trim() || null,
+        email: (a.email || '').trim() || null,
+        usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
+      })),
+    ideas: (formSrc.ideas || [])
+      .filter((i) => (i.texto || '').trim() || i.id)
+      .map((i) => ({
+        id: i.id || undefined,
+        texto: i.texto || '',
+        orden: i.orden,
+      })),
+    apartados: (formSrc.apartados || [])
+      .filter((a) => (a.titulo || a.contenido || '').trim())
+      .map((a) => ({
+        id: a.id || undefined,
+        titulo: a.titulo || '',
+        contenido: a.contenido || '',
+      })),
     ...extra,
   })
 
   const applySavedActa = (row) => {
     skipServerHydrateRef.current = true
+    hydratedActaIdRef.current = row.id
     setLocalActaId(row.id)
     setConsecutivo(row.consecutivo)
-    setForm((f) => {
-      const prevAs = f.asistentes || []
-      const prevIdeas = f.ideas || []
-      const prevAp = f.apartados || []
-      const prevOrden = f.orden_items || []
-      return {
-        ...f,
-        estado: (row.estado === 'en_firma' || row.estado === 'cerrada') ? 'realizada' : (row.estado || f.estado),
-        tipo_acta: row.tipo_acta || f.tipo_acta || 'interna',
-        elaborador_id: row.elaborador_id,
-        elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
-        asistentes: (row.asistentes || []).length
-          ? row.asistentes.map((x, i) => mapAsistenteFromApi(x, prevAs[i]))
-          : prevAs,
-        ideas: (row.ideas || []).length
-          ? row.ideas.map((x, i) => ({
-            _key: prevIdeas[i]?._key || (x.id != null ? `idea-id-${x.id}` : newRowKey('idea')),
-            id: x.id,
-            texto: x.texto || '',
-            orden: x.orden,
-          }))
-          : prevIdeas,
-        apartados: (row.apartados || []).length
-          ? row.apartados.map((x, i) => ({
-            _key: prevAp[i]?._key || (x.id != null ? `ap-id-${x.id}` : newRowKey('ap')),
-            id: x.id,
-            titulo: x.titulo || '',
-            contenido: x.contenido || '',
-          }))
-          : prevAp,
-        orden_items: (() => {
-          const parsed = parseOrdenDia(row.orden_del_dia)
-          return parsed.map((item, i) => ({
-            ...item,
-            key: prevOrden[i]?.key || item.key || newRowKey('ord'),
-          }))
-        })(),
-      }
-    })
+    // Solo sincroniza metadatos e IDs; no reemplaza el contenido local diligeniado.
+    setForm((f) => ({
+      ...f,
+      estado: (row.estado === 'en_firma' || row.estado === 'cerrada') ? 'realizada' : (row.estado || f.estado),
+      tipo_acta: row.tipo_acta || f.tipo_acta || 'interna',
+      elaborador_id: row.elaborador_id ?? f.elaborador_id,
+      elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
+      asistentes: mergeAsistenteIds(f.asistentes, row.asistentes),
+      ideas: mergeIdeaIds(f.ideas, row.ideas),
+      apartados: mergeApartadoIds(f.apartados, row.apartados),
+    }))
     return row
   }
 
@@ -283,7 +373,7 @@ export default function ActaEditor({
       setOkMsg(msg)
       onSaved?.(row, { stay: true, enviada: estadoExtra === 'realizada' })
     } catch (e) {
-      setError(e.message || 'No se pudo guardar')
+      setError(friendlyFetchError(e, 'No se pudo guardar'))
     } finally {
       setSaving(false)
     }
@@ -319,7 +409,7 @@ export default function ActaEditor({
       const ctx = await ensureReadyForCompromiso(ideaIdx, texto)
       setCompromisoCtx(ctx)
     } catch (e) {
-      setError(e.message || 'No se pudo preparar el compromiso')
+      setError(friendlyFetchError(e, 'No se pudo preparar el compromiso'))
     } finally {
       setSaving(false)
     }
@@ -341,7 +431,7 @@ export default function ActaEditor({
       setTab('acciones')
       setOkMsg('Vista previa generada.')
     } catch (e) {
-      setError(e.message || 'No se pudo generar PDF')
+      setError(friendlyFetchError(e, 'No se pudo generar PDF'))
     } finally {
       setPdfBusy(false)
     }
@@ -358,7 +448,7 @@ export default function ActaEditor({
       const a = await api.getActa(aid)
       applySavedActa(a)
     } catch (e) {
-      setError(e.message || 'No se pudo firmar')
+      setError(friendlyFetchError(e, 'No se pudo firmar'))
     }
   }
 
@@ -377,7 +467,14 @@ export default function ActaEditor({
             {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta)} · elaborador obligatorio
           </div>
         </div>
-        <button type="button" onClick={onCancel} style={ghost(t)}>{asModal ? 'Cerrar' : 'Volver'}</button>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          {(permisos?.crear || permisos?.editar) && !soloLectura && (
+            <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>
+              {saving ? 'Guardando…' : 'Guardar'}
+            </button>
+          )}
+          <button type="button" onClick={onCancel} style={ghost(t)}>{asModal ? 'Cerrar' : 'Volver'}</button>
+        </div>
       </div>
 
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
@@ -877,12 +974,10 @@ export default function ActaEditor({
       <div
         role="dialog"
         aria-modal="true"
-        onClick={onCancel}
         className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
         style={seguimientoModalOverlayStyle(viewportCompact)}
       >
         <div
-          onClick={(e) => e.stopPropagation()}
           className={viewportCompact ? 'cc-seguim-modal-sheet cc-seguim-modal-sheet--acta' : 'cc-seguim-modal-sheet--desktop'}
           style={{
             ...seguimientoModalSheetStyle(viewportCompact, { wide: true }),

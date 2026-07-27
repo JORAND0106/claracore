@@ -13,6 +13,7 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
   })
   const [asignadosIds, setAsignadosIds] = useState([])
   const [q, setQ] = useState('')
+  const [highlight, setHighlight] = useState(-1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -38,6 +39,29 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
   const toggle = (id) => {
     const n = Number(id)
     setAsignadosIds((arr) => (arr.includes(n) ? arr.filter((x) => x !== n) : [...arr, n]))
+  }
+
+  const onSearchKeyDown = (e) => {
+    if (!filtrados.length) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight((h) => {
+        const max = filtrados.length - 1
+        return h < 0 ? 0 : Math.min(max, h + 1)
+      })
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight((h) => {
+        const max = filtrados.length - 1
+        if (h < 0) return max
+        return Math.max(0, h - 1)
+      })
+    } else if (e.key === 'Enter' && highlight >= 0 && filtrados[highlight]) {
+      e.preventDefault()
+      toggle(filtrados[highlight].id)
+      setHighlight(-1)
+      setQ('')
+    }
   }
 
   const guardar = async () => {
@@ -76,10 +100,8 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
       aria-modal="true"
       className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
       style={{ ...seguimientoModalOverlayStyle(viewportCompact), zIndex: 12100 }}
-      onClick={onClose}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         className={viewportCompact ? 'cc-seguim-modal-sheet' : 'cc-seguim-modal-sheet--desktop'}
         style={{
           ...seguimientoModalSheetStyle(viewportCompact),
@@ -90,13 +112,16 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
         }}
       >
         <div className={viewportCompact ? 'cc-seguim-compromiso-form cc-seguim-compromiso-form--compact' : 'cc-seguim-compromiso-form'}>
-        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text, marginBottom: 12 }}>
-          Generar compromiso
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>
+            Generar compromiso
+          </div>
+          <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
         </div>
         <Field t={t} label="Quién solicita">
           <select value={form.solicitante_id} onChange={(e) => set('solicitante_id', e.target.value)} style={inp(t)}>
             <option value={usuario?.id || ''}>{nombreUser(usuario)} (yo)</option>
-            {usuarios.map((u) => (
+            {usuarios.filter((u) => !u.es_externo && Number(u.id) > 0).map((u) => (
               <option key={u.id} value={u.id}>{nombreUser(u)}</option>
             ))}
           </select>
@@ -121,20 +146,22 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
           )}
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar usuarios…"
+            onChange={(e) => { setQ(e.target.value); setHighlight(-1) }}
+            onKeyDown={onSearchKeyDown}
+            placeholder="Buscar usuarios… (↑↓ y Enter)"
             style={{ ...inp(t), marginBottom: 6 }}
           />
           <div style={{
             maxHeight: 160, overflow: 'auto', border: `1px solid ${t.border}`,
             borderRadius: 8, background: t.bg || t.bgCard,
           }}>
-            {filtrados.map((u) => (
+            {filtrados.map((u, idx) => (
               <label
                 key={u.id}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
                   borderBottom: `1px solid ${t.border}`, cursor: 'pointer', fontSize: 'var(--cc-sm)', color: t.text,
+                  background: idx === highlight ? `${t.primary}18` : 'transparent',
                 }}
               >
                 <input type="checkbox" checked={asignadosIds.includes(Number(u.id))} onChange={() => toggle(u.id)} />
