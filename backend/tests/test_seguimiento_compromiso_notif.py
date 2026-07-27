@@ -213,6 +213,148 @@ def test_crear_compromiso_asignado_externo(monkeypatch):
     assert "Acta Nº 4" in inserted[0]["solicitante_nombre"]
 
 
+def test_schema_has_no_sticky_false(monkeypatch):
+    """Un False previo no debe bloquear tras migración/reload (solo True es sticky)."""
+    svc._SCHEMA_CAPS["asignado_externo_id"] = False
+    probes = {"n": 0}
+
+    class FakeQ:
+        def select(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            probes["n"] += 1
+            return type("R", (), {"data": []})()
+
+    class FakeSb:
+        def table(self, name):
+            assert name == "seguimiento_item"
+            return FakeQ()
+
+    assert svc._schema_has(FakeSb(), "asignado_externo_id") is True
+    assert probes["n"] == 1
+    assert svc._SCHEMA_CAPS["asignado_externo_id"] is True
+    # Segunda llamada: cache True, sin nuevo probe
+    assert svc._schema_has(FakeSb(), "asignado_externo_id") is True
+    assert probes["n"] == 1
+
+
+def test_ensure_asignado_externo_reprobes_after_reload(monkeypatch):
+    """Tras False, ensure limpia cache, intenta reload y re-sondea."""
+    svc._SCHEMA_CAPS["asignado_externo_id"] = False
+    calls = {"reload": 0, "probe": 0}
+
+    class FakeQ:
+        def select(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            calls["probe"] += 1
+            if calls["probe"] == 1:
+                raise Exception(
+                    "Could not find the 'asignado_externo_id' column of "
+                    "'seguimiento_item' in the schema cache"
+                )
+            return type("R", (), {"data": []})()
+
+    class FakeSb:
+        def table(self, _name):
+            return FakeQ()
+
+    monkeypatch.setattr(
+        svc,
+        "_try_reload_postgrest_schema",
+        lambda _sb: calls.__setitem__("reload", calls["reload"] + 1) or True,
+    )
+
+    ok = svc._ensure_asignado_externo_column(FakeSb())
+    assert ok is True
+    assert calls["reload"] >= 1
+    assert calls["probe"] >= 2
+    assert svc._SCHEMA_CAPS["asignado_externo_id"] is True
+
+
+def test_crear_compromiso_externo_recupera_cache_false(monkeypatch):
+    """Si el proceso había cacheado False, ensure permite crear tras re-probe OK."""
+    inserted = []
+    svc._SCHEMA_CAPS["asignado_externo_id"] = False
+
+    class FakeQ:
+        def __init__(self, name):
+            self.name = name
+            self._payload = None
+
+        def select(self, *_a, **_k):
+            return self
+
+        def insert(self, payload):
+            self._payload = payload
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if self.name == "seguimiento_item" and self._payload:
+                row = {**self._payload, "id": 888}
+                inserted.append(row)
+                return type("R", (), {"data": [row]})()
+            if self.name == "seguimiento_item":
+                # probe select asignado_externo_id
+                return type("R", (), {"data": []})()
+            if self.name == "seguimiento_contacto_externo":
+                return type("R", (), {"data": [{
+                    "id": 55, "nombre": "Ext Contacto", "cargo": "Ing", "email": "e@x.com",
+                }]})()
+            return type("R", (), {"data": []})()
+
+    class FakeSb:
+        def table(self, name):
+            return FakeQ(name)
+
+    monkeypatch.setattr(svc, "get_acta", lambda *_a, **_k: {
+        "id": 1, "consecutivo": 4, "estado": "borrador",
+        "ideas": [{"id": 9, "texto": "Idea"}],
+    })
+    monkeypatch.setattr(svc, "_proximo_consecutivo_item", lambda *_a, **_k: 2)
+    monkeypatch.setattr(svc, "_registrar_evento", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc, "calcular_fecha_limite_gracia",
+        lambda *_a, **_k: __import__("datetime").datetime(2026, 8, 25, tzinfo=__import__("datetime").timezone.utc),
+    )
+    monkeypatch.setattr(svc, "CalendarioNoHabilesCache", lambda **_k: object())
+    monkeypatch.setattr(svc, "make_calendar_loader", lambda _sb: None)
+    monkeypatch.setattr(svc, "_try_reload_postgrest_schema", lambda _sb: False)
+
+    row = svc._crear_un_compromiso(
+        FakeSb(), 5, 1, 9,
+        {
+            "es_externo": True,
+            "asignado_externo_id": 55,
+            "asignado_a_nombre": "Ext Contacto",
+            "solicitante_id": 10,
+            "redaccion": "Seguimiento externo",
+            "fecha_vencimiento": "2026-08-20",
+        },
+        user_id=10,
+    )
+    assert row["id"] == 888
+    assert inserted[0]["asignado_externo_id"] == 55
+    assert svc._SCHEMA_CAPS["asignado_externo_id"] is True
+
+
 def test_notificar_no_auto_si_mismo():
     class FakeSb:
         def table(self, *_a, **_k):

@@ -2576,6 +2576,36 @@ select.cc-dashboard-acta-select--light option {
   grid-template-columns: 1fr !important;
 }
 
+/* Fecha/hora del popup de compromiso: más discretos que un input genérico. */
+.cc-seguim-compromiso-form .cc-seguim-datetime-row {
+  max-width: 360px;
+}
+.cc-seguim-compromiso-form input.cc-seguim-datetime[type="date"],
+.cc-seguim-compromiso-form input.cc-seguim-datetime[type="time"] {
+  appearance: none;
+  -webkit-appearance: none;
+  font-size: var(--cc-sm);
+  font-weight: 400;
+  line-height: 1.25;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.cc-seguim-compromiso-form input.cc-seguim-datetime[type="date"]::-webkit-calendar-picker-indicator,
+.cc-seguim-compromiso-form input.cc-seguim-datetime[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0.45;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 4px;
+}
+.cc-seguim-compromiso-form--compact .cc-seguim-datetime-row {
+  max-width: none;
+}
+
 .cc-seguim-item-detalle--compact .cc-seguim-comentario-row,
 .cc-seguim-modal-sheet .cc-seguim-comentario-row {
   flex-direction: column;
