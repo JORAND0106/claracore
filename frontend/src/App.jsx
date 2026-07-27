@@ -17724,7 +17724,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeExportarAlmacen = esDeveloper || almacenPerm.exportar
   const almacenVerEconomicos = esDeveloper || almacenAcceso.verEconomicos
   const seguimientoAcceso = accesoSeguimiento(usuario, usuario?.contrato_id)
-  const tienePermisoSeguimiento = esDeveloper || (!seguimientoAcceso.bloqueado && seguimientoAcceso.ver)
+  // Seguimiento abierto a todos los roles de obra; Contador sigue fuera (flujo contable).
+  // Borrado definitivo se controla con seguimientoAcceso.eliminar / esDesarrollador.
+  const tienePermisoSeguimiento = !esContador && !!seguimientoAcceso.ver
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
