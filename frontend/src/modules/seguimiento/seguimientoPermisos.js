@@ -1,31 +1,22 @@
-import { esDesarrolladorUsuario, permisoFuncionContrato } from '../../utils/permisosContrato'
+import { esDesarrolladorUsuario } from '../../utils/permisosContrato.js'
 
-const FUNC = 'Seguimiento'
-
-export function accesoSeguimiento(usuario, contratoId) {
-  if (esDesarrolladorUsuario(usuario)) {
-    return {
-      ver: true,
-      crear: true,
-      editar: true,
-      eliminar: true,
-      validar: true,
-      exportar: true,
-      bloqueado: false,
-      esDesarrollador: true,
-      esGerencial: esContratistaGerencial(usuario),
-    }
-  }
-  const p = permisoFuncionContrato(usuario, FUNC, contratoId)
+/**
+ * Acceso al módulo Seguimiento.
+ * Abierto para todos los roles de plataforma (ver/crear/editar/validar/exportar).
+ * Solo «eliminar» (borrado definitivo de actas/tareas) queda exclusivo de Desarrollador.
+ * No depende de la matriz Control de accesos (a diferencia de Almacén, etc.).
+ */
+export function accesoSeguimiento(usuario, _contratoId) {
+  const esDev = esDesarrolladorUsuario(usuario)
   return {
-    ver: !!p?.ver,
-    crear: !!p?.crear,
-    editar: !!p?.editar,
-    eliminar: !!p?.eliminar,
-    validar: !!p?.validar,
-    exportar: !!p?.exportar,
-    bloqueado: !p?.ver,
-    esDesarrollador: false,
+    ver: true,
+    crear: true,
+    editar: true,
+    eliminar: esDev,
+    validar: true,
+    exportar: true,
+    bloqueado: false,
+    esDesarrollador: esDev,
     esGerencial: esContratistaGerencial(usuario),
   }
 }

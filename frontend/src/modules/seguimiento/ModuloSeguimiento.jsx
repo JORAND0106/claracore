@@ -80,7 +80,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       <div style={{ padding: 24 }}>
         <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: 10 }}>Seguimiento</div>
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>
-          Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Seguimiento» (acción Ver).
+          No fue posible abrir el módulo Seguimiento con la sesión actual. Vuelve a iniciar sesión o elige un contrato activo.
         </div>
       </div>
     )

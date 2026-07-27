@@ -1,5 +1,9 @@
 """
-Permisos módulo Seguimiento — fila en `funciones` (nombre «Seguimiento», código SEGUIMIENTO).
+Permisos módulo Seguimiento.
+
+El módulo está abierto a cualquier usuario autenticado (ver/crear/editar/validar/exportar).
+La acción «eliminar» (borrado definitivo de actas e ítems) es exclusiva del rol Desarrollador.
+No depende de la matriz Control de accesos (a diferencia de Almacén de Obra, etc.).
 """
 from __future__ import annotations
 
@@ -9,57 +13,52 @@ from fastapi import HTTPException
 
 SegAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
-_FUNC_NOMBRE = "seguimiento"
 
-
-def _cargo_permiso_seguimiento(current_user, accion: SegAccion) -> bool:
+def _es_desarrollador_seguro(current_user) -> bool:
     try:
-        uid = int(current_user.get("sub"))
-    except (TypeError, ValueError):
-        return False
-    try:
-        from main import _es_desarrollador, supabase, supabase_execute
+        from main import _es_desarrollador
 
-        if _es_desarrollador(current_user):
-            return True
-        urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
-        u = urows[0] if urows else None
-        if not u or u.get("cargo_id") is None:
-            return False
-        cid = int(u["cargo_id"])
-        perms = supabase_execute(
-            lambda: supabase.table("permisos")
-            .select("funcion_id, " + accion)
-            .eq("cargo_id", cid)
-            .execute()
-            .data
-        ) or []
-        fids = [p["funcion_id"] for p in perms if p.get(accion)]
-        if not fids:
-            return False
-        funcs = supabase_execute(
-            lambda: supabase.table("funciones")
-            .select("id, nombre")
-            .in_("id", fids)
-            .execute()
-            .data
-        ) or []
-        want = _FUNC_NOMBRE
-        for f in funcs:
-            if (f.get("nombre") or "").strip().lower() == want:
-                return True
+        return bool(_es_desarrollador(current_user))
+    except Exception:
+        pass
+    try:
+        import seguimiento_service as svc
+
+        return bool(svc.es_desarrollador_seguimiento(current_user))
     except Exception:
         return False
-    return False
+
+
+def _usuario_autenticado(current_user) -> bool:
+    if not current_user:
+        return False
+    sub = current_user.get("sub")
+    return sub is not None and str(sub).strip() != ""
 
 
 def tiene_permiso_seguimiento(current_user, accion: SegAccion) -> bool:
-    return _cargo_permiso_seguimiento(current_user, accion)
+    if not _usuario_autenticado(current_user):
+        return False
+    if _es_desarrollador_seguro(current_user):
+        return True
+    if accion == "eliminar":
+        return False
+    return True
 
 
 def require_permiso_seguimiento(current_user, accion: SegAccion) -> None:
-    if not _cargo_permiso_seguimiento(current_user, accion):
+    if not tiene_permiso_seguimiento(current_user, accion):
+        if accion == "eliminar":
+            raise HTTPException(
+                status_code=403,
+                detail="Solo el rol Desarrollador puede eliminar definitivamente actas o tareas.",
+            )
         raise HTTPException(
             status_code=403,
-            detail=f"No tiene permiso (Seguimiento · {accion}). Configúrelo en Control de accesos.",
+            detail=f"No tiene permiso (Seguimiento · {accion}).",
         )
+
+
+# Compat tests / callers que aún parchean el helper privado de matriz por cargo
+def _cargo_permiso_seguimiento(current_user, accion: SegAccion) -> bool:
+    return tiene_permiso_seguimiento(current_user, accion)

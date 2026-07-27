@@ -22,7 +22,7 @@ def test_es_desarrollador_seguimiento_fallback_sin_main(monkeypatch):
 
 
 def test_permiso_seguimiento_desarrollador_via_helper(monkeypatch):
-    """require/tiene_permiso delegan en _es_desarrollador (acceso total)."""
+    """Desarrollador: acceso total incluyendo eliminar."""
     calls = {"n": 0}
 
     class FakeMain:
@@ -43,7 +43,47 @@ def test_permiso_seguimiento_desarrollador_via_helper(monkeypatch):
     assert perm.tiene_permiso_seguimiento({"sub": "1"}, "ver")
     assert perm.tiene_permiso_seguimiento({"sub": "1"}, "validar")
     assert perm.tiene_permiso_seguimiento({"sub": "1"}, "eliminar")
-    assert calls["n"] >= 3
+    assert calls["n"] >= 1
+
+
+def test_permiso_seguimiento_abierto_todos_roles_excepto_eliminar(monkeypatch):
+    """Cualquier usuario autenticado: ver/crear/editar; eliminar solo Desarrollador."""
+
+    class FakeMain:
+        @staticmethod
+        def _es_desarrollador(_u):
+            return False
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "main", FakeMain)
+    user = {"sub": "42", "rol_nombre": "Interventoría Operativa"}
+    assert perm.tiene_permiso_seguimiento(user, "ver")
+    assert perm.tiene_permiso_seguimiento(user, "crear")
+    assert perm.tiene_permiso_seguimiento(user, "editar")
+    assert perm.tiene_permiso_seguimiento(user, "validar")
+    assert perm.tiene_permiso_seguimiento(user, "exportar")
+    assert not perm.tiene_permiso_seguimiento(user, "eliminar")
+    assert not perm.tiene_permiso_seguimiento(None, "ver")
+    assert not perm.tiene_permiso_seguimiento({}, "ver")
+
+
+def test_require_eliminar_mensaje_desarrollador(monkeypatch):
+    class FakeMain:
+        @staticmethod
+        def _es_desarrollador(_u):
+            return False
+
+    import sys
+    from fastapi import HTTPException
+
+    monkeypatch.setitem(sys.modules, "main", FakeMain)
+    try:
+        perm.require_permiso_seguimiento({"sub": "9"}, "eliminar")
+        assert False, "debía lanzar 403"
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "Desarrollador" in exc.detail
 
 
 def _fake_bandeja_q(rows):
