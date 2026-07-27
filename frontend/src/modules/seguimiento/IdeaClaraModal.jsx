@@ -17,6 +17,7 @@ export default function IdeaClaraModal({
   const [historial, setHistorial] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [copiado, setCopiado] = useState(false)
 
   useEffect(() => {
     setTexto(textoInicial || '')
@@ -44,6 +45,30 @@ export default function IdeaClaraModal({
       setError(e.message || 'Clara no respondió')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const copiarTexto = async () => {
+    const raw = String(texto || '')
+    if (!raw.trim()) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(raw)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = raw
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.left = '-9999px'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      setCopiado(true)
+      window.setTimeout(() => setCopiado(false), 1600)
+    } catch {
+      setError('No se pudo copiar al portapapeles')
     }
   }
 
@@ -80,7 +105,29 @@ export default function IdeaClaraModal({
           <button type="button" onClick={onClose} style={btnGhost(t)}>✕</button>
         </div>
 
-        <label style={labelStyle(t)}>Texto de la idea</label>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+          <label style={{ ...labelStyle(t), marginBottom: 0 }}>Texto de la idea</label>
+          <button
+            type="button"
+            onClick={copiarTexto}
+            disabled={!texto.trim()}
+            title={copiado ? 'Copiado' : 'Copiar texto generado'}
+            aria-label={copiado ? 'Copiado' : 'Copiar texto generado'}
+            style={{
+              ...btnGhost(t),
+              padding: '6px 10px',
+              minWidth: 40,
+              opacity: texto.trim() ? 1 : 0.5,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontWeight: 600,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>⧉</span>
+            <span style={{ fontSize: 'var(--cc-xs)' }}>{copiado ? 'Copiado' : 'Copiar'}</span>
+          </button>
+        </div>
         <textarea
           value={texto}
           onChange={(e) => setTexto(e.target.value)}

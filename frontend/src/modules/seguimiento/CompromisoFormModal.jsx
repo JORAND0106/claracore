@@ -1,17 +1,32 @@
 import { useMemo, useState } from 'react'
 import { nombreUser } from './UserSearchSelect'
+import { numeroActaLabel } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
-export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = [], onClose, onSubmit, viewportCompact: viewportCompactProp }) {
+/**
+ * Formulario para generar compromiso(s) desde una idea de acta.
+ * Asignables: usuarios de plataforma + asistentes externos del acta actual.
+ * Origen atribuido al acta/comité (no al operador del formulario).
+ */
+export default function CompromisoFormModal({
+  t,
+  usuario,
+  textoIdea,
+  usuarios = [],
+  asistentesActa = [],
+  actaConsecutivo = null,
+  onClose,
+  onSubmit,
+  viewportCompact: viewportCompactProp,
+}) {
   const viewportCompactHook = useSeguimientoCompact()
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [form, setForm] = useState({
-    solicitante_id: usuario?.id || '',
     fecha_vencimiento: '',
     hora_vencimiento: '',
     redaccion: textoIdea || '',
   })
-  const [asignadosIds, setAsignadosIds] = useState([])
+  const [asignadosKeys, setAsignadosKeys] = useState([])
   const [q, setQ] = useState('')
   const [highlight, setHighlight] = useState(-1)
   const [busy, setBusy] = useState(false)
@@ -19,26 +34,92 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
+  const origenLabel = useMemo(() => {
+    if (actaConsecutivo != null && actaConsecutivo !== '') {
+      return `Compromiso de Comité · ${numeroActaLabel(actaConsecutivo)}`
+    }
+    return 'Compromiso de Comité'
+  }, [actaConsecutivo])
+
+  /** Clave estable para mezcla usuarios / externos. */
+  const keyOf = (u) => {
+    if (!u) return ''
+    if (u.es_externo || u.externo_id != null || Number(u.id) < 0) {
+      const eid = u.externo_id != null ? u.externo_id : (Number(u.id) < 0 ? Math.abs(Number(u.id)) : null)
+      return eid != null ? `ext-${eid}` : `ext-nom-${(u.nombre || '').trim().toLowerCase()}`
+    }
+    return `usr-${u.id}`
+  }
+
+  const pool = useMemo(() => {
+    const byKey = new Map()
+    for (const u of usuarios || []) {
+      if (!u) continue
+      if (u.es_externo || Number(u.id) < 0) continue // externos del catálogo: solo si están en el acta
+      if (!(Number(u.id) > 0)) continue
+      byKey.set(keyOf(u), {
+        ...u,
+        es_externo: false,
+        _key: keyOf(u),
+      })
+    }
+    for (const a of asistentesActa || []) {
+      const nombre = (a.nombre || '').trim()
+      if (!nombre) continue
+      if (a.usuario_id && Number(a.usuario_id) > 0) {
+        const k = `usr-${a.usuario_id}`
+        if (!byKey.has(k)) {
+          byKey.set(k, {
+            id: Number(a.usuario_id),
+            nombre,
+            apellidos: '',
+            email: a.email || '',
+            cargo_nombre: a.cargo || '',
+            empresa: a.entidad || '',
+            es_externo: false,
+            _key: k,
+          })
+        }
+        continue
+      }
+      const eid = a.externo_id != null ? Number(a.externo_id) : null
+      const synId = eid != null ? -eid : null
+      const k = eid != null ? `ext-${eid}` : `ext-nom-${nombre.toLowerCase()}`
+      byKey.set(k, {
+        id: synId,
+        externo_id: eid,
+        nombre,
+        apellidos: '',
+        email: a.email || '',
+        cargo_nombre: a.cargo || '',
+        empresa: a.entidad || '',
+        es_externo: true,
+        _key: k,
+      })
+    }
+    return Array.from(byKey.values())
+  }, [usuarios, asistentesActa])
+
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase()
-    // Solo usuarios reales de plataforma (no contactos externos de actas)
-    const basePool = usuarios.filter(
-      (u) => !u.es_externo && Number(u.id) > 0 && !asignadosIds.includes(Number(u.id)),
-    )
+    const basePool = pool.filter((u) => !asignadosKeys.includes(u._key))
     const base = !s
-      ? basePool.slice(0, 40)
+      ? basePool.slice(0, 50)
       : basePool.filter((u) => {
         const n = nombreUser(u).toLowerCase()
-        return n.includes(s) || String(u.email || '').toLowerCase().includes(s)
-      }).slice(0, 40)
+        return n.includes(s)
+          || String(u.email || '').toLowerCase().includes(s)
+          || String(u.cargo_nombre || '').toLowerCase().includes(s)
+          || String(u.empresa || '').toLowerCase().includes(s)
+      }).slice(0, 50)
     return base
-  }, [usuarios, q, asignadosIds])
+  }, [pool, q, asignadosKeys])
 
-  const asignados = usuarios.filter((u) => asignadosIds.includes(Number(u.id)) && !u.es_externo && Number(u.id) > 0)
+  const asignados = pool.filter((u) => asignadosKeys.includes(u._key))
 
-  const toggle = (id) => {
-    const n = Number(id)
-    setAsignadosIds((arr) => (arr.includes(n) ? arr.filter((x) => x !== n) : [...arr, n]))
+  const toggle = (uOrKey) => {
+    const k = typeof uOrKey === 'string' ? uOrKey : keyOf(uOrKey)
+    setAsignadosKeys((arr) => (arr.includes(k) ? arr.filter((x) => x !== k) : [...arr, k]))
   }
 
   const onSearchKeyDown = (e) => {
@@ -58,28 +139,41 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
       })
     } else if (e.key === 'Enter' && highlight >= 0 && filtrados[highlight]) {
       e.preventDefault()
-      toggle(filtrados[highlight].id)
+      toggle(filtrados[highlight])
       setHighlight(-1)
       setQ('')
     }
   }
 
   const guardar = async () => {
-    if (!asignadosIds.length || !form.fecha_vencimiento || !form.redaccion.trim()) {
+    if (!asignadosKeys.length || !form.fecha_vencimiento || !form.redaccion.trim()) {
       setError('Seleccione al menos un asignado, vencimiento y redacción.')
       return
     }
     setBusy(true)
     setError('')
     try {
-      const sol = usuarios.find((u) => String(u.id) === String(form.solicitante_id)) || usuario
       await onSubmit({
-        solicitante_id: Number(form.solicitante_id) || usuario?.id,
-        solicitante_nombre: nombreUser(sol),
-        asignados: asignados.map((u) => ({
-          asignado_a_id: Number(u.id),
-          asignado_a_nombre: nombreUser(u),
-        })),
+        solicitante_id: usuario?.id || null,
+        solicitante_nombre: origenLabel,
+        asignados: asignados.map((u) => {
+          if (u.es_externo) {
+            return {
+              asignado_a_id: null,
+              asignado_externo_id: u.externo_id != null ? Number(u.externo_id) : null,
+              asignado_a_nombre: nombreUser(u),
+              es_externo: true,
+              asignado_cargo: u.cargo_nombre || null,
+              asignado_entidad: u.empresa || null,
+              asignado_email: u.email || null,
+            }
+          }
+          return {
+            asignado_a_id: Number(u.id),
+            asignado_a_nombre: nombreUser(u),
+            es_externo: false,
+          }
+        }),
         fecha_vencimiento: form.fecha_vencimiento,
         hora_vencimiento: form.hora_vencimiento || null,
         redaccion: form.redaccion.trim(),
@@ -118,28 +212,36 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
           </div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
         </div>
-        <Field t={t} label="Quién solicita">
-          <select value={form.solicitante_id} onChange={(e) => set('solicitante_id', e.target.value)} style={inp(t)}>
-            <option value={usuario?.id || ''}>{nombreUser(usuario)} (yo)</option>
-            {usuarios.filter((u) => !u.es_externo && Number(u.id) > 0).map((u) => (
-              <option key={u.id} value={u.id}>{nombreUser(u)}</option>
-            ))}
-          </select>
+        <Field t={t} label="Origen">
+          <div style={{
+            ...inp(t),
+            display: 'flex',
+            alignItems: 'center',
+            minHeight: 40,
+            fontWeight: 600,
+            color: t.primary,
+            background: `${t.primary}10`,
+          }}
+          >
+            {origenLabel}
+          </div>
         </Field>
         <Field t={t} label="A quién o a quiénes se asigna">
           {asignados.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
               {asignados.map((u) => (
                 <button
-                  key={u.id}
+                  key={u._key}
                   type="button"
-                  onClick={() => toggle(u.id)}
+                  onClick={() => toggle(u)}
                   style={{
                     border: `1px solid ${t.primary}`, borderRadius: 8, padding: '4px 8px',
                     background: `${t.primary}18`, color: t.text, cursor: 'pointer', fontSize: 'var(--cc-xs)',
                   }}
                 >
-                  {nombreUser(u)} ✕
+                  {nombreUser(u)}
+                  {u.es_externo ? ' · Ext' : ''}
+                  {' '}✕
                 </button>
               ))}
             </div>
@@ -148,25 +250,45 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
             value={q}
             onChange={(e) => { setQ(e.target.value); setHighlight(-1) }}
             onKeyDown={onSearchKeyDown}
-            placeholder="Buscar usuarios… (↑↓ y Enter)"
+            placeholder="Buscar usuarios o asistentes externos… (↑↓ y Enter)"
             style={{ ...inp(t), marginBottom: 6 }}
           />
           <div style={{
             maxHeight: 160, overflow: 'auto', border: `1px solid ${t.border}`,
             borderRadius: 8, background: t.bg || t.bgCard,
-          }}>
+          }}
+          >
             {filtrados.map((u, idx) => (
               <label
-                key={u.id}
+                key={u._key}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
                   borderBottom: `1px solid ${t.border}`, cursor: 'pointer', fontSize: 'var(--cc-sm)', color: t.text,
                   background: idx === highlight ? `${t.primary}18` : 'transparent',
                 }}
               >
-                <input type="checkbox" checked={asignadosIds.includes(Number(u.id))} onChange={() => toggle(u.id)} />
-                <span>{nombreUser(u)}</span>
-                <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>{u.cargo_nombre || u.email || ''}</span>
+                <input
+                  type="checkbox"
+                  checked={asignadosKeys.includes(u._key)}
+                  onChange={() => toggle(u)}
+                />
+                <span style={{ fontWeight: 600 }}>{nombreUser(u)}</span>
+                {u.es_externo ? (
+                  <span style={{
+                    fontSize: 'var(--cc-xs)',
+                    fontWeight: 700,
+                    color: t.textMuted,
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 6,
+                    padding: '1px 6px',
+                  }}
+                  >
+                    Externo
+                  </span>
+                ) : null}
+                <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                  {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
+                </span>
               </label>
             ))}
             {filtrados.length === 0 && (

@@ -129,6 +129,88 @@ def test_crear_un_compromiso_dispara_notif(monkeypatch):
     assert notifs[0]["destinatario_id"] == 20
     assert notifs[0]["reasignacion"] is False
     assert notifs[0]["acta"]["estado"] == "borrador"
+    assert "Acta Nº 3" in inserted[0]["solicitante_nombre"]
+    assert "Compromiso de Comité" in inserted[0]["solicitante_nombre"]
+
+
+def test_crear_compromiso_asignado_externo(monkeypatch):
+    inserted = []
+
+    class FakeQ:
+        def __init__(self, name):
+            self.name = name
+            self._payload = None
+            self._filters = {}
+
+        def select(self, *_a, **_k):
+            return self
+
+        def insert(self, payload):
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters[k] = v
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if self.name == "seguimiento_item" and self._payload:
+                row = {**self._payload, "id": 777}
+                inserted.append(row)
+                return type("R", (), {"data": [row]})()
+            if self.name == "seguimiento_contacto_externo":
+                return type("R", (), {"data": [{
+                    "id": 55, "nombre": "Ext Contacto", "cargo": "Ing", "email": "e@x.com",
+                }]})()
+            return type("R", (), {"data": []})()
+
+    class FakeSb:
+        def table(self, name):
+            return FakeQ(name)
+
+    monkeypatch.setattr(svc, "get_acta", lambda *_a, **_k: {
+        "id": 1, "consecutivo": 4, "estado": "borrador",
+        "ideas": [{"id": 9, "texto": "Idea"}],
+    })
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr(svc, "_proximo_consecutivo_item", lambda *_a, **_k: 2)
+    monkeypatch.setattr(svc, "_registrar_evento", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc, "calcular_fecha_limite_gracia",
+        lambda *_a, **_k: __import__("datetime").datetime(2026, 8, 25, tzinfo=__import__("datetime").timezone.utc),
+    )
+    monkeypatch.setattr(svc, "CalendarioNoHabilesCache", lambda **_k: object())
+    monkeypatch.setattr(svc, "make_calendar_loader", lambda _sb: None)
+    notifs = []
+    monkeypatch.setattr(
+        svc, "_notificar_compromiso_asignado",
+        lambda *_a, **k: notifs.append(k) or True,
+    )
+
+    row = svc._crear_un_compromiso(
+        FakeSb(), 5, 1, 9,
+        {
+            "es_externo": True,
+            "asignado_externo_id": 55,
+            "asignado_a_nombre": "Ext Contacto",
+            "solicitante_id": 10,
+            "redaccion": "Seguimiento externo",
+            "fecha_vencimiento": "2026-08-20",
+        },
+        user_id=10,
+    )
+    assert row["id"] == 777
+    assert inserted[0]["asignado_a_id"] is None
+    assert inserted[0]["asignado_externo_id"] == 55
+    assert inserted[0]["asignado_a_nombre"] == "Ext Contacto"
+    assert notifs == []  # sin usuario de plataforma → sin notif push/buzón
+    assert "Acta Nº 4" in inserted[0]["solicitante_nombre"]
 
 
 def test_notificar_no_auto_si_mismo():
