@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 
 function nombreUser(u) {
   if (!u) return ''
@@ -6,7 +6,24 @@ function nombreUser(u) {
 }
 
 /**
- * Buscador de usuarios del contrato con autocompletado.
+ * Atributos anti-autofill para iOS/iPadOS/Safari/Chrome:
+ * el SO no debe tratar este campo como correo/contacto guardado.
+ */
+export const USER_SEARCH_ANTIAUTOFILL = {
+  type: 'search',
+  inputMode: 'search',
+  autoComplete: 'off',
+  autoCorrect: 'off',
+  autoCapitalize: 'none',
+  spellCheck: false,
+  'data-lpignore': 'true',
+  'data-1p-ignore': 'true',
+  'data-bwignore': 'true',
+  'data-form-type': 'other',
+}
+
+/**
+ * Buscador de usuarios del contrato con autocompletado de plataforma.
  * mode=strict: solo permite seleccionar usuarios existentes (elaborador).
  * mode=free: permite texto libre + confirmación si no hay match (asistentes).
  */
@@ -21,9 +38,17 @@ export default function UserSearchSelect({
   placeholder = 'Buscar usuario…',
   style,
 }) {
+  const reactId = useId()
+  const fieldName = `cc_seg_user_search_${String(reactId).replace(/:/g, '')}`
   const [q, setQ] = useState(valueNombre || '')
   const [open, setOpen] = useState(false)
   const [confirmFree, setConfirmFree] = useState(null)
+  // iOS muestra contactos al enfocar inputs editables; readonly hasta el primer focus lo evita.
+  const [iosGuard, setIosGuard] = useState(true)
+
+  useEffect(() => {
+    setQ(valueNombre || '')
+  }, [valueNombre, valueId])
 
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -58,16 +83,49 @@ export default function UserSearchSelect({
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative' }} data-form-type="other">
+      {/* honeypot: despista gestores de contraseñas / autofill de contacto */}
       <input
+        type="text"
+        tabIndex={-1}
+        aria-hidden="true"
+        autoComplete="username"
+        value=""
+        readOnly
+        style={{
+          position: 'absolute',
+          opacity: 0,
+          height: 0,
+          width: 0,
+          pointerEvents: 'none',
+          border: 0,
+          padding: 0,
+        }}
+      />
+      <input
+        {...USER_SEARCH_ANTIAUTOFILL}
+        id={fieldName}
+        name={fieldName}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={`${fieldName}-list`}
         value={q}
+        readOnly={iosGuard}
         onChange={(e) => {
           setQ(e.target.value)
           setOpen(true)
           setConfirmFree(null)
           if (mode === 'strict' && !e.target.value.trim()) onSelect?.(null)
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={(e) => {
+          if (iosGuard) setIosGuard(false)
+          setOpen(true)
+          // Algunos WebKit mantienen el caret al quitar readOnly en el mismo tick
+          window.setTimeout(() => {
+            try { e.target.removeAttribute('readonly') } catch { /* ignore */ }
+          }, 0)
+        }}
         onBlur={() => {
           setTimeout(() => {
             setOpen(false)
@@ -75,7 +133,6 @@ export default function UserSearchSelect({
             if (mode === 'strict') {
               const exact = usuarios.find((u) => nombreUser(u).toLowerCase() === q.trim().toLowerCase())
               if (!exact && valueId) {
-                // revert to last selected
                 const prev = usuarios.find((u) => Number(u.id) === Number(valueId))
                 if (prev) setQ(nombreUser(prev))
                 else { setQ(''); onSelect?.(null) }
@@ -88,18 +145,22 @@ export default function UserSearchSelect({
         }}
         placeholder={placeholder}
         style={style}
-        autoComplete="off"
       />
       {open && filtrados.length > 0 && (
-        <div style={{
-          position: 'absolute', zIndex: 40, left: 0, right: 0, top: '100%',
-          background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
-          maxHeight: 200, overflow: 'auto', boxShadow: t.shadow,
-        }}>
+        <div
+          id={`${fieldName}-list`}
+          role="listbox"
+          style={{
+            position: 'absolute', zIndex: 40, left: 0, right: 0, top: '100%',
+            background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
+            maxHeight: 200, overflow: 'auto', boxShadow: t.shadow,
+          }}
+        >
           {filtrados.map((u) => (
             <button
               key={u.id}
               type="button"
+              role="option"
               onMouseDown={(e) => { e.preventDefault(); pick(u) }}
               style={{
                 display: 'block', width: '100%', textAlign: 'left', border: 'none',
