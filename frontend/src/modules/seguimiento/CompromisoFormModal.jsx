@@ -20,15 +20,20 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
 
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase()
-    const base = usuarios.filter((u) => !asignadosIds.includes(Number(u.id)))
-    if (!s) return base.slice(0, 40)
-    return base.filter((u) => {
-      const n = nombreUser(u).toLowerCase()
-      return n.includes(s) || String(u.email || '').toLowerCase().includes(s)
-    }).slice(0, 40)
+    // Solo usuarios reales de plataforma (no contactos externos de actas)
+    const basePool = usuarios.filter(
+      (u) => !u.es_externo && Number(u.id) > 0 && !asignadosIds.includes(Number(u.id)),
+    )
+    const base = !s
+      ? basePool.slice(0, 40)
+      : basePool.filter((u) => {
+        const n = nombreUser(u).toLowerCase()
+        return n.includes(s) || String(u.email || '').toLowerCase().includes(s)
+      }).slice(0, 40)
+    return base
   }, [usuarios, q, asignadosIds])
 
-  const asignados = usuarios.filter((u) => asignadosIds.includes(Number(u.id)))
+  const asignados = usuarios.filter((u) => asignadosIds.includes(Number(u.id)) && !u.es_externo && Number(u.id) > 0)
 
   const toggle = (id) => {
     const n = Number(id)

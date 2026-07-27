@@ -204,18 +204,22 @@ def _notificar(
     entidad_tipo: str,
     entidad_id: str,
     padre_id: Optional[int] = None,
-) -> None:
-    if not destinatario_id or destinatario_id == remitente_id:
-        return
+    enviar_push: bool = False,
+    push_tipo: Optional[str] = None,
+    push_slot_key: Optional[str] = None,
+) -> bool:
+    """Inserta en buzón de plataforma. Opcionalmente intenta Web Push. No usa Telegram (solo soporte)."""
+    if not destinatario_id or int(destinatario_id) == int(remitente_id):
+        return False
     row = {
-        "remitente_id": remitente_id,
+        "remitente_id": int(remitente_id),
         "remitente_nombre": "ClaraCore",
         "destinatario_id": int(destinatario_id),
-        "asunto": asunto,
-        "mensaje": mensaje,
+        "asunto": (asunto or "")[:500],
+        "mensaje": mensaje or "",
         "tipo": "SISTEMA",
         "modulo": "SEGUIMIENTO",
-        "contrato_id": contrato_id,
+        "contrato_id": int(contrato_id) if contrato_id is not None else None,
         "entidad_tipo": entidad_tipo,
         "entidad_id": str(entidad_id),
         "leido": False,
@@ -224,10 +228,115 @@ def _notificar(
     }
     if padre_id:
         row["padre_id"] = int(padre_id)
+    ok = False
     try:
-        sb.table("notificaciones").insert(row).execute()
+        try:
+            from main import supabase_execute
+            supabase_execute(lambda: sb.table("notificaciones").insert(row).execute())
+        except Exception:
+            sb.table("notificaciones").insert(row).execute()
+        ok = True
     except Exception as exc:
-        _log.warning("notif seguimiento: %s", exc)
+        _log.warning(
+            "notif seguimiento falló dest=%s entidad=%s/%s: %s",
+            destinatario_id, entidad_tipo, entidad_id, exc,
+        )
+        return False
+    if ok and enviar_push:
+        _try_push_seguimiento(
+            destinatario_id=int(destinatario_id),
+            contrato_id=contrato_id,
+            asunto=asunto,
+            mensaje=mensaje,
+            tipo=push_tipo or entidad_tipo or "seguimiento",
+            slot_key=push_slot_key or f"{entidad_tipo}-{entidad_id}-{destinatario_id}",
+        )
+    return ok
+
+
+def _try_push_seguimiento(
+    *,
+    destinatario_id: int,
+    contrato_id: Optional[int],
+    asunto: str,
+    mensaje: str,
+    tipo: str,
+    slot_key: str,
+) -> None:
+    try:
+        from notificaciones_push_service import NotificacionesPushSender
+        from main import supabase as _sb_main
+        sender = NotificacionesPushSender(_sb_main)
+        if not sender.configured():
+            return
+        sender.enviar_a_usuario(
+            usuario_id=int(destinatario_id),
+            contrato_id=int(contrato_id) if contrato_id is not None else None,
+            tipo=str(tipo)[:80],
+            slot_key=str(slot_key)[:200],
+            title=(asunto or "Seguimiento")[:120],
+            email_text=mensaje or "",
+        )
+    except Exception as exc:
+        _log.warning("push seguimiento dest=%s: %s", destinatario_id, exc)
+
+
+def _fmt_fecha_notif(raw) -> str:
+    if not raw:
+        return "—"
+    s = str(raw)[:10]
+    parts = s.split("-")
+    if len(parts) == 3:
+        return f"{parts[2]}/{parts[1]}/{parts[0]}"
+    return s
+
+
+def _notificar_compromiso_asignado(
+    sb,
+    *,
+    destinatario_id: int,
+    remitente_id: int,
+    titulo: str,
+    fecha_vencimiento,
+    contrato_id: Optional[int],
+    item_id,
+    acta: Optional[dict] = None,
+    reasignacion: bool = False,
+) -> bool:
+    """
+    Aviso inmediato al asignado al crear (o reasignar) un compromiso.
+    Independiente del estado del acta (borrador / realizada / firmada).
+    """
+    consec = (acta or {}).get("consecutivo")
+    acta_txt = f"Acta Nº {consec}" if consec is not None else "un acta de Seguimiento"
+    fv = _fmt_fecha_notif(fecha_vencimiento)
+    titulo_clean = (titulo or "compromiso").strip() or "compromiso"
+    if reasignacion:
+        asunto = f"Compromiso reasignado — {acta_txt}"
+        verbo = "reasignó"
+    else:
+        asunto = f"Nuevo compromiso — {acta_txt}"
+        verbo = "asignó"
+    mensaje = (
+        f"Se le {verbo} un compromiso proveniente de {acta_txt}.\n\n"
+        f"«{titulo_clean}»\n\n"
+        f"Fecha de vencimiento: {fv}\n\n"
+        f"Revíselo en la bandeja de Seguimiento o en el widget de inicio."
+    )
+    slot = f"compromiso-{'reasign' if reasignacion else 'nuevo'}-{item_id}-{destinatario_id}"
+    return _notificar(
+        sb,
+        destinatario_id=int(destinatario_id),
+        remitente_id=int(remitente_id),
+        asunto=asunto,
+        mensaje=mensaje,
+        contrato_id=contrato_id,
+        entidad_tipo="seguimiento_compromiso",
+        entidad_id=str(item_id),
+        enviar_push=True,
+        push_tipo="seguimiento_compromiso",
+        push_slot_key=slot,
+    )
 
 
 def _norm_estado_gestion_val(raw: Optional[str], *, hecho: bool = False) -> str:
@@ -1367,15 +1476,17 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
         raise ValueError("No se pudo crear el compromiso")
     item = ins[0]
     _registrar_evento(sb, int(item["id"]), "compromiso_creado", user_id, {"acta_id": acta_id, "idea_id": idea_id})
-    _notificar(
+    # Notificación inmediata al asignado (no espera Realizada/Firmada del acta)
+    _notificar_compromiso_asignado(
         sb,
         destinatario_id=asignado_id,
         remitente_id=user_id,
-        asunto=f"Nuevo compromiso del acta Nº {acta.get('consecutivo')}",
-        mensaje=f"Se le asignó el compromiso:\n\n{titulo}\n\nVence: {fv.isoformat()}",
+        titulo=titulo,
+        fecha_vencimiento=fv.isoformat(),
         contrato_id=contrato_id,
-        entidad_tipo="seguimiento_compromiso",
-        entidad_id=str(item["id"]),
+        item_id=item["id"],
+        acta=acta,
+        reasignacion=False,
     )
     return item
 
@@ -2469,6 +2580,7 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
     if not dest:
         raise ValueError("Destinatario no encontrado")
     nombre = data.get("destinatario_nombre") or _nombre_usuario(dest)
+    prev_asignado = int(item.get("asignado_a_id") or 0)
     patch: Dict[str, Any] = {
         "relacion_destinatario": modo,
         "updated_at": _now_utc().isoformat(),
@@ -2483,19 +2595,43 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
         patch["referido_a_nombre"] = nombre
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
     _registrar_evento(sb, item_id, f"destinar_{modo}", user_id, {"destinatario_id": dest_id})
-    _notificar(
-        sb,
-        destinatario_id=dest_id,
-        remitente_id=user_id,
-        asunto=f"{'Asignación' if modo == 'asignacion' else 'Referencia'}: {item.get('titulo')}",
-        mensaje=(
-            f"Se le {'asignó formalmente' if modo == 'asignacion' else 'compartió como referencia'} "
-            f"el ítem «{item.get('titulo')}»."
-        ),
-        contrato_id=item.get("contrato_id"),
-        entidad_tipo="seguimiento_item",
-        entidad_id=str(item_id),
-    )
+    # Compromiso reasignado: aviso rico e inmediato (también en acta borrador)
+    if (
+        modo == "asignacion"
+        and item.get("origen") == "compromiso"
+        and dest_id != prev_asignado
+    ):
+        acta = None
+        if item.get("acta_id") and item.get("contrato_id"):
+            try:
+                acta = get_acta(sb, int(item["acta_id"]), int(item["contrato_id"]))
+            except Exception:
+                acta = None
+        _notificar_compromiso_asignado(
+            sb,
+            destinatario_id=dest_id,
+            remitente_id=user_id,
+            titulo=item.get("titulo") or "",
+            fecha_vencimiento=item.get("fecha_vencimiento"),
+            contrato_id=item.get("contrato_id"),
+            item_id=item_id,
+            acta=acta,
+            reasignacion=True,
+        )
+    else:
+        _notificar(
+            sb,
+            destinatario_id=dest_id,
+            remitente_id=user_id,
+            asunto=f"{'Asignación' if modo == 'asignacion' else 'Referencia'}: {item.get('titulo')}",
+            mensaje=(
+                f"Se le {'asignó formalmente' if modo == 'asignacion' else 'compartió como referencia'} "
+                f"el ítem «{item.get('titulo')}»."
+            ),
+            contrato_id=item.get("contrato_id"),
+            entidad_tipo="seguimiento_item",
+            entidad_id=str(item_id),
+        )
     return get_item_detalle(sb, item_id)
 
 

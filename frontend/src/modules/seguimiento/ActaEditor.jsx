@@ -659,7 +659,11 @@ export default function ActaEditor({
             await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
             setCompromisoCtx(null)
             setError('')
-            setOkMsg('Compromiso incorporado a la bandeja unificada.')
+            setOkMsg('Compromiso incorporado a la bandeja. Los asignados ya fueron notificados.')
+            try {
+              const abiertos = await api.compromisosAbiertos(localActaId || undefined)
+              setPrevios(abiertos || [])
+            } catch { /* ignore */ }
           }}
         />
       )}
