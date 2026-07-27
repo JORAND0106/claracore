@@ -659,11 +659,16 @@ def _is_missing_column_error(exc: BaseException, column: str) -> bool:
     return any(x in msg for x in ("schema cache", "could not find", "column", "pgrst204"))
 
 
-def _schema_has(sb, cap: str) -> bool:
-    """Detecta columnas/valores nuevos; evita fallar si la migración no se aplicó."""
-    cached = _SCHEMA_CAPS.get(cap)
-    if cached is not None:
-        return cached
+def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
+    """Detecta columnas/valores nuevos; evita fallar si la migración no se aplicó.
+
+    Solo cachea True de forma permanente en el proceso. Un resultado False se
+    re-prueba en la siguiente consulta (migración aplicada en caliente o
+    recarga del schema cache de PostgREST), salvo que force=True fuerce
+    el sondeo inmediato.
+    """
+    if not force and _SCHEMA_CAPS.get(cap) is True:
+        return True
     try:
         if cap == "tipo_acta":
             sb.table("seguimiento_acta").select("id,tipo_acta").limit(1).execute()
@@ -711,6 +716,39 @@ def _schema_has(sb, cap: str) -> bool:
             _SCHEMA_CAPS[cap] = True
             _log.warning("schema probe %s ambiguo: %s", cap, exc)
     return bool(_SCHEMA_CAPS.get(cap))
+
+
+def _try_reload_postgrest_schema(sb) -> bool:
+    """Best-effort: pide a PostgREST recargar el schema cache vía RPC o NOTIFY."""
+    try:
+        sb.rpc("sicoe_reload_postgrest_schema").execute()
+        return True
+    except Exception as exc:
+        _log.debug("reload postgrest schema (rpc) no disponible: %s", exc)
+    try:
+        # Fallback si existe una RPC genérica de notify en el proyecto.
+        sb.rpc("pg_notify", {"channel": "pgrst", "payload": "reload schema"}).execute()
+        return True
+    except Exception as exc:
+        _log.debug("reload postgrest schema (pg_notify rpc) no disponible: %s", exc)
+    return False
+
+
+def _ensure_asignado_externo_column(sb) -> bool:
+    """Confirma que PostgREST ve asignado_externo_id; reintenta tras reload."""
+    if _schema_has(sb, "asignado_externo_id"):
+        return True
+    _SCHEMA_CAPS["asignado_externo_id"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        # Dar un instante a PostgREST tras NOTIFY (best-effort en el mismo request).
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "asignado_externo_id", force=True)
 
 
 def _norm_tipo_acta(raw) -> str:
@@ -1534,10 +1572,13 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
                 "No se pudo registrar el contacto externo como asignado. "
                 "Verifique que la migración de contactos externos esté aplicada."
             )
-        if not _schema_has(sb, "asignado_externo_id"):
+        if not _ensure_asignado_externo_column(sb):
             raise ValueError(
-                "La asignación a contactos externos requiere actualizar el esquema "
-                "(columna asignado_externo_id)."
+                "La asignación a contactos externos no está disponible: "
+                "la API no ve la columna asignado_externo_id. "
+                "Si ya aplicó la migración en Supabase, ejecute en el SQL Editor: "
+                "NOTIFY pgrst, 'reload schema'; "
+                "(o Configuración → API → Reload schema) y reintente."
             )
 
     fv = _parse_date(data.get("fecha_vencimiento"))
@@ -1584,9 +1625,11 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
         ins = sb.table("seguimiento_item").insert(row).execute().data
     except Exception as exc:
         if es_externo and _is_missing_column_error(exc, "asignado_externo_id"):
-            _SCHEMA_CAPS["asignado_externo_id"] = False
+            _SCHEMA_CAPS["asignado_externo_id"] = None
             raise ValueError(
-                "No se pueden asignar contactos externos hasta aplicar la migración de esquema."
+                "No se pueden asignar contactos externos: la API no ve "
+                "asignado_externo_id. Si la migración ya está aplicada, ejecute "
+                "NOTIFY pgrst, 'reload schema'; en Supabase y reintente."
             ) from exc
         raise
     if not ins:

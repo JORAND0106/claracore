@@ -296,12 +296,24 @@ export default function CompromisoFormModal({
             )}
           </div>
         </Field>
-        <div className="cc-seguim-form-grid cc-seguim-form-grid--2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="cc-seguim-form-grid cc-seguim-form-grid--2 cc-seguim-datetime-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Field t={t} label="Fecha de vencimiento">
-            <input type="date" value={form.fecha_vencimiento} onChange={(e) => set('fecha_vencimiento', e.target.value)} style={inp(t)} />
+            <input
+              type="date"
+              className="cc-seguim-datetime"
+              value={form.fecha_vencimiento}
+              onChange={(e) => set('fecha_vencimiento', e.target.value)}
+              style={dateTimeInp(t)}
+            />
           </Field>
           <Field t={t} label="Hora (opcional)">
-            <input type="time" value={form.hora_vencimiento} onChange={(e) => set('hora_vencimiento', e.target.value)} style={inp(t)} />
+            <input
+              type="time"
+              className="cc-seguim-datetime"
+              value={form.hora_vencimiento}
+              onChange={(e) => set('hora_vencimiento', e.target.value)}
+              style={dateTimeInp(t)}
+            />
           </Field>
         </div>
         <Field t={t} label="Redacción del compromiso">
@@ -333,6 +345,18 @@ function inp(t) {
     width: '100%', boxSizing: 'border-box', fontSize: 'var(--cc-input)',
     padding: '8px 10px', borderRadius: 8, border: `1px solid ${t.border}`,
     background: t.bg || t.bgCard, color: t.text,
+  }
+}
+function dateTimeInp(t) {
+  return {
+    ...inp(t),
+    padding: '5px 8px',
+    fontSize: 'var(--cc-sm)',
+    borderRadius: 6,
+    lineHeight: 1.25,
+    minHeight: 0,
+    height: 32,
+    fontWeight: 400,
   }
 }
 function primary(t) {
