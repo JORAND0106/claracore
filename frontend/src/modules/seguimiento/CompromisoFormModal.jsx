@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
 import { nombreUser } from './UserSearchSelect'
+import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
-export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = [], onClose, onSubmit }) {
+export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = [], onClose, onSubmit, viewportCompact: viewportCompactProp }) {
+  const viewportCompactHook = useSeguimientoCompact()
+  const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [form, setForm] = useState({
     solicitante_id: usuario?.id || '',
     fecha_vencimiento: '',
@@ -66,20 +69,22 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
     <div
       role="dialog"
       aria-modal="true"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 12100,
-        background: 'rgba(15,23,42,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-      }}
+      className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+      style={{ ...seguimientoModalOverlayStyle(viewportCompact), zIndex: 12100 }}
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className={viewportCompact ? 'cc-seguim-modal-sheet' : 'cc-seguim-modal-sheet--desktop'}
         style={{
-          width: 'min(620px, 100%)', background: t.bgCard, border: `1px solid ${t.border}`,
-          borderRadius: 12, padding: 20, boxShadow: t.shadow, maxHeight: '92vh', overflow: 'auto',
+          ...seguimientoModalSheetStyle(viewportCompact),
+          width: viewportCompact ? '100%' : 'min(620px, 100%)',
+          background: t.bgCard,
+          border: viewportCompact ? 'none' : `1px solid ${t.border}`,
+          boxShadow: t.shadow,
         }}
       >
+        <div className={viewportCompact ? 'cc-seguim-compromiso-form cc-seguim-compromiso-form--compact' : 'cc-seguim-compromiso-form'}>
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text, marginBottom: 12 }}>
           Generar compromiso
         </div>
@@ -137,7 +142,7 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
             )}
           </div>
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="cc-seguim-form-grid cc-seguim-form-grid--2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Field t={t} label="Fecha de vencimiento">
             <input type="date" value={form.fecha_vencimiento} onChange={(e) => set('fecha_vencimiento', e.target.value)} style={inp(t)} />
           </Field>
@@ -149,11 +154,12 @@ export default function CompromisoFormModal({ t, usuario, textoIdea, usuarios = 
           <textarea rows={5} value={form.redaccion} onChange={(e) => set('redaccion', e.target.value)} style={inp(t)} />
         </Field>
         {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)' }}>{error}</div>}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+        <div className="cc-seguim-modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
           <button type="button" onClick={onClose} style={ghost(t)}>Cancelar</button>
           <button type="button" disabled={busy} onClick={guardar} style={primary(t)}>
             {busy ? 'Guardando…' : 'Incorporar compromiso'}
           </button>
+        </div>
         </div>
       </div>
     </div>

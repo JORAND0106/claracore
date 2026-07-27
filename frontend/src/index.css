@@ -2320,3 +2320,306 @@ select.cc-dashboard-acta-select--light option {
     font-size: var(--cc-sm);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Seguimiento — móvil / tablet / iPad (≤1366, menú hamburguesa)
+   Desktop (>1366): sin cambios de layout.
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-seguim-root {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cc-seguim-root--compact .cc-seguim-page-head {
+  flex-direction: column;
+  align-items: stretch !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-tabs {
+  overflow-x: auto;
+  flex-wrap: nowrap !important;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+}
+
+.cc-seguim-root--compact .cc-seguim-tabs button {
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+/* Filtros en grilla 2 columnas */
+.cc-seguim-root--compact .cc-seguim-filters,
+.cc-seguim-bandeja--compact .cc-seguim-filters,
+.cc-seguim-actas--compact .cc-seguim-filters {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-filter--wide,
+.cc-seguim-bandeja--compact .cc-seguim-filter--wide,
+.cc-seguim-actas--compact .cc-seguim-filter--wide {
+  grid-column: 1 / -1;
+}
+
+.cc-seguim-root--compact .cc-seguim-filter--check,
+.cc-seguim-bandeja--compact .cc-seguim-filter--check,
+.cc-seguim-actas--compact .cc-seguim-filter--check {
+  grid-column: 1 / -1;
+  margin-bottom: 0 !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-filter-actions,
+.cc-seguim-bandeja--compact .cc-seguim-filter-actions,
+.cc-seguim-actas--compact .cc-seguim-filter-actions {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.cc-seguim-root--compact .cc-seguim-filter-actions button,
+.cc-seguim-bandeja--compact .cc-seguim-filter-actions button,
+.cc-seguim-actas--compact .cc-seguim-filter-actions button {
+  flex: 1 1 auto;
+  min-height: 44px;
+}
+
+.cc-seguim-root--compact input,
+.cc-seguim-root--compact select,
+.cc-seguim-root--compact textarea,
+.cc-seguim-bandeja--compact input,
+.cc-seguim-bandeja--compact select,
+.cc-seguim-actas--compact input,
+.cc-seguim-actas--compact select {
+  min-height: 44px;
+  font-size: var(--cc-input, 16px);
+}
+
+/* Tablas → tarjetas apiladas */
+.cc-seguim-root--compact .cc-seguim-table-scroll,
+.cc-seguim-bandeja--compact .cc-seguim-table-scroll,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll,
+.cc-seguim-actas--compact .cc-seguim-table-scroll,
+.cc-seguim-acta-editor--compact .cc-seguim-table-scroll {
+  overflow-x: visible !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-table thead,
+.cc-seguim-bandeja--compact .cc-seguim-table thead,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table thead,
+.cc-seguim-actas--compact .cc-seguim-table thead,
+.cc-seguim-acta-editor--compact .cc-seguim-table thead {
+  display: none;
+}
+
+.cc-seguim-root--compact .cc-seguim-table tbody tr,
+.cc-seguim-bandeja--compact .cc-seguim-table tbody tr,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table tbody tr,
+.cc-seguim-actas--compact .cc-seguim-table tbody tr,
+.cc-seguim-acta-editor--compact .cc-seguim-table tbody tr {
+  display: block;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 22%, transparent);
+  border-radius: 10px;
+  background: inherit;
+}
+
+.cc-seguim-root--compact .cc-seguim-table tbody tr:last-child,
+.cc-seguim-bandeja--compact .cc-seguim-table tbody tr:last-child,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table tbody tr:last-child,
+.cc-seguim-actas--compact .cc-seguim-table tbody tr:last-child,
+.cc-seguim-acta-editor--compact .cc-seguim-table tbody tr:last-child {
+  margin-bottom: 0;
+}
+
+.cc-seguim-root--compact .cc-seguim-table td,
+.cc-seguim-bandeja--compact .cc-seguim-table td,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table td,
+.cc-seguim-actas--compact .cc-seguim-table td,
+.cc-seguim-acta-editor--compact .cc-seguim-table td {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 0 !important;
+  border: none !important;
+  max-width: none !important;
+  white-space: normal !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-table td::before,
+.cc-seguim-bandeja--compact .cc-seguim-table td::before,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table td::before,
+.cc-seguim-actas--compact .cc-seguim-table td::before,
+.cc-seguim-acta-editor--compact .cc-seguim-table td::before {
+  content: attr(data-label);
+  font-weight: 700;
+  font-size: var(--cc-xs);
+  color: var(--cc-text-muted, #64748b);
+  flex-shrink: 0;
+  max-width: 42%;
+  text-align: left;
+}
+
+.cc-seguim-root--compact .cc-seguim-table td:not([data-label])::before,
+.cc-seguim-bandeja--compact .cc-seguim-table td:not([data-label])::before,
+.cc-seguim-bandeja--compact.cc-seguim-table-scroll .cc-seguim-table td:not([data-label])::before,
+.cc-seguim-actas--compact .cc-seguim-table td:not([data-label])::before,
+.cc-seguim-acta-editor--compact .cc-seguim-table td:not([data-label])::before {
+  content: none;
+}
+
+/* Editor de acta */
+.cc-seguim-acta-editor--compact .cc-seguim-form-grid {
+  grid-template-columns: 1fr !important;
+}
+
+.cc-seguim-acta-editor--compact .cc-seguim-asistente-row {
+  grid-template-columns: 1fr !important;
+}
+
+.cc-seguim-acta-editor--compact .cc-seguim-asistente-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.cc-seguim-acta-editor--compact .cc-seguim-acta-head {
+  flex-direction: column;
+  align-items: stretch !important;
+}
+
+.cc-seguim-acta-editor--compact .cc-seguim-acta-head button {
+  width: 100%;
+  min-height: 44px;
+}
+
+.cc-seguim-acta-editor--compact .cc-seguim-acta-actions button {
+  flex: 1 1 calc(50% - 4px);
+  min-height: 44px;
+}
+
+.cc-seguim-acta-editor--compact iframe {
+  height: min(360px, 55vh) !important;
+}
+
+/* Checklist de tareas */
+.cc-seguim-root--compact .cc-seguim-checklist-title-row input,
+.cc-seguim-modal-sheet .cc-seguim-checklist-title-row input {
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-estados,
+.cc-seguim-modal-sheet .cc-seguim-checklist-estados {
+  width: 100%;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-actions,
+.cc-seguim-modal-sheet .cc-seguim-checklist-actions {
+  margin-left: 0 !important;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-meta-row label,
+.cc-seguim-modal-sheet .cc-seguim-checklist-meta-row label {
+  flex: 1 1 calc(50% - 6px);
+  min-width: 0;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-meta-row label input,
+.cc-seguim-modal-sheet .cc-seguim-checklist-meta-row label input {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-comment-row,
+.cc-seguim-modal-sheet .cc-seguim-checklist-comment-row {
+  flex-direction: column;
+}
+
+.cc-seguim-root--compact .cc-seguim-checklist-comment-row button,
+.cc-seguim-modal-sheet .cc-seguim-checklist-comment-row button {
+  width: 100%;
+  min-height: 44px;
+}
+
+/* Modales fullscreen inferior */
+.cc-seguim-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+}
+
+.cc-seguim-modal-overlay--compact {
+  align-items: flex-end !important;
+  padding: 0 !important;
+}
+
+.cc-seguim-modal-sheet {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-seguim-modal-sheet--desktop {
+  border-radius: 12px;
+}
+
+.cc-seguim-item-detalle--compact .cc-seguim-form-grid--2,
+.cc-seguim-compromiso-form--compact .cc-seguim-form-grid--2 {
+  grid-template-columns: 1fr !important;
+}
+
+.cc-seguim-item-detalle--compact .cc-seguim-comentario-row,
+.cc-seguim-modal-sheet .cc-seguim-comentario-row {
+  flex-direction: column;
+}
+
+.cc-seguim-item-detalle--compact .cc-seguim-comentario-row button,
+.cc-seguim-modal-sheet .cc-seguim-comentario-row button {
+  width: 100%;
+  min-height: 44px;
+}
+
+.cc-seguim-item-detalle--compact iframe,
+.cc-seguim-modal-sheet iframe {
+  height: min(280px, 45vh) !important;
+}
+
+.cc-seguim-modal-footer button {
+  min-height: 44px;
+}
+
+.cc-seguim-item-detalle--compact .cc-seguim-modal-footer,
+.cc-seguim-modal-sheet .cc-seguim-modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-top: 12px;
+  margin-top: 16px !important;
+  border-top: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 18%, transparent);
+  background: color-mix(in srgb, var(--cc-bg-card, #fff) 94%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+@media (min-width: 768px) and (max-width: 1366px) {
+  .cc-seguim-root--compact .cc-seguim-filters,
+  .cc-seguim-bandeja--compact .cc-seguim-filters,
+  .cc-seguim-actas--compact .cc-seguim-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cc-seguim-root--compact .cc-seguim-filter--wide,
+  .cc-seguim-bandeja--compact .cc-seguim-filter--wide,
+  .cc-seguim-actas--compact .cc-seguim-filter--wide {
+    grid-column: 1 / -1;
+  }
+}
+

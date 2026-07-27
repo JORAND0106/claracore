@@ -12,7 +12,7 @@ import {
   tipoLaborLabel,
 } from './vencimientoLevels'
 
-export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false }) {
+export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false, viewportCompact = false }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -56,39 +56,39 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
   const uid = usuario?.id
 
   return (
-    <div>
+    <div className={viewportCompact ? 'cc-seguim-bandeja cc-seguim-bandeja--compact' : 'cc-seguim-bandeja'}>
       {!compact && (
-        <div style={{
+        <div className="cc-seguim-filters" style={{
           display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
         }}>
-          <Filter t={t} label="Palabras clave">
+          <Filter t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
             <input
               value={filtros.q}
               onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
               onKeyDown={(e) => { if (e.key === 'Enter') load() }}
               placeholder="Título, descripción, notas…"
-              style={{ ...inp(t), minWidth: 200 }}
+              style={{ ...inp(t), minWidth: viewportCompact ? 0 : 200, width: '100%' }}
             />
           </Filter>
-          <Filter t={t} label="Estado">
-            <select value={filtros.estado} onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))} style={inp(t)}>
+          <Filter t={t} label="Estado" className="cc-seguim-filter">
+            <select value={filtros.estado} onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))} style={{ ...inp(t), width: '100%' }}>
               {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
             </select>
           </Filter>
-          <Filter t={t} label="Origen">
-            <select value={filtros.origen} onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))} style={inp(t)}>
+          <Filter t={t} label="Origen" className="cc-seguim-filter">
+            <select value={filtros.origen} onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))} style={{ ...inp(t), width: '100%' }}>
               <option value="">Todos</option>
               <option value="compromiso">Compromisos</option>
               <option value="tarea">Tareas</option>
             </select>
           </Filter>
-          <Filter t={t} label="Desde">
-            <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={inp(t)} />
+          <Filter t={t} label="Desde" className="cc-seguim-filter">
+            <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
           </Filter>
-          <Filter t={t} label="Hasta">
-            <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={inp(t)} />
+          <Filter t={t} label="Hasta" className="cc-seguim-filter">
+            <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
           </Filter>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4 }}>
+          <label className="cc-seguim-filter cc-seguim-filter--check" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4 }}>
             <input
               type="checkbox"
               checked={!!filtros.incluir_cerrados}
@@ -96,10 +96,12 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             />
             Incluir cumplidos / cancelados
           </label>
-          <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
-          {permisos?.crear && (
-            <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
-          )}
+          <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
+            {permisos?.crear && (
+              <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
+            )}
+          </div>
         </div>
       )}
 
@@ -120,8 +122,8 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
       ) : sorted.length === 0 ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>No hay ítems en la bandeja.</div>
       ) : (
-        <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 900 }}>
+        <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+          <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 900 }}>
             <thead>
               <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>#</th>
@@ -155,11 +157,13 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                     onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
                     onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
                   >
-                    <td style={td}>{r.consecutivo ?? r.id}</td>
-                    <td style={td}>{fmtFecha(r.created_at)}</td>
-                    <td style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
-                    <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
-                    <td style={{
+                    <td data-label="#" style={td}>{r.consecutivo ?? r.id}</td>
+                    <td data-label="Creación" style={td}>{fmtFecha(r.created_at)}</td>
+                    <td data-label="Vencimiento" style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
+                    <td data-label="Nivel" style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
+                    <td
+                      data-label="Estado / avance"
+                      style={{
                       ...td,
                       fontWeight: 700,
                       color: (r.origen === 'tarea' ? avance?.pct === 100 : r.estado_gestion === 'cumplido')
@@ -169,13 +173,13 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                     >
                       {estadoLabel}
                     </td>
-                    <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
+                    <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
                       <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
                       {r.titulo}
                     </td>
-                    <td style={td}>{dest}</td>
-                    <td style={td}>{origenRemitenteLabel(r, uid)}</td>
-                    <td style={td}>{tipoLaborLabel(r, uid)}</td>
+                    <td data-label="Destinatario" style={td}>{dest}</td>
+                    <td data-label="Origen / remitente" style={td}>{origenRemitenteLabel(r, uid)}</td>
+                    <td data-label="Tipo de labor" style={td}>{tipoLaborLabel(r, uid)}</td>
                   </tr>
                 )
               })}
@@ -192,6 +196,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           usuario={usuario}
           usuarios={usuarios}
           permisos={permisos}
+          viewportCompact={viewportCompact}
           onClose={() => setDetalleId(null)}
           onChanged={load}
         />
@@ -202,6 +207,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           api={api}
           usuario={usuario}
           usuarios={usuarios}
+          viewportCompact={viewportCompact}
           onClose={() => setShowTarea(false)}
           onCreated={() => { setShowTarea(false); load() }}
         />
@@ -213,9 +219,9 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
 const th = { padding: '10px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
 const td = { padding: '10px 8px', verticalAlign: 'middle', color: 'inherit' }
 
-function Filter({ t, label, children }) {
+function Filter({ t, label, children, className = '' }) {
   return (
-    <div>
+    <div className={className}>
       <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600, marginBottom: 2 }}>{label}</div>
       {children}
     </div>
@@ -225,6 +231,7 @@ function inp(t) {
   return {
     fontSize: 'var(--cc-input)', padding: '6px 8px', borderRadius: 8,
     border: `1px solid ${t.border}`, background: t.bgCard, color: t.text,
+    boxSizing: 'border-box',
   }
 }
 function primary(t) {

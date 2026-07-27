@@ -3,9 +3,12 @@ import TareaChecklistEditor from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
+import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
 /** Crear tarea personal: basta el título; la checklist se puede completar después. */
-export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
+export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated, viewportCompact: viewportCompactProp }) {
+  const viewportCompactHook = useSeguimientoCompact()
+  const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [titulo, setTitulo] = useState('')
   const [checklist, setChecklist] = useState([])
   const [destUser, setDestUser] = useState(null)
@@ -99,25 +102,21 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
       role="dialog"
       aria-modal="true"
       onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 11000,
-        background: 'rgba(15,23,42,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-      }}
+      className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+      style={seguimientoModalOverlayStyle(viewportCompact)}
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className={viewportCompact ? 'cc-seguim-modal-sheet cc-seguim-modal-sheet--wide' : 'cc-seguim-modal-sheet--desktop'}
         style={{
-          width: 'min(1640px, 98vw)',
-          maxHeight: '92vh',
-          overflow: 'auto',
+          ...seguimientoModalSheetStyle(viewportCompact, { wide: true }),
           background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 14,
-          padding: '28px 28px 22px',
+          border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow,
+          padding: viewportCompact ? undefined : '28px 28px 22px',
         }}
       >
+        <div className={viewportCompact ? 'cc-seguim-tarea-form cc-seguim-tarea-form--compact' : 'cc-seguim-tarea-form'}>
         <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text, marginBottom: 6 }}>
           Nueva tarea personal
         </div>
@@ -183,11 +182,12 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
 
         {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginTop: 4, fontSize: 'var(--cc-sm)' }}>{error}</div>}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+        <div className="cc-seguim-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
           <button type="button" onClick={onClose} style={ghost(t)}>Cancelar</button>
           <button type="button" disabled={busy} onClick={guardar} style={primary(t)}>
             {busy ? 'Guardando…' : 'Crear tarea'}
           </button>
+        </div>
         </div>
       </div>
     </div>

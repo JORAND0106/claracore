@@ -170,7 +170,7 @@ export default function TareaChecklistEditor({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="cc-seguim-checklist" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {items.length > 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
@@ -226,7 +226,7 @@ export default function TareaChecklistEditor({
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {/* Título + estado radio compacto en la misma línea */}
-                <div style={{
+                <div className="cc-seguim-checklist-title-row" style={{
                   display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8,
                 }}>
                   <input
@@ -246,6 +246,7 @@ export default function TareaChecklistEditor({
                   <div
                     role="radiogroup"
                     aria-label="Estado de gestión"
+                    className="cc-seguim-checklist-estados"
                     style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
                   >
                     {ESTADOS_GESTION.map((x) => {
@@ -282,7 +283,7 @@ export default function TareaChecklistEditor({
                 </div>
 
                 {/* Fecha/hora (+ reprogramación en la misma línea) y acciones compactas */}
-                <div style={{
+                <div className="cc-seguim-checklist-meta-row" style={{
                   display: 'flex',
                   flexWrap: 'wrap',
                   gap: 6,
@@ -338,7 +339,7 @@ export default function TareaChecklistEditor({
                     </>
                   )}
 
-                  <div style={{
+                  <div className="cc-seguim-checklist-actions" style={{
                     marginLeft: 'auto', display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center',
                   }}>
                     {!disabled && (
@@ -479,7 +480,7 @@ export default function TareaChecklistEditor({
                       </div>
                     ))}
                     {!disabled && (
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                      <div className="cc-seguim-checklist-comment-row" style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                         <textarea
                           rows={2}
                           value={draftComments[idx] || ''}

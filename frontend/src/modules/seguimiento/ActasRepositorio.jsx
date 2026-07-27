@@ -15,6 +15,7 @@ export default function ActasRepositorio({
   t,
   api,
   permisos,
+  viewportCompact = false,
   onNueva,
   onAbrir,
 }) {
@@ -48,39 +49,41 @@ export default function ActasRepositorio({
   useEffect(() => { load() }, [load])
 
   return (
-    <div>
-      <div style={{
+    <div className={viewportCompact ? 'cc-seguim-actas cc-seguim-actas--compact' : 'cc-seguim-actas'}>
+      <div className="cc-seguim-filters" style={{
         display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
       }}>
-        <Field t={t} label="Palabras clave">
+        <Field t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
           <input
             value={filtros.q}
             onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
             onKeyDown={(e) => { if (e.key === 'Enter') load() }}
             placeholder="Buscar en contenido del acta…"
-            style={{ ...inp(t), minWidth: 220 }}
+            style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
           />
         </Field>
-        <Field t={t} label="Estado">
-          <select value={filtros.estado} onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))} style={inp(t)}>
+        <Field t={t} label="Estado" className="cc-seguim-filter">
+          <select value={filtros.estado} onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))} style={{ ...inp(t), width: '100%' }}>
             {ACTA_ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
           </select>
         </Field>
-        <Field t={t} label="Tipo">
-          <select value={filtros.tipo_acta} onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))} style={inp(t)}>
+        <Field t={t} label="Tipo" className="cc-seguim-filter">
+          <select value={filtros.tipo_acta} onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))} style={{ ...inp(t), width: '100%' }}>
             {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
           </select>
         </Field>
-        <Field t={t} label="Desde">
-          <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={inp(t)} />
+        <Field t={t} label="Desde" className="cc-seguim-filter">
+          <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
         </Field>
-        <Field t={t} label="Hasta">
-          <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={inp(t)} />
+        <Field t={t} label="Hasta" className="cc-seguim-filter">
+          <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
         </Field>
-        <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
-        {permisos?.crear && (
-          <button type="button" onClick={onNueva} style={primary(t)}>+ Nueva acta</button>
-        )}
+        <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
+          {permisos?.crear && (
+            <button type="button" onClick={onNueva} style={primary(t)}>+ Nueva acta</button>
+          )}
+        </div>
       </div>
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>{error}</div>}
@@ -90,8 +93,8 @@ export default function ActasRepositorio({
       ) : rows.length === 0 ? (
         <div style={{ color: t.textMuted }}>No hay actas que coincidan con la consulta.</div>
       ) : (
-        <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 860 }}>
+        <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+          <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 860 }}>
             <thead>
               <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>Consecutivo</th>
@@ -112,13 +115,13 @@ export default function ActasRepositorio({
                   onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary}10` }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = t.bgCard }}
                 >
-                  <td style={td}>{a.consecutivo ?? '—'}</td>
-                  <td style={{ ...td, fontWeight: 700, color: t.text }}>{numeroActaLabel(a.consecutivo)}</td>
-                  <td style={td}>{fmtFecha(a.fecha_reunion)}</td>
-                  <td style={td}>{labelTipoActa(a.tipo_acta || 'interna')}</td>
-                  <td style={{ ...td, maxWidth: 220 }}>{a.ubicacion || '—'}</td>
-                  <td style={td}>{a.elaborador_nombre || '—'}</td>
-                  <td style={td}>
+                  <td data-label="Consecutivo" style={td}>{a.consecutivo ?? '—'}</td>
+                  <td data-label="Número de acta" style={{ ...td, fontWeight: 700, color: t.text }}>{numeroActaLabel(a.consecutivo)}</td>
+                  <td data-label="Fecha" style={td}>{fmtFecha(a.fecha_reunion)}</td>
+                  <td data-label="Tipo" style={td}>{labelTipoActa(a.tipo_acta || 'interna')}</td>
+                  <td data-label="Ubicación" style={{ ...td, maxWidth: 220 }}>{a.ubicacion || '—'}</td>
+                  <td data-label="Elaborador" style={td}>{a.elaborador_nombre || '—'}</td>
+                  <td data-label="Estado" style={td}>
                     <span style={{
                       display: 'inline-block', padding: '2px 8px', borderRadius: 6,
                       border: `1px solid ${t.border}`, fontWeight: 600, fontSize: 'var(--cc-xs)',
@@ -139,9 +142,9 @@ export default function ActasRepositorio({
 const th = { padding: '10px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
 const td = { padding: '10px 8px', verticalAlign: 'middle', color: 'inherit' }
 
-function Field({ t, label, children }) {
+function Field({ t, label, children, className = '' }) {
   return (
-    <div>
+    <div className={className}>
       <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600, marginBottom: 2 }}>{label}</div>
       {children}
     </div>
@@ -151,6 +154,7 @@ function inp(t) {
   return {
     fontSize: 'var(--cc-input)', padding: '6px 8px', borderRadius: 8,
     border: `1px solid ${t.border}`, background: t.bgCard, color: t.text,
+    boxSizing: 'border-box',
   }
 }
 function primary(t) {

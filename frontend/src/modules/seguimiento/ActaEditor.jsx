@@ -13,6 +13,7 @@ import {
   labelTipoActa,
   numeroActaLabel,
 } from './seguimientoTheme'
+import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
 const TABS_ACTA = [
   { id: 'encabezado', label: 'Encabezado' },
@@ -51,6 +52,7 @@ export default function ActaEditor({
   onSaved,
   onCancel,
   permisos,
+  compact: viewportCompact = false,
   asModal = false,
 }) {
   const [loading, setLoading] = useState(!!actaId)
@@ -292,8 +294,8 @@ export default function ActaEditor({
   }
 
   const body = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+    <div className={viewportCompact ? 'cc-seguim-acta-editor cc-seguim-acta-editor--compact' : 'cc-seguim-acta-editor'} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="cc-seguim-acta-head" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <div style={{ fontSize: asModal ? 'var(--cc-title)' : 'var(--cc-h2)', fontWeight: 700, color: t.text }}>
             {consecutivo != null ? numeroActaLabel(consecutivo) : 'Nueva acta de reunión'}
@@ -305,7 +307,7 @@ export default function ActaEditor({
         <button type="button" onClick={onCancel} style={ghost(t)}>{asModal ? 'Cerrar' : 'Volver'}</button>
       </div>
 
-      <div style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => (
           <button
             key={tb.id}
@@ -347,7 +349,7 @@ export default function ActaEditor({
       {tab === 'encabezado' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>Encabezado</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+        <div className="cc-seguim-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
           <Field t={t} label="Fecha de la reunión">
             <input type="date" disabled={soloLectura} value={form.fecha_reunion} onChange={(e) => setField('fecha_reunion', e.target.value)} style={inp(t)} />
           </Field>
@@ -451,8 +453,8 @@ export default function ActaEditor({
         {previos.length === 0 ? (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>No hay compromisos abiertos previos.</div>
         ) : (
-          <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: 640 }}>
+          <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+            <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 640 }}>
               <thead>
                 <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
                   <th style={{ padding: '8px 10px', fontWeight: 700 }}>Acta origen</th>
@@ -475,14 +477,14 @@ export default function ActaEditor({
                     onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
                     onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
                   >
-                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
+                    <td data-label="Acta origen" style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
                       {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : '—')}
                       {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
                     </td>
-                    <td style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
-                    <td style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
-                    <td style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
-                    <td style={{ padding: '8px 10px', color: t.textMuted }}>
+                    <td data-label="Compromiso" style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
+                    <td data-label="Asignado" style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
+                    <td data-label="Vence" style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
+                    <td data-label="Estado" style={{ padding: '8px 10px', color: t.textMuted }}>
                       {ESTADOS.find((x) => x.value === c.estado_gestion)?.label || c.estado_gestion}
                     </td>
                   </tr>
@@ -503,7 +505,7 @@ export default function ActaEditor({
           )}
         </div>
         {form.asistentes.map((a, idx) => (
-          <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,2fr) 1fr 1fr 1.2fr auto', gap: 8, marginBottom: 10, alignItems: 'start' }}>
+          <div key={idx} className="cc-seguim-asistente-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,2fr) 1fr 1fr 1.2fr auto', gap: 8, marginBottom: 10, alignItems: 'start' }}>
             <UserSearchSelect
               t={t}
               usuarios={usuariosContrato}
@@ -526,7 +528,7 @@ export default function ActaEditor({
             <input placeholder="Cargo" value={a.cargo} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, cargo: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
             <input placeholder="Entidad / empresa" value={a.entidad} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, entidad: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
             <input placeholder="Correo" value={a.email || ''} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, email: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
-            <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 4 }} className="cc-seguim-asistente-actions">
               {localActaId && a.id && permisos?.validar && form.estado !== 'borrador' && (
                 <button type="button" title="Firmar con firma de perfil" onClick={() => firmar(a.id)} style={ghost(t)}>✎</button>
               )}
@@ -585,7 +587,7 @@ export default function ActaEditor({
       {tab === 'acciones' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>Vista previa y acciones del sistema</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+        <div className="cc-seguim-acta-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
           {(permisos?.crear || permisos?.editar) && !soloLectura && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>{saving ? 'Guardando…' : 'Guardar acta'}</button>
           )}
@@ -650,6 +652,7 @@ export default function ActaEditor({
           permisos={permisos}
           allowEstadoGestion
           revisionEnActa
+          viewportCompact={viewportCompact}
           onClose={() => setDetalleCompromisoId(null)}
           onChanged={async () => {
             try {
@@ -664,8 +667,24 @@ export default function ActaEditor({
 
   if (asModal) {
     return (
-      <div role="dialog" aria-modal="true" onClick={onCancel} style={{ position: 'fixed', inset: 0, zIndex: 11000, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(1180px, 98vw)', maxHeight: '92vh', overflow: 'auto', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 20, boxShadow: t.shadow }}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={onCancel}
+        className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+        style={seguimientoModalOverlayStyle(viewportCompact)}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={viewportCompact ? 'cc-seguim-modal-sheet cc-seguim-modal-sheet--acta' : 'cc-seguim-modal-sheet--desktop'}
+          style={{
+            ...seguimientoModalSheetStyle(viewportCompact, { wide: true }),
+            background: t.bgCard,
+            border: viewportCompact ? 'none' : `1px solid ${t.border}`,
+            boxShadow: t.shadow,
+            width: viewportCompact ? '100%' : 'min(1180px, 98vw)',
+          }}
+        >
           {body}
         </div>
       </div>

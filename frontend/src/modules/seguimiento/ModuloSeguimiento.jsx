@@ -7,6 +7,7 @@ import ActasRepositorio from './ActasRepositorio'
 import BandejaPanel from './BandejaPanel'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
+import { useSeguimientoCompact } from './seguimientoShared'
 
 const TABS = [
   { id: 'bandeja', label: 'Bandeja', icon: '📥' },
@@ -22,6 +23,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     () => createSeguimientoApi(contratoId ?? usuario?.contrato_id, token),
     [contratoId, usuario?.contrato_id, token],
   )
+  const compact = useSeguimientoCompact()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const [tab, setTab] = useState('bandeja')
   const [usuariosContrato, setUsuariosContrato] = useState([])
@@ -87,8 +89,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: 1200 }}>
-      <div style={{
+    <div
+      className={compact ? 'cc-seguim-root cc-seguim-root--compact' : 'cc-seguim-root'}
+      style={{ width: '100%', maxWidth: compact ? '100%' : 1200 }}
+    >
+      <div className="cc-seguim-page-head" style={{
         display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
         justifyContent: 'space-between', marginBottom: 14,
       }}>
@@ -107,7 +112,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div className="cc-seguim-tabs" style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {TABS.map((tb) => (
           <button
             key={tb.id}
@@ -136,6 +141,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
+          viewportCompact={compact}
         />
       )}
 
@@ -145,6 +151,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           t={t}
           api={api}
           permisos={permisos}
+          viewportCompact={compact}
           onNueva={() => { setCreating(true); setEditingActaId(null) }}
           onAbrir={(id) => { setEditingActaId(id); setCreating(false) }}
         />
@@ -158,6 +165,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           usuariosContrato={usuariosContrato}
           actaId={editingActaId}
           permisos={permisos}
+          compact={compact}
           asModal
           onCancel={() => { setCreating(false); setEditingActaId(null); setRepoKey((n) => n + 1) }}
           onSaved={async (row, meta) => {

@@ -6,12 +6,16 @@ import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
+import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
 export default function ItemDetalleModal({
   t, api, itemId, usuario, usuarios = [], permisos, onClose, onChanged,
+  viewportCompact: viewportCompactProp,
   allowEstadoGestion = null, // null = auto (solo tareas); true/false fuerza
   revisionEnActa = false, // revisión de compromisos en el siguiente comité
 }) {
+  const viewportCompactHook = useSeguimientoCompact()
+  const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -65,7 +69,7 @@ export default function ItemDetalleModal({
 
   if (loading || !item) {
     return (
-      <Overlay t={t} onClose={onClose} wide={false}>
+      <Overlay t={t} onClose={onClose} wide={false} viewportCompact={viewportCompact}>
         <div style={{ color: t.textMuted }}>{error || 'Cargando…'}</div>
       </Overlay>
     )
@@ -169,7 +173,8 @@ export default function ItemDetalleModal({
   }
 
   return (
-    <Overlay t={t} onClose={onClose} wide={wide}>
+    <Overlay t={t} onClose={onClose} wide={wide} viewportCompact={viewportCompact}>
+      <div className={viewportCompact ? 'cc-seguim-item-detalle cc-seguim-item-detalle--compact' : 'cc-seguim-item-detalle'}>
       <div style={{
         borderLeft: `5px solid ${origen.border}`,
         paddingLeft: 12, marginBottom: 12,
@@ -265,7 +270,7 @@ export default function ItemDetalleModal({
             ))}
           </div>
           {estadoSel === 'reprogramado' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+            <div className="cc-seguim-form-grid cc-seguim-form-grid--2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
               <div>
                 <label style={lbl(t)}>Nueva fecha de vencimiento *</label>
                 <input type="date" value={fechaReprog} onChange={(e) => setFechaReprog(e.target.value)} style={inp(t)} />
@@ -384,7 +389,7 @@ export default function ItemDetalleModal({
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin comentarios aún.</div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="cc-seguim-comentario-row" style={{ display: 'flex', gap: 8 }}>
           <input
             value={comentario}
             onChange={(e) => setComentario(e.target.value)}
@@ -485,7 +490,7 @@ export default function ItemDetalleModal({
         </section>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
+      <div className="cc-seguim-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
         {esDev && (
           <button
             type="button"
@@ -504,33 +509,28 @@ export default function ItemDetalleModal({
         )}
         <button type="button" onClick={onClose} style={{ ...ghost(t), marginLeft: 'auto' }}>Cerrar</button>
       </div>
+      </div>
     </Overlay>
   )
 }
 
-function Overlay({ t, onClose, children, wide = false }) {
+function Overlay({ t, onClose, children, wide = false, viewportCompact = false }) {
   return (
     <div
       role="dialog"
       aria-modal="true"
       onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 11000,
-        background: 'rgba(15,23,42,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-      }}
+      className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+      style={seguimientoModalOverlayStyle(viewportCompact)}
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className={viewportCompact ? 'cc-seguim-modal-sheet' : 'cc-seguim-modal-sheet--desktop'}
         style={{
-          width: wide ? 'min(1640px, 98vw)' : 'min(820px, 100%)',
-          maxHeight: '92vh',
-          overflow: 'auto',
+          ...seguimientoModalSheetStyle(viewportCompact, { wide }),
           background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 12,
-          padding: 20,
-          boxShadow: t.shadow,
+          border: viewportCompact ? 'none' : `1px solid ${t.border}`,
+          boxShadow: t.shadow || '0 12px 40px rgba(0,0,0,0.2)',
         }}
       >
         {children}

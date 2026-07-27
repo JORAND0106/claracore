@@ -3,6 +3,7 @@ import { createSeguimientoApi } from '../../modules/seguimiento/seguimientoApi'
 import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
+import { useSeguimientoCompact } from '../../modules/seguimiento/seguimientoShared'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
 import { calcularAvanceTarea, labelAvance } from '../../modules/seguimiento/tareaAvance'
 import {
@@ -49,6 +50,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
 
   const sorted = useMemo(() => sortByProximidadVencimiento(rows), [rows])
   const uid = usuario?.id
+  const viewportCompact = useSeguimientoCompact()
 
   if (!permisos.ver || cid == null || cid === '') return null
 
@@ -98,10 +100,10 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
           ) : sorted.length === 0 ? (
             <div style={{ fontSize: bodySize, color: t.textMuted }}>Sin pendientes.</div>
           ) : (
-            <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-              <table style={{
+            <div className={viewportCompact ? 'cc-seguim-table-scroll cc-seguim-bandeja--compact' : 'cc-seguim-table-scroll'} style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+              <table className="cc-seguim-table" style={{
                 width: '100%', borderCollapse: 'collapse',
-                fontSize: smSize, minWidth: 860,
+                fontSize: smSize, minWidth: viewportCompact ? 0 : 860,
               }}
               >
                 <thead>
@@ -137,11 +139,13 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
                         onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
                         onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
                       >
-                        <td style={td}>{r.consecutivo ?? r.id}</td>
-                        <td style={td}>{fmtFecha(r.created_at)}</td>
-                        <td style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
-                        <td style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
-                        <td style={{
+                        <td data-label="#" style={td}>{r.consecutivo ?? r.id}</td>
+                        <td data-label="Creación" style={td}>{fmtFecha(r.created_at)}</td>
+                        <td data-label="Vencimiento" style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
+                        <td data-label="Nivel" style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
+                        <td
+                          data-label="Estado / avance"
+                          style={{
                           ...td,
                           fontWeight: 700,
                           color: (r.origen === 'tarea' ? avance?.pct === 100 : r.estado_gestion === 'cumplido')
@@ -151,13 +155,13 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
                         >
                           {estadoLabel}
                         </td>
-                        <td style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
+                        <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
                           <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
                           {r.titulo}
                         </td>
-                        <td style={td}>{dest}</td>
-                        <td style={td}>{origenRemitenteLabel(r, uid)}</td>
-                        <td style={td}>{tipoLaborLabel(r, uid)}</td>
+                        <td data-label="Destinatario" style={td}>{dest}</td>
+                        <td data-label="Origen / remitente" style={td}>{origenRemitenteLabel(r, uid)}</td>
+                        <td data-label="Tipo de labor" style={td}>{tipoLaborLabel(r, uid)}</td>
                       </tr>
                     )
                   })}
