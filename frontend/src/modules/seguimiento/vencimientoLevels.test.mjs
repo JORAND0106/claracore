@@ -6,7 +6,9 @@ import {
   calcularNivelVencimiento,
   fechaVencimientoEfectiva,
   nivelVencimientoItem,
+  origenRemitenteLabel,
   sortByProximidadVencimiento,
+  tipoLaborLabel,
 } from './vencimientoLevels.js'
 
 function assert(cond, msg) {
@@ -80,5 +82,27 @@ const nivelCk = nivelVencimientoItem({
   campos_libres: { checklist: [{ fecha: '2026-08-10' }] },
 }, new Date(2026, 7, 10))
 assert(nivelCk === 5, 'nivel desde checklist en día de vencimiento')
+
+// Delegación: etiquetas en bandeja / widget
+const delegada = {
+  origen: 'tarea',
+  relacion_destinatario: 'asignacion',
+  created_by: 10,
+  asignado_a_id: 20,
+  created_by_nombre: 'Ana Pérez',
+}
+assert(tipoLaborLabel(delegada, 20) === 'Delegada a mí', 'tipo labor delegada')
+assert(origenRemitenteLabel(delegada, 20) === 'Delegó: Ana Pérez', 'remitente delegó')
+assert(tipoLaborLabel(delegada, 10) === 'Asignada a otro', 'tipo labor delegante')
+
+const refRecv = {
+  origen: 'tarea',
+  relacion_destinatario: 'referencia',
+  created_by: 10,
+  asignado_a_id: 10,
+  referido_a_id: 20,
+  created_by_nombre: 'Ana Pérez',
+}
+assert(origenRemitenteLabel(refRecv, 20) === 'Referencia de: Ana Pérez', 'remitente referencia')
 
 console.log('vencimientoLevels.test.mjs OK')
