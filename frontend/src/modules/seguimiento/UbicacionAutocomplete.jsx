@@ -74,8 +74,8 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
           <button
             key={o.id}
             type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
+            onPointerDown={(e) => {
+              e.preventDefault()
               setQ(o.label)
               onChange?.(o.label, o)
               setOpen(false)

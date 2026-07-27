@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import ItemDetalleModal from './ItemDetalleModal'
@@ -24,12 +24,51 @@ const TABS_ACTA = [
   { id: 'acciones', label: 'Vista previa y acciones' },
 ]
 
+let _rowKeySeq = 0
+function newRowKey(prefix = 'r') {
+  _rowKeySeq += 1
+  return `${prefix}-${Date.now().toString(36)}-${_rowKeySeq}`
+}
+
+function emptyAsistente() {
+  return {
+    _key: newRowKey('as'),
+    nombre: '',
+    cargo: '',
+    entidad: '',
+    email: '',
+    usuario_id: null,
+    externo_id: null,
+  }
+}
+
+function emptyIdea() {
+  return { _key: newRowKey('idea'), texto: '' }
+}
+
+function emptyApartado() {
+  return { _key: newRowKey('ap'), titulo: '', contenido: '' }
+}
+
+function mapAsistenteFromApi(x, prev = null) {
+  return {
+    _key: prev?._key || (x.id != null ? `as-id-${x.id}` : newRowKey('as')),
+    id: x.id,
+    nombre: x.nombre || '',
+    cargo: x.cargo || '',
+    entidad: x.entidad || '',
+    email: x.email || '',
+    usuario_id: x.usuario_id || null,
+    externo_id: x.externo_id ?? prev?.externo_id ?? null,
+  }
+}
+
 function parseOrdenDia(raw) {
   if (Array.isArray(raw)) {
     return raw.map((x, i) => (
       typeof x === 'object'
-        ? { texto: x.texto || x.titulo || '', hecho: !!(x.hecho || x.checked || x.done), key: x.key || i }
-        : { texto: String(x), hecho: false, key: i }
+        ? { texto: x.texto || x.titulo || '', hecho: !!(x.hecho || x.checked || x.done), key: x.key || newRowKey('ord') }
+        : { texto: String(x), hecho: false, key: newRowKey('ord') }
     ))
   }
   if (typeof raw === 'string' && raw.trim().startsWith('[')) {
@@ -38,9 +77,9 @@ function parseOrdenDia(raw) {
     } catch { /* fallthrough */ }
   }
   if (typeof raw === 'string' && raw.trim()) {
-    return raw.split(/\n+/).filter(Boolean).map((texto, i) => ({ texto, hecho: false, key: i }))
+    return raw.split(/\n+/).filter(Boolean).map((texto) => ({ texto, hecho: false, key: newRowKey('ord') }))
   }
-  return [{ texto: '', hecho: false, key: 0 }]
+  return [{ texto: '', hecho: false, key: newRowKey('ord') }]
 }
 
 export default function ActaEditor({
@@ -68,12 +107,12 @@ export default function ActaEditor({
     fecha_reunion: new Date().toISOString().slice(0, 10),
     ubicacion: '',
     tipo_acta: 'interna',
-    orden_items: [{ texto: '', hecho: false, key: 0 }],
+    orden_items: [{ texto: '', hecho: false, key: newRowKey('ord') }],
     elaborador_id: usuario?.id || null,
     elaborador_nombre: nombre(usuario),
-    asistentes: [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }],
-    ideas: [{ texto: '' }],
-    apartados: [{ titulo: '', contenido: '' }],
+    asistentes: [emptyAsistente()],
+    ideas: [emptyIdea()],
+    apartados: [emptyApartado()],
     estado: 'borrador',
   })
   const [claraIdx, setClaraIdx] = useState(null)
@@ -81,10 +120,17 @@ export default function ActaEditor({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
   const soloLectura = form.estado === 'firmada'
+  /** Evita re-hidratar desde API cuando el padre pasa actaId tras el primer guardado local. */
+  const skipServerHydrateRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      if (skipServerHydrateRef.current) {
+        skipServerHydrateRef.current = false
+        if (!cancelled) setLoading(false)
+        return
+      }
       try {
         if (actaId) {
           setLoading(true)
@@ -100,22 +146,24 @@ export default function ActaEditor({
             elaborador_id: a.elaborador_id,
             elaborador_nombre: a.elaborador_nombre || '',
             asistentes: (a.asistentes || []).length
-              ? a.asistentes.map((x) => ({
-                id: x.id,
-                nombre: x.nombre || '',
-                cargo: x.cargo || '',
-                entidad: x.entidad || '',
-                email: x.email || '',
-                usuario_id: x.usuario_id || null,
-                externo_id: null,
-              }))
-              : [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }],
+              ? a.asistentes.map((x) => mapAsistenteFromApi(x))
+              : [emptyAsistente()],
             ideas: (a.ideas || []).length
-              ? a.ideas.map((x) => ({ id: x.id, texto: x.texto || '', orden: x.orden }))
-              : [{ texto: '' }],
+              ? a.ideas.map((x) => ({
+                _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
+                id: x.id,
+                texto: x.texto || '',
+                orden: x.orden,
+              }))
+              : [emptyIdea()],
             apartados: (a.apartados || []).length
-              ? a.apartados.map((x) => ({ id: x.id, titulo: x.titulo || '', contenido: x.contenido || '' }))
-              : [{ titulo: '', contenido: '' }],
+              ? a.apartados.map((x) => ({
+                _key: x.id != null ? `ap-id-${x.id}` : newRowKey('ap'),
+                id: x.id,
+                titulo: x.titulo || '',
+                contenido: x.contenido || '',
+              }))
+              : [emptyApartado()],
             estado: (a.estado === 'en_firma' || a.estado === 'cerrada') ? 'realizada' : (a.estado || 'borrador'),
           })
           const abiertos = await api.compromisosAbiertos(actaId)
@@ -141,59 +189,79 @@ export default function ActaEditor({
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
+  const patchList = (k, updater) => {
+    setForm((f) => ({ ...f, [k]: updater(f[k] || []) }))
+  }
 
-  const buildPayload = (extra = {}) => ({
-    fecha_reunion: form.fecha_reunion,
-    ubicacion: form.ubicacion,
-    tipo_acta: form.tipo_acta || 'interna',
-    orden_del_dia: (form.orden_items || [])
+  const buildPayload = (extra = {}, formSrc = form) => ({
+    fecha_reunion: formSrc.fecha_reunion,
+    ubicacion: formSrc.ubicacion,
+    tipo_acta: formSrc.tipo_acta || 'interna',
+    orden_del_dia: (formSrc.orden_items || [])
       .filter((x) => (x.texto || '').trim())
       .map((x) => ({ texto: x.texto.trim(), hecho: !!x.hecho })),
-    elaborador_id: form.elaborador_id,
-    elaborador_nombre: form.elaborador_nombre,
-    asistentes: form.asistentes.filter((a) => a.nombre.trim()),
-    ideas: form.ideas.filter((i) => (i.texto || '').trim() || i.id),
-    apartados: form.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
+    elaborador_id: formSrc.elaborador_id,
+    elaborador_nombre: formSrc.elaborador_nombre,
+    asistentes: formSrc.asistentes.filter((a) => a.nombre.trim()),
+    ideas: formSrc.ideas.filter((i) => (i.texto || '').trim() || i.id),
+    apartados: formSrc.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
     ...extra,
   })
 
   const applySavedActa = (row) => {
+    skipServerHydrateRef.current = true
     setLocalActaId(row.id)
     setConsecutivo(row.consecutivo)
-    setForm((f) => ({
-      ...f,
-      estado: (row.estado === 'en_firma' || row.estado === 'cerrada') ? 'realizada' : (row.estado || f.estado),
-      tipo_acta: row.tipo_acta || f.tipo_acta || 'interna',
-      elaborador_id: row.elaborador_id,
-      elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
-      asistentes: (row.asistentes || []).length
-        ? row.asistentes.map((x) => ({
-          id: x.id,
-          nombre: x.nombre || '',
-          cargo: x.cargo || '',
-          entidad: x.entidad || '',
-          email: x.email || '',
-          usuario_id: x.usuario_id || null,
-          externo_id: null,
-        }))
-        : f.asistentes,
-      ideas: (row.ideas || []).length
-        ? row.ideas.map((x) => ({ id: x.id, texto: x.texto || '', orden: x.orden }))
-        : f.ideas,
-      apartados: (row.apartados || []).length
-        ? row.apartados.map((x) => ({ id: x.id, titulo: x.titulo || '', contenido: x.contenido || '' }))
-        : f.apartados,
-      orden_items: parseOrdenDia(row.orden_del_dia),
-    }))
+    setForm((f) => {
+      const prevAs = f.asistentes || []
+      const prevIdeas = f.ideas || []
+      const prevAp = f.apartados || []
+      const prevOrden = f.orden_items || []
+      return {
+        ...f,
+        estado: (row.estado === 'en_firma' || row.estado === 'cerrada') ? 'realizada' : (row.estado || f.estado),
+        tipo_acta: row.tipo_acta || f.tipo_acta || 'interna',
+        elaborador_id: row.elaborador_id,
+        elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
+        asistentes: (row.asistentes || []).length
+          ? row.asistentes.map((x, i) => mapAsistenteFromApi(x, prevAs[i]))
+          : prevAs,
+        ideas: (row.ideas || []).length
+          ? row.ideas.map((x, i) => ({
+            _key: prevIdeas[i]?._key || (x.id != null ? `idea-id-${x.id}` : newRowKey('idea')),
+            id: x.id,
+            texto: x.texto || '',
+            orden: x.orden,
+          }))
+          : prevIdeas,
+        apartados: (row.apartados || []).length
+          ? row.apartados.map((x, i) => ({
+            _key: prevAp[i]?._key || (x.id != null ? `ap-id-${x.id}` : newRowKey('ap')),
+            id: x.id,
+            titulo: x.titulo || '',
+            contenido: x.contenido || '',
+          }))
+          : prevAp,
+        orden_items: (() => {
+          const parsed = parseOrdenDia(row.orden_del_dia)
+          return parsed.map((item, i) => ({
+            ...item,
+            key: prevOrden[i]?.key || item.key || newRowKey('ord'),
+          }))
+        })(),
+      }
+    })
     return row
   }
 
   /** Guarda (crea o actualiza) y deja el acta e ideas con id listos para compromisos. */
-  const persistActa = async (extra = {}) => {
-    if (!form.elaborador_id) {
+  const persistActa = async (extra = {}, formSrc = null) => {
+    const src = formSrc || form
+    if (!src.elaborador_id) {
       throw new Error('Seleccione un elaborador registrado en el contrato')
     }
-    const payload = buildPayload(extra)
+    const payload = buildPayload(extra, src)
     const row = localActaId
       ? await api.updateActa(localActaId, payload)
       : await api.createActa(payload)
@@ -223,13 +291,16 @@ export default function ActaEditor({
 
   const ensureReadyForCompromiso = async (ideaIdxHint, textoHint) => {
     // Asegura texto local y guarda para obtener ids
-    let ideas = [...form.ideas]
+    let ideasSnapshot = form.ideas
     if (ideaIdxHint != null && textoHint != null) {
-      ideas[ideaIdxHint] = { ...ideas[ideaIdxHint], texto: textoHint }
-      setField('ideas', ideas)
+      ideasSnapshot = form.ideas.map((row, i) => (
+        i === ideaIdxHint ? { ...row, texto: textoHint } : row
+      ))
+      patchList('ideas', () => ideasSnapshot)
     }
-    const row = await persistActa()
-    const ideaLocal = ideas[ideaIdxHint]
+    const formSrc = { ...form, ideas: ideasSnapshot }
+    const row = await persistActa({}, formSrc)
+    const ideaLocal = ideasSnapshot[ideaIdxHint]
     let ideaId = ideaLocal?.id
     if (!ideaId && ideaIdxHint != null) {
       // match por orden / texto tras guardar
@@ -418,9 +489,10 @@ export default function ActaEditor({
                 disabled={soloLectura}
                 checked={!!it.hecho}
                 onChange={(e) => {
-                  const next = [...form.orden_items]
-                  next[idx] = { ...it, hecho: e.target.checked }
-                  setField('orden_items', next)
+                  const checked = e.target.checked
+                  patchList('orden_items', (list) => list.map((row, i) => (
+                    i === idx ? { ...row, hecho: checked } : row
+                  )))
                 }}
               />
               <input
@@ -428,19 +500,31 @@ export default function ActaEditor({
                 value={it.texto}
                 placeholder={`Punto ${idx + 1}`}
                 onChange={(e) => {
-                  const next = [...form.orden_items]
-                  next[idx] = { ...it, texto: e.target.value }
-                  setField('orden_items', next)
+                  const texto = e.target.value
+                  patchList('orden_items', (list) => list.map((row, i) => (
+                    i === idx ? { ...row, texto } : row
+                  )))
                 }}
                 style={{ ...inp(t), flex: 1 }}
               />
               {!soloLectura && (
-                <button type="button" style={ghost(t)} onClick={() => setField('orden_items', form.orden_items.filter((_, i) => i !== idx))}>✕</button>
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onClick={() => patchList('orden_items', (list) => list.filter((_, i) => i !== idx))}
+                >
+                  ✕
+                </button>
               )}
             </div>
           ))}
           {!soloLectura && (
-            <button type="button" style={ghost(t)} onClick={() => setField('orden_items', [...form.orden_items, { texto: '', hecho: false, key: Date.now() }])}>
+            <button
+              type="button"
+              style={ghost(t)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => patchList('orden_items', (list) => [...list, { texto: '', hecho: false, key: newRowKey('ord') }])}
+            >
               + Agregar punto
             </button>
           )}
@@ -503,11 +587,18 @@ export default function ActaEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Asistentes</h3>
           {!soloLectura && (
-            <button type="button" style={ghost(t)} onClick={() => setField('asistentes', [...form.asistentes, { nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }])}>+ Asistente</button>
+            <button
+              type="button"
+              style={ghost(t)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => patchList('asistentes', (list) => [...list, emptyAsistente()])}
+            >
+              + Asistente
+            </button>
           )}
         </div>
         {form.asistentes.map((a, idx) => (
-          <div key={idx} className="cc-seguim-asistente-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,2fr) 1fr 1fr 1.2fr auto', gap: 8, marginBottom: 10, alignItems: 'start' }}>
+          <div key={a._key || a.id || `as-${idx}`} className="cc-seguim-asistente-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,2fr) 1fr 1fr 1.2fr auto', gap: 8, marginBottom: 10, alignItems: 'start' }}>
             <UserSearchSelect
               t={t}
               usuarios={usuariosContrato}
@@ -517,45 +608,78 @@ export default function ActaEditor({
               placeholder="Buscar o digitar nombre…"
               style={inp(t)}
               onSelect={(u) => {
-                const next = [...form.asistentes]
-                if (u.es_externo || (u.externo_id != null && Number(u.id) < 0)) {
-                  next[idx] = {
-                    ...a,
-                    usuario_id: null,
-                    externo_id: u.externo_id ?? Math.abs(Number(u.id)),
-                    nombre: nombreUser(u),
-                    cargo: u.cargo_nombre || '',
-                    entidad: u.empresa || '',
-                    email: u.email || '',
+                patchList('asistentes', (list) => list.map((row, i) => {
+                  if (i !== idx) return row
+                  if (u.es_externo || (u.externo_id != null && Number(u.id) < 0)) {
+                    return {
+                      ...row,
+                      usuario_id: null,
+                      externo_id: u.externo_id ?? Math.abs(Number(u.id)),
+                      nombre: nombreUser(u),
+                      cargo: u.cargo_nombre || '',
+                      entidad: u.empresa || '',
+                      email: u.email || '',
+                    }
                   }
-                } else {
-                  next[idx] = {
-                    ...a,
+                  return {
+                    ...row,
                     usuario_id: u.id,
                     externo_id: null,
                     nombre: nombreUser(u),
-                    cargo: u.cargo_nombre || a.cargo || '',
-                    entidad: u.empresa || a.entidad || '',
-                    email: u.email || a.email || '',
+                    cargo: u.cargo_nombre || row.cargo || '',
+                    entidad: u.empresa || row.entidad || '',
+                    email: u.email || row.email || '',
                   }
-                }
-                setField('asistentes', next)
+                }))
               }}
               onFreeConfirm={({ nombre }) => {
-                const next = [...form.asistentes]
-                next[idx] = { ...a, usuario_id: null, externo_id: null, nombre }
-                setField('asistentes', next)
+                patchList('asistentes', (list) => list.map((row, i) => (
+                  i === idx
+                    ? { ...row, usuario_id: null, externo_id: null, nombre }
+                    : row
+                )))
               }}
             />
-            <input placeholder="Cargo" value={a.cargo} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, cargo: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
-            <input placeholder="Entidad / empresa" value={a.entidad} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, entidad: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
-            <input placeholder="Correo" value={a.email || ''} onChange={(e) => { const next = [...form.asistentes]; next[idx] = { ...a, email: e.target.value }; setField('asistentes', next) }} style={inp(t)} />
+            <input
+              placeholder="Cargo"
+              value={a.cargo}
+              onChange={(e) => {
+                const cargo = e.target.value
+                patchList('asistentes', (list) => list.map((row, i) => (i === idx ? { ...row, cargo } : row)))
+              }}
+              style={inp(t)}
+            />
+            <input
+              placeholder="Entidad / empresa"
+              value={a.entidad}
+              onChange={(e) => {
+                const entidad = e.target.value
+                patchList('asistentes', (list) => list.map((row, i) => (i === idx ? { ...row, entidad } : row)))
+              }}
+              style={inp(t)}
+            />
+            <input
+              placeholder="Correo"
+              value={a.email || ''}
+              onChange={(e) => {
+                const email = e.target.value
+                patchList('asistentes', (list) => list.map((row, i) => (i === idx ? { ...row, email } : row)))
+              }}
+              style={inp(t)}
+            />
             <div style={{ display: 'flex', gap: 4 }} className="cc-seguim-asistente-actions">
               {localActaId && a.id && permisos?.validar && form.estado !== 'borrador' && (
                 <button type="button" title="Firmar con firma de perfil" onClick={() => firmar(a.id)} style={ghost(t)}>✎</button>
               )}
               {!soloLectura && (
-                <button type="button" onClick={() => setField('asistentes', form.asistentes.filter((_, i) => i !== idx))} style={ghost(t)}>✕</button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => patchList('asistentes', (list) => list.filter((_, i) => i !== idx))}
+                  style={ghost(t)}
+                >
+                  ✕
+                </button>
               )}
             </div>
           </div>
@@ -568,20 +692,43 @@ export default function ActaEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Ideas centrales</h3>
           {!soloLectura && (
-            <button type="button" style={primary(t)} onClick={() => setField('ideas', [...form.ideas, { texto: '' }])}>+ Agregar idea</button>
+            <button
+              type="button"
+              style={primary(t)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => patchList('ideas', (list) => [...list, emptyIdea()])}
+            >
+              + Agregar idea
+            </button>
           )}
         </div>
         {form.ideas.map((idea, idx) => (
-          <div key={idea.id || idx} style={{ marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}` }}>
+          <div key={idea._key || idea.id || `idea-${idx}`} style={{ marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}` }}>
             <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}</div>
-            <textarea rows={4} disabled={soloLectura} value={idea.texto} onChange={(e) => { const next = [...form.ideas]; next[idx] = { ...idea, texto: e.target.value }; setField('ideas', next) }} style={inp(t)} />
+            <textarea
+              rows={4}
+              disabled={soloLectura}
+              value={idea.texto}
+              onChange={(e) => {
+                const texto = e.target.value
+                patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+              }}
+              style={inp(t)}
+            />
             {!soloLectura && (
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>Redactar con Clara</button>
                 {permisos?.crear && (
                   <button type="button" style={ghost(t)} disabled={saving || !(idea.texto || '').trim()} onClick={() => abrirCompromiso(idx, idea.texto)}>Generar compromiso</button>
                 )}
-                <button type="button" style={ghost(t)} onClick={() => setField('ideas', form.ideas.filter((_, i) => i !== idx))}>Quitar</button>
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => patchList('ideas', (list) => list.filter((_, i) => i !== idx))}
+                >
+                  Quitar
+                </button>
               </div>
             )}
           </div>
@@ -594,13 +741,39 @@ export default function ActaEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Apartados adicionales</h3>
           {!soloLectura && (
-            <button type="button" style={ghost(t)} onClick={() => setField('apartados', [...form.apartados, { titulo: '', contenido: '' }])}>+ Apartado</button>
+            <button
+              type="button"
+              style={ghost(t)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => patchList('apartados', (list) => [...list, emptyApartado()])}
+            >
+              + Apartado
+            </button>
           )}
         </div>
         {form.apartados.map((ap, idx) => (
-          <div key={idx} style={{ marginTop: 8 }}>
-            <input placeholder="Título" disabled={soloLectura} value={ap.titulo} onChange={(e) => { const next = [...form.apartados]; next[idx] = { ...ap, titulo: e.target.value }; setField('apartados', next) }} style={{ ...inp(t), marginBottom: 6 }} />
-            <textarea rows={3} placeholder="Contenido libre" disabled={soloLectura} value={ap.contenido} onChange={(e) => { const next = [...form.apartados]; next[idx] = { ...ap, contenido: e.target.value }; setField('apartados', next) }} style={inp(t)} />
+          <div key={ap._key || ap.id || `ap-${idx}`} style={{ marginTop: 8 }}>
+            <input
+              placeholder="Título"
+              disabled={soloLectura}
+              value={ap.titulo}
+              onChange={(e) => {
+                const titulo = e.target.value
+                patchList('apartados', (list) => list.map((row, i) => (i === idx ? { ...row, titulo } : row)))
+              }}
+              style={{ ...inp(t), marginBottom: 6 }}
+            />
+            <textarea
+              rows={3}
+              placeholder="Contenido libre"
+              disabled={soloLectura}
+              value={ap.contenido}
+              onChange={(e) => {
+                const contenido = e.target.value
+                patchList('apartados', (list) => list.map((row, i) => (i === idx ? { ...row, contenido } : row)))
+              }}
+              style={inp(t)}
+            />
           </div>
         ))}
       </section>
@@ -643,8 +816,16 @@ export default function ActaEditor({
           api={api}
           textoInicial={form.ideas[claraIdx]?.texto || ''}
           onClose={() => setClaraIdx(null)}
-          onEnviarAlActa={(texto) => { const next = [...form.ideas]; next[claraIdx] = { ...next[claraIdx], texto }; setField('ideas', next); setClaraIdx(null) }}
-          onGenerarCompromiso={async (texto) => { const idx = claraIdx; const next = [...form.ideas]; next[idx] = { ...next[idx], texto }; setField('ideas', next); setClaraIdx(null); await abrirCompromiso(idx, texto) }}
+          onEnviarAlActa={(texto) => {
+            patchList('ideas', (list) => list.map((row, i) => (i === claraIdx ? { ...row, texto } : row)))
+            setClaraIdx(null)
+          }}
+          onGenerarCompromiso={async (texto) => {
+            const idx = claraIdx
+            patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+            setClaraIdx(null)
+            await abrirCompromiso(idx, texto)
+          }}
         />
       )}
 

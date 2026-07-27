@@ -51,6 +51,10 @@ export default function UserSearchSelect({
   // iOS muestra contactos al enfocar inputs editables; readonly hasta el primer focus lo evita.
   const [iosGuard, setIosGuard] = useState(true)
   const inputRef = useRef(null)
+  const listRef = useRef(null)
+  const pickingRef = useRef(false)
+  const qRef = useRef(q)
+  qRef.current = q
 
   useEffect(() => {
     setQ(valueNombre || '')
@@ -74,15 +78,17 @@ export default function UserSearchSelect({
   const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 200 })
 
   const pick = (u) => {
+    pickingRef.current = true
     setQ(nombreUser(u))
     setOpen(false)
     setConfirmFree(null)
     onSelect?.(u)
+    window.setTimeout(() => { pickingRef.current = false }, 0)
   }
 
   const tryFree = () => {
     if (mode !== 'free') return
-    const s = q.trim()
+    const s = qRef.current.trim()
     if (!s) return
     const exact = usuarios.find((u) => nombreUser(u).toLowerCase() === s.toLowerCase())
     if (exact) {
@@ -95,6 +101,7 @@ export default function UserSearchSelect({
   const listbox = listOpen && dropdownStyle && typeof document !== 'undefined'
     ? createPortal(
       <div
+        ref={listRef}
         id={`${fieldName}-list`}
         role="listbox"
         style={{
@@ -112,7 +119,11 @@ export default function UserSearchSelect({
             key={u.es_externo ? `ext-${u.externo_id}` : u.id}
             type="button"
             role="option"
-            onMouseDown={(e) => { e.preventDefault(); pick(u) }}
+            onPointerDown={(e) => {
+              // Evita blur del input antes del pick (doble toque en iPad / clic perdido).
+              e.preventDefault()
+              pick(u)
+            }}
             style={{
               display: 'block', width: '100%', textAlign: 'left', border: 'none',
               background: Number(u.id) === Number(valueId) ? `${t.primary}18` : 'transparent',
@@ -183,11 +194,25 @@ export default function UserSearchSelect({
           }, 0)
         }}
         onBlur={() => {
-          setTimeout(() => {
+          window.setTimeout(() => {
+            if (pickingRef.current) {
+              setOpen(false)
+              return
+            }
+            // Clic en otro control del formulario: no forzar confirmación de texto libre.
+            const active = document.activeElement
+            if (active && active !== inputRef.current) {
+              const tag = (active.tagName || '').toLowerCase()
+              if (tag === 'button' || tag === 'a' || active.getAttribute?.('role') === 'tab') {
+                setOpen(false)
+                return
+              }
+            }
             setOpen(false)
             if (mode === 'free') tryFree()
             if (mode === 'strict') {
-              const exact = usuarios.find((u) => nombreUser(u).toLowerCase() === q.trim().toLowerCase())
+              const cur = qRef.current
+              const exact = usuarios.find((u) => nombreUser(u).toLowerCase() === cur.trim().toLowerCase())
               if (!exact && valueId) {
                 const prev = usuarios.find((u) => Number(u.id) === Number(valueId))
                 if (prev) setQ(nombreUser(prev))
@@ -217,6 +242,7 @@ export default function UserSearchSelect({
             <button
               type="button"
               style={{ border: 'none', borderRadius: 8, padding: '6px 12px', background: t.primary, color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 onFreeConfirm?.({ nombre: confirmFree })
                 setConfirmFree(null)
@@ -228,6 +254,7 @@ export default function UserSearchSelect({
             <button
               type="button"
               style={{ border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', background: 'transparent', color: t.text, cursor: 'pointer' }}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => { setConfirmFree(null); setQ(valueNombre || '') }}
             >
               Cancelar
