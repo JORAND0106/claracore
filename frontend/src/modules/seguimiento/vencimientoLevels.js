@@ -162,7 +162,7 @@ export function tipoLaborLabel(item, usuarioId) {
   }
   if (item.relacion_destinatario === 'asignacion' && Number(item.asignado_a_id) === Number(usuarioId)
     && Number(item.created_by) !== Number(usuarioId)) {
-    return 'Asignada a mí'
+    return 'Delegada a mí'
   }
   if (Number(item.created_by) === Number(usuarioId)
     && item.relacion_destinatario === 'asignacion'
@@ -215,9 +215,13 @@ export function origenRemitenteLabel(item, usuarioId) {
     || (assigneeId === uid && creatorId && creatorId !== uid)
   )
   if (enviadaPorOtro) {
-    return item.solicitante_nombre
+    const quien = item.solicitante_nombre
       || item.created_by_nombre
-      || (creatorId ? `Usuario #${creatorId}` : '—')
+      || (creatorId ? `Usuario #${creatorId}` : null)
+    if (!quien) return '—'
+    if (item.relacion_destinatario === 'asignacion') return `Delegó: ${quien}`
+    if (item.relacion_destinatario === 'referencia') return `Referencia de: ${quien}`
+    return quien
   }
   if (creatorId && creatorId !== uid && (assigneeId === uid || referidoId === uid)) {
     return item.created_by_nombre || item.solicitante_nombre || `Usuario #${creatorId}`

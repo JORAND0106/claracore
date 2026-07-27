@@ -230,6 +230,57 @@ def _notificar(
         _log.warning("notif seguimiento: %s", exc)
 
 
+def _es_tarea_delegada_asignacion(item: Optional[dict]) -> bool:
+    """Delegación con responsabilidad (asignación formal), no referencia ni personal."""
+    if not item or item.get("origen") != "tarea":
+        return False
+    if (item.get("relacion_destinatario") or "").strip().lower() != "asignacion":
+        return False
+    try:
+        creator = int(item.get("created_by") or 0)
+        assignee = int(item.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(creator and assignee and creator != assignee)
+
+
+def _notificar_delegante_tarea_cumplida(
+    sb,
+    item: dict,
+    *,
+    prev_estado: Optional[str],
+    new_estado: Optional[str],
+    actor_id: int,
+) -> None:
+    """
+    Avisa a quien delegó cuando la tarea asignada pasa a Cumplida
+    (marca directa o 100% de sub-ítems). No aplica a «solo referencia».
+    """
+    if (new_estado or "").strip().lower() != "cumplido":
+        return
+    if (prev_estado or "").strip().lower() == "cumplido":
+        return
+    if not _es_tarea_delegada_asignacion(item):
+        return
+    creator = int(item["created_by"])
+    titulo = (item.get("titulo") or "tarea").strip() or "tarea"
+    quien = (item.get("asignado_a_nombre") or "").strip()
+    por_quien = f" por {quien}" if quien else ""
+    _notificar(
+        sb,
+        destinatario_id=creator,
+        remitente_id=int(actor_id),
+        asunto=f"Tarea delegada cumplida: {titulo[:70]}",
+        mensaje=(
+            f"La tarea «{titulo}» que usted delegó ya fue marcada como Cumplida{por_quien}. "
+            f"Revísela en Seguimiento o en el widget de inicio."
+        ),
+        contrato_id=item.get("contrato_id"),
+        entidad_tipo="seguimiento_tarea",
+        entidad_id=str(item.get("id") or ""),
+    )
+
+
 # ── Actas ────────────────────────────────────────────────────────────────────
 
 def proximo_consecutivo(sb, contrato_id: int) -> int:
@@ -1019,6 +1070,13 @@ def actualizar_estado_gestion(
         "abierto": "reabierto",
     }.get(estado, "cambio_estado")
     _registrar_evento(sb, item_id, tipo, user_id, {"estado": estado})
+    _notificar_delegante_tarea_cumplida(
+        sb,
+        item,
+        prev_estado=item.get("estado_gestion"),
+        new_estado=estado,
+        actor_id=user_id,
+    )
     return get_item(sb, item_id)
 
 
@@ -1489,7 +1547,16 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         patch["hora_vencimiento"] = _norm_hora(data.get("hora_vencimiento"))
     if "imagenes" in data:
         patch["imagenes"] = data.get("imagenes") or []
+    prev_estado = (item.get("estado_gestion") or "").strip().lower()
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    new_estado = (patch.get("estado_gestion") or prev_estado or "").strip().lower()
+    _notificar_delegante_tarea_cumplida(
+        sb,
+        item,
+        prev_estado=prev_estado,
+        new_estado=new_estado,
+        actor_id=user_id,
+    )
     return get_item_detalle(sb, item_id)
 
 
