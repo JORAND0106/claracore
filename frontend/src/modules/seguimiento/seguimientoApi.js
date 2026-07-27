@@ -25,28 +25,53 @@ async function parseOrThrow(res) {
   throw err
 }
 
+function mapNetworkError(e) {
+  if (!e) return new Error('Error de red')
+  // Ya es error HTTP parseado
+  if (e.status != null) return e
+  const name = e.name || ''
+  const msg = String(e.message || e || '')
+  if (name === 'AbortError' || name === 'TimeoutError' || /aborted|timeout|signal is aborted/i.test(msg)) {
+    const err = new Error('La solicitud tardó demasiado. Intente de nuevo.')
+    err.name = 'TimeoutError'
+    return err
+  }
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+    return new Error('No se pudo conectar con el servidor. Verifique su conexión e intente de nuevo.')
+  }
+  return e instanceof Error ? e : new Error(msg || 'Error de red')
+}
+
 export function createSeguimientoApi(contratoId, token) {
   const cid = contratoId
   const t = token
 
   async function get(path, timeout = 30000) {
     const sig = apiFetchSignal(timeout)
-    const res = await fetch(`${API_BASE}${path}`, {
-      headers: authHeaders(t, false),
-      ...(sig ? { signal: sig } : {}),
-    })
-    return parseOrThrow(res)
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: authHeaders(t, false),
+        ...(sig ? { signal: sig } : {}),
+      })
+      return parseOrThrow(res)
+    } catch (e) {
+      throw mapNetworkError(e)
+    }
   }
 
   async function send(method, path, body, timeout = 60000) {
     const sig = apiFetchSignal(timeout)
-    const res = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers: authHeaders(t, true),
-      body: body != null ? JSON.stringify(body) : undefined,
-      ...(sig ? { signal: sig } : {}),
-    })
-    return parseOrThrow(res)
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        method,
+        headers: authHeaders(t, true),
+        body: body != null ? JSON.stringify(body) : undefined,
+        ...(sig ? { signal: sig } : {}),
+      })
+      return parseOrThrow(res)
+    } catch (e) {
+      throw mapNetworkError(e)
+    }
   }
 
   return {

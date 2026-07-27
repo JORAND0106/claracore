@@ -607,12 +607,10 @@ function Overlay({ t, onClose, children, wide = false, viewportCompact = false }
     <div
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
       className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
       style={seguimientoModalOverlayStyle(viewportCompact)}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         className={viewportCompact ? 'cc-seguim-modal-sheet' : 'cc-seguim-modal-sheet--desktop'}
         style={{
           ...seguimientoModalSheetStyle(viewportCompact, { wide }),

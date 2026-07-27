@@ -31,6 +31,7 @@ export const USER_SEARCH_ANTIAUTOFILL = {
  *
  * El listado se renderiza en portal (fixed) para no quedar recortado por
  * overflow:auto del modal de acta / otros sheets de Seguimiento.
+ * Soporta flechas ↑/↓ y Enter para seleccionar.
  */
 export default function UserSearchSelect({
   t,
@@ -48,6 +49,7 @@ export default function UserSearchSelect({
   const [q, setQ] = useState(valueNombre || '')
   const [open, setOpen] = useState(false)
   const [confirmFree, setConfirmFree] = useState(null)
+  const [highlight, setHighlight] = useState(-1)
   // iOS muestra contactos al enfocar inputs editables; readonly hasta el primer focus lo evita.
   const [iosGuard, setIosGuard] = useState(true)
   const inputRef = useRef(null)
@@ -74,14 +76,26 @@ export default function UserSearchSelect({
     return base
   }, [usuarios, q])
 
+  useEffect(() => {
+    setHighlight(-1)
+  }, [q, open, filtrados.length])
+
+  useEffect(() => {
+    if (highlight < 0 || !listRef.current) return
+    const el = listRef.current.querySelector(`[data-opt-idx="${highlight}"]`)
+    try { el?.scrollIntoView({ block: 'nearest' }) } catch { /* ignore */ }
+  }, [highlight])
+
   const listOpen = open && filtrados.length > 0
   const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 200 })
+  const activeOptId = listOpen && highlight >= 0 ? `${fieldName}-opt-${highlight}` : undefined
 
   const pick = (u) => {
     pickingRef.current = true
     setQ(nombreUser(u))
     setOpen(false)
     setConfirmFree(null)
+    setHighlight(-1)
     onSelect?.(u)
     window.setTimeout(() => { pickingRef.current = false }, 0)
   }
@@ -96,6 +110,48 @@ export default function UserSearchSelect({
       return
     }
     setConfirmFree(s)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (open) {
+        e.preventDefault()
+        setOpen(false)
+        setHighlight(-1)
+      }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open) setOpen(true)
+      setHighlight((h) => {
+        const max = Math.max(0, filtrados.length - 1)
+        return h < 0 ? 0 : Math.min(max, h + 1)
+      })
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) setOpen(true)
+      setHighlight((h) => {
+        const max = Math.max(0, filtrados.length - 1)
+        if (h < 0) return max
+        return Math.max(0, h - 1)
+      })
+      return
+    }
+    if (e.key === 'Enter') {
+      if (listOpen && highlight >= 0 && filtrados[highlight]) {
+        e.preventDefault()
+        pick(filtrados[highlight])
+        return
+      }
+      if (mode === 'free' && qRef.current.trim()) {
+        e.preventDefault()
+        setOpen(false)
+        tryFree()
+      }
+    }
   }
 
   const listbox = listOpen && dropdownStyle && typeof document !== 'undefined'
@@ -114,35 +170,47 @@ export default function UserSearchSelect({
           WebkitOverflowScrolling: 'touch',
         }}
       >
-        {filtrados.map((u) => (
-          <button
-            key={u.es_externo ? `ext-${u.externo_id}` : u.id}
-            type="button"
-            role="option"
-            onPointerDown={(e) => {
-              // Evita blur del input antes del pick (doble toque en iPad / clic perdido).
-              e.preventDefault()
-              pick(u)
-            }}
-            style={{
-              display: 'block', width: '100%', textAlign: 'left', border: 'none',
-              background: Number(u.id) === Number(valueId) ? `${t.primary}18` : 'transparent',
-              padding: '8px 10px', cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>
-              {nombreUser(u)}
-              {u.es_externo ? (
-                <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                  · Externo
-                </span>
-              ) : null}
-            </div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-              {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
-            </div>
-          </button>
-        ))}
+        {filtrados.map((u, idx) => {
+          const selected = Number(u.id) === Number(valueId)
+          const active = idx === highlight
+          return (
+            <button
+              key={u.es_externo ? `ext-${u.externo_id}` : u.id}
+              id={`${fieldName}-opt-${idx}`}
+              data-opt-idx={idx}
+              type="button"
+              role="option"
+              aria-selected={active || selected}
+              onPointerDown={(e) => {
+                // Evita blur del input antes del pick (doble toque en iPad / clic perdido).
+                e.preventDefault()
+                pick(u)
+              }}
+              onMouseEnter={() => setHighlight(idx)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', border: 'none',
+                background: active
+                  ? `${t.primary}28`
+                  : selected
+                    ? `${t.primary}18`
+                    : 'transparent',
+                padding: '8px 10px', cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>
+                {nombreUser(u)}
+                {u.es_externo ? (
+                  <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                    · Externo
+                  </span>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
+              </div>
+            </button>
+          )
+        })}
       </div>,
       document.body,
     )
@@ -177,6 +245,7 @@ export default function UserSearchSelect({
         aria-autocomplete="list"
         aria-expanded={listOpen}
         aria-controls={`${fieldName}-list`}
+        aria-activedescendant={activeOptId}
         value={q}
         readOnly={iosGuard}
         onChange={(e) => {
@@ -185,6 +254,7 @@ export default function UserSearchSelect({
           setConfirmFree(null)
           if (mode === 'strict' && !e.target.value.trim()) onSelect?.(null)
         }}
+        onKeyDown={onKeyDown}
         onFocus={(e) => {
           if (iosGuard) setIosGuard(false)
           setOpen(true)

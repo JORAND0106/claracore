@@ -178,9 +178,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             }
             if (row?.id) {
               setCreating(false)
-              setEditingActaId(row.id)
+              // Evita re-disparar hidratación si el id no cambió.
+              setEditingActaId((prev) => (Number(prev) === Number(row.id) ? prev : row.id))
             }
-            setRepoKey((n) => n + 1)
+            // Refrescar listado solo al cerrar o borrar; no remount mientras se edita.
+            if (!meta?.stay) setRepoKey((n) => n + 1)
           }}
         />
       )}
