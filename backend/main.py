@@ -28,6 +28,7 @@ import json
 import math
 import secrets
 import string
+import hashlib
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20586,9 +20587,101 @@ def reservar_ids_pol(
     ids = _sicoe_reservar_ids_pol_total(contrato_id, body.cantidad)
     return {"ids": ids, "desde": ids[0], "hasta": ids[-1]}
 
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _so_foto_hash_lookup(contrato_id: int, content_hash: str) -> Optional[dict]:
+    h = (content_hash or "").strip().lower()
+    if not h or len(h) < 16:
+        return None
+
+    def _q():
+        return (
+            supabase.table("so_foto_hashes")
+            .select("foto_url, foto_numero, content_hash")
+            .eq("contrato_id", int(contrato_id))
+            .eq("content_hash", h)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    return rows[0] if rows else None
+
+
+def _so_foto_hash_upsert(contrato_id: int, content_hash: str, foto_url: str, foto_numero: Optional[int]) -> None:
+    h = (content_hash or "").strip().lower()
+    if not h or not foto_url:
+        return
+    payload = {
+        "contrato_id": int(contrato_id),
+        "content_hash": h,
+        "foto_url": foto_url,
+        "foto_numero": foto_numero,
+    }
+
+    def _up():
+        return (
+            supabase.table("so_foto_hashes")
+            .upsert(payload, on_conflict="contrato_id,content_hash")
+            .execute()
+            .data
+        )
+
+    try:
+        supabase_execute(_up)
+    except Exception as exc:
+        _log_api.warning("so_foto_hashes upsert contrato=%s: %s", contrato_id, exc)
+
+
+@app.post("/sicoe-obra/{contrato_id}/check-foto-hash")
+async def check_foto_hash(
+    contrato_id: int,
+    content_hash: str = Form(...),
+    current_user=Depends(get_current_user),
+):
+    """Indica si el contenido (SHA-256) ya existe como foto en el contrato."""
+    existing = _so_foto_hash_lookup(contrato_id, content_hash)
+    if not existing:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "url": existing.get("foto_url"),
+        "numero": existing.get("foto_numero"),
+        "message": (
+            "Esta foto ya fue cargada anteriormente. "
+            "Úsala desde la galería del registro en lugar de subirla de nuevo."
+        ),
+    }
+
+
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
-async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
+async def upload_foto(
+    contrato_id: int,
+    file: UploadFile = File(...),
+    numero: int = Form(...),
+    descripcion: str = Form(""),
+    content_hash: Optional[str] = Form(None),
+    current_user=Depends(get_current_user),
+):
     contents = await file.read()
+    digest = (content_hash or "").strip().lower() or _sha256_hex(contents)
+    existing = _so_foto_hash_lookup(contrato_id, digest)
+    if existing and existing.get("foto_url"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "foto_duplicada",
+                "url": existing.get("foto_url"),
+                "numero": existing.get("foto_numero"),
+                "message": (
+                    "Esta foto ya fue cargada anteriormente. "
+                    "Úsala desde la galería del registro en lugar de subirla de nuevo."
+                ),
+            },
+        )
     ext = _ext_desde_content_type(file.content_type)
     blob_path = path_sicoe_foto(contrato_id, numero, ext)
     try:
@@ -20596,7 +20689,8 @@ async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: in
     except Exception as exc:
         _log_api.warning("Azure Blob upload foto %s: %s", blob_path, exc)
         raise HTTPException(status_code=503, detail="No se pudo subir la foto a Azure Blob Storage.") from exc
-    return {"url": url, "numero": numero}
+    _so_foto_hash_upsert(contrato_id, digest, url, numero)
+    return {"url": url, "numero": numero, "content_hash": digest}
 
 @app.post("/sicoe-obra/{contrato_id}/upload-grafico")
 async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
@@ -21268,6 +21362,17 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         )
     except Exception:
         pass
+    # Corte/sub/costos/dims: invalidar KPIs y panel para que ediciones post-sello no queden ocultas por caché.
+    _CAMPOS_INVALIDAN_DASH = frozenset({
+        "subcontratista_id", "corte_id", "cantidad_total", "costo_directo",
+        "vlr_unitario", "item_numero", "capitulo", "longitud", "ancho", "espesor", "cantidad",
+        "acta_rpo_id", "semana_id",
+    })
+    if data.keys() & _CAMPOS_INVALIDAN_DASH:
+        try:
+            _invalidate_dashboard_financial_caches(int(contrato_id))
+        except Exception:
+            pass
     return row
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/registros")
@@ -22020,6 +22125,11 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                     "reporte_id": reporte_id,
                 },
             )
+        except Exception:
+            pass
+
+        try:
+            _invalidate_dashboard_financial_caches(int(contrato_id))
         except Exception:
             pass
 

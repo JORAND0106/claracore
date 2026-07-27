@@ -27,7 +27,7 @@ import {
 } from './offline/offlineRouter'
 import { db, savePendingBlob, countAllPendingBlobs } from './offline/db'
 import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offlineUtils'
-import { prepararImagenParaUpload } from './comprimirImagen'
+import { prepararImagenParaUpload, sha256Hex } from './comprimirImagen'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import { openAdminUsuarios } from './openAdminListadoPrecios'
@@ -2666,35 +2666,111 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     return previewUrl
   }
 
-  // Subir foto
+  /** Invalida listado SICOE + dashboard tras ediciones (p. ej. corte/sub post-sello). */
+  const notificarTrasEdicionRegistro = (patch = null, { refrescarPanel = true, invalidarDashboard = true } = {}) => {
+    const rid = registro?.id
+    if (patch && rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+      onOptimisticRegistroPatch?.(rid, patch)
+    }
+    if (refrescarPanel) {
+      try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
+    } else {
+      try { invalidateSicoeVistaCache(contrato_id) } catch { /* noop */ }
+    }
+    if (invalidarDashboard) {
+      try { invalidateDashboardVistaCache(contrato_id) } catch { /* noop */ }
+    }
+  }
+
+  const limpiarPreviewFotoLocal = () => {
+    if (previewObjectUrlRef.current) {
+      URL.revokeObjectURL(previewObjectUrlRef.current)
+      previewObjectUrlRef.current = null
+    }
+  }
+
+  const mostrarPreviewFotoInmediata = (file) => {
+    const previewUrl = URL.createObjectURL(file)
+    limpiarPreviewFotoLocal()
+    previewObjectUrlRef.current = previewUrl
+    setFotoLocal(previewUrl)
+    setFotoImgError(false)
+    return previewUrl
+  }
+
+  // Subir foto (preview inmediata + dedupe por SHA-256 del contenido comprimido)
   const subirFoto = async (file) => {
     setUploadingFoto(true)
+    mostrarPreviewFotoInmediata(file)
     try {
       if (!isOnline && isOfflineReady) {
-        const previewUrl = await encolarMediaOffline(file, 'foto')
-        setFotoLocal(previewUrl)
+        // Offline: encolarMediaOffline crea su propio objectURL; liberamos el preview previo.
+        limpiarPreviewFotoLocal()
+        const offlinePreview = await encolarMediaOffline(file, 'foto')
+        setFotoLocal(offlinePreview)
         setFotoImgError(false)
+        return
+      }
+      const prepared = await prepararImagenParaUpload(file)
+      const digest = await sha256Hex(prepared)
+      const fdCheck = new FormData()
+      fdCheck.append('content_hash', digest)
+      const checkRes = await fetch(`${API}/sicoe-obra/${contrato_id}/check-foto-hash`, {
+        method: 'POST',
+        headers: { Authorization: hdrs.Authorization },
+        body: fdCheck,
+      })
+      const checkData = await checkRes.json().catch(() => ({}))
+      if (checkRes.ok && checkData?.exists) {
+        limpiarPreviewFotoLocal()
+        setFotoLocal(registro.foto_url || null)
+        alert(
+          checkData.message
+          || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
+        )
+        setModalGaleriaHoja(true)
         return
       }
       const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
       if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
-      const prepared = await prepararImagenParaUpload(file)
-      const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
+      const fd = new FormData()
+      fd.append('file', prepared)
+      fd.append('numero', String(numero))
+      fd.append('descripcion', '')
+      fd.append('content_hash', digest)
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
+      if (up.status === 409) {
+        const dup = await up.json().catch(() => ({}))
+        const detail = dup?.detail
+        const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
+        limpiarPreviewFotoLocal()
+        setFotoLocal(registro.foto_url || null)
+        alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
+        setModalGaleriaHoja(true)
+        return
+      }
       const res = await sicoeFetchJsonOThrow(up)
       const rid = registro?.id
+      const fotoPatch = { foto_url: res.url, foto_numero: res.numero ?? numero }
       if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
         const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
           method:'PUT', headers: hdrs,
-          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: res.url, foto_numero: res.numero ?? numero })
+          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, ...fotoPatch })
         })
         await sicoeFetchJsonOThrow(put)
       }
+      limpiarPreviewFotoLocal()
       setFotoLocal(res.url)
-    } catch(e) { alert('Error subiendo foto: ' + (e?.message || String(e))) }
-    setUploadingFoto(false)
+      notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
+    } catch(e) {
+      limpiarPreviewFotoLocal()
+      setFotoLocal(registro.foto_url || null)
+      alert('Error subiendo foto: ' + (e?.message || String(e)))
+    } finally {
+      setUploadingFoto(false)
+    }
   }
 
   const persistirGraficoEnRegistro = async (url, numero, origen = 'manual') => {
@@ -2976,6 +3052,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         }
 
         onOptimisticRegistroPatch?.(registro.id, patchOptimista)
+        try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
+        try { invalidateDashboardVistaCache(contrato_id) } catch { /* noop */ }
         setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
         guardadoOk = true
       } catch(e) {
@@ -3011,6 +3089,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       try {
         await new Promise((r) => setTimeout(r, 200))
         setToastMsg(null)
+        const cidSaved = Number.isNaN(cid) ? null : cid
+        notificarTrasEdicionRegistro({ corte_id: cidSaved })
         const p = onItemAsignado?.()
         if (p != null && typeof p.then === 'function') await p
       } catch {
@@ -3048,6 +3128,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       try {
         await new Promise((r) => setTimeout(r, 200))
         setToastMsg(null)
+        notificarTrasEdicionRegistro({
+          subcontratista_id: Number.isNaN(sid) ? null : sid,
+          ...(saved?.corte_id != null || (saved && 'corte_id' in saved)
+            ? { corte_id: saved?.corte_id ?? null }
+            : {}),
+        })
         const p = onItemAsignado?.()
         if (p != null && typeof p.then === 'function') await p
       } catch {
@@ -3887,6 +3973,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
             {fotoVista ? (
               <>
+                <div style={{ position:'relative' }}>
                 <img
                   key={fotoVista}
                   src={fotoVista}
@@ -3912,6 +3999,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   onLoad={() => setFotoImgError(false)}
                   onError={() => setFotoImgError(true)}
                 />
+                {uploadingFoto && (
+                  <div style={{
+                    position:'absolute', left:0, right:0, bottom:0, padding:'6px 10px',
+                    background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:'var(--cc-label)',
+                    fontWeight:600, textAlign:'center',
+                  }}>
+                    Guardando foto…
+                  </div>
+                )}
+                </div>
                 {fotoImgError && (
                   <div style={{ padding:'8px 10px', fontSize:'var(--cc-label)', color:'#B91C1C', background:'#FEF2F2' }}>
                     No se pudo cargar la imagen (revisa que la URL exista en Cloudinary o que no esté bloqueada).{' '}
@@ -4073,14 +4170,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 onSelect={async (url, numero) => {
                   try {
                     const rid = registro?.id
+                    const fotoPatch = { foto_url: url, foto_numero: numero }
                     if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
                       const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
                         method:'PUT', headers: hdrs,
-                        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: url, foto_numero: numero })
+                        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, ...fotoPatch })
                       })
                       await sicoeFetchJsonOThrow(put)
                     }
+                    limpiarPreviewFotoLocal()
                     setFotoLocal(url)
+                    notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
                   } catch(e) { alert('Error asignando foto de galería: ' + (e?.message || String(e))) }
                   setModalGaleriaHoja(false)
                 }}
@@ -11265,6 +11365,10 @@ function ModuloSicoeObra({
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
+            invalidateDashboardVistaCache(contrato_id)
+            if (busquedaRealizada) {
+              try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+            }
           }}
           onReporteActualizado={(patch) => {
             setReporteSeleccionado((prev) =>
@@ -13532,7 +13636,25 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
                   try {
+                    const previewUrl = URL.createObjectURL(file)
+                    const aPrev=[...registros]; aPrev[modalRegistro]={...aPrev[modalRegistro], foto_url: previewUrl, _fotoOk: true, _fotoPreview: true}; setRegistros(aPrev)
                     const prepared = await prepararImagenParaUpload(file)
+                    const digest = await sha256Hex(prepared)
+                    const fdCheck = new FormData(); fdCheck.append('content_hash', digest)
+                    const checkRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/check-foto-hash`, {
+                      method: 'POST', headers: { Authorization: hdrs.Authorization }, body: fdCheck,
+                    })
+                    const checkData = await checkRes.json().catch(() => ({}))
+                    if (checkRes.ok && checkData?.exists) {
+                      URL.revokeObjectURL(previewUrl)
+                      const aDup=[...registros]; aDup[modalRegistro]={...aDup[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aDup)
+                      alert(
+                        checkData.message
+                        || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
+                      )
+                      setModalGaleria(true)
+                      return
+                    }
                     const fd = new FormData(); fd.append('file', prepared)
                     const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
                     const numR = await sicoeFetchJsonOThrow(resN)
@@ -13540,8 +13662,20 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
                     fd.append('numero', String(numero))
                     fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numero}`)
+                    fd.append('content_hash', digest)
                     const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
+                    if (r.status === 409) {
+                      URL.revokeObjectURL(previewUrl)
+                      const dup = await r.json().catch(() => ({}))
+                      const detail = dup?.detail
+                      const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
+                      const aDup=[...registros]; aDup[modalRegistro]={...aDup[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aDup)
+                      alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
+                      setModalGaleria(true)
+                      return
+                    }
                     const data = await sicoeFetchJsonOThrow(r)
+                    URL.revokeObjectURL(previewUrl)
                     const nFoto = data.numero ?? numero
                     const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: nFoto, _fotoOk: true}; setRegistros(a)
                   } catch(err) { alert('Error subiendo foto: ' + (err?.message || String(err))) }

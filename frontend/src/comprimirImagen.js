@@ -96,3 +96,16 @@ export function base64DesdeDataUrl(dataUrl) {
   const i = dataUrl.indexOf(',')
   return i >= 0 ? dataUrl.slice(i + 1) : dataUrl
 }
+
+/**
+ * SHA-256 hex del contenido (para deduplicar fotos SICOE).
+ * @param {Blob|ArrayBuffer|File} data
+ * @returns {Promise<string>}
+ */
+export async function sha256Hex(data) {
+  const buf = data instanceof ArrayBuffer
+    ? data
+    : await (data instanceof Blob ? data.arrayBuffer() : new Response(data).arrayBuffer())
+  const hash = await crypto.subtle.digest('SHA-256', buf)
+  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('')
+}
