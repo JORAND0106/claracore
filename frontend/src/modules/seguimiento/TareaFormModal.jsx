@@ -6,14 +6,14 @@ import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimient
 
 /**
  * Formulario de nueva tarea:
- * - Personal (para el creador) o delegada/asignada a un usuario de la plataforma.
- * - Si se delega, al guardar se elige asignación formal vs solo referencia.
+ * - Personal o delegada a uno/varios usuarios (asignación formal colectiva).
+ * - Referencia sigue siendo un solo destinatario (fuera del multi-cumplimiento).
  */
 export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
   const [titulo, setTitulo] = useState('')
   const [checklist, setChecklist] = useState([])
   const [destinoTipo, setDestinoTipo] = useState('personal') // 'personal' | 'delegar'
-  const [destUser, setDestUser] = useState(null)
+  const [destUsers, setDestUsers] = useState([])
   const [askModo, setAskModo] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -49,6 +49,18 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
     }
   }
 
+  const addDest = (u) => {
+    if (!u) return
+    setDestUsers((arr) => {
+      if (arr.some((x) => Number(x.id) === Number(u.id))) return arr
+      return [...arr, u]
+    })
+  }
+
+  const removeDest = (id) => {
+    setDestUsers((arr) => arr.filter((x) => Number(x.id) !== Number(id)))
+  }
+
   const crearConModo = async (relacion) => {
     setBusy(true)
     setError('')
@@ -70,10 +82,15 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         hora_vencimiento: duePreview.hora || null,
         campos_libres: { checklist: checklistClean },
       }
-      if (destinoTipo === 'delegar' && destUser && relacion) {
+      if (destinoTipo === 'delegar' && destUsers.length && relacion) {
         payload.relacion_destinatario = relacion
-        payload.destinatario_id = destUser.id
-        payload.referido_a_nombre = nombreUser(destUser)
+        payload.destinatarios = destUsers.map((u) => ({
+          id: u.id,
+          nombre: nombreUser(u),
+        }))
+        // Compat legado (primer destinatario)
+        payload.destinatario_id = destUsers[0].id
+        payload.referido_a_nombre = nombreUser(destUsers[0])
       }
       const row = await api.crearTarea(payload)
       await uploadPendientes(row.id, checklist)
@@ -93,8 +110,8 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
       return
     }
     if (destinoTipo === 'delegar') {
-      if (!destUser) {
-        setError('Seleccione el usuario destinatario o marque la tarea como personal')
+      if (!destUsers.length) {
+        setError('Seleccione al menos un destinatario o marque la tarea como personal')
         return
       }
       setError('')
@@ -106,7 +123,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
 
   const elegirPersonal = () => {
     setDestinoTipo('personal')
-    setDestUser(null)
+    setDestUsers([])
     setAskModo(false)
     setError('')
   }
@@ -116,6 +133,9 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
     setAskModo(false)
     setError('')
   }
+
+  const multi = destUsers.length > 1
+  const nombresDest = destUsers.map((u) => nombreUser(u)).join(', ')
 
   return (
     <div
@@ -158,14 +178,15 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           autoComplete="off"
         />
 
-        {/* Personal | Delegar en una sola línea; destinatario solo si Delegar */}
+        {/* Personal | Delegar en una sola línea; destinatarios solo si Delegar */}
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
           alignItems: 'center',
           gap: 10,
-          marginBottom: 16,
-        }}>
+          marginBottom: 8,
+        }}
+        >
           <div
             role="radiogroup"
             aria-label="Destino de la tarea"
@@ -203,25 +224,51 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           {destinoTipo === 'delegar' ? (
             <div style={{ flex: '1 1 240px', minWidth: 200, maxWidth: '100%' }}>
               <UserSearchSelect
+                key={`dest-search-${destUsers.map((u) => u.id).join('-') || 'empty'}`}
                 t={t}
-                usuarios={usuarios}
-                valueId={destUser?.id}
-                valueNombre={destUser ? nombreUser(destUser) : ''}
+                usuarios={usuarios.filter((u) => !destUsers.some((d) => Number(d.id) === Number(u.id)))}
+                valueId={null}
+                valueNombre=""
                 mode="strict"
-                placeholder="Buscar destinatario…"
+                placeholder={destUsers.length ? 'Agregar otro destinatario…' : 'Buscar destinatario(s)…'}
                 style={{ ...inp(t), marginBottom: 0 }}
-                onSelect={(u) => setDestUser(u)}
+                onSelect={(u) => addDest(u)}
               />
             </div>
           ) : (
             <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.35 }}>
-              Queda en su bandeja. Elija Delegar para asignar a otro usuario.
+              Queda en su bandeja. Elija Delegar para asignar a uno o varios usuarios.
             </span>
           )}
         </div>
+        {destinoTipo === 'delegar' && destUsers.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {destUsers.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => removeDest(u.id)}
+                title="Quitar"
+                style={{
+                  border: `1px solid ${t.primary}`,
+                  borderRadius: 8,
+                  padding: '4px 8px',
+                  background: `${t.primary}18`,
+                  color: t.text,
+                  cursor: 'pointer',
+                  fontSize: 'var(--cc-xs)',
+                }}
+              >
+                {nombreUser(u)} ✕
+              </button>
+            ))}
+          </div>
+        )}
         {destinoTipo === 'delegar' && (
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: -10, marginBottom: 14, lineHeight: 1.4 }}>
-            Al guardar se preguntará si es asignación formal o solo referencia.
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 14, lineHeight: 1.4 }}>
+            {multi
+              ? 'Con varios destinatarios la tarea solo queda Cumplida cuando todos confirmen su parte (asignación formal).'
+              : 'Al guardar se preguntará si es asignación formal o solo referencia.'}
           </div>
         )}
 
@@ -238,22 +285,27 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} usuario={usuario} />
         </div>
 
-        {askModo && destUser && destinoTipo === 'delegar' && (
+        {askModo && destUsers.length > 0 && destinoTipo === 'delegar' && (
           <div style={{
             marginBottom: 14, padding: 12, borderRadius: 8,
             border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
             fontSize: 'var(--cc-sm)', color: t.text,
-          }}>
+          }}
+          >
             <div style={{ marginBottom: 8, fontWeight: 600 }}>
-              ¿Asignar formalmente a {nombreUser(destUser)} o solo enviarla como referencia?
+              {multi
+                ? `¿Asignar formalmente a ${destUsers.length} destinatarios (${nombresDest})?`
+                : `¿Asignar formalmente a ${nombresDest} o solo enviarla como referencia?`}
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <button type="button" disabled={busy} style={primary(t)} onClick={() => crearConModo('asignacion')}>
-                Asignación formal
+                Asignación formal{multi ? ' (cumplimiento colectivo)' : ''}
               </button>
-              <button type="button" disabled={busy} style={ghost(t)} onClick={() => crearConModo('referencia')}>
-                Solo referencia
-              </button>
+              {!multi && (
+                <button type="button" disabled={busy} style={ghost(t)} onClick={() => crearConModo('referencia')}>
+                  Solo referencia
+                </button>
+              )}
               <button type="button" style={ghost(t)} onClick={() => setAskModo(false)}>Cancelar</button>
             </div>
           </div>

@@ -105,4 +105,21 @@ const refRecv = {
 }
 assert(origenRemitenteLabel(refRecv, 20) === 'Referencia de: Ana Pérez', 'remitente referencia')
 
+const multi = {
+  origen: 'tarea',
+  relacion_destinatario: 'asignacion',
+  created_by: 10,
+  asignado_a_id: 20,
+  created_by_nombre: 'Ana Pérez',
+  campos_libres: {
+    asignaciones: [
+      { usuario_id: 20, nombre: 'Luis', estado_gestion: 'abierto' },
+      { usuario_id: 30, nombre: 'María', estado_gestion: 'abierto' },
+    ],
+  },
+}
+assert(tipoLaborLabel(multi, 30) === 'Delegada a mí (compartida)', 'multi asignado')
+assert(tipoLaborLabel(multi, 10) === 'Delegada a 2', 'multi delegante')
+assert(origenRemitenteLabel(multi, 30) === 'Delegó: Ana Pérez', 'multi remitente')
+
 console.log('vencimientoLevels.test.mjs OK')

@@ -103,6 +103,8 @@ export function createSeguimientoApi(contratoId, token) {
     getItem: (itemId) => get(`/seguimiento/items/${itemId}`),
     patchEstado: (itemId, estado_gestion, extra = {}) =>
       send('PATCH', `/seguimiento/items/${itemId}/estado`, { estado_gestion, ...extra }),
+    patchAsignacionEstado: (itemId, body) =>
+      send('PATCH', `/seguimiento/items/${itemId}/asignacion-estado`, body),
     destinarItem: (itemId, body) => send('POST', `/seguimiento/items/${itemId}/destinar`, body),
     deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),

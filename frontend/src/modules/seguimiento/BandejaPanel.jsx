@@ -3,6 +3,7 @@ import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { destinatarioLabel } from './tareaAsignaciones'
 import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import {
   fechaVencimientoEfectiva,
@@ -140,9 +141,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                 const nivel = nivelVencimientoItem(r)
                 const due = fechaVencimientoEfectiva(r)
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                const dest = r.relacion_destinatario === 'referencia'
-                  ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
-                  : (r.asignado_a_nombre || '—')
+                const dest = destinatarioLabel(r)
                 const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
                 const estadoLabel = r.origen === 'tarea' && avance?.pct != null
                   ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)
