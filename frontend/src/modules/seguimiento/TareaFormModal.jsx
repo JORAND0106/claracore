@@ -4,10 +4,15 @@ import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
 
-/** Crear tarea personal: basta el título; la checklist se puede completar después. */
+/**
+ * Formulario de nueva tarea:
+ * - Personal (para el creador) o delegada/asignada a un usuario de la plataforma.
+ * - Si se delega, al guardar se elige asignación formal vs solo referencia.
+ */
 export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated }) {
   const [titulo, setTitulo] = useState('')
   const [checklist, setChecklist] = useState([])
+  const [destinoTipo, setDestinoTipo] = useState('personal') // 'personal' | 'delegar'
   const [destUser, setDestUser] = useState(null)
   const [askModo, setAskModo] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -65,7 +70,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         hora_vencimiento: duePreview.hora || null,
         campos_libres: { checklist: checklistClean },
       }
-      if (destUser && relacion) {
+      if (destinoTipo === 'delegar' && destUser && relacion) {
         payload.relacion_destinatario = relacion
         payload.destinatario_id = destUser.id
         payload.referido_a_nombre = nombreUser(destUser)
@@ -87,11 +92,29 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
       setError('Indique un título')
       return
     }
-    if (destUser) {
+    if (destinoTipo === 'delegar') {
+      if (!destUser) {
+        setError('Seleccione el usuario destinatario o marque la tarea como personal')
+        return
+      }
+      setError('')
       setAskModo(true)
       return
     }
     await crearConModo(null)
+  }
+
+  const elegirPersonal = () => {
+    setDestinoTipo('personal')
+    setDestUser(null)
+    setAskModo(false)
+    setError('')
+  }
+
+  const elegirDelegar = () => {
+    setDestinoTipo('delegar')
+    setAskModo(false)
+    setError('')
   }
 
   return (
@@ -119,7 +142,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
         }}
       >
         <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text, marginBottom: 6 }}>
-          Nueva tarea personal
+          Nueva tarea
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 20, lineHeight: 1.45 }}>
           Puede crear la tarea solo con el título y, cuando quiera, agregar sub-ítems con imagen,
@@ -132,7 +155,76 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           onChange={(e) => setTitulo(e.target.value)}
           style={{ ...inp(t), marginBottom: 14 }}
           placeholder="¿Qué hay que hacer?"
+          autoComplete="off"
         />
+
+        {/* Personal vs delegada: opción visible antes del buscador de destinatarios */}
+        <fieldset style={{
+          border: `1px solid ${t.border}`,
+          borderRadius: 10,
+          padding: '12px 14px',
+          margin: '0 0 16px',
+        }}>
+          <legend style={{
+            fontSize: 'var(--cc-label)',
+            color: t.textMuted,
+            fontWeight: 700,
+            padding: '0 6px',
+          }}
+          >
+            Destino de la tarea
+          </legend>
+          <div
+            role="radiogroup"
+            aria-label="Destino de la tarea"
+            style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+          >
+            <label style={radioLbl(t)}>
+              <input
+                type="radio"
+                name="tarea-destino-tipo"
+                checked={destinoTipo === 'personal'}
+                onChange={elegirPersonal}
+              />
+              <span>
+                <b style={{ color: t.text }}>Personal</b>
+                <span style={{ color: t.textMuted }}> — queda para usted en su bandeja</span>
+              </span>
+            </label>
+            <label style={radioLbl(t)}>
+              <input
+                type="radio"
+                name="tarea-destino-tipo"
+                checked={destinoTipo === 'delegar'}
+                onChange={elegirDelegar}
+              />
+              <span>
+                <b style={{ color: t.text }}>Delegar / asignar</b>
+                <span style={{ color: t.textMuted }}> — a un usuario de la plataforma</span>
+              </span>
+            </label>
+          </div>
+
+          {destinoTipo === 'delegar' && (
+            <div style={{ marginTop: 12 }}>
+              <label style={lbl(t)}>Destinatario</label>
+              <UserSearchSelect
+                t={t}
+                usuarios={usuarios}
+                valueId={destUser?.id}
+                valueNombre={destUser ? nombreUser(destUser) : ''}
+                mode="strict"
+                placeholder="Buscar usuario del contrato…"
+                style={{ ...inp(t), marginBottom: 6 }}
+                onSelect={(u) => setDestUser(u)}
+              />
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
+                Al guardar se le preguntará si es asignación formal o solo referencia.
+                En ambos casos la tarea permanece en su bandeja y aparece en la del destinatario.
+              </div>
+            </div>
+          )}
+        </fieldset>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
           <label style={{ ...lbl(t), marginBottom: 0 }}>Checklist</label>
@@ -147,20 +239,7 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
           <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} usuario={usuario} />
         </div>
 
-        <label style={lbl(t)}>Destinatario (opcional)</label>
-        <UserSearchSelect
-          t={t}
-          usuarios={usuarios}
-          mode="strict"
-          placeholder="Buscar usuario del contrato…"
-          style={{ ...inp(t), marginBottom: 6 }}
-          onSelect={(u) => setDestUser(u)}
-        />
-        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 14, lineHeight: 1.4 }}>
-          Al guardar se le preguntará si es asignación formal o solo referencia.
-        </div>
-
-        {askModo && destUser && (
+        {askModo && destUser && destinoTipo === 'delegar' && (
           <div style={{
             marginBottom: 14, padding: 12, borderRadius: 8,
             border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
@@ -196,6 +275,17 @@ export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose
 
 function lbl(t) {
   return { display: 'block', fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600, marginBottom: 6 }
+}
+function radioLbl(t) {
+  return {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 10,
+    fontSize: 'var(--cc-sm)',
+    color: t.text,
+    cursor: 'pointer',
+    lineHeight: 1.35,
+  }
 }
 function inp(t) {
   return {

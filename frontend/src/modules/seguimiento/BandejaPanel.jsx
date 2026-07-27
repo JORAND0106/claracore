@@ -98,7 +98,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           </label>
           <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
           {permisos?.crear && (
-            <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
+            <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Nueva tarea</button>
           )}
         </div>
       )}
