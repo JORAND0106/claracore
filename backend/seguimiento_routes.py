@@ -93,6 +93,7 @@ class AsistenteBody(BaseModel):
 class IdeaBody(BaseModel):
     id: Optional[int] = None
     texto: str = ""
+    quien_dijo: Optional[str] = None
     orden: Optional[int] = None
 
 

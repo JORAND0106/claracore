@@ -642,6 +642,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "fecha_base_nivel": None,
     "asistente_email": None,
     "contacto_externo": None,
+    "idea_quien_dijo": None,
 }
 
 
@@ -675,6 +676,9 @@ def _schema_has(sb, cap: str) -> bool:
         elif cap == "contacto_externo":
             sb.table("seguimiento_contacto_externo").select("id").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "idea_quien_dijo":
+            sb.table("seguimiento_acta_idea").select("id,quien_dijo").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -685,6 +689,8 @@ def _schema_has(sb, cap: str) -> bool:
         if cap in ("tipo_acta", "fecha_base_nivel", "asistente_email") and _is_missing_column_error(exc, cap.replace("asistente_", "")):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asistente_email" and _is_missing_column_error(exc, "email"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "idea_quien_dijo" and _is_missing_column_error(exc, "quien_dijo"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
             "seguimiento_contacto_externo" in msg
@@ -1301,22 +1307,48 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
     """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes."""
     existing = sb.table("seguimiento_acta_idea").select("id").eq("acta_id", int(acta_id)).execute().data or []
     keep_ids: Set[int] = set()
+    include_quien = _schema_has(sb, "idea_quien_dijo")
     for i, idea in enumerate(ideas or []):
         texto = (idea.get("texto") or "").strip()
+        quien = (idea.get("quien_dijo") or "").strip() or None
         iid = idea.get("id")
+        payload = {
+            "texto": texto,
+            "orden": int(idea.get("orden") if idea.get("orden") is not None else i),
+            "updated_at": _now_utc().isoformat(),
+        }
+        if include_quien:
+            payload["quien_dijo"] = quien
         if iid:
             keep_ids.add(int(iid))
-            sb.table("seguimiento_acta_idea").update({
-                "texto": texto,
-                "orden": int(idea.get("orden") if idea.get("orden") is not None else i),
-                "updated_at": _now_utc().isoformat(),
-            }).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+            try:
+                sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+            except Exception as exc:
+                if include_quien and _is_missing_column_error(exc, "quien_dijo"):
+                    _SCHEMA_CAPS["idea_quien_dijo"] = False
+                    include_quien = False
+                    payload.pop("quien_dijo", None)
+                    sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+                else:
+                    raise
         else:
-            ins = sb.table("seguimiento_acta_idea").insert({
+            row = {
                 "acta_id": int(acta_id),
                 "texto": texto,
                 "orden": int(idea.get("orden") if idea.get("orden") is not None else i),
-            }).execute().data
+            }
+            if include_quien:
+                row["quien_dijo"] = quien
+            try:
+                ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+            except Exception as exc:
+                if include_quien and _is_missing_column_error(exc, "quien_dijo"):
+                    _SCHEMA_CAPS["idea_quien_dijo"] = False
+                    include_quien = False
+                    row.pop("quien_dijo", None)
+                    ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+                else:
+                    raise
             if ins:
                 keep_ids.add(int(ins[0]["id"]))
     for e in existing:
