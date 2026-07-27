@@ -1,4 +1,6 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useAnchoredDropdown } from './useAnchoredDropdown'
 
 function nombreUser(u) {
   if (!u) return ''
@@ -26,6 +28,9 @@ export const USER_SEARCH_ANTIAUTOFILL = {
  * Buscador de usuarios del contrato con autocompletado de plataforma.
  * mode=strict: solo permite seleccionar usuarios existentes (elaborador).
  * mode=free: permite texto libre + confirmación si no hay match (asistentes).
+ *
+ * El listado se renderiza en portal (fixed) para no quedar recortado por
+ * overflow:auto del modal de acta / otros sheets de Seguimiento.
  */
 export default function UserSearchSelect({
   t,
@@ -45,6 +50,7 @@ export default function UserSearchSelect({
   const [confirmFree, setConfirmFree] = useState(null)
   // iOS muestra contactos al enfocar inputs editables; readonly hasta el primer focus lo evita.
   const [iosGuard, setIosGuard] = useState(true)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     setQ(valueNombre || '')
@@ -64,6 +70,9 @@ export default function UserSearchSelect({
     return base
   }, [usuarios, q])
 
+  const listOpen = open && filtrados.length > 0
+  const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 200 })
+
   const pick = (u) => {
     setQ(nombreUser(u))
     setOpen(false)
@@ -82,6 +91,51 @@ export default function UserSearchSelect({
     }
     setConfirmFree(s)
   }
+
+  const listbox = listOpen && dropdownStyle && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        id={`${fieldName}-list`}
+        role="listbox"
+        style={{
+          ...dropdownStyle,
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          overflow: 'auto',
+          boxShadow: t.shadow,
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        {filtrados.map((u) => (
+          <button
+            key={u.es_externo ? `ext-${u.externo_id}` : u.id}
+            type="button"
+            role="option"
+            onMouseDown={(e) => { e.preventDefault(); pick(u) }}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left', border: 'none',
+              background: Number(u.id) === Number(valueId) ? `${t.primary}18` : 'transparent',
+              padding: '8px 10px', cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>
+              {nombreUser(u)}
+              {u.es_externo ? (
+                <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                  · Externo
+                </span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+              {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
+            </div>
+          </button>
+        ))}
+      </div>,
+      document.body,
+    )
+    : null
 
   return (
     <div style={{ position: 'relative' }} data-form-type="other">
@@ -105,11 +159,12 @@ export default function UserSearchSelect({
       />
       <input
         {...USER_SEARCH_ANTIAUTOFILL}
+        ref={inputRef}
         id={fieldName}
         name={fieldName}
         role="combobox"
         aria-autocomplete="list"
-        aria-expanded={open}
+        aria-expanded={listOpen}
         aria-controls={`${fieldName}-list`}
         value={q}
         readOnly={iosGuard}
@@ -147,43 +202,7 @@ export default function UserSearchSelect({
         placeholder={placeholder}
         style={style}
       />
-      {open && filtrados.length > 0 && (
-        <div
-          id={`${fieldName}-list`}
-          role="listbox"
-          style={{
-            position: 'absolute', zIndex: 40, left: 0, right: 0, top: '100%',
-            background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
-            maxHeight: 200, overflow: 'auto', boxShadow: t.shadow,
-          }}
-        >
-          {filtrados.map((u) => (
-            <button
-              key={u.es_externo ? `ext-${u.externo_id}` : u.id}
-              type="button"
-              role="option"
-              onMouseDown={(e) => { e.preventDefault(); pick(u) }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left', border: 'none',
-                background: Number(u.id) === Number(valueId) ? `${t.primary}18` : 'transparent',
-                padding: '8px 10px', cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>
-                {nombreUser(u)}
-                {u.es_externo ? (
-                  <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                    · Externo
-                  </span>
-                ) : null}
-              </div>
-              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                {[u.cargo_nombre, u.empresa, u.email].filter(Boolean).join(' · ')}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
+      {listbox}
       {confirmFree && (
         <div style={{
           marginTop: 8, padding: 10, borderRadius: 8,

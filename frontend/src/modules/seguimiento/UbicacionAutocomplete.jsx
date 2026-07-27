@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useAnchoredDropdown } from './useAnchoredDropdown'
 
 /**
  * Autocompletado de direcciones en Colombia.
  * Combina Mapbox (si hay token), Nominatim y Photon para ampliar cobertura.
+ *
+ * Sugerencias en portal (fixed) para no quedar recortadas por overflow:auto
+ * del modal de acta (pestaña Encabezado).
  */
 export default function UbicacionAutocomplete({ t, value, onChange, style }) {
   const [q, setQ] = useState(value || '')
@@ -11,12 +16,18 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
   const [busy, setBusy] = useState(false)
   const timer = useRef(null)
   const wrap = useRef(null)
+  const inputRef = useRef(null)
+  const listRef = useRef(null)
+
+  const listOpen = open && opts.length > 0
+  const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 280 })
 
   useEffect(() => { setQ(value || '') }, [value])
 
   useEffect(() => {
     const onDoc = (e) => {
-      if (wrap.current && !wrap.current.contains(e.target)) setOpen(false)
+      if (wrap.current?.contains(e.target) || listRef.current?.contains(e.target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -45,9 +56,48 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
     }, 280)
   }
 
+  const listbox = listOpen && dropdownStyle && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        ref={listRef}
+        style={{
+          ...dropdownStyle,
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          boxShadow: t.shadow || '0 8px 24px rgba(0,0,0,0.12)',
+          overflow: 'auto',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        {opts.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setQ(o.label)
+              onChange?.(o.label, o)
+              setOpen(false)
+            }}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left', border: 'none',
+              background: 'transparent', padding: '8px 10px', cursor: 'pointer',
+              color: t.text, fontSize: 'var(--cc-sm)', borderBottom: `1px solid ${t.border}`,
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>,
+      document.body,
+    )
+    : null
+
   return (
     <div ref={wrap} style={{ position: 'relative' }}>
       <input
+        ref={inputRef}
         value={q}
         onChange={(e) => buscar(e.target.value)}
         onFocus={() => { if (opts.length) setOpen(true) }}
@@ -58,32 +108,7 @@ export default function UbicacionAutocomplete({ t, value, onChange, style }) {
       {busy && (
         <div style={{ position: 'absolute', right: 10, top: 10, fontSize: 'var(--cc-xs)', color: t.textMuted }}>…</div>
       )}
-      {open && (
-        <div style={{
-          position: 'absolute', zIndex: 30, left: 0, right: 0, top: '100%',
-          background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
-          boxShadow: t.shadow || '0 8px 24px rgba(0,0,0,0.12)', maxHeight: 280, overflow: 'auto',
-        }}>
-          {opts.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              onClick={() => {
-                setQ(o.label)
-                onChange?.(o.label, o)
-                setOpen(false)
-              }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left', border: 'none',
-                background: 'transparent', padding: '8px 10px', cursor: 'pointer',
-                color: t.text, fontSize: 'var(--cc-sm)', borderBottom: `1px solid ${t.border}`,
-              }}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {listbox}
     </div>
   )
 }

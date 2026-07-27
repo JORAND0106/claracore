@@ -19,6 +19,11 @@ export function seguimientoModalOverlayStyle(compact) {
   }
 }
 
+/**
+ * Sheet del modal con overflow:auto (scroll en contenido largo).
+ * Los autocompletados (UserSearchSelect, UbicacionAutocomplete) usan portal
+ * fixed vía useAnchoredDropdown para no quedar recortados por este overflow.
+ */
 export function seguimientoModalSheetStyle(compact, { wide = false, zIndex = 11000 } = {}) {
   if (!compact) {
     return {
