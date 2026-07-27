@@ -532,6 +532,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "estado_realizada": None,
     "fecha_base_nivel": None,
     "asistente_email": None,
+    "contacto_externo": None,
 }
 
 
@@ -562,15 +563,27 @@ def _schema_has(sb, cap: str) -> bool:
         elif cap == "asistente_email":
             sb.table("seguimiento_acta_asistente").select("id,email").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "contacto_externo":
+            sb.table("seguimiento_contacto_externo").select("id").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
         else:
             _SCHEMA_CAPS[cap] = False
     except Exception as exc:
+        msg = _exc_msg(exc)
         if cap in ("tipo_acta", "fecha_base_nivel", "asistente_email") and _is_missing_column_error(exc, cap.replace("asistente_", "")):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asistente_email" and _is_missing_column_error(exc, "email"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "contacto_externo" and (
+            "seguimiento_contacto_externo" in msg
+            or "does not exist" in msg
+            or "schema cache" in msg
+            or "could not find" in msg
+            or "pgrst205" in msg
+        ):
             _SCHEMA_CAPS[cap] = False
         else:
             # Error ambiguo: asumir disponible para no degradar en falso.
@@ -939,7 +952,7 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
         raise ValueError("No se pudo crear el acta")
     acta = ins[0]
     aid = int(acta["id"])
-    _sync_asistentes(sb, aid, data.get("asistentes") or [])
+    _sync_asistentes(sb, aid, data.get("asistentes") or [], contrato_id=int(contrato_id))
     _sync_ideas(sb, aid, data.get("ideas") or [])
     _sync_apartados(sb, aid, data.get("apartados") or [])
     return get_acta(sb, aid, contrato_id)
@@ -990,7 +1003,7 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
         patch["estado"] = _estado_para_db(sb, nuevo)
     _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
     if "asistentes" in data:
-        _sync_asistentes(sb, acta_id, data.get("asistentes") or [])
+        _sync_asistentes(sb, acta_id, data.get("asistentes") or [], contrato_id=int(contrato_id))
     if "ideas" in data:
         _sync_ideas(sb, acta_id, data.get("ideas") or [])
     if "apartados" in data:
@@ -998,7 +1011,142 @@ def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) ->
     return get_acta(sb, acta_id, contrato_id)
 
 
-def _sync_asistentes(sb, acta_id: int, asistentes: list) -> None:
+def _norm_email(raw: Optional[str]) -> Optional[str]:
+    s = (raw or "").strip().lower()
+    return s or None
+
+
+def upsert_contacto_externo(
+    sb,
+    contrato_id: int,
+    *,
+    nombre: str,
+    cargo: Optional[str] = None,
+    entidad: Optional[str] = None,
+    email: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Guarda o actualiza un contacto externo del catálogo (sin acceso/login).
+    Clave: (contrato_id, email_norm) si hay correo.
+    No reactiva contactos ya vinculados a un usuario real (activo=false + usuario_id).
+    """
+    if not _schema_has(sb, "contacto_externo"):
+        return None
+    nombre_clean = (nombre or "").strip()
+    if not nombre_clean:
+        return None
+    email_clean = (email or "").strip() or None
+    email_norm = _norm_email(email_clean)
+    cargo_clean = (cargo or "").strip() or None
+    entidad_clean = (entidad or "").strip() or None
+    now = _now_utc().isoformat()
+    payload = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre_clean[:300],
+        "cargo": cargo_clean[:200] if cargo_clean else None,
+        "entidad": entidad_clean[:200] if entidad_clean else None,
+        "email": email_clean[:320] if email_clean else None,
+        "email_norm": email_norm,
+        "updated_at": now,
+    }
+    try:
+        existing = None
+        if email_norm:
+            rows = (
+                sb.table("seguimiento_contacto_externo")
+                .select("*")
+                .eq("contrato_id", int(contrato_id))
+                .eq("email_norm", email_norm)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            existing = rows[0] if rows else None
+        if existing:
+            # Ya migró a usuario real → no reactivar ni sobrescribir
+            if existing.get("activo") is False and existing.get("usuario_id"):
+                return existing
+            upd = {**payload, "activo": True}
+            sb.table("seguimiento_contacto_externo").update(upd).eq("id", int(existing["id"])).execute()
+            return {**existing, **upd, "id": existing["id"]}
+        # Sin email: insertar siempre (catálogo por nombre en ese acta)
+        ins = sb.table("seguimiento_contacto_externo").insert({
+            **payload,
+            "activo": True,
+            "created_at": now,
+        }).execute().data
+        return (ins or [None])[0]
+    except Exception as exc:
+        _log.warning("upsert contacto externo contrato=%s: %s", contrato_id, exc)
+        return None
+
+
+def list_contactos_externos_activos(sb, contrato_id: int) -> List[dict]:
+    """Contactos externos activos del contrato (para el buscador de asistentes)."""
+    if not _schema_has(sb, "contacto_externo"):
+        return []
+    try:
+        rows = (
+            sb.table("seguimiento_contacto_externo")
+            .select("id, nombre, cargo, entidad, email, email_norm, activo, usuario_id")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
+            .order("nombre")
+            .limit(500)
+            .execute()
+            .data
+            or []
+        )
+        return [r for r in rows if r.get("activo") is not False]
+    except Exception as exc:
+        _log.warning("list contactos externos contrato=%s: %s", contrato_id, exc)
+        _SCHEMA_CAPS["contacto_externo"] = False
+        return []
+
+
+def inhabilitar_contactos_externos_por_email(
+    sb,
+    email: str,
+    *,
+    usuario_id: Optional[int] = None,
+) -> int:
+    """
+    Al crear un usuario real, inhabilita contactos externos con el mismo correo
+    (cualquier contrato). Criterio: email_norm == lower(trim(email)).
+    """
+    if not _schema_has(sb, "contacto_externo"):
+        return 0
+    email_norm = _norm_email(email)
+    if not email_norm:
+        return 0
+    try:
+        rows = (
+            sb.table("seguimiento_contacto_externo")
+            .select("id")
+            .eq("email_norm", email_norm)
+            .eq("activo", True)
+            .execute()
+            .data
+            or []
+        )
+        n = 0
+        patch = {
+            "activo": False,
+            "updated_at": _now_utc().isoformat(),
+        }
+        if usuario_id is not None:
+            patch["usuario_id"] = int(usuario_id)
+        for r in rows:
+            sb.table("seguimiento_contacto_externo").update(patch).eq("id", int(r["id"])).execute()
+            n += 1
+        return n
+    except Exception as exc:
+        _log.warning("inhabilitar contactos externos email=%s: %s", email_norm, exc)
+        return 0
+
+
+def _sync_asistentes(sb, acta_id: int, asistentes: list, *, contrato_id: Optional[int] = None) -> None:
     sb.table("seguimiento_acta_asistente").delete().eq("acta_id", int(acta_id)).execute()
     rows = []
     include_email = _schema_has(sb, "asistente_email")
@@ -1017,6 +1165,16 @@ def _sync_asistentes(sb, acta_id: int, asistentes: list) -> None:
         if include_email:
             row["email"] = (a.get("email") or "").strip() or None
         rows.append(row)
+        # Catálogo: solo asistentes sin usuario de plataforma
+        if contrato_id and not row.get("usuario_id"):
+            upsert_contacto_externo(
+                sb,
+                int(contrato_id),
+                nombre=nombre,
+                cargo=row.get("cargo"),
+                entidad=row.get("entidad"),
+                email=row.get("email"),
+            )
     if rows:
         try:
             sb.table("seguimiento_acta_asistente").insert(rows).execute()
@@ -2363,35 +2521,58 @@ def eliminar_acta(sb, contrato_id: int, acta_id: int, current_user: dict) -> dic
 
 
 def list_usuarios_contrato_enriquecidos(sb, contrato_id: int) -> List[dict]:
-    """Usuarios del contrato con cargo y empresa (contratista del contrato)."""
+    """Usuarios del contrato + contactos externos activos (asistentes recurrentes)."""
     ct = sb.table("contratos").select("id, contratista, numero").eq("id", int(contrato_id)).limit(1).execute().data or []
     empresa = (ct[0].get("contratista") if ct else None) or None
     uc = sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", int(contrato_id)).execute().data or []
     ids_uc = [r["usuario_id"] for r in uc]
     principales = sb.table("usuarios").select("id").eq("contrato_id", int(contrato_id)).execute().data or []
     todos_ids = list({*(ids_uc or []), *[p["id"] for p in principales]})
-    if not todos_ids:
-        return []
-    users = (
-        sb.table("usuarios")
-        .select("id, nombre, apellidos, email, cargo_id, activo")
-        .in_("id", todos_ids)
-        .eq("activo", True)
-        .execute()
-        .data
-        or []
-    )
-    cargo_ids = list({u["cargo_id"] for u in users if u.get("cargo_id")})
-    cargos = {}
-    if cargo_ids:
-        crows = sb.table("cargos").select("id, nombre").in_("id", cargo_ids).execute().data or []
-        cargos = {c["id"]: c.get("nombre") for c in crows}
-    out = []
-    for u in users:
+    out: List[dict] = []
+    emails_usuarios: Set[str] = set()
+    if todos_ids:
+        users = (
+            sb.table("usuarios")
+            .select("id, nombre, apellidos, email, cargo_id, activo")
+            .in_("id", todos_ids)
+            .eq("activo", True)
+            .execute()
+            .data
+            or []
+        )
+        cargo_ids = list({u["cargo_id"] for u in users if u.get("cargo_id")})
+        cargos = {}
+        if cargo_ids:
+            crows = sb.table("cargos").select("id, nombre").in_("id", cargo_ids).execute().data or []
+            cargos = {c["id"]: c.get("nombre") for c in crows}
+        for u in users:
+            em = _norm_email(u.get("email"))
+            if em:
+                emails_usuarios.add(em)
+            out.append({
+                **u,
+                "cargo_nombre": cargos.get(u.get("cargo_id")) or "",
+                "empresa": empresa or "",
+                "es_externo": False,
+            })
+    # Contactos externos activos; excluir si ya hay usuario real con el mismo email
+    for ext in list_contactos_externos_activos(sb, int(contrato_id)):
+        em = _norm_email(ext.get("email_norm") or ext.get("email"))
+        if em and em in emails_usuarios:
+            continue
+        eid = int(ext["id"])
         out.append({
-            **u,
-            "cargo_nombre": cargos.get(u.get("cargo_id")) or "",
-            "empresa": empresa or "",
+            # id negativo evita colisión con usuarios reales en el combobox
+            "id": -eid,
+            "externo_id": eid,
+            "es_externo": True,
+            "nombre": ext.get("nombre") or "",
+            "apellidos": "",
+            "email": ext.get("email") or "",
+            "cargo_id": None,
+            "cargo_nombre": ext.get("cargo") or "",
+            "empresa": ext.get("entidad") or "",
+            "activo": True,
         })
     out.sort(key=lambda x: f"{x.get('nombre') or ''} {x.get('apellidos') or ''}".lower())
     return out

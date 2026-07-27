@@ -71,7 +71,7 @@ export default function ActaEditor({
     orden_items: [{ texto: '', hecho: false, key: 0 }],
     elaborador_id: usuario?.id || null,
     elaborador_nombre: nombre(usuario),
-    asistentes: [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }],
+    asistentes: [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }],
     ideas: [{ texto: '' }],
     apartados: [{ titulo: '', contenido: '' }],
     estado: 'borrador',
@@ -106,9 +106,10 @@ export default function ActaEditor({
                 cargo: x.cargo || '',
                 entidad: x.entidad || '',
                 email: x.email || '',
-                usuario_id: x.usuario_id,
+                usuario_id: x.usuario_id || null,
+                externo_id: null,
               }))
-              : [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }],
+              : [{ nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }],
             ideas: (a.ideas || []).length
               ? a.ideas.map((x) => ({ id: x.id, texto: x.texto || '', orden: x.orden }))
               : [{ texto: '' }],
@@ -172,7 +173,8 @@ export default function ActaEditor({
           cargo: x.cargo || '',
           entidad: x.entidad || '',
           email: x.email || '',
-          usuario_id: x.usuario_id,
+          usuario_id: x.usuario_id || null,
+          externo_id: null,
         }))
         : f.asistentes,
       ideas: (row.ideas || []).length
@@ -501,7 +503,7 @@ export default function ActaEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={h3(t)}>Asistentes</h3>
           {!soloLectura && (
-            <button type="button" style={ghost(t)} onClick={() => setField('asistentes', [...form.asistentes, { nombre: '', cargo: '', entidad: '', email: '', usuario_id: null }])}>+ Asistente</button>
+            <button type="button" style={ghost(t)} onClick={() => setField('asistentes', [...form.asistentes, { nombre: '', cargo: '', entidad: '', email: '', usuario_id: null, externo_id: null }])}>+ Asistente</button>
           )}
         </div>
         {form.asistentes.map((a, idx) => (
@@ -510,18 +512,38 @@ export default function ActaEditor({
               t={t}
               usuarios={usuariosContrato}
               mode="free"
-              valueId={a.usuario_id}
+              valueId={a.usuario_id || (a.externo_id ? -Number(a.externo_id) : null)}
               valueNombre={a.nombre}
               placeholder="Buscar o digitar nombre…"
               style={inp(t)}
               onSelect={(u) => {
                 const next = [...form.asistentes]
-                next[idx] = { ...a, usuario_id: u.id, nombre: nombreUser(u), cargo: u.cargo_nombre || a.cargo || '', entidad: u.empresa || a.entidad || '', email: u.email || a.email || '' }
+                if (u.es_externo || (u.externo_id != null && Number(u.id) < 0)) {
+                  next[idx] = {
+                    ...a,
+                    usuario_id: null,
+                    externo_id: u.externo_id ?? Math.abs(Number(u.id)),
+                    nombre: nombreUser(u),
+                    cargo: u.cargo_nombre || '',
+                    entidad: u.empresa || '',
+                    email: u.email || '',
+                  }
+                } else {
+                  next[idx] = {
+                    ...a,
+                    usuario_id: u.id,
+                    externo_id: null,
+                    nombre: nombreUser(u),
+                    cargo: u.cargo_nombre || a.cargo || '',
+                    entidad: u.empresa || a.entidad || '',
+                    email: u.email || a.email || '',
+                  }
+                }
                 setField('asistentes', next)
               }}
               onFreeConfirm={({ nombre }) => {
                 const next = [...form.asistentes]
-                next[idx] = { ...a, usuario_id: null, nombre }
+                next[idx] = { ...a, usuario_id: null, externo_id: null, nombre }
                 setField('asistentes', next)
               }}
             />

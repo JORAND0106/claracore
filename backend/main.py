@@ -6400,6 +6400,13 @@ def registro_usuario(usuario: UsuarioRegistro):
     nuevo = (result.data or [None])[0]
     if nuevo:
         _notificar_registro_usuario_pendiente(nuevo)
+        try:
+            from seguimiento_service import inhabilitar_contactos_externos_por_email
+            inhabilitar_contactos_externos_por_email(
+                supabase, usuario.email, usuario_id=int(nuevo["id"]),
+            )
+        except Exception as e:
+            _log_api.warning("registro: no se inhabilitaron contactos externos: %s", e)
     else:
         # Fallback: reconsultar por email si el insert no devolvió fila
         try:
@@ -6413,6 +6420,13 @@ def registro_usuario(usuario: UsuarioRegistro):
             )
             if again:
                 _notificar_registro_usuario_pendiente(again[0])
+                try:
+                    from seguimiento_service import inhabilitar_contactos_externos_por_email
+                    inhabilitar_contactos_externos_por_email(
+                        supabase, usuario.email, usuario_id=int(again[0]["id"]),
+                    )
+                except Exception as e:
+                    _log_api.warning("registro: no se inhabilitaron contactos externos: %s", e)
         except Exception as e:
             _log_api.exception("registro: no se pudo notificar tras insert: %s", e)
     return {"mensaje": "Registro exitoso, pendiente de aprobación"}
@@ -6716,12 +6730,22 @@ def listar_usuarios(current_user=Depends(get_current_user)):
 @app.post("/usuarios")
 def crear_usuario(usuario: UsuarioCreate, current_user=Depends(get_current_user)):
     hashed = hash_password(usuario.password)
-    return supabase.table("usuarios").insert({
+    result = supabase.table("usuarios").insert({
         "nombre": usuario.nombre,
         "email": usuario.email,
         "password_hash": hashed,
         "cargo_id": usuario.cargo_id
-    }).execute().data
+    }).execute()
+    data = result.data or []
+    if data:
+        try:
+            from seguimiento_service import inhabilitar_contactos_externos_por_email
+            inhabilitar_contactos_externos_por_email(
+                supabase, usuario.email, usuario_id=int(data[0]["id"]),
+            )
+        except Exception as e:
+            _log_api.warning("crear_usuario: no se inhabilitaron contactos externos: %s", e)
+    return data
 
 @app.get("/categorias")
 def listar_categorias(current_user=Depends(get_current_user)):
@@ -7043,6 +7067,23 @@ def aprobar_usuario(
         background_tasks.add_task(
             _enviar_bienvenida_usuario_aprobado, usuario_id, aprobado_por
         )
+        try:
+            urows = (
+                supabase.table("usuarios")
+                .select("id, email")
+                .eq("id", usuario_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if urows and urows[0].get("email"):
+                from seguimiento_service import inhabilitar_contactos_externos_por_email
+                inhabilitar_contactos_externos_por_email(
+                    supabase, urows[0]["email"], usuario_id=int(usuario_id),
+                )
+        except Exception as e:
+            _log_api.warning("aprobar: no se inhabilitaron contactos externos: %s", e)
     return {"mensaje": "Usuario aprobado"}
 
 @app.put("/admin/usuarios/{usuario_id}/rechazar")
