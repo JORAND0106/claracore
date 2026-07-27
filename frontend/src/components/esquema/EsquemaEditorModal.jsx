@@ -5,6 +5,17 @@ import {
   makeHatchPattern,
   preloadHatchRegions,
 } from './esquemaHatch'
+import {
+  BOX_TOOLS,
+  LINE_TOOLS,
+  applyResizeHandle,
+  cursorForHandle,
+  drawResizeHandles,
+  drawSnapMarker,
+  findSnap,
+  hitResizeHandle,
+  parsePositive,
+} from './esquemaGeometry'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -102,7 +113,7 @@ export default function EsquemaEditorModal({
   const startPt = useRef(null)
   const lastPt = useRef(null)
   const draftRef = useRef(null)
-  const dragRef = useRef(null) // { id, mode: 'move'|'rotate', ox, oy, startAngle, baseRot }
+  const dragRef = useRef(null) // { id, mode: 'move'|'rotate'|'resize', handle?, ox, oy, ... }
   const panRef = useRef({ x: 0, y: 0 })
   const zoomRef = useRef(1)
   const panDragRef = useRef(null)
@@ -110,15 +121,21 @@ export default function EsquemaEditorModal({
   const colorRef = useRef('#1e293b')
   const widthRef = useRef(3)
   const hatchRef = useRef(0)
-  const measureRef = useRef('')
+  const measureWRef = useRef('')
+  const measureHRef = useRef('')
   const pointersRef = useRef(new Map()) // pointerId → { x, y } (pantalla, para pellizco)
   const pinchRef = useRef(null) // { dist0, zoom0, midX, midY, pan0 }
+  const snapRef = useRef(null) // { x, y, kind, guide? }
+  const clipboardRef = useRef(null)
+  const copySelectedRef = useRef(() => false)
+  const pasteClipboardRef = useRef(() => false)
 
   const [tool, setTool] = useState('lapiz')
   const [color, setColor] = useState('#1e293b')
   const [width, setWidth] = useState(3)
   const [hatch, setHatch] = useState(0)
-  const [measureInput, setMeasureInput] = useState('')
+  const [measureW, setMeasureW] = useState('')
+  const [measureH, setMeasureH] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [liveMeasure, setLiveMeasure] = useState('')
   const [canUndo, setCanUndo] = useState(false)
@@ -126,6 +143,8 @@ export default function EsquemaEditorModal({
   const [busy, setBusy] = useState(false)
   const [panTick, setPanTick] = useState(0)
   const [zoomPct, setZoomPct] = useState(100)
+  const [hoverCursor, setHoverCursor] = useState(null)
+  const [hasClipboard, setHasClipboard] = useState(false)
   const selectedIdRef = useRef(null)
   const redrawRef = useRef(() => {})
 
@@ -133,7 +152,8 @@ export default function EsquemaEditorModal({
   colorRef.current = color
   widthRef.current = width
   hatchRef.current = hatch
-  measureRef.current = measureInput
+  measureWRef.current = measureW
+  measureHRef.current = measureH
   selectedIdRef.current = selectedId
 
   const selectedObj = selectedId
@@ -143,6 +163,15 @@ export default function EsquemaEditorModal({
     selectedObj?.type === 'tabla'
     && (tool === 'seleccion' || tool === 'tabla')
     && !selectedObj.rotation
+  )
+  const needsBoxMeasure = (
+    BOX_TOOLS.has(tool)
+    || (selectedObj && BOX_TOOLS.has(selectedObj.type))
+  )
+  const needsLengthMeasure = (
+    LINE_TOOLS.has(tool)
+    || tool === 'triangulo'
+    || (selectedObj && (LINE_TOOLS.has(selectedObj.type) || selectedObj.type === 'triangulo'))
   )
 
   const cssSize = () => {
@@ -177,8 +206,10 @@ export default function EsquemaEditorModal({
     for (const obj of list) {
       drawObject(ctx, obj, obj.id === selectedId, {
         skipTablaText: obj.type === 'tabla' && obj.id === hideTablaTextId,
+        zoom: zoomRef.current,
       })
     }
+    if (snapRef.current) drawSnapMarker(ctx, snapRef.current, zoomRef.current)
     ctx.restore()
   }, [selectedId, panTick])
 
@@ -339,32 +370,48 @@ export default function EsquemaEditorModal({
   }
 
   const applyMeasureToShape = (shape, toolId, a, b) => {
-    const raw = String(measureRef.current || '').trim().replace(',', '.')
-    const val = Number(raw)
-    if (!Number.isFinite(val) || val <= 0) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    const wVal = parsePositive(measureWRef.current)
+    const hVal = parsePositive(measureHRef.current)
+    const signX = b.x >= a.x ? 1 : -1
+    const signY = b.y >= a.y ? 1 : -1
 
     if (toolId === 'linea' || toolId === 'flecha') {
+      if (!wVal) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
       const ang = Math.atan2(b.y - a.y, b.x - a.x)
       return {
         ...shape,
         x1: a.x,
         y1: a.y,
-        x2: a.x + Math.cos(ang) * val,
-        y2: a.y + Math.sin(ang) * val,
+        x2: a.x + Math.cos(ang) * wVal,
+        y2: a.y + Math.sin(ang) * wVal,
       }
     }
-    // Cajas: val = ancho; alto proporcional al arrastre (mín. 1)
-    const signX = b.x >= a.x ? 1 : -1
-    const signY = b.y >= a.y ? 1 : -1
-    const dragH = Math.abs(b.y - a.y) || val
-    const dragW = Math.abs(b.x - a.x) || val
+
+    // Rectángulo / elipse: ancho y alto independientes
+    if (BOX_TOOLS.has(toolId)) {
+      if (!wVal && !hVal) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+      const finalW = wVal || Math.abs(b.x - a.x) || 1
+      const finalH = hVal || Math.abs(b.y - a.y) || 1
+      return {
+        ...shape,
+        x1: a.x,
+        y1: a.y,
+        x2: a.x + signX * finalW,
+        y2: a.y + signY * finalH,
+      }
+    }
+
+    // Triángulo: longitud/ancho digitado; alto proporcional al arrastre
+    if (!wVal) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    const dragH = Math.abs(b.y - a.y) || wVal
+    const dragW = Math.abs(b.x - a.x) || wVal
     const ratio = dragW > 0 ? dragH / dragW : 1
-    const height = Math.max(1, val * ratio)
+    const height = Math.max(1, wVal * ratio)
     return {
       ...shape,
       x1: a.x,
       y1: a.y,
-      x2: a.x + signX * val,
+      x2: a.x + signX * wVal,
       y2: a.y + signY * height,
     }
   }
@@ -376,6 +423,55 @@ export default function EsquemaEditorModal({
     const w = Math.round(Math.abs(b.x - a.x))
     const h = Math.round(Math.abs(b.y - a.y))
     return `${w} × ${h}`
+  }
+
+  const snapThreshold = () => 14 / (zoomRef.current || 1)
+
+  const snapWorldPoint = (p, { fromPoint = null } = {}) => {
+    const hit = findSnap(p, objectsRef.current, {
+      threshold: snapThreshold(),
+      fromPoint,
+    })
+    snapRef.current = hit
+    return hit ? { x: hit.x, y: hit.y } : p
+  }
+
+  const syncMeasureFromObject = (obj) => {
+    if (!obj || !SHAPE_TOOLS.has(obj.type)) return
+    if (LINE_TOOLS.has(obj.type)) {
+      setMeasureW(String(Math.round(dist({ x: obj.x1, y: obj.y1 }, { x: obj.x2, y: obj.y2 }))))
+      setMeasureH('')
+      return
+    }
+    setMeasureW(String(Math.round(Math.abs(obj.x2 - obj.x1))))
+    setMeasureH(String(Math.round(Math.abs(obj.y2 - obj.y1))))
+  }
+
+  const copySelected = () => {
+    const id = selectedIdRef.current
+    if (!id) return false
+    const obj = objectsRef.current.find((o) => o.id === id)
+    if (!obj || obj.type === 'image') return false
+    clipboardRef.current = cloneScene([obj])[0]
+    setHasClipboard(true)
+    return true
+  }
+
+  const pasteClipboard = () => {
+    if (!clipboardRef.current) return false
+    pushHistory()
+    const offset = 24 / (zoomRef.current || 1)
+    let copy = cloneScene([clipboardRef.current])[0]
+    copy.id = uid()
+    copy = translateObject(copy, offset, offset)
+    clipboardRef.current = cloneScene([copy])[0]
+    setHasClipboard(true)
+    objectsRef.current = [...objectsRef.current, copy]
+    setSelectedId(copy.id)
+    if (SHAPE_TOOLS.has(copy.type)) syncMeasureFromObject(copy)
+    setDirty(true)
+    setPanTick((n) => n + 1)
+    return true
   }
 
   const hitTest = (p) => {
@@ -402,11 +498,28 @@ export default function EsquemaEditorModal({
     }
     if (pinchRef.current) return
 
-    const p = posFromEvent(e)
+    let p = posFromEvent(e)
     const currentTool = toolRef.current
     drawing.current = true
-    startPt.current = p
-    lastPt.current = p
+
+    // Manijas de redimensionado (selección o mover) — priorizan sobre dibujo/selección
+    if (currentTool === 'seleccion' || currentTool === 'mover') {
+      const selId = selectedIdRef.current
+      const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
+      const handle = sel ? hitResizeHandle(p, sel, snapThreshold()) : null
+      if (handle) {
+        dragRef.current = {
+          id: sel.id,
+          mode: 'resize',
+          handle: handle.id,
+          origin: cloneScene([sel])[0],
+        }
+        pushHistory()
+        startPt.current = p
+        lastPt.current = p
+        return
+      }
+    }
 
     if (currentTool === 'paneo') {
       const src = e.touches?.[0] || e
@@ -416,13 +529,35 @@ export default function EsquemaEditorModal({
         originX: panRef.current.x,
         originY: panRef.current.y,
       }
+      startPt.current = p
+      lastPt.current = p
       return
     }
 
     if (currentTool === 'seleccion') {
       const hit = hitTest(p)
       setSelectedId(hit ? hit.id : null)
+      if (hit && SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
+      // Si el clic cae en manija de la figura recién seleccionada, iniciar resize
+      if (hit) {
+        const handle = hitResizeHandle(p, hit, snapThreshold())
+        if (handle) {
+          dragRef.current = {
+            id: hit.id,
+            mode: 'resize',
+            handle: handle.id,
+            origin: cloneScene([hit])[0],
+          }
+          pushHistory()
+          drawing.current = true
+          startPt.current = p
+          lastPt.current = p
+          redraw()
+          return
+        }
+      }
       drawing.current = false
+      snapRef.current = null
       redraw()
       return
     }
@@ -467,6 +602,8 @@ export default function EsquemaEditorModal({
         origin: cloneScene([sel])[0],
       }
       pushHistory()
+      startPt.current = p
+      lastPt.current = p
       return
     }
 
@@ -495,7 +632,16 @@ export default function EsquemaEditorModal({
       return
     }
 
+    // Snap al iniciar trazo de figura (extremo / medio)
+    if (SHAPE_TOOLS.has(currentTool)) {
+      p = snapWorldPoint(p)
+    }
+
+    startPt.current = p
+    lastPt.current = p
+
     if (currentTool === 'lapiz' || currentTool === 'borrador') {
+      snapRef.current = null
       draftRef.current = {
         id: uid(),
         type: 'stroke',
@@ -550,9 +696,31 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (!drawing.current) return
-    e.preventDefault()
+    const raw = posFromEvent(e)
     const currentTool = toolRef.current
+
+    // Hover de manijas (cursor) cuando no se dibuja
+    if (!drawing.current) {
+      const selId = selectedIdRef.current
+      const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
+      if (sel && (currentTool === 'seleccion' || currentTool === 'mover')) {
+        const handle = hitResizeHandle(raw, sel, snapThreshold())
+        setHoverCursor(handle ? cursorForHandle(handle.id) : null)
+      } else {
+        setHoverCursor(null)
+      }
+      // Vista previa de snap al acercarse con herramienta de figura
+      if (SHAPE_TOOLS.has(currentTool)) {
+        snapWorldPoint(raw)
+        redraw(draftRef.current)
+      } else if (snapRef.current) {
+        snapRef.current = null
+        redraw()
+      }
+      return
+    }
+
+    e.preventDefault()
 
     if (currentTool === 'paneo' && panDragRef.current) {
       const src = e.touches?.[0] || e
@@ -565,22 +733,47 @@ export default function EsquemaEditorModal({
       return
     }
 
-    const p = posFromEvent(e)
-    lastPt.current = p
-
-    if (currentTool === 'mover' && dragRef.current) {
+    // Redimensionado por manijas
+    if (dragRef.current?.mode === 'resize') {
       const d = dragRef.current
+      const snapped = snapWorldPoint(raw)
+      lastPt.current = snapped
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
-        if (d.mode === 'move') {
-          return translateObject(d.origin, p.x - d.ox, p.y - d.oy)
+        const next = applyResizeHandle(d.origin, d.handle, snapped)
+        if (SHAPE_TOOLS.has(next.type)) {
+          next.label = measureLabelFor(
+            next.type,
+            { x: next.x1, y: next.y1 },
+            { x: next.x2, y: next.y2 },
+          )
+          setLiveMeasure(next.label)
         }
-        const center = objectCenter(d.origin)
-        const ang = Math.atan2(p.y - center.y, p.x - center.x)
-        return { ...o, rotation: d.baseRot + (ang - d.startAngle) }
+        return next
       })
       setDirty(true)
       redraw()
+      return
+    }
+
+    let p = raw
+    lastPt.current = p
+
+    if ((currentTool === 'mover' || currentTool === 'seleccion') && dragRef.current) {
+      const d = dragRef.current
+      if (d.mode === 'move' || d.mode === 'rotate') {
+        objectsRef.current = objectsRef.current.map((o) => {
+          if (o.id !== d.id) return o
+          if (d.mode === 'move') {
+            return translateObject(d.origin, p.x - d.ox, p.y - d.oy)
+          }
+          const center = objectCenter(d.origin)
+          const ang = Math.atan2(p.y - center.y, p.x - center.x)
+          return { ...o, rotation: d.baseRot + (ang - d.startAngle) }
+        })
+        setDirty(true)
+        redraw()
+      }
       return
     }
 
@@ -594,6 +787,8 @@ export default function EsquemaEditorModal({
     }
 
     if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+      p = snapWorldPoint(raw, { fromPoint: startPt.current })
+      lastPt.current = p
       let shape = {
         ...draftRef.current,
         x1: startPt.current.x,
@@ -628,14 +823,24 @@ export default function EsquemaEditorModal({
     e.preventDefault()
     drawing.current = false
     const currentTool = toolRef.current
-    const p = posFromEvent(e)
+    let p = posFromEvent(e)
 
     if (currentTool === 'paneo') {
       panDragRef.current = null
       return
     }
 
-    if (currentTool === 'mover') {
+    if (dragRef.current?.mode === 'resize') {
+      const id = dragRef.current.id
+      const obj = objectsRef.current.find((o) => o.id === id)
+      if (obj && SHAPE_TOOLS.has(obj.type)) syncMeasureFromObject(obj)
+      dragRef.current = null
+      snapRef.current = null
+      redraw()
+      return
+    }
+
+    if (currentTool === 'mover' || currentTool === 'seleccion') {
       dragRef.current = null
       return
     }
@@ -647,11 +852,13 @@ export default function EsquemaEditorModal({
         setDirty(true)
       }
       draftRef.current = null
+      snapRef.current = null
       redraw()
       return
     }
 
     if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+      p = snapWorldPoint(p, { fromPoint: startPt.current })
       let shape = applyMeasureToShape(
         { ...draftRef.current },
         currentTool,
@@ -660,9 +867,11 @@ export default function EsquemaEditorModal({
       )
       const a = { x: shape.x1, y: shape.y1 }
       const b = { x: shape.x2, y: shape.y2 }
-      if (dist(a, b) < 3 && !Number(measureRef.current)) {
+      const hasMeasure = !!(parsePositive(measureWRef.current) || parsePositive(measureHRef.current))
+      if (dist(a, b) < 3 && !hasMeasure) {
         draftRef.current = null
         setLiveMeasure('')
+        snapRef.current = null
         redraw()
         return
       }
@@ -670,9 +879,11 @@ export default function EsquemaEditorModal({
       pushHistory()
       objectsRef.current = [...objectsRef.current, shape]
       setSelectedId(shape.id)
+      syncMeasureFromObject(shape)
       setLiveMeasure(shape.label)
       setDirty(true)
       draftRef.current = null
+      snapRef.current = null
       redraw()
     }
   }
@@ -699,11 +910,16 @@ export default function EsquemaEditorModal({
     if (!id) return
     const obj = objectsRef.current.find((o) => o.id === id)
     if (!obj || !SHAPE_TOOLS.has(obj.type)) return
-    const raw = String(measureInput || '').trim().replace(',', '.')
-    const val = Number(raw)
-    if (!Number.isFinite(val) || val <= 0) return
+    const wVal = parsePositive(measureW)
+    const hVal = parsePositive(measureH)
+    if (BOX_TOOLS.has(obj.type)) {
+      if (!wVal && !hVal) return
+    } else if (!wVal) {
+      return
+    }
     pushHistory()
-    measureRef.current = String(val)
+    measureWRef.current = measureW
+    measureHRef.current = measureH
     const a = { x: obj.x1, y: obj.y1 }
     const b = { x: obj.x2, y: obj.y2 }
     const dir = (b.x === a.x && b.y === a.y) ? { x: a.x + 1, y: a.y } : b
@@ -715,9 +931,16 @@ export default function EsquemaEditorModal({
     redraw()
   }
 
-  // Reaplicar medida al cambiar el input si hay figura en borrador o seleccionada recién creada
+  const canApplyMeasure = (() => {
+    if (!(selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type))) return false
+    if (BOX_TOOLS.has(selectedObj.type)) return !!(parsePositive(measureW) || parsePositive(measureH))
+    return !!parsePositive(measureW)
+  })()
+
+  // Reaplicar medida al cambiar el input si hay figura en borrador
   useEffect(() => {
-    measureRef.current = measureInput
+    measureWRef.current = measureW
+    measureHRef.current = measureH
     if (draftRef.current && startPt.current && lastPt.current && SHAPE_TOOLS.has(toolRef.current)) {
       let shape = applyMeasureToShape(
         { ...draftRef.current },
@@ -730,7 +953,28 @@ export default function EsquemaEditorModal({
       setLiveMeasure(shape.label)
       redraw(shape)
     }
-  }, [measureInput, redraw])
+  }, [measureW, measureH, redraw])
+
+  copySelectedRef.current = copySelected
+  pasteClipboardRef.current = pasteClipboard
+
+  // Copiar / pegar (Ctrl/⌘+C / Ctrl/⌘+V); ignora si el foco está en un input
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod) return
+      const key = String(e.key || '').toLowerCase()
+      if (key === 'c') {
+        if (copySelectedRef.current()) e.preventDefault()
+      } else if (key === 'v') {
+        if (pasteClipboardRef.current()) e.preventDefault()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const guardar = async () => {
     setBusy(true)
@@ -929,6 +1173,24 @@ export default function EsquemaEditorModal({
               </button>
             </>
           )}
+          <button
+            type="button"
+            style={ghost(t)}
+            title="Copiar selección (Ctrl/⌘+C)"
+            disabled={!selectedId || selectedObj?.type === 'image'}
+            onClick={() => copySelected()}
+          >
+            Copiar
+          </button>
+          <button
+            type="button"
+            style={ghost(t)}
+            title="Pegar (Ctrl/⌘+V)"
+            disabled={!hasClipboard}
+            onClick={() => pasteClipboard()}
+          >
+            Pegar
+          </button>
           <button type="button" style={ghost(t)} onClick={clearAll}>Limpiar</button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
@@ -938,63 +1200,127 @@ export default function EsquemaEditorModal({
           </div>
         </div>
 
-        {/* Barra de dimensiones: flujo explícito para digitar y aplicar medida */}
+        {/* Barra de dimensiones: ancho/alto independientes para rect/elipse */}
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           padding: '8px 14px', borderBottom: `1px solid ${t.border}`,
           background: `${t.primary}08`, flexShrink: 0,
         }}>
           <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 800, color: t.text }}>Dimensiones</span>
-          <label style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600,
-          }}
-          >
-            Valor deseado
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={measureInput}
-              onChange={(e) => setMeasureInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  applyMeasureToSelected()
-                }
+          {needsBoxMeasure ? (
+            <>
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600,
               }}
-              placeholder="ej. 120"
-              title="Longitud (línea/flecha) o ancho (rectángulo/elipse/triángulo), en unidades de pantalla"
-              style={{
-                width: 88, padding: '5px 8px', borderRadius: 6,
-                border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
-                color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
+              >
+                Ancho
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={measureW}
+                  onChange={(e) => setMeasureW(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyMeasureToSelected()
+                    }
+                  }}
+                  placeholder="ej. 120"
+                  title="Ancho (eje X) en unidades de pantalla"
+                  style={{
+                    width: 72, padding: '5px 8px', borderRadius: 6,
+                    border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
+                    color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
+                  }}
+                />
+              </label>
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600,
               }}
-            />
-            <span style={{ color: t.textMuted }}>u.p.</span>
-          </label>
+              >
+                Alto
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={measureH}
+                  onChange={(e) => setMeasureH(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyMeasureToSelected()
+                    }
+                  }}
+                  placeholder="ej. 80"
+                  title="Alto (eje Y / eje menor) en unidades de pantalla"
+                  style={{
+                    width: 72, padding: '5px 8px', borderRadius: 6,
+                    border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
+                    color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
+                  }}
+                />
+                <span style={{ color: t.textMuted }}>u.p.</span>
+              </label>
+            </>
+          ) : (
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600,
+            }}
+            >
+              {needsLengthMeasure ? 'Longitud / ancho' : 'Valor deseado'}
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={measureW}
+                onChange={(e) => setMeasureW(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    applyMeasureToSelected()
+                  }
+                }}
+                placeholder="ej. 120"
+                title="Longitud (línea/flecha) o ancho (triángulo), en unidades de pantalla"
+                style={{
+                  width: 88, padding: '5px 8px', borderRadius: 6,
+                  border: `1px solid ${t.border}`, fontSize: 'var(--cc-sm)',
+                  color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
+                }}
+              />
+              <span style={{ color: t.textMuted }}>u.p.</span>
+            </label>
+          )}
           <button
             type="button"
-            disabled={!(selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && Number(String(measureInput).replace(',', '.')) > 0)}
+            disabled={!canApplyMeasure}
             onClick={applyMeasureToSelected}
             title="Ajusta la figura ya seleccionada al valor digitado"
             style={{
               ...primary(t),
               padding: '6px 12px',
               fontSize: 'var(--cc-xs)',
-              opacity: (selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type) && Number(String(measureInput).replace(',', '.')) > 0) ? 1 : 0.4,
+              opacity: canApplyMeasure ? 1 : 0.4,
             }}
           >
             Aplicar a selección
           </button>
           <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, flex: '1 1 220px', lineHeight: 1.35 }}>
-            {selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type)
-              ? (Number(String(measureInput).replace(',', '.')) > 0
-                ? `Figura seleccionada lista: pulse «Aplicar a selección» o Enter para fijar ${measureInput} u.p.`
-                : 'Figura seleccionada: digite el valor y pulse «Aplicar a selección».')
-              : (Number(String(measureInput).replace(',', '.')) > 0
-                ? `Al dibujar la próxima línea/flecha/caja se usará ${measureInput} u.p. automáticamente.`
-                : '1) Digite el valor. 2a) Dibuje la figura (se aplica sola) o 2b) Seleccione una figura existente y pulse «Aplicar a selección».')}
+            {needsBoxMeasure
+              ? (parsePositive(measureW) || parsePositive(measureH)
+                ? `Rect/elipse: ancho ${measureW || 'arrastre'} × alto ${measureH || 'arrastre'} u.p.`
+                : 'Rectángulo/elipse: digite ancho y alto independientes (p. ej. 120 × 80).')
+              : (selectedId && selectedObj && SHAPE_TOOLS.has(selectedObj.type)
+                ? (parsePositive(measureW)
+                  ? `Figura seleccionada: pulse «Aplicar a selección» o Enter (${measureW} u.p.).`
+                  : 'Figura seleccionada: digite el valor y pulse «Aplicar a selección».')
+                : (parsePositive(measureW)
+                  ? `Al dibujar se usará ${measureW} u.p. automáticamente.`
+                  : 'Digite medida, dibuje, o seleccione y aplique. Manijas = redimensionar. Snap: extremo/medio/⊥.'))}
             {liveMeasure ? ` · Arrastre actual: ${liveMeasure}` : ''}
           </span>
         </div>
@@ -1005,11 +1331,12 @@ export default function EsquemaEditorModal({
             style={{
               display: 'block', width: '100%', height: '100%',
               background: '#fff', borderRadius: 8, touchAction: 'none',
-              cursor: tool === 'paneo' ? 'grab'
-                : tool === 'seleccion' ? 'default'
-                  : tool === 'mover' ? 'move'
-                    : tool === 'hatch' || tool === 'tabla' ? 'cell'
-                      : 'crosshair',
+              cursor: hoverCursor
+                || (tool === 'paneo' ? 'grab'
+                  : tool === 'seleccion' ? 'default'
+                    : tool === 'mover' ? 'move'
+                      : tool === 'hatch' || tool === 'tabla' ? 'cell'
+                        : 'crosshair'),
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -1037,8 +1364,8 @@ export default function EsquemaEditorModal({
           )}
         </div>
         <div style={{ padding: '6px 14px', fontSize: 'var(--cc-xs)', color: t.textMuted, borderTop: `1px solid ${t.border}`, flexShrink: 0 }}>
-          Zoom: rueda/scroll del mouse, pellizco con dos dedos (táctil) o botones −/+. Paneo con la herramienta de mano.
-          Seleccionar → Mover/rotar (Alt/Shift = rotar). Dimensiones: ver barra superior.
+          Zoom: rueda/scroll o pellizco. Copiar/pegar: Ctrl/⌘+C / V o botones. Selección: manijas para redimensionar.
+          Snap al dibujar: extremo (círculo), medio (cuadrado), perpendicular (rombo). Dimensiones rect/elipse: ancho × alto.
         </div>
       </div>
     </div>
@@ -1063,6 +1390,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
       ctx.setLineDash([])
+      drawResizeHandles(ctx, obj, opts.zoom || 1)
     }
     ctx.restore()
     return
@@ -1082,6 +1410,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, w + 8, h + 8)
       ctx.setLineDash([])
+      drawResizeHandles(ctx, obj, opts.zoom || 1)
     }
     ctx.restore()
     return
@@ -1165,6 +1494,10 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.setLineDash([4, 3])
       ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8)
       ctx.setLineDash([])
+    }
+    // Manijas tipo Tinkercad (también para stroke/tabla vía getResizeHandles)
+    if (obj.type !== 'image') {
+      drawResizeHandles(ctx, obj, opts.zoom || 1)
     }
   }
   ctx.restore()
