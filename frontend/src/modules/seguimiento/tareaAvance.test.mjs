@@ -29,4 +29,22 @@ assert(b.pct === 100 && b.validos === 4 && b.estadoTarea === 'cumplido', 'cancel
 const c = calcularAvanceTarea([])
 assert(c.pct == null && c.estadoTarea === 'abierto', 'sin sub-ítems')
 
+const d = calcularAvanceTarea([{
+  estado_gestion: 'abierto',
+  asignaciones: [
+    { usuario_id: 1, estado_gestion: 'cumplido' },
+    { usuario_id: 2, estado_gestion: 'abierto' },
+  ],
+}])
+assert(d.pct === 0 && d.estadoTarea === 'parcial', 'multi: no cuenta hasta que todos cumplan')
+
+const e = calcularAvanceTarea([{
+  estado_gestion: 'abierto',
+  asignaciones: [
+    { usuario_id: 1, estado_gestion: 'cumplido' },
+    { usuario_id: 2, estado_gestion: 'cumplido' },
+  ],
+}])
+assert(e.pct === 100 && e.estadoTarea === 'cumplido', 'multi: todos cumplidos → 100%')
+
 console.log('tareaAvance.test.mjs OK')

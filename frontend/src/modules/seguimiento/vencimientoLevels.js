@@ -7,6 +7,8 @@
  *
  * Ejemplo plazo 2 días: al crear inicia en nivel 4; el día del vencimiento = 5.
  */
+import { asignacionesDe, esAsignadoFormal } from './tareaAsignaciones.js'
+
 export const VENCIMIENTO_NIVELES = [
   { key: 1, emoji: '🟢', color: '#0EA5E9', label: 'Holgado' },
   { key: 2, emoji: '🟡', color: '#65A30D', label: 'Atención' },
@@ -160,20 +162,22 @@ export function tipoLaborLabel(item, usuarioId) {
   if (item.relacion_destinatario === 'referencia' && Number(item.referido_a_id) === Number(usuarioId)) {
     return 'Referencia recibida'
   }
-  if (item.relacion_destinatario === 'asignacion' && Number(item.asignado_a_id) === Number(usuarioId)
+  const asigns = asignacionesDe(item)
+  const soyAsignado = esAsignadoFormal(item, usuarioId)
+  if (item.relacion_destinatario === 'asignacion' && soyAsignado
     && Number(item.created_by) !== Number(usuarioId)) {
-    return 'Asignada a mí'
+    return asigns.length > 1 ? 'Delegada a mí (compartida)' : 'Delegada a mí'
   }
   if (Number(item.created_by) === Number(usuarioId)
     && item.relacion_destinatario === 'asignacion'
-    && Number(item.asignado_a_id) !== Number(usuarioId)) {
-    return 'Asignada a otro'
+    && asigns.some((a) => Number(a.usuario_id) !== Number(usuarioId))) {
+    return asigns.length > 1 ? `Delegada a ${asigns.length}` : 'Asignada a otro'
   }
   if (Number(item.created_by) === Number(usuarioId)
     && item.relacion_destinatario === 'referencia') {
     return 'Referencia enviada'
   }
-  if (Number(item.asignado_a_id) === Number(usuarioId)) return 'Debo entregar'
+  if (Number(item.asignado_a_id) === Number(usuarioId) || soyAsignado) return 'Debo entregar'
   return 'Tarea'
 }
 
@@ -210,14 +214,20 @@ export function origenRemitenteLabel(item, usuarioId) {
   if (esPersonalEstricta) return '—'
 
   const enviadaPorOtro = (
-    (item.relacion_destinatario === 'asignacion' && assigneeId === uid && creatorId !== uid)
+    (item.relacion_destinatario === 'asignacion' && (
+      (assigneeId === uid && creatorId !== uid) || esAsignadoFormal(item, uid)
+    ) && creatorId !== uid)
     || (item.relacion_destinatario === 'referencia' && referidoId === uid && creatorId !== uid)
     || (assigneeId === uid && creatorId && creatorId !== uid)
   )
   if (enviadaPorOtro) {
-    return item.solicitante_nombre
+    const quien = item.solicitante_nombre
       || item.created_by_nombre
-      || (creatorId ? `Usuario #${creatorId}` : '—')
+      || (creatorId ? `Usuario #${creatorId}` : null)
+    if (!quien) return '—'
+    if (item.relacion_destinatario === 'asignacion') return `Delegó: ${quien}`
+    if (item.relacion_destinatario === 'referencia') return `Referencia de: ${quien}`
+    return quien
   }
   if (creatorId && creatorId !== uid && (assigneeId === uid || referidoId === uid)) {
     return item.created_by_nombre || item.solicitante_nombre || `Usuario #${creatorId}`

@@ -4,6 +4,7 @@ import TareaChecklistEditor, { seedChecklistFromItem } from './TareaChecklistEdi
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { asignacionesDe, destinatarioLabel, esAsignadoFormal, miEstadoEnAsignaciones } from './tareaAsignaciones'
 import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
@@ -79,7 +80,10 @@ export default function ItemDetalleModal({
   const esCompromiso = item.origen === 'compromiso'
   const esTarea = item.origen === 'tarea'
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
-  const soyResponsable = esDev || Number(item.asignado_a_id) === Number(usuario?.id)
+  const asigns = esTarea ? asignacionesDe(item) : []
+  const multiAsignacion = esTarea && asigns.length > 0
+  const soyAsignado = esDev || esAsignadoFormal(item, usuario?.id) || Number(item.asignado_a_id) === Number(usuario?.id)
+  const soyResponsable = soyAsignado
   const soySolicitante = esDev || Number(item.solicitante_id) === Number(usuario?.id)
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
   const due = fechaVencimientoEfectiva(item)
@@ -97,8 +101,27 @@ export default function ItemDetalleModal({
     if (allowEstadoGestion === false) return false
     // Tareas con checklist: estado por sub-ítem (solo reprogramar global queda aquí)
     if (esTarea && tieneChecklist) return false
+    // Multi sin checklist: cada asignado marca su parte vía panel dedicado
+    if (esTarea && multiAsignacion && !tieneChecklist) return false
     return esTarea
   })()
+
+  const patchMiEstado = async (estado, checklistId = null) => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.patchAsignacionEstado(item.id, {
+        estado_gestion: estado,
+        checklist_id: checklistId || undefined,
+      })
+      await reload()
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'No se pudo actualizar su estado')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const confirmarDestino = async (modo) => {
     if (!destPick) return
@@ -138,6 +161,7 @@ export default function ItemDetalleModal({
         // Media nueva (pending) se sube después; la persistida se conserva en merge backend
         imagen: it.imagen?.pending ? null : (it.imagen || null),
         esquema: it.esquema?.pending ? null : (it.esquema || null),
+        ...(Array.isArray(it.asignaciones) ? { asignaciones: it.asignaciones } : {}),
       }))
       const updated = await api.updateTarea(item.id, {
         campos_libres: { checklist: checklistPayload },
@@ -185,7 +209,7 @@ export default function ItemDetalleModal({
           <span>#{item.consecutivo ?? item.id} · {item.titulo}</span>
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          {item.asignado_a_nombre || '—'}
+          {destinatarioLabel(item)}
           {item.referido_a_nombre ? ` · ref: ${item.referido_a_nombre}` : ''}
           {' · '}vence {fmtFechaHora(due.fecha || item.fecha_vencimiento, due.hora || item.hora_vencimiento)}
           {' · '}{esTarea && avance ? `avance ${labelAvance(avance)}` : item.estado_gestion}
@@ -195,6 +219,63 @@ export default function ItemDetalleModal({
       </div>
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginBottom: 8 }}>{error}</div>}
+
+      {esTarea && multiAsignacion && (
+        <div style={{
+          margin: '8px 0 12px', padding: '10px 12px', borderRadius: 8,
+          border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+          fontSize: 'var(--cc-sm)', color: t.text,
+        }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Destinatarios y cumplimiento</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {asigns.map((a) => (
+              <span
+                key={a.usuario_id}
+                style={{
+                  fontSize: 'var(--cc-xs)',
+                  padding: '4px 8px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.border}`,
+                  background: a.estado_gestion === 'cumplido' ? 'rgba(15,118,110,0.12)' : 'transparent',
+                  color: t.text,
+                }}
+              >
+                {a.nombre || `#${a.usuario_id}`}: {a.estado_gestion}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+            Estado colectivo: <b style={{ color: t.text }}>{item.estado_gestion}</b>.
+            Solo pasa a Cumplida cuando todos confirman su parte.
+          </div>
+          {!tieneChecklist && esAsignadoFormal(item, usuario?.id) && permisos?.editar && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
+                Mi cumplimiento (actual: {miEstadoEnAsignaciones(asigns, usuario?.id) || '—'})
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
+                  <button
+                    key={x.value}
+                    type="button"
+                    disabled={busy}
+                    style={{
+                      ...ghost(t),
+                      padding: '6px 10px',
+                      borderColor: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? t.primary : t.border,
+                      background: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? `${t.primary}18` : 'transparent',
+                    }}
+                    onClick={() => patchMiEstado(x.value)}
+                  >
+                    {x.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {esTarea ? (
         <section style={{ marginTop: 4 }}>
@@ -214,6 +295,13 @@ export default function ItemDetalleModal({
             value={checklist}
             disabled={!puedeEditarTarea}
             usuario={usuario}
+            multiCumplimiento={multiAsignacion}
+            miEstadoBusy={busy}
+            onMiEstado={
+              multiAsignacion && esAsignadoFormal(item, usuario?.id) && permisos?.editar
+                ? (checklistId, estado) => patchMiEstado(estado, checklistId)
+                : undefined
+            }
             onChange={(next) => { setChecklist(next); setChecklistDirty(true) }}
           />
         </section>

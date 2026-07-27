@@ -27,7 +27,7 @@ export function getResizeHandles(obj) {
     const y = obj.y || 0
     return boxHandles(x, y, x + w, y + h)
   }
-  if (obj.type === 'hatchRegion') {
+  if (obj.type === 'hatchRegion' || obj.type === 'texto') {
     const x = obj.x || 0
     const y = obj.y || 0
     return boxHandles(x, y, x + (obj.w || 0), y + (obj.h || 0))
@@ -98,7 +98,7 @@ export function applyResizeHandle(origin, handleId, point) {
       cellH: h / rows,
     }
   }
-  if (origin.type === 'hatchRegion') {
+  if (origin.type === 'hatchRegion' || origin.type === 'texto') {
     const box = resizeBox(
       origin.x || 0,
       origin.y || 0,
@@ -111,8 +111,8 @@ export function applyResizeHandle(origin, handleId, point) {
       ...origin,
       x: Math.min(box.x1, box.x2),
       y: Math.min(box.y1, box.y2),
-      w: Math.max(4, Math.abs(box.x2 - box.x1)),
-      h: Math.max(4, Math.abs(box.y2 - box.y1)),
+      w: Math.max(24, Math.abs(box.x2 - box.x1)),
+      h: Math.max(20, Math.abs(box.y2 - box.y1)),
     }
   }
   if (origin.x1 == null) return origin

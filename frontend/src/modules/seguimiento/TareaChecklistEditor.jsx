@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
-import { calcularAvanceTarea, normEstadoSubitem } from './tareaAvance'
+import { calcularAvanceTarea, estadoEfectivoSubitem, normEstadoSubitem } from './tareaAvance'
+import { miEstadoEnAsignaciones } from './tareaAsignaciones'
 
 const ESTADO_SHORT = {
   abierto: 'Abierto',
@@ -32,6 +33,14 @@ function normalizeComentarios(raw) {
 export function newChecklistItem(partial = {}) {
   const id = partial.id || `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const estado = normEstadoSubitem(partial.estado_gestion, { hecho: !!partial.hecho })
+  const asignaciones = Array.isArray(partial.asignaciones)
+    ? partial.asignaciones.map((a) => ({
+      usuario_id: Number(a.usuario_id ?? a.id),
+      nombre: a.nombre || '',
+      estado_gestion: normEstadoSubitem(a.estado_gestion),
+      updated_at: a.updated_at || null,
+    }))
+    : []
   return {
     id,
     texto: partial.texto || '',
@@ -45,6 +54,7 @@ export function newChecklistItem(partial = {}) {
     enlace: partial.enlace || '',
     comentarios: normalizeComentarios(partial.comentarios),
     orden: partial.orden ?? 0,
+    ...(asignaciones.length ? { asignaciones } : {}),
   }
 }
 
@@ -65,6 +75,7 @@ export function seedChecklistFromItem(item) {
       enlace: it.enlace || it.link || '',
       comentarios: it.comentarios || [],
       orden: it.orden ?? i,
+      asignaciones: it.asignaciones,
     }))
   }
   if ((item?.descripcion || '').trim()) {
@@ -73,6 +84,7 @@ export function seedChecklistFromItem(item) {
       estado_gestion: item.estado_gestion || 'abierto',
       fecha: item.fecha_vencimiento ? String(item.fecha_vencimiento).slice(0, 10) : '',
       hora: item.hora_vencimiento ? String(item.hora_vencimiento).slice(0, 5) : '',
+      asignaciones: libres.asignaciones,
     })]
   }
   return []
@@ -84,6 +96,10 @@ export default function TareaChecklistEditor({
   onChange,
   disabled = false,
   usuario = null,
+  /** Si true, el estado global se deriva de asignaciones; el usuario edita solo «mi estado». */
+  multiCumplimiento = false,
+  onMiEstado,
+  miEstadoBusy = false,
 }) {
   const items = Array.isArray(value) ? value : []
   const fileRefs = useRef({})
@@ -211,7 +227,12 @@ export default function TareaChecklistEditor({
       {items.map((it, idx) => {
         const srcImg = imagenSrc(it.imagen)
         const srcEsquema = imagenSrc(it.esquema)
-        const est = normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
+        const asigns = Array.isArray(it.asignaciones) ? it.asignaciones : []
+        const multi = multiCumplimiento && asigns.length > 0
+        const est = multi
+          ? estadoEfectivoSubitem(it)
+          : normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
+        const miEst = multi ? miEstadoEnAsignaciones(asigns, usuario?.id) : null
         const comentarios = normalizeComentarios(it.comentarios)
         return (
           <div
@@ -228,7 +249,8 @@ export default function TareaChecklistEditor({
                 {/* Título + estado radio compacto en la misma línea */}
                 <div className="cc-seguim-checklist-title-row" style={{
                   display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8,
-                }}>
+                }}
+                >
                   <input
                     disabled={disabled}
                     value={it.texto}
@@ -243,6 +265,7 @@ export default function TareaChecklistEditor({
                       opacity: est === 'cumplido' ? 0.75 : 1,
                     }}
                   />
+<<<<<<< HEAD
                   <div
                     role="radiogroup"
                     aria-label="Estado de gestión"
@@ -271,12 +294,104 @@ export default function TareaChecklistEditor({
                             cursor: disabled ? 'default' : 'pointer',
                             lineHeight: 1.2,
                           }}
+=======
+                  {multi ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                      <div style={{ fontSize: 11, color: t.textMuted }}>
+                        Colectivo: <b style={{ color: t.text }}>{ESTADO_SHORT[est] || est}</b>
+                      </div>
+                      {miEst != null && typeof onMiEstado === 'function' && (
+                        <div
+                          role="radiogroup"
+                          aria-label="Mi estado en este sub-ítem"
+                          style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
+>>>>>>> 094437974045b7bc4c92efb8fa8fc95aa36a97a5
                         >
-                          {ESTADO_SHORT[x.value] || x.label}
-                        </button>
-                      )
-                    })}
-                  </div>
+                          <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Mi parte:</span>
+                          {ESTADOS_GESTION.map((x) => {
+                            const active = miEst === x.value
+                            return (
+                              <button
+                                key={x.value}
+                                type="button"
+                                role="radio"
+                                aria-checked={active}
+                                disabled={miEstadoBusy}
+                                title={x.label}
+                                onClick={() => onMiEstado(it.id, x.value)}
+                                style={{
+                                  border: `1px solid ${active ? t.primary : t.border}`,
+                                  background: active ? `${t.primary}18` : 'transparent',
+                                  color: active ? t.primary : t.textMuted,
+                                  borderRadius: 6,
+                                  padding: '3px 7px',
+                                  fontSize: 11,
+                                  fontWeight: active ? 700 : 500,
+                                  cursor: miEstadoBusy ? 'wait' : 'pointer',
+                                  lineHeight: 1.2,
+                                }}
+                              >
+                                {ESTADO_SHORT[x.value] || x.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {asigns.map((a) => (
+                          <span
+                            key={a.usuario_id}
+                            style={{
+                              fontSize: 10,
+                              padding: '2px 6px',
+                              borderRadius: 6,
+                              border: `1px solid ${t.border}`,
+                              color: t.textMuted,
+                              background: String(a.estado_gestion).toLowerCase() === 'cumplido'
+                                ? 'rgba(15,118,110,0.12)'
+                                : 'transparent',
+                            }}
+                          >
+                            {(a.nombre || `#${a.usuario_id}`).split(' ')[0]}: {ESTADO_SHORT[a.estado_gestion] || a.estado_gestion}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      role="radiogroup"
+                      aria-label="Estado de gestión"
+                      style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
+                    >
+                      {ESTADOS_GESTION.map((x) => {
+                        const active = est === x.value
+                        return (
+                          <button
+                            key={x.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            disabled={disabled}
+                            title={x.label}
+                            onClick={() => setAt(idx, { estado_gestion: x.value })}
+                            style={{
+                              border: `1px solid ${active ? t.primary : t.border}`,
+                              background: active ? `${t.primary}18` : 'transparent',
+                              color: active ? t.primary : t.textMuted,
+                              borderRadius: 6,
+                              padding: '3px 7px',
+                              fontSize: 11,
+                              fontWeight: active ? 700 : 500,
+                              cursor: disabled ? 'default' : 'pointer',
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {ESTADO_SHORT[x.value] || x.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                   {!disabled && (
                     <button type="button" style={ghostTiny(t)} title="Quitar sub-ítem" onClick={() => removeAt(idx)}>✕</button>
                   )}

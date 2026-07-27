@@ -3,6 +3,7 @@ import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
+import { destinatarioLabel } from './tareaAsignaciones'
 import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import {
   fechaVencimientoEfectiva,
@@ -96,12 +97,19 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             />
             Incluir cumplidos / cancelados
           </label>
+<<<<<<< HEAD
           <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
             {permisos?.crear && (
               <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Tarea personal</button>
             )}
           </div>
+=======
+          <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
+          {permisos?.crear && (
+            <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>+ Nueva tarea</button>
+          )}
+>>>>>>> 094437974045b7bc4c92efb8fa8fc95aa36a97a5
         </div>
       )}
 
@@ -142,9 +150,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                 const nivel = nivelVencimientoItem(r)
                 const due = fechaVencimientoEfectiva(r)
                 const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                const dest = r.relacion_destinatario === 'referencia'
-                  ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
-                  : (r.asignado_a_nombre || '—')
+                const dest = destinatarioLabel(r)
                 const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
                 const estadoLabel = r.origen === 'tarea' && avance?.pct != null
                   ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)

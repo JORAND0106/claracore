@@ -230,6 +230,278 @@ def _notificar(
         _log.warning("notif seguimiento: %s", exc)
 
 
+def _norm_estado_gestion_val(raw: Optional[str], *, hecho: bool = False) -> str:
+    e = (raw or "").strip().lower()
+    if e in (
+        "abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado", "reprogramado",
+    ):
+        return e
+    if hecho:
+        return "cumplido"
+    return "abierto"
+
+
+def _agregar_estados_asignados(estados) -> str:
+    """Agrega estados individuales → estado colectivo (todos cumplidos ⇒ cumplido)."""
+    norms = [_norm_estado_gestion_val(e) for e in (estados or [])]
+    if not norms:
+        return "abierto"
+    if all(e == "cancelado" for e in norms):
+        return "cancelado"
+    activos = [e for e in norms if e != "cancelado"]
+    if not activos:
+        return "cancelado"
+    if all(e == "cumplido" for e in activos):
+        return "cumplido"
+    if any(e == "cumplido" for e in activos):
+        return "parcial"
+    if any(e in ("en_progreso", "parcial", "reprogramado", "vencido") for e in activos):
+        return "en_progreso"
+    return "abierto"
+
+
+def _normalizar_entrada_asignacion(raw) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        uid = int(raw.get("usuario_id") or raw.get("id") or raw.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not uid:
+        return None
+    updated = raw.get("updated_at")
+    return {
+        "usuario_id": uid,
+        "nombre": (raw.get("nombre") or raw.get("asignado_a_nombre") or "").strip()[:200],
+        "estado_gestion": _norm_estado_gestion_val(raw.get("estado_gestion"), hecho=bool(raw.get("hecho"))),
+        "updated_at": str(updated)[:40] if updated else None,
+    }
+
+
+def _normalizar_lista_asignaciones(raw) -> List[dict]:
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    seen: Set[int] = set()
+    for r in raw:
+        entry = _normalizar_entrada_asignacion(r)
+        if not entry or entry["usuario_id"] in seen:
+            continue
+        seen.add(entry["usuario_id"])
+        out.append(entry)
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _clonar_asignaciones_estado(asignaciones: List[dict], estado: str = "abierto") -> List[dict]:
+    est = _norm_estado_gestion_val(estado)
+    return [
+        {
+            "usuario_id": int(a["usuario_id"]),
+            "nombre": a.get("nombre") or "",
+            "estado_gestion": est,
+            "updated_at": None,
+        }
+        for a in (asignaciones or [])
+    ]
+
+
+def _nombres_asignaciones(asignaciones: List[dict]) -> str:
+    names = [(a.get("nombre") or "").strip() or f"Usuario #{a.get('usuario_id')}" for a in (asignaciones or [])]
+    return ", ".join(names)
+
+
+def _asignaciones_efectivas(item: Optional[dict]) -> List[dict]:
+    """Lista de asignados formales; compat con legado de un solo asignado_a_id."""
+    if not item:
+        return []
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    arr = _normalizar_lista_asignaciones((libres or {}).get("asignaciones"))
+    if arr:
+        return arr
+    if (item.get("relacion_destinatario") or "").strip().lower() != "asignacion":
+        return []
+    try:
+        aid = int(item.get("asignado_a_id") or 0)
+        creator = int(item.get("created_by") or 0)
+    except (TypeError, ValueError):
+        return []
+    if not aid or aid == creator:
+        return []
+    return [{
+        "usuario_id": aid,
+        "nombre": (item.get("asignado_a_nombre") or "").strip(),
+        "estado_gestion": _norm_estado_gestion_val(item.get("estado_gestion")),
+        "updated_at": None,
+    }]
+
+
+def _ids_asignados_tarea(item: Optional[dict]) -> Set[int]:
+    ids: Set[int] = set()
+    for a in _asignaciones_efectivas(item):
+        try:
+            ids.add(int(a["usuario_id"]))
+        except (TypeError, ValueError, KeyError):
+            pass
+    try:
+        if item and item.get("asignado_a_id"):
+            ids.add(int(item["asignado_a_id"]))
+    except (TypeError, ValueError):
+        pass
+    return ids
+
+
+def _usuario_es_asignado_formal(item: Optional[dict], user_id: int) -> bool:
+    return int(user_id) in _ids_asignados_tarea(item)
+
+
+def _es_tarea_delegada_asignacion(item: Optional[dict]) -> bool:
+    """Delegación con responsabilidad (asignación formal), no referencia ni personal."""
+    if not item or item.get("origen") != "tarea":
+        return False
+    if (item.get("relacion_destinatario") or "").strip().lower() != "asignacion":
+        return False
+    try:
+        creator = int(item.get("created_by") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not creator:
+        return False
+    asigns = _asignaciones_efectivas(item)
+    if asigns:
+        return any(int(a["usuario_id"]) != creator for a in asigns)
+    try:
+        assignee = int(item.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(assignee and creator != assignee)
+
+
+def _parse_destinatarios_payload(data: dict, sb, user_id: int) -> List[dict]:
+    """
+    Acepta destinatarios múltiples:
+      - destinatarios: [{id|usuario_id, nombre?}, ...]
+      - destinatario_ids: [1,2]
+      - destinatario_id / referido_a_id (legado, uno)
+    """
+    out: List[dict] = []
+    seen: Set[int] = set()
+
+    def add(uid, nombre=None):
+        try:
+            n = int(uid)
+        except (TypeError, ValueError):
+            return
+        if not n or n in seen or n == int(user_id):
+            return
+        seen.add(n)
+        nm = (nombre or "").strip()
+        if not nm:
+            row = _usuario_row(sb, n)
+            nm = _nombre_usuario(row) if row else f"Usuario #{n}"
+        out.append({"usuario_id": n, "nombre": nm[:200], "estado_gestion": "abierto", "updated_at": None})
+
+    raw_list = data.get("destinatarios")
+    if isinstance(raw_list, list):
+        for r in raw_list:
+            if isinstance(r, dict):
+                add(r.get("usuario_id") or r.get("id") or r.get("asignado_a_id"),
+                    r.get("nombre") or r.get("asignado_a_nombre"))
+            else:
+                add(r)
+    raw_ids = data.get("destinatario_ids")
+    if isinstance(raw_ids, list):
+        for x in raw_ids:
+            add(x)
+    # Legado single
+    single = data.get("destinatario_id") or data.get("referido_a_id")
+    if single and not out:
+        add(single, data.get("referido_a_nombre") or data.get("destinatario_nombre") or data.get("asignado_a_nombre"))
+    return out
+
+
+def _notificar_delegante_cumplido_individual(
+    sb,
+    item: dict,
+    *,
+    actor_id: int,
+    actor_nombre: str,
+    ambito: str,
+) -> None:
+    """Notifica a quien delegó cada vez que un destinatario marca su cumplido individual."""
+    if not _es_tarea_delegada_asignacion(item):
+        return
+    creator = int(item["created_by"])
+    if creator == int(actor_id):
+        return
+    titulo = (item.get("titulo") or "tarea").strip() or "tarea"
+    quien = (actor_nombre or "").strip() or f"Usuario #{actor_id}"
+    detalle = ambito.strip() if ambito else "la tarea"
+    _notificar(
+        sb,
+        destinatario_id=creator,
+        remitente_id=int(actor_id),
+        asunto=f"Cumplido parcial: {titulo[:60]}",
+        mensaje=(
+            f"{quien} marcó como Cumplida su parte en {detalle} de la tarea delegada «{titulo}». "
+            f"La tarea permanece pendiente hasta que todos los destinatarios confirmen."
+        ),
+        contrato_id=item.get("contrato_id"),
+        entidad_tipo="seguimiento_tarea",
+        entidad_id=str(item.get("id") or ""),
+    )
+
+
+def _notificar_delegante_cumplido_total(
+    sb,
+    item: dict,
+    *,
+    actor_id: int,
+    prev_estado: Optional[str],
+    new_estado: Optional[str],
+) -> None:
+    """Notifica cuando la tarea queda cumplida en su totalidad por todos los destinatarios."""
+    if (new_estado or "").strip().lower() != "cumplido":
+        return
+    if (prev_estado or "").strip().lower() == "cumplido":
+        return
+    if not _es_tarea_delegada_asignacion(item):
+        return
+    creator = int(item["created_by"])
+    titulo = (item.get("titulo") or "tarea").strip() or "tarea"
+    asigns = _asignaciones_efectivas(item)
+    nombres = _nombres_asignaciones(asigns) if asigns else (item.get("asignado_a_nombre") or "").strip()
+    por = f" por {nombres}" if nombres else ""
+    _notificar(
+        sb,
+        destinatario_id=creator,
+        remitente_id=int(actor_id),
+        asunto=f"Tarea delegada cumplida en su totalidad: {titulo[:55]}",
+        mensaje=(
+            f"La tarea «{titulo}» que usted delegó quedó Cumplida en su totalidad{por}. "
+            f"Todos los destinatarios confirmaron su parte. Revísela en Seguimiento o en el widget de inicio."
+        ),
+        contrato_id=item.get("contrato_id"),
+        entidad_tipo="seguimiento_tarea",
+        entidad_id=str(item.get("id") or ""),
+    )
+
+
+def _notificar_delegante_tarea_cumplida(
+    sb,
+    item: dict,
+    *,
+    prev_estado: Optional[str],
+    new_estado: Optional[str],
+    actor_id: int,
+) -> None:
+    """Compat: transición global a cumplido (p. ej. checklist al 100% o un solo asignado)."""
+    _notificar_delegante_cumplido_total(
+        sb, item, actor_id=actor_id, prev_estado=prev_estado, new_estado=new_estado,
+    )
+
+
 # ── Actas ────────────────────────────────────────────────────────────────────
 
 def proximo_consecutivo(sb, contrato_id: int) -> int:
@@ -973,6 +1245,11 @@ def actualizar_estado_gestion(
                 "El estado de la tarea se calcula según el avance de sus sub-ítems. "
                 "Actualice el estado de cada sub-ítem en la checklist."
             )
+        # Multi-destinatario sin checklist: cada asignado marca su propio estado
+        if _asignaciones_efectivas(item) and estado != "reprogramado":
+            return actualizar_estado_asignado(
+                sb, item_id, user_id, estado, checklist_id=None, current_user=None,
+            )
     if estado == "reprogramado":
         if item.get("origen") != "tarea":
             raise ValueError("Reprogramar solo aplica a tareas personales")
@@ -1019,6 +1296,13 @@ def actualizar_estado_gestion(
         "abierto": "reabierto",
     }.get(estado, "cambio_estado")
     _registrar_evento(sb, item_id, tipo, user_id, {"estado": estado})
+    _notificar_delegante_tarea_cumplida(
+        sb,
+        item,
+        prev_estado=item.get("estado_gestion"),
+        new_estado=estado,
+        actor_id=user_id,
+    )
     return get_item(sb, item_id)
 
 
@@ -1056,42 +1340,39 @@ def _normalizar_imagen_ref(raw) -> Optional[dict]:
 
 
 def _norm_estado_subitem(raw, *, hecho: bool = False) -> str:
-    e = (raw or "").strip().lower()
-    if e in ITEM_ESTADOS:
-        return e
-    if hecho:
-        return "cumplido"
-    return "abierto"
+    return _norm_estado_gestion_val(raw, hecho=hecho)
+
+
+def _estado_efectivo_subitem(it: dict) -> str:
+    """Estado colectivo del sub-ítem: agrega asignaciones[] si existen."""
+    if not isinstance(it, dict):
+        return "abierto"
+    asigns = _normalizar_lista_asignaciones(it.get("asignaciones"))
+    if asigns:
+        return _agregar_estados_asignados([a.get("estado_gestion") for a in asigns])
+    return _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho")))
 
 
 def _avance_desde_checklist(checklist: List[dict]) -> tuple:
     """
     Retorna (pct|None, estado_tarea).
     Cancelados fuera de numerador y denominador. 100% ⇒ cumplido.
+    Sub-ítem con múltiples destinatarios solo cuenta cumplido si todos confirmaron.
     """
     items = checklist or []
     if not items:
         return None, "abierto"
-    validos = [
-        it for it in items
-        if _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho"))) != "cancelado"
-    ]
-    if not validos:
+    estados = [_estado_efectivo_subitem(it) for it in items]
+    validos_idx = [i for i, e in enumerate(estados) if e != "cancelado"]
+    if not validos_idx:
         return None, "cancelado"
-    cumplidos = sum(
-        1 for it in validos
-        if _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho"))) == "cumplido"
-    )
-    pct = int(round(100.0 * cumplidos / len(validos)))
+    cumplidos = sum(1 for i in validos_idx if estados[i] == "cumplido")
+    pct = int(round(100.0 * cumplidos / len(validos_idx)))
     if pct >= 100:
         estado = "cumplido"
-    elif cumplidos > 0:
+    elif cumplidos > 0 or any(estados[i] == "parcial" for i in validos_idx):
         estado = "parcial"
-    elif any(
-        _norm_estado_subitem(it.get("estado_gestion"), hecho=bool(it.get("hecho")))
-        in ("en_progreso", "parcial", "reprogramado", "vencido")
-        for it in validos
-    ):
+    elif any(estados[i] in ("en_progreso", "reprogramado", "vencido") for i in validos_idx):
         estado = "en_progreso"
     else:
         estado = "abierto"
@@ -1183,7 +1464,11 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             hecho = False
         tabla = _normalizar_tabla_subitem(it.get("tabla"))
         comentarios = _normalizar_comentarios_subitem(it.get("comentarios"))
-        out.append({
+        asignaciones_item = _normalizar_lista_asignaciones(it.get("asignaciones"))
+        if asignaciones_item:
+            estado = _agregar_estados_asignados([a.get("estado_gestion") for a in asignaciones_item])
+            hecho = estado == "cumplido"
+        out_row = {
             "id": str(cid)[:40],
             "texto": texto[:2000],
             "hecho": hecho,
@@ -1197,7 +1482,10 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
             "enlace": enlace[:2000] if enlace else "",
             "comentarios": comentarios,
             "orden": int(it.get("orden") if it.get("orden") is not None else i),
-        })
+        }
+        if asignaciones_item:
+            out_row["asignaciones"] = asignaciones_item
+        out.append(out_row)
     out.sort(key=lambda x: x.get("orden") or 0)
     for i, it in enumerate(out):
         it["orden"] = i
@@ -1240,8 +1528,23 @@ def _normalizar_campos_libres_tarea(raw) -> dict:
     # Contenido general deprecado: vive en cada sub-ítem
     base.pop("dibujos", None)
     base.pop("notas", None)
+    if "asignaciones" in base:
+        base["asignaciones"] = _normalizar_lista_asignaciones(base.get("asignaciones"))
+        if not base["asignaciones"]:
+            base.pop("asignaciones", None)
     if "checklist" in base:
-        base["checklist"] = _normalizar_checklist_tarea(base.get("checklist"))
+        checklist = _normalizar_checklist_tarea(base.get("checklist"))
+        # Propagar asignaciones de tarea a sub-ítems que aún no las tienen
+        task_asig = _normalizar_lista_asignaciones(base.get("asignaciones"))
+        if task_asig:
+            for it in checklist:
+                if not it.get("asignaciones"):
+                    it["asignaciones"] = _clonar_asignaciones_estado(task_asig, "abierto")
+                    it["estado_gestion"] = _agregar_estados_asignados(
+                        [a.get("estado_gestion") for a in it["asignaciones"]]
+                    )
+                    it["hecho"] = it["estado_gestion"] == "cumplido"
+        base["checklist"] = checklist
         pct, _estado = _avance_desde_checklist(base["checklist"])
         base["avance_pct"] = pct
     return base
@@ -1356,29 +1659,53 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     hora = hora_ck if fv_ck else _norm_hora(data.get("hora_vencimiento"))
     descripcion = (data.get("descripcion") or "").strip() or _descripcion_desde_checklist(campos.get("checklist") or [])
     consec = _proximo_consecutivo_item(sb, origen="tarea", user_id=user_id)
-    relacion = data.get("relacion_destinatario")
-    referido_id = data.get("referido_a_id") or data.get("destinatario_id")
+    relacion = (data.get("relacion_destinatario") or "").strip().lower() or None
+    destinatarios = _parse_destinatarios_payload(data, sb, user_id)
     asignado_id = int(data.get("asignado_a_id") or user_id)
     asignado_nombre = data.get("asignado_a_nombre") or _nombre_usuario(u)
+    referido_id = None
     referido_nombre = None
-    if relacion == "asignacion" and referido_id:
-        dest = _usuario_row(sb, int(referido_id))
-        if not dest:
-            raise ValueError("Destinatario no encontrado")
-        asignado_id = int(referido_id)
-        asignado_nombre = data.get("referido_a_nombre") or _nombre_usuario(dest)
+
+    if relacion == "asignacion":
+        if not destinatarios:
+            raise ValueError("Seleccione al menos un destinatario para delegar")
+        for d in destinatarios:
+            if not _usuario_row(sb, int(d["usuario_id"])):
+                raise ValueError(f"Destinatario no encontrado: {d.get('nombre') or d['usuario_id']}")
+        campos["asignaciones"] = _clonar_asignaciones_estado(destinatarios, "abierto")
+        # Sembrar estado individual en cada sub-ítem
+        if campos.get("checklist"):
+            for it in campos["checklist"]:
+                it["asignaciones"] = _clonar_asignaciones_estado(destinatarios, "abierto")
+                it["estado_gestion"] = "abierto"
+                it["hecho"] = False
+        asignado_id = int(destinatarios[0]["usuario_id"])
+        asignado_nombre = _nombres_asignaciones(destinatarios)
         referido_id = None
-    elif relacion == "referencia" and referido_id:
-        dest = _usuario_row(sb, int(referido_id))
+        referido_nombre = None
+    elif relacion == "referencia":
+        # Fuera de alcance multi: un solo referido informativo
+        if not destinatarios:
+            raise ValueError("Seleccione el destinatario de la referencia")
+        if len(destinatarios) > 1:
+            raise ValueError("La referencia solo admite un destinatario")
+        dest = _usuario_row(sb, int(destinatarios[0]["usuario_id"]))
         if not dest:
             raise ValueError("Destinatario no encontrado")
-        referido_nombre = data.get("referido_a_nombre") or _nombre_usuario(dest)
-        referido_id = int(referido_id)
+        referido_id = int(destinatarios[0]["usuario_id"])
+        referido_nombre = destinatarios[0].get("nombre") or _nombre_usuario(dest)
+        # Creador permanece como responsable
+        asignado_id = int(user_id)
+        asignado_nombre = _nombre_usuario(u)
     else:
         relacion = None
         referido_id = None
 
     _pct_init, estado_agg = _avance_desde_checklist(campos.get("checklist") or [])
+    if relacion == "asignacion" and not (campos.get("checklist") or []):
+        estado_agg = _agregar_estados_asignados(
+            [a.get("estado_gestion") for a in campos.get("asignaciones") or []]
+        )
     row = {
         "origen": "tarea",
         "titulo": titulo[:500],
@@ -1402,16 +1729,36 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     if not ins:
         raise ValueError("No se pudo crear la tarea")
     item = ins[0]
-    _registrar_evento(sb, int(item["id"]), "tarea_creada", user_id, {"relacion": relacion, "contrato_id": contrato_id})
-    notify_id = asignado_id if relacion == "asignacion" else referido_id
-    if notify_id and int(notify_id) != int(user_id):
-        tipo_msg = "asignó formalmente" if relacion == "asignacion" else "compartió como referencia"
+    _registrar_evento(
+        sb,
+        int(item["id"]),
+        "tarea_creada",
+        user_id,
+        {
+            "relacion": relacion,
+            "contrato_id": contrato_id,
+            "destinatarios": [a["usuario_id"] for a in (campos.get("asignaciones") or [])],
+        },
+    )
+    if relacion == "asignacion":
+        for a in campos.get("asignaciones") or []:
+            _notificar(
+                sb,
+                destinatario_id=int(a["usuario_id"]),
+                remitente_id=user_id,
+                asunto=f"Tarea: {titulo[:80]}",
+                mensaje=f"Se le asignó formalmente la tarea «{titulo}».",
+                contrato_id=int(contrato_id),
+                entidad_tipo="seguimiento_tarea",
+                entidad_id=str(item["id"]),
+            )
+    elif relacion == "referencia" and referido_id:
         _notificar(
             sb,
-            destinatario_id=int(notify_id),
+            destinatario_id=int(referido_id),
             remitente_id=user_id,
             asunto=f"Tarea: {titulo[:80]}",
-            mensaje=f"Se le {tipo_msg} la tarea «{titulo}».",
+            mensaje=f"Se le compartió como referencia la tarea «{titulo}».",
             contrato_id=int(contrato_id),
             entidad_tipo="seguimiento_tarea",
             entidad_id=str(item["id"]),
@@ -1428,6 +1775,7 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         not es_dev
         and int(item.get("created_by") or 0) != int(user_id)
         and int(item.get("asignado_a_id") or 0) != int(user_id)
+        and not _usuario_es_asignado_formal(item, user_id)
     ):
         raise ValueError("No puede editar esta tarea")
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
@@ -1442,9 +1790,12 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         prev = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
         incoming = dict(data.get("campos_libres") or {}) if isinstance(data.get("campos_libres"), dict) else {}
         merged = {**prev, **incoming}
+        # No permitir que el cliente borre asignaciones formales por omisión
+        if "asignaciones" not in incoming and prev.get("asignaciones"):
+            merged["asignaciones"] = prev["asignaciones"]
         if "checklist" not in incoming and "checklist" in prev:
             merged["checklist"] = prev["checklist"]
-        # Al actualizar checklist, fusionar imagen/esquema ya persistidos si el cliente los omite
+        # Al actualizar checklist, fusionar imagen/esquema/asignaciones ya persistidos si el cliente los omite
         if "checklist" in incoming and isinstance(prev.get("checklist"), list):
             prev_by_id = {
                 str(x.get("id")): x
@@ -1463,6 +1814,8 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
                         row["imagen"] = old["imagen"]
                     if "esquema" not in it and old.get("esquema"):
                         row["esquema"] = old["esquema"]
+                    if "asignaciones" not in it and old.get("asignaciones"):
+                        row["asignaciones"] = old["asignaciones"]
                 merged_ck.append(row)
             merged["checklist"] = merged_ck
         campos = _normalizar_campos_libres_tarea(merged)
@@ -1489,7 +1842,165 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         patch["hora_vencimiento"] = _norm_hora(data.get("hora_vencimiento"))
     if "imagenes" in data:
         patch["imagenes"] = data.get("imagenes") or []
+    prev_estado = (item.get("estado_gestion") or "").strip().lower()
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    new_estado = (patch.get("estado_gestion") or prev_estado or "").strip().lower()
+    # Tras checklist: si pasó a cumplido colectivo, avisar al delegante
+    item_notif = dict(item)
+    if "campos_libres" in patch:
+        item_notif["campos_libres"] = patch["campos_libres"]
+    if "estado_gestion" in patch:
+        item_notif["estado_gestion"] = patch["estado_gestion"]
+    _notificar_delegante_tarea_cumplida(
+        sb,
+        item_notif,
+        prev_estado=prev_estado,
+        new_estado=new_estado,
+        actor_id=user_id,
+    )
+    return get_item_detalle(sb, item_id)
+
+
+def actualizar_estado_asignado(
+    sb,
+    item_id: int,
+    user_id: int,
+    estado: str,
+    *,
+    checklist_id: Optional[str] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """
+    Registra el cumplido/estado individual de un destinatario.
+    - Sin checklist_id: actualiza asignaciones[] a nivel tarea (tareas sin sub-ítems).
+    - Con checklist_id: actualiza asignaciones[] del sub-ítem; el global se agrega.
+    Notifica al delegante en cada cumplido individual y al cierre colectivo.
+    """
+    estado = _norm_estado_gestion_val(estado)
+    if estado not in ITEM_ESTADOS:
+        raise ValueError("Estado de gestión no válido")
+    item = get_item(sb, item_id)
+    if item.get("origen") != "tarea":
+        raise ValueError("Solo aplica a tareas personales")
+    if not _usuario_es_asignado_formal(item, user_id) and not es_desarrollador_seguimiento(current_user):
+        raise ValueError("No es destinatario asignado de esta tarea")
+
+    asigns_task = _asignaciones_efectivas(item)
+    if not asigns_task:
+        raise ValueError("Esta tarea no tiene destinatarios de asignación formal")
+
+    actor_row = _usuario_row(sb, user_id)
+    actor_nombre = _nombre_usuario(actor_row) or f"Usuario #{user_id}"
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    prev_global = (item.get("estado_gestion") or "").strip().lower()
+    checklist = list(libres.get("checklist") or []) if isinstance(libres.get("checklist"), list) else []
+
+    individual_cumplido = False
+    ambito = "la tarea"
+
+    if checklist_id:
+        found = False
+        for it in checklist:
+            if str(it.get("id")) != str(checklist_id):
+                continue
+            found = True
+            asig = _normalizar_lista_asignaciones(it.get("asignaciones"))
+            if not asig:
+                asig = _clonar_asignaciones_estado(asigns_task, "abierto")
+            prev_mine = next(
+                (a.get("estado_gestion") for a in asig if int(a["usuario_id"]) == int(user_id)),
+                None,
+            )
+            updated = False
+            for a in asig:
+                if int(a["usuario_id"]) == int(user_id):
+                    a["estado_gestion"] = estado
+                    a["updated_at"] = _now_utc().isoformat()
+                    if not a.get("nombre"):
+                        a["nombre"] = actor_nombre
+                    updated = True
+                    break
+            if not updated:
+                raise ValueError("Usted no está asignado a este sub-ítem")
+            it["asignaciones"] = asig
+            it["estado_gestion"] = _agregar_estados_asignados([a.get("estado_gestion") for a in asig])
+            it["hecho"] = it["estado_gestion"] == "cumplido"
+            texto = (it.get("texto") or "").strip() or "sub-ítem"
+            ambito = f"el sub-ítem «{texto[:80]}»"
+            if estado == "cumplido" and (prev_mine or "").strip().lower() != "cumplido":
+                individual_cumplido = True
+            break
+        if not found:
+            raise ValueError("Sub-ítem no encontrado")
+        libres["checklist"] = _normalizar_checklist_tarea(checklist)
+        # Sincronizar estado individual a nivel tarea (agregado de sus sub-ítems)
+        task_asig = _normalizar_lista_asignaciones(libres.get("asignaciones")) or _clonar_asignaciones_estado(asigns_task)
+        for a in task_asig:
+            uid = int(a["usuario_id"])
+            estados_user = []
+            for it in libres["checklist"]:
+                for xa in _normalizar_lista_asignaciones(it.get("asignaciones")):
+                    if int(xa["usuario_id"]) == uid:
+                        estados_user.append(xa.get("estado_gestion"))
+            if estados_user:
+                a["estado_gestion"] = _agregar_estados_asignados(estados_user)
+                a["updated_at"] = _now_utc().isoformat()
+        libres["asignaciones"] = task_asig
+        pct, estado_agg = _avance_desde_checklist(libres["checklist"])
+        libres["avance_pct"] = pct
+        new_global = estado_agg
+    else:
+        if checklist:
+            raise ValueError(
+                "Esta tarea tiene checklist: marque su cumplido en cada sub-ítem."
+            )
+        task_asig = _normalizar_lista_asignaciones(libres.get("asignaciones")) or _clonar_asignaciones_estado(asigns_task)
+        prev_mine = next(
+            (a.get("estado_gestion") for a in task_asig if int(a["usuario_id"]) == int(user_id)),
+            None,
+        )
+        updated = False
+        for a in task_asig:
+            if int(a["usuario_id"]) == int(user_id):
+                a["estado_gestion"] = estado
+                a["updated_at"] = _now_utc().isoformat()
+                if not a.get("nombre"):
+                    a["nombre"] = actor_nombre
+                updated = True
+                break
+        if not updated:
+            raise ValueError("Usted no está asignado a esta tarea")
+        libres["asignaciones"] = task_asig
+        new_global = _agregar_estados_asignados([a.get("estado_gestion") for a in task_asig])
+        if estado == "cumplido" and (prev_mine or "").strip().lower() != "cumplido":
+            individual_cumplido = True
+
+    patch = {
+        "campos_libres": libres,
+        "estado_gestion": new_global,
+        "asignado_a_nombre": _nombres_asignaciones(libres.get("asignaciones") or asigns_task),
+        "updated_at": _now_utc().isoformat(),
+    }
+    sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    _registrar_evento(
+        sb,
+        item_id,
+        "cumplido_asignado" if estado == "cumplido" else "estado_asignado",
+        user_id,
+        {"estado": estado, "checklist_id": checklist_id, "estado_global": new_global},
+    )
+
+    item_after = dict(item)
+    item_after["campos_libres"] = libres
+    item_after["estado_gestion"] = new_global
+
+    if individual_cumplido and len(asigns_task) > 1:
+        _notificar_delegante_cumplido_individual(
+            sb, item_after, actor_id=user_id, actor_nombre=actor_nombre, ambito=ambito,
+        )
+    _notificar_delegante_cumplido_total(
+        sb, item_after, actor_id=user_id, prev_estado=prev_global, new_estado=new_global,
+    )
     return get_item_detalle(sb, item_id)
 
 
@@ -1671,13 +2182,22 @@ def list_bandeja(
             continue
         libres = dict(r.get("campos_libres") or {}) if isinstance(r.get("campos_libres"), dict) else {}
         ck = libres.get("checklist") if isinstance(libres.get("checklist"), list) else []
-        if not ck:
+        if ck:
+            pct, est = _avance_desde_checklist(ck)
+            libres["avance_pct"] = pct
+            r["campos_libres"] = libres
+            r["avance_pct"] = pct
+            r["estado_gestion"] = est
             continue
-        pct, est = _avance_desde_checklist(ck)
-        libres["avance_pct"] = pct
-        r["campos_libres"] = libres
-        r["avance_pct"] = pct
-        r["estado_gestion"] = est
+        asigns = _asignaciones_efectivas(r)
+        if asigns:
+            r["estado_gestion"] = _agregar_estados_asignados([a.get("estado_gestion") for a in asigns])
+            if not libres.get("asignaciones"):
+                libres["asignaciones"] = asigns
+                r["campos_libres"] = libres
+            # Exponer nombres unidos para la columna Destinatario
+            if not r.get("asignado_a_nombre") or "," not in str(r.get("asignado_a_nombre") or ""):
+                r["asignado_a_nombre"] = _nombres_asignaciones(asigns) or r.get("asignado_a_nombre")
 
     out = []
     for r in rows:
@@ -1699,16 +2219,21 @@ def list_bandeja(
         cid_creator = r.get("created_by")
         referido = r.get("referido_a_id")
         if responsable_id is not None and int(aid or 0) != int(responsable_id):
-            continue
+            # También coincidir si el responsable está en asignaciones[] multi
+            ids_asig = _ids_asignados_tarea(r)
+            if int(responsable_id) not in ids_asig:
+                continue
         # Desarrollador ve todos los ítems del contrato activo (no cross-contrato).
         if es_dev:
             out.append(r)
             continue
+        ids_asig = _ids_asignados_tarea(r)
         if (
             int(aid or 0) in visible_ids
             or int(cid_creator or 0) in visible_ids
             or int(referido or 0) in visible_ids
             or int(r.get("solicitante_id") or 0) == int(user_id)
+            or bool(ids_asig & visible_ids)
         ):
             out.append(r)
             continue

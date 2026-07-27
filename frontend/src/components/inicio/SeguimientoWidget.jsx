@@ -5,6 +5,7 @@ import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from '../../modules/seg
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
 import { useSeguimientoCompact } from '../../modules/seguimiento/seguimientoShared'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
+import { destinatarioLabel } from '../../modules/seguimiento/tareaAsignaciones'
 import { calcularAvanceTarea, labelAvance } from '../../modules/seguimiento/tareaAvance'
 import {
   fechaVencimientoEfectiva,
@@ -124,9 +125,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
                     const nivel = nivelVencimientoItem(r)
                     const due = fechaVencimientoEfectiva(r)
                     const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                    const dest = r.relacion_destinatario === 'referencia'
-                      ? (r.referido_a_nombre || r.asignado_a_nombre || '—')
-                      : (r.asignado_a_nombre || '—')
+                    const dest = destinatarioLabel(r)
                     const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
                     const estadoLabel = r.origen === 'tarea' && avance?.pct != null
                       ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)
