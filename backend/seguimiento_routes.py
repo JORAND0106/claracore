@@ -19,6 +19,7 @@ from main import _require_contract_access, get_current_user, registrar_log, supa
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
 from seguimiento_service import (
     add_idea,
+    actualizar_estado_asignado,
     actualizar_estado_gestion,
     adjuntar_imagen_tarea_base64,
     agregar_comentario,
@@ -163,6 +164,19 @@ class DestinarBody(BaseModel):
     modo: Optional[str] = None
 
 
+class AsignacionEstadoBody(BaseModel):
+    estado_gestion: str = Field(..., min_length=3)
+    checklist_id: Optional[str] = None
+
+
+class DestinatarioTareaBody(BaseModel):
+    id: Optional[int] = None
+    usuario_id: Optional[int] = None
+    nombre: Optional[str] = None
+    asignado_a_id: Optional[int] = None
+    asignado_a_nombre: Optional[str] = None
+
+
 class TareaCreateBody(BaseModel):
     titulo: str = Field(..., min_length=1)
     descripcion: Optional[str] = None
@@ -174,6 +188,8 @@ class TareaCreateBody(BaseModel):
     asignado_a_id: Optional[int] = None
     asignado_a_nombre: Optional[str] = None
     destinatario_id: Optional[int] = None
+    destinatario_ids: Optional[List[int]] = None
+    destinatarios: Optional[List[DestinatarioTareaBody]] = None
     referido_a_id: Optional[int] = None
     referido_a_nombre: Optional[str] = None
     relacion_destinatario: Optional[str] = None
@@ -302,6 +318,23 @@ def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depend
             _uid(current_user),
             nueva_fecha_vencimiento=body.nueva_fecha_vencimiento,
             hora_vencimiento=body.hora_vencimiento,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/items/{item_id}/asignacion-estado")
+def route_asignacion_estado(item_id: int, body: AsignacionEstadoBody, current_user=Depends(get_current_user)):
+    """Cumplido / estado individual de un destinatario (tarea o sub-ítem)."""
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        return actualizar_estado_asignado(
+            supabase,
+            item_id,
+            _uid(current_user),
+            body.estado_gestion,
+            checklist_id=body.checklist_id,
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

@@ -3,6 +3,7 @@
  * - Peso equitativo entre sub-ítems no cancelados
  * - Cancelados fuera del numerador y del denominador
  * - 100% ⇒ tarea cumplida
+ * - Sub-ítem con asignaciones[]: solo cuenta cumplido si todos confirmaron
  */
 
 export const ESTADOS_SUBITEM = [
@@ -22,6 +23,28 @@ export function normEstadoSubitem(raw, { hecho = false } = {}) {
   return 'abierto'
 }
 
+export function agregarEstadosAsignados(estados) {
+  const norms = (estados || []).map((e) => normEstadoSubitem(e))
+  if (!norms.length) return 'abierto'
+  if (norms.every((e) => e === 'cancelado')) return 'cancelado'
+  const activos = norms.filter((e) => e !== 'cancelado')
+  if (!activos.length) return 'cancelado'
+  if (activos.every((e) => e === 'cumplido')) return 'cumplido'
+  if (activos.some((e) => e === 'cumplido')) return 'parcial'
+  if (activos.some((e) => ['en_progreso', 'parcial', 'reprogramado', 'vencido'].includes(e))) {
+    return 'en_progreso'
+  }
+  return 'abierto'
+}
+
+export function estadoEfectivoSubitem(it) {
+  const asigns = Array.isArray(it?.asignaciones) ? it.asignaciones : []
+  if (asigns.length) {
+    return agregarEstadosAsignados(asigns.map((a) => a?.estado_gestion))
+  }
+  return normEstadoSubitem(it?.estado_gestion, { hecho: !!it?.hecho })
+}
+
 export function checklistItems(itemOrList) {
   if (Array.isArray(itemOrList)) return itemOrList
   const libres = itemOrList?.campos_libres && typeof itemOrList.campos_libres === 'object'
@@ -35,22 +58,23 @@ export function checklistItems(itemOrList) {
  */
 export function calcularAvanceTarea(itemOrChecklist) {
   const items = checklistItems(itemOrChecklist)
-  const validos = items.filter((it) => normEstadoSubitem(it?.estado_gestion, { hecho: !!it?.hecho }) !== 'cancelado')
+  const estados = items.map((it) => estadoEfectivoSubitem(it))
+  const validosIdx = estados.map((e, i) => (e !== 'cancelado' ? i : -1)).filter((i) => i >= 0)
   if (!items.length) {
     return { pct: null, validos: 0, cumplidos: 0, estadoTarea: 'abierto' }
   }
-  if (!validos.length) {
+  if (!validosIdx.length) {
     return { pct: null, validos: 0, cumplidos: 0, estadoTarea: 'cancelado' }
   }
-  const cumplidos = validos.filter((it) => normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho }) === 'cumplido').length
-  const pct = Math.round((100 * cumplidos) / validos.length)
+  const cumplidos = validosIdx.filter((i) => estados[i] === 'cumplido').length
+  const pct = Math.round((100 * cumplidos) / validosIdx.length)
   let estadoTarea = 'abierto'
   if (pct >= 100) estadoTarea = 'cumplido'
-  else if (cumplidos > 0) estadoTarea = 'parcial'
-  else if (validos.some((it) => ['en_progreso', 'parcial', 'reprogramado', 'vencido'].includes(normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })))) {
+  else if (cumplidos > 0 || validosIdx.some((i) => estados[i] === 'parcial')) estadoTarea = 'parcial'
+  else if (validosIdx.some((i) => ['en_progreso', 'reprogramado', 'vencido'].includes(estados[i]))) {
     estadoTarea = 'en_progreso'
   }
-  return { pct, validos: validos.length, cumplidos, estadoTarea }
+  return { pct, validos: validosIdx.length, cumplidos, estadoTarea }
 }
 
 export function labelAvance(avance) {
