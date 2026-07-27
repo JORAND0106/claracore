@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useAnchoredDropdown } from './useAnchoredDropdown'
 
 /**
- * Texto libre con sugerencias (asistentes del acta).
+ * Texto libre con sugerencias (asistentes del acta) para el campo Interviniente.
  * No exige coincidencia exacta: el valor digitado se conserva.
  */
 export default function QuienDijoAutocomplete({

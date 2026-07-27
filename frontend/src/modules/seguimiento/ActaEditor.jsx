@@ -814,7 +814,7 @@ export default function ActaEditor({
         {form.ideas.map((idea, idx) => (
           <div key={idea._key || idea.id || `idea-${idx}`} style={{ marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}` }}>
             <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}</div>
-            <Field t={t} label="Quién dijo">
+            <Field t={t} label="Interviniente">
               <QuienDijoAutocomplete
                 t={t}
                 disabled={soloLectura}

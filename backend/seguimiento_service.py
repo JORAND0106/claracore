@@ -1310,7 +1310,7 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
     include_quien = _schema_has(sb, "idea_quien_dijo")
     for i, idea in enumerate(ideas or []):
         texto = (idea.get("texto") or "").strip()
-        quien = (idea.get("quien_dijo") or "").strip() or None
+        quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None
         iid = idea.get("id")
         payload = {
             "texto": texto,

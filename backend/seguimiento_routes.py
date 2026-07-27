@@ -93,7 +93,9 @@ class AsistenteBody(BaseModel):
 class IdeaBody(BaseModel):
     id: Optional[int] = None
     texto: str = ""
+    # Persistido como quien_dijo; "interviniente" es alias de API/UI.
     quien_dijo: Optional[str] = None
+    interviniente: Optional[str] = None
     orden: Optional[int] = None
 
 
