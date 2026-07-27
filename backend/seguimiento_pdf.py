@@ -133,9 +133,16 @@ def generar_pdf_acta(
 
     ideas_html = ""
     for idx, idea in enumerate(ideas or [], start=1):
+        quien = (idea.get("quien_dijo") or "").strip()
+        quien_line = (
+            f"<div style='font-size:8.5pt;color:#64748b;margin:2pt 0 4pt;'>"
+            f"Quién dijo: {_esc(quien)}</div>"
+            if quien else ""
+        )
         ideas_html += (
             f"<div style='margin:6pt 0;'>"
             f"<div style='font-size:9pt;font-weight:700;color:{_COLOR};'>Idea central {idx}</div>"
+            f"{quien_line}"
             f"<div style='font-size:9pt;white-space:pre-wrap;'>{_esc(idea.get('texto'))}</div>"
             f"</div>"
         )

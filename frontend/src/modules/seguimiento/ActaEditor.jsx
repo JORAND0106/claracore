@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import ItemDetalleModal from './ItemDetalleModal'
+import QuienDijoAutocomplete from './QuienDijoAutocomplete'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import {
@@ -43,7 +44,7 @@ function emptyAsistente() {
 }
 
 function emptyIdea() {
-  return { _key: newRowKey('idea'), texto: '' }
+  return { _key: newRowKey('idea'), texto: '', quien_dijo: '' }
 }
 
 function emptyApartado() {
@@ -238,6 +239,7 @@ export default function ActaEditor({
                 _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
                 id: x.id,
                 texto: x.texto || '',
+                quien_dijo: x.quien_dijo || '',
                 orden: x.orden,
               }))
               : [emptyIdea()],
@@ -314,6 +316,7 @@ export default function ActaEditor({
       .map((i) => ({
         id: i.id || undefined,
         texto: i.texto || '',
+        quien_dijo: (i.quien_dijo || '').trim() || null,
         orden: i.orden,
       })),
     apartados: (formSrc.apartados || [])
@@ -460,6 +463,10 @@ export default function ActaEditor({
   if (loading) {
     return <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)', padding: 16 }}>Cargando acta…</div>
   }
+
+  const asistenteOpciones = (form.asistentes || [])
+    .map((a) => (a.nombre || '').trim())
+    .filter(Boolean)
 
   const body = (
     <div className={viewportCompact ? 'cc-seguim-acta-editor cc-seguim-acta-editor--compact' : 'cc-seguim-acta-editor'} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -807,6 +814,23 @@ export default function ActaEditor({
         {form.ideas.map((idea, idx) => (
           <div key={idea._key || idea.id || `idea-${idx}`} style={{ marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}` }}>
             <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}</div>
+            <Field t={t} label="Quién dijo">
+              <QuienDijoAutocomplete
+                t={t}
+                disabled={soloLectura}
+                value={idea.quien_dijo || ''}
+                options={asistenteOpciones}
+                placeholder={asistenteOpciones.length
+                  ? 'Seleccione un asistente o digite el nombre…'
+                  : 'Registre asistentes o digite el nombre…'}
+                style={inp(t)}
+                onChange={(quien_dijo) => {
+                  patchList('ideas', (list) => list.map((row, i) => (
+                    i === idx ? { ...row, quien_dijo } : row
+                  )))
+                }}
+              />
+            </Field>
             <textarea
               rows={4}
               disabled={soloLectura}
@@ -816,6 +840,7 @@ export default function ActaEditor({
                 patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
               }}
               style={inp(t)}
+              placeholder="Redacción de la idea central…"
             />
             {!soloLectura && (
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
