@@ -372,6 +372,11 @@ export default function ActaEditor({
         : 'Acta guardada correctamente.'
       setOkMsg(msg)
       onSaved?.(row, { stay: true, enviada: estadoExtra === 'realizada' })
+      // Tras guardado OK: avanzar a la siguiente pestaña (excepto en la última).
+      const idx = TABS_ACTA.findIndex((tb) => tb.id === tab)
+      if (idx >= 0 && idx < TABS_ACTA.length - 1) {
+        setTab(TABS_ACTA[idx + 1].id)
+      }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo guardar'))
     } finally {
