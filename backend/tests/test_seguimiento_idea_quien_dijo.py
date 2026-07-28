@@ -50,10 +50,13 @@ class _FakeTable:
             return type("R", (), {"data": [row]})()
         if self._op == "update":
             for r in self.store.get("ideas", []):
-                if r.get("id") == self._filters.get("id"):
-                    r.update(self._payload)
-                    self.store["last_update"] = dict(r)
-                    return type("R", (), {"data": [r]})()
+                if "id" in self._filters and r.get("id") != self._filters.get("id"):
+                    continue
+                if "acta_id" in self._filters and r.get("acta_id") != self._filters.get("acta_id"):
+                    continue
+                r.update(self._payload)
+                self.store["last_update"] = dict(r)
+                return type("R", (), {"data": [r]})()
             return type("R", (), {"data": []})()
         if self._op == "delete":
             return type("R", (), {"data": []})()
@@ -73,6 +76,7 @@ def test_sync_ideas_persists_quien_dijo(monkeypatch):
     sb = _FakeSB(store)
     _SCHEMA_CAPS["idea_quien_dijo"] = True
     monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: True)
 
     _sync_ideas(sb, 7, [
         {"texto": "Mejorar drenaje", "quien_dijo": " Ana Pérez "},
@@ -88,6 +92,7 @@ def test_sync_ideas_acepta_alias_interviniente(monkeypatch):
     sb = _FakeSB(store)
     _SCHEMA_CAPS["idea_quien_dijo"] = True
     monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: True)
 
     _sync_ideas(sb, 7, [
         {"texto": "Idea", "interviniente": " Luis Gómez "},
@@ -96,19 +101,22 @@ def test_sync_ideas_acepta_alias_interviniente(monkeypatch):
     assert store["last_insert"]["quien_dijo"] == "Luis Gómez"
 
 
-def test_sync_ideas_omits_quien_cuando_schema_ausente(monkeypatch):
+def test_sync_ideas_falla_si_schema_ausente(monkeypatch):
+    """Sin columna quien_dijo no se hace silent-drop: error explícito."""
     store = {"ideas": [], "_seq": 10}
     sb = _FakeSB(store)
     _SCHEMA_CAPS["idea_quien_dijo"] = False
     monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: False)
     monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: False)
 
-    _sync_ideas(sb, 7, [
-        {"texto": "Idea", "quien_dijo": "Alguien"},
-    ])
+    import pytest
 
-    assert "quien_dijo" not in store["last_insert"]
-    assert store["last_insert"]["texto"] == "Idea"
+    with pytest.raises(ValueError, match="Interviniente"):
+        _sync_ideas(sb, 7, [
+            {"texto": "Idea", "quien_dijo": "Alguien"},
+        ])
+
+    assert "last_insert" not in store
 
 
 def test_sync_ideas_reintenta_tras_ensure(monkeypatch):
@@ -148,3 +156,28 @@ def test_sync_ideas_reintenta_tras_ensure(monkeypatch):
     ])
 
     assert store["last_insert"]["quien_dijo"] == "María"
+
+
+def test_sync_ideas_actualiza_orden_al_reordenar(monkeypatch):
+    store = {
+        "ideas": [
+            {"id": 1, "acta_id": 7, "texto": "A", "orden": 0, "quien_dijo": None},
+            {"id": 2, "acta_id": 7, "texto": "B", "orden": 1, "quien_dijo": None},
+        ],
+        "_seq": 10,
+    }
+    sb = _FakeSB(store)
+    _SCHEMA_CAPS["idea_quien_dijo"] = True
+    monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: True)
+
+    _sync_ideas(sb, 7, [
+        {"id": 2, "texto": "B", "orden": 0, "quien_dijo": "X"},
+        {"id": 1, "texto": "A", "orden": 1, "quien_dijo": "Y"},
+    ])
+
+    by_id = {r["id"]: r for r in store["ideas"]}
+    assert by_id[2]["orden"] == 0
+    assert by_id[2]["quien_dijo"] == "X"
+    assert by_id[1]["orden"] == 1
+    assert by_id[1]["quien_dijo"] == "Y"

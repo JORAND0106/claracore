@@ -107,7 +107,7 @@ function mergeAsistenteIds(local = [], server = []) {
 function mergeIdeaIds(local = [], server = []) {
   if (!Array.isArray(server) || !server.length) return local
   const used = new Set()
-  return local.map((row, idx) => {
+  const merged = local.map((row, idx) => {
     let match = null
     if (row.id != null) match = server.find((s) => Number(s.id) === Number(row.id))
     if (!match && (row.texto || '').trim()) {
@@ -117,13 +117,21 @@ function mergeIdeaIds(local = [], server = []) {
     if (!match && server[idx] && !used.has(server[idx].id)) match = server[idx]
     if (!match) return row
     used.add(match.id)
-    const quienServer = match.quien_dijo || match.interviniente || ''
+    const quienServer = String(match.quien_dijo || match.interviniente || '').trim()
+    const quienLocal = String(row.quien_dijo || row.interviniente || '').trim()
     return {
       ...row,
       id: match.id,
-      orden: match.orden ?? row.orden,
-      quien_dijo: (row.quien_dijo || '').trim() || quienServer || '',
+      // Preferir valor persistido en servidor (evita enmascarar fallos de guardado).
+      orden: match.orden != null ? Number(match.orden) : row.orden,
+      quien_dijo: quienServer || quienLocal || '',
     }
+  })
+  return [...merged].sort((a, b) => {
+    const oa = a.orden != null ? Number(a.orden) : 1e9
+    const ob = b.orden != null ? Number(b.orden) : 1e9
+    if (oa !== ob) return oa - ob
+    return (Number(a.id) || 0) - (Number(b.id) || 0)
   })
 }
 
@@ -229,6 +237,9 @@ export default function ActaEditor({
     ideas: [emptyIdea()],
     apartados: [emptyApartado()],
     estado: 'borrador',
+    proxima_fecha: '',
+    proxima_hora: '',
+    proxima_lugar: '',
   })
   const [claraIdx, setClaraIdx] = useState(null)
   const [compromisoCtx, setCompromisoCtx] = useState(null)
@@ -296,13 +307,20 @@ export default function ActaEditor({
               ? a.asistentes.map((x) => mapAsistenteFromApi(x))
               : [emptyAsistente()],
             ideas: (a.ideas || []).length
-              ? a.ideas.map((x) => ({
-                _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
-                id: x.id,
-                texto: x.texto || '',
-                quien_dijo: x.quien_dijo || x.interviniente || '',
-                orden: x.orden,
-              }))
+              ? [...(a.ideas || [])]
+                .sort((x, y) => {
+                  const ox = x.orden != null ? Number(x.orden) : 1e9
+                  const oy = y.orden != null ? Number(y.orden) : 1e9
+                  if (ox !== oy) return ox - oy
+                  return (Number(x.id) || 0) - (Number(y.id) || 0)
+                })
+                .map((x, i) => ({
+                  _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
+                  id: x.id,
+                  texto: x.texto || '',
+                  quien_dijo: x.quien_dijo || x.interviniente || '',
+                  orden: x.orden != null ? Number(x.orden) : i,
+                }))
               : [emptyIdea()],
             apartados: (a.apartados || []).length
               ? a.apartados.map((x) => ({
@@ -313,6 +331,9 @@ export default function ActaEditor({
               }))
               : [emptyApartado()],
             estado: (a.estado === 'en_firma' || a.estado === 'cerrada') ? 'realizada' : (a.estado || 'borrador'),
+            proxima_fecha: a.proxima_fecha ? String(a.proxima_fecha).slice(0, 10) : '',
+            proxima_hora: a.proxima_hora ? String(a.proxima_hora).slice(0, 5) : '',
+            proxima_lugar: a.proxima_lugar || '',
           })
           setActaCompromisos(Array.isArray(a.compromisos) ? a.compromisos : [])
           hydratedActaIdRef.current = a.id
@@ -380,6 +401,9 @@ export default function ActaEditor({
       .map((x) => ({ texto: x.texto.trim(), hecho: !!x.hecho })),
     elaborador_id: formSrc.elaborador_id,
     elaborador_nombre: formSrc.elaborador_nombre,
+    proxima_fecha: (formSrc.proxima_fecha || '').trim() || null,
+    proxima_hora: (formSrc.proxima_hora || '').trim() || null,
+    proxima_lugar: (formSrc.proxima_lugar || '').trim() || null,
     asistentes: (formSrc.asistentes || [])
       .filter((a) => (a.nombre || '').trim())
       .map((a) => ({
@@ -399,7 +423,8 @@ export default function ActaEditor({
           texto: i.texto || '',
           quien_dijo: quien,
           interviniente: quien,
-          orden: i.orden != null && i.orden !== '' ? Number(i.orden) : idx,
+          // Consecutivo interno = posición actual en UI (tras reordenar).
+          orden: idx,
         }
       }),
     apartados: (formSrc.apartados || [])
@@ -424,12 +449,19 @@ export default function ActaEditor({
       tipo_acta: row.tipo_acta || f.tipo_acta || 'interna',
       elaborador_id: row.elaborador_id ?? f.elaborador_id,
       elaborador_nombre: row.elaborador_nombre || f.elaborador_nombre,
+      proxima_fecha: row.proxima_fecha != null
+        ? String(row.proxima_fecha).slice(0, 10)
+        : f.proxima_fecha,
+      proxima_hora: row.proxima_hora != null
+        ? String(row.proxima_hora).slice(0, 5)
+        : f.proxima_hora,
+      proxima_lugar: row.proxima_lugar != null ? (row.proxima_lugar || '') : f.proxima_lugar,
       asistentes: mergeAsistenteIds(f.asistentes, row.asistentes),
       ideas: mergeIdeaIds(f.ideas, row.ideas),
       apartados: mergeApartadoIds(f.apartados, row.apartados),
     }))
     return row
-  }
+  })
 
   /** Guarda (crea o actualiza) y deja el acta e ideas con id listos para compromisos. */
   const persistActa = async (extra = {}, formSrc = null) => {
@@ -945,7 +977,7 @@ export default function ActaEditor({
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
           {soloLectura
             ? 'Pulse una idea para expandirla. Solo una permanece abierta a la vez.'
-            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. Idea 1, 2… se renumeran; el # interno no cambia.'}
+            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. El consecutivo (Idea 1, 2…) sigue el orden actual y se guarda al Guardar.'}
         </div>
         {form.ideas.map((idea, idx) => {
           const ideaKey = idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${idx}`)
@@ -957,9 +989,11 @@ export default function ActaEditor({
           const compromisoCumplido = tieneCompromiso
             && compsIdea.every((c) => String(c.estado_gestion || '').toLowerCase() === 'cumplido')
           const interviniente = String(idea.quien_dijo || '').trim()
+          const consecutivoIdea = (idea.orden != null && idea.orden !== ''
+            ? Number(idea.orden)
+            : idx) + 1
           const headLine = [
-            `Idea ${idx + 1}`,
-            idea.id != null ? `#${idea.id}` : null,
+            `Idea ${consecutivoIdea}`,
             interviniente || null,
           ].filter(Boolean).join(' · ')
           // Institucional (primary) si hay compromiso; verde solo si está Cumplido.
@@ -1360,6 +1394,48 @@ export default function ActaEditor({
         ) : (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Genere la vista previa para visualizar el PDF del acta en este panel.</div>
         )}
+
+        <div style={{
+          marginTop: 18,
+          paddingTop: 14,
+          borderTop: `1px solid ${t.border}`,
+        }}
+        >
+          <h3 style={{ ...h3(t), marginBottom: 6 }}>Próxima reunión (reserva)</h3>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 10 }}>
+            Espacio para dejar programada o reservada la información tentativa de la próxima reunión, como cierre de esta acta.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            <Field t={t} label="Fecha tentativa">
+              <input
+                type="date"
+                disabled={soloLectura}
+                value={form.proxima_fecha || ''}
+                onChange={(e) => setField('proxima_fecha', e.target.value)}
+                style={inp(t)}
+              />
+            </Field>
+            <Field t={t} label="Hora tentativa">
+              <input
+                type="time"
+                disabled={soloLectura}
+                value={form.proxima_hora || ''}
+                onChange={(e) => setField('proxima_hora', e.target.value)}
+                style={inp(t)}
+              />
+            </Field>
+            <Field t={t} label="Lugar tentativo">
+              <input
+                type="text"
+                disabled={soloLectura}
+                value={form.proxima_lugar || ''}
+                onChange={(e) => setField('proxima_lugar', e.target.value)}
+                placeholder="Sala, dirección o enlace…"
+                style={inp(t)}
+              />
+            </Field>
+          </div>
+        </div>
       </section>
       )}
 
