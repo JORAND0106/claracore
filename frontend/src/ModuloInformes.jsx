@@ -3,7 +3,9 @@ import { API_BASE as API, API_FALLBACK } from './apiBase'
 import { formatCOP } from './utils/formatCOP'
 import {
   mensajeSiRespuestaEsHtmlEnVezDePdf,
-  vistaPreviaEsPdfBinario,
+  planDescargaPdfDesdeVistaPrevia,
+  planDescargaSelloDesdeVistaPrevia,
+  vistaPreviaEsHtmlIdu,
 } from './informesVistaPreviaPdf'
 
 const FS = {
@@ -1975,7 +1977,7 @@ export default function ModuloInformes({
 
   /** Vista previa FO-IDU-EO-04 HTML usa pdfUrl para el iframe, pero NO es un PDF descargable.
    *  Lógica compartida: informesVistaPreviaPdf.js (tests node). */
-  // vistaPreviaEsPdfBinario importado arriba
+  // Helpers de descarga / detección HTML vs PDF: informesVistaPreviaPdf.js
 
   /** Fuerza extensión .pdf y caracteres seguros (WhatsApp/Android rechazan nombres sin .pdf). */
   function asegurarNombreArchivoPdf(name, fallback = 'documento.pdf') {
@@ -2047,24 +2049,52 @@ export default function ModuloInformes({
     }, 5000)
   }
 
-  /** Descarga inmediata del PDF ya en memoria (vista previa), sin regenerar ni sellar SHA. */
+  /**
+   * Descarga PDF desde el modal. Si la vista previa es HTML (FO-EO-04 preview-html),
+   * NO descarga ese blob: usa el PDF del job o genera el PDF real (application/pdf).
+   * Si ya hay PDF binario en memoria (CC-MES-002, etc.), descarga esos bytes tipados.
+   */
   async function descargarPdfDesdeVistaPrevia() {
-    if (!vistaPreviaEsPdfBinario(vistaPrevia)) {
-      setError(
-        vistaPrevia?.tipo === 'idu-html'
-          ? 'Esta vista previa es HTML (FO-IDU-EO-04), no un PDF. Use el botón azul de generar/descargar PDF con sello.'
-          : 'No hay un PDF binario en esta vista previa para descargar.',
-      )
-      return
-    }
-    if (!vistaPrevia?.pdfUrl && !vistaPrevia?.pdfBlob) return
-    const name = asegurarNombreArchivoPdf(vistaPrevia.nombreArchivo || 'documento.pdf')
+    const plan = planDescargaPdfDesdeVistaPrevia(vistaPrevia, {
+      foEo04LastJobId,
+      contratoId,
+    })
     try {
+      if (plan.action === 'none') return
+      if (plan.action === 'error') {
+        setError(plan.message || 'No se pudo descargar el PDF.')
+        return
+      }
+      if (plan.action === 'fo-eo-04-job-pdf') {
+        const authToken = getAuthToken()
+        if (authToken) {
+          try {
+            const r = await fetchConFallback(plan.path, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            })
+            if (r?.ok) {
+              const blob = await leerRespuestaComoPdfBlob(r)
+              descargarBlobPdf(blob, plan.nombre || 'FO-IDU-EO-04-V2.pdf')
+              return
+            }
+          } catch {
+            /* job caducado o red: regenerar abajo */
+          }
+        }
+        await generarFoEo04Pdf({ conSello: false, descargarAlListo: true })
+        return
+      }
+      if (plan.action === 'fo-eo-04-generar') {
+        await generarFoEo04Pdf({ conSello: false, descargarAlListo: true })
+        return
+      }
+      // blob-local
+      if (!vistaPrevia?.pdfUrl && !vistaPrevia?.pdfBlob) return
+      const name = asegurarNombreArchivoPdf(vistaPrevia.nombreArchivo || 'documento.pdf')
       if (vistaPrevia.pdfBlob && String(vistaPrevia.pdfBlob.type || '').includes('pdf')) {
         descargarBlobPdf(vistaPrevia.pdfBlob, name)
         return
       }
-      // Fallback: clonar bytes desde el ObjectURL del iframe (nuevo Blob tipado).
       const r = await fetch(vistaPrevia.pdfUrl)
       const blob = await leerRespuestaComoPdfBlob(r)
       descargarBlobPdf(blob, name)
@@ -2073,18 +2103,41 @@ export default function ModuloInformes({
     }
   }
 
-  /** Sello SHA desde la vista previa: reutiliza caché del PDF consolidado (no regenera 300+ págs.). */
+  /** Sello SHA: caché del consolidado, o job FO-EO-04 / generación si la vista es HTML. */
   async function descargarPdfSelloDesdeVistaPrevia() {
-    const ruta = vistaPrevia?.rutaSello
-    if (!ruta) {
-      setError('Esta vista previa no tiene ruta de sello SHA.')
+    const plan = planDescargaSelloDesdeVistaPrevia(vistaPrevia, {
+      foEo04LastJobId,
+      contratoId,
+    })
+    if (plan.action === 'none') return
+    if (plan.action === 'error') {
+      setError(plan.message || 'Esta vista previa no tiene ruta de sello SHA.')
       return
     }
-    if (!vistaPreviaEsPdfBinario(vistaPrevia)) {
-      setError('El sello SHA solo aplica a un PDF binario ya generado, no a la vista previa HTML.')
+    if (plan.action === 'fo-eo-04-generar') {
+      await generarFoEo04Pdf({ conSello: true })
       return
     }
-    await descargarPdfConc(ruta, vistaPrevia.nombreArchivoSello || 'documento_firmado.pdf')
+    if (plan.action === 'fo-eo-04-job-sello') {
+      const authToken = getAuthToken()
+      if (authToken) {
+        try {
+          const r = await fetchConFallback(plan.path, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          })
+          if (r?.ok) {
+            const blob = await leerRespuestaComoPdfBlob(r)
+            descargarBlobPdf(blob, plan.nombre || 'FO-IDU-EO-04-V2-sello.pdf')
+            return
+          }
+        } catch {
+          /* regenerar con sello */
+        }
+      }
+      await generarFoEo04Pdf({ conSello: true })
+      return
+    }
+    await descargarPdfConc(plan.path, plan.nombre || 'documento_firmado.pdf')
   }
 
   function nombreArchivoDesdeContentDisposition(cd) {
@@ -2948,9 +3001,11 @@ export default function ModuloInformes({
       setVistaPrevia({
         fase: 'ok',
         tipo: 'idu-html',
-        // ObjectURL para el iframe (HTML). NO es un PDF: mimeTipo evita «Descargar PDF».
+        // ObjectURL para el iframe (HTML interactivo). «Descargar PDF» pedirá el PDF del job,
+        // no este blob (ver planDescargaPdfDesdeVistaPrevia).
         pdfUrl: URL.createObjectURL(blob),
         mimeTipo: 'text/html',
+        nombreArchivo: 'FO-IDU-EO-04-V2.pdf',
       })
     } catch (e) {
       setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: String(e?.message || e) })
@@ -2960,8 +3015,9 @@ export default function ModuloInformes({
   }
 
   /** Genera el PDF real (todas las memorias) en background y, si conSello, descarga la
-   *  versión sellada. El render corre en procesos hijos para no bloquear el worker. */
-  async function generarFoEo04Pdf({ conSello = false } = {}) {
+   *  versión sellada. Con descargarAlListo descarga el PDF limpio al terminar (p. ej. desde
+   *  el modal cuando la vista previa actual es HTML). */
+  async function generarFoEo04Pdf({ conSello = false, descargarAlListo = false } = {}) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
     if (cargandoSub && !actasConc.length) {
@@ -3111,6 +3167,13 @@ export default function ModuloInformes({
                 nombreArchivoSello: 'FO-IDU-EO-04-V2-sello.pdf',
                 avisoAcumulados: avisoAcum || null,
               })
+              if (descargarAlListo) {
+                try {
+                  descargarBlobPdf(blob, 'FO-IDU-EO-04-V2.pdf')
+                } catch (eDl) {
+                  setError(String(eDl?.message || eDl) || 'PDF generado pero no se pudo iniciar la descarga.')
+                }
+              }
             } catch (e) {
               detenerTimerFoEo04()
               setFoEo04Job(null)
@@ -6168,8 +6231,8 @@ export default function ModuloInformes({
                   {vistaPrevia.fase === 'progreso' && vistaPrevia.tipo === 'idu-plantilla-vacia'
                     ? 'Espere mientras termina la generación (el reloj de arena cuenta el tiempo transcurrido).'
                     : vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl
-                      ? (vistaPrevia.tipo === 'idu-html'
-                          ? 'Vista previa HTML (no es un archivo PDF). Para descargar el documento binario use «Generar / descargar PDF» con sello en la barra del formato FO-IDU-EO-04.'
+                      ? (vistaPreviaEsHtmlIdu(vistaPrevia)
+                          ? 'Vista previa HTML interactiva. «Descargar PDF» obtiene el archivo application/pdf real (job o generación), no este HTML.'
                           : vistaPrevia.tipo === 'memoria-mes-todos-pdf' || vistaPrevia.tipo === 'memoria-mes-todos'
                           ? 'Use «Descargar PDF» para guardar el documento ya generado (sin sello). El sello SHA añade una página al final y, tras la vista previa, suele tardar segundos (reutiliza este PDF).'
                           : 'Documento listo. «Descargar PDF» guarda el archivo de esta vista previa sin regenerarlo.')
@@ -6194,11 +6257,15 @@ export default function ModuloInformes({
                 ) : null}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {vistaPrevia.fase === 'ok' && vistaPreviaEsPdfBinario(vistaPrevia) ? (
+              {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl ? (
                 <button
                   type="button"
                   onClick={descargarPdfDesdeVistaPrevia}
-                  title="Descargar el PDF ya generado en esta vista previa (sin sello SHA). Archivo application/pdf válido, listo para abrir o compartir."
+                  title={
+                    vistaPreviaEsHtmlIdu(vistaPrevia)
+                      ? 'Descargar el PDF binario real (application/pdf). Si ya hay un job listo lo reutiliza; si no, genera el PDF y lo descarga.'
+                      : 'Descargar el PDF ya generado en esta vista previa (sin sello SHA). Archivo application/pdf válido, listo para abrir o compartir.'
+                  }
                   aria-label="Descargar PDF de la vista previa"
                   style={{
                     flexShrink: 0,
@@ -6216,12 +6283,17 @@ export default function ModuloInformes({
                   Descargar PDF
                 </button>
               ) : null}
-              {vistaPrevia.fase === 'ok' && vistaPreviaEsPdfBinario(vistaPrevia) && vistaPrevia.rutaSello ? (
+              {vistaPrevia.fase === 'ok' &&
+              (vistaPrevia.rutaSello || vistaPreviaEsHtmlIdu(vistaPrevia)) ? (
                 <button
                   type="button"
                   onClick={descargarPdfSelloDesdeVistaPrevia}
                   disabled={!!concPdfBusy}
-                  title="Añadir sello SHA al PDF de la vista previa (reutiliza el archivo en caché; no regenera el informe completo)"
+                  title={
+                    vistaPreviaEsHtmlIdu(vistaPrevia)
+                      ? 'Generar o reutilizar el PDF FO-IDU-EO-04 y descargar la versión con sello SHA'
+                      : 'Añadir sello SHA al PDF de la vista previa (reutiliza el archivo en caché; no regenera el informe completo)'
+                  }
                   aria-label="Descargar PDF con sello SHA"
                   style={{
                     flexShrink: 0,
