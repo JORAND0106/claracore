@@ -359,6 +359,29 @@ def _linea_costo_registro(r: Dict[str, Any]) -> float:
 
 _PAGE_SICOE = 1000
 _MAX_PAGINAS = 5000
+_PAGINATE_RETRIES = 3
+
+
+def _is_transient_supabase_disconnect(err: BaseException) -> bool:
+    """httpx/httpcore cierran la conexión bajo carga (RemoteProtocolError: Server disconnected)."""
+    name = type(err).__name__
+    if name in (
+        "RemoteProtocolError",
+        "ConnectError",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "LocalProtocolError",
+    ):
+        return True
+    msg = str(err).lower()
+    return (
+        "server disconnected" in msg
+        or "connection reset" in msg
+        or "connection aborted" in msg
+        or "timed out" in msg
+    )
 
 
 def _leer_paginado(
@@ -368,14 +391,30 @@ def _leer_paginado(
     PostgREST/Supabase suelen devolver un máx. de filas por respuesta (~1000).
     Sin esto, un solo .execute() no recorre todos los so_registros.
     `build_q` -> función sin argumentos que devuelve una query nueva (sin .range).
+
+    Reintenta páginas ante desconexiones transitorias (causa típica del 500
+    «Server disconnected» al consolidar CC-MES-002 todos los ítems).
     """
+    import time
+
     all_rows: List[Dict[str, Any]] = []
     off = 0
     for _ in range(_MAX_PAGINAS):
-        try:
-            part = build_q().range(off, off + _PAGE_SICOE - 1).execute().data or []
-        except Exception as e:
-            _log.warning("so_registros paginada: %s", e)
+        part: Optional[List[Dict[str, Any]]] = None
+        last_err: Optional[BaseException] = None
+        for attempt in range(_PAGINATE_RETRIES):
+            try:
+                part = build_q().range(off, off + _PAGE_SICOE - 1).execute().data or []
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if _is_transient_supabase_disconnect(e) and attempt < _PAGINATE_RETRIES - 1:
+                    time.sleep(0.35 * (attempt + 1))
+                    continue
+                _log.warning("so_registros paginada: %s", e)
+                break
+        if last_err is not None and part is None:
             break
         if not part:
             break
@@ -453,6 +492,75 @@ def registro_tiene_pendiente_matriz(r: Dict[str, Any]) -> bool:
     return False
 
 
+_SEL_MEMORIA_CC_MES = (
+    "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
+    "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
+    "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
+    "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
+)
+
+
+def fetch_registros_memoria_cc_mes_acta_todos(
+    sb,
+    contrato_id: int,
+    acta_rpo_id: int,
+) -> List[Dict[str, Any]]:
+    """
+    Todos los registros de memoria CC-MES-002 de un acta en UNA lectura paginada.
+
+    Sustituye el patrón N+1 (matriz_params + query por ítem) que bajo volumen alto
+    provoca httpx.RemoteProtocolError('Server disconnected') al armar el PDF consolidado.
+    Misma regla de cascada/aprobación que fetch_registros_memoria_cc_mes_alineado_acta.
+    """
+    if not acta_rpo_id:
+        return []
+    aprob = _estados_aprob_sql()
+    campo_mx, niveles_act = matriz_params_contrato(sb, int(contrato_id))
+    niveles_q = [int(n) for n in (niveles_act or [1, 2, 3]) if 1 <= int(n) <= 6]
+    cid, aid = int(contrato_id), int(acta_rpo_id)
+
+    def _build_mem():
+        qq = (
+            sb.table("so_registros")
+            .select(_SEL_MEMORIA_CC_MES)
+            .eq("contrato_id", cid)
+            .eq("acta_rpo_id", aid)
+            .not_.is_("item_numero", "null")
+            .neq("item_numero", "")
+        )
+        for n in niveles_q:
+            qq = qq.in_(f"nivel{n}_estado", aprob)
+        return qq.order("numero_registro")
+
+    try:
+        raw = _leer_paginado(_build_mem)
+    except Exception as e:
+        _log.warning("memoria CC-MES acta completa (cascade): %s", e)
+        return []
+    out: List[Dict[str, Any]] = []
+    for r in raw or []:
+        if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            out.append(r)
+    return out
+
+
+def group_registros_memoria_por_item(
+    registros: List[Dict[str, Any]],
+) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """Agrupa filas de memoria por item_numero (orden de primera aparición)."""
+    by: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    for r in registros or []:
+        k = (r.get("item_numero") or "").strip()
+        if not k:
+            continue
+        if k not in by:
+            by[k] = []
+            order.append(k)
+        by[k].append(r)
+    return [(k, by[k]) for k in order]
+
+
 def fetch_registros_memoria_cc_mes_alineado_acta(
     sb,
     contrato_id: int,
@@ -470,12 +578,7 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
         return []
     aprob = _estados_aprob_sql()
     campo_mx, niveles_act = matriz_params_contrato(sb, int(contrato_id))
-    sel = (
-        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
-        "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
-        "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
-        "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
-    )
+    sel = _SEL_MEMORIA_CC_MES
     itn = (item_numero or "").strip()
     exact = item_exacto
     niveles_q = [int(n) for n in (niveles_act or [1, 2, 3]) if 1 <= int(n) <= 6]

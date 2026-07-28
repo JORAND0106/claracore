@@ -97,6 +97,55 @@ from main import get_current_user as _get_user
 from main import get_current_user_optional as _get_user_optional
 from mail_smtp import try_send_text_email
 from supabase import create_client as _create_client
+try:
+    # Preferir el ClientOptions exportado por supabase (incluye httpx_client).
+    from supabase import ClientOptions as _SbClientOptions
+except Exception:  # pragma: no cover
+    try:
+        from supabase.lib.client_options import ClientOptions as _SbClientOptions
+    except Exception:  # pragma: no cover
+        _SbClientOptions = None
+import httpx as _httpx
+
+# Mismos timeouts que main.get_supabase: informes hace lecturas largas (CC-MES-002 completo).
+_INFORMES_SB_TIMEOUT = _httpx.Timeout(
+    connect=float(_os.getenv("SUPABASE_HTTP_CONNECT_TIMEOUT", "20")),
+    read=float(_os.getenv("SUPABASE_HTTP_READ_TIMEOUT", "180")),
+    write=float(_os.getenv("SUPABASE_HTTP_WRITE_TIMEOUT", "600")),
+    pool=float(_os.getenv("SUPABASE_HTTP_POOL_TIMEOUT", "30")),
+)
+
+
+def _make_informes_supabase():
+    url = (_os.getenv("SUPABASE_URL") or "").strip()
+    key = (_os.getenv("SUPABASE_KEY") or "").strip()
+    # Placeholder solo para import/tests locales sin .env (prod siempre define URL/KEY).
+    if not url:
+        url = "http://127.0.0.1"
+    if not key:
+        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.test"
+    if _SbClientOptions is not None:
+        try:
+            kwargs = {}
+            # supabase≥2.x: postgrest_client_timeout y/o httpx_client según versión.
+            try:
+                kwargs["postgrest_client_timeout"] = _INFORMES_SB_TIMEOUT
+            except Exception:
+                pass
+            try:
+                opts = _SbClientOptions(
+                    httpx_client=_httpx.Client(http2=False, timeout=_INFORMES_SB_TIMEOUT),
+                    **kwargs,
+                )
+            except TypeError:
+                opts = _SbClientOptions(**kwargs) if kwargs else _SbClientOptions()
+            return _create_client(url, key, options=opts)
+        except Exception as exc:
+            _log.warning("informes supabase ClientOptions: %s; fallback default", exc)
+    return _create_client(url, key)
+
+
+_sb = _make_informes_supabase()
 from ccd_conciliacion import (
     _bloque_capitulo_matriz,
     _nivel_norm_matriz as _norm_estado_n3,
@@ -106,8 +155,10 @@ from ccd_conciliacion import (
     fetch_registros_acta_todas_sico_obra,
     fetch_registros_conciliacion,
     fetch_registros_informe_cc_mes_por_acta,
+    fetch_registros_memoria_cc_mes_acta_todos,
     fetch_registros_memoria_cc_mes_alineado_acta,
     fetch_registros_memoria_conciliacion,
+    group_registros_memoria_por_item,
     informe_gerencia_matriz_maps_por_rpc,
     _norm_cap_informe_gerencia,
     rpo_conciliacion_por_contrato,
@@ -141,10 +192,6 @@ CODIGO_FORMATO_CCD_CC_MES_002 = "CC-MES-002"
 CODIGO_FORMATO_IDU_FO_EO_04_V2 = "FO-IDU-EO-04-V2"
 # Informe gerencia: comparativo de costo directo (cascada N1–N3) entre dos actas RPO; firmas CCD = acta «presente».
 CODIGO_FORMATO_CCD_CC_GER_001 = "CC-GER-001"
-_sb = _create_client(
-    _os.getenv("SUPABASE_URL", ""),
-    _os.getenv("SUPABASE_KEY", "")
-)
 
 router = APIRouter(tags=["informes"])
 
@@ -668,12 +715,38 @@ def _html_logo_contratista(contrato: dict, compact: bool = False, compact_box_he
 
 
 def _row(table: str, select: str, **eq: Any) -> Optional[Dict[str, Any]]:
-    """Una fila o None; evita excepciones de PostgREST por `.single()` sin resultados."""
-    q = _sb.table(table).select(select)
-    for k, v in eq.items():
-        q = q.eq(k, v)
-    rows = q.limit(1).execute().data or []
-    return rows[0] if rows else None
+    """Una fila o None; evita excepciones de PostgREST por `.single()` sin resultados.
+
+    Reintenta ante RemoteProtocolError/timeouts (mismo patrón que CC-MES-002 completo).
+    """
+    last_err: Optional[BaseException] = None
+    for attempt in range(3):
+        try:
+            q = _sb.table(table).select(select)
+            for k, v in eq.items():
+                q = q.eq(k, v)
+            rows = q.limit(1).execute().data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            last_err = e
+            name = type(e).__name__
+            msg = str(e).lower()
+            transient = name in (
+                "RemoteProtocolError",
+                "ConnectError",
+                "ReadTimeout",
+                "ConnectTimeout",
+                "WriteTimeout",
+                "PoolTimeout",
+            ) or "server disconnected" in msg or "timed out" in msg
+            if transient and attempt < 2:
+                time.sleep(0.35 * (attempt + 1))
+                continue
+            _log.warning("_row %s (attempt %s): %s", table, attempt + 1, e)
+            raise
+    if last_err:
+        raise last_err
+    return None
 
 
 class CcdEstiloPdfBody(BaseModel):
@@ -6312,25 +6385,39 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     )
 
 
-def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current_user):
-    """Arma el HTML «todos los ítems» de un acta RPO (CC-MES-002). Devuelve (html, contrato, nrpo).
+# Umbrales: por debajo → un solo HTML→PDF (más compacto); por encima → PDF por ítem + merge
+# (evita OOM / cuelgues de xhtml2pdf y libera el worker entre ítems).
+_CC_MES_002_SINGLE_PASS_MAX_ITEMS = max(
+    1, int(_os.environ.get("CC_MES_002_SINGLE_PASS_MAX_ITEMS", "4") or "4")
+)
+_CC_MES_002_SINGLE_PASS_MAX_REGS = max(
+    1, int(_os.environ.get("CC_MES_002_SINGLE_PASS_MAX_REGS", "120") or "120")
+)
 
-    Reúne, en orden ascendente de código, una memoria por cada ítem aprobado del acta
-    (mismas reglas multinivel que la memoria por ítem). Lanza HTTPException si no hay datos.
+
+def _cc_mes_002_acta_completo_ctx(contrato_id: int, acta_id: int, current_user) -> Dict[str, Any]:
+    """Contexto «todos los ítems» CC-MES-002: 1 lectura Supabase + HTML por ítem.
+
+    Antes se hacía N+1 (listado agregado + fetch memoria por ítem, cada uno con
+    matriz_params) y un HTML monolítico → RemoteProtocolError('Server disconnected')
+    y/o agotamiento al renderizar con xhtml2pdf.
     """
-    reg_agg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
-    items_agg, _total = aggregate_items_conciliacion(reg_agg)
+    # Una sola lectura paginada con detalle de memoria (fotos, PK, etc.).
+    todos = fetch_registros_memoria_cc_mes_acta_todos(_sb, contrato_id, acta_id)
+    if not todos:
+        raise HTTPException(
+            status_code=404,
+            detail="No hay registros aprobados en esta acta para generar memorias",
+        )
+    items_agg, _total = aggregate_items_conciliacion(todos)
     _sort_items_corte_por_item_numero_asc(items_agg)
     numeros = [
         (it.get("item_numero") or "").strip()
         for it in items_agg
         if (it.get("item_numero") or "").strip()
     ]
-    if not numeros:
-        raise HTTPException(
-            status_code=404,
-            detail="No hay registros aprobados en esta acta para generar memorias",
-        )
+    by_item = {k: regs for k, regs in group_registros_memoria_por_item(todos)}
+
     contrato = _row(
         "contratos",
         "numero, objeto, contratista, nit, interventoria, logo_contratista",
@@ -6375,14 +6462,16 @@ def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current
     sub, corte = _sub_corte_dummy_memoria()
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), fmt)
     estilo_css = _memoria_pdf_estilo_css(est)
+    pie = f"Acta RPO {nrpo} · cons. {cons}"
 
-    parts: list[str] = []
+    item_bodies: List[str] = []
+    item_htmls: List[str] = []
+    n_regs = 0
     for item_numero in numeros:
-        registros = fetch_registros_memoria_cc_mes_alineado_acta(
-            _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
-        )
+        registros = by_item.get(item_numero) or []
         if not registros:
             continue
+        n_regs += len(registros)
         item_info = {
             "item_numero": registros[0].get("item_numero", item_numero),
             "item_descripcion": registros[0].get("item_descripcion", ""),
@@ -6402,19 +6491,88 @@ def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current
             conc_meta=conc_meta,
             aprobo_firma_data_uri=aprobo_uri,
             aprobo_interventoria_desde_config=True,
-            pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
+            pie_fotos_contexto=pie,
         )
-        if parts:
-            parts.append("<pdf:nextpage />")
-        parts.append(inner)
+        item_bodies.append(inner)
+        item_htmls.append(_wrap_memoria_item_html(inner, estilo_css))
 
-    if not parts:
+    if not item_bodies:
         raise HTTPException(
             status_code=404,
             detail="No hay registros aprobados por ítem en esta acta",
         )
-    html = _wrap_memoria_item_html("".join(parts), estilo_css)
-    return html, contrato, nrpo
+
+    # HTML monolítico (compat / single-pass): mismos saltos de página entre ítems.
+    joined_parts: List[str] = []
+    for i, body in enumerate(item_bodies):
+        if i > 0:
+            joined_parts.append("<pdf:nextpage />")
+        joined_parts.append(body)
+    html_joined = _wrap_memoria_item_html("".join(joined_parts), estilo_css)
+
+    return {
+        "contrato": contrato,
+        "nrpo": nrpo,
+        "cons": cons,
+        "firma_cfg": firma_cfg,
+        "n_items": len(item_bodies),
+        "n_regs": n_regs,
+        "item_htmls": item_htmls,
+        "html_joined": html_joined,
+        "items_agg": items_agg,
+        "by_item": by_item,
+        "numeros": [n for n in numeros if by_item.get(n)],
+        "conc_meta": conc_meta,
+        "pie": pie,
+        "sub": sub,
+        "corte": corte,
+    }
+
+
+def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current_user):
+    """Arma el HTML «todos los ítems» de un acta RPO (CC-MES-002). Devuelve (html, contrato, nrpo)."""
+    ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
+    return ctx["html_joined"], ctx["contrato"], ctx["nrpo"]
+
+
+def _cc_mes_002_pdf_completo_bytes(ctx: Dict[str, Any]) -> bytes:
+    """Renderiza el PDF consolidado: single-pass si el volumen es bajo; si no, por ítem + merge."""
+    n_items = int(ctx.get("n_items") or 0)
+    n_regs = int(ctx.get("n_regs") or 0)
+    item_htmls: List[str] = list(ctx.get("item_htmls") or [])
+    html_joined = str(ctx.get("html_joined") or "")
+
+    use_single = (
+        n_items <= _CC_MES_002_SINGLE_PASS_MAX_ITEMS
+        and n_regs <= _CC_MES_002_SINGLE_PASS_MAX_REGS
+        and bool(html_joined)
+    )
+    if use_single or len(item_htmls) <= 1:
+        _log.info(
+            "cc_mes_002 PDF completo single-pass items=%s regs=%s",
+            n_items,
+            n_regs,
+        )
+        return _to_pdf(html_joined if html_joined else item_htmls[0])
+
+    _log.info(
+        "cc_mes_002 PDF completo por lotes items=%s regs=%s (evita HTML monolítico)",
+        n_items,
+        n_regs,
+    )
+    partes: List[bytes] = []
+    for i, h in enumerate(item_htmls):
+        try:
+            partes.append(_to_pdf(h))
+        except Exception as e:
+            _log.exception("cc_mes_002 PDF ítem %s/%s falló", i + 1, n_items)
+            raise RuntimeError(
+                f"Fallo renderizando memoria ítem {i + 1}/{n_items}: {e!s}"
+            ) from e
+    merged = _merge_pdf_bytes_tree(partes)
+    if not merged:
+        raise ValueError("PDF consolidado vacío tras fusionar ítems")
+    return merged
 
 
 @router.get("/{contrato_id}/pdf/cc-mes-002/acta/{acta_id}/completo")
@@ -6428,12 +6586,17 @@ def pdf_cc_mes_002_acta_completo(
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
-        html, _contrato, nrpo = _cc_mes_002_acta_html_parts_completo(contrato_id, acta_id, current_user)
+        ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
         try:
-            pdf_bytes = _to_pdf(html)
+            pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
         except Exception as e:
-            _log.exception("pdf_cc_mes_002_acta_completo: fallo PDF")
+            _log.exception(
+                "pdf_cc_mes_002_acta_completo: fallo PDF items=%s regs=%s",
+                ctx.get("n_items"),
+                ctx.get("n_regs"),
+            )
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
+        nrpo = ctx["nrpo"]
         fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
         return Response(
             content=pdf_bytes,
@@ -6458,12 +6621,18 @@ def pdf_cc_mes_002_acta_completo_con_sello_firma(
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
-        html, contrato, nrpo = _cc_mes_002_acta_html_parts_completo(contrato_id, acta_id, current_user)
+        ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
         try:
-            pdf_bytes = _to_pdf(html)
+            pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
         except Exception as e:
-            _log.exception("pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF")
+            _log.exception(
+                "pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF items=%s regs=%s",
+                ctx.get("n_items"),
+                ctx.get("n_regs"),
+            )
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
+        contrato = ctx["contrato"]
+        nrpo = ctx["nrpo"]
         fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
         return _attachment_pdf_con_pagina_sello_usuario(
             pdf_bytes,
@@ -10830,14 +10999,18 @@ def _cc_mes_002_acta_completo_excel_bytes(contrato_id: int, acta_id: int, curren
     """Excel CC-MES-002: una hoja por ítem (misma lógica que PDF completo mensual)."""
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg_agg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
-    items_agg, _total = aggregate_items_conciliacion(reg_agg)
+    # Misma lectura única que el PDF consolidado (evita N+1 a Supabase).
+    todos = fetch_registros_memoria_cc_mes_acta_todos(_sb, contrato_id, acta_id)
+    if not todos:
+        raise HTTPException(404, "No hay registros en esta acta para generar memorias")
+    items_agg, _total = aggregate_items_conciliacion(todos)
     _sort_items_corte_por_item_numero_asc(items_agg)
     numeros = [
         (it.get("item_numero") or "").strip()
         for it in items_agg
         if (it.get("item_numero") or "").strip()
     ]
+    by_item = {k: regs for k, regs in group_registros_memoria_por_item(todos)}
     if not numeros:
         raise HTTPException(404, "No hay registros en esta acta para generar memorias")
 
@@ -10869,9 +11042,7 @@ def _cc_mes_002_acta_completo_excel_bytes(contrato_id: int, acta_id: int, curren
     wb = Workbook()
     first = True
     for inum in numeros:
-        registros = fetch_registros_memoria_cc_mes_alineado_acta(
-            _sb, contrato_id, inum, acta_rpo_id=acta_id, item_exacto=True
-        )
+        registros = by_item.get(inum) or []
         if not registros:
             continue
         item_info = {
