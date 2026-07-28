@@ -255,3 +255,16 @@ def test_cc_mes_002_disk_cache_put_get_and_reuse(tmp_path, monkeypatch):
     assert info["from_cache"] is True
     assert info["fname"].endswith(".pdf")
     mock_ctx.assert_not_called()
+
+
+def test_safe_filename_pdf_preserves_extension_when_truncated():
+    """Nombres largos no deben perder .pdf (causa típica de «archivo no se puede abrir»)."""
+    inf = _import_informes_with_stubs()
+    long_nrpo = "RPO-" + ("X" * 120)
+    fname = inf._safe_filename_pdf(f"CC-MES-002_acta_{long_nrpo}_todos-items.pdf")
+    assert fname.lower().endswith(".pdf")
+    assert len(fname) <= 80
+    assert "CC-MES-002" in fname
+    # Truncación antigua [:80] sobre el nombre completo cortaba la extensión:
+    legacy = inf._safe_filename_part(f"CC-MES-002_acta_{long_nrpo}_todos-items.pdf")
+    assert not legacy.lower().endswith(".pdf")
