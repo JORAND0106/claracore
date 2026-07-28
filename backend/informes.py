@@ -537,6 +537,21 @@ def _safe_filename_part(s: object) -> str:
     return (t or "x")[:80]
 
 
+def _safe_filename_pdf(s: object) -> str:
+    """Como _safe_filename_part, pero garantiza extensión .pdf (el [:80] no debe cortarla).
+
+    Sin esto, actas con RPO/nombre largo producían Content-Disposition sin «.pdf» y
+    WhatsApp/visores móviles reportaban «No pudimos abrir este archivo».
+    """
+    raw = str(s if s is not None else "").strip()
+    if raw.lower().endswith(".pdf"):
+        raw = raw[:-4]
+    stem = _safe_filename_part(raw)
+    if len(stem) > 76:
+        stem = stem[:76].rstrip("._-") or "documento"
+    return f"{stem}.pdf"
+
+
 def _natural_sort_key_cadena(s: object) -> Tuple[Any, ...]:
     """Orden natural por trozos numéricos vs texto: 1.10.1 < 1.10.2; NP-004 < NP-205; 4.01. < 4.26."""
     t = str(s if s is not None else "").strip()
@@ -4701,11 +4716,17 @@ def _attachment_pdf_con_pagina_sello_usuario(
     pdf_sello = _to_pdf(html_sello)
     out = _merge_pdf_bytes(pdf_main, pdf_sello)
     base = nombre_archivo_pdf.strip() or "documento.pdf"
-    fname = (base[:-4] + "_firmado.pdf") if base.lower().endswith(".pdf") else (base + "_firmado.pdf")
+    fname = _safe_filename_pdf(
+        (base[:-4] + "_firmado.pdf") if base.lower().endswith(".pdf") else (base + "_firmado.pdf")
+    )
     return Response(
         content=out,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Content-Length": str(len(out)),
+            "Cache-Control": "no-store",
+        },
     )
 
 
@@ -6700,7 +6721,9 @@ def _cc_mes_002_pdf_completo_bytes_cached(
                 len(pdf_bytes),
             )
             nrpo = str(meta.get("nrpo") or acta_id)
-            fname = str(meta.get("fname") or f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+            fname = _safe_filename_pdf(
+                str(meta.get("fname") or f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+            )
             # Contrato mínimo para sello si viene en meta; si no, se relee.
             contrato = {"numero": meta.get("contrato_numero") or ""}
             if not contrato.get("numero"):
@@ -6718,7 +6741,7 @@ def _cc_mes_002_pdf_completo_bytes_cached(
     ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
     pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
     nrpo = ctx["nrpo"]
-    fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+    fname = _safe_filename_pdf(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
     contrato = ctx["contrato"]
     _cc_mes_002_cache_put(
         contrato_id,
@@ -6756,14 +6779,22 @@ def pdf_cc_mes_002_acta_completo(
         except Exception as e:
             _log.exception("pdf_cc_mes_002_acta_completo: fallo PDF")
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
-        fname = info["fname"]
+        fname = _safe_filename_pdf(info["fname"])
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(
+                500,
+                f"PDF consolidado inválido (sin cabecera %PDF, {len(pdf_bytes)} bytes).",
+            )
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f'attachment; filename="{fname}"',
+                "Content-Length": str(len(pdf_bytes)),
+                "Cache-Control": "no-store",
                 "X-ClaraCore-Pdf-Cache": "hit" if info.get("from_cache") else "miss",
                 "X-ClaraCore-Pdf-Items": str(info.get("n_items") or ""),
+                "X-ClaraCore-Pdf-Bytes": str(len(pdf_bytes)),
             },
         )
     except HTTPException:

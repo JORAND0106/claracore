@@ -1920,17 +1920,29 @@ export default function ModuloInformes({
         setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: msg })
         return
       }
-      const blob = await r.blob()
+      let blob
+      try {
+        blob = await leerRespuestaComoPdfBlob(r)
+      } catch (ePdf) {
+        setVistaPrevia({
+          fase: 'error',
+          tipo: 'memoria-mes-todos',
+          mensaje: String(ePdf?.message || ePdf),
+        })
+        return
+      }
       const pdfUrl = URL.createObjectURL(blob)
-      const nombreArchivo =
-        nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-002-todos.pdf'
+      const nombreArchivo = asegurarNombreArchivoPdf(
+        nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-002-todos.pdf',
+      )
       setVistaPrevia({
         fase: 'ok',
         tipo: 'memoria-mes-todos-pdf',
         pdfUrl,
+        pdfBlob: blob,
         nombreArchivo,
         rutaSello: `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo/con-sello-firma`,
-        nombreArchivoSello: nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf',
+        nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
       })
     } catch (e) {
       const msg = String(e?.message || e)
@@ -1938,17 +1950,87 @@ export default function ModuloInformes({
     }
   }
 
+  /** Fuerza extensión .pdf y caracteres seguros (WhatsApp/Android rechazan nombres sin .pdf). */
+  function asegurarNombreArchivoPdf(name, fallback = 'documento.pdf') {
+    let n = String(name || '').trim() || fallback
+    n = n.replace(/[/\\?%*:|"<>]/g, '_').replace(/\s+/g, '_')
+    if (!/\.pdf$/i.test(n)) n = `${n.replace(/\.+$/, '') || 'documento'}.pdf`
+    return n.slice(0, 120)
+  }
+
+  function esCabeceraPdfBytes(bytes) {
+    return (
+      bytes &&
+      bytes.length >= 5 &&
+      bytes[0] === 0x25 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x44 &&
+      bytes[3] === 0x46
+    ) // %PDF
+  }
+
+  /** Lee el body como ArrayBuffer y construye Blob application/pdf (evita MIME vacío/corrupto). */
+  async function leerRespuestaComoPdfBlob(r) {
+    const buf = await r.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    if (!esCabeceraPdfBytes(bytes)) {
+      let hint = `${bytes.length} bytes sin cabecera %PDF`
+      try {
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 280)).trim()
+        if (text) hint = text.slice(0, 220)
+      } catch {
+        /* noop */
+      }
+      throw new Error(`La respuesta del servidor no es un PDF válido (${hint}).`)
+    }
+    return new Blob([buf], { type: 'application/pdf' })
+  }
+
+  /**
+   * Descarga un Blob PDF con ObjectURL fresco y type application/pdf.
+   * Reutilizar el blob: URL del iframe en móvil a menudo genera archivos vacíos/inválidos.
+   */
+  function descargarBlobPdf(blob, nombreArchivo) {
+    if (!blob) throw new Error('No hay PDF en memoria para descargar.')
+    const name = asegurarNombreArchivoPdf(nombreArchivo)
+    const typed =
+      blob.type === 'application/pdf' ? blob : new Blob([blob], { type: 'application/pdf' })
+    const url = URL.createObjectURL(typed)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    a.rel = 'noopener'
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    // En Android/WhatsApp hay que esperar a que el sistema copie el archivo antes de revoke.
+    window.setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {
+        /* noop */
+      }
+      try {
+        a.remove()
+      } catch {
+        /* noop */
+      }
+    }, 5000)
+  }
+
   /** Descarga inmediata del PDF ya en memoria (vista previa), sin regenerar ni sellar SHA. */
-  function descargarPdfDesdeVistaPrevia() {
-    if (!vistaPrevia?.pdfUrl) return
-    const name = vistaPrevia.nombreArchivo || 'documento.pdf'
+  async function descargarPdfDesdeVistaPrevia() {
+    if (!vistaPrevia?.pdfUrl && !vistaPrevia?.pdfBlob) return
+    const name = asegurarNombreArchivoPdf(vistaPrevia.nombreArchivo || 'documento.pdf')
     try {
-      const a = document.createElement('a')
-      a.href = vistaPrevia.pdfUrl
-      a.download = name
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      if (vistaPrevia.pdfBlob) {
+        descargarBlobPdf(vistaPrevia.pdfBlob, name)
+        return
+      }
+      // Fallback: clonar bytes desde el ObjectURL del iframe (nuevo Blob tipado).
+      const r = await fetch(vistaPrevia.pdfUrl)
+      const blob = await leerRespuestaComoPdfBlob(r)
+      descargarBlobPdf(blob, name)
     } catch (e) {
       setError(String(e?.message || e) || 'No se pudo descargar el PDF de la vista previa.')
     }
@@ -2007,8 +2089,19 @@ export default function ModuloInformes({
         setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
         return
       }
+      const fallback = fallbackNombre || 'documento.pdf'
+      const nameRaw = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || fallback
+      const esPdf =
+        /\.pdf$/i.test(fallback) ||
+        /\.pdf$/i.test(nameRaw) ||
+        String(r.headers.get('content-type') || '').toLowerCase().includes('application/pdf')
+      if (esPdf) {
+        const blob = await leerRespuestaComoPdfBlob(r)
+        descargarBlobPdf(blob, nameRaw)
+        return
+      }
       const blob = await r.blob()
-      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || fallbackNombre
+      const name = nameRaw
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -6051,7 +6144,7 @@ export default function ModuloInformes({
                 <button
                   type="button"
                   onClick={descargarPdfDesdeVistaPrevia}
-                  title="Descargar el PDF ya generado en esta vista previa (sin sello SHA, inmediato)"
+                  title="Descargar el PDF ya generado en esta vista previa (sin sello SHA). Archivo application/pdf válido, listo para abrir o compartir."
                   aria-label="Descargar PDF de la vista previa"
                   style={{
                     flexShrink: 0,
