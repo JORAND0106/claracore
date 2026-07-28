@@ -10091,10 +10091,16 @@ def ccd_fo_eo_04_preview_html(
     if acta_norm:
         n_items = len(_fetch_items_n3_acta(int(acta_norm), int(contrato_id)))
     content = html if standalone else _fo_eo_04_html_embed_fragment(html)
+    # text/html explícito + marcador: la UI no debe tratar esta respuesta como PDF
+    # (el botón «Descargar PDF» usa /ccd/pdf-job/.../pdf → application/pdf).
     return HTMLResponse(
         content=content,
         media_type="text/html; charset=utf-8",
-        headers={"X-CC-Fo-Eo-04-Items": str(n_items)},
+        headers={
+            "X-CC-Fo-Eo-04-Items": str(n_items),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'inline; filename="FO-IDU-EO-04-V2-preview.html"',
+        },
     )
 
 
