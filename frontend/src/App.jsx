@@ -9334,6 +9334,21 @@ function ModuloSicoeObra({
     if (pa === '—' && pb === '—') return '—'
     return `${pa} → ${pb}`
   }
+  /** Fecha de creación del reporte (mismo criterio es-CO que registros / carpeta). */
+  const fmtSicoeFechaCreacion = (ts) => {
+    if (!ts) return '—'
+    try {
+      const n = /Z$|[+-]\d{2}:\d{2}$/.test(String(ts)) ? String(ts) : `${ts}Z`
+      const d = new Date(n)
+      if (isNaN(d)) return '—'
+      return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+    } catch {
+      return '—'
+    }
+  }
+  const sicoeGrillaCols = nivelInfo.verValoresEconomicos
+    ? '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
+    : '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px'
   // Varias capas: AND u OR según `validacion_capas_op` en backend; no refinar de nuevo con agregados por reporte
   const reportesMostrados = reportes
 
@@ -10873,14 +10888,13 @@ function ModuloSicoeObra({
         {/* Header grid — sticky (desktop) */}
         <div className="cc-sicoe-reportes-grid" style={{
           display:'grid',
-          gridTemplateColumns: nivelInfo.verValoresEconomicos
-            ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
-            : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
+          gridTemplateColumns: sicoeGrillaCols,
           gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
           <div>N° REP.</div>
+          <div title="Fecha de creación del reporte">F. CREACIÓN</div>
           <div>TRAMO</div>
           <div>COSTADO</div>
           <div>ABCISA</div>
@@ -10921,12 +10935,10 @@ function ModuloSicoeObra({
           {reportesMostrados.map(rep => (
           <div key={rep.id} style={{
             display:'grid',
-            gridTemplateColumns: nivelInfo.verValoresEconomicos
-              ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
-              : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
+            gridTemplateColumns: sicoeGrillaCols,
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
-            transition:'background 0.15s', minWidth: 720 }}
+            transition:'background 0.15s', minWidth: 820 }}
             onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
                 ;(async () => {
@@ -11007,6 +11019,12 @@ function ModuloSicoeObra({
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
             <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
+            <div
+              style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3, whiteSpace:'nowrap' }}
+              title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
+            >
+              {fmtSicoeFechaCreacion(rep.created_at)}
+            </div>
             <div style={{ color:t.text, fontSize:'var(--cc-sm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.tramo || ''}>
               {rep.tramo || '—'}
             </div>
@@ -11124,7 +11142,12 @@ function ModuloSicoeObra({
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                  <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)' }}>#{rep.numero_reporte}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)' }}>#{rep.numero_reporte}</div>
+                    <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
+                      {fmtSicoeFechaCreacion(rep.created_at)}
+                    </div>
+                  </div>
                   <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 700 }}>{rep.num_registros != null ? `${rep.num_registros} regs` : '—'}</div>
                 </div>
                 <div style={{ fontWeight: 600, color: t.text, fontSize: 'var(--cc-body)', lineHeight: 1.35 }}>{rep.descripcion_actividad || 'Sin descripción'}</div>
