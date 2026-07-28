@@ -1922,11 +1922,46 @@ export default function ModuloInformes({
       }
       const blob = await r.blob()
       const pdfUrl = URL.createObjectURL(blob)
-      setVistaPrevia({ fase: 'ok', tipo: 'memoria-mes-todos-pdf', pdfUrl })
+      const nombreArchivo =
+        nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-002-todos.pdf'
+      setVistaPrevia({
+        fase: 'ok',
+        tipo: 'memoria-mes-todos-pdf',
+        pdfUrl,
+        nombreArchivo,
+        rutaSello: `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo/con-sello-firma`,
+        nombreArchivoSello: nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf',
+      })
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: msg })
     }
+  }
+
+  /** Descarga inmediata del PDF ya en memoria (vista previa), sin regenerar ni sellar SHA. */
+  function descargarPdfDesdeVistaPrevia() {
+    if (!vistaPrevia?.pdfUrl) return
+    const name = vistaPrevia.nombreArchivo || 'documento.pdf'
+    try {
+      const a = document.createElement('a')
+      a.href = vistaPrevia.pdfUrl
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (e) {
+      setError(String(e?.message || e) || 'No se pudo descargar el PDF de la vista previa.')
+    }
+  }
+
+  /** Sello SHA desde la vista previa: reutiliza caché del PDF consolidado (no regenera 300+ págs.). */
+  async function descargarPdfSelloDesdeVistaPrevia() {
+    const ruta = vistaPrevia?.rutaSello
+    if (!ruta) {
+      setError('Esta vista previa no tiene ruta de sello SHA.')
+      return
+    }
+    await descargarPdfConc(ruta, vistaPrevia.nombreArchivoSello || 'documento_firmado.pdf')
   }
 
   function nombreArchivoDesdeContentDisposition(cd) {
@@ -5266,7 +5301,7 @@ export default function ModuloInformes({
                               )
                             }
                             disabled={concPdfBusy}
-                            title="Descargar PDF con todos los ítems y página de sello (firma del perfil, huella SHA-256)"
+                            title="Descargar PDF con sello SHA. Si ya abrió la vista previa, reutiliza ese PDF (segundos). Si no, regenera todo el consolidado y en actas muy grandes puede tardar varios minutos."
                             aria-label="Descargar PDF todas las memorias mensuales con sello"
                           >
                             {concPdfBusy
@@ -5987,7 +6022,11 @@ export default function ModuloInformes({
                 <div style={{ fontSize: f.sub + 'px', color: '#64748b', marginTop: '4px' }}>
                   {vistaPrevia.fase === 'progreso' && vistaPrevia.tipo === 'idu-plantilla-vacia'
                     ? 'Espere mientras termina la generación (el reloj de arena cuenta el tiempo transcurrido).'
-                    : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
+                    : vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl
+                      ? (vistaPrevia.tipo === 'memoria-mes-todos-pdf' || vistaPrevia.tipo === 'memoria-mes-todos'
+                          ? 'Use «Descargar PDF» para guardar el documento ya generado (sin sello). El sello SHA añade una página al final y, tras la vista previa, suele tardar segundos (reutiliza este PDF).'
+                          : 'Documento listo. «Descargar PDF» guarda el archivo de esta vista previa sin regenerarlo.')
+                      : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
                 </div>
                 {vistaPrevia.avisoAcumulados ? (
                   <div
@@ -6007,7 +6046,53 @@ export default function ModuloInformes({
                   </div>
                 ) : null}
               </div>
-              <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl ? (
+                <button
+                  type="button"
+                  onClick={descargarPdfDesdeVistaPrevia}
+                  title="Descargar el PDF ya generado en esta vista previa (sin sello SHA, inmediato)"
+                  aria-label="Descargar PDF de la vista previa"
+                  style={{
+                    flexShrink: 0,
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid #93c5fd',
+                    backgroundColor: '#eff6ff',
+                    color: '#1e40af',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                    fontSize: f.sub + 'px',
+                  }}
+                >
+                  Descargar PDF
+                </button>
+              ) : null}
+              {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl && vistaPrevia.rutaSello ? (
+                <button
+                  type="button"
+                  onClick={descargarPdfSelloDesdeVistaPrevia}
+                  disabled={!!concPdfBusy}
+                  title="Añadir sello SHA al PDF de la vista previa (reutiliza el archivo en caché; no regenera el informe completo)"
+                  aria-label="Descargar PDF con sello SHA"
+                  style={{
+                    flexShrink: 0,
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid #c4b5fd',
+                    backgroundColor: concPdfBusy ? '#ede9fe' : '#f5f3ff',
+                    color: '#5b21b6',
+                    fontWeight: '700',
+                    cursor: concPdfBusy ? 'wait' : 'pointer',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                    fontSize: f.sub + 'px',
+                    opacity: concPdfBusy ? 0.75 : 1,
+                  }}
+                >
+                  {concPdfBusy ? 'Sellando…' : 'Descargar con sello SHA'}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={cerrarVistaPrevia}

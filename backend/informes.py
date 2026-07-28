@@ -6575,6 +6575,171 @@ def _cc_mes_002_pdf_completo_bytes(ctx: Dict[str, Any]) -> bytes:
     return merged
 
 
+# Caché en disco del PDF consolidado CC-MES-002 (sin sello). Evita regenerar 300+ páginas
+# al pedir /con-sello-firma justo después de la vista previa (causa de demoras >15 min).
+import tempfile as _ccd_mes_tmp
+
+_CCD_MES_002_CACHE_DIR = _os.environ.get(
+    "CCD_MES_002_PDF_CACHE_DIR",
+    _os.path.join(_ccd_mes_tmp.gettempdir(), "claracore_cc_mes_002_cache"),
+)
+_CCD_MES_002_CACHE_TTL_SEC = max(
+    300, int(_os.environ.get("CCD_MES_002_PDF_CACHE_TTL_SEC", "1800") or "1800")
+)
+_CCD_MES_002_CACHE_LOCK = threading.Lock()
+
+
+def _cc_mes_002_cache_key(contrato_id: int, acta_id: int) -> str:
+    raw = f"CC-MES-002|completo|{int(contrato_id)}|{int(acta_id)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+
+
+def _cc_mes_002_cache_paths(key: str) -> Tuple[str, str]:
+    root = _CCD_MES_002_CACHE_DIR
+    _os.makedirs(root, exist_ok=True)
+    return (
+        _os.path.join(root, f"{key}.pdf"),
+        _os.path.join(root, f"{key}.meta.json"),
+    )
+
+
+def _cc_mes_002_cache_put(
+    contrato_id: int,
+    acta_id: int,
+    pdf_bytes: bytes,
+    *,
+    nrpo: str = "",
+    fname: str = "",
+    contrato_numero: str = "",
+    n_items: Any = None,
+    n_regs: Any = None,
+) -> str:
+    """Persiste el PDF sin sello; devuelve la clave de caché."""
+    key = _cc_mes_002_cache_key(contrato_id, acta_id)
+    pdf_path, meta_path = _cc_mes_002_cache_paths(key)
+    with _CCD_MES_002_CACHE_LOCK:
+        tmp = pdf_path + ".part"
+        with open(tmp, "wb") as f:
+            f.write(pdf_bytes)
+        _os.replace(tmp, pdf_path)
+        meta = {
+            "key": key,
+            "contrato_id": int(contrato_id),
+            "acta_id": int(acta_id),
+            "nrpo": str(nrpo or ""),
+            "fname": str(fname or ""),
+            "contrato_numero": str(contrato_numero or ""),
+            "n_items": n_items,
+            "n_regs": n_regs,
+            "bytes": len(pdf_bytes),
+            "ts": time.time(),
+        }
+        tmp_m = meta_path + ".tmp"
+        with open(tmp_m, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        _os.replace(tmp_m, meta_path)
+    _log.info(
+        "cc_mes_002 cache put key=%s bytes=%s acta=%s",
+        key[:12],
+        len(pdf_bytes),
+        acta_id,
+    )
+    return key
+
+
+def _cc_mes_002_cache_get(contrato_id: int, acta_id: int) -> Optional[Tuple[bytes, Dict[str, Any]]]:
+    """Devuelve (pdf_bytes, meta) si el caché es válido; si no, None."""
+    key = _cc_mes_002_cache_key(contrato_id, acta_id)
+    pdf_path, meta_path = _cc_mes_002_cache_paths(key)
+    with _CCD_MES_002_CACHE_LOCK:
+        if not (_os.path.isfile(pdf_path) and _os.path.isfile(meta_path)):
+            return None
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            ts = float(meta.get("ts") or 0)
+            if time.time() - ts > _CCD_MES_002_CACHE_TTL_SEC:
+                try:
+                    _os.unlink(pdf_path)
+                except OSError:
+                    pass
+                try:
+                    _os.unlink(meta_path)
+                except OSError:
+                    pass
+                return None
+            with open(pdf_path, "rb") as f:
+                data = f.read()
+            if not data:
+                return None
+            return data, meta if isinstance(meta, dict) else {}
+        except Exception as exc:
+            _log.warning("cc_mes_002 cache get: %s", exc)
+            return None
+
+
+def _cc_mes_002_pdf_completo_bytes_cached(
+    contrato_id: int,
+    acta_id: int,
+    current_user,
+    *,
+    force_refresh: bool = False,
+) -> Tuple[bytes, Dict[str, Any]]:
+    """PDF consolidado reutilizando caché de vista previa cuando exista.
+
+    Returns:
+        (pdf_bytes, info) donde info incluye nrpo, fname, contrato, from_cache, n_items, n_regs.
+    """
+    if not force_refresh:
+        hit = _cc_mes_002_cache_get(contrato_id, acta_id)
+        if hit:
+            pdf_bytes, meta = hit
+            _log.info(
+                "cc_mes_002 PDF completo desde caché acta=%s bytes=%s",
+                acta_id,
+                len(pdf_bytes),
+            )
+            nrpo = str(meta.get("nrpo") or acta_id)
+            fname = str(meta.get("fname") or f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+            # Contrato mínimo para sello si viene en meta; si no, se relee.
+            contrato = {"numero": meta.get("contrato_numero") or ""}
+            if not contrato.get("numero"):
+                row = _row("contratos", "numero", id=contrato_id) or {}
+                contrato = {"numero": str(row.get("numero") or "")}
+            return pdf_bytes, {
+                "nrpo": nrpo,
+                "fname": fname,
+                "contrato": contrato,
+                "from_cache": True,
+                "n_items": meta.get("n_items"),
+                "n_regs": meta.get("n_regs"),
+            }
+
+    ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
+    pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
+    nrpo = ctx["nrpo"]
+    fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+    contrato = ctx["contrato"]
+    _cc_mes_002_cache_put(
+        contrato_id,
+        acta_id,
+        pdf_bytes,
+        nrpo=nrpo,
+        fname=fname,
+        contrato_numero=str(contrato.get("numero") or ""),
+        n_items=ctx.get("n_items"),
+        n_regs=ctx.get("n_regs"),
+    )
+    return pdf_bytes, {
+        "nrpo": nrpo,
+        "fname": fname,
+        "contrato": contrato,
+        "from_cache": False,
+        "n_items": ctx.get("n_items"),
+        "n_regs": ctx.get("n_regs"),
+    }
+
+
 @router.get("/{contrato_id}/pdf/cc-mes-002/acta/{acta_id}/completo")
 def pdf_cc_mes_002_acta_completo(
     contrato_id: int,
@@ -6586,22 +6751,20 @@ def pdf_cc_mes_002_acta_completo(
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
-        ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
         try:
-            pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
+            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(contrato_id, acta_id, current_user)
         except Exception as e:
-            _log.exception(
-                "pdf_cc_mes_002_acta_completo: fallo PDF items=%s regs=%s",
-                ctx.get("n_items"),
-                ctx.get("n_regs"),
-            )
+            _log.exception("pdf_cc_mes_002_acta_completo: fallo PDF")
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
-        nrpo = ctx["nrpo"]
-        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+        fname = info["fname"]
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "X-ClaraCore-Pdf-Cache": "hit" if info.get("from_cache") else "miss",
+                "X-ClaraCore-Pdf-Items": str(info.get("n_items") or ""),
+            },
         )
     except HTTPException:
         raise
@@ -6616,24 +6779,32 @@ def pdf_cc_mes_002_acta_completo_con_sello_firma(
     acta_id: int,
     current_user=Depends(_get_user),
 ):
-    """Mismo PDF «todos los ítems» CC-MES-002 + página de sello."""
+    """PDF «todos los ítems» CC-MES-002 + página de sello.
+
+    Reutiliza el PDF de la vista previa si está en caché (SHA-256 + 1 página de sello
+    en segundos). Sin caché regenera el consolidado (puede tardar mucho en actas grandes).
+    """
     _perm_informes_ccd(current_user, "ver")
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
-        ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
         try:
-            pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
+            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(contrato_id, acta_id, current_user)
         except Exception as e:
             _log.exception(
-                "pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF items=%s regs=%s",
-                ctx.get("n_items"),
-                ctx.get("n_regs"),
+                "pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF from_cache=%s",
+                False,
             )
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
-        contrato = ctx["contrato"]
-        nrpo = ctx["nrpo"]
-        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+        _log.info(
+            "cc_mes_002 sello: from_cache=%s bytes=%s items=%s",
+            info.get("from_cache"),
+            len(pdf_bytes),
+            info.get("n_items"),
+        )
+        contrato = info["contrato"]
+        nrpo = info["nrpo"]
+        fname = info["fname"]
         return _attachment_pdf_con_pagina_sello_usuario(
             pdf_bytes,
             current_user,
