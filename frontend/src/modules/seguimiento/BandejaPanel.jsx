@@ -11,6 +11,7 @@ import {
   origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
+  truncateTema,
 } from './vencimientoLevels'
 
 export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false, viewportCompact = false }) {
@@ -172,9 +173,11 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
                     >
                       {estadoLabel}
                     </td>
-                    <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 260 }}>
+                    <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
                       <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
-                      {r.titulo}
+                      <span className="cc-seguim-tema-trunc" title={r.titulo || ''}>
+                        {truncateTema(r.titulo)}
+                      </span>
                     </td>
                     <td data-label="Destinatario" style={td}>{dest}</td>
                     <td data-label="Origen / remitente" style={td}>{origenRemitenteLabel(r, uid)}</td>

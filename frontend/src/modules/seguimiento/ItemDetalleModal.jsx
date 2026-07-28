@@ -31,12 +31,20 @@ export default function ItemDetalleModal({
   const [destPick, setDestPick] = useState(null)
   const [checklist, setChecklist] = useState([])
   const [checklistDirty, setChecklistDirty] = useState(false)
+  const [fechaEdit, setFechaEdit] = useState('')
+  const [horaEdit, setHoraEdit] = useState('')
+  const [fechaEditDirty, setFechaEditDirty] = useState(false)
 
   const applyItem = (d) => {
     setItem(d)
     if (d?.origen === 'tarea') {
       setChecklist(seedChecklistFromItem(d))
       setChecklistDirty(false)
+    }
+    if (d?.origen === 'compromiso') {
+      setFechaEdit(String(d.fecha_vencimiento || '').slice(0, 10))
+      setHoraEdit(d.hora_vencimiento ? String(d.hora_vencimiento).slice(0, 5) : '')
+      setFechaEditDirty(false)
     }
   }
 
@@ -86,6 +94,17 @@ export default function ItemDetalleModal({
   const soyResponsable = soyAsignado
   const soySolicitante = esDev || Number(item.solicitante_id) === Number(usuario?.id)
   const soyCreador = esDev || Number(item.created_by) === Number(usuario?.id)
+  const actaElabId = item.acta?.elaborador_id
+  const soyElaboradorActa = esCompromiso && actaElabId != null
+    && Number(actaElabId) === Number(usuario?.id)
+  const actaSellada = esCompromiso && ['realizada', 'firmada', 'en_firma', 'cerrada'].includes(
+    String(item.acta?.estado || '').toLowerCase(),
+  )
+  const puedeEditarFechaCompromiso = esCompromiso && (soyElaboradorActa || esDev) && !actaSellada && permisos?.editar
+  const puedeComentarCompromiso = esCompromiso
+    && Number(item.asignado_a_id) === Number(usuario?.id)
+    && Number(item.asignado_a_id) > 0
+  const puedeComentar = esTarea || puedeComentarCompromiso
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
   const avance = esTarea ? calcularAvanceTarea(checklist.length ? checklist : item) : null
@@ -397,6 +416,57 @@ export default function ItemDetalleModal({
         </div>
       )}
 
+      {esCompromiso && puedeEditarFechaCompromiso && (
+        <section style={{ marginTop: 12, marginBottom: 8 }}>
+          <h4 style={h4(t)}>Corregir fecha de vencimiento</h4>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Solo el elaborador del acta puede corregir una fecha asignada por error.
+          </div>
+          <div className="cc-seguim-datetime-stack" style={{ maxWidth: 280 }}>
+            <label style={lbl(t)}>Fecha de vencimiento</label>
+            <input
+              type="date"
+              className="cc-seguim-datetime"
+              value={fechaEdit}
+              onChange={(e) => { setFechaEdit(e.target.value); setFechaEditDirty(true) }}
+              style={{ ...inp(t), height: 32, padding: '4px 8px', fontSize: 'var(--cc-sm)' }}
+            />
+            <label style={{ ...lbl(t), marginTop: 6 }}>Hora (opcional)</label>
+            <input
+              type="time"
+              className="cc-seguim-datetime"
+              value={horaEdit}
+              onChange={(e) => { setHoraEdit(e.target.value); setFechaEditDirty(true) }}
+              style={{ ...inp(t), height: 32, padding: '4px 8px', fontSize: 'var(--cc-sm)', maxWidth: 140 }}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={busy || !fechaEditDirty || !fechaEdit}
+            style={{ ...primary(t), marginTop: 10, opacity: fechaEditDirty && fechaEdit ? 1 : 0.45 }}
+            onClick={async () => {
+              setBusy(true)
+              setError('')
+              try {
+                await api.patchFechaCompromiso(item.id, {
+                  fecha_vencimiento: fechaEdit,
+                  hora_vencimiento: horaEdit || null,
+                })
+                setFechaEditDirty(false)
+                await reload()
+                onChanged?.()
+              } catch (e) {
+                setError(e.message || 'No se pudo actualizar la fecha')
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            Guardar fecha
+          </button>
+        </section>
+      )}
+
       {esCompromiso && !puedeEditarEstado && (
         <div style={{
           margin: '12px 0', padding: '8px 10px', borderRadius: 8,
@@ -465,6 +535,11 @@ export default function ItemDetalleModal({
 
       <section style={{ marginTop: 16 }}>
         <h4 style={h4(t)}>Comentarios</h4>
+        {esCompromiso && (
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            En compromisos de acta, solo el asignado puede dejar observaciones al elaborador.
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflow: 'auto', marginBottom: 8 }}>
           {(item.comentarios || []).map((c) => (
             <div key={c.id} style={{ padding: 8, borderRadius: 8, background: t.bg || 'rgba(0,0,0,0.03)', fontSize: 'var(--cc-sm)' }}>
@@ -477,31 +552,37 @@ export default function ItemDetalleModal({
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin comentarios aún.</div>
           )}
         </div>
-        <div className="cc-seguim-comentario-row" style={{ display: 'flex', gap: 8 }}>
-          <input
-            value={comentario}
-            onChange={(e) => setComentario(e.target.value)}
-            placeholder="Escriba un comentario…"
-            style={{ ...inp(t), flex: 1 }}
-          />
-          <button
-            type="button"
-            disabled={busy || !comentario.trim()}
-            style={primary(t)}
-            onClick={async () => {
-              setBusy(true)
-              try {
-                await api.comentar(item.id, comentario.trim())
-                setComentario('')
-                await reload()
-                onChanged?.()
-              } catch (e) { setError(e.message) }
-              finally { setBusy(false) }
-            }}
-          >
-            Enviar
-          </button>
-        </div>
+        {puedeComentar ? (
+          <div className="cc-seguim-comentario-row" style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={comentario}
+              onChange={(e) => setComentario(e.target.value)}
+              placeholder={esCompromiso ? 'Observación para el elaborador…' : 'Escriba un comentario…'}
+              style={{ ...inp(t), flex: 1 }}
+            />
+            <button
+              type="button"
+              disabled={busy || !comentario.trim()}
+              style={primary(t)}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await api.comentar(item.id, comentario.trim())
+                  setComentario('')
+                  await reload()
+                  onChanged?.()
+                } catch (e) { setError(e.message) }
+                finally { setBusy(false) }
+              }}
+            >
+              Enviar
+            </button>
+          </div>
+        ) : esCompromiso ? (
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+            No puede comentar este compromiso (solo el usuario asignado).
+          </div>
+        ) : null}
       </section>
 
       {esCompromiso && soyResponsable && (

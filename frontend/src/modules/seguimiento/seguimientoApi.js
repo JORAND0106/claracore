@@ -133,6 +133,9 @@ export function createSeguimientoApi(contratoId, token) {
     destinarItem: (itemId, body) => send('POST', `/seguimiento/items/${itemId}/destinar`, body),
     deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),
+    patchFechaCompromiso: (itemId, body) =>
+      send('PATCH', `/seguimiento/items/${itemId}/fecha-compromiso`, body),
+    revertirActa: (actaId) => send('POST', `/seguimiento/${cid}/actas/${actaId}/revertir`),
     async uploadEvidencia(itemId, file, notas = '') {
       const fd = new FormData()
       fd.append('archivo', file)

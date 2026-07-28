@@ -21,6 +21,7 @@ from seguimiento_service import (
     add_idea,
     actualizar_estado_asignado,
     actualizar_estado_gestion,
+    actualizar_fecha_compromiso,
     adjuntar_imagen_tarea_base64,
     agregar_comentario,
     cargar_evidencia,
@@ -41,6 +42,7 @@ from seguimiento_service import (
     proximo_consecutivo,
     redaccion_asistida_clara,
     registrar_firma_asistente,
+    revertir_acta_a_borrador,
     revisar_justificacion,
     solicitar_justificacion,
     update_acta,
@@ -231,6 +233,11 @@ class ComentarioBody(BaseModel):
     mensaje: str = Field(..., min_length=1)
 
 
+class FechaCompromisoBody(BaseModel):
+    fecha_vencimiento: str = Field(..., min_length=8)
+    hora_vencimiento: Optional[str] = None
+
+
 class JustificacionBody(BaseModel):
     motivo: str = Field(..., min_length=5)
     nueva_fecha_vencimiento: str
@@ -383,6 +390,27 @@ def route_comentario(item_id: int, body: ComentarioBody, current_user=Depends(ge
     require_permiso_seguimiento(current_user, "ver")
     try:
         return agregar_comentario(supabase, item_id, body.mensaje, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/items/{item_id}/fecha-compromiso")
+def route_fecha_compromiso(
+    item_id: int, body: FechaCompromisoBody, current_user=Depends(get_current_user)
+):
+    """Corrige fecha/hora de un compromiso de acta (solo elaborador)."""
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        row = actualizar_fecha_compromiso(
+            supabase,
+            item_id,
+            _uid(current_user),
+            fecha_vencimiento=body.fecha_vencimiento,
+            hora_vencimiento=body.hora_vencimiento,
+            current_user=current_user,
+        )
+        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_compromiso_fecha", str(item_id), {})
+        return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -608,8 +636,28 @@ def route_update_acta(
     require_permiso_seguimiento(current_user, "editar")
     _check_contrato(current_user, contrato_id)
     try:
-        row = update_acta(supabase, contrato_id, acta_id, body.model_dump(exclude_unset=True), _uid(current_user))
+        row = update_acta(
+            supabase,
+            contrato_id,
+            acta_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
         registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/revertir")
+def route_revertir_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
+    """Desarrollador: desella el acta (realizada/firmada → borrador)."""
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = revertir_acta_a_borrador(supabase, contrato_id, acta_id, current_user)
+        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta_revertir", str(acta_id), {})
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -622,7 +670,10 @@ def route_add_idea(
     require_permiso_seguimiento(current_user, "editar")
     _check_contrato(current_user, contrato_id)
     try:
-        return add_idea(supabase, contrato_id, acta_id, body.texto)
+        return add_idea(
+            supabase, contrato_id, acta_id, body.texto,
+            user_id=_uid(current_user), current_user=current_user,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -634,7 +685,10 @@ def route_update_idea(
     require_permiso_seguimiento(current_user, "editar")
     _check_contrato(current_user, contrato_id)
     try:
-        return update_idea(supabase, contrato_id, idea_id, body.texto)
+        return update_idea(
+            supabase, contrato_id, idea_id, body.texto,
+            user_id=_uid(current_user), current_user=current_user,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -651,7 +705,13 @@ def route_crear_compromiso(
     _check_contrato(current_user, contrato_id)
     try:
         row = crear_compromiso_desde_idea(
-            supabase, contrato_id, acta_id, idea_id, body.model_dump(), _uid(current_user)
+            supabase,
+            contrato_id,
+            acta_id,
+            idea_id,
+            body.model_dump(),
+            _uid(current_user),
+            current_user=current_user,
         )
         log_id = str(row.get("id") or (row.get("items") or [{}])[0].get("id") or idea_id)
         registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", log_id, {})

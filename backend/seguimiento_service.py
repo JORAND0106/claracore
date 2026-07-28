@@ -854,11 +854,71 @@ def _enrich_acta_row(acta: dict) -> dict:
     return acta
 
 
-def _require_elaborador(data: dict, user_id: int) -> tuple:
+def _require_elaborador(data: dict, user_id: int) -> int:
     elaborador_id = data.get("elaborador_id")
     if elaborador_id in (None, "", 0, "0"):
         raise ValueError("El elaborador es obligatorio")
     return int(elaborador_id)
+
+
+def _acta_esta_sellada(acta: Optional[dict]) -> bool:
+    """Realizada o firmada: contenido inmodificable (salvo revertir por Desarrollador)."""
+    if not acta:
+        return False
+    est = (acta.get("estado") or "").strip().lower()
+    if est in ("en_firma", "cerrada"):
+        est = "realizada"
+    return est in ("realizada", "firmada")
+
+
+def _assert_puede_editar_acta(
+    acta: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+    *,
+    permitir_revertir_dev: bool = False,
+    nuevo_estado: Optional[str] = None,
+) -> None:
+    """
+    Solo el elaborador edita el contenido mientras el acta esté en borrador.
+    Sellada (realizada/firmada): nadie edita; el Desarrollador puede revertir a borrador.
+    """
+    es_dev = es_desarrollador_seguimiento(current_user)
+    sellada = _acta_esta_sellada(acta)
+    if sellada:
+        if (
+            permitir_revertir_dev
+            and es_dev
+            and nuevo_estado
+            and _norm_estado_acta(nuevo_estado) == "borrador"
+        ):
+            return
+        raise ValueError(
+            "El acta está sellada (Realizada/Firmada) y no se puede editar. "
+            "Solo el rol Desarrollador puede revertirla a borrador."
+        )
+    if es_dev:
+        return
+    elab = acta.get("elaborador_id")
+    if elab is None or int(elab) != int(user_id):
+        raise ValueError("Solo el elaborador del acta puede editar su contenido")
+
+
+def revertir_acta_a_borrador(
+    sb, contrato_id: int, acta_id: int, current_user: Optional[dict]
+) -> dict:
+    """Desarrollador: desella el acta pasando de realizada/firmada a borrador."""
+    if not es_desarrollador_seguimiento(current_user):
+        raise ValueError("Solo el rol Desarrollador puede revertir un acta sellada")
+    acta = get_acta(sb, acta_id, contrato_id)
+    if not _acta_esta_sellada(acta):
+        raise ValueError("El acta no está sellada; no hay nada que revertir")
+    patch = {
+        "estado": _estado_para_db(sb, "borrador"),
+        "updated_at": _now_utc().isoformat(),
+    }
+    _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
+    return get_acta(sb, acta_id, contrato_id)
 
 
 def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_id: Optional[int] = None) -> list:
@@ -1117,10 +1177,32 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     return get_acta(sb, aid, contrato_id)
 
 
-def update_acta(sb, contrato_id: int, acta_id: int, data: dict, user_id: int) -> dict:
+def update_acta(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    data: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> dict:
     acta = get_acta(sb, acta_id, contrato_id)
-    if acta.get("estado") == "firmada":
-        raise ValueError("El acta firmada no se puede editar")
+    nuevo_estado_raw = data.get("estado") if "estado" in data else None
+    _assert_puede_editar_acta(
+        acta,
+        user_id,
+        current_user,
+        permitir_revertir_dev=True,
+        nuevo_estado=nuevo_estado_raw,
+    )
+    # Si es solo revertir (dev): permitir únicamente el cambio de estado a borrador.
+    if _acta_esta_sellada(acta):
+        patch = {
+            "estado": _estado_para_db(sb, "borrador"),
+            "updated_at": _now_utc().isoformat(),
+        }
+        _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
+        return get_acta(sb, acta_id, contrato_id)
+
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
     if "fecha_reunion" in data and data["fecha_reunion"]:
         patch["fecha_reunion"] = (_parse_date(data["fecha_reunion"]) or date.today()).isoformat()
@@ -1425,8 +1507,18 @@ def _sync_apartados(sb, acta_id: int, apartados: list) -> None:
         sb.table("seguimiento_acta_apartado").insert(rows).execute()
 
 
-def add_idea(sb, contrato_id: int, acta_id: int, texto: str = "") -> dict:
-    get_acta(sb, acta_id, contrato_id)
+def add_idea(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    texto: str = "",
+    *,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
+    acta = get_acta(sb, acta_id, contrato_id)
+    if user_id is not None:
+        _assert_puede_editar_acta(acta, int(user_id), current_user)
     existing = sb.table("seguimiento_acta_idea").select("orden").eq("acta_id", int(acta_id)).order("orden", desc=True).limit(1).execute().data or []
     orden = (int(existing[0]["orden"]) + 1) if existing else 0
     ins = sb.table("seguimiento_acta_idea").insert({
@@ -1439,7 +1531,15 @@ def add_idea(sb, contrato_id: int, acta_id: int, texto: str = "") -> dict:
     return ins[0]
 
 
-def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
+def update_idea(
+    sb,
+    contrato_id: int,
+    idea_id: int,
+    texto: str,
+    *,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
     idea = sb.table("seguimiento_acta_idea").select("*, seguimiento_acta!inner(contrato_id)").eq("id", int(idea_id)).limit(1).execute().data
     # Fallback sin join si PostgREST no resuelve el alias
     if not idea:
@@ -1447,7 +1547,6 @@ def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
         if not rows:
             raise ValueError("Idea no encontrada")
         acta = get_acta(sb, int(rows[0]["acta_id"]), contrato_id)
-        _ = acta
         idea_row = rows[0]
     else:
         idea_row = idea[0]
@@ -1457,6 +1556,9 @@ def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
             acta_cid = rel.get("contrato_id")
         if acta_cid is not None and int(acta_cid) != int(contrato_id):
             raise ValueError("Idea no pertenece al contrato")
+        acta = get_acta(sb, int(idea_row["acta_id"]), contrato_id)
+    if user_id is not None:
+        _assert_puede_editar_acta(acta, int(user_id), current_user)
     upd = sb.table("seguimiento_acta_idea").update({
         "texto": (texto or "").strip(),
         "updated_at": _now_utc().isoformat(),
@@ -1487,8 +1589,18 @@ def _norm_hora(raw) -> Optional[str]:
     return None
 
 
-def crear_compromiso_desde_idea(sb, contrato_id: int, acta_id: int, idea_id: int, data: dict, user_id: int) -> dict:
-    """Crea uno o varios compromisos (uno por asignado)."""
+def crear_compromiso_desde_idea(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    idea_id: int,
+    data: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """Crea uno o varios compromisos (uno por asignado). Solo elaborador (o Dev) en acta no sellada."""
+    acta = get_acta(sb, acta_id, contrato_id)
+    _assert_puede_editar_acta(acta, user_id, current_user)
     asignados = data.get("asignados") or []
     if not asignados and data.get("asignado_a_id"):
         asignados = [{
@@ -2881,6 +2993,28 @@ def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
         raise ValueError("Mensaje vacío")
     item = get_item(sb, item_id)
     u = _usuario_row(sb, user_id)
+    dest = None
+    if item.get("origen") == "compromiso":
+        # Solo el asignado de plataforma puede comentar (dirigido al elaborador del acta).
+        if int(item.get("asignado_a_id") or 0) != int(user_id):
+            raise ValueError(
+                "Solo puede comentar en compromisos que le fueron asignados a usted"
+            )
+        acta_elab = None
+        if item.get("acta_id"):
+            try:
+                acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+                acta_elab = acta.get("elaborador_id")
+            except Exception:
+                acta_elab = None
+        dest = acta_elab or item.get("solicitante_id") or item.get("created_by")
+    else:
+        # Tareas: notificar contraparte (asignado ↔ solicitante/creador)
+        if int(item.get("asignado_a_id") or 0) == int(user_id):
+            dest = item.get("solicitante_id") or item.get("created_by")
+        else:
+            dest = item.get("asignado_a_id")
+
     ins = sb.table("seguimiento_item_comentario").insert({
         "item_id": int(item_id),
         "autor_id": int(user_id),
@@ -2889,13 +3023,7 @@ def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
     }).execute().data
     if not ins:
         raise ValueError("No se pudo guardar el comentario")
-    # Notificar contraparte
-    dest = None
-    if int(item.get("asignado_a_id") or 0) == int(user_id):
-        dest = item.get("solicitante_id") or item.get("created_by")
-    else:
-        dest = item.get("asignado_a_id")
-    if dest:
+    if dest and int(dest) != int(user_id):
         _notificar(
             sb,
             destinatario_id=int(dest),
@@ -2907,6 +3035,48 @@ def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
             entidad_id=str(item_id),
         )
     return ins[0]
+
+
+def actualizar_fecha_compromiso(
+    sb,
+    item_id: int,
+    user_id: int,
+    *,
+    fecha_vencimiento: str,
+    hora_vencimiento: Optional[str] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """Corrige la fecha de un compromiso de acta. Solo elaborador del acta (o Dev), acta no sellada."""
+    item = get_item(sb, item_id)
+    if item.get("origen") != "compromiso":
+        raise ValueError("Solo aplica a compromisos de acta")
+    if not item.get("acta_id"):
+        raise ValueError("El compromiso no está vinculado a un acta")
+    acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+    _assert_puede_editar_acta(acta, user_id, current_user)
+    fv = _parse_date(fecha_vencimiento)
+    if not fv:
+        raise ValueError("Fecha de vencimiento requerida")
+    cache = CalendarioNoHabilesCache(loader=make_calendar_loader(sb))
+    limite = calcular_fecha_limite_gracia(item.get("contrato_id"), fv, cache)
+    hora = _norm_hora(hora_vencimiento) if hora_vencimiento is not None else item.get("hora_vencimiento")
+    if hora_vencimiento is not None and str(hora_vencimiento).strip() == "":
+        hora = None
+    patch = {
+        "fecha_vencimiento": fv.isoformat(),
+        "fecha_limite_gracia": limite.astimezone(timezone.utc).isoformat(),
+        "hora_vencimiento": hora,
+        "updated_at": _now_utc().isoformat(),
+    }
+    sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    _registrar_evento(
+        sb,
+        int(item_id),
+        "fecha_compromiso_corregida",
+        user_id,
+        {"fecha_vencimiento": fv.isoformat(), "hora_vencimiento": hora},
+    )
+    return get_item_detalle(sb, item_id)
 
 
 def cargar_evidencia(
