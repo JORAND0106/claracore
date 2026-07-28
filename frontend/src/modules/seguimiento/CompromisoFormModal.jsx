@@ -296,11 +296,11 @@ export default function CompromisoFormModal({
             )}
           </div>
         </Field>
-        <div className="cc-seguim-form-grid cc-seguim-form-grid--2 cc-seguim-datetime-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="cc-seguim-datetime-stack">
           <Field t={t} label="Fecha de vencimiento">
             <input
               type="date"
-              className="cc-seguim-datetime"
+              className="cc-seguim-datetime cc-seguim-datetime--fecha"
               value={form.fecha_vencimiento}
               onChange={(e) => set('fecha_vencimiento', e.target.value)}
               style={dateTimeInp(t)}
@@ -309,10 +309,10 @@ export default function CompromisoFormModal({
           <Field t={t} label="Hora (opcional)">
             <input
               type="time"
-              className="cc-seguim-datetime"
+              className="cc-seguim-datetime cc-seguim-datetime--hora"
               value={form.hora_vencimiento}
               onChange={(e) => set('hora_vencimiento', e.target.value)}
-              style={dateTimeInp(t)}
+              style={{ ...dateTimeInp(t), maxWidth: 140 }}
             />
           </Field>
         </div>

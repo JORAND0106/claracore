@@ -9,6 +9,7 @@ import {
   origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
+  truncateTema,
 } from './vencimientoLevels.js'
 
 function assert(cond, msg) {
@@ -121,5 +122,21 @@ const multi = {
 assert(tipoLaborLabel(multi, 30) === 'Delegada a mí (compartida)', 'multi asignado')
 assert(tipoLaborLabel(multi, 10) === 'Delegada a 2', 'multi delegante')
 assert(origenRemitenteLabel(multi, 30) === 'Delegó: Ana Pérez', 'multi remitente')
+
+// Compromisos de acta: sin «Asignada por mí»
+const compActa = {
+  origen: 'compromiso',
+  asignado_a_id: 20,
+  solicitante_id: 10,
+  created_by: 10,
+  acta_id: 5,
+}
+assert(tipoLaborLabel(compActa, 20) === 'Debo entregar', 'compromiso asignado')
+assert(tipoLaborLabel(compActa, 10) === '—', 'compromiso elaborador sin Asignada por mí')
+
+const tema = truncateTema('Entregar planos actualizados del tramo norte para revisión del comité')
+assert(tema.endsWith('…'), 'tema truncado con ellipsis')
+assert(tema.length < 60, 'tema breve')
+assert(truncateTema('Corto') === 'Corto', 'tema corto intacto')
 
 console.log('vencimientoLevels.test.mjs OK')

@@ -190,7 +190,19 @@ export default function ActaEditor({
   const [compromisoCtx, setCompromisoCtx] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
-  const soloLectura = form.estado === 'firmada'
+  const esDev = !!permisos?.esDesarrollador
+  const esElaborador = form.elaborador_id != null
+    && Number(form.elaborador_id) === Number(usuario?.id)
+  const sellada = form.estado === 'realizada' || form.estado === 'firmada'
+  const encabezadoGuardado = localActaId != null
+  /** Nueva acta (sin id): se diligencia encabezado. Luego solo elaborador (o Dev en borrador). Sellada = nadie. */
+  const puedeEditar = !sellada && (
+    !encabezadoGuardado
+    || esElaborador
+    || (esDev && form.estado === 'borrador')
+  )
+  const soloLectura = !puedeEditar
+  const tabsBloqueadas = !encabezadoGuardado
   /** Evita re-hidratar desde API cuando el padre pasa actaId tras el primer guardado local. */
   const skipServerHydrateRef = useRef(false)
   /** Acta ya hidratada en esta sesión del popup — no volver a pisar el formulario. */
@@ -285,6 +297,10 @@ export default function ActaEditor({
   }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
+
+  useEffect(() => {
+    if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
+  }, [encabezadoGuardado, tab])
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
@@ -476,11 +492,14 @@ export default function ActaEditor({
             {consecutivo != null ? numeroActaLabel(consecutivo) : 'Nueva acta de reunión'}
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta)} · elaborador obligatorio
+            {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta)}
+            {sellada ? ' · sellada (solo lectura)' : ''}
+            {!sellada && encabezadoGuardado && soloLectura ? ' · solo lectura (elaborador exclusivo)' : ''}
+            {!encabezadoGuardado ? ' · guarde el encabezado para continuar' : ''}
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          {(permisos?.crear || permisos?.editar) && !soloLectura && (
+          {puedeEditar && (permisos?.crear || permisos?.editar) && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>
               {saving ? 'Guardando…' : 'Guardar'}
             </button>
@@ -490,27 +509,36 @@ export default function ActaEditor({
       </div>
 
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {TABS_ACTA.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            onClick={() => setTab(tb.id)}
-            style={{
-              border: 'none',
-              borderBottom: tab === tb.id ? `2px solid ${t.primary}` : '2px solid transparent',
-              background: 'transparent',
-              color: tab === tb.id ? t.primary : t.textMuted,
-              fontWeight: tab === tb.id ? 700 : 500,
-              padding: '8px 14px',
-              cursor: 'pointer',
-              fontSize: 'var(--cc-sm)',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-            }}
-          >
-            {tb.label}
-          </button>
-        ))}
+        {TABS_ACTA.map((tb) => {
+          const locked = tabsBloqueadas && tb.id !== 'encabezado'
+          return (
+            <button
+              key={tb.id}
+              type="button"
+              disabled={locked}
+              title={locked ? 'Guarde el encabezado primero para definir el elaborador' : undefined}
+              onClick={() => {
+                if (locked) return
+                setTab(tb.id)
+              }}
+              style={{
+                border: 'none',
+                borderBottom: tab === tb.id ? `2px solid ${t.primary}` : '2px solid transparent',
+                background: 'transparent',
+                color: locked ? `${t.textMuted}99` : (tab === tb.id ? t.primary : t.textMuted),
+                fontWeight: tab === tb.id ? 700 : 500,
+                padding: '8px 14px',
+                cursor: locked ? 'not-allowed' : 'pointer',
+                fontSize: 'var(--cc-sm)',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                opacity: locked ? 0.55 : 1,
+              }}
+            >
+              {tb.label}
+            </button>
+          )
+        })}
       </div>
 
       {error && (
@@ -547,34 +575,42 @@ export default function ActaEditor({
             </select>
           </Field>
           <Field t={t} label="Ubicación">
-            <UbicacionAutocomplete
-              t={t}
-              value={form.ubicacion}
-              onChange={(v) => setField('ubicacion', v)}
-              style={inp(t)}
-            />
+            {soloLectura ? (
+              <div style={inp(t)}>{form.ubicacion || '—'}</div>
+            ) : (
+              <UbicacionAutocomplete
+                t={t}
+                value={form.ubicacion}
+                onChange={(v) => setField('ubicacion', v)}
+                style={inp(t)}
+              />
+            )}
           </Field>
           <Field t={t} label="Elaborador *">
-            <UserSearchSelect
-              t={t}
-              usuarios={usuariosContrato}
-              mode="strict"
-              valueId={form.elaborador_id}
-              valueNombre={form.elaborador_nombre}
-              placeholder="Buscar usuario del contrato…"
-              style={inp(t)}
-              onSelect={(u) => {
-                if (!u) {
-                  setForm((f) => ({ ...f, elaborador_id: null, elaborador_nombre: '' }))
-                  return
-                }
-                setForm((f) => ({
-                  ...f,
-                  elaborador_id: u.id,
-                  elaborador_nombre: nombreUser(u),
-                }))
-              }}
-            />
+            {soloLectura ? (
+              <div style={inp(t)}>{form.elaborador_nombre || '—'}</div>
+            ) : (
+              <UserSearchSelect
+                t={t}
+                usuarios={usuariosContrato}
+                mode="strict"
+                valueId={form.elaborador_id}
+                valueNombre={form.elaborador_nombre}
+                placeholder="Buscar usuario del contrato…"
+                style={inp(t)}
+                onSelect={(u) => {
+                  if (!u) {
+                    setForm((f) => ({ ...f, elaborador_id: null, elaborador_nombre: '' }))
+                    return
+                  }
+                  setForm((f) => ({
+                    ...f,
+                    elaborador_id: u.id,
+                    elaborador_nombre: nombreUser(u),
+                  }))
+                }}
+              />
+            )}
           </Field>
           <Field t={t} label="Estado">
             <select disabled value={form.estado || 'borrador'} style={inp(t)}>
@@ -751,6 +787,7 @@ export default function ActaEditor({
             />
             <input
               placeholder="Cargo"
+              disabled={soloLectura}
               value={a.cargo}
               onChange={(e) => {
                 const cargo = e.target.value
@@ -760,6 +797,7 @@ export default function ActaEditor({
             />
             <input
               placeholder="Entidad / empresa"
+              disabled={soloLectura}
               value={a.entidad}
               onChange={(e) => {
                 const entidad = e.target.value
@@ -769,6 +807,7 @@ export default function ActaEditor({
             />
             <input
               placeholder="Correo"
+              disabled={soloLectura}
               value={a.email || ''}
               onChange={(e) => {
                 const email = e.target.value
@@ -910,17 +949,41 @@ export default function ActaEditor({
       <section style={card(t)}>
         <h3 style={h3(t)}>Vista previa y acciones del sistema</h3>
         <div className="cc-seguim-acta-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
-          {(permisos?.crear || permisos?.editar) && !soloLectura && (
+          {puedeEditar && (permisos?.crear || permisos?.editar) && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>{saving ? 'Guardando…' : 'Guardar acta'}</button>
           )}
-          {(permisos?.crear || permisos?.editar) && !soloLectura && form.estado === 'borrador' && (
+          {puedeEditar && (permisos?.crear || permisos?.editar) && form.estado === 'borrador' && encabezadoGuardado && (
             <button type="button" disabled={saving} onClick={() => guardar({ estadoExtra: 'realizada' })} style={primary(t)}>Marcar como Realizada</button>
           )}
-          {(permisos?.crear || permisos?.editar) && (
-            <button type="button" disabled={pdfBusy || saving} onClick={previewPdf} style={ghost(t)}>{pdfBusy ? 'Generando PDF…' : 'Generar vista previa PDF'}</button>
+          {(permisos?.crear || permisos?.editar || permisos?.ver) && (
+            <button type="button" disabled={pdfBusy || saving || !encabezadoGuardado} onClick={previewPdf} style={ghost(t)}>{pdfBusy ? 'Generando PDF…' : 'Generar vista previa PDF'}</button>
           )}
           {form.estado === 'realizada' && permisos?.validar && (
             <button type="button" style={ghost(t)} onClick={() => { setTab('asistentes'); setOkMsg('Use el botón ✎ junto a cada asistente para registrar la firma de perfil.') }}>Enviar a firma</button>
+          )}
+          {esDev && sellada && localActaId && (
+            <button
+              type="button"
+              disabled={saving}
+              style={ghost(t)}
+              onClick={async () => {
+                if (!window.confirm('¿Revertir esta acta sellada a borrador editable?')) return
+                setSaving(true)
+                setError('')
+                try {
+                  const row = await api.revertirActa(localActaId)
+                  applySavedActa(row)
+                  setOkMsg('Acta revertida a borrador. Ya puede editarla el elaborador.')
+                  onSaved?.(row, { stay: true })
+                } catch (e) {
+                  setError(friendlyFetchError(e, 'No se pudo revertir'))
+                } finally {
+                  setSaving(false)
+                }
+              }}
+            >
+              Revertir a borrador (Dev)
+            </button>
           )}
           {permisos?.esDesarrollador && localActaId && (
             <button type="button" style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }} onClick={async () => {

@@ -152,11 +152,9 @@ function _horaMs(hhmm) {
 export function tipoLaborLabel(item, usuarioId) {
   if (!item) return '—'
   if (item.origen === 'compromiso') {
+    // Compromisos de acta: no «Asignada por mí» (el elaborador no asigna a título personal).
     if (Number(item.asignado_a_id) === Number(usuarioId)) return 'Debo entregar'
-    if (Number(item.solicitante_id) === Number(usuarioId) || Number(item.created_by) === Number(usuarioId)) {
-      return 'Asignada por mí'
-    }
-    return 'Compromiso'
+    return '—'
   }
   // tarea
   if (item.relacion_destinatario === 'referencia' && Number(item.referido_a_id) === Number(usuarioId)) {
@@ -179,6 +177,22 @@ export function tipoLaborLabel(item, usuarioId) {
   }
   if (Number(item.asignado_a_id) === Number(usuarioId) || soyAsignado) return 'Debo entregar'
   return 'Tarea'
+}
+
+/**
+ * Recorta el tema para grillas (bandeja / widget).
+ * ~3–6 palabras o un tope corto de caracteres; el texto completo va en title/tooltip.
+ */
+export function truncateTema(text, { maxWords = 5, maxChars = 42 } = {}) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!s) return '—'
+  const words = s.split(' ')
+  let short = words.length <= maxWords ? s : words.slice(0, maxWords).join(' ')
+  if (short.length > maxChars) {
+    short = short.slice(0, maxChars).replace(/\s+\S*$/, '').trim() || short.slice(0, maxChars)
+  }
+  if (short.length < s.length) return `${short}…`
+  return short
 }
 
 /**

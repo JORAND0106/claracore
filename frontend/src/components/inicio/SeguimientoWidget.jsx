@@ -13,6 +13,7 @@ import {
   origenRemitenteLabel,
   sortByProximidadVencimiento,
   tipoLaborLabel,
+  truncateTema,
 } from '../../modules/seguimiento/vencimientoLevels'
 
 /**
@@ -154,9 +155,11 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
                         >
                           {estadoLabel}
                         </td>
-                        <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
+                        <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 180 }}>
                           <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
-                          {r.titulo}
+                          <span className="cc-seguim-tema-trunc" title={r.titulo || ''}>
+                            {truncateTema(r.titulo)}
+                          </span>
                         </td>
                         <td data-label="Destinatario" style={td}>{dest}</td>
                         <td data-label="Origen / remitente" style={td}>{origenRemitenteLabel(r, uid)}</td>

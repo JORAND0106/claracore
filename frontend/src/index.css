@@ -2576,9 +2576,16 @@ select.cc-dashboard-acta-select--light option {
   grid-template-columns: 1fr !important;
 }
 
-/* Fecha/hora del popup de compromiso: más discretos que un input genérico. */
-.cc-seguim-compromiso-form .cc-seguim-datetime-row {
-  max-width: 360px;
+/* Fecha prominente + hora secundaria (apiladas, sin grid apretado). */
+.cc-seguim-compromiso-form .cc-seguim-datetime-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 280px;
+  margin-bottom: 4px;
+}
+.cc-seguim-compromiso-form .cc-seguim-datetime-stack > div {
+  margin-bottom: 4px;
 }
 .cc-seguim-compromiso-form input.cc-seguim-datetime[type="date"],
 .cc-seguim-compromiso-form input.cc-seguim-datetime[type="time"] {
@@ -2593,6 +2600,9 @@ select.cc-dashboard-acta-select--light option {
   padding: 4px 8px;
   border-radius: 6px;
 }
+.cc-seguim-compromiso-form input.cc-seguim-datetime--hora {
+  max-width: 140px;
+}
 .cc-seguim-compromiso-form input.cc-seguim-datetime[type="date"]::-webkit-calendar-picker-indicator,
 .cc-seguim-compromiso-form input.cc-seguim-datetime[type="time"]::-webkit-calendar-picker-indicator {
   opacity: 0.45;
@@ -2602,8 +2612,18 @@ select.cc-dashboard-acta-select--light option {
   padding: 0;
   margin-left: 4px;
 }
-.cc-seguim-compromiso-form--compact .cc-seguim-datetime-row {
+.cc-seguim-compromiso-form--compact .cc-seguim-datetime-stack {
   max-width: none;
+}
+
+/* Tema truncado en bandeja / widget */
+.cc-seguim-tema-trunc {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .cc-seguim-item-detalle--compact .cc-seguim-comentario-row,
