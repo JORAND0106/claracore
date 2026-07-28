@@ -8379,13 +8379,38 @@ def _fo_eo_04_pdf_use_processes() -> bool:
     return True
 
 
-def _fo_eo_04_pdf_single_pass_preferred() -> bool:
-    """Un solo HTML→PDF deduplica firmas/logos idénticos (mucho menos peso que N PDFs fusionados).
+def _fo_eo_04_pdf_single_pass_max_pages() -> int:
+    """Por encima de este nº de páginas se usa lote+ProcessPool (más rápido en CPU).
 
-    FO_EO04_PDF_SINGLE_PASS=0 vuelve al modo por lotes (más rápido en CPU, PDF más pesado).
+    El single-pass compacta firmas/logos, pero xhtml2pdf es monohilo y en actas
+    grandes (100–300+ memorias) supera con facilidad los 20 minutos.
     """
-    env = (_os.environ.get("FO_EO04_PDF_SINGLE_PASS") or "1").strip().lower()
-    return env not in ("0", "false", "no")
+    return max(
+        1,
+        int(_os.environ.get("FO_EO04_PDF_SINGLE_PASS_MAX_PAGES", "24") or "24"),
+    )
+
+
+def _fo_eo_04_pdf_single_pass_preferred(n_pages: Optional[int] = None) -> bool:
+    """Un solo HTML→PDF deduplica firmas/logos (PDF más liviano).
+
+    - FO_EO04_PDF_SINGLE_PASS=0 → siempre lotes (paralelo).
+    - FO_EO04_PDF_SINGLE_PASS=force → siempre single-pass (escape hatch).
+    - Por defecto (auto/1): single-pass solo si n_pages ≤ FO_EO04_PDF_SINGLE_PASS_MAX_PAGES.
+    """
+    env = (_os.environ.get("FO_EO04_PDF_SINGLE_PASS") or "auto").strip().lower()
+    if env in ("0", "false", "no"):
+        return False
+    if env in ("force", "always"):
+        return True
+    if n_pages is not None:
+        try:
+            n = int(n_pages)
+        except (TypeError, ValueError):
+            n = 0
+        if n > _fo_eo_04_pdf_single_pass_max_pages():
+            return False
+    return True
 
 
 _FO_EO04_PROCESS_POOL = None
@@ -9221,6 +9246,7 @@ def _fo_eo_04_pdf_from_pages(
 ) -> bytes:
     """
     Una memoria → un PDF pequeño → fusión. Procesos en lotes de 2 páginas (~meta 2 mem/s).
+    Actas grandes: evita single-pass monolítico (cuello de botella >20 min).
     """
     n = len(pages_html)
     if n == 0:
@@ -9230,18 +9256,35 @@ def _fo_eo_04_pdf_from_pages(
             on_progress({"pct": 88, "msg": "Renderizando PDF…", "current_item": 1, "total_items": 1})
         return _to_pdf(pages_html[0])
 
-    # Modo compacto (default): un solo documento HTML → un PDF. xhtml2pdf reutiliza
-    # imágenes idénticas (firmas, logo) en lugar de duplicarlas 124 veces al fusionar
-    # PDFs por página — principal reducción de peso además de la compresión JPEG.
-    if _fo_eo_04_pdf_single_pass_preferred():
+    # Compacto solo bajo umbral de volumen; por encima → ProcessPool por lotes.
+    if _fo_eo_04_pdf_single_pass_preferred(n):
         if on_progress:
             on_progress({"pct": 78, "msg": f"Renderizando PDF único ({n} páginas, modo compacto)…", "total_items": n})
+        t_sp = time.time()
         combined = _combine_html_pages(pages_html)
         pdf = _to_pdf(combined)
         if on_progress:
             on_progress({"pct": 98, "msg": f"PDF listo ({len(pdf) // 1024} KB)", "total_items": n})
-        _log.info("fo_eo_04 PDF single-pass: %s páginas, %s KB", n, len(pdf) // 1024)
+        _log.info(
+            "fo_eo_04 PDF single-pass: %s páginas, %s KB, %.1fs",
+            n,
+            len(pdf) // 1024,
+            time.time() - t_sp,
+        )
         return pdf
+
+    _log.info(
+        "fo_eo_04 PDF batch: %s páginas (single-pass max=%s)",
+        n,
+        _fo_eo_04_pdf_single_pass_max_pages(),
+    )
+    if on_progress:
+        on_progress({
+            "pct": 76,
+            "msg": f"Renderizando PDF en paralelo ({n} páginas)…",
+            "current_item": 0,
+            "total_items": n,
+        })
 
     t0 = time.time()
     done_pages = 0
@@ -9263,7 +9306,12 @@ def _fo_eo_04_pdf_from_pages(
         and n >= _FO_EO04_PDF_PARALLEL_MIN_PAGES
         and _FO_EO04_PROCESS_POOL is not None
     )
+    # Actas muy grandes: más páginas por tarea → menos IPC.
     per_task = max(1, _FO_EO04_PDF_PAGES_PER_TASK)
+    if n >= 80:
+        per_task = max(per_task, 4)
+    if n >= 200:
+        per_task = max(per_task, 6)
     page_pdfs: List[Optional[bytes]] = [None] * n
 
     if use_processes:
@@ -9310,11 +9358,12 @@ def _fo_eo_04_pdf_from_pages(
     merged = _merge_pdf_bytes_tree(parts)
     elapsed = time.time() - t0
     _log.info(
-        "fo_eo_04 PDF listo: %s páginas en %.1fs (%.2f mem/s) procesos=%s",
+        "fo_eo_04 PDF listo: %s páginas en %.1fs (%.2f mem/s) procesos=%s per_task=%s",
         n,
         elapsed,
         n / max(0.001, elapsed),
         use_processes,
+        per_task,
     )
     return merged
 
@@ -9806,6 +9855,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
 ) -> tuple:
     """Igual que _build_fo_eo_04_pdf_bytes con reporte de progreso."""
     cu = current_user if isinstance(current_user, dict) else dict(current_user or {})
+    t0 = time.time()
     _html, fname, contrato_numero_raw, pages = _build_fo_eo_04_html(
         contrato_id,
         formato_codigo,
@@ -9816,7 +9866,20 @@ def _build_fo_eo_04_pdf_bytes_prog(
         preview_ui=False,
         on_progress=on_progress,
     )
+    t_html = time.time()
+    _log.info(
+        "fo_eo_04 job HTML listo: %s páginas en %.1fs",
+        len(pages or []),
+        t_html - t0,
+    )
     pdf_bytes = _fo_eo_04_pdf_from_pages(pages, on_progress=on_progress)
+    _log.info(
+        "fo_eo_04 job PDF listo: %s KB en %.1fs (html=%.1fs render=%.1fs)",
+        len(pdf_bytes) // 1024,
+        time.time() - t0,
+        t_html - t0,
+        time.time() - t_html,
+    )
     if on_progress:
         on_progress({"pct": 100, "msg": "¡Listo!"})
     return pdf_bytes, fname, contrato_numero_raw
@@ -9945,7 +10008,13 @@ def ccd_pdf_job_estado(
     _perm_informes_ccd(current_user, "ver")
     job = _pdf_job_resolve(job_id)
     if not job or job.get("contrato_id") != contrato_id:
-        raise HTTPException(status_code=404, detail="Job no encontrado")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Job no encontrado o expirado (TTL ~30 min). "
+                "Detenga el polling e inicie de nuevo la generación."
+            ),
+        )
     out = {
         "status": job.get("status"),
         "pct": job.get("pct", 0),

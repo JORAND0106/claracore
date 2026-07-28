@@ -7,6 +7,7 @@ import {
   planDescargaSelloDesdeVistaPrevia,
   vistaPreviaEsHtmlIdu,
 } from './informesVistaPreviaPdf'
+import { decidirPollEstadoJobPdf } from './informesPdfJobPoll'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -3072,20 +3073,44 @@ export default function ModuloInformes({
       const { job_id } = await rInit.json()
       setFoEo04Job((prev) => ({ ...prev, id: job_id, status: 'progresando' }))
 
-      // 2. Polling con setTimeout recursivo (evita solapamiento de llamadas async)
+      // 2. Polling con setTimeout recursivo (evita solapamiento de llamadas async).
+      // Corta de inmediato ante 404/410 (job expirado) y por timeout absoluto.
       let done = false
+      let consecFails = 0
+      const pollStartedAt = Date.now()
       const poll = async () => {
         if (done) return
+        const elapsedMs = Date.now() - pollStartedAt
         try {
           const rEstado = await fetchConFallback(
             `/informes/${contratoId}/ccd/pdf-job/${job_id}/estado`,
             { headers: { Authorization: `Bearer ${authToken}` } }
           )
           if (done) return
-          if (!rEstado.ok) {
-            if (!done) foEo04JobPollRef.current = setTimeout(poll, 1500)
+          const decision = decidirPollEstadoJobPdf({
+            httpStatus: rEstado?.status ?? null,
+            ok: !!rEstado?.ok,
+            elapsedMs,
+            consecFails,
+          })
+          if (decision.action === 'stop') {
+            done = true
+            foEo04JobPollRef.current = null
+            detenerTimerFoEo04()
+            setVistaPrevia({
+              fase: 'error',
+              tipo: 'idu-plantilla-vacia',
+              mensaje: decision.message || 'No se pudo seguir el estado del PDF.',
+            })
+            setFoEo04Job(null)
             return
           }
+          if (decision.action === 'retry') {
+            consecFails = decision.consecFails ?? consecFails + 1
+            if (!done) foEo04JobPollRef.current = setTimeout(poll, decision.delayMs || 1500)
+            return
+          }
+          consecFails = 0
           const estado = await rEstado.json()
           if (done) return
 
@@ -3195,6 +3220,25 @@ export default function ModuloInformes({
             setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: estado.error || 'Error al generar el PDF.' })
             setFoEo04Job(null)
           } else {
+            // Timeout absoluto también entre estados «progresando»
+            const mid = decidirPollEstadoJobPdf({
+              httpStatus: 200,
+              ok: true,
+              elapsedMs: Date.now() - pollStartedAt,
+              consecFails: 0,
+            })
+            if (mid.action === 'stop') {
+              done = true
+              foEo04JobPollRef.current = null
+              detenerTimerFoEo04()
+              setVistaPrevia({
+                fase: 'error',
+                tipo: 'idu-plantilla-vacia',
+                mensaje: mid.message || 'Tiempo de espera agotado.',
+              })
+              setFoEo04Job(null)
+              return
+            }
             setFoEo04Job((prev) => ({
               ...prev,
               status: estado.status,
@@ -3203,11 +3247,30 @@ export default function ModuloInformes({
               currentItem: estado.current_item ?? null,
               totalItems: estado.total_items ?? null,
             }))
-            foEo04JobPollRef.current = setTimeout(poll, 1200)
+            foEo04JobPollRef.current = setTimeout(poll, mid.delayMs || 1200)
           }
         } catch {
-          // Error de red temporal → reintentar
-          if (!done) foEo04JobPollRef.current = setTimeout(poll, 2000)
+          // Error de red temporal → reintentar con tope
+          const decision = decidirPollEstadoJobPdf({
+            httpStatus: null,
+            ok: false,
+            elapsedMs: Date.now() - pollStartedAt,
+            consecFails,
+          })
+          if (decision.action === 'stop') {
+            done = true
+            foEo04JobPollRef.current = null
+            detenerTimerFoEo04()
+            setVistaPrevia({
+              fase: 'error',
+              tipo: 'idu-plantilla-vacia',
+              mensaje: decision.message || 'No se pudo consultar el estado del PDF.',
+            })
+            setFoEo04Job(null)
+            return
+          }
+          consecFails = decision.consecFails ?? consecFails + 1
+          if (!done) foEo04JobPollRef.current = setTimeout(poll, decision.delayMs || 2000)
         }
       }
       foEo04JobPollRef.current = setTimeout(poll, 800)
