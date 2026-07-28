@@ -85,10 +85,22 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
             </select>
           </Filter>
           <Filter t={t} label="Desde" className="cc-seguim-filter">
-            <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
+            <input
+              type="date"
+              className="cc-seguim-date"
+              value={filtros.fecha_desde}
+              onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+            />
           </Filter>
           <Filter t={t} label="Hasta" className="cc-seguim-filter">
-            <input type="date" value={filtros.fecha_hasta} onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))} style={{ ...inp(t), width: '100%' }} />
+            <input
+              type="date"
+              className="cc-seguim-date"
+              value={filtros.fecha_hasta}
+              onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+            />
           </Filter>
           <label className="cc-seguim-filter cc-seguim-filter--check" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4 }}>
             <input

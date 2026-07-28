@@ -734,6 +734,22 @@ def _try_reload_postgrest_schema(sb) -> bool:
     return False
 
 
+def _ensure_idea_quien_dijo_column(sb) -> bool:
+    """Confirma que PostgREST ve quien_dijo en ideas; reintenta tras reload."""
+    if _schema_has(sb, "idea_quien_dijo"):
+        return True
+    _SCHEMA_CAPS["idea_quien_dijo"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "idea_quien_dijo", force=True)
+
+
 def _ensure_asignado_externo_column(sb) -> bool:
     """Confirma que PostgREST ve asignado_externo_id; reintenta tras reload."""
     if _schema_has(sb, "asignado_externo_id"):
@@ -1433,7 +1449,69 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
     """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes."""
     existing = sb.table("seguimiento_acta_idea").select("id").eq("acta_id", int(acta_id)).execute().data or []
     keep_ids: Set[int] = set()
-    include_quien = _schema_has(sb, "idea_quien_dijo")
+    # Si alguna idea trae interviniente, forzar re-probe (migración / reload PostgREST).
+    wants_quien = any(
+        ((idea.get("interviniente") or idea.get("quien_dijo") or "").strip())
+        for idea in (ideas or [])
+    )
+    include_quien = (
+        _ensure_idea_quien_dijo_column(sb) if wants_quien else _schema_has(sb, "idea_quien_dijo")
+    )
+
+    def _write_update(payload: dict, iid: int) -> None:
+        nonlocal include_quien
+        try:
+            sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+            if "quien_dijo" in payload:
+                include_quien = True
+                _SCHEMA_CAPS["idea_quien_dijo"] = True
+        except Exception as exc:
+            if "quien_dijo" in payload and _is_missing_column_error(exc, "quien_dijo"):
+                _SCHEMA_CAPS["idea_quien_dijo"] = None
+                if _ensure_idea_quien_dijo_column(sb):
+                    include_quien = True
+                    sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+                    _SCHEMA_CAPS["idea_quien_dijo"] = True
+                    return
+                include_quien = False
+                _SCHEMA_CAPS["idea_quien_dijo"] = False
+                payload = {k: v for k, v in payload.items() if k != "quien_dijo"}
+                sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
+                _log.warning(
+                    "quien_dijo no persistido (idea %s): PostgREST no ve la columna. "
+                    "Ejecute NOTIFY pgrst, 'reload schema';",
+                    iid,
+                )
+            else:
+                raise
+
+    def _write_insert(row: dict) -> Optional[dict]:
+        nonlocal include_quien
+        try:
+            ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+            if "quien_dijo" in row:
+                include_quien = True
+                _SCHEMA_CAPS["idea_quien_dijo"] = True
+            return (ins or [None])[0]
+        except Exception as exc:
+            if "quien_dijo" in row and _is_missing_column_error(exc, "quien_dijo"):
+                _SCHEMA_CAPS["idea_quien_dijo"] = None
+                if _ensure_idea_quien_dijo_column(sb):
+                    include_quien = True
+                    ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+                    _SCHEMA_CAPS["idea_quien_dijo"] = True
+                    return (ins or [None])[0]
+                include_quien = False
+                _SCHEMA_CAPS["idea_quien_dijo"] = False
+                row = {k: v for k, v in row.items() if k != "quien_dijo"}
+                ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+                _log.warning(
+                    "quien_dijo no persistido en idea nueva: PostgREST no ve la columna. "
+                    "Ejecute NOTIFY pgrst, 'reload schema';"
+                )
+                return (ins or [None])[0]
+            raise
+
     for i, idea in enumerate(ideas or []):
         texto = (idea.get("texto") or "").strip()
         quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None
@@ -1447,16 +1525,7 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             payload["quien_dijo"] = quien
         if iid:
             keep_ids.add(int(iid))
-            try:
-                sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
-            except Exception as exc:
-                if include_quien and _is_missing_column_error(exc, "quien_dijo"):
-                    _SCHEMA_CAPS["idea_quien_dijo"] = False
-                    include_quien = False
-                    payload.pop("quien_dijo", None)
-                    sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
-                else:
-                    raise
+            _write_update(payload, int(iid))
         else:
             row = {
                 "acta_id": int(acta_id),
@@ -1465,18 +1534,9 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             }
             if include_quien:
                 row["quien_dijo"] = quien
-            try:
-                ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
-            except Exception as exc:
-                if include_quien and _is_missing_column_error(exc, "quien_dijo"):
-                    _SCHEMA_CAPS["idea_quien_dijo"] = False
-                    include_quien = False
-                    row.pop("quien_dijo", None)
-                    ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
-                else:
-                    raise
-            if ins:
-                keep_ids.add(int(ins[0]["id"]))
+            inserted = _write_insert(row)
+            if inserted and inserted.get("id") is not None:
+                keep_ids.add(int(inserted["id"]))
     for e in existing:
         if int(e["id"]) not in keep_ids:
             # No borrar ideas con compromisos ligados
