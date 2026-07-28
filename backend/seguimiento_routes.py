@@ -119,6 +119,9 @@ class ActaCreateBody(BaseModel):
     ideas: List[IdeaBody] = Field(default_factory=list)
     apartados: List[ApartadoBody] = Field(default_factory=list)
     estado: Optional[str] = None
+    proxima_fecha: Optional[str] = None
+    proxima_hora: Optional[str] = None
+    proxima_lugar: Optional[str] = None
 
 
 class ActaUpdateBody(BaseModel):
@@ -132,6 +135,9 @@ class ActaUpdateBody(BaseModel):
     asistentes: Optional[List[AsistenteBody]] = None
     ideas: Optional[List[IdeaBody]] = None
     apartados: Optional[List[ApartadoBody]] = None
+    proxima_fecha: Optional[str] = None
+    proxima_hora: Optional[str] = None
+    proxima_lugar: Optional[str] = None
 
 
 class IdeaTextoBody(BaseModel):

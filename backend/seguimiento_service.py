@@ -644,6 +644,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "contacto_externo": None,
     "idea_quien_dijo": None,
     "asignado_externo_id": None,
+    "acta_proxima_reunion": None,
 }
 
 
@@ -688,6 +689,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "asignado_externo_id":
             sb.table("seguimiento_item").select("id,asignado_externo_id").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "acta_proxima_reunion":
+            sb.table("seguimiento_acta").select("id,proxima_fecha,proxima_hora,proxima_lugar").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -702,6 +706,12 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_quien_dijo" and _is_missing_column_error(exc, "quien_dijo"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asignado_externo_id" and _is_missing_column_error(exc, "asignado_externo_id"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "acta_proxima_reunion" and (
+            _is_missing_column_error(exc, "proxima_fecha")
+            or _is_missing_column_error(exc, "proxima_hora")
+            or _is_missing_column_error(exc, "proxima_lugar")
+        ):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
             "seguimiento_contacto_externo" in msg
@@ -748,6 +758,34 @@ def _ensure_idea_quien_dijo_column(sb) -> bool:
         except Exception:
             pass
     return _schema_has(sb, "idea_quien_dijo", force=True)
+
+
+def _ensure_acta_proxima_reunion_columns(sb) -> bool:
+    """Confirma columnas de reserva de próxima reunión; reintenta tras reload."""
+    if _schema_has(sb, "acta_proxima_reunion"):
+        return True
+    _SCHEMA_CAPS["acta_proxima_reunion"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "acta_proxima_reunion", force=True)
+
+
+def _require_idea_quien_dijo(sb) -> None:
+    """Falla de forma explícita si Interviniente no puede persistirse (sin silent-drop)."""
+    if _ensure_idea_quien_dijo_column(sb):
+        return
+    raise ValueError(
+        "No se pudo guardar el Interviniente: la columna quien_dijo no está disponible "
+        "en el schema cache de PostgREST. Aplique la migración "
+        "20260727210000_seguimiento_idea_quien_dijo.sql y ejecute "
+        "NOTIFY pgrst, 'reload schema';"
+    )
 
 
 def _ensure_asignado_externo_column(sb) -> bool:
@@ -967,6 +1005,14 @@ def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_
                 _SCHEMA_CAPS["estado_realizada"] = False
                 attempt["estado"] = "en_firma"
                 changed = True
+            for col in ("proxima_fecha", "proxima_hora", "proxima_lugar"):
+                if col in attempt and _is_missing_column_error(exc, col):
+                    _SCHEMA_CAPS["acta_proxima_reunion"] = False
+                    attempt.pop("proxima_fecha", None)
+                    attempt.pop("proxima_hora", None)
+                    attempt.pop("proxima_lugar", None)
+                    changed = True
+                    break
             if not changed:
                 raise
     if last_exc:
@@ -1189,6 +1235,14 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     }
     if has_tipo:
         row["tipo_acta"] = tipo
+    if _ensure_acta_proxima_reunion_columns(sb):
+        if "proxima_fecha" in data:
+            pf = _parse_date(data.get("proxima_fecha")) if data.get("proxima_fecha") else None
+            row["proxima_fecha"] = pf.isoformat() if pf else None
+        if "proxima_hora" in data:
+            row["proxima_hora"] = (data.get("proxima_hora") or "").strip() or None
+        if "proxima_lugar" in data:
+            row["proxima_lugar"] = (data.get("proxima_lugar") or "").strip() or None
     ins = _persist_acta_row(sb, row)
     if not ins:
         raise ValueError("No se pudo crear el acta")
@@ -1265,6 +1319,14 @@ def update_acta(
     if "estado" in data and data["estado"]:
         nuevo = _norm_estado_acta(data["estado"])
         patch["estado"] = _estado_para_db(sb, nuevo)
+    if _ensure_acta_proxima_reunion_columns(sb):
+        if "proxima_fecha" in data:
+            pf = _parse_date(data.get("proxima_fecha")) if data.get("proxima_fecha") else None
+            patch["proxima_fecha"] = pf.isoformat() if pf else None
+        if "proxima_hora" in data:
+            patch["proxima_hora"] = (data.get("proxima_hora") or "").strip() or None
+        if "proxima_lugar" in data:
+            patch["proxima_lugar"] = (data.get("proxima_lugar") or "").strip() or None
     _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
     if "asistentes" in data:
         _sync_asistentes(sb, acta_id, data.get("asistentes") or [], contrato_id=int(contrato_id))
@@ -1453,71 +1515,54 @@ def _sync_asistentes(sb, acta_id: int, asistentes: list, *, contrato_id: Optiona
 
 
 def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
-    """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes."""
+    """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes.
+
+    Persiste siempre quien_dijo (Interviniente). Si PostgREST no ve la columna,
+    falla con error explícito — nunca hace silent-drop del valor.
+    """
     existing = sb.table("seguimiento_acta_idea").select("id").eq("acta_id", int(acta_id)).execute().data or []
     keep_ids: Set[int] = set()
-    # Si alguna idea trae interviniente, forzar re-probe (migración / reload PostgREST).
-    wants_quien = any(
-        ((idea.get("interviniente") or idea.get("quien_dijo") or "").strip())
-        for idea in (ideas or [])
-    )
-    include_quien = (
-        _ensure_idea_quien_dijo_column(sb) if wants_quien else _schema_has(sb, "idea_quien_dijo")
-    )
+    _require_idea_quien_dijo(sb)
 
     def _write_update(payload: dict, iid: int) -> None:
-        nonlocal include_quien
         try:
             sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
             if "quien_dijo" in payload:
-                include_quien = True
                 _SCHEMA_CAPS["idea_quien_dijo"] = True
         except Exception as exc:
             if "quien_dijo" in payload and _is_missing_column_error(exc, "quien_dijo"):
                 _SCHEMA_CAPS["idea_quien_dijo"] = None
                 if _ensure_idea_quien_dijo_column(sb):
-                    include_quien = True
                     sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
                     _SCHEMA_CAPS["idea_quien_dijo"] = True
                     return
-                include_quien = False
                 _SCHEMA_CAPS["idea_quien_dijo"] = False
-                payload = {k: v for k, v in payload.items() if k != "quien_dijo"}
-                sb.table("seguimiento_acta_idea").update(payload).eq("id", int(iid)).eq("acta_id", int(acta_id)).execute()
-                _log.warning(
-                    "quien_dijo no persistido (idea %s): PostgREST no ve la columna. "
-                    "Ejecute NOTIFY pgrst, 'reload schema';",
-                    iid,
-                )
-            else:
-                raise
+                raise ValueError(
+                    "No se pudo guardar el Interviniente (idea %s): PostgREST no ve la columna "
+                    "quien_dijo. Ejecute NOTIFY pgrst, 'reload schema'."
+                    % iid
+                ) from exc
+            raise
 
     def _write_insert(row: dict) -> Optional[dict]:
-        nonlocal include_quien
         try:
             ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
             if "quien_dijo" in row:
-                include_quien = True
                 _SCHEMA_CAPS["idea_quien_dijo"] = True
             inserted = (ins or [None])[0]
         except Exception as exc:
             if "quien_dijo" in row and _is_missing_column_error(exc, "quien_dijo"):
                 _SCHEMA_CAPS["idea_quien_dijo"] = None
                 if _ensure_idea_quien_dijo_column(sb):
-                    include_quien = True
                     ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
                     _SCHEMA_CAPS["idea_quien_dijo"] = True
                     inserted = (ins or [None])[0]
                 else:
-                    include_quien = False
                     _SCHEMA_CAPS["idea_quien_dijo"] = False
-                    row = {k: v for k, v in row.items() if k != "quien_dijo"}
-                    ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
-                    _log.warning(
-                        "quien_dijo no persistido en idea nueva: PostgREST no ve la columna. "
-                        "Ejecute NOTIFY pgrst, 'reload schema';"
-                    )
-                    inserted = (ins or [None])[0]
+                    raise ValueError(
+                        "No se pudo guardar el Interviniente en idea nueva: PostgREST no ve "
+                        "la columna quien_dijo. Ejecute NOTIFY pgrst, 'reload schema'."
+                    ) from exc
             else:
                 raise
         # Supabase a veces no devuelve la fila insertada: recuperar por acta+orden(+texto).
@@ -1549,13 +1594,14 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
         texto = (idea.get("texto") or "").strip()
         quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None
         iid = idea.get("id")
+        # orden siempre alineado al índice del payload (consecutivo visible = orden+1).
+        orden = int(idea.get("orden") if idea.get("orden") is not None else i)
         payload = {
             "texto": texto,
-            "orden": int(idea.get("orden") if idea.get("orden") is not None else i),
+            "orden": orden,
+            "quien_dijo": quien,
             "updated_at": _now_utc().isoformat(),
         }
-        if include_quien:
-            payload["quien_dijo"] = quien
         if iid:
             keep_ids.add(int(iid))
             _write_update(payload, int(iid))
@@ -1563,10 +1609,9 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             row = {
                 "acta_id": int(acta_id),
                 "texto": texto,
-                "orden": int(idea.get("orden") if idea.get("orden") is not None else i),
+                "orden": orden,
+                "quien_dijo": quien,
             }
-            if include_quien:
-                row["quien_dijo"] = quien
             inserted = _write_insert(row)
             if inserted and inserted.get("id") is not None:
                 keep_ids.add(int(inserted["id"]))
@@ -3349,6 +3394,11 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
         sb.table("seguimiento_acta").update({"contenido_hash": h, "updated_at": _now_utc().isoformat()}).eq("id", int(acta_id)).execute()
     except Exception as exc:
         _log.warning("contenido_hash acta=%s: %s", acta_id, exc)
+    previos = []
+    try:
+        previos = compromisos_abiertos_contrato(sb, int(contrato_id), excluir_acta_id=int(acta_id))
+    except Exception as exc:
+        _log.warning("compromisos abiertos pdf acta=%s: %s", acta_id, exc)
     try:
         return generar_pdf_acta(
             contrato,
@@ -3358,6 +3408,7 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
             acta.get("apartados") or [],
             firmas=acta.get("firmas") or [],
             compromisos=acta.get("compromisos") or [],
+            compromisos_previos=previos,
         )
     except Exception as exc:
         _log.exception("PDF acta %s: %s", acta_id, exc)
@@ -3374,6 +3425,7 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
             acta.get("apartados") or [],
             firmas=[],
             compromisos=acta.get("compromisos") or [],
+            compromisos_previos=previos,
         )
 
 

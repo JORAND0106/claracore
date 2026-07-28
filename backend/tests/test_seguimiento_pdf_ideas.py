@@ -1,11 +1,11 @@
-"""PDF de acta: todas las ideas centrales deben aparecer (multipágina)."""
+"""PDF de acta: estructura institucional y todas las ideas centrales."""
 from __future__ import annotations
 
 import io
 
 from pypdf import PdfReader
 
-from seguimiento_pdf import generar_pdf_acta
+from seguimiento_pdf import contenido_hash_acta, generar_pdf_acta
 
 
 def _pdf_text(pdf_bytes: bytes) -> str:
@@ -24,7 +24,7 @@ def test_pdf_incluye_cinco_ideas_centrales():
         for i in range(1, 6)
     ]
     pdf = generar_pdf_acta(
-        {"numero": "CT-1", "id": 1},
+        {"numero": "CT-1", "id": 1, "objeto": "Obra de prueba"},
         {
             "consecutivo": 12,
             "fecha_reunion": "2026-07-28",
@@ -41,10 +41,12 @@ def test_pdf_incluye_cinco_ideas_centrales():
         compromisos=[],
     )
     text = _pdf_text(pdf)
-    assert "Ideas centrales (5)" in text
+    assert "Acta de Comité de Seguimiento" in text
+    assert "(Interna)" in text
+    assert "Ideas centrales" in text
     for i in range(1, 6):
         assert f"IDEA_MARKER_{i}" in text, f"falta idea {i}"
-        assert f"Idea central {i}" in text
+        assert f"Idea {i}" in text
 
 
 def test_pdf_pagina_con_idea_larga_y_siguientes():
@@ -67,7 +69,7 @@ def test_pdf_pagina_con_idea_larga_y_siguientes():
         for i in range(1, 8)
     ]
     pdf = generar_pdf_acta(
-        {"numero": "CT-9", "id": 9},
+        {"numero": "CT-9", "id": 9, "objeto": "Objeto largo de contrato de obra"},
         {
             "consecutivo": 3,
             "fecha_reunion": "2026-07-28",
@@ -76,15 +78,32 @@ def test_pdf_pagina_con_idea_larga_y_siguientes():
             "tipo_acta": "externa",
             "estado": "borrador",
             "orden_del_dia": [{"texto": f"Punto {i}", "hecho": False} for i in range(1, 6)],
+            "proxima_fecha": "2026-08-15",
+            "proxima_hora": "09:00",
+            "proxima_lugar": "Sala gerencia",
         },
         asis,
         ideas,
         [{"titulo": "Notas", "contenido": "Apartado libre"}],
         firmas=[],
         compromisos=[{"titulo": "Comp", "asignado_a_nombre": "U", "fecha_vencimiento": "2026-08-01"}],
+        compromisos_previos=[
+            {"titulo": "Prev", "asignado_a_nombre": "P", "fecha_vencimiento": "2026-07-01", "estado_gestion": "abierto"}
+        ],
     )
     text = _pdf_text(pdf)
     reader = PdfReader(io.BytesIO(pdf))
     assert len(reader.pages) >= 2
+    assert "(Externa)" in text
+    assert "Compromisos abiertos de actas anteriores" in text
+    assert "Próxima reunión" in text
+    assert "Sala gerencia" in text
     for i in range(1, 6):
         assert f"IDEA_MARKER_{i}" in text, f"falta idea {i} tras contenido largo"
+
+
+def test_contenido_hash_incluye_quien_dijo():
+    base = {"consecutivo": 1, "fecha_reunion": "2026-01-01"}
+    h1 = contenido_hash_acta(base, [], [{"texto": "X", "quien_dijo": "A", "orden": 0}], [])
+    h2 = contenido_hash_acta(base, [], [{"texto": "X", "quien_dijo": "B", "orden": 0}], [])
+    assert h1 != h2
