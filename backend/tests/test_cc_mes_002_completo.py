@@ -222,3 +222,36 @@ def test_cc_mes_002_pdf_completo_bytes_single_pass_when_small():
         out = inf._cc_mes_002_pdf_completo_bytes(ctx)
     assert out == b"%PDF-JOINED"
     assert calls == ["<html>JOINED_OK</html>"]
+
+
+def test_cc_mes_002_disk_cache_put_get_and_reuse(tmp_path, monkeypatch):
+    """Tras vista previa, el sello debe reutilizar el PDF en disco (sin regenerar)."""
+    inf = _import_informes_with_stubs()
+    monkeypatch.setattr(inf, "_CCD_MES_002_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(inf, "_CCD_MES_002_CACHE_TTL_SEC", 1800)
+
+    pdf = b"%PDF-1.4 cache-body"
+    key = inf._cc_mes_002_cache_put(
+        7,
+        55,
+        pdf,
+        nrpo="RPO-9",
+        fname="CC-MES-002_acta_RPO-9_todos-items.pdf",
+        contrato_numero="IDU-1",
+        n_items=40,
+        n_regs=900,
+    )
+    assert key
+    hit = inf._cc_mes_002_cache_get(7, 55)
+    assert hit is not None
+    data, meta = hit
+    assert data == pdf
+    assert meta["nrpo"] == "RPO-9"
+    assert meta["n_items"] == 40
+
+    with patch.object(inf, "_cc_mes_002_acta_completo_ctx") as mock_ctx:
+        out, info = inf._cc_mes_002_pdf_completo_bytes_cached(7, 55, {"sub": "1"})
+    assert out == pdf
+    assert info["from_cache"] is True
+    assert info["fname"].endswith(".pdf")
+    mock_ctx.assert_not_called()
