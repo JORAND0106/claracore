@@ -16,6 +16,10 @@ import {
 } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
+/** Verde institucional solo para compromiso cumplido. */
+const COLOR_CUMPLIDO = 'var(--cc-color-positive, #0f766e)'
+const BG_CUMPLIDO = 'color-mix(in srgb, var(--cc-color-positive, #0f766e) 12%, transparent)'
+
 const TABS_ACTA = [
   { id: 'encabezado', label: 'Encabezado' },
   { id: 'orden', label: 'Orden del día' },
@@ -159,6 +163,40 @@ function parseOrdenDia(raw) {
   return [{ texto: '', hecho: false, key: newRowKey('ord') }]
 }
 
+/** Textarea que crece con el contenido (sin scroll interno). */
+function AutoGrowTextarea({ value, onChange, style, minRows = 3, ...rest }) {
+  const ref = useRef(null)
+  const fit = () => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    const line = 22
+    const minH = Math.max(minRows, 2) * line
+    el.style.height = `${Math.max(el.scrollHeight, minH)}px`
+  }
+  useEffect(() => {
+    fit()
+  }, [value])
+  return (
+    <textarea
+      {...rest}
+      ref={ref}
+      rows={minRows}
+      value={value}
+      onChange={(e) => {
+        onChange?.(e)
+        requestAnimationFrame(fit)
+      }}
+      style={{
+        ...style,
+        overflow: 'hidden',
+        resize: 'none',
+        minHeight: Math.max(minRows, 2) * 22,
+      }}
+    />
+  )
+}
+
 export default function ActaEditor({
   t,
   api,
@@ -197,8 +235,10 @@ export default function ActaEditor({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
   const [actaCompromisos, setActaCompromisos] = useState([])
-  /** Acordeón: una sola idea expandida (clave = _key o id). */
+  /** Acordeón: una sola idea expandida (clave = _key o id). null = todas colapsadas. */
   const [ideaExpandidaKey, setIdeaExpandidaKey] = useState(null)
+  const [dragIdeaIdx, setDragIdeaIdx] = useState(null)
+  const [dragOverIdeaIdx, setDragOverIdeaIdx] = useState(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
@@ -313,22 +353,22 @@ export default function ActaEditor({
     if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
   }, [encabezadoGuardado, tab])
 
-  // Al entrar a Ideas: expandir la primera si no hay ninguna abierta.
-  useEffect(() => {
-    if (tab !== 'ideas') return
-    if (ideaExpandidaKey != null) return
-    const first = (form.ideas || [])[0]
-    if (!first) return
-    const k = first._key || (first.id != null ? `idea-id-${first.id}` : 'idea-0')
-    setIdeaExpandidaKey(k)
-    // Solo al cambiar de pestaña; no reabrir si el usuario colapsó todas.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
-
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
   const patchList = (k, updater) => {
     setForm((f) => ({ ...f, [k]: updater(f[k] || []) }))
+  }
+
+  const reorderIdeas = (fromIdx, toIdx) => {
+    if (fromIdx == null || toIdx == null || fromIdx === toIdx) return
+    patchList('ideas', (list) => {
+      if (fromIdx < 0 || toIdx < 0 || fromIdx >= list.length || toIdx >= list.length) return list
+      const next = [...list]
+      const [moved] = next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, moved)
+      // Renumeración lógica (orden); el id interno (#) no cambia.
+      return next.map((row, i) => ({ ...row, orden: i }))
+    })
   }
 
   const buildPayload = (extra = {}, formSrc = form) => ({
@@ -893,7 +933,8 @@ export default function ActaEditor({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 const neu = emptyIdea()
-                patchList('ideas', (list) => [...list, neu])
+                patchList('ideas', (list) => [...list, neu].map((row, i) => ({ ...row, orden: i })))
+                // Nueva idea: expandir solo esa para redactar; el resto sigue colapsado.
                 setIdeaExpandidaKey(neu._key)
               }}
             >
@@ -902,7 +943,9 @@ export default function ActaEditor({
           )}
         </div>
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
-          Pulse una idea para expandirla. Solo una permanece abierta a la vez.
+          {soloLectura
+            ? 'Pulse una idea para expandirla. Solo una permanece abierta a la vez.'
+            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. Idea 1, 2… se renumeran; el # interno no cambia.'}
         </div>
         {form.ideas.map((idea, idx) => {
           const ideaKey = idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${idx}`)
@@ -911,98 +954,209 @@ export default function ActaEditor({
             (c) => idea.id != null && Number(c.idea_id) === Number(idea.id),
           )
           const tieneCompromiso = compsIdea.length > 0
+          const compromisoCumplido = tieneCompromiso
+            && compsIdea.every((c) => String(c.estado_gestion || '').toLowerCase() === 'cumplido')
           const interviniente = String(idea.quien_dijo || '').trim()
           const headLine = [
             `Idea ${idx + 1}`,
             idea.id != null ? `#${idea.id}` : null,
             interviniente || null,
           ].filter(Boolean).join(' · ')
-          const borderColor = expanded
-            ? t.primary
-            : (tieneCompromiso ? ORIGEN_COLOR.compromiso.border : t.border)
-          const bgColor = expanded
-            ? `${t.primary}08`
-            : (tieneCompromiso ? ORIGEN_COLOR.compromiso.bg : (t.bgCard || 'transparent'))
+          // Institucional (primary) si hay compromiso; verde solo si está Cumplido.
+          const accent = compromisoCumplido
+            ? COLOR_CUMPLIDO
+            : (tieneCompromiso ? t.primary : t.border)
+          const bgColor = compromisoCumplido
+            ? BG_CUMPLIDO
+            : (expanded
+              ? `${t.primary}08`
+              : (tieneCompromiso ? `${t.primary}12` : (t.bgCard || 'transparent')))
+          const isDragOver = dragOverIdeaIdx === idx && dragIdeaIdx != null && dragIdeaIdx !== idx
           return (
             <div
               key={ideaKey}
-              className={`cc-seguim-idea-accordion${expanded ? ' cc-seguim-idea-accordion--open' : ''}${tieneCompromiso ? ' cc-seguim-idea-accordion--con-compromiso' : ''}`}
+              className={[
+                'cc-seguim-idea-accordion',
+                expanded ? 'cc-seguim-idea-accordion--open' : '',
+                tieneCompromiso ? 'cc-seguim-idea-accordion--con-compromiso' : '',
+                compromisoCumplido ? 'cc-seguim-idea-accordion--cumplido' : '',
+                isDragOver ? 'cc-seguim-idea-accordion--drag-over' : '',
+              ].filter(Boolean).join(' ')}
+              onDragOver={(e) => {
+                if (soloLectura || dragIdeaIdx == null) return
+                e.preventDefault()
+                try { e.dataTransfer.dropEffect = 'move' } catch { /* ignore */ }
+                if (dragOverIdeaIdx !== idx) setDragOverIdeaIdx(idx)
+              }}
+              onDrop={(e) => {
+                if (soloLectura) return
+                e.preventDefault()
+                let from = dragIdeaIdx
+                try {
+                  const raw = e.dataTransfer.getData('text/plain')
+                  if (raw !== '' && raw != null) from = Number(raw)
+                } catch { /* ignore */ }
+                setDragIdeaIdx(null)
+                setDragOverIdeaIdx(null)
+                if (Number.isFinite(from)) reorderIdeas(from, idx)
+              }}
               style={{
                 marginTop: 8,
                 borderRadius: 8,
-                border: `1px solid ${borderColor}`,
-                borderLeft: tieneCompromiso ? `3px solid ${ORIGEN_COLOR.compromiso.border}` : `1px solid ${borderColor}`,
+                border: `1px solid ${expanded ? t.primary : accent}`,
+                borderLeft: tieneCompromiso ? `3px solid ${accent}` : `1px solid ${expanded ? t.primary : accent}`,
                 background: bgColor,
                 overflow: 'hidden',
+                opacity: dragIdeaIdx === idx ? 0.55 : 1,
+                outline: isDragOver ? `2px dashed ${t.primary}` : 'none',
+                outlineOffset: 1,
               }}
             >
-              <button
-                type="button"
+              <div
                 className="cc-seguim-idea-accordion__head"
-                aria-expanded={expanded}
-                onClick={() => setIdeaExpandidaKey(expanded ? null : ideaKey)}
                 style={{
                   display: 'flex',
                   width: '100%',
                   alignItems: 'center',
-                  gap: 8,
-                  textAlign: 'left',
-                  border: 'none',
-                  background: 'transparent',
+                  gap: 6,
                   padding: '8px 10px',
-                  cursor: 'pointer',
-                  color: t.text,
                   minHeight: 36,
+                  color: t.text,
                 }}
               >
-                <span style={{
-                  flexShrink: 0,
-                  width: 18,
-                  height: 18,
-                  borderRadius: 4,
-                  border: `1px solid ${t.border}`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 11,
-                  color: t.primary,
-                  fontWeight: 700,
-                }}
-                >
-                  {expanded ? '▾' : '▸'}
-                </span>
-                <span style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: 'var(--cc-sm)',
-                  fontWeight: 700,
-                  color: t.primary,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                >
-                  {headLine}
-                  {!interviniente ? (
-                    <span style={{ fontWeight: 500, color: t.textMuted }}> · sin interviniente</span>
-                  ) : null}
-                </span>
-                {tieneCompromiso && (
-                  <span style={{
-                    flexShrink: 0,
-                    fontSize: 'var(--cc-xs)',
-                    fontWeight: 600,
-                    color: ORIGEN_COLOR.compromiso.border,
-                    padding: '1px 6px',
-                    borderRadius: 4,
-                    border: `1px solid ${ORIGEN_COLOR.compromiso.border}`,
-                    background: 'transparent',
-                  }}
-                  >
-                    {compsIdea.length === 1 ? 'Compromiso' : `${compsIdea.length} comp.`}
+                {!soloLectura && (
+                  <span style={{ display: 'inline-flex', flexShrink: 0, alignItems: 'center', gap: 2 }}>
+                    <span
+                      title="Arrastrar para reordenar"
+                      aria-label="Arrastrar para reordenar"
+                      draggable
+                      onDragStart={(e) => {
+                        setDragIdeaIdx(idx)
+                        try {
+                          e.dataTransfer.effectAllowed = 'move'
+                          e.dataTransfer.setData('text/plain', String(idx))
+                        } catch { /* ignore */ }
+                        e.stopPropagation()
+                      }}
+                      onDragEnd={() => {
+                        setDragIdeaIdx(null)
+                        setDragOverIdeaIdx(null)
+                      }}
+                      style={{
+                        cursor: 'grab',
+                        color: t.textMuted,
+                        fontSize: 14,
+                        lineHeight: 1,
+                        padding: '2px 4px',
+                        userSelect: 'none',
+                        touchAction: 'none',
+                      }}
+                    >
+                      ⠿
+                    </span>
+                    <button
+                      type="button"
+                      title="Subir"
+                      disabled={idx === 0}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => reorderIdeas(idx, idx - 1)}
+                      style={{
+                        ...ghost(t),
+                        padding: '0 5px',
+                        minHeight: 24,
+                        fontSize: 11,
+                        opacity: idx === 0 ? 0.35 : 1,
+                      }}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      title="Bajar"
+                      disabled={idx >= form.ideas.length - 1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => reorderIdeas(idx, idx + 1)}
+                      style={{
+                        ...ghost(t),
+                        padding: '0 5px',
+                        minHeight: 24,
+                        fontSize: 11,
+                        opacity: idx >= form.ideas.length - 1 ? 0.35 : 1,
+                      }}
+                    >
+                      ↓
+                    </button>
                   </span>
                 )}
-              </button>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setIdeaExpandidaKey(expanded ? null : ideaKey)}
+                  style={{
+                    display: 'flex',
+                    flex: 1,
+                    minWidth: 0,
+                    alignItems: 'center',
+                    gap: 8,
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    padding: 0,
+                    cursor: 'pointer',
+                    color: t.text,
+                  }}
+                >
+                  <span style={{
+                    flexShrink: 0,
+                    width: 18,
+                    height: 18,
+                    borderRadius: 4,
+                    border: `1px solid ${t.border}`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 11,
+                    color: t.primary,
+                    fontWeight: 700,
+                  }}
+                  >
+                    {expanded ? '▾' : '▸'}
+                  </span>
+                  <span style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    color: t.primary,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  >
+                    {headLine}
+                    {!interviniente ? (
+                      <span style={{ fontWeight: 500, color: t.textMuted }}> · sin interviniente</span>
+                    ) : null}
+                  </span>
+                  {tieneCompromiso && (
+                    <span style={{
+                      flexShrink: 0,
+                      fontSize: 'var(--cc-xs)',
+                      fontWeight: 600,
+                      color: accent,
+                      padding: '1px 6px',
+                      borderRadius: 4,
+                      border: `1px solid ${accent}`,
+                      background: 'transparent',
+                    }}
+                    >
+                      {compromisoCumplido
+                        ? 'Cumplido'
+                        : (compsIdea.length === 1 ? 'Compromiso' : `${compsIdea.length} comp.`)}
+                    </span>
+                  )}
+                </button>
+              </div>
               {expanded && (
                 <div className="cc-seguim-idea-accordion__body" style={{ padding: '0 12px 12px' }}>
                   <Field t={t} label="Interviniente">
@@ -1022,8 +1176,8 @@ export default function ActaEditor({
                       }}
                     />
                   </Field>
-                  <textarea
-                    rows={4}
+                  <AutoGrowTextarea
+                    minRows={3}
                     disabled={soloLectura}
                     value={idea.texto}
                     onChange={(e) => {
@@ -1035,31 +1189,36 @@ export default function ActaEditor({
                   />
                   {compsIdea.length > 0 && (
                     <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {compsIdea.map((c) => (
-                        <div
-                          key={c.id}
-                          style={{
-                            padding: '8px 10px',
-                            borderRadius: 8,
-                            border: `1px solid ${ORIGEN_COLOR.compromiso.border}`,
-                            background: ORIGEN_COLOR.compromiso.bg,
-                            fontSize: 'var(--cc-sm)',
-                            color: t.text,
-                          }}
-                        >
-                          <div style={{ fontWeight: 700, color: ORIGEN_COLOR.compromiso.border, marginBottom: 4 }}>
-                            Compromiso generado
-                            {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
+                      {compsIdea.map((c) => {
+                        const cump = String(c.estado_gestion || '').toLowerCase() === 'cumplido'
+                        const cAccent = cump ? COLOR_CUMPLIDO : t.primary
+                        return (
+                          <div
+                            key={c.id}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: `1px solid ${cAccent}`,
+                              background: cump ? BG_CUMPLIDO : `${t.primary}12`,
+                              fontSize: 'var(--cc-sm)',
+                              color: t.text,
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
+                              Compromiso generado
+                              {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
+                              {cump ? ' · Cumplido' : ''}
+                            </div>
+                            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                              Vence {fmtFecha(c.fecha_vencimiento)}
+                              {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
+                            </div>
+                            <div style={{ marginTop: 2 }}>
+                              Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
+                            </div>
                           </div>
-                          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                            Vence {fmtFecha(c.fecha_vencimiento)}
-                            {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
-                          </div>
-                          <div style={{ marginTop: 2 }}>
-                            Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )}
                   {!soloLectura && (
@@ -1073,7 +1232,9 @@ export default function ActaEditor({
                         style={ghost(t)}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
-                          patchList('ideas', (list) => list.filter((_, i) => i !== idx))
+                          patchList('ideas', (list) => list
+                            .filter((_, i) => i !== idx)
+                            .map((row, i) => ({ ...row, orden: i })))
                           setIdeaExpandidaKey(null)
                         }}
                       >
