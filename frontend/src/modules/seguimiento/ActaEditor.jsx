@@ -461,7 +461,7 @@ export default function ActaEditor({
       apartados: mergeApartadoIds(f.apartados, row.apartados),
     }))
     return row
-  })
+  }
 
   /** Guarda (crea o actualiza) y deja el acta e ideas con id listos para compromisos. */
   const persistActa = async (extra = {}, formSrc = null) => {
