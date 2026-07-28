@@ -1,6 +1,10 @@
 import { useState, useEffect, useId, useRef } from 'react'
 import { API_BASE as API, API_FALLBACK } from './apiBase'
 import { formatCOP } from './utils/formatCOP'
+import {
+  mensajeSiRespuestaEsHtmlEnVezDePdf,
+  vistaPreviaEsPdfBinario,
+} from './informesVistaPreviaPdf'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -1415,9 +1419,27 @@ export default function ModuloInformes({
         setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
         return
       }
-      const blob = await r.blob()
+      let blob
+      try {
+        blob = await leerRespuestaComoPdfBlob(r)
+      } catch (ePdf) {
+        setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: String(ePdf?.message || ePdf) })
+        return
+      }
       const pdfUrl = URL.createObjectURL(blob)
-      setVistaPrevia({ fase: 'ok', tipo: 'corte-pdf', pdfUrl })
+      const nombreArchivo = asegurarNombreArchivoPdf(
+        nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-SUB-001.pdf',
+      )
+      setVistaPrevia({
+        fase: 'ok',
+        tipo: 'corte-pdf',
+        pdfUrl,
+        pdfBlob: blob,
+        mimeTipo: 'application/pdf',
+        nombreArchivo,
+        rutaSello: `/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`,
+        nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
+      })
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
@@ -1940,6 +1962,7 @@ export default function ModuloInformes({
         tipo: 'memoria-mes-todos-pdf',
         pdfUrl,
         pdfBlob: blob,
+        mimeTipo: 'application/pdf',
         nombreArchivo,
         rutaSello: `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo/con-sello-firma`,
         nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
@@ -1949,6 +1972,10 @@ export default function ModuloInformes({
       setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: msg })
     }
   }
+
+  /** Vista previa FO-IDU-EO-04 HTML usa pdfUrl para el iframe, pero NO es un PDF descargable.
+   *  Lógica compartida: informesVistaPreviaPdf.js (tests node). */
+  // vistaPreviaEsPdfBinario importado arriba
 
   /** Fuerza extensión .pdf y caracteres seguros (WhatsApp/Android rechazan nombres sin .pdf). */
   function asegurarNombreArchivoPdf(name, fallback = 'documento.pdf') {
@@ -1976,10 +2003,12 @@ export default function ModuloInformes({
     if (!esCabeceraPdfBytes(bytes)) {
       let hint = `${bytes.length} bytes sin cabecera %PDF`
       try {
-        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 280)).trim()
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 400)).trim()
+        const htmlMsg = mensajeSiRespuestaEsHtmlEnVezDePdf(text)
+        if (htmlMsg) throw new Error(htmlMsg)
         if (text) hint = text.slice(0, 220)
-      } catch {
-        /* noop */
+      } catch (eHint) {
+        if (eHint && /devolvió HTML|no un archivo PDF/i.test(String(eHint.message || eHint))) throw eHint
       }
       throw new Error(`La respuesta del servidor no es un PDF válido (${hint}).`)
     }
@@ -2020,10 +2049,18 @@ export default function ModuloInformes({
 
   /** Descarga inmediata del PDF ya en memoria (vista previa), sin regenerar ni sellar SHA. */
   async function descargarPdfDesdeVistaPrevia() {
+    if (!vistaPreviaEsPdfBinario(vistaPrevia)) {
+      setError(
+        vistaPrevia?.tipo === 'idu-html'
+          ? 'Esta vista previa es HTML (FO-IDU-EO-04), no un PDF. Use el botón azul de generar/descargar PDF con sello.'
+          : 'No hay un PDF binario en esta vista previa para descargar.',
+      )
+      return
+    }
     if (!vistaPrevia?.pdfUrl && !vistaPrevia?.pdfBlob) return
     const name = asegurarNombreArchivoPdf(vistaPrevia.nombreArchivo || 'documento.pdf')
     try {
-      if (vistaPrevia.pdfBlob) {
+      if (vistaPrevia.pdfBlob && String(vistaPrevia.pdfBlob.type || '').includes('pdf')) {
         descargarBlobPdf(vistaPrevia.pdfBlob, name)
         return
       }
@@ -2041,6 +2078,10 @@ export default function ModuloInformes({
     const ruta = vistaPrevia?.rutaSello
     if (!ruta) {
       setError('Esta vista previa no tiene ruta de sello SHA.')
+      return
+    }
+    if (!vistaPreviaEsPdfBinario(vistaPrevia)) {
+      setError('El sello SHA solo aplica a un PDF binario ya generado, no a la vista previa HTML.')
       return
     }
     await descargarPdfConc(ruta, vistaPrevia.nombreArchivoSello || 'documento_firmado.pdf')
@@ -2904,7 +2945,13 @@ export default function ModuloInformes({
       }
       const htmlTexto = await r.text()
       const blob = new Blob([htmlTexto], { type: 'text/html;charset=utf-8' })
-      setVistaPrevia({ fase: 'ok', tipo: 'idu-html', pdfUrl: URL.createObjectURL(blob) })
+      setVistaPrevia({
+        fase: 'ok',
+        tipo: 'idu-html',
+        // ObjectURL para el iframe (HTML). NO es un PDF: mimeTipo evita «Descargar PDF».
+        pdfUrl: URL.createObjectURL(blob),
+        mimeTipo: 'text/html',
+      })
     } catch (e) {
       setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: String(e?.message || e) })
     } finally {
@@ -3052,11 +3099,16 @@ export default function ModuloInformes({
                 })
                 return
               }
-              const blob = await rPdf.blob()
+              const blob = await leerRespuestaComoPdfBlob(rPdf)
               setVistaPrevia({
                 fase: 'ok',
                 tipo: 'idu-plantilla-vacia-pdf',
                 pdfUrl: URL.createObjectURL(blob),
+                pdfBlob: blob,
+                mimeTipo: 'application/pdf',
+                nombreArchivo: 'FO-IDU-EO-04-V2.pdf',
+                rutaSello: `/informes/${contratoId}/ccd/pdf-job/${job_id}/con-sello-firma`,
+                nombreArchivoSello: 'FO-IDU-EO-04-V2-sello.pdf',
                 avisoAcumulados: avisoAcum || null,
               })
             } catch (e) {
@@ -6116,7 +6168,9 @@ export default function ModuloInformes({
                   {vistaPrevia.fase === 'progreso' && vistaPrevia.tipo === 'idu-plantilla-vacia'
                     ? 'Espere mientras termina la generación (el reloj de arena cuenta el tiempo transcurrido).'
                     : vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl
-                      ? (vistaPrevia.tipo === 'memoria-mes-todos-pdf' || vistaPrevia.tipo === 'memoria-mes-todos'
+                      ? (vistaPrevia.tipo === 'idu-html'
+                          ? 'Vista previa HTML (no es un archivo PDF). Para descargar el documento binario use «Generar / descargar PDF» con sello en la barra del formato FO-IDU-EO-04.'
+                          : vistaPrevia.tipo === 'memoria-mes-todos-pdf' || vistaPrevia.tipo === 'memoria-mes-todos'
                           ? 'Use «Descargar PDF» para guardar el documento ya generado (sin sello). El sello SHA añade una página al final y, tras la vista previa, suele tardar segundos (reutiliza este PDF).'
                           : 'Documento listo. «Descargar PDF» guarda el archivo de esta vista previa sin regenerarlo.')
                       : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
@@ -6140,7 +6194,7 @@ export default function ModuloInformes({
                 ) : null}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl ? (
+              {vistaPrevia.fase === 'ok' && vistaPreviaEsPdfBinario(vistaPrevia) ? (
                 <button
                   type="button"
                   onClick={descargarPdfDesdeVistaPrevia}
@@ -6162,7 +6216,7 @@ export default function ModuloInformes({
                   Descargar PDF
                 </button>
               ) : null}
-              {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl && vistaPrevia.rutaSello ? (
+              {vistaPrevia.fase === 'ok' && vistaPreviaEsPdfBinario(vistaPrevia) && vistaPrevia.rutaSello ? (
                 <button
                   type="button"
                   onClick={descargarPdfSelloDesdeVistaPrevia}
