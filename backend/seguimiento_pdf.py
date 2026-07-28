@@ -90,6 +90,11 @@ def _firma_celda(lbl: str, nombre: str, cargo: str, entidad: str, firma_uri: str
     )
 
 
+def _nl2br(text: str) -> str:
+    """Convierte saltos de línea a <br/> (xhtml2pdf pagina mejor que white-space:pre-wrap)."""
+    return _esc(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br/>")
+
+
 def generar_pdf_acta(
     contrato: dict,
     acta: dict,
@@ -131,19 +136,29 @@ def generar_pdf_acta(
         "Sin asistentes registrados</td></tr>"
     )
 
+    # Orden estable: orden, luego id
+    ideas_sorted = sorted(
+        list(ideas or []),
+        key=lambda x: (
+            int(x.get("orden") if x.get("orden") is not None else 10**9),
+            int(x.get("id") or 0),
+        ),
+    )
     ideas_html = ""
-    for idx, idea in enumerate(ideas or [], start=1):
-        quien = (idea.get("quien_dijo") or "").strip()
+    for idx, idea in enumerate(ideas_sorted, start=1):
+        quien = (idea.get("quien_dijo") or idea.get("interviniente") or "").strip()
         quien_line = (
             f"<div style='font-size:8.5pt;color:#64748b;margin:2pt 0 4pt;'>"
             f"Interviniente: {_esc(quien)}</div>"
             if quien else ""
         )
+        iid = idea.get("id")
+        id_lbl = f" · #{_esc(iid)}" if iid is not None else ""
         ideas_html += (
-            f"<div style='margin:6pt 0;'>"
-            f"<div style='font-size:9pt;font-weight:700;color:{_COLOR};'>Idea central {idx}</div>"
+            f"<div class='pdf-idea'>"
+            f"<div style='font-size:9pt;font-weight:700;color:{_COLOR};'>Idea central {idx}{id_lbl}</div>"
             f"{quien_line}"
-            f"<div style='font-size:9pt;white-space:pre-wrap;'>{_esc(idea.get('texto'))}</div>"
+            f"<div style='font-size:9pt;'>{_nl2br(idea.get('texto') or '')}</div>"
             f"</div>"
         )
     if not ideas_html:
@@ -153,9 +168,9 @@ def generar_pdf_acta(
     for ap in apartados or []:
         tit = ap.get("titulo") or "Apartado"
         apartados_html += (
-            f"<div style='margin:6pt 0;'>"
+            f"<div class='pdf-block' style='margin:6pt 0;'>"
             f"<div style='font-size:9pt;font-weight:700;'>{_esc(tit)}</div>"
-            f"<div style='font-size:9pt;white-space:pre-wrap;'>{_esc(ap.get('contenido'))}</div>"
+            f"<div style='font-size:9pt;'>{_nl2br(ap.get('contenido') or '')}</div>"
             f"</div>"
         )
 
@@ -170,7 +185,7 @@ def generar_pdf_acta(
             for c in compromisos
         )
         comp_html = (
-            f"<h3 style='color:{_COLOR};font-size:11pt;margin:12pt 0 4pt;'>Compromisos generados</h3>"
+            f"<h2>Compromisos generados</h2>"
             f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;font-size:8pt;'>"
             f"<tr style='background:#f1f5f9;'>"
             f"<th style='padding:3pt 4pt;border:0.4pt solid {_BORDE};text-align:left;'>Compromiso</th>"
@@ -201,13 +216,26 @@ def generar_pdf_acta(
             chunk.append("<td style='width:33%;'></td>")
         firmas_rows += f"<tr>{''.join(chunk)}</tr>"
 
+    n_ideas = len(ideas_sorted)
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
 @page {{ size: letter portrait; margin: 14mm 12mm; }}
 body {{ font-family: Helvetica, Arial, sans-serif; color: #0f172a; font-size: 9pt; }}
 h1 {{ color: {_COLOR}; font-size: 14pt; margin: 0 0 4pt; }}
-h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt solid {_COLOR}; padding-bottom: 2pt; }}
+h2 {{
+  color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt;
+  border-bottom: 1pt solid {_COLOR}; padding-bottom: 2pt;
+  page-break-after: avoid;
+}}
+.pdf-idea {{
+  margin: 8pt 0 10pt;
+  padding-bottom: 4pt;
+  border-bottom: 0.3pt solid #e2e8f0;
+  page-break-inside: auto;
+}}
+.pdf-block {{ page-break-inside: auto; }}
+.pdf-firmas {{ page-break-inside: auto; margin-top: 8pt; }}
 </style></head><body>
 <table width="100%" cellspacing="0" cellpadding="0"><tr>
   <td width="80">{logo}</td>
@@ -236,7 +264,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
 {asis_rows}
 </table>
 
-<h2>Ideas centrales</h2>
+<h2>Ideas centrales ({n_ideas})</h2>
 {ideas_html}
 
 {comp_html}
@@ -244,7 +272,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
 {('<h2>Apartados adicionales</h2>' + apartados_html) if apartados_html else ''}
 
 <h2>Firmas de asistentes</h2>
-<table width="100%" cellspacing="0" cellpadding="0">{firmas_rows}</table>
+<table class="pdf-firmas" width="100%" cellspacing="0" cellpadding="0">{firmas_rows}</table>
 </body></html>"""
     return to_pdf_bytes(doc, landscape=False)
 

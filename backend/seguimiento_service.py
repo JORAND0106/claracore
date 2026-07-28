@@ -1100,7 +1100,14 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
         sb.table("seguimiento_acta_asistente").select("*").eq("acta_id", aid).order("orden").execute().data or []
     )
     acta["ideas"] = (
-        sb.table("seguimiento_acta_idea").select("*").eq("acta_id", aid).order("orden").execute().data or []
+        sb.table("seguimiento_acta_idea")
+        .select("*")
+        .eq("acta_id", aid)
+        .order("orden")
+        .order("id")
+        .execute()
+        .data
+        or []
     )
     acta["apartados"] = (
         sb.table("seguimiento_acta_apartado").select("*").eq("acta_id", aid).order("orden").execute().data or []
@@ -1492,7 +1499,7 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             if "quien_dijo" in row:
                 include_quien = True
                 _SCHEMA_CAPS["idea_quien_dijo"] = True
-            return (ins or [None])[0]
+            inserted = (ins or [None])[0]
         except Exception as exc:
             if "quien_dijo" in row and _is_missing_column_error(exc, "quien_dijo"):
                 _SCHEMA_CAPS["idea_quien_dijo"] = None
@@ -1500,18 +1507,44 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                     include_quien = True
                     ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
                     _SCHEMA_CAPS["idea_quien_dijo"] = True
-                    return (ins or [None])[0]
-                include_quien = False
-                _SCHEMA_CAPS["idea_quien_dijo"] = False
-                row = {k: v for k, v in row.items() if k != "quien_dijo"}
-                ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
-                _log.warning(
-                    "quien_dijo no persistido en idea nueva: PostgREST no ve la columna. "
-                    "Ejecute NOTIFY pgrst, 'reload schema';"
+                    inserted = (ins or [None])[0]
+                else:
+                    include_quien = False
+                    _SCHEMA_CAPS["idea_quien_dijo"] = False
+                    row = {k: v for k, v in row.items() if k != "quien_dijo"}
+                    ins = sb.table("seguimiento_acta_idea").insert(row).execute().data
+                    _log.warning(
+                        "quien_dijo no persistido en idea nueva: PostgREST no ve la columna. "
+                        "Ejecute NOTIFY pgrst, 'reload schema';"
+                    )
+                    inserted = (ins or [None])[0]
+            else:
+                raise
+        # Supabase a veces no devuelve la fila insertada: recuperar por acta+orden(+texto).
+        if not inserted or inserted.get("id") is None:
+            try:
+                q = (
+                    sb.table("seguimiento_acta_idea")
+                    .select("*")
+                    .eq("acta_id", int(row["acta_id"]))
+                    .eq("orden", int(row.get("orden") or 0))
+                    .order("id", desc=True)
+                    .limit(5)
                 )
-                return (ins or [None])[0]
-            raise
-
+                found = q.execute().data or []
+                texto = (row.get("texto") or "").strip()
+                if texto:
+                    match = next(
+                        (r for r in found if (r.get("texto") or "").strip() == texto),
+                        None,
+                    )
+                else:
+                    match = found[0] if found else None
+                if match:
+                    inserted = match
+            except Exception as exc:
+                _log.debug("recover idea insert id: %s", exc)
+        return inserted
     for i, idea in enumerate(ideas or []):
         texto = (idea.get("texto") or "").strip()
         quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None

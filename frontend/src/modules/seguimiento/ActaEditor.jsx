@@ -351,15 +351,15 @@ export default function ActaEditor({
         usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
       })),
     ideas: (formSrc.ideas || [])
-      .filter((i) => (i.texto || '').trim() || i.id)
-      .map((i) => {
+      .filter((i) => (i.texto || '').trim() || (i.quien_dijo || '').trim() || i.id)
+      .map((i, idx) => {
         const quien = (i.quien_dijo || i.interviniente || '').trim() || null
         return {
           id: i.id || undefined,
           texto: i.texto || '',
           quien_dijo: quien,
           interviniente: quien,
-          orden: i.orden,
+          orden: i.orden != null && i.orden !== '' ? Number(i.orden) : idx,
         }
       }),
     apartados: (formSrc.apartados || [])
@@ -478,13 +478,22 @@ export default function ActaEditor({
       if (!form.elaborador_id) {
         throw new Error('Indique el elaborador antes de generar la vista previa')
       }
+      const localesConTexto = (form.ideas || []).filter((i) => (i.texto || '').trim()).length
       const row = await persistActa()
+      const guardadas = Array.isArray(row?.ideas) ? row.ideas.length : 0
       const blob = await api.pdfActaBlob(row.id)
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
       const url = URL.createObjectURL(blob)
       setPdfUrl(url)
       setTab('acciones')
-      setOkMsg('Vista previa generada.')
+      if (localesConTexto > 0 && guardadas < localesConTexto) {
+        setOkMsg(
+          `Vista previa generada con ${guardadas} idea(s) en el PDF. `
+          + `En el formulario hay ${localesConTexto} con texto: guarde de nuevo si falta alguna.`,
+        )
+      } else {
+        setOkMsg(`Vista previa generada (${guardadas} idea${guardadas === 1 ? '' : 's'} central${guardadas === 1 ? '' : 'es'}). Deslice el PDF si hay varias páginas.`)
+      }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo generar PDF'))
     } finally {
@@ -901,17 +910,29 @@ export default function ActaEditor({
           const compsIdea = (actaCompromisos || []).filter(
             (c) => idea.id != null && Number(c.idea_id) === Number(idea.id),
           )
-          const preview = String(idea.texto || '').replace(/\s+/g, ' ').trim()
-          const previewShort = preview.length > 72 ? `${preview.slice(0, 72)}…` : (preview || 'Sin redacción aún')
+          const tieneCompromiso = compsIdea.length > 0
+          const interviniente = String(idea.quien_dijo || '').trim()
+          const headLine = [
+            `Idea ${idx + 1}`,
+            idea.id != null ? `#${idea.id}` : null,
+            interviniente || null,
+          ].filter(Boolean).join(' · ')
+          const borderColor = expanded
+            ? t.primary
+            : (tieneCompromiso ? ORIGEN_COLOR.compromiso.border : t.border)
+          const bgColor = expanded
+            ? `${t.primary}08`
+            : (tieneCompromiso ? ORIGEN_COLOR.compromiso.bg : (t.bgCard || 'transparent'))
           return (
             <div
               key={ideaKey}
-              className={`cc-seguim-idea-accordion${expanded ? ' cc-seguim-idea-accordion--open' : ''}`}
+              className={`cc-seguim-idea-accordion${expanded ? ' cc-seguim-idea-accordion--open' : ''}${tieneCompromiso ? ' cc-seguim-idea-accordion--con-compromiso' : ''}`}
               style={{
-                marginTop: 10,
+                marginTop: 8,
                 borderRadius: 8,
-                border: `1px solid ${expanded ? t.primary : t.border}`,
-                background: expanded ? `${t.primary}08` : (t.bgCard || 'transparent'),
+                border: `1px solid ${borderColor}`,
+                borderLeft: tieneCompromiso ? `3px solid ${ORIGEN_COLOR.compromiso.border}` : `1px solid ${borderColor}`,
+                background: bgColor,
                 overflow: 'hidden',
               }}
             >
@@ -923,56 +944,64 @@ export default function ActaEditor({
                 style={{
                   display: 'flex',
                   width: '100%',
-                  alignItems: 'flex-start',
-                  gap: 10,
+                  alignItems: 'center',
+                  gap: 8,
                   textAlign: 'left',
                   border: 'none',
                   background: 'transparent',
-                  padding: '10px 12px',
+                  padding: '8px 10px',
                   cursor: 'pointer',
                   color: t.text,
+                  minHeight: 36,
                 }}
               >
                 <span style={{
                   flexShrink: 0,
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
+                  width: 18,
+                  height: 18,
+                  borderRadius: 4,
                   border: `1px solid ${t.border}`,
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: 12,
+                  fontSize: 11,
                   color: t.primary,
                   fontWeight: 700,
-                  marginTop: 1,
                 }}
                 >
                   {expanded ? '▾' : '▸'}
                 </span>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary }}>
-                    Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}
-                    {idea.quien_dijo ? (
-                      <span style={{ fontWeight: 500, color: t.textMuted }}> · {idea.quien_dijo}</span>
-                    ) : null}
-                  </span>
-                  {!expanded && (
-                    <span style={{
-                      display: 'block',
-                      marginTop: 2,
-                      fontSize: 'var(--cc-xs)',
-                      color: t.textMuted,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                    >
-                      {previewShort}
-                      {compsIdea.length > 0 ? ` · ${compsIdea.length} compromiso${compsIdea.length === 1 ? '' : 's'}` : ''}
-                    </span>
-                  )}
+                <span style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  color: t.primary,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                >
+                  {headLine}
+                  {!interviniente ? (
+                    <span style={{ fontWeight: 500, color: t.textMuted }}> · sin interviniente</span>
+                  ) : null}
                 </span>
+                {tieneCompromiso && (
+                  <span style={{
+                    flexShrink: 0,
+                    fontSize: 'var(--cc-xs)',
+                    fontWeight: 600,
+                    color: ORIGEN_COLOR.compromiso.border,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    border: `1px solid ${ORIGEN_COLOR.compromiso.border}`,
+                    background: 'transparent',
+                  }}
+                  >
+                    {compsIdea.length === 1 ? 'Compromiso' : `${compsIdea.length} comp.`}
+                  </span>
+                )}
               </button>
               {expanded && (
                 <div className="cc-seguim-idea-accordion__body" style={{ padding: '0 12px 12px' }}>
@@ -1151,7 +1180,22 @@ export default function ActaEditor({
           )}
         </div>
         {pdfUrl ? (
-          <iframe title="PDF acta" src={pdfUrl} style={{ width: '100%', height: 480, border: `1px solid ${t.border}`, borderRadius: 8 }} />
+          <div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <a
+                href={pdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...ghost(t), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+              >
+                Abrir PDF completo
+              </a>
+              <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                En iPad/tablet deslice dentro del visor o ábralo en otra pestaña para ver todas las páginas.
+              </span>
+            </div>
+            <iframe title="PDF acta" src={pdfUrl} style={{ width: '100%', height: 'min(70vh, 640px)', border: `1px solid ${t.border}`, borderRadius: 8 }} />
+          </div>
         ) : (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Genere la vista previa para visualizar el PDF del acta en este panel.</div>
         )}
