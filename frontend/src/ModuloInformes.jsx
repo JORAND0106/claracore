@@ -1906,6 +1906,10 @@ export default function ModuloInformes({
     })
     setError(null)
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    // Volumen alto (todos los ítems): hasta 10 min, alineado con FO-EO-04 / gunicorn --timeout 300.
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      opts.signal = AbortSignal.timeout(600000)
+    }
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
     const pathPdf = `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo`
@@ -1954,7 +1958,16 @@ export default function ModuloInformes({
     if (!opts.skipBusy) setConcPdfBusy(true)
     setError(null)
     try {
-      const r = await fetchConFallback(rutaRelativa, { headers: { Authorization: `Bearer ${authToken}` } })
+      const fetchOpts = { headers: { Authorization: `Bearer ${authToken}` } }
+      // PDFs consolidados (todos los ítems) pueden tardar varios minutos.
+      if (
+        /\/completo(\/|$|\?)/.test(String(rutaRelativa || '')) &&
+        typeof AbortSignal !== 'undefined' &&
+        typeof AbortSignal.timeout === 'function'
+      ) {
+        fetchOpts.signal = AbortSignal.timeout(600000)
+      }
+      const r = await fetchConFallback(rutaRelativa, fetchOpts)
       if (!r?.ok) {
         setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
         return
@@ -2331,7 +2344,11 @@ export default function ModuloInformes({
     const aid = encodeURIComponent(actaConcId)
     const path = `/informes/${cid}/excel/cc-mes-002/acta/${aid}/completo`
     try {
-      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      const fetchOpts = { headers: { Authorization: `Bearer ${authToken}` } }
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        fetchOpts.signal = AbortSignal.timeout(600000)
+      }
+      const r = await fetchConFallback(path, fetchOpts)
       if (!r || !r.ok) {
         setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
         return
