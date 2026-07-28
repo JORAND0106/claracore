@@ -2616,14 +2616,44 @@ select.cc-dashboard-acta-select--light option {
   max-width: none;
 }
 
-/* Tema truncado en bandeja / widget */
-.cc-seguim-tema-trunc {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
+/* Fecha discreta (filtros bandeja + encabezado acta); evita chrome pesado en iPad. */
+.cc-seguim-filters input.cc-seguim-date[type="date"],
+.cc-seguim-acta-editor input.cc-seguim-date[type="date"],
+.cc-seguim-bandeja input.cc-seguim-date[type="date"] {
+  appearance: none;
+  -webkit-appearance: none;
+  font-size: var(--cc-sm);
+  font-weight: 400;
+  line-height: 1.25;
+  height: 34px;
+  min-height: 34px !important;
+  max-height: 34px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+.cc-seguim-filters input.cc-seguim-date[type="date"]::-webkit-calendar-picker-indicator,
+.cc-seguim-acta-editor input.cc-seguim-date[type="date"]::-webkit-calendar-picker-indicator,
+.cc-seguim-bandeja input.cc-seguim-date[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.45;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 4px;
+}
+.cc-seguim-root--compact .cc-seguim-filters input.cc-seguim-date[type="date"],
+.cc-seguim-bandeja--compact input.cc-seguim-date[type="date"],
+.cc-seguim-acta-editor--compact input.cc-seguim-date[type="date"] {
+  height: 36px;
+  min-height: 36px !important;
+  max-height: 36px;
+  font-size: 16px; /* evita zoom iOS */
+}
+
+.cc-seguim-idea-accordion__head:focus-visible {
+  outline: 2px solid var(--cc-color-primary, #2563eb);
+  outline-offset: -2px;
 }
 
 .cc-seguim-item-detalle--compact .cc-seguim-comentario-row,

@@ -101,6 +101,7 @@ def test_sync_ideas_omits_quien_cuando_schema_ausente(monkeypatch):
     sb = _FakeSB(store)
     _SCHEMA_CAPS["idea_quien_dijo"] = False
     monkeypatch.setattr("seguimiento_service._schema_has", lambda *_a, **_k: False)
+    monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: False)
 
     _sync_ideas(sb, 7, [
         {"texto": "Idea", "quien_dijo": "Alguien"},
@@ -108,3 +109,42 @@ def test_sync_ideas_omits_quien_cuando_schema_ausente(monkeypatch):
 
     assert "quien_dijo" not in store["last_insert"]
     assert store["last_insert"]["texto"] == "Idea"
+
+
+def test_sync_ideas_reintenta_tras_ensure(monkeypatch):
+    """Si el probe inicial falla pero ensure recupera la columna, se persiste quien_dijo."""
+    store = {"ideas": [], "_seq": 10, "fail_quien_once": True}
+    sb = _FakeSB(store)
+    _SCHEMA_CAPS["idea_quien_dijo"] = False
+
+    def schema_has(_sb, cap, force=False):
+        return cap == "idea_quien_dijo" and not store.get("fail_quien_once")
+
+    monkeypatch.setattr("seguimiento_service._schema_has", schema_has)
+    monkeypatch.setattr("seguimiento_service._ensure_idea_quien_dijo_column", lambda _sb: True)
+    monkeypatch.setattr(
+        "seguimiento_service._is_missing_column_error",
+        lambda exc, col: "quien_dijo" in str(exc).lower(),
+    )
+
+    orig_execute = _FakeTable.execute
+
+    def execute_maybe_fail(self):
+        if (
+            self.name == "seguimiento_acta_idea"
+            and self._op == "insert"
+            and self._payload
+            and "quien_dijo" in self._payload
+            and store.get("fail_quien_once")
+        ):
+            store["fail_quien_once"] = False
+            raise Exception("Could not find the 'quien_dijo' column of 'seguimiento_acta_idea' in the schema cache")
+        return orig_execute(self)
+
+    monkeypatch.setattr(_FakeTable, "execute", execute_maybe_fail)
+
+    _sync_ideas(sb, 7, [
+        {"texto": "Idea", "quien_dijo": "María"},
+    ])
+
+    assert store["last_insert"]["quien_dijo"] == "María"

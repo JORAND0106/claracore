@@ -113,7 +113,13 @@ function mergeIdeaIds(local = [], server = []) {
     if (!match && server[idx] && !used.has(server[idx].id)) match = server[idx]
     if (!match) return row
     used.add(match.id)
-    return { ...row, id: match.id, orden: match.orden ?? row.orden }
+    const quienServer = match.quien_dijo || match.interviniente || ''
+    return {
+      ...row,
+      id: match.id,
+      orden: match.orden ?? row.orden,
+      quien_dijo: (row.quien_dijo || '').trim() || quienServer || '',
+    }
   })
 }
 
@@ -190,6 +196,9 @@ export default function ActaEditor({
   const [compromisoCtx, setCompromisoCtx] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
+  const [actaCompromisos, setActaCompromisos] = useState([])
+  /** Acordeón: una sola idea expandida (clave = _key o id). */
+  const [ideaExpandidaKey, setIdeaExpandidaKey] = useState(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
@@ -251,7 +260,7 @@ export default function ActaEditor({
                 _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
                 id: x.id,
                 texto: x.texto || '',
-                quien_dijo: x.quien_dijo || '',
+                quien_dijo: x.quien_dijo || x.interviniente || '',
                 orden: x.orden,
               }))
               : [emptyIdea()],
@@ -265,6 +274,7 @@ export default function ActaEditor({
               : [emptyApartado()],
             estado: (a.estado === 'en_firma' || a.estado === 'cerrada') ? 'realizada' : (a.estado || 'borrador'),
           })
+          setActaCompromisos(Array.isArray(a.compromisos) ? a.compromisos : [])
           hydratedActaIdRef.current = a.id
           try {
             const abiertos = await client.compromisosAbiertos(actaId)
@@ -285,6 +295,7 @@ export default function ActaEditor({
           if (cancelled) return
           setConsecutivo(prox?.consecutivo ?? null)
           setPrevios(abiertos || [])
+          setActaCompromisos([])
           hydratedActaIdRef.current = 'new'
         }
       } catch (e) {
@@ -301,6 +312,18 @@ export default function ActaEditor({
   useEffect(() => {
     if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
   }, [encabezadoGuardado, tab])
+
+  // Al entrar a Ideas: expandir la primera si no hay ninguna abierta.
+  useEffect(() => {
+    if (tab !== 'ideas') return
+    if (ideaExpandidaKey != null) return
+    const first = (form.ideas || [])[0]
+    if (!first) return
+    const k = first._key || (first.id != null ? `idea-id-${first.id}` : 'idea-0')
+    setIdeaExpandidaKey(k)
+    // Solo al cambiar de pestaña; no reabrir si el usuario colapsó todas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
@@ -329,12 +352,16 @@ export default function ActaEditor({
       })),
     ideas: (formSrc.ideas || [])
       .filter((i) => (i.texto || '').trim() || i.id)
-      .map((i) => ({
-        id: i.id || undefined,
-        texto: i.texto || '',
-        quien_dijo: (i.quien_dijo || '').trim() || null,
-        orden: i.orden,
-      })),
+      .map((i) => {
+        const quien = (i.quien_dijo || i.interviniente || '').trim() || null
+        return {
+          id: i.id || undefined,
+          texto: i.texto || '',
+          quien_dijo: quien,
+          interviniente: quien,
+          orden: i.orden,
+        }
+      }),
     apartados: (formSrc.apartados || [])
       .filter((a) => (a.titulo || a.contenido || '').trim())
       .map((a) => ({
@@ -427,6 +454,10 @@ export default function ActaEditor({
   }
 
   const abrirCompromiso = async (ideaIdx, texto) => {
+    const idea = form.ideas[ideaIdx]
+    if (idea) {
+      setIdeaExpandidaKey(idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${ideaIdx}`))
+    }
     setSaving(true)
     setError('')
     try {
@@ -561,7 +592,14 @@ export default function ActaEditor({
         <h3 style={h3(t)}>Encabezado</h3>
         <div className="cc-seguim-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
           <Field t={t} label="Fecha de la reunión">
-            <input type="date" disabled={soloLectura} value={form.fecha_reunion} onChange={(e) => setField('fecha_reunion', e.target.value)} style={inp(t)} />
+            <input
+              type="date"
+              className="cc-seguim-date"
+              disabled={soloLectura}
+              value={form.fecha_reunion}
+              onChange={(e) => setField('fecha_reunion', e.target.value)}
+              style={inp(t)}
+            />
           </Field>
           <Field t={t} label="Tipo de acta *">
             <select
@@ -837,68 +875,188 @@ export default function ActaEditor({
 
       {tab === 'ideas' && (
       <section style={card(t)}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <h3 style={h3(t)}>Ideas centrales</h3>
           {!soloLectura && (
             <button
               type="button"
               style={primary(t)}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => patchList('ideas', (list) => [...list, emptyIdea()])}
+              onClick={() => {
+                const neu = emptyIdea()
+                patchList('ideas', (list) => [...list, neu])
+                setIdeaExpandidaKey(neu._key)
+              }}
             >
               + Agregar idea
             </button>
           )}
         </div>
-        {form.ideas.map((idea, idx) => (
-          <div key={idea._key || idea.id || `idea-${idx}`} style={{ marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}` }}>
-            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}</div>
-            <Field t={t} label="Interviniente">
-              <QuienDijoAutocomplete
-                t={t}
-                disabled={soloLectura}
-                value={idea.quien_dijo || ''}
-                options={asistenteOpciones}
-                placeholder={asistenteOpciones.length
-                  ? 'Seleccione un asistente o digite el nombre…'
-                  : 'Registre asistentes o digite el nombre…'}
-                style={inp(t)}
-                onChange={(quien_dijo) => {
-                  patchList('ideas', (list) => list.map((row, i) => (
-                    i === idx ? { ...row, quien_dijo } : row
-                  )))
-                }}
-              />
-            </Field>
-            <textarea
-              rows={4}
-              disabled={soloLectura}
-              value={idea.texto}
-              onChange={(e) => {
-                const texto = e.target.value
-                patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
+          Pulse una idea para expandirla. Solo una permanece abierta a la vez.
+        </div>
+        {form.ideas.map((idea, idx) => {
+          const ideaKey = idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${idx}`)
+          const expanded = ideaExpandidaKey === ideaKey
+          const compsIdea = (actaCompromisos || []).filter(
+            (c) => idea.id != null && Number(c.idea_id) === Number(idea.id),
+          )
+          const preview = String(idea.texto || '').replace(/\s+/g, ' ').trim()
+          const previewShort = preview.length > 72 ? `${preview.slice(0, 72)}…` : (preview || 'Sin redacción aún')
+          return (
+            <div
+              key={ideaKey}
+              className={`cc-seguim-idea-accordion${expanded ? ' cc-seguim-idea-accordion--open' : ''}`}
+              style={{
+                marginTop: 10,
+                borderRadius: 8,
+                border: `1px solid ${expanded ? t.primary : t.border}`,
+                background: expanded ? `${t.primary}08` : (t.bgCard || 'transparent'),
+                overflow: 'hidden',
               }}
-              style={inp(t)}
-              placeholder="Redacción de la idea central…"
-            />
-            {!soloLectura && (
-              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>Redactar con Clara</button>
-                {permisos?.crear && (
-                  <button type="button" style={ghost(t)} disabled={saving || !(idea.texto || '').trim()} onClick={() => abrirCompromiso(idx, idea.texto)}>Generar compromiso</button>
-                )}
-                <button
-                  type="button"
-                  style={ghost(t)}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => patchList('ideas', (list) => list.filter((_, i) => i !== idx))}
+            >
+              <button
+                type="button"
+                className="cc-seguim-idea-accordion__head"
+                aria-expanded={expanded}
+                onClick={() => setIdeaExpandidaKey(expanded ? null : ideaKey)}
+                style={{
+                  display: 'flex',
+                  width: '100%',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  color: t.text,
+                }}
+              >
+                <span style={{
+                  flexShrink: 0,
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  border: `1px solid ${t.border}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  color: t.primary,
+                  fontWeight: 700,
+                  marginTop: 1,
+                }}
                 >
-                  Quitar
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
+                  {expanded ? '▾' : '▸'}
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary }}>
+                    Idea {idx + 1}{idea.id ? ` · #${idea.id}` : ''}
+                    {idea.quien_dijo ? (
+                      <span style={{ fontWeight: 500, color: t.textMuted }}> · {idea.quien_dijo}</span>
+                    ) : null}
+                  </span>
+                  {!expanded && (
+                    <span style={{
+                      display: 'block',
+                      marginTop: 2,
+                      fontSize: 'var(--cc-xs)',
+                      color: t.textMuted,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    >
+                      {previewShort}
+                      {compsIdea.length > 0 ? ` · ${compsIdea.length} compromiso${compsIdea.length === 1 ? '' : 's'}` : ''}
+                    </span>
+                  )}
+                </span>
+              </button>
+              {expanded && (
+                <div className="cc-seguim-idea-accordion__body" style={{ padding: '0 12px 12px' }}>
+                  <Field t={t} label="Interviniente">
+                    <QuienDijoAutocomplete
+                      t={t}
+                      disabled={soloLectura}
+                      value={idea.quien_dijo || ''}
+                      options={asistenteOpciones}
+                      placeholder={asistenteOpciones.length
+                        ? 'Seleccione un asistente o digite el nombre…'
+                        : 'Registre asistentes o digite el nombre…'}
+                      style={inp(t)}
+                      onChange={(quien_dijo) => {
+                        patchList('ideas', (list) => list.map((row, i) => (
+                          i === idx ? { ...row, quien_dijo } : row
+                        )))
+                      }}
+                    />
+                  </Field>
+                  <textarea
+                    rows={4}
+                    disabled={soloLectura}
+                    value={idea.texto}
+                    onChange={(e) => {
+                      const texto = e.target.value
+                      patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+                    }}
+                    style={inp(t)}
+                    placeholder="Redacción de la idea central…"
+                  />
+                  {compsIdea.length > 0 && (
+                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {compsIdea.map((c) => (
+                        <div
+                          key={c.id}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: 8,
+                            border: `1px solid ${ORIGEN_COLOR.compromiso.border}`,
+                            background: ORIGEN_COLOR.compromiso.bg,
+                            fontSize: 'var(--cc-sm)',
+                            color: t.text,
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, color: ORIGEN_COLOR.compromiso.border, marginBottom: 4 }}>
+                            Compromiso generado
+                            {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
+                          </div>
+                          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                            Vence {fmtFecha(c.fecha_vencimiento)}
+                            {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
+                          </div>
+                          <div style={{ marginTop: 2 }}>
+                            Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!soloLectura && (
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>Redactar con Clara</button>
+                      {permisos?.crear && (
+                        <button type="button" style={ghost(t)} disabled={saving || !(idea.texto || '').trim()} onClick={() => abrirCompromiso(idx, idea.texto)}>Generar compromiso</button>
+                      )}
+                      <button
+                        type="button"
+                        style={ghost(t)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          patchList('ideas', (list) => list.filter((_, i) => i !== idx))
+                          setIdeaExpandidaKey(null)
+                        }}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </section>
       )}
 
@@ -1029,7 +1187,25 @@ export default function ActaEditor({
           actaConsecutivo={consecutivo}
           onClose={() => setCompromisoCtx(null)}
           onSubmit={async (body) => {
-            await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
+            const created = await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
+            const items = Array.isArray(created?.items)
+              ? created.items
+              : (created?.id ? [created] : [])
+            if (items.length) {
+              setActaCompromisos((prev) => {
+                const ids = new Set((prev || []).map((x) => Number(x.id)))
+                const next = [...(prev || [])]
+                items.forEach((it) => {
+                  if (!ids.has(Number(it.id))) next.push(it)
+                })
+                return next
+              })
+            } else if (localActaId || compromisoCtx.actaId) {
+              try {
+                const a = await api.getActa(localActaId || compromisoCtx.actaId)
+                setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+              } catch { /* ignore */ }
+            }
             setCompromisoCtx(null)
             setError('')
             setOkMsg('Compromiso incorporado a la bandeja.')
