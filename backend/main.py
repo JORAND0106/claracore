@@ -8476,23 +8476,294 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
         "balance_liq_costo":   round(costo_liq - costo_cobro),
     }
 
+def _actas_rpo_firmadas_ids(contrato_id: int) -> set:
+    """Actas RPO con al menos una firma CCD registrada (costo histórico firmado)."""
+    firmadas: set = set()
+    try:
+        rows = (
+            supabase.table("ccd_firma_registro")
+            .select("contexto_id")
+            .eq("contrato_id", int(contrato_id))
+            .eq("contexto_tipo", "acta_rpo")
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            try:
+                cid = int(r.get("contexto_id"))
+            except (TypeError, ValueError):
+                continue
+            if cid:
+                firmadas.add(cid)
+    except Exception:
+        # Si la tabla no existe o falla la consulta, no bloquear el recálculo:
+        # se tratará como sin actas firmadas detectables.
+        pass
+    return firmadas
+
+
+def _recalc_costo_directo(cantidad, vlr_unitario: float) -> float:
+    try:
+        cant = float(cantidad or 0)
+    except (TypeError, ValueError):
+        cant = 0.0
+    try:
+        vlr = float(vlr_unitario or 0)
+    except (TypeError, ValueError):
+        vlr = 0.0
+    return float(round(cant * vlr, 0))
+
+
+def _row_needs_recalc_vlr_costo(row: dict, vlr_nuevo: float, cant_key: str, vlr_key: str, costo_key: str) -> bool:
+    """True si el valor unitario o el costo directo no coinciden con el precio vigente."""
+    try:
+        vlr_actual = float(row.get(vlr_key) or 0)
+    except (TypeError, ValueError):
+        vlr_actual = 0.0
+    costo_esperado = _recalc_costo_directo(row.get(cant_key), vlr_nuevo)
+    try:
+        costo_actual = float(row.get(costo_key) or 0)
+    except (TypeError, ValueError):
+        costo_actual = 0.0
+    if abs(vlr_actual - float(vlr_nuevo)) > 0.009:
+        return True
+    if abs(costo_actual - costo_esperado) > 0.009:
+        return True
+    return False
+
+
 @app.post("/listado-precios/item/{item_id}/recalcular")
 def recalcular_cobros_precio(item_id: int, current_user=Depends(get_current_user)):
-    """Actualiza de Pendiente → Aprobado todos los registros de cobro de este ítem de precio."""
-    precio = supabase.table("listado_precios").select(
-        "contrato_id, capitulo, competencia, item_numero, estado_precio"
-    ).eq("id", item_id).single().execute().data
+    """Recalcula costo_directo de registros del ítem con el precio unitario vigente.
+
+    - Solo actualiza valor unitario y costo_directo; nunca toca cantidades.
+    - Aplica a so_registros, presupuesto (no sellado) y filas de cobro del ítem.
+    - Excluye so_registros / cobros ligados a actas RPO con firma CCD.
+    """
+    rows = (
+        supabase.table("listado_precios")
+        .select("id, contrato_id, capitulo, competencia, item_numero, precio_unitario, estado_precio")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    precio = rows[0] if rows else None
     if not precio:
         raise HTTPException(status_code=404, detail="Ítem no encontrado")
-    if precio.get("estado_precio") != "Aprobado":
-        raise HTTPException(status_code=400, detail="El precio debe estar Aprobado antes de recalcular cobros")
-    q = supabase.table("cobro").update({"precio_estado": "Aprobado"}).eq("contrato_id", precio["contrato_id"]).eq("item", precio["item_numero"]).eq("precio_estado", "Pendiente")
-    if precio.get("capitulo"):
-        q = q.eq("capitulo", precio["capitulo"])
-    if precio.get("competencia"):
-        q = q.eq("competencia", precio["competencia"])
-    result = q.execute()
-    return {"recalculados": len(result.data or [])}
+
+    contrato_id = int(precio["contrato_id"])
+    _require_contract_access(current_user, contrato_id)
+
+    estado = str(precio.get("estado_precio") or "").strip()
+    if estado != "Aprobado":
+        raise HTTPException(
+            status_code=400,
+            detail="El precio debe estar Aprobado antes de recalcular cobros. Guarde los cambios del ítem e intente de nuevo.",
+        )
+
+    try:
+        vlr_nuevo = float(precio.get("precio_unitario") or 0)
+    except (TypeError, ValueError):
+        vlr_nuevo = 0.0
+    if vlr_nuevo <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="El ítem no tiene un valor unitario vigente válido para recalcular.",
+        )
+
+    capitulo = (precio.get("capitulo") or "").strip()
+    competencia = (precio.get("competencia") or "").strip()
+    item_numero = (precio.get("item_numero") or "").strip()
+    if not item_numero:
+        raise HTTPException(status_code=400, detail="El ítem no tiene número de ítem para localizar registros.")
+
+    cap_k = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+    it_k = _dash_norm_item_key_py(item_numero)
+    comp_f = competencia
+    actas_firmadas = _actas_rpo_firmadas_ids(contrato_id)
+
+    actualizados_sicoe = 0
+    omitidos_acta_firmada = 0
+    actualizados_ppto = 0
+    omitidos_sellados = 0
+    actualizados_cobro = 0
+    sin_cambio = 0
+
+    # ── so_registros (cobro SICOE) ───────────────────────────────────────────
+    off = 0
+    while True:
+        def _q_so(o=off):
+            return (
+                supabase.table("so_registros")
+                .select("id, capitulo, competencia, item_numero, cantidad_total, vlr_unitario, costo_directo, acta_rpo_id")
+                .eq("contrato_id", contrato_id)
+                .order("id")
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q_so) or []
+        for r in batch:
+            if cap_k and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_k:
+                continue
+            if comp_f and (r.get("competencia") or "").strip() != comp_f:
+                continue
+            if _dash_norm_item_key_py(r.get("item_numero")) != it_k:
+                continue
+            try:
+                acta_id = int(r.get("acta_rpo_id")) if r.get("acta_rpo_id") is not None else None
+            except (TypeError, ValueError):
+                acta_id = None
+            if acta_id and acta_id in actas_firmadas:
+                omitidos_acta_firmada += 1
+                continue
+            if not _row_needs_recalc_vlr_costo(r, vlr_nuevo, "cantidad_total", "vlr_unitario", "costo_directo"):
+                sin_cambio += 1
+                continue
+            nuevo_costo = _recalc_costo_directo(r.get("cantidad_total"), vlr_nuevo)
+            supabase.table("so_registros").update(
+                {"vlr_unitario": vlr_nuevo, "costo_directo": nuevo_costo}
+            ).eq("id", r["id"]).eq("contrato_id", contrato_id).execute()
+            actualizados_sicoe += 1
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    # ── presupuesto (no sellado) ─────────────────────────────────────────────
+    off = 0
+    while True:
+        q = (
+            supabase.table("presupuesto")
+            .select("id, capitulo, competencia, item, cant_total, vlr_unitario, costo_directo, sellado, dado_de_baja")
+            .eq("contrato_id", contrato_id)
+            .eq("item", item_numero)
+            .order("id")
+            .range(off, off + 999)
+        )
+        if capitulo:
+            q = q.eq("capitulo", capitulo)
+        if competencia:
+            q = q.eq("competencia", competencia)
+        batch = q.execute().data or []
+        for r in batch:
+            if r.get("dado_de_baja"):
+                continue
+            if r.get("sellado"):
+                omitidos_sellados += 1
+                continue
+            if not _row_needs_recalc_vlr_costo(r, vlr_nuevo, "cant_total", "vlr_unitario", "costo_directo"):
+                sin_cambio += 1
+                continue
+            nuevo_costo = _recalc_costo_directo(r.get("cant_total"), vlr_nuevo)
+            supabase.table("presupuesto").update(
+                {"vlr_unitario": vlr_nuevo, "costo_directo": nuevo_costo}
+            ).eq("id", r["id"]).eq("contrato_id", contrato_id).execute()
+            actualizados_ppto += 1
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    # ── cobro (tabla histórica / importada; no fallar si no existe) ─────────
+    try:
+        off = 0
+        firmadas_numeros: set = set()
+        if actas_firmadas:
+            try:
+                ar = (
+                    supabase.table("actas")
+                    .select("id, numero_rpo")
+                    .eq("contrato_id", contrato_id)
+                    .in_("id", list(actas_firmadas))
+                    .execute()
+                    .data
+                    or []
+                )
+                for a in ar:
+                    try:
+                        n = int(a.get("numero_rpo"))
+                    except (TypeError, ValueError):
+                        continue
+                    if n:
+                        firmadas_numeros.add(n)
+            except Exception:
+                pass
+        while True:
+            q = (
+                supabase.table("cobro")
+                .select("id, capitulo, competencia, item, cantidad, valor_unitario, costo_directo, acta")
+                .eq("contrato_id", contrato_id)
+                .eq("item", item_numero)
+                .order("id")
+                .range(off, off + 999)
+            )
+            if capitulo:
+                q = q.eq("capitulo", capitulo)
+            if competencia:
+                q = q.eq("competencia", competencia)
+            batch = q.execute().data or []
+            for r in batch:
+                try:
+                    acta_n = int(r.get("acta")) if r.get("acta") is not None else None
+                except (TypeError, ValueError):
+                    acta_n = None
+                if acta_n and acta_n in firmadas_numeros:
+                    omitidos_acta_firmada += 1
+                    continue
+                if not _row_needs_recalc_vlr_costo(r, vlr_nuevo, "cantidad", "valor_unitario", "costo_directo"):
+                    sin_cambio += 1
+                    continue
+                nuevo_costo = _recalc_costo_directo(r.get("cantidad"), vlr_nuevo)
+                supabase.table("cobro").update(
+                    {"valor_unitario": vlr_nuevo, "costo_directo": nuevo_costo}
+                ).eq("id", r["id"]).eq("contrato_id", contrato_id).execute()
+                actualizados_cobro += 1
+            if len(batch) < 1000:
+                break
+            off += 1000
+    except Exception as e:
+        msg = str(e)
+        if "cobro" in msg.lower() and ("does not exist" in msg or "PGRST" in msg):
+            pass
+        else:
+            # No abortar el recálculo ya aplicado en so_registros/presupuesto
+            try:
+                _log_api.warning("recalcular cobro table: %s", msg[:240])
+            except Exception:
+                pass
+
+    total = actualizados_sicoe + actualizados_ppto + actualizados_cobro
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRECIOS",
+        "listado_precios",
+        str(item_id),
+        {
+            "accion": "recalcular_cobros",
+            "precio_unitario": vlr_nuevo,
+            "actualizados_sicoe": actualizados_sicoe,
+            "actualizados_presupuesto": actualizados_ppto,
+            "actualizados_cobro": actualizados_cobro,
+            "omitidos_acta_firmada": omitidos_acta_firmada,
+            "omitidos_sellados": omitidos_sellados,
+            "sin_cambio": sin_cambio,
+        },
+    )
+    return {
+        "ok": True,
+        "recalculados": total,
+        "actualizados_sicoe": actualizados_sicoe,
+        "actualizados_presupuesto": actualizados_ppto,
+        "actualizados_cobro": actualizados_cobro,
+        "omitidos_acta_firmada": omitidos_acta_firmada,
+        "omitidos_sellados": omitidos_sellados,
+        "sin_cambio": sin_cambio,
+        "precio_unitario": vlr_nuevo,
+    }
 
 @app.post("/listado-precios/{contrato_id}/log-exportar")
 def log_exportar_precios(contrato_id: int, current_user=Depends(get_current_user)):
