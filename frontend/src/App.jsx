@@ -42,14 +42,6 @@ import TempPruebaResumenJornadaDev from './components/temp/TempPruebaResumenJorn
 import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
 import { useWebPushSubscription } from './hooks/useWebPushSubscription'
 import { BookOpen, Menu, X } from 'lucide-react'
-import {
-  buildGridTemplate,
-  mergeGrillasUiConfig,
-  minWidthFromColumns,
-  patchColumnWidth,
-  resolveVisibleColumns,
-} from './utils/grillasUiConfig'
-import ColumnResizeHandle from './components/ColumnResizeHandle'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
@@ -7274,45 +7266,6 @@ function ModuloSicoeObra({
 
   const [nivelesContrato, setNivelesContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
   const [nivelMasivoPanelContratista, setNivelMasivoPanelContratista] = useState(2)
-  const [grillasUiConfig, setGrillasUiConfig] = useState(() => mergeGrillasUiConfig(null))
-  const grillasSaveTimer = useRef(null)
-
-  useEffect(() => {
-    if (!contrato_id) {
-      setGrillasUiConfig(mergeGrillasUiConfig(null))
-      return
-    }
-    const ac = new AbortController()
-    fetch(`${API_URL}/contratos/${contrato_id}/grillas-ui-config`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-      signal: ac.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) setGrillasUiConfig(mergeGrillasUiConfig(data))
-      })
-      .catch(() => {})
-    return () => ac.abort()
-  }, [contrato_id, API_URL])
-
-  const persistGrillasUiConfig = useCallback(
-    (next) => {
-      setGrillasUiConfig(next)
-      if (!contrato_id) return
-      if (grillasSaveTimer.current) clearTimeout(grillasSaveTimer.current)
-      grillasSaveTimer.current = setTimeout(() => {
-        fetch(`${API_URL}/contratos/${contrato_id}/grillas-ui-config`, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${getToken()}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ grillas_ui_config: next }),
-        }).catch(() => {})
-      }, 600)
-    },
-    [contrato_id, API_URL],
-  )
 
   useEffect(() => {
     if (!contrato_id) {
@@ -9393,30 +9346,9 @@ function ModuloSicoeObra({
       return '—'
     }
   }
-  const sicoeColsVisibles = useMemo(
-    () =>
-      resolveVisibleColumns('sicoe_obra', grillasUiConfig, {
-        verEconomia: !!nivelInfo.verValoresEconomicos,
-      }),
-    [grillasUiConfig, nivelInfo.verValoresEconomicos],
-  )
-  const sicoeGrillaCols = useMemo(() => buildGridTemplate(sicoeColsVisibles), [sicoeColsVisibles])
-  const sicoeGrillaMinW = useMemo(() => minWidthFromColumns(sicoeColsVisibles), [sicoeColsVisibles])
-  const sicoeColVisible = useCallback(
-    (id) => sicoeColsVisibles.some((c) => c.id === id),
-    [sicoeColsVisibles],
-  )
-  const onSicoeColResizeEnd = useCallback(
-    (colId, widthPx) => {
-      persistGrillasUiConfig(patchColumnWidth(grillasUiConfig, 'sicoe_obra', colId, widthPx))
-    },
-    [grillasUiConfig, persistGrillasUiConfig],
-  )
-  const sicoeGrillaCell = {
-    minWidth: 0,
-    overflow: 'hidden',
-    wordBreak: 'break-word',
-  }
+  const sicoeGrillaCols = nivelInfo.verValoresEconomicos
+    ? '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
+    : '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px'
   // Varias capas: AND u OR según `validacion_capas_op` en backend; no refinar de nuevo con agregados por reporte
   const reportesMostrados = reportes
 
@@ -10953,83 +10885,60 @@ function ModuloSicoeObra({
             </button>
           </div>
         )}
-        {/* Desktop: header + filas en el mismo scroll/minWidth (evita solape entre columnas). */}
-        <div className="cc-sicoe-reportes-grid">
-          <div className="cc-sicoe-table-scroll">
-            <div style={{ minWidth: sicoeGrillaMinW }}>
-              <div
-                className="cc-sicoe-reportes-grid-head"
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: sicoeGrillaCols,
-                  gap: '8px',
-                  padding: '10px 16px',
-                  borderBottom: `1px solid ${t.border}`,
-                  fontSize: 'var(--cc-label)',
-                  fontWeight: '700',
-                  color: t.textMuted,
-                  letterSpacing: '0.5px',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 9,
-                  background: t.bgCard,
-                }}
-              >
-                {sicoeColsVisibles.map((col) => (
-                  <div
-                    key={col.id}
-                    style={{
-                      ...sicoeGrillaCell,
-                      position: 'relative',
-                      paddingRight: 8,
-                      textAlign: col.id === 'costo_directo' || col.id === 'regs' ? 'right' : 'left',
-                    }}
-                    title={
-                      col.id === 'fecha_creacion'
-                        ? 'Fecha de creación del reporte'
-                        : col.id === 'costo_directo'
-                          ? 'Suma de costo directo en líneas que cumplen el filtro de búsqueda actual'
-                          : col.id === 'regs'
-                            ? 'Líneas que cumplen el filtro de búsqueda actual'
-                            : col.label
-                    }
-                  >
-                    {col.label}
-                    <ColumnResizeHandle
-                      color={t.primary || '#94a3b8'}
-                      onResizeEnd={(w) => onSicoeColResizeEnd(col.id, w)}
-                    />
-                  </div>
-                ))}
-              </div>
+        {/* Header grid — sticky (desktop) */}
+        <div className="cc-sicoe-reportes-grid" style={{
+          display:'grid',
+          gridTemplateColumns: sicoeGrillaCols,
+          gap:'8px',
+          padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
+          fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
+          position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
+          <div>N° REP.</div>
+          <div title="Fecha de creación del reporte">F. CREACIÓN</div>
+          <div>TRAMO</div>
+          <div>COSTADO</div>
+          <div>ABCISA</div>
+          <div>NODO</div>
+          <div>DESCRIPCIÓN</div>
+          {nivelInfo.verValoresEconomicos && (
+            <div style={{ textAlign:'right' }} title="Suma de costo directo en líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta se usa la misma vista si la búsqueda sigue vigente.">
+              COSTO DIRECTO
+            </div>
+          )}
+          <div>CAPÍTULO</div>
+          <div style={{ textAlign:'right' }} title="Líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta coinciden con el resumen si la búsqueda sigue vigente.">
+            REGS.
+          </div>
+        </div>
 
-              {cargando && reportes.length === 0 ? (
-                <div style={{ padding: '40px', textAlign: 'center', color: t.textMuted }}>
-                  {busquedaAmplia
-                    ? <span>⏳ <strong>Búsqueda amplia detectada</strong> — esto puede tomar unos segundos.<br/>
-                        <span style={{ fontSize: 'var(--cc-sm)' }}>Combina filtros adicionales para resultados más rápidos.</span>
-                      </span>
-                    : 'Cargando reportes...'
-                  }
-                </div>
-              ) : !sicoeVistaResultadosActiva ? (
-                <div style={{ padding: '48px', textAlign: 'center', color: t.textMuted, fontSize: 'var(--cc-body)' }}>
-                  🔍 Defina criterios en <strong>Filtros</strong> y pulse <strong>Buscar</strong> para ver la grilla y el panel.
-                </div>
-              ) : reportes.length === 0 ? (
-                <div style={{ padding: '40px', textAlign: 'center', color: t.textMuted }}>
-                  Sin resultados para los filtros aplicados.
-                </div>
-              ) : (
-                reportesMostrados.map(rep => (
-          <div key={rep.id}
-            className="cc-sicoe-reportes-grid-row"
-            style={{
+        {/* Filas */}
+        {cargando && reportes.length === 0 ? (
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
+            {busquedaAmplia
+              ? <span>⏳ <strong>Búsqueda amplia detectada</strong> — esto puede tomar unos segundos.<br/>
+                  <span style={{fontSize:'var(--cc-sm)'}}>Combina filtros adicionales para resultados más rápidos.</span>
+                </span>
+              : 'Cargando reportes...'
+            }
+          </div>
+        ) : !sicoeVistaResultadosActiva ? (
+          <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-body)' }}>
+            🔍 Defina criterios en <strong>Filtros</strong> y pulse <strong>Buscar</strong> para ver la grilla y el panel.
+          </div>
+        ) : reportes.length === 0 ? (
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
+            Sin resultados para los filtros aplicados.
+          </div>
+        ) : (
+          <>
+          <div className="cc-sicoe-reportes-grid cc-sicoe-table-scroll" style={{ overflowX: sicoeCompact ? undefined : undefined }}>
+          {reportesMostrados.map(rep => (
+          <div key={rep.id} style={{
             display:'grid',
             gridTemplateColumns: sicoeGrillaCols,
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
-            transition:'background 0.15s' }}
+            transition:'background 0.15s', minWidth: 820 }}
             onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
                 ;(async () => {
@@ -11109,65 +11018,42 @@ function ModuloSicoeObra({
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-            {sicoeColsVisibles.map((col) => {
-              if (col.id === 'numero_reporte') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
-              }
-              if (col.id === 'fecha_creacion') {
-                return (
-                  <div
-                    key={col.id}
-                    style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }}
-                    title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
-                  >
-                    {fmtSicoeFechaCreacion(rep.created_at)}
-                  </div>
-                )
-              }
-              if (col.id === 'tramo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.tramo || ''}>{rep.tramo || '—'}</div>
-              }
-              if (col.id === 'costado') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.calzada || rep.margen || ''}>{rep.calzada || rep.margen || '—'}</div>
-              }
-              if (col.id === 'abcisa') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>{fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}</div>
-              }
-              if (col.id === 'nodo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>{fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}</div>
-              }
-              if (col.id === 'descripcion') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontWeight:'600' }} title={rep.descripcion_actividad || ''}>{rep.descripcion_actividad || '—'}</div>
-              }
-              if (col.id === 'costo_directo') {
-                return (
-                  <div key={col.id} className="cc-sicoe-num" style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
-                    {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
-                  </div>
-                )
-              }
-              if (col.id === 'capitulo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontSize:'var(--cc-label)', color:t.textMuted }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
-              }
-              if (col.id === 'regs') {
-                return (
-                  <div key={col.id} style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
-                    {rep.num_registros != null ? rep.num_registros : '—'}
-                  </div>
-                )
-              }
-              return <div key={col.id} style={sicoeGrillaCell}>—</div>
-            })}
-          </div>
-                ))
-              )}
+            <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
+            <div
+              style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3, whiteSpace:'nowrap' }}
+              title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
+            >
+              {fmtSicoeFechaCreacion(rep.created_at)}
+            </div>
+            <div style={{ color:t.text, fontSize:'var(--cc-sm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.tramo || ''}>
+              {rep.tramo || '—'}
+            </div>
+            <div style={{ color:t.text, fontSize:'var(--cc-sm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.calzada || rep.margen || ''}>
+              {rep.calzada || rep.margen || '—'}
+            </div>
+            <div style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}
+            </div>
+            <div style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}
+            </div>
+            <div style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis' }}>{rep.descripcion_actividad || '—'}</div>
+            {nivelInfo.verValoresEconomicos && (
+              <div className="cc-sicoe-num" style={{ fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
+                {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
+              </div>
+            )}
+            <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
+              {rep.num_registros != null ? rep.num_registros : '—'}
             </div>
           </div>
-        </div>
+        ))}
+          </div>
 
-          {/* Móvil: tarjetas de reportes (ocultas en desktop vía CSS) */}
+          {/* Móvil: tarjetas de reportes */}
           <div className="cc-sicoe-reportes-cards">
-            {sicoeVistaResultadosActiva && !cargando ? reportesMostrados.map(rep => (
+            {reportesMostrados.map(rep => (
               <div
                 key={`card-rep-${rep.id}`}
                 className="cc-sicoe-reporte-card"
@@ -11275,8 +11161,10 @@ function ModuloSicoeObra({
                   )}
                 </div>
               </div>
-            )) : null}
+            ))}
           </div>
+          </>
+        )}
 
         {/* Footer: cargar más / spinner / fin */}
         {busquedaRealizada && reportes.length > 0 && (

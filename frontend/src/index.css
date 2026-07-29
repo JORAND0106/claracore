@@ -742,20 +742,6 @@ select.cc-dashboard-acta-select--light option {
   display: block;
 }
 
-.cc-sicoe-reportes-grid-head,
-.cc-sicoe-reportes-grid-row {
-  box-sizing: border-box;
-  width: 100%;
-}
-
-.cc-sicoe-reportes-grid-head > *,
-.cc-sicoe-reportes-grid-row > * {
-  min-width: 0;
-  overflow: hidden;
-  /* Sin truncado forzado nowrap: el contenido puede envolver; anchos vienen de config por contrato */
-  word-break: break-word;
-}
-
 .cc-sicoe-reg-cards {
   display: none;
 }

@@ -15,14 +15,11 @@ import {
   mergeExportPalette,
   setExportPaletteTier,
 } from "./utils/exportPalette";
-import { mergeGrillasUiConfig, defaultGrillasUiConfig } from "./utils/grillasUiConfig";
-import ContratoGrillasUiTab from "./components/ContratoGrillasUiTab";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
   { id: "financiera", label: "Información financiera" },
   { id: "exportacion", label: "Paleta exportación" },
-  { id: "grillas", label: "Columnas de grilla", editOnly: true },
   { id: "niveles", label: "Niveles de validación", editOnly: true },
   { id: "licencia", label: "Contrato de licenciamiento", devOnly: true, editOnly: true },
   { id: "ordenes", label: "Órdenes de pago", devOnly: true, editOnly: true },
@@ -915,16 +912,6 @@ export default function ContratoEditModal({
             </div>
           )}
 
-          {tab === "grillas" && isEdit && (
-            <ContratoGrillasUiTab
-              form={form}
-              setForm={setForm}
-              ui={ui}
-              font={font}
-              disabled={!perms?.editar}
-            />
-          )}
-
           {tab === "niveles" && isEdit && (
             <div>
               <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>Niveles de Validación SICOE</div>
@@ -976,7 +963,7 @@ export default function ContratoEditModal({
           )}
         </div>
 
-        {(tab === "info" || tab === "financiera" || tab === "exportacion" || tab === "grillas" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
+        {(tab === "info" || tab === "financiera" || tab === "exportacion" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
           <div
             style={{
               padding: "12px 20px 16px",
