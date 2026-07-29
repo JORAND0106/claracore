@@ -15166,6 +15166,10 @@ def offline_pack(
     # 5. Semanas
     semanas = []
     try:
+        try:
+            _asegurar_semana_vigente_sicoe(int(contrato_id))
+        except Exception:
+            pass
         semanas = supabase.table("so_semanas").select("*") \
             .eq("contrato_id", contrato_id).execute().data or []
     except Exception as e:
@@ -18687,6 +18691,10 @@ def analisis_registros_obra(
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
 def filtros_semanas(contrato_id: int, current_user=Depends(get_current_user)):
+    try:
+        _asegurar_semana_vigente_sicoe(int(contrato_id))
+    except Exception:
+        pass
     def _q():
         return supabase.table("so_semanas").select("id, numero_semana, fecha_inicio, fecha_fin")\
             .eq("contrato_id", contrato_id).order("numero_semana", desc=True).execute().data
@@ -19335,22 +19343,8 @@ def _sicoe_resolver_acta_semana_corte(
 
     semana_id = None
     try:
-
-        def _sem():
-            return (
-                supabase.table("so_semanas")
-                .select("id, numero_semana")
-                .eq("contrato_id", contrato_id)
-                .eq("estado", "activa")
-                .lte("fecha_inicio", today)
-                .gte("fecha_fin", today)
-                .limit(1)
-                .execute()
-                .data
-            )
-
-        sems = supabase_execute(_sem)
-        semana_id = sems[0]["id"] if sems else None
+        vigente_sem = _asegurar_semana_vigente_sicoe(int(contrato_id))
+        semana_id = vigente_sem.get("id") if vigente_sem else None
     except Exception:
         semana_id = None
 
@@ -22122,17 +22116,9 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         semana_id = reporte.get("semana_id")
         if not semana_id:
             try:
-                def _sem():
-                    return supabase.table("so_semanas")\
-                        .select("id, numero_semana")\
-                        .eq("contrato_id", contrato_id)\
-                        .eq("estado", "activa")\
-                        .lte("fecha_inicio", today)\
-                        .gte("fecha_fin", today)\
-                        .limit(1).execute().data
-                sems = supabase_execute(_sem)
-                semana_id = sems[0]["id"] if sems else None
-            except:
+                vigente_sem = _asegurar_semana_vigente_sicoe(int(contrato_id))
+                semana_id = vigente_sem.get("id") if vigente_sem else None
+            except Exception:
                 semana_id = None
 
         upd_reg_payload = {
@@ -22314,8 +22300,126 @@ class SemanaCreate(BaseModel):
     dia_corte:     int  # 0=Lunes … 6=Domingo
     estado:        str = "activa"
 
+
+def _siguiente_bloque_semana_sicoe(fecha_fin_anterior: date) -> Tuple[date, date]:
+    """Siguiente semana de 7 días exactos sin hueco: inicio = día siguiente al fin anterior."""
+    f_ini = fecha_fin_anterior + timedelta(days=1)
+    f_fin = fecha_fin_anterior + timedelta(days=7)
+    return f_ini, f_fin
+
+
+def _asegurar_semana_vigente_sicoe(
+    contrato_id: int,
+    *,
+    ref_date: Optional[date] = None,
+    max_semanas: int = 52,
+) -> Optional[dict]:
+    """
+    Garantiza una semana activa que cubra ref_date (hoy por defecto).
+    Si la última semana ya venció, genera automáticamente las siguientes en
+    bloques de 7 días sin huecos (inicio = fin_anterior + 1 día), copiando
+    dia_corte de la última semana. Si no hay seed, no inventa la primera.
+    """
+    hoy = ref_date or date.today()
+    today_s = hoy.isoformat()
+    cid = int(contrato_id)
+
+    def _vigente():
+        return (
+            supabase.table("so_semanas")
+            .select("*")
+            .eq("contrato_id", cid)
+            .eq("estado", "activa")
+            .lte("fecha_inicio", today_s)
+            .gte("fecha_fin", today_s)
+            .order("numero_semana", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    vigentes = supabase_execute(_vigente) or []
+    if vigentes:
+        return vigentes[0]
+
+    def _ultima():
+        return (
+            supabase.table("so_semanas")
+            .select("*")
+            .eq("contrato_id", cid)
+            .order("numero_semana", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    ultimas = supabase_execute(_ultima) or []
+    if not ultimas:
+        return None
+
+    ultima = ultimas[0]
+    try:
+        num = int(ultima.get("numero_semana") or 0)
+        fi_prev = date.fromisoformat(str(ultima["fecha_inicio"]))
+        ff_prev = date.fromisoformat(str(ultima["fecha_fin"]))
+        dia_corte = int(ultima["dia_corte"]) if ultima.get("dia_corte") is not None else 4
+    except (TypeError, ValueError, KeyError):
+        return None
+
+    # No inventar semanas hacia atrás ni solapar una última que aún no empieza.
+    if fi_prev > hoy:
+        return None
+
+    # Última cubre hoy pero no estaba "activa" (u otra anomalía): no regenerar encima.
+    if fi_prev <= hoy <= ff_prev:
+        return None
+
+    creado = None
+    for _ in range(max(1, int(max_semanas or 52))):
+        f_ini, f_fin = _siguiente_bloque_semana_sicoe(ff_prev)
+        if f_fin <= f_ini:
+            break
+        num += 1
+        row = {
+            "contrato_id": cid,
+            "numero_semana": num,
+            "fecha_inicio": f_ini.isoformat(),
+            "fecha_fin": f_fin.isoformat(),
+            "dia_corte": dia_corte,
+            "estado": "activa",
+        }
+        try:
+            ins = supabase.table("so_semanas").insert(row).execute()
+            creado = (ins.data or [row])[0]
+        except Exception:
+            vigentes = supabase_execute(_vigente) or []
+            if vigentes:
+                return vigentes[0]
+            # Posible carrera parcial: releer última y continuar desde ahí.
+            ultimas = supabase_execute(_ultima) or []
+            if not ultimas:
+                break
+            try:
+                ultima = ultimas[0]
+                num = int(ultima.get("numero_semana") or num)
+                ff_prev = date.fromisoformat(str(ultima["fecha_fin"]))
+            except (TypeError, ValueError, KeyError):
+                break
+            continue
+        if f_ini <= hoy <= f_fin:
+            return creado
+        ff_prev = f_fin
+
+    vigentes = supabase_execute(_vigente) or []
+    return vigentes[0] if vigentes else creado
+
+
 @app.get("/sicoe-obra/{contrato_id}/semanas")
 def listar_semanas(contrato_id: int, current_user=Depends(get_current_user)):
+    try:
+        _asegurar_semana_vigente_sicoe(int(contrato_id))
+    except Exception:
+        pass
     def _q():
         return supabase.table("so_semanas")\
             .select("*").eq("contrato_id", contrato_id)\
@@ -22331,8 +22435,11 @@ def crear_semanas(contrato_id: int, body: List[SemanaCreate], current_user=Depen
 
 @app.get("/sicoe-obra/{contrato_id}/semana-vigente")
 def semana_vigente(contrato_id: int, current_user=Depends(get_current_user)):
-    from datetime import date
     today = date.today().isoformat()
+    try:
+        _asegurar_semana_vigente_sicoe(int(contrato_id))
+    except Exception:
+        pass
     def _vig():
         return supabase.table("so_semanas")\
             .select("*").eq("contrato_id", contrato_id).eq("estado", "activa")\
@@ -22353,7 +22460,6 @@ def semana_vigente(contrato_id: int, current_user=Depends(get_current_user)):
 @app.post("/sicoe-obra/{contrato_id}/semanas/extender")
 def extender_semanas(contrato_id: int, n_semanas: int, current_user=Depends(get_current_user)):
     """Agrega n_semanas adicionales continuando desde la última semana existente"""
-    from datetime import date, timedelta
     def _ultima():
         return supabase.table("so_semanas")\
             .select("numero_semana, fecha_fin, dia_corte")\
