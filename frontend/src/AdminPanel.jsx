@@ -3870,6 +3870,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const [statsLoading,     setStatsLoading]     = useState(false);
   const [saving,           setSaving]           = useState(false);
   const [recalculando,     setRecalculando]     = useState(false);
+  const [recalcMsg,        setRecalcMsg]        = useState(null);
   const [showCrear,        setShowCrear]        = useState(false);
   const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
   const [creating,         setCreating]         = useState(false);
@@ -4477,6 +4478,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const abrirDetalle = async (item) => {
     setPopup({ ...item });
     setStats(null);
+    setRecalcMsg(null);
     setUModoCustomP(false);
     setUCustomP("");
     setStatsLoading(true);
@@ -4537,13 +4539,38 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const recalcular = async () => {
     if (!popup) return;
-    if (!window.confirm("¿Recalcular todos los registros de cobro de este ítem de Pendiente → Aprobado?")) return;
+    if (!window.confirm(
+      "¿Recalcular el costo directo de todos los registros de este ítem con el valor unitario vigente?\n\n"
+      + "No se modificarán cantidades. Los registros de actas ya firmadas quedarán excluidos."
+    )) return;
     setRecalculando(true);
+    setRecalcMsg(null);
     try {
       const res = await call("POST", `/listado-precios/item/${popup.id}/recalcular`);
-      setMsg({ type:"success", text:`✅ ${res.recalculados} registros de cobro actualizados a Aprobado.` });
-    } catch (e) { setMsg({ type:"error", text:e.message }); }
-    finally { setRecalculando(false); }
+      const n = Number(res?.recalculados || 0);
+      const omitFirm = Number(res?.omitidos_acta_firmada || 0);
+      const omitSell = Number(res?.omitidos_sellados || 0);
+      const partes = [`✅ ${n} registro(s) actualizados con el valor unitario vigente.`];
+      if (omitFirm > 0) partes.push(`${omitFirm} omitido(s) por pertenecer a actas firmadas.`);
+      if (omitSell > 0) partes.push(`${omitSell} omitido(s) por estar sellados.`);
+      if (n === 0 && omitFirm === 0 && omitSell === 0) {
+        partes.length = 0;
+        partes.push("No había registros pendientes de recálculo para este ítem (ya estaban al día).");
+      }
+      const text = partes.join(" ");
+      setRecalcMsg({ type: "success", text });
+      setMsg({ type: "success", text });
+      try {
+        const freshStats = await call("GET", `/listado-precios/item/${popup.id}/stats`);
+        if (freshStats) setStats(freshStats);
+      } catch { /* ignore */ }
+    } catch (e) {
+      const text = e?.message || "No se pudo recalcular los cobros.";
+      setRecalcMsg({ type: "error", text });
+      setMsg({ type: "error", text });
+    } finally {
+      setRecalculando(false);
+    }
   };
 
   // ── Plantilla CSV ──────────────────────────────────────────────────────────
@@ -5267,9 +5294,29 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                       </span>
                     )}
                     {perms?.validar && popupEsAprobado && (
-                      <button style={S.btn("primary",true)} onClick={recalcular} disabled={recalculando}>
-                        {recalculando?"Recalculando...":"⟳ Recalcular Cobros"}
-                      </button>
+                      <div style={{display:"flex",flexDirection:"column",gap:8,width:"100%",alignItems:"flex-start"}}>
+                        <button style={S.btn("primary",true)} onClick={recalcular} disabled={recalculando}>
+                          {recalculando?"Recalculando...":"⟳ Recalcular Cobros"}
+                        </button>
+                        {recalcMsg && (
+                          <div
+                            style={{
+                              ...S.alert(recalcMsg.type),
+                              width: "100%",
+                              boxSizing: "border-box",
+                              margin: 0,
+                            }}
+                          >
+                            {recalcMsg.text}
+                            <span
+                              onClick={() => setRecalcMsg(null)}
+                              style={{ float: "right", cursor: "pointer", opacity: 0.6 }}
+                            >
+                              ✕
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
