@@ -9334,14 +9334,18 @@ function ModuloSicoeObra({
     if (pa === '—' && pb === '—') return '—'
     return `${pa} → ${pb}`
   }
-  /** Fecha de creación del reporte (mismo criterio es-CO que registros / carpeta). */
+  /** Fecha de creación del reporte en grilla: 09/Jul/26 */
   const fmtSicoeFechaCreacion = (ts) => {
     if (!ts) return '—'
     try {
       const n = /Z$|[+-]\d{2}:\d{2}$/.test(String(ts)) ? String(ts) : `${ts}Z`
       const d = new Date(n)
       if (isNaN(d)) return '—'
-      return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+      const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+      const dd = String(d.getDate()).padStart(2, '0')
+      const mon = MESES[d.getMonth()]
+      const yy = String(d.getFullYear()).slice(-2)
+      return `${dd}/${mon}/${yy}`
     } catch {
       return '—'
     }
@@ -10893,16 +10897,16 @@ function ModuloSicoeObra({
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
-          <div>N° REP.</div>
-          <div title="Fecha de creación del reporte">F. CREACIÓN</div>
+          <div style={{ whiteSpace: 'nowrap' }} title="N° reporte">Rep</div>
+          <div style={{ whiteSpace: 'nowrap' }} title="Fecha de creación del reporte">F. Crea.</div>
           <div>TRAMO</div>
           <div>COSTADO</div>
           <div>ABCISA</div>
           <div>NODO</div>
           <div>DESCRIPCIÓN</div>
           {nivelInfo.verValoresEconomicos && (
-            <div style={{ textAlign:'right' }} title="Suma de costo directo en líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta se usa la misma vista si la búsqueda sigue vigente.">
-              COSTO DIRECTO
+            <div style={{ textAlign:'right', whiteSpace: 'nowrap' }} title="Costo directo — suma en líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta se usa la misma vista si la búsqueda sigue vigente.">
+              C. Dir.
             </div>
           )}
           <div>CAPÍTULO</div>
@@ -11037,7 +11041,12 @@ function ModuloSicoeObra({
             <div style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
               {fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}
             </div>
-            <div style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis' }}>{rep.descripcion_actividad || '—'}</div>
+            <div
+              style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+              title={rep.descripcion_actividad ? String(rep.descripcion_actividad) : undefined}
+            >
+              {rep.descripcion_actividad || '—'}
+            </div>
             {nivelInfo.verValoresEconomicos && (
               <div className="cc-sicoe-num" style={{ fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
                 {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
