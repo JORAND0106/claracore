@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
 import { mergeExportPalette, EXPORT_PALETTE_DEFAULTS } from "./utils/exportPalette";
+import { defaultGrillasUiConfig, mergeGrillasUiConfig } from "./utils/grillasUiConfig";
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
@@ -2703,6 +2704,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     valor_componente_ambiental: '', valor_componente_social: '', valor_componente_pmt: '', costo_directo_contrato: '',
     costos_adicionales_lista: [],
     export_palette: { ...EXPORT_PALETTE_DEFAULTS },
+    grillas_ui_config: defaultGrillasUiConfig(),
   };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
@@ -2869,6 +2871,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       costo_directo_contrato: d.costo_directo_contrato != null ? String(d.costo_directo_contrato) : '',
       costos_adicionales_lista,
       export_palette: mergeExportPalette(d.export_palette),
+      grillas_ui_config: mergeGrillasUiConfig(d.grillas_ui_config),
     });
     setPlanoArchivoLabel(planoLimpio && (planoLimpio.features || []).length ? 'Plano guardado en servidor' : null);
   }
