@@ -11590,21 +11590,21 @@ function ModuloSicoeObra({
               }}
             >
               <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
-                <div style={{ fontSize:'var(--cc-body)', fontWeight:'900', color:'#fff' }}>⬇ Exportar registros a Excel</div>
-                <div style={{ fontSize:'var(--cc-sm)', color:'#94A3B8' }}>Elige los campos de so_registros que quieres descargar.</div>
+                <div style={{ fontSize:'var(--cc-body)', fontWeight:'900', color:'#F8FAFC' }}>⬇ Exportar registros a Excel</div>
+                <div style={{ fontSize:'var(--cc-sm)', color:'#CBD5E1' }}>Elige los campos de so_registros que quieres descargar.</div>
               </div>
               <button
                 onClick={() => setExportModalOpen(false)}
-                style={{ background:'transparent', border:'none', color:t.textMuted, cursor:'pointer', fontSize:'var(--cc-title)' }}
+                style={{ background:'transparent', border:'none', color:'#E2E8F0', cursor:'pointer', fontSize:'var(--cc-title)' }}
                 aria-label="Cerrar"
               >
                 ✕
               </button>
             </div>
 
-            <div style={{ padding:'16px 20px', overflowY:'auto' }}>
+            <div style={{ padding:'16px 20px', overflowY:'auto', background: t.bgCard }}>
               {exportCargandoCampos ? (
-                <div style={{ textAlign:'center', color:t.textMuted, padding:'28px 0' }}>Consultando campos...</div>
+                <div style={{ textAlign:'center', color:t.text, padding:'28px 0' }}>Consultando campos...</div>
               ) : (
                 <>
                   <div
@@ -11613,17 +11613,17 @@ function ModuloSicoeObra({
                       padding: '12px 14px',
                       border: `1px solid ${t.border}`,
                       borderRadius: '12px',
-                      background: '#0B1220',
+                      background: t.bg,
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '10px',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.textMuted }}>
+                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>
                         Plantillas de campos
                       </div>
-                      <div style={{ fontSize: 'var(--cc-label)', color: '#94A3B8' }}>
+                      <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600 }}>
                         Opcional: puedes seguir eligiendo campos a mano.
                       </div>
                     </div>
@@ -11661,24 +11661,27 @@ function ModuloSicoeObra({
                           </option>
                         ))}
                       </select>
-                      {exportPlantillaActivaId != null && (
-                        <button
-                          type="button"
-                          onClick={(ev) => eliminarExportPlantillaActual(exportPlantillaActivaId, ev)}
-                          disabled={exportGuardandoPlantilla || exportando}
-                          style={{
-                            background: 'transparent',
-                            border: `1px solid ${t.border}`,
-                            borderRadius: '10px',
-                            padding: '10px 14px',
-                            color: '#F87171',
-                            cursor: (exportGuardandoPlantilla || exportando) ? 'not-allowed' : 'pointer',
-                            fontWeight: 700,
-                          }}
-                        >
-                          Eliminar
-                        </button>
-                      )}
+                      {exportPlantillaActivaId != null && (() => {
+                        const elimDisabled = exportGuardandoPlantilla || exportando
+                        return (
+                          <button
+                            type="button"
+                            onClick={(ev) => eliminarExportPlantillaActual(exportPlantillaActivaId, ev)}
+                            disabled={elimDisabled}
+                            style={{
+                              background: elimDisabled ? t.bgCard : t.bgCard,
+                              border: `1px solid ${elimDisabled ? t.border : '#FCA5A5'}`,
+                              borderRadius: '10px',
+                              padding: '10px 14px',
+                              color: elimDisabled ? t.textMuted : '#B91C1C',
+                              cursor: elimDisabled ? 'not-allowed' : 'pointer',
+                              fontWeight: 700,
+                            }}
+                          >
+                            Eliminar
+                          </button>
+                        )
+                      })()}
                     </div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                       <input
@@ -11697,66 +11700,56 @@ function ModuloSicoeObra({
                           fontSize: 'var(--cc-sm)',
                         }}
                       />
-                      <button
-                        type="button"
-                        onClick={guardarExportPlantillaActual}
-                        disabled={
+                      {(() => {
+                        const guardarDisabled =
                           exportGuardandoPlantilla
                           || exportando
                           || !String(exportNombrePlantilla || '').trim()
                           || exportSeleccionCampos.length === 0
-                        }
-                        style={{
-                          background: t.primary,
-                          border: 'none',
-                          borderRadius: '10px',
-                          padding: '10px 14px',
-                          color: '#fff',
-                          cursor: (
-                            exportGuardandoPlantilla
-                            || exportando
-                            || !String(exportNombrePlantilla || '').trim()
-                            || exportSeleccionCampos.length === 0
-                          ) ? 'not-allowed' : 'pointer',
-                          opacity: (
-                            exportGuardandoPlantilla
-                            || exportando
-                            || !String(exportNombrePlantilla || '').trim()
-                            || exportSeleccionCampos.length === 0
-                          ) ? 0.65 : 1,
-                          fontWeight: 800,
-                        }}
-                      >
-                        {exportGuardandoPlantilla ? 'Guardando…' : 'Guardar nueva'}
-                      </button>
-                      {exportPlantillaActivaId != null && (
-                        <button
-                          type="button"
-                          onClick={actualizarExportPlantillaActual}
-                          disabled={
-                            exportGuardandoPlantilla
-                            || exportando
-                            || !String(exportNombrePlantilla || '').trim()
-                            || exportSeleccionCampos.length === 0
-                          }
-                          style={{
-                            background: 'transparent',
-                            border: `1px solid ${t.border}`,
-                            borderRadius: '10px',
-                            padding: '10px 14px',
-                            color: t.text,
-                            cursor: (
-                              exportGuardandoPlantilla
-                              || exportando
-                              || !String(exportNombrePlantilla || '').trim()
-                              || exportSeleccionCampos.length === 0
-                            ) ? 'not-allowed' : 'pointer',
-                            fontWeight: 700,
-                          }}
-                        >
-                          Actualizar plantilla
-                        </button>
-                      )}
+                        return (
+                          <button
+                            type="button"
+                            onClick={guardarExportPlantillaActual}
+                            disabled={guardarDisabled}
+                            style={{
+                              background: guardarDisabled ? t.border : t.primary,
+                              border: 'none',
+                              borderRadius: '10px',
+                              padding: '10px 14px',
+                              color: guardarDisabled ? t.text : '#fff',
+                              cursor: guardarDisabled ? 'not-allowed' : 'pointer',
+                              fontWeight: 800,
+                            }}
+                          >
+                            {exportGuardandoPlantilla ? 'Guardando…' : 'Guardar nueva'}
+                          </button>
+                        )
+                      })()}
+                      {exportPlantillaActivaId != null && (() => {
+                        const actualizarDisabled =
+                          exportGuardandoPlantilla
+                          || exportando
+                          || !String(exportNombrePlantilla || '').trim()
+                          || exportSeleccionCampos.length === 0
+                        return (
+                          <button
+                            type="button"
+                            onClick={actualizarExportPlantillaActual}
+                            disabled={actualizarDisabled}
+                            style={{
+                              background: actualizarDisabled ? t.bgCard : t.bgCard,
+                              border: `1px solid ${t.border}`,
+                              borderRadius: '10px',
+                              padding: '10px 14px',
+                              color: actualizarDisabled ? t.textMuted : t.text,
+                              cursor: actualizarDisabled ? 'not-allowed' : 'pointer',
+                              fontWeight: 700,
+                            }}
+                          >
+                            Actualizar plantilla
+                          </button>
+                        )
+                      })()}
                     </div>
                   </div>
 
@@ -11767,64 +11760,107 @@ function ModuloSicoeObra({
                       onChange={e => setExportFiltroCampo(e.target.value)}
                       style={{ flex:'1 1 260px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', color:t.text, outline:'none', fontSize:'var(--cc-sm)' }}
                     />
-                    <button
-                      onClick={() => {
-                        setExportSeleccionCampos(exportCampos)
-                        setExportPlantillaActivaId(null)
-                      }}
-                      disabled={!exportCampos.length || exportando}
-                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:(!exportCampos.length || exportando) ? 'not-allowed' : 'pointer', fontWeight:'700' }}
-                    >
-                      Seleccionar todo
-                    </button>
-                    <button
-                      onClick={() => {
-                        setExportSeleccionCampos([])
-                        setExportPlantillaActivaId(null)
-                        setExportNombrePlantilla('')
-                      }}
-                      disabled={exportando}
-                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:exportando ? 'not-allowed' : 'pointer', fontWeight:'700' }}
-                    >
-                      Limpiar
-                    </button>
+                    {(() => {
+                      const selTodoDisabled = !exportCampos.length || exportando
+                      return (
+                        <button
+                          onClick={() => {
+                            setExportSeleccionCampos(exportCampos)
+                            setExportPlantillaActivaId(null)
+                          }}
+                          disabled={selTodoDisabled}
+                          style={{
+                            background: t.bgCard,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '10px',
+                            padding: '10px 14px',
+                            color: selTodoDisabled ? t.textMuted : t.text,
+                            cursor: selTodoDisabled ? 'not-allowed' : 'pointer',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Seleccionar todo
+                        </button>
+                      )
+                    })()}
+                    {(() => {
+                      const limpiarDisabled = exportando
+                      return (
+                        <button
+                          onClick={() => {
+                            setExportSeleccionCampos([])
+                            setExportPlantillaActivaId(null)
+                            setExportNombrePlantilla('')
+                          }}
+                          disabled={limpiarDisabled}
+                          style={{
+                            background: t.bgCard,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '10px',
+                            padding: '10px 14px',
+                            color: limpiarDisabled ? t.textMuted : t.text,
+                            cursor: limpiarDisabled ? 'not-allowed' : 'pointer',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Limpiar
+                        </button>
+                      )
+                    })()}
                   </div>
 
                   {exportError && (
-                    <div style={{ marginBottom:'12px', background:'#EF444415', border:'1px solid #EF444440', padding:'12px 14px', borderRadius:'12px', color:t.text }}>
+                    <div style={{ marginBottom:'12px', background:'#FEF2F2', border:'1px solid #FECACA', padding:'12px 14px', borderRadius:'12px', color:'#991B1B' }}>
                       {exportError}
                     </div>
                   )}
 
-                  <div style={{ border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'hidden' }}>
-                    <div style={{ padding:'10px 14px', background:'#0B1220', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px' }}>
-                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.textMuted }}>
+                  <div style={{ border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'hidden', background: t.bgCard }}>
+                    <div style={{ padding:'10px 14px', background:t.bg, borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px' }}>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.text }}>
                         {exportSeleccionCampos.length} campo(s) seleccionados
                       </div>
-                      <div style={{ fontSize:'var(--cc-label)', color:'#94A3B8' }}>
+                      <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, fontWeight: 600 }}>
                         Tip: puedes seleccionar pocos campos para acelerar.
                       </div>
                     </div>
-                    <div style={{ maxHeight:'360px', overflowY:'auto', padding:'10px 14px' }}>
+                    <div style={{ maxHeight:'360px', overflowY:'auto', padding:'10px 14px', background: t.bgCard }}>
                       {camposVista.length === 0 ? (
-                        <div style={{ color:t.textMuted, textAlign:'center', padding:'18px 0' }}>Sin campos para mostrar</div>
+                        <div style={{ color:t.textMuted, textAlign:'center', padding:'18px 0', fontWeight: 600 }}>Sin campos para mostrar</div>
                       ) : (
                         <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap:'8px 12px' }}>
-                          {camposVista.map(c => (
-                            <label
-                              key={c}
-                              style={{ display:'flex', gap:'10px', alignItems:'center', padding:'6px 8px', border:`1px solid ${t.border}`, borderRadius:'10px', background:'transparent' }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={exportSeleccionCampos.includes(c)}
-                                onChange={() => toggleCampo(c)}
-                              />
-                              <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'700', lineHeight:1.2 }}>
-                                {prettyCampo(c)}
-                              </span>
-                            </label>
-                          ))}
+                          {camposVista.map(c => {
+                            const checked = exportSeleccionCampos.includes(c)
+                            return (
+                              <label
+                                key={c}
+                                style={{
+                                  display: 'flex',
+                                  gap: '10px',
+                                  alignItems: 'center',
+                                  padding: '6px 8px',
+                                  border: `1px solid ${checked ? t.primary : t.border}`,
+                                  borderRadius: '10px',
+                                  background: checked ? `${t.primary}12` : t.inputBg,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleCampo(c)}
+                                />
+                                <span style={{
+                                  fontSize: 'var(--cc-sm)',
+                                  color: t.text,
+                                  fontWeight: checked ? 800 : 600,
+                                  lineHeight: 1.2,
+                                }}>
+                                  {prettyCampo(c)}
+                                </span>
+                              </label>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -11844,20 +11880,46 @@ function ModuloSicoeObra({
                 flexShrink:0,
               }}
             >
-              <button
-                onClick={() => setExportModalOpen(false)}
-                disabled={exportando}
-                style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 16px', color:t.textMuted, cursor:exportando ? 'not-allowed' : 'pointer', fontWeight:'800' }}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={descargarExcelRegistros}
-                disabled={exportando || exportCargandoCampos || exportSeleccionCampos.length === 0}
-                style={{ background:t.primary, border:'none', borderRadius:'10px', padding:'10px 16px', color:'#fff', cursor:(exportando || exportCargandoCampos || exportSeleccionCampos.length === 0) ? 'not-allowed' : 'pointer', opacity:(exportando || exportCargandoCampos || exportSeleccionCampos.length === 0) ? 0.65 : 1, fontWeight:'900' }}
-              >
-                {exportando ? 'Generando...' : 'Descargar Excel'}
-              </button>
+              {(() => {
+                const cancelDisabled = exportando
+                return (
+                  <button
+                    onClick={() => setExportModalOpen(false)}
+                    disabled={cancelDisabled}
+                    style={{
+                      background: cancelDisabled ? '#1E293B' : '#1E293B',
+                      border: '1px solid #64748B',
+                      borderRadius: '10px',
+                      padding: '10px 16px',
+                      color: cancelDisabled ? '#94A3B8' : '#F8FAFC',
+                      cursor: cancelDisabled ? 'not-allowed' : 'pointer',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                )
+              })()}
+              {(() => {
+                const descDisabled = exportando || exportCargandoCampos || exportSeleccionCampos.length === 0
+                return (
+                  <button
+                    onClick={descargarExcelRegistros}
+                    disabled={descDisabled}
+                    style={{
+                      background: descDisabled ? '#64748B' : t.primary,
+                      border: 'none',
+                      borderRadius: '10px',
+                      padding: '10px 16px',
+                      color: '#F8FAFC',
+                      cursor: descDisabled ? 'not-allowed' : 'pointer',
+                      fontWeight: 900,
+                    }}
+                  >
+                    {exportando ? 'Generando...' : 'Descargar Excel'}
+                  </button>
+                )
+              })()}
             </div>
           </div>
         </div>
