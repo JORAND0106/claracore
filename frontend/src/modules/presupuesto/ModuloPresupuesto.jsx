@@ -12,6 +12,13 @@ import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import { useClaraViewport } from '../../useClaraViewport'
+import {
+  mergeGrillasUiConfig,
+  minWidthFromColumns,
+  patchColumnWidth,
+  resolveVisibleColumns,
+} from '../../utils/grillasUiConfig'
+import ColumnResizeHandle from '../../components/ColumnResizeHandle'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
@@ -1137,6 +1144,112 @@ useEffect(() => {
   const puedeAbrirEdicionMasiva =
     puedeTabEditarMasiva || puedeTabDepuracionMasiva || puedeTabInterventoriaMasiva
   const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
+  const [grillasUiConfig, setGrillasUiConfig] = useState(() => mergeGrillasUiConfig(null))
+  const grillasSaveTimer = useRef(null)
+
+  useEffect(() => {
+    if (!contratoId) {
+      setGrillasUiConfig(mergeGrillasUiConfig(null))
+      return
+    }
+    const ac = new AbortController()
+    fetch(`${API}/contratos/${contratoId}/grillas-ui-config`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: ac.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setGrillasUiConfig(mergeGrillasUiConfig(data))
+      })
+      .catch(() => {})
+    return () => ac.abort()
+  }, [contratoId, API, token])
+
+  const persistGrillasUiConfig = useCallback(
+    (next) => {
+      setGrillasUiConfig(next)
+      if (!contratoId || !token) return
+      if (grillasSaveTimer.current) clearTimeout(grillasSaveTimer.current)
+      grillasSaveTimer.current = setTimeout(() => {
+        fetch(`${API}/contratos/${contratoId}/grillas-ui-config`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ grillas_ui_config: next }),
+        }).catch(() => {})
+      }, 600)
+    },
+    [contratoId, API, token],
+  )
+
+  const pptoColsVisibles = useMemo(
+    () =>
+      resolveVisibleColumns('presupuesto', grillasUiConfig, {
+        verEconomia: !!nivelInfo.verValoresEconomicos,
+        verDepuracion: !!mostrarColumnaDepuracion,
+      }),
+    [grillasUiConfig, nivelInfo.verValoresEconomicos, mostrarColumnaDepuracion],
+  )
+  const pptoTablaMinW = useMemo(() => minWidthFromColumns(pptoColsVisibles), [pptoColsVisibles])
+  const pptoShow = useCallback(
+    (id) => pptoColsVisibles.some((c) => c.id === id),
+    [pptoColsVisibles],
+  )
+  const pptoColW = useCallback(
+    (id) => {
+      const c = pptoColsVisibles.find((x) => x.id === id)
+      if (!c) return {}
+      return { width: c.width, maxWidth: Math.max(c.width, 40), boxSizing: 'border-box' }
+    },
+    [pptoColsVisibles],
+  )
+  const onPptoColResizeEnd = useCallback(
+    (colId, widthPx) => {
+      persistGrillasUiConfig(patchColumnWidth(grillasUiConfig, 'presupuesto', colId, widthPx))
+    },
+    [grillasUiConfig, persistGrillasUiConfig],
+  )
+  const pptoThBase = useMemo(
+    () => ({
+      padding: '8px 10px',
+      fontSize: 'var(--cc-sm)',
+      fontWeight: '700',
+      letterSpacing: '0.5px',
+      color: t.textMuted,
+      borderBottom: `1px solid ${t.border}`,
+      textAlign: 'left',
+      whiteSpace: 'normal',
+      wordBreak: 'break-word',
+      overflow: 'hidden',
+    }),
+    [t.textMuted, t.border],
+  )
+  const pptoTh = useCallback(
+    (id, label, extraStyle = {}, title) => {
+      if (!pptoShow(id)) return null
+      return (
+        <th
+          key={id}
+          className={
+            id === 'check'
+              ? 'cc-ppto-sticky-col cc-ppto-sticky-col--check'
+              : id === 'id_pol'
+                ? 'cc-ppto-sticky-col cc-ppto-sticky-col--id'
+                : undefined
+          }
+          style={{ ...pptoThBase, ...pptoColW(id), position: 'relative', paddingRight: 10, ...extraStyle }}
+          title={title}
+        >
+          {label}
+          <ColumnResizeHandle color={t.primary || '#94a3b8'} onResizeEnd={(w) => onPptoColResizeEnd(id, w)} />
+        </th>
+      )
+    },
+    [pptoShow, pptoColW, onPptoColResizeEnd, pptoThBase, t.primary],
+  )
+
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [cacheKey]: { data, ts, total } }
   const _pptoPanelCacheRef = useRef({})   // { [panelKey]: { filas, capitulosResumen, total, ts } }
@@ -6763,33 +6876,34 @@ async function restaurar(id) {
           </div>
         )}
         <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
-          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: 1240 }}>
+          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: pptoTablaMinW }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
-                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={thStyle}>ID_POL</th>
-                <th style={thStyle}>Capítulo</th>
-                <th style={thStyle}>Competencia</th>
-                <th style={thStyle}>Ítem</th>
-                <th style={thStyle}>Descripción</th>
-                <th style={thStyle}>Und</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
-                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa inicio">Abs. Inicio</th>
-                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa final">Abs. Final</th>
-                <th style={thStyle}>Área/Long</th>
-                <th style={thStyle}>Ancho</th>
-                <th style={thStyle}>Espesor</th>
-                <th style={thStyle}>Cant.Total</th>
-                <th style={thStyle}>Vlr Unit.</th>
-                <th style={thStyle}>Costo Directo</th>
-                {mostrarColumnaDepuracion && (
-                  <th style={thStyle} title="Residente de Costos u Obra — antes de Interventoría">Depuración</th>
+                {pptoTh(
+                  'check',
+                  <input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} />,
                 )}
-                <th style={thStyle}>Revisado</th>
-                <th style={thStyle} title="Trazabilidad / auditoría">📜</th>
-                <th style={thStyle}>💬</th>
-                <th style={thStyle}></th>
+                {pptoTh('id_pol', 'ID_POL')}
+                {pptoTh('capitulo', 'Capítulo')}
+                {pptoTh('competencia', 'Competencia')}
+                {pptoTh('item', 'Ítem')}
+                {pptoTh('descripcion', 'Descripción')}
+                {pptoTh('und', 'Und')}
+                {pptoTh('nodo_ini', 'No.Ini', {}, puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined)}
+                {pptoTh('nodo_fin', 'No.Fin', {}, puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined)}
+                {pptoTh('abs_inicio', 'Abs. Inicio', {}, 'Abscisa inicio')}
+                {pptoTh('abs_final', 'Abs. Final', {}, 'Abscisa final')}
+                {pptoTh('area_long', 'Área/Long')}
+                {pptoTh('ancho', 'Ancho')}
+                {pptoTh('espesor', 'Espesor')}
+                {pptoTh('cant_total', 'Cant.Total')}
+                {pptoTh('vlr_unit', 'Vlr Unit.')}
+                {pptoTh('costo_directo', 'Costo Directo')}
+                {pptoTh('depuracion', 'Depuración', {}, 'Residente de Costos u Obra — antes de Interventoría')}
+                {pptoTh('revisado', 'Revisado')}
+                {pptoTh('auditoria', '📜', {}, 'Trazabilidad / auditoría')}
+                {pptoTh('comentarios', '💬')}
+                {pptoTh('acciones', '')}
               </tr>
             </thead>
             <tbody>
@@ -6798,7 +6912,8 @@ async function restaurar(id) {
                 return (
                   <tr key={r.id} data-id={r.id} className="cc-ppto-data-row" style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { navegarRegistroEnPlano(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
-                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
+                    {pptoShow('check') && (
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={{...tdStyle, ...pptoColW('check'), whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
                           style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
@@ -6812,7 +6927,9 @@ async function restaurar(id) {
                         </button>
                       </div>
                     </td>
-                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                    )}
+                    {pptoShow('id_pol') && (
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={{ ...tdStyle, ...pptoColW('id_pol') }} onClick={e => e.stopPropagation()}>
                       <span
                         onClick={() => abrirDetallePptoDesdeFila(r)}
                         title="Ver detalle"
@@ -6820,12 +6937,24 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
-                    <td style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.competencia||'—'}</td>
-                    <td style={tdStyle}>{r.item}</td>
-                    <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
-                    <td style={tdStyle}>{r.und}</td>
-                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('capitulo') && (
+                    <td style={{ ...tdStyle, ...pptoColW('capitulo'), minWidth: 0, overflow: 'hidden', wordBreak: 'break-word' }} title={r.capitulo || ''}>{r.capitulo}</td>
+                    )}
+                    {pptoShow('competencia') && (
+                    <td style={{ ...tdStyle, ...pptoColW('competencia'), fontSize:'var(--cc-sm)', color:t.textMuted, minWidth: 0, wordBreak: 'break-word' }}>{r.competencia||'—'}</td>
+                    )}
+                    {pptoShow('item') && (
+                    <td style={{ ...tdStyle, ...pptoColW('item') }}>{r.item}</td>
+                    )}
+                    {pptoShow('descripcion') && (
+                    <td style={{ ...tdStyle, ...pptoColW('descripcion'), minWidth: 0, overflow: 'hidden', wordBreak: 'break-word' }} title={r.descripcion || ''}>{r.descripcion}</td>
+                    )}
+                    {pptoShow('und') && (
+                    <td style={{ ...tdStyle, ...pptoColW('und') }}>{r.und}</td>
+                    )}
+                    {pptoShow('nodo_ini') && (
+                    <td style={{ ...tdStyle, ...pptoColW('nodo_ini') }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
@@ -6833,7 +6962,9 @@ async function restaurar(id) {
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_inicio || '-')}
                     </td>
-                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('nodo_fin') && (
+                    <td style={{ ...tdStyle, ...pptoColW('nodo_fin') }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
@@ -6841,19 +6972,25 @@ async function restaurar(id) {
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_final || '-')}
                     </td>
+                    )}
+                    {pptoShow('abs_inicio') && (
                     <td
-                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      style={{ ...tdStyle, ...pptoColW('abs_inicio'), minWidth: 0, overflow: 'hidden', wordBreak: 'break-word' }}
                       title={r.abs_inicio != null && String(r.abs_inicio).trim() ? String(r.abs_inicio) : undefined}
                     >
                       {r.abs_inicio != null && String(r.abs_inicio).trim() ? r.abs_inicio : '-'}
                     </td>
+                    )}
+                    {pptoShow('abs_final') && (
                     <td
-                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      style={{ ...tdStyle, ...pptoColW('abs_final'), minWidth: 0, overflow: 'hidden', wordBreak: 'break-word' }}
                       title={r.abs_final != null && String(r.abs_final).trim() ? String(r.abs_final) : undefined}
                     >
                       {r.abs_final != null && String(r.abs_final).trim() ? r.abs_final : '-'}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('area_long') && (
+                    <td style={{ ...tdStyle, ...pptoColW('area_long'), textAlign:'right' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAreaLongNodInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
@@ -6862,29 +6999,36 @@ async function restaurar(id) {
                           ? renderDimBloqueadaCad(fmtN(r.area_long_nod), MSG_AREA_LONG_DESDE_PLANO)
                           : fmtN(r.area_long_nod)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('ancho') && (
+                    <td style={{ ...tdStyle, ...pptoColW('ancho'), textAlign:'right' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.ancho)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('espesor') && (
+                    <td style={{ ...tdStyle, ...pptoColW('espesor'), textAlign:'right' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.espesor)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
-                    {nivelInfo.verValoresEconomicos && (
-                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmt(r.vlr_unitario)}</td>
                     )}
-                    {nivelInfo.verValoresEconomicos && (
-                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
+                    {pptoShow('cant_total') && (
+                    <td style={{ ...tdStyle, ...pptoColW('cant_total'), textAlign:'right', fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
                     )}
-                    {mostrarColumnaDepuracion && (
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                    {pptoShow('vlr_unit') && (
+                    <td style={{ ...tdStyle, ...pptoColW('vlr_unit'), textAlign:'right' }}>{fmt(r.vlr_unitario)}</td>
+                    )}
+                    {pptoShow('costo_directo') && (
+                    <td style={{ ...tdStyle, ...pptoColW('costo_directo'), textAlign:'right', fontWeight:'700', color:t.primary }}>{fmt(r.costo_directo)}</td>
+                    )}
+                    {pptoShow('depuracion') && (
+                    <td style={{ ...tdStyle, ...pptoColW('depuracion') }} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', justifyContent:'center' }}>
                         <PptoValidacionIcon
                           eje="depuracion"
@@ -6898,7 +7042,8 @@ async function restaurar(id) {
                       </div>
                     </td>
                     )}
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                    {pptoShow('revisado') && (
+                    <td style={{ ...tdStyle, ...pptoColW('revisado') }} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
                         <PptoValidacionIcon
                           eje="interventoria"
@@ -6937,7 +7082,9 @@ async function restaurar(id) {
                         )}
                       </div>
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('auditoria') && (
+                    <td style={{ ...tdStyle, ...pptoColW('auditoria'), textAlign:'center' }} onClick={e=>e.stopPropagation()}>
                       <button
                         type="button"
                         title="Trazabilidad y auditoría de este registro"
@@ -6953,7 +7100,9 @@ async function restaurar(id) {
                         }}
                       >📜</button>
                     </td>
-                    <td style={{ ...tdStyle, minWidth:'80px' }} onClick={e=>e.stopPropagation()}>
+                    )}
+                    {pptoShow('comentarios') && (
+                    <td style={{ ...tdStyle, ...pptoColW('comentarios') }} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'4px', alignItems:'center', justifyContent:'center' }}>
                         {[
                           { tipo:'dims',          icono:'📐', color:'#F59E0B', label:'Dims' },
@@ -6985,9 +7134,10 @@ async function restaurar(id) {
                         })}
                       </div>
                     </td>
-                    {puedeEliminar && !verPapelera && (
-                      <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
-                        {seleccionados.has(r.id) && (
+                    )}
+                    {pptoShow('acciones') && (
+                      <td style={{ ...tdStyle, ...pptoColW('acciones') }} onClick={e => e.stopPropagation()}>
+                        {puedeEliminar && !verPapelera && seleccionados.has(r.id) && (
                           <button
                             type="button"
                             onClick={() => { if (!esSellado(r) && !dandoDeBaja) void darDeBaja(r.id) }}
@@ -7001,11 +7151,7 @@ async function restaurar(id) {
                             🗑️
                           </button>
                         )}
-                      </td>
-                    )}
-                    {puedeEliminar && verPapelera && (
-                      <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
-                        {seleccionados.has(r.id) && (
+                        {puedeEliminar && verPapelera && seleccionados.has(r.id) && (
                           <button onClick={() => restaurar(r.id)}
                             title="Restaurar registro"
                             style={{ background:'#10B98115', border:'1px solid #10B98144', borderRadius:'6px', padding:'3px 8px', color:'#10B981', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
