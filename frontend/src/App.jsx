@@ -11680,56 +11680,6 @@ function ModuloSicoeObra({
                         </button>
                       )}
                     </div>
-                    {exportPlantillas.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
-                        {exportPlantillas.map((pl) => {
-                          const activa = String(pl.id) === String(exportPlantillaActivaId)
-                          return (
-                            <div
-                              key={`pl-row-${pl.id}`}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => aplicarExportPlantilla(pl)}
-                              onKeyDown={(e) => e.key === 'Enter' && aplicarExportPlantilla(pl)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                                padding: '8px 10px',
-                                borderRadius: 8,
-                                border: `1px solid ${activa ? (t.primary || '#38BDF8') : t.border}`,
-                                background: activa ? '#0F2942' : 'transparent',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>
-                                {pl.nombre}
-                                <span style={{ color: t.textMuted, fontWeight: 500 }}>
-                                  {Array.isArray(pl.campos) ? ` · ${pl.campos.length} campos` : ''}
-                                </span>
-                              </span>
-                              <button
-                                type="button"
-                                aria-label={`Eliminar plantilla ${pl.nombre}`}
-                                onClick={(ev) => eliminarExportPlantillaActual(pl.id, ev)}
-                                disabled={exportGuardandoPlantilla || exportando}
-                                style={{
-                                  background: 'transparent',
-                                  border: 'none',
-                                  color: t.textMuted,
-                                  cursor: (exportGuardandoPlantilla || exportando) ? 'not-allowed' : 'pointer',
-                                  fontSize: 18,
-                                  lineHeight: 1,
-                                }}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                       <input
                         value={exportNombrePlantilla}
