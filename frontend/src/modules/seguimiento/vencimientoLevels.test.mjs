@@ -7,6 +7,7 @@ import {
   fechaVencimientoEfectiva,
   nivelVencimientoItem,
   origenRemitenteLabel,
+  resumenVencimientoBandeja,
   sortByProximidadVencimiento,
   tipoLaborLabel,
   truncateTema,
@@ -138,5 +139,21 @@ const tema = truncateTema('Entregar planos actualizados del tramo norte para rev
 assert(tema.endsWith('…'), 'tema truncado con ellipsis')
 assert(tema.length < 60, 'tema breve')
 assert(truncateTema('Corto') === 'Corto', 'tema corto intacto')
+
+// Resumen colapsado: vencidas / 1–3 d / >3 d
+const hoyRes = new Date(2026, 6, 29) // 29-jul-2026
+const rowsRes = [
+  { fecha_vencimiento: '2026-07-20' }, // vencida
+  { fecha_vencimiento: '2026-07-29' }, // vence hoy → vencidas
+  { fecha_vencimiento: '2026-07-31' }, // +2 → por vencer
+  { fecha_vencimiento: '2026-08-01' }, // +3 → por vencer
+  { fecha_vencimiento: '2026-08-05' }, // +7 → >3 d
+  { fecha_vencimiento: null }, // sin fecha → ignorada
+]
+const res = resumenVencimientoBandeja(rowsRes, hoyRes)
+assert(res.vencidas === 2, `vencidas=${res.vencidas}`)
+assert(res.porVencer === 2, `porVencer=${res.porVencer}`)
+assert(res.asignadas === 1, `asignadas=${res.asignadas}`)
+assert(res.total === 5, `total=${res.total}`)
 
 console.log('vencimientoLevels.test.mjs OK')
