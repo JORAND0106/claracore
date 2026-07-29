@@ -59,6 +59,14 @@ import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoF
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
 import {
+  PanelCalculadoraProvider,
+  PanelCalculadoraToggle,
+  PanelCalculadoraFloat,
+  PanelCalcSelectable,
+  usePanelCalculadora,
+  panelCalcCategoryId,
+} from './components/panelCalculadora'
+import {
   crearExportPlantilla,
   actualizarExportPlantilla,
   eliminarExportPlantilla,
@@ -7168,13 +7176,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 const SICOE_PANEL_COLOR_NO_REVISADO = '#3B82F6'
 const SICOE_PANEL_COLOR_PENDIENTE = '#EAB308'
 
-function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = 'rgba(148,163,184,0.06)' }) {
+function SicoePanelDataBarCell({
+  value,
+  max,
+  color,
+  text,
+  textColor,
+  trackBg = 'rgba(148,163,184,0.06)',
+  calcCategory,
+  calcCategoryLabel,
+  calcKind = 'valor',
+  calcLabel,
+}) {
+  const calc = usePanelCalculadora()
   const raw = Number(value)
   const v = Number.isFinite(raw) ? Math.abs(raw) : 0
   const m = Math.max(0, Number(max) || 0)
   const denom = m > 0 ? m : (v > 0 ? v : 1)
   const pct = Math.min(100, (v / denom) * 100)
-  return (
+  const inner = (
     <div style={{ position:'relative', minWidth: 72, padding:'6px 16px', textAlign:'right' }}>
       <div
         aria-hidden
@@ -7186,9 +7206,58 @@ function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = '
         {/* Relleno muy tenue: solo guía visual, no tapar el texto */}
         <div style={{ height: '100%', width: `${pct}%`, background: color, opacity: 0.14 }} />
       </div>
-      <span className="cc-sicoe-panel-bar-text" style={{ position:'relative', zIndex: 1, color: textColor || color, fontWeight: 600 }}>{text}</span>
+      <span className="cc-sicoe-panel-bar-text cc-panel-calc-num" style={{ position:'relative', zIndex: 1, color: textColor || color, fontWeight: 600 }}>{text}</span>
     </div>
   )
+  if (!calc?.active || !calcCategory || !Number.isFinite(raw)) return inner
+  return (
+    <PanelCalcSelectable
+      categoryId={panelCalcCategoryId(calcCategory, calcKind)}
+      categoryLabel={calcCategoryLabel || calcCategory}
+      kind={calcKind}
+      value={raw}
+      label={calcLabel || text}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        margin: 0,
+        width: '100%',
+        display: 'block',
+        textAlign: 'inherit',
+        color: 'inherit',
+        font: 'inherit',
+      }}
+    >
+      {inner}
+    </PanelCalcSelectable>
+  )
+}
+
+/** Toggle + float de calculadora para el panel SICOE (consume el Provider). */
+function SicoePanelCalcChrome({ t, showToggle }) {
+  const calc = usePanelCalculadora()
+  return (
+    <>
+      {showToggle ? (
+        <PanelCalculadoraToggle
+          style={{
+            border: '1px solid rgba(255,255,255,0.25)',
+            color: calc?.active ? '#fff' : '#CBD5E1',
+            background: calc?.active ? '#2563eb' : 'rgba(255,255,255,0.08)',
+            width: 34,
+            height: 34,
+          }}
+        />
+      ) : null}
+    </>
+  )
+}
+
+function SicoePanelCalcFloatMount() {
+  const calc = usePanelCalculadora()
+  if (!calc?.active) return null
+  return <PanelCalculadoraFloat anchor="fixed" />
 }
 
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
@@ -10506,7 +10575,8 @@ function ModuloSicoeObra({
       )}
 
       {/* ── Panel de análisis ── */}
-      <div className="cc-sicoe-panel" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow: sicoeCompact ? 'visible' : 'hidden' }}>
+      <PanelCalculadoraProvider t={t}>
+      <div className="cc-sicoe-panel" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow: sicoeCompact ? 'visible' : 'hidden', '--cc-calc-accent': t.primary }}>
         {!sicoeVistaResultadosActiva ? (
           <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
             Defina criterios en Filtros y pulse <strong>Buscar</strong> para ver el panel de análisis.
@@ -10517,7 +10587,7 @@ function ModuloSicoeObra({
           <>
             <div
               onClick={(e) => {
-                if (e.target.closest('button[data-sicoe-volver-panel]')) return
+                if (e.target.closest('button[data-sicoe-volver-panel], button[data-sicoe-aplicar-panel], button[data-panel-calc-action]')) return
                 setPanelExpandido(v => !v)
               }}
               style={{ padding: sicoeCompact ? '10px 12px' : '10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'10px', background:'#1E293B', cursor:'pointer', userSelect:'none', flexWrap: sicoeCompact ? 'wrap' : undefined }}>
@@ -10565,6 +10635,7 @@ function ModuloSicoeObra({
                   </button>
                 </>
               ) : null}
+              <SicoePanelCalcChrome t={t} showToggle />
               <span style={{ marginLeft: sicoeCompact ? 0 : 'auto', fontSize:'var(--cc-label)', color:'#94A3B8', flexShrink:0, textAlign: sicoeCompact ? 'left' : 'right', width: sicoeCompact ? '100%' : undefined }}>
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
                 {analisis.verificacion?.dashboard_kpi_cobrado != null && nivelInfo.verValoresEconomicos ? (
@@ -10611,6 +10682,7 @@ function ModuloSicoeObra({
                         onClick={(e) => {
                           e.stopPropagation()
                           if (cargando || cargandoAnalisis) return
+                          if (e.target.closest('.cc-panel-calc-selectable, button[data-panel-calc-action]')) return
                           const newF = { ...filtrosSicoeRef.current, item: g.label }
                           aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
                         }}
@@ -10629,40 +10701,40 @@ function ModuloSicoeObra({
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} · ${g.label}`} />
                         </td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'var(--cc-label)' }}>{g.unidad}</td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)}  calcCategory="CostoDirecto" calcCategoryLabel="Costo directo" calcKind="costo" calcLabel={`${fmtPesos(g.costo_directo ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)} />
+                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="costo" calcLabel={`${fmtPesos(g.no_revisados_costo ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={String(g.no_revisados ?? '—')} />
+                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={String(g.no_revisados ?? '—')}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="valor" calcLabel={`${g.no_revisados ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)}  calcCategory="Aprobado" calcCategoryLabel="Aprobados" calcKind="costo" calcLabel={`${fmtPesos(g.aprobados ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={String(g.aprobados_count ?? '—')} />
+                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={String(g.aprobados_count ?? '—')}  calcCategory="Aprobado" calcCategoryLabel="Aprobados" calcKind="valor" calcLabel={`${g.aprobados_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)} />
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)}  calcCategory="Pendiente" calcCategoryLabel="Pendientes" calcKind="costo" calcLabel={`${fmtPesos(g.pendientes ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={String(g.pendientes_count ?? '—')} />
+                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={String(g.pendientes_count ?? '—')}  calcCategory="Pendiente" calcCategoryLabel="Pendientes" calcKind="valor" calcLabel={`${g.pendientes_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)}  calcCategory="Rechazado" calcCategoryLabel="Rechazados" calcKind="costo" calcLabel={`${fmtPesos(g.rechazados ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={String(g.rechazados_count ?? '—')} />
+                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={String(g.rechazados_count ?? '—')}  calcCategory="Rechazado" calcCategoryLabel="Rechazados" calcKind="valor" calcLabel={`${g.rechazados_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                       </tr>
@@ -10729,42 +10801,42 @@ function ModuloSicoeObra({
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)' }}>{g.capitulo}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} · ${g.label}`} />
                         </td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)}  calcCategory="CostoDirecto" calcCategoryLabel="Costo directo" calcKind="costo" calcLabel={`${fmtPesos(g.costo_directo ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)} />
+                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)}  calcCategory="Registros" calcCategoryLabel="Registros" calcKind="valor" calcLabel={`${g.total_registros ?? 0} · ${g.label}`} />
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)} />
+                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="costo" calcLabel={`${fmtPesos(g.no_revisados_costo ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={`${g.no_revisados ?? 0} regs`} />
+                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={`${g.no_revisados ?? 0} regs`}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="valor" calcLabel={`${g.no_revisados ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)}  calcCategory="Aprobado" calcCategoryLabel="Aprobados" calcKind="costo" calcLabel={`${fmtPesos(g.aprobados ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={`${g.aprobados_count ?? 0} regs`} />
+                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={`${g.aprobados_count ?? 0} regs`}  calcCategory="Aprobado" calcCategoryLabel="Aprobados" calcKind="valor" calcLabel={`${g.aprobados_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)} />
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)}  calcCategory="Pendiente" calcCategoryLabel="Pendientes" calcKind="costo" calcLabel={`${fmtPesos(g.pendientes ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={`${g.pendientes_count ?? 0} regs`} />
+                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={`${g.pendientes_count ?? 0} regs`}  calcCategory="Pendiente" calcCategoryLabel="Pendientes" calcKind="valor" calcLabel={`${g.pendientes_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)}  calcCategory="Rechazado" calcCategoryLabel="Rechazados" calcKind="costo" calcLabel={`${fmtPesos(g.rechazados ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={`${g.rechazados_count ?? 0} regs`} />
+                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={`${g.rechazados_count ?? 0} regs`}  calcCategory="Rechazado" calcCategoryLabel="Rechazados" calcKind="valor" calcLabel={`${g.rechazados_count ?? 0} · ${g.label}`} />
                           )}
                         </td>
                       </tr>
@@ -10823,8 +10895,9 @@ function ModuloSicoeObra({
                   </thead>
                   <tbody>
                     {analisis.grupos.map(g => (
-                      <tr key={g.label} onClick={() => {
+                      <tr key={g.label} onClick={(e) => {
                         if (cargando || cargandoAnalisis) return
+                        if (e.target.closest('.cc-panel-calc-selectable, button[data-panel-calc-action]')) return
                         const newF = { ...filtrosSicoeRef.current, capitulo: g.label, item: '' }
                         aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
                       }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:(cargando || cargandoAnalisis) ? 'wait' : 'pointer' }}
@@ -10841,32 +10914,32 @@ function ModuloSicoeObra({
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)}  calcCategory="CostoDirecto" calcCategoryLabel="Costo directo" calcKind="costo" calcLabel={`${fmtPesos(g.costo_directo ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)} />
+                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)}  calcCategory="Registros" calcCategoryLabel="Registros" calcKind="valor" calcLabel={`${g.total_registros ?? 0} · ${g.label}`} />
                         </td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           {nivelInfo.verValoresEconomicos ? (
-                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)} />
+                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={fmtPesos(g.no_revisados_costo ?? 0)}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="costo" calcLabel={`${fmtPesos(g.no_revisados_costo ?? 0)} · ${g.label}`} />
                           ) : (
-                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={String(g.no_revisados ?? '—')} />
+                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color={SICOE_PANEL_COLOR_NO_REVISADO} text={String(g.no_revisados ?? '—')}  calcCategory="No Revisado" calcCategoryLabel="Sin revisar" calcKind="valor" calcLabel={`${g.no_revisados ?? 0} · ${g.label}`} />
                           )}
                         </td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)}  calcCategory="Aprobado" calcCategoryLabel="Aprobados" calcKind="costo" calcLabel={`${fmtPesos(g.aprobados ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)} />
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color={SICOE_PANEL_COLOR_PENDIENTE} text={fmtPesos(g.pendientes ?? 0)}  calcCategory="Pendiente" calcCategoryLabel="Pendientes" calcKind="costo" calcLabel={`${fmtPesos(g.pendientes ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
-                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)}  calcCategory="Rechazado" calcCategoryLabel="Rechazados" calcKind="costo" calcLabel={`${fmtPesos(g.rechazados ?? 0)} · ${g.label}`} />
                           </td>
                         )}
                       </tr>
@@ -10889,6 +10962,7 @@ function ModuloSicoeObra({
               )}
               </div>
             </div>}
+            <SicoePanelCalcFloatMount />
           </>
         ) : (
           <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
@@ -10896,6 +10970,7 @@ function ModuloSicoeObra({
           </div>
         )}
       </div>
+      </PanelCalculadoraProvider>
 
       <SicoeFiltroObraVista
         t={t}

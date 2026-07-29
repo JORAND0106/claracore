@@ -7,6 +7,15 @@ import {
   pptoPanelAvanceGlobal,
   pptoPanelTotalesFilas,
 } from './pptoPanelValidacionAgg'
+import {
+  PanelCalculadoraProvider,
+  PanelCalculadoraToggle,
+  PanelCalculadoraFloat,
+  PanelCalcSelectable,
+  usePanelCalculadora,
+  panelCalcCategoryId,
+  panelCalcFmtNumber,
+} from '../../components/panelCalculadora'
 
 /** Anillo compacto: % validado (registros fuera de «No Revisado»). */
 function IndicadorAvance({ pct = 0, pendientes = 0, size = 'md', title: titleExtra }) {
@@ -80,18 +89,71 @@ function fmtCant(n) {
   return v.toLocaleString('es-CO', { maximumFractionDigits: 4 })
 }
 
-function CeldaEstado({ celda, verCostos, fmt, color, mutedColor, textColor }) {
+function CeldaEstado({ celda, verCostos, fmt, color, mutedColor, textColor, categoryKey, categoryLabel, rowLabel }) {
+  const calc = usePanelCalculadora()
   if (!celda || celda.count === 0) {
     return <span style={{ color: mutedColor, fontSize: 'var(--cc-caption)' }}>—</span>
   }
   const cant = celda.cant ?? 0
+  const costo = celda.costo ?? 0
+  const calcOn = !!calc?.active
+  const catCant = panelCalcCategoryId(categoryKey || 'valor', 'cant')
+  const catCosto = panelCalcCategoryId(categoryKey || 'valor', 'costo')
+  const baseLbl = `${categoryLabel || categoryKey || 'Valor'}${rowLabel ? ` · ${rowLabel}` : ''}`
+
+  const cantNode = calcOn ? (
+    <PanelCalcSelectable
+      categoryId={catCant}
+      categoryLabel={`${categoryLabel || 'Cantidad'} (cant.)`}
+      kind="cant"
+      value={cant}
+      label={`${panelCalcFmtNumber(cant)} · ${baseLbl}`}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        font: 'inherit',
+        color: 'inherit',
+        display: 'inline',
+      }}
+    >
+      <span className="cc-panel-calc-num" style={{ fontWeight: 700, color: textColor }}>{fmtCant(cant)}</span>
+    </PanelCalcSelectable>
+  ) : (
+    <span style={{ fontWeight: 700, color: textColor }}>{fmtCant(cant)}</span>
+  )
+
+  const costoNode = verCostos ? (
+    calcOn ? (
+      <PanelCalcSelectable
+        categoryId={catCosto}
+        categoryLabel={`${categoryLabel || 'Costo'} (costo)`}
+        kind="costo"
+        value={costo}
+        label={`${panelCalcFmtNumber(costo, { money: true })} · ${baseLbl}`}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          font: 'inherit',
+          color: 'inherit',
+          display: 'inline',
+        }}
+      >
+        <span className="cc-panel-calc-num" style={{ fontWeight: 600, color }}>{fmt(costo)}</span>
+      </PanelCalcSelectable>
+    ) : (
+      <span style={{ fontWeight: 600, color }}>{fmt(costo)}</span>
+    )
+  ) : null
+
   return (
     <span style={{ fontSize: 'var(--cc-caption)', lineHeight: 1.3, whiteSpace: 'nowrap' }}>
-      <span style={{ fontWeight: 700, color: textColor }}>{fmtCant(cant)}</span>
+      {cantNode}
       {verCostos && (
         <>
           <span style={{ color: mutedColor, margin: '0 4px' }}>|</span>
-          <span style={{ fontWeight: 600, color }}>{fmt(celda.costo)}</span>
+          {costoNode}
         </>
       )}
     </span>
@@ -372,13 +434,91 @@ export default function PptoPanelValidacion({
   const puedeVolver = busquedaActiva && nivel === 'item'
 
   return (
-    <div className="cc-ppto-panel-validacion" style={shellStyle}>
+    <PanelCalculadoraProvider t={t}>
+      <PptoPanelValidacionInner
+        t={t}
+        shellStyle={shellStyle}
+        compact={compact}
+        puedeVolver={puedeVolver}
+        volverCapitulos={volverCapitulos}
+        encabezado={encabezado}
+        cargando={cargando}
+        onLimpiarTodo={onLimpiarTodo}
+        handleBuscar={handleBuscar}
+        puedeBuscar={puedeBuscar}
+        busquedaActiva={busquedaActiva}
+        labels={labels}
+        checks={checks}
+        checksPendientes={checksPendientes}
+        aplicarDesdeChecks={aplicarDesdeChecks}
+        avanceGlobal={avanceGlobal}
+        totales={totales}
+        fmt={fmt}
+        verValoresEconomicos={verValoresEconomicos}
+        expandido={expandido}
+        setExpandido={setExpandido}
+        btnAtras={btnAtras}
+        btnLimpiar={btnLimpiar}
+        btnBuscar={btnBuscar}
+        filas={filas}
+        nivel={nivel}
+        toggleCheck={toggleCheck}
+        checksAplicados={checksAplicados}
+        onDrillCapitulo={onDrillCapitulo}
+        onFiltrarEstadoCelda={onFiltrarEstadoCelda}
+        itemDescMap={itemDescMap}
+      />
+    </PanelCalculadoraProvider>
+  )
+}
+
+function PptoPanelValidacionInner({
+  t,
+  shellStyle,
+  compact,
+  puedeVolver,
+  volverCapitulos,
+  encabezado,
+  cargando,
+  onLimpiarTodo,
+  handleBuscar,
+  puedeBuscar,
+  busquedaActiva,
+  labels,
+  checks,
+  checksPendientes,
+  aplicarDesdeChecks,
+  avanceGlobal,
+  totales,
+  fmt,
+  verValoresEconomicos,
+  expandido,
+  setExpandido,
+  btnAtras,
+  btnLimpiar,
+  btnBuscar,
+  filas,
+  nivel,
+  toggleCheck,
+  checksAplicados,
+  onDrillCapitulo,
+  onFiltrarEstadoCelda,
+  itemDescMap,
+}) {
+  const calc = usePanelCalculadora()
+  const calcOn = !!calc?.active
+
+  return (
+    <div
+      className={`cc-ppto-panel-validacion${calcOn ? ' cc-panel-calc-mode' : ''}`}
+      style={{ ...shellStyle, '--cc-calc-accent': t.primary }}
+    >
       {compact ? (
       <div
         role="button"
         tabIndex={0}
         onClick={(e) => {
-          if (e.target.closest('button[data-ppto-panel-action]')) return
+          if (e.target.closest('button[data-ppto-panel-action], button[data-panel-calc-action]')) return
           setExpandido((v) => !v)
         }}
         onKeyDown={(e) => e.key === 'Enter' && setExpandido((v) => !v)}
@@ -472,6 +612,17 @@ export default function PptoPanelValidacion({
               {cargando ? '⏳…' : checksPendientes ? 'Aplicar filtros ●' : 'Aplicar filtros'}
             </button>
           )}
+          {busquedaActiva && (
+            <PanelCalculadoraToggle
+              style={{
+                border: '1px solid var(--ppto-panel-border)',
+                color: 'var(--ppto-panel-muted)',
+                background: calcOn ? 'var(--ppto-panel-accent)' : 'transparent',
+                width: 44,
+                height: 44,
+              }}
+            />
+          )}
         </div>
 
         {(busquedaActiva && (labels.length > 0 || avanceGlobal.total > 0)) && (
@@ -515,7 +666,7 @@ export default function PptoPanelValidacion({
         role="button"
         tabIndex={0}
         onClick={(e) => {
-          if (e.target.closest('button[data-ppto-panel-action]')) return
+          if (e.target.closest('button[data-ppto-panel-action], button[data-panel-calc-action]')) return
           setExpandido((v) => !v)
         }}
         onKeyDown={(e) => e.key === 'Enter' && setExpandido((v) => !v)}
@@ -609,6 +760,15 @@ export default function PptoPanelValidacion({
               {cargando ? '⏳…' : checksPendientes ? 'Aplicar filtros ●' : 'Aplicar filtros'}
             </button>
           </>
+        )}
+        {busquedaActiva && (
+          <PanelCalculadoraToggle
+            style={{
+              border: '1px solid var(--ppto-panel-border)',
+              color: calcOn ? '#fff' : 'var(--ppto-panel-muted)',
+              background: calcOn ? 'var(--ppto-panel-accent)' : 'transparent',
+            }}
+          />
         )}
         {busquedaActiva && avanceGlobal.total > 0 && (
           <span
@@ -803,11 +963,31 @@ export default function PptoPanelValidacion({
                         </div>
                       )}
                     </td>
-                    {PPTO_PANEL_ESTADOS.map((e) => (
+                    {PPTO_PANEL_ESTADOS.map((e) => {
+                      const hasData = !!g.celdas[e.key]?.count
+                      const celdaInner = (
+                        <CeldaEstado
+                          celda={g.celdas[e.key]}
+                          verCostos={verValoresEconomicos}
+                          fmt={fmt}
+                          color={e.color}
+                          mutedColor="var(--ppto-panel-muted)"
+                          textColor="var(--ppto-panel-text)"
+                          categoryKey={e.key}
+                          categoryLabel={e.label}
+                          rowLabel={nivel === 'item' ? g.item : g.label}
+                        />
+                      )
+                      return (
                       <td
                         key={e.key}
                         style={{ padding: '3px 8px', textAlign: 'right', verticalAlign: 'middle' }}
                       >
+                        {calcOn ? (
+                          <div style={{ padding: '2px 4px', width: '100%', borderRadius: 4 }}>
+                            {celdaInner}
+                          </div>
+                        ) : (
                         <button
                           type="button"
                           onClick={(ev) => {
@@ -819,9 +999,9 @@ export default function PptoPanelValidacion({
                               estado: e.key,
                             })
                           }}
-                          disabled={!g.celdas[e.key]?.count}
+                          disabled={!hasData}
                           title={
-                            g.celdas[e.key]?.count
+                            hasData
                               ? `Ver ${g.celdas[e.key].count.toLocaleString('es-CO')} registros «${e.label}» (${fmtCant(g.celdas[e.key].cant ?? 0)} cant.) en la grilla`
                               : undefined
                           }
@@ -829,28 +1009,23 @@ export default function PptoPanelValidacion({
                             background: 'transparent',
                             border: 'none',
                             padding: '2px 4px',
-                            cursor: g.celdas[e.key]?.count ? 'pointer' : 'default',
+                            cursor: hasData ? 'pointer' : 'default',
                             width: '100%',
                             borderRadius: 4,
                           }}
                           onMouseEnter={(ev) => {
-                            if (g.celdas[e.key]?.count) ev.currentTarget.style.background = 'color-mix(in srgb, var(--ppto-panel-accent) 12%, transparent)'
+                            if (hasData) ev.currentTarget.style.background = 'color-mix(in srgb, var(--ppto-panel-accent) 12%, transparent)'
                           }}
                           onMouseLeave={(ev) => {
                             ev.currentTarget.style.background = 'transparent'
                           }}
                         >
-                          <CeldaEstado
-                            celda={g.celdas[e.key]}
-                            verCostos={verValoresEconomicos}
-                            fmt={fmt}
-                            color={e.color}
-                            mutedColor="var(--ppto-panel-muted)"
-                            textColor="var(--ppto-panel-text)"
-                          />
+                          {celdaInner}
                         </button>
+                        )}
                       </td>
-                    ))}
+                      )
+                    })}
                     <td style={{ padding: '4px 8px', textAlign: 'right', verticalAlign: 'middle' }}>
                       <CeldaEstado
                         celda={{ count: g.totalRegs, costo: g.totalCosto, cant: g.cantTotal }}
@@ -859,6 +1034,9 @@ export default function PptoPanelValidacion({
                         color="var(--ppto-panel-accent)"
                         mutedColor="var(--ppto-panel-muted)"
                         textColor="var(--ppto-panel-text)"
+                        categoryKey="Total"
+                        categoryLabel="Total"
+                        rowLabel={nivel === 'item' ? g.item : g.label}
                       />
                     </td>
                   </tr>
@@ -884,6 +1062,9 @@ export default function PptoPanelValidacion({
                         color={e.color}
                         mutedColor="var(--ppto-panel-muted)"
                         textColor="var(--ppto-panel-text)"
+                        categoryKey={e.key}
+                        categoryLabel={e.label}
+                        rowLabel="Total"
                       />
                     </td>
                   ))}
@@ -895,6 +1076,9 @@ export default function PptoPanelValidacion({
                       color="var(--ppto-panel-accent)"
                       mutedColor="var(--ppto-panel-muted)"
                       textColor="var(--ppto-panel-text)"
+                      categoryKey="Total"
+                      categoryLabel="Total"
+                      rowLabel="Total"
                     />
                   </td>
                 </tr>
@@ -909,8 +1093,11 @@ export default function PptoPanelValidacion({
               borderTop: '1px solid var(--ppto-panel-border)',
             }}
           >
-            Clic en una celda de estado → carga esos registros en la grilla. Avance = % fuera de «No revisado». Solo presupuesto vigente.
+            {calcOn
+              ? 'Modo calculadora: haz clic en cantidades o costos de la misma categoría.'
+              : 'Clic en una celda de estado → carga esos registros en la grilla. Avance = % fuera de «No revisado». Solo presupuesto vigente.'}
           </div>
+          {calcOn && <PanelCalculadoraFloat anchor="fixed" />}
         </div>
       )}
     </div>

@@ -2703,3 +2703,31 @@ select.cc-dashboard-acta-select--light option {
   }
 }
 
+
+/* ── Calculadora de paneles dinámicos ───────────────────────── */
+@keyframes ccPanelCalcIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ccPanelCalcChip {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cc-panel-calc-selectable.is-pickable {
+  border-radius: 6px !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-calc-accent, #0077B6) 35%, transparent);
+}
+.cc-panel-calc-selectable.is-pickable:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--cc-calc-accent, #0077B6) 14%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-calc-accent, #0077B6) 55%, transparent),
+    0 4px 12px color-mix(in srgb, var(--cc-calc-accent, #0077B6) 18%, transparent);
+}
+.cc-panel-calc-mode .cc-panel-calc-selectable.is-pickable .cc-panel-calc-num {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--cc-calc-accent, #0077B6) 55%, transparent);
+  text-underline-offset: 2px;
+}
+.cc-panel-calc-float {
+  backdrop-filter: blur(8px);
+}
