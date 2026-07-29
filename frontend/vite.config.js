@@ -16,7 +16,7 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/_appinsights/, ''),
       },
       // Todas las rutas del backend (mismo origen en dev → login, SICOE, presupuesto, etc.)
-      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|subcontratistas|presupuesto|cobro|contabilidad|almacen|catalogo-insumos|exportar|cad-queue|claracad|cad/ejes|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra|guias|sst|prog-obra|avi|topografia|filtros-plantillas|presupuesto-versiones|seguimiento|test-telegram|internal)': {
+      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|subcontratistas|presupuesto|cobro|contabilidad|almacen|catalogo-insumos|exportar|cad-queue|claracad|cad/ejes|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra|guias|sst|prog-obra|avi|topografia|filtros-plantillas|export-plantillas|presupuesto-versiones|seguimiento|test-telegram|internal)': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         // Lote auditoría + IA: una sola petición puede durar muchos minutos; el proxy por defecto corta y el navegador muestra "Failed to fetch".

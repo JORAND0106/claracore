@@ -59,6 +59,13 @@ import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoF
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
 import {
+  crearExportPlantilla,
+  actualizarExportPlantilla,
+  eliminarExportPlantilla,
+  fetchExportPlantillas,
+  SICOE_EXPORT_MODULO,
+} from './modules/sicoe-obra/exportPlantillasApi'
+import {
   sicoeLocVacia,
   sicoeLocFromRegistro,
   sicoePkRowFromRegistro,
@@ -9739,6 +9746,11 @@ function ModuloSicoeObra({
   const [exportError, setExportError] = useState(null)
   const [exportando, setExportando] = useState(false)
   const [exportMetaContrato, setExportMetaContrato] = useState(null)
+  const [exportPlantillas, setExportPlantillas] = useState([])
+  const [exportPlantillaActivaId, setExportPlantillaActivaId] = useState(null)
+  const [exportNombrePlantilla, setExportNombrePlantilla] = useState('')
+  const [exportGuardandoPlantilla, setExportGuardandoPlantilla] = useState(false)
+  const [exportCargandoPlantillas, setExportCargandoPlantillas] = useState(false)
 
   const CAMPOS_OCULTOS_EXPORT = new Set([
     'id',
@@ -9770,6 +9782,115 @@ function ModuloSicoeObra({
   }
   const prettyCampo = (c) => LABELS_EXPORT[c] || String(c || '').replace(/_/g, ' ').replace(/\bid\b/gi, 'ID').toUpperCase()
 
+  const cargarExportPlantillas = async () => {
+    const token = getToken()
+    if (!token) {
+      setExportPlantillas([])
+      return
+    }
+    setExportCargandoPlantillas(true)
+    try {
+      const rows = await fetchExportPlantillas(token, SICOE_EXPORT_MODULO)
+      setExportPlantillas(Array.isArray(rows) ? rows : [])
+    } catch {
+      setExportPlantillas([])
+    } finally {
+      setExportCargandoPlantillas(false)
+    }
+  }
+
+  const aplicarExportPlantilla = (pl, camposDisponibles = exportCampos) => {
+    if (!pl) {
+      setExportPlantillaActivaId(null)
+      setExportNombrePlantilla('')
+      return
+    }
+    const raw = Array.isArray(pl.campos) ? pl.campos : []
+    const disponibles = new Set(camposDisponibles || [])
+    const seleccion = raw.map((c) => String(c || '').trim()).filter((c) => c && disponibles.has(c))
+    setExportSeleccionCampos(seleccion.length > 0 ? seleccion : [])
+    setExportPlantillaActivaId(pl.id ?? null)
+    setExportNombrePlantilla(String(pl.nombre || ''))
+    setExportError(null)
+  }
+
+  const guardarExportPlantillaActual = async () => {
+    const token = getToken()
+    const nombre = String(exportNombrePlantilla || '').trim()
+    if (!token || !nombre) return
+    if (!exportSeleccionCampos.length) {
+      setExportError('Seleccione al menos un campo antes de guardar la plantilla.')
+      return
+    }
+    setExportGuardandoPlantilla(true)
+    setExportError(null)
+    try {
+      const row = await crearExportPlantilla(token, {
+        modulo: SICOE_EXPORT_MODULO,
+        nombre,
+        campos: exportSeleccionCampos,
+      })
+      await cargarExportPlantillas()
+      if (row?.id != null) {
+        setExportPlantillaActivaId(row.id)
+        setExportNombrePlantilla(String(row.nombre || nombre))
+      }
+    } catch (e) {
+      setExportError(e?.message || 'No se pudo guardar la plantilla')
+    } finally {
+      setExportGuardandoPlantilla(false)
+    }
+  }
+
+  const actualizarExportPlantillaActual = async () => {
+    const token = getToken()
+    if (!token || exportPlantillaActivaId == null) return
+    if (!exportSeleccionCampos.length) {
+      setExportError('Seleccione al menos un campo antes de actualizar la plantilla.')
+      return
+    }
+    const nombre = String(exportNombrePlantilla || '').trim()
+    if (!nombre) {
+      setExportError('Indique un nombre para la plantilla.')
+      return
+    }
+    setExportGuardandoPlantilla(true)
+    setExportError(null)
+    try {
+      const row = await actualizarExportPlantilla(token, exportPlantillaActivaId, {
+        nombre,
+        campos: exportSeleccionCampos,
+      })
+      await cargarExportPlantillas()
+      if (row?.nombre) setExportNombrePlantilla(String(row.nombre))
+    } catch (e) {
+      setExportError(e?.message || 'No se pudo actualizar la plantilla')
+    } finally {
+      setExportGuardandoPlantilla(false)
+    }
+  }
+
+  const eliminarExportPlantillaActual = async (id, ev) => {
+    ev?.stopPropagation?.()
+    const token = getToken()
+    if (!token || id == null) return
+    if (!window.confirm('¿Eliminar esta plantilla de exportación?')) return
+    setExportGuardandoPlantilla(true)
+    setExportError(null)
+    try {
+      await eliminarExportPlantilla(token, id)
+      if (exportPlantillaActivaId === id) {
+        setExportPlantillaActivaId(null)
+        setExportNombrePlantilla('')
+      }
+      await cargarExportPlantillas()
+    } catch (e) {
+      setExportError(e?.message || 'No se pudo eliminar la plantilla')
+    } finally {
+      setExportGuardandoPlantilla(false)
+    }
+  }
+
   const abrirPopupExportRegistros = async () => {
     if (!contrato_id) return
     setExportModalOpen(true)
@@ -9778,6 +9899,9 @@ function ModuloSicoeObra({
     setExportCampos([])
     setExportSeleccionCampos([])
     setExportFiltroCampo('')
+    setExportPlantillaActivaId(null)
+    setExportNombrePlantilla('')
+    void cargarExportPlantillas()
 
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/campos`, {
@@ -11483,6 +11607,209 @@ function ModuloSicoeObra({
                 <div style={{ textAlign:'center', color:t.textMuted, padding:'28px 0' }}>Consultando campos...</div>
               ) : (
                 <>
+                  <div
+                    style={{
+                      marginBottom: '14px',
+                      padding: '12px 14px',
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '12px',
+                      background: '#0B1220',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.textMuted }}>
+                        Plantillas de campos
+                      </div>
+                      <div style={{ fontSize: 'var(--cc-label)', color: '#94A3B8' }}>
+                        Opcional: puedes seguir eligiendo campos a mano.
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <select
+                        value={exportPlantillaActivaId ?? ''}
+                        disabled={exportCargandoPlantillas || exportando || exportGuardandoPlantilla}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          if (!val) {
+                            setExportPlantillaActivaId(null)
+                            setExportNombrePlantilla('')
+                            return
+                          }
+                          const pl = exportPlantillas.find((p) => String(p.id) === String(val))
+                          if (pl) aplicarExportPlantilla(pl)
+                        }}
+                        style={{
+                          flex: '1 1 220px',
+                          background: t.inputBg,
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '10px',
+                          padding: '10px 12px',
+                          color: t.text,
+                          outline: 'none',
+                          fontSize: 'var(--cc-sm)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <option value="">Selección manual (sin plantilla)</option>
+                        {exportPlantillas.map((pl) => (
+                          <option key={pl.id} value={pl.id}>
+                            {pl.nombre}
+                            {Array.isArray(pl.campos) ? ` (${pl.campos.length})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {exportPlantillaActivaId != null && (
+                        <button
+                          type="button"
+                          onClick={(ev) => eliminarExportPlantillaActual(exportPlantillaActivaId, ev)}
+                          disabled={exportGuardandoPlantilla || exportando}
+                          style={{
+                            background: 'transparent',
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '10px',
+                            padding: '10px 14px',
+                            color: '#F87171',
+                            cursor: (exportGuardandoPlantilla || exportando) ? 'not-allowed' : 'pointer',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                    {exportPlantillas.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
+                        {exportPlantillas.map((pl) => {
+                          const activa = String(pl.id) === String(exportPlantillaActivaId)
+                          return (
+                            <div
+                              key={`pl-row-${pl.id}`}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => aplicarExportPlantilla(pl)}
+                              onKeyDown={(e) => e.key === 'Enter' && aplicarExportPlantilla(pl)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                border: `1px solid ${activa ? (t.primary || '#38BDF8') : t.border}`,
+                                background: activa ? '#0F2942' : 'transparent',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>
+                                {pl.nombre}
+                                <span style={{ color: t.textMuted, fontWeight: 500 }}>
+                                  {Array.isArray(pl.campos) ? ` · ${pl.campos.length} campos` : ''}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`Eliminar plantilla ${pl.nombre}`}
+                                onClick={(ev) => eliminarExportPlantillaActual(pl.id, ev)}
+                                disabled={exportGuardandoPlantilla || exportando}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: t.textMuted,
+                                  cursor: (exportGuardandoPlantilla || exportando) ? 'not-allowed' : 'pointer',
+                                  fontSize: 18,
+                                  lineHeight: 1,
+                                }}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input
+                        value={exportNombrePlantilla}
+                        onChange={(e) => setExportNombrePlantilla(e.target.value)}
+                        placeholder="Nombre de la plantilla…"
+                        disabled={exportando || exportGuardandoPlantilla}
+                        style={{
+                          flex: '1 1 200px',
+                          background: t.inputBg,
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '10px',
+                          padding: '10px 12px',
+                          color: t.text,
+                          outline: 'none',
+                          fontSize: 'var(--cc-sm)',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={guardarExportPlantillaActual}
+                        disabled={
+                          exportGuardandoPlantilla
+                          || exportando
+                          || !String(exportNombrePlantilla || '').trim()
+                          || exportSeleccionCampos.length === 0
+                        }
+                        style={{
+                          background: t.primary,
+                          border: 'none',
+                          borderRadius: '10px',
+                          padding: '10px 14px',
+                          color: '#fff',
+                          cursor: (
+                            exportGuardandoPlantilla
+                            || exportando
+                            || !String(exportNombrePlantilla || '').trim()
+                            || exportSeleccionCampos.length === 0
+                          ) ? 'not-allowed' : 'pointer',
+                          opacity: (
+                            exportGuardandoPlantilla
+                            || exportando
+                            || !String(exportNombrePlantilla || '').trim()
+                            || exportSeleccionCampos.length === 0
+                          ) ? 0.65 : 1,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {exportGuardandoPlantilla ? 'Guardando…' : 'Guardar nueva'}
+                      </button>
+                      {exportPlantillaActivaId != null && (
+                        <button
+                          type="button"
+                          onClick={actualizarExportPlantillaActual}
+                          disabled={
+                            exportGuardandoPlantilla
+                            || exportando
+                            || !String(exportNombrePlantilla || '').trim()
+                            || exportSeleccionCampos.length === 0
+                          }
+                          style={{
+                            background: 'transparent',
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '10px',
+                            padding: '10px 14px',
+                            color: t.text,
+                            cursor: (
+                              exportGuardandoPlantilla
+                              || exportando
+                              || !String(exportNombrePlantilla || '').trim()
+                              || exportSeleccionCampos.length === 0
+                            ) ? 'not-allowed' : 'pointer',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Actualizar plantilla
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <div style={{ display:'flex', gap:'10px', alignItems:'center', flexWrap:'wrap', marginBottom:'12px' }}>
                     <input
                       placeholder="Buscar campo..."
@@ -11491,14 +11818,21 @@ function ModuloSicoeObra({
                       style={{ flex:'1 1 260px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', color:t.text, outline:'none', fontSize:'var(--cc-sm)' }}
                     />
                     <button
-                      onClick={() => setExportSeleccionCampos(exportCampos)}
+                      onClick={() => {
+                        setExportSeleccionCampos(exportCampos)
+                        setExportPlantillaActivaId(null)
+                      }}
                       disabled={!exportCampos.length || exportando}
                       style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:(!exportCampos.length || exportando) ? 'not-allowed' : 'pointer', fontWeight:'700' }}
                     >
                       Seleccionar todo
                     </button>
                     <button
-                      onClick={() => setExportSeleccionCampos([])}
+                      onClick={() => {
+                        setExportSeleccionCampos([])
+                        setExportPlantillaActivaId(null)
+                        setExportNombrePlantilla('')
+                      }}
                       disabled={exportando}
                       style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:exportando ? 'not-allowed' : 'pointer', fontWeight:'700' }}
                     >
