@@ -149,6 +149,50 @@ function _horaMs(hhmm) {
   return ((h || 0) * 60 + (m || 0)) * 60 * 1000
 }
 
+/**
+ * Días restantes hasta el vencimiento efectivo (fecha calendario Bogotá).
+ * Negativo = vencida; 0 = vence hoy; null = sin fecha.
+ */
+export function diasHastaVencimiento(item, hoy = hoyBogotaDate()) {
+  const due = fechaVencimientoEfectiva(item)
+  const d = parseDateOnly(due.fecha)
+  if (!d) return null
+  return daysBetween(hoy, d)
+}
+
+/** Categorías del resumen colapsado de bandeja / widget de inicio. */
+export const RESUMEN_VENCIMIENTO = {
+  vencidas: { key: 'vencidas', label: 'Vencidas', color: '#DC2626' },
+  porVencer: { key: 'porVencer', label: 'Por vencer', color: '#EA580C' },
+  asignadas: { key: 'asignadas', label: '>+3 d', color: '#16A34A' },
+}
+
+/**
+ * Conteos para el resumen de una línea:
+ * - vencidas: daysLeft < 0 (y vence hoy → también crítico rojo)
+ * - porVencer: 1 ≤ daysLeft ≤ 3
+ * - asignadas: daysLeft > 3
+ * Sin fecha de vencimiento no entra en ninguna categoría del resumen.
+ */
+export function resumenVencimientoBandeja(rows, hoy = hoyBogotaDate()) {
+  let vencidas = 0
+  let porVencer = 0
+  let asignadas = 0
+  for (const r of rows || []) {
+    const daysLeft = diasHastaVencimiento(r, hoy)
+    if (daysLeft == null) continue
+    if (daysLeft <= 0) vencidas += 1
+    else if (daysLeft <= 3) porVencer += 1
+    else asignadas += 1
+  }
+  return {
+    vencidas,
+    porVencer,
+    asignadas,
+    total: vencidas + porVencer + asignadas,
+  }
+}
+
 export function tipoLaborLabel(item, usuarioId) {
   if (!item) return '—'
   if (item.origen === 'compromiso') {

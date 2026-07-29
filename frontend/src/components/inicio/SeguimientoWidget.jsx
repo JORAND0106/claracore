@@ -3,6 +3,7 @@ import { createSeguimientoApi } from '../../modules/seguimiento/seguimientoApi'
 import { accesoSeguimiento } from '../../modules/seguimiento/seguimientoPermisos'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from '../../modules/seguimiento/seguimientoTheme'
 import ItemDetalleModal from '../../modules/seguimiento/ItemDetalleModal'
+import BandejaResumenLinea from '../../modules/seguimiento/BandejaResumenLinea'
 import { useSeguimientoCompact } from '../../modules/seguimiento/seguimientoShared'
 import VencimientoIcon from '../../modules/seguimiento/VencimientoIcon'
 import { destinatarioLabel } from '../../modules/seguimiento/tareaAsignaciones'
@@ -11,14 +12,15 @@ import {
   fechaVencimientoEfectiva,
   nivelVencimientoItem,
   origenRemitenteLabel,
+  resumenVencimientoBandeja,
   sortByProximidadVencimiento,
   tipoLaborLabel,
   truncateTema,
 } from '../../modules/seguimiento/vencimientoLevels'
 
 /**
- * Widget de inicio: misma grilla de columnas que la bandeja completa,
- * filtrada por el contrato activo.
+ * Widget de inicio: resumen de una línea colapsado por defecto;
+ * al expandir, misma grilla que la bandeja (filtrada por contrato activo).
  */
 export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, onIrSeguimiento }) {
   const cid = contratoId ?? usuario?.contrato_id
@@ -33,7 +35,7 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [detalleId, setDetalleId] = useState(null)
-  const [abierto, setAbierto] = useState(true)
+  const [abierto, setAbierto] = useState(false)
 
   useEffect(() => {
     if (!permisos.ver || !token || cid == null || cid === '') {
@@ -51,13 +53,12 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
   }, [api, permisos.ver, token, cid])
 
   const sorted = useMemo(() => sortByProximidadVencimiento(rows), [rows])
+  const resumen = useMemo(() => resumenVencimientoBandeja(sorted), [sorted])
   const uid = usuario?.id
   const viewportCompact = useSeguimientoCompact()
 
   if (!permisos.ver || cid == null || cid === '') return null
 
-  const titleSize = fs?.novedadTitulo || fs?.titulo || 'var(--cc-title)'
-  const bodySize = fs?.base || 'var(--cc-body)'
   const smSize = fs?.sm || 'var(--cc-sm)'
 
   return (
@@ -68,39 +69,23 @@ export default function SeguimientoWidget({ t, fs, usuario, token, contratoId, o
       boxShadow: t.shadow,
       overflow: 'hidden',
     }}>
-      <button
-        type="button"
-        onClick={() => setAbierto((v) => !v)}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 8, padding: '12px 14px', border: 'none', background: 'transparent', cursor: 'pointer',
-          color: t.text,
-        }}
-      >
-        <div style={{ textAlign: 'left' }}>
-          <div style={{ fontSize: titleSize, fontWeight: 700 }}>Seguimiento</div>
-          <div style={{ fontSize: smSize, color: t.textMuted }}>
-            Compromisos y tareas {permisos.esGerencial ? '(incluye equipo)' : ''}
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            minWidth: 22, height: 22, borderRadius: 11, padding: '0 6px',
-            background: t.primary, color: '#fff', fontSize: smSize, fontWeight: 700,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            {rows.length}
-          </span>
-          <span style={{ color: t.textMuted }}>{abierto ? '▾' : '▸'}</span>
-        </div>
-      </button>
+      <BandejaResumenLinea
+        t={t}
+        resumen={resumen}
+        abierto={abierto}
+        onToggle={() => setAbierto((v) => !v)}
+        titulo="Seguimiento"
+        subtitulo={permisos.esGerencial ? '(equipo)' : null}
+        loading={loading}
+        emptyLabel="Sin pendientes"
+      />
 
       {abierto && (
         <div style={{ padding: '0 14px 14px' }}>
           {loading ? (
-            <div style={{ fontSize: bodySize, color: t.textMuted }}>Cargando…</div>
+            <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted }}>Cargando…</div>
           ) : sorted.length === 0 ? (
-            <div style={{ fontSize: bodySize, color: t.textMuted }}>Sin pendientes.</div>
+            <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted }}>Sin pendientes.</div>
           ) : (
             <div className={viewportCompact ? 'cc-seguim-table-scroll cc-seguim-bandeja--compact' : 'cc-seguim-table-scroll'} style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
               <table className="cc-seguim-table" style={{
