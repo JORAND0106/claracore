@@ -2353,6 +2353,9 @@ app.include_router(presupuesto_versiones_router)
 from filtros_plantillas_routes import router as filtros_plantillas_router
 app.include_router(filtros_plantillas_router)
 
+from export_plantillas_routes import router as export_plantillas_router
+app.include_router(export_plantillas_router)
+
 from notificaciones_email_routes import router as notificaciones_email_router
 app.include_router(notificaciones_email_router)
 
