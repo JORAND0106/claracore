@@ -14704,9 +14704,9 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   const buzonMobile = buzonVpMobile || buzonLandscapeMobile
   const zPanel = buzonMobile ? BUZON_Z_PANEL_MOBILE : BUZON_Z_PANEL
   const zModal = buzonMobile ? BUZON_Z_MODAL_MOBILE : BUZON_Z_MODAL
+  // Siempre el contrato activo de sesión (también Desarrollador / multi-contrato).
   const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
-  // A1: Desarrollador ve notificaciones de todos los contratos (sin filtrar por contrato_id).
-  const contratoCtx = esDev ? null : usuario?.contrato_id
+  const contratoCtx = usuario?.contrato_id
   const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
   const [abierto,       setAbierto]       = useState(false)
   const [tab,           setTab]           = useState('recibidos')
@@ -14744,15 +14744,15 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   }
 
   const cargarCount = async () => {
-    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setNoLeidas(0); return }
+    if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
     const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
   }
 
   const cargarRecibidos = async () => {
-    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setRecibidos([]); return }
+    if (contratoCtx == null || contratoCtx === '') { setRecibidos([]); return }
     const p = new URLSearchParams()
-    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
+    p.set('contrato_id', String(contratoCtx))
     if (filtroRecibidos === 'no_leidas') p.set('solo_no_leidas', 'true')
     p.set('limit', '100')
     const q = p.toString()
@@ -14761,14 +14761,15 @@ function BuzonNotificaciones({ t, usuario, onNavegar, onOpenChange }) {
   }
 
   const cargarEnviados = async () => {
-    if (!esDev && (contratoCtx == null || contratoCtx === '')) { setEnviados([]); return }
+    if (contratoCtx == null || contratoCtx === '') { setEnviados([]); return }
     const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: authHeaders() }).catch(() => null)
     if (r?.ok) setEnviados(excluirSoporte(await r.json()))
   }
 
   const cargarDestinatarios = async () => {
+    if (contratoCtx == null || contratoCtx === '') { setDestinatarios([]); return }
     const p = new URLSearchParams()
-    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
+    p.set('contrato_id', String(contratoCtx))
     const qs = p.toString()
     const r = await fetch(
       `${API}/notificaciones/usuarios-destinatarios${qs ? `?${qs}` : ''}`,

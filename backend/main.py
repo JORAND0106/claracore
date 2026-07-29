@@ -13317,6 +13317,29 @@ def _filtro_query_notif_contrato_o_nulo(q, contrato_id: Optional[int]):
     return q.eq("contrato_id", cid)
 
 
+def _contrato_id_efectivo_buzon(
+    contrato_id: Optional[int],
+    current_user,
+) -> Optional[int]:
+    """Contrato para listados del buzón: query param o, si falta, contrato activo del usuario.
+
+    Nunca deja el listado sin filtro (evita mezclar notificaciones de todos los
+    contratos vinculados / vistas Desarrollador sin contrato_id).
+    """
+    if contrato_id is not None:
+        try:
+            return int(contrato_id)
+        except (TypeError, ValueError):
+            return None
+    try:
+        uid = int(current_user.get("sub", 0))
+    except (TypeError, ValueError):
+        return None
+    if not uid:
+        return None
+    return _usuario_contrato_id_por_user_id(uid)
+
+
 def _filtro_notif_visible_buzon_recibidas(q):
     """Excluye mensajes que el destinatario ocultó de su buzón."""
     q = q.or_("oculto_destinatario.eq.false,oculto_destinatario.is.null")
@@ -13705,12 +13728,15 @@ def get_notificaciones_recibidas(
     contrato_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
-    """Notificaciones recibidas por el usuario actual. Si se envía contrato_id, solo las de ese contrato."""
+    """Notificaciones recibidas del contrato activo (query o contrato del usuario)."""
     uid = int(current_user.get("sub", 0))
+    cid = _contrato_id_efectivo_buzon(contrato_id, current_user)
+    if cid is None:
+        return []
     q = supabase.table("notificaciones").select("*") \
         .eq("destinatario_id", uid) \
         .order("created_at", desc=True)
-    q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+    q = _filtro_query_notif_contrato_o_nulo(q, cid)
     q = _filtro_notif_visible_buzon_recibidas(q)
     if solo_no_leidas:
         q = q.eq("leido", False)
@@ -13724,12 +13750,15 @@ def get_notificaciones_enviadas(
     contrato_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
-    """Notificaciones enviadas por el usuario actual. Si se envía contrato_id, solo las de ese contrato."""
+    """Notificaciones enviadas del contrato activo (query o contrato del usuario)."""
     uid = int(current_user.get("sub", 0))
+    cid = _contrato_id_efectivo_buzon(contrato_id, current_user)
+    if cid is None:
+        return []
     q = supabase.table("notificaciones").select("*") \
         .eq("remitente_id", uid) \
         .order("created_at", desc=True)
-    q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+    q = _filtro_query_notif_contrato_o_nulo(q, cid)
     q = _filtro_notif_visible_buzon_enviadas(q)
     return q.range(offset, offset + limit - 1).execute().data
 
@@ -13738,14 +13767,17 @@ def get_no_leidas_count(
     contrato_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
-    """Conteo de notificaciones no leídas — solo mensajes raíz. Opcionalmente filtrado por contrato."""
+    """Conteo de no leídas (raíz) del contrato activo."""
     uid = int(current_user.get("sub", 0))
+    cid = _contrato_id_efectivo_buzon(contrato_id, current_user)
+    if cid is None:
+        return {"count": 0}
     try:
         q = supabase.table("notificaciones").select("id", count="exact") \
             .eq("destinatario_id", uid) \
             .eq("leido", False) \
             .is_("padre_id", "null")
-        q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+        q = _filtro_query_notif_contrato_o_nulo(q, cid)
         q = _filtro_notif_visible_buzon_recibidas(q)
         result = q.execute()
         return {"count": result.count or 0}
@@ -13836,23 +13868,17 @@ def get_usuarios_destinatarios(
             raise HTTPException(status_code=403, detail="No tienes acceso a destinatarios de ese contrato")
         scope.add(cid)
     else:
-        if urow.get("contrato_id") is not None:
-            try:
-                scope.add(int(urow["contrato_id"]))
-            except (TypeError, ValueError):
-                pass
-        for r in supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", uid).execute().data or []:
-            if r.get("contrato_id") is not None:
+        # Sin query: solo el contrato activo del usuario (no todos los vinculados).
+        cid_act = _usuario_contrato_id_por_user_id(uid)
+        if cid_act is not None:
+            scope.add(cid_act)
+        else:
+            jwt_cid = current_user.get("contrato_id")
+            if jwt_cid is not None and str(jwt_cid).strip() != "":
                 try:
-                    scope.add(int(r["contrato_id"]))
+                    scope.add(int(jwt_cid))
                 except (TypeError, ValueError):
                     pass
-        jwt_cid = current_user.get("contrato_id")
-        if jwt_cid is not None and str(jwt_cid).strip() != "":
-            try:
-                scope.add(int(jwt_cid))
-            except (TypeError, ValueError):
-                pass
 
     def _rows_to_out(rows: list) -> list:
         cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
