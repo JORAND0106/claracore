@@ -42,14 +42,6 @@ import TempPruebaResumenJornadaDev from './components/temp/TempPruebaResumenJorn
 import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
 import { useWebPushSubscription } from './hooks/useWebPushSubscription'
 import { BookOpen, Menu, X } from 'lucide-react'
-import {
-  buildGridTemplate,
-  mergeGrillasUiConfig,
-  minWidthFromColumns,
-  patchColumnWidth,
-  resolveVisibleColumns,
-} from './utils/grillasUiConfig'
-import ColumnResizeHandle from './components/ColumnResizeHandle'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
@@ -7274,45 +7266,6 @@ function ModuloSicoeObra({
 
   const [nivelesContrato, setNivelesContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
   const [nivelMasivoPanelContratista, setNivelMasivoPanelContratista] = useState(2)
-  const [grillasUiConfig, setGrillasUiConfig] = useState(() => mergeGrillasUiConfig(null))
-  const grillasSaveTimer = useRef(null)
-
-  useEffect(() => {
-    if (!contrato_id) {
-      setGrillasUiConfig(mergeGrillasUiConfig(null))
-      return
-    }
-    const ac = new AbortController()
-    fetch(`${API_URL}/contratos/${contrato_id}/grillas-ui-config`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-      signal: ac.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) setGrillasUiConfig(mergeGrillasUiConfig(data))
-      })
-      .catch(() => {})
-    return () => ac.abort()
-  }, [contrato_id, API_URL])
-
-  const persistGrillasUiConfig = useCallback(
-    (next) => {
-      setGrillasUiConfig(next)
-      if (!contrato_id) return
-      if (grillasSaveTimer.current) clearTimeout(grillasSaveTimer.current)
-      grillasSaveTimer.current = setTimeout(() => {
-        fetch(`${API_URL}/contratos/${contrato_id}/grillas-ui-config`, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${getToken()}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ grillas_ui_config: next }),
-        }).catch(() => {})
-      }, 600)
-    },
-    [contrato_id, API_URL],
-  )
 
   useEffect(() => {
     if (!contrato_id) {
@@ -9393,29 +9346,16 @@ function ModuloSicoeObra({
       return '—'
     }
   }
-  const sicoeColsVisibles = useMemo(
-    () =>
-      resolveVisibleColumns('sicoe_obra', grillasUiConfig, {
-        verEconomia: !!nivelInfo.verValoresEconomicos,
-      }),
-    [grillasUiConfig, nivelInfo.verValoresEconomicos],
-  )
-  const sicoeGrillaCols = useMemo(() => buildGridTemplate(sicoeColsVisibles), [sicoeColsVisibles])
-  const sicoeGrillaMinW = useMemo(() => minWidthFromColumns(sicoeColsVisibles), [sicoeColsVisibles])
-  const sicoeColVisible = useCallback(
-    (id) => sicoeColsVisibles.some((c) => c.id === id),
-    [sicoeColsVisibles],
-  )
-  const onSicoeColResizeEnd = useCallback(
-    (colId, widthPx) => {
-      persistGrillasUiConfig(patchColumnWidth(grillasUiConfig, 'sicoe_obra', colId, widthPx))
-    },
-    [grillasUiConfig, persistGrillasUiConfig],
-  )
+  // Tracks fijos + 1 fr; minWidth compartido header/filas para que no se desalineen al hacer scroll.
+  const sicoeGrillaCols = nivelInfo.verValoresEconomicos
+    ? '64px 110px 84px 80px 112px 124px minmax(180px,1.4fr) 100px 96px 64px'
+    : '64px 110px 84px 80px 112px 124px minmax(180px,1.4fr) 96px 64px'
+  const sicoeGrillaMinW = nivelInfo.verValoresEconomicos ? 1080 : 980
   const sicoeGrillaCell = {
     minWidth: 0,
     overflow: 'hidden',
-    wordBreak: 'break-word',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   }
   // Varias capas: AND u OR según `validacion_capas_op` en backend; no refinar de nuevo con agregados por reporte
   const reportesMostrados = reportes
@@ -10975,32 +10915,22 @@ function ModuloSicoeObra({
                   background: t.bgCard,
                 }}
               >
-                {sicoeColsVisibles.map((col) => (
-                  <div
-                    key={col.id}
-                    style={{
-                      ...sicoeGrillaCell,
-                      position: 'relative',
-                      paddingRight: 8,
-                      textAlign: col.id === 'costo_directo' || col.id === 'regs' ? 'right' : 'left',
-                    }}
-                    title={
-                      col.id === 'fecha_creacion'
-                        ? 'Fecha de creación del reporte'
-                        : col.id === 'costo_directo'
-                          ? 'Suma de costo directo en líneas que cumplen el filtro de búsqueda actual'
-                          : col.id === 'regs'
-                            ? 'Líneas que cumplen el filtro de búsqueda actual'
-                            : col.label
-                    }
-                  >
-                    {col.label}
-                    <ColumnResizeHandle
-                      color={t.primary || '#94a3b8'}
-                      onResizeEnd={(w) => onSicoeColResizeEnd(col.id, w)}
-                    />
+                <div style={sicoeGrillaCell}>N° REP.</div>
+                <div style={sicoeGrillaCell} title="Fecha de creación del reporte">F. CREACIÓN</div>
+                <div style={sicoeGrillaCell}>TRAMO</div>
+                <div style={sicoeGrillaCell}>COSTADO</div>
+                <div style={sicoeGrillaCell}>ABCISA</div>
+                <div style={sicoeGrillaCell}>NODO</div>
+                <div style={sicoeGrillaCell}>DESCRIPCIÓN</div>
+                {nivelInfo.verValoresEconomicos && (
+                  <div style={{ ...sicoeGrillaCell, textAlign: 'right' }} title="Suma de costo directo en líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta se usa la misma vista si la búsqueda sigue vigente.">
+                    COSTO DIRECTO
                   </div>
-                ))}
+                )}
+                <div style={sicoeGrillaCell}>CAPÍTULO</div>
+                <div style={{ ...sicoeGrillaCell, textAlign: 'right' }} title="Líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta coinciden con el resumen si la búsqueda sigue vigente.">
+                  REGS.
+                </div>
               </div>
 
               {cargando && reportes.length === 0 ? (
@@ -11109,55 +11039,35 @@ function ModuloSicoeObra({
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-            {sicoeColsVisibles.map((col) => {
-              if (col.id === 'numero_reporte') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
-              }
-              if (col.id === 'fecha_creacion') {
-                return (
-                  <div
-                    key={col.id}
-                    style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }}
-                    title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
-                  >
-                    {fmtSicoeFechaCreacion(rep.created_at)}
-                  </div>
-                )
-              }
-              if (col.id === 'tramo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.tramo || ''}>{rep.tramo || '—'}</div>
-              }
-              if (col.id === 'costado') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.calzada || rep.margen || ''}>{rep.calzada || rep.margen || '—'}</div>
-              }
-              if (col.id === 'abcisa') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>{fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}</div>
-              }
-              if (col.id === 'nodo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>{fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}</div>
-              }
-              if (col.id === 'descripcion') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontWeight:'600' }} title={rep.descripcion_actividad || ''}>{rep.descripcion_actividad || '—'}</div>
-              }
-              if (col.id === 'costo_directo') {
-                return (
-                  <div key={col.id} className="cc-sicoe-num" style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
-                    {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
-                  </div>
-                )
-              }
-              if (col.id === 'capitulo') {
-                return <div key={col.id} style={{ ...sicoeGrillaCell, fontSize:'var(--cc-label)', color:t.textMuted }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
-              }
-              if (col.id === 'regs') {
-                return (
-                  <div key={col.id} style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
-                    {rep.num_registros != null ? rep.num_registros : '—'}
-                  </div>
-                )
-              }
-              return <div key={col.id} style={sicoeGrillaCell}>—</div>
-            })}
+            <div style={{ ...sicoeGrillaCell, fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
+            <div
+              style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }}
+              title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
+            >
+              {fmtSicoeFechaCreacion(rep.created_at)}
+            </div>
+            <div style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.tramo || ''}>
+              {rep.tramo || '—'}
+            </div>
+            <div style={{ ...sicoeGrillaCell, color:t.text, fontSize:'var(--cc-sm)' }} title={rep.calzada || rep.margen || ''}>
+              {rep.calzada || rep.margen || '—'}
+            </div>
+            <div style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}
+            </div>
+            <div style={{ ...sicoeGrillaCell, color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}
+            </div>
+            <div style={{ ...sicoeGrillaCell, fontWeight:'600' }} title={rep.descripcion_actividad || ''}>{rep.descripcion_actividad || '—'}</div>
+            {nivelInfo.verValoresEconomicos && (
+              <div className="cc-sicoe-num" style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
+                {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
+              </div>
+            )}
+            <div style={{ ...sicoeGrillaCell, fontSize:'var(--cc-label)', color:t.textMuted }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
+            <div style={{ ...sicoeGrillaCell, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
+              {rep.num_registros != null ? rep.num_registros : '—'}
+            </div>
           </div>
                 ))
               )}

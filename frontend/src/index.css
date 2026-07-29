@@ -752,8 +752,7 @@ select.cc-dashboard-acta-select--light option {
 .cc-sicoe-reportes-grid-row > * {
   min-width: 0;
   overflow: hidden;
-  /* Sin truncado forzado nowrap: el contenido puede envolver; anchos vienen de config por contrato */
-  word-break: break-word;
+  text-overflow: ellipsis;
 }
 
 .cc-sicoe-reg-cards {

@@ -825,7 +825,6 @@ class ContratoCreate(BaseModel):
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: List[CostoAdicionalItem] = Field(default_factory=list)
     export_palette: Optional[Dict[str, Any]] = None
-    grillas_ui_config: Optional[Dict[str, Any]] = None
 
 class PermisoUpdate(BaseModel):
     cargo_id: int
@@ -887,7 +886,6 @@ class ContratoUpdate(BaseModel):
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: Optional[List[CostoAdicionalItem]] = None
     export_palette: Optional[Dict[str, Any]] = None
-    grillas_ui_config: Optional[Dict[str, Any]] = None
 
 class ListadoPrecioItem(BaseModel):
     capitulo: Optional[str] = None
@@ -5787,23 +5785,6 @@ def obtener_contrato(contrato_id: int, include_plano: bool = Query(False)):
     if not row:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
     row["export_palette"] = _export_palette_desde_contrato(row)
-    # grillas_ui_config: columna nueva; se enriquece si está en el row (* / migración aplicada)
-    if "grillas_ui_config" in row:
-        row["grillas_ui_config"] = _sanitize_grillas_ui_config(row.get("grillas_ui_config"))
-    else:
-        try:
-            g = (
-                supabase.table("contratos")
-                .select("grillas_ui_config")
-                .eq("id", contrato_id)
-                .limit(1)
-                .execute()
-                .data
-            )
-            raw_g = (g[0].get("grillas_ui_config") if g else None)
-            row["grillas_ui_config"] = _sanitize_grillas_ui_config(raw_g)
-        except Exception:
-            row["grillas_ui_config"] = _sanitize_grillas_ui_config({})
     return row
 
 @app.post("/auth/login")
@@ -6914,164 +6895,6 @@ def _guardar_export_palette_contrato(contrato_id: int, palette: Any) -> None:
             raise
 
 
-# ── Grillas UI (SicoeObra / Presupuesto): visibilidad + anchos por contrato ──
-_GRILLAS_UI_SICOE = (
-    ("numero_reporte", 64, True),
-    ("fecha_creacion", 110, False),
-    ("tramo", 84, False),
-    ("costado", 80, False),
-    ("abcisa", 112, False),
-    ("nodo", 124, False),
-    ("descripcion", 220, False),
-    ("costo_directo", 100, False),
-    ("capitulo", 96, False),
-    ("regs", 64, True),
-)
-_GRILLAS_UI_PPTO = (
-    ("check", 56, True),
-    ("id_pol", 88, True),
-    ("capitulo", 140, False),
-    ("competencia", 110, False),
-    ("item", 72, False),
-    ("descripcion", 200, False),
-    ("und", 56, False),
-    ("nodo_ini", 72, False),
-    ("nodo_fin", 72, False),
-    ("abs_inicio", 80, False),
-    ("abs_final", 80, False),
-    ("area_long", 80, False),
-    ("ancho", 64, False),
-    ("espesor", 64, False),
-    ("cant_total", 80, False),
-    ("vlr_unit", 90, False),
-    ("costo_directo", 100, False),
-    ("depuracion", 100, False),
-    ("revisado", 90, False),
-    ("auditoria", 48, False),
-    ("comentarios", 48, False),
-    ("acciones", 48, True),
-)
-
-
-def _sanitize_grillas_ui_modulo(raw_mod: Any, catalog: tuple) -> dict:
-    by_id: Dict[str, Any] = {}
-    if isinstance(raw_mod, dict) and isinstance(raw_mod.get("columns"), list):
-        for row in raw_mod["columns"]:
-            if isinstance(row, dict) and row.get("id"):
-                by_id[str(row["id"])] = row
-    cols = []
-    for cid, default_w, locked in catalog:
-        prev = by_id.get(cid) or {}
-        visible = True if locked else (prev.get("visible") is not False)
-        try:
-            w = int(prev["width"]) if prev.get("width") is not None else int(default_w)
-        except (TypeError, ValueError):
-            w = int(default_w)
-        w = max(40, min(640, w))
-        cols.append({"id": cid, "visible": bool(visible), "width": w})
-    return {"columns": cols}
-
-
-def _sanitize_grillas_ui_config(raw: Any) -> dict:
-    src = raw if isinstance(raw, dict) else {}
-    return {
-        "version": 1,
-        "sicoe_obra": _sanitize_grillas_ui_modulo(src.get("sicoe_obra"), _GRILLAS_UI_SICOE),
-        "presupuesto": _sanitize_grillas_ui_modulo(src.get("presupuesto"), _GRILLAS_UI_PPTO),
-    }
-
-
-def _guardar_grillas_ui_config_contrato(contrato_id: int, config: Any) -> dict:
-    clean = _sanitize_grillas_ui_config(config or {})
-    try:
-        supabase.table("contratos").update({"grillas_ui_config": clean}).eq("id", contrato_id).execute()
-    except Exception as e:
-        msg = str(e).lower()
-        if "grillas_ui_config" in msg or "pgrst204" in msg:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Columna grillas_ui_config no disponible. "
-                    "Ejecute la migración alter_contratos_grillas_ui_config.sql en Supabase."
-                ),
-            ) from e
-        raise
-    return clean
-
-
-def _perm_contratos_admin_grillas(current_user) -> None:
-    u = current_user if isinstance(current_user, dict) else dict(current_user or {})
-    rol = str(u.get("rol_nombre") or "").strip().lower()
-    if rol in ("desarrollador", "administrador"):
-        return
-    for p in u.get("permisos") or []:
-        fn = str(p.get("funcion_nombre") or "").strip().lower()
-        if fn == "contratos" and (p.get("editar") or p.get("crear")):
-            return
-    raise HTTPException(status_code=403, detail="Sin permiso para configurar grillas del contrato")
-
-
-@app.get("/contratos/{contrato_id}/grillas-ui-config")
-def obtener_grillas_ui_config(contrato_id: int, current_user=Depends(get_current_user)):
-    try:
-        rows = (
-            supabase.table("contratos")
-            .select("id, grillas_ui_config")
-            .eq("id", contrato_id)
-            .limit(1)
-            .execute()
-            .data
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if "grillas_ui_config" in msg or "pgrst204" in msg:
-            return _sanitize_grillas_ui_config({})
-        raise
-    if not rows:
-        raise HTTPException(status_code=404, detail="Contrato no encontrado")
-    return _sanitize_grillas_ui_config(rows[0].get("grillas_ui_config"))
-
-
-@app.put("/contratos/{contrato_id}/grillas-ui-config")
-def actualizar_grillas_ui_config(
-    contrato_id: int,
-    body: Dict[str, Any],
-    current_user=Depends(get_current_user),
-):
-    """Guarda visibilidad/anchos a nivel contrato (persistente para todos los usuarios).
-
-    Visibilidad: solo admin/desarrollador (misma restricción del módulo Contratos).
-    Anchos: cualquier usuario autenticado puede persistir el arrastre desde la grilla.
-    """
-    cfg = body.get("grillas_ui_config", body)
-    incoming = _sanitize_grillas_ui_config(cfg)
-    es_admin_grillas = True
-    try:
-        _perm_contratos_admin_grillas(current_user)
-    except HTTPException:
-        es_admin_grillas = False
-    if es_admin_grillas:
-        clean = _guardar_grillas_ui_config_contrato(contrato_id, incoming)
-    else:
-        # No-admin: conservar visibilidad actual; aplicar solo anchos del payload.
-        actual = obtener_grillas_ui_config(contrato_id, current_user)
-        merged = _sanitize_grillas_ui_config(actual)
-        for mod in ("sicoe_obra", "presupuesto"):
-            by_w = {
-                str(c.get("id")): c.get("width")
-                for c in (incoming.get(mod) or {}).get("columns") or []
-                if c and c.get("id")
-            }
-            cols = []
-            for c in (merged.get(mod) or {}).get("columns") or []:
-                cid = str(c.get("id"))
-                w = by_w.get(cid, c.get("width"))
-                cols.append({**c, "width": w})
-            merged[mod] = {"columns": cols}
-        clean = _guardar_grillas_ui_config_contrato(contrato_id, merged)
-    return {"mensaje": "Configuración de grillas actualizada", "grillas_ui_config": clean}
-
-
 def _normalizar_costos_adicionales_lista(items: List[CostoAdicionalItem]) -> List[dict]:
     out: List[dict] = []
 
@@ -7168,15 +6991,6 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
             _guardar_export_palette_contrato(nuevo["id"], contrato.export_palette)
         except Exception:
             pass
-    if getattr(contrato, "grillas_ui_config", None) is not None:
-        try:
-            nuevo["grillas_ui_config"] = _guardar_grillas_ui_config_contrato(
-                nuevo["id"], contrato.grillas_ui_config
-            )
-        except Exception:
-            nuevo["grillas_ui_config"] = _sanitize_grillas_ui_config({})
-    else:
-        nuevo["grillas_ui_config"] = _sanitize_grillas_ui_config({})
     nuevo["export_palette"] = _export_palette_desde_contrato(nuevo)
     return nuevo
 
@@ -7191,17 +7005,12 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
     palette_payload = None
     if "export_palette" in data:
         palette_payload = data.pop("export_palette")
-    grillas_payload = None
-    if "grillas_ui_config" in data:
-        grillas_payload = data.pop("grillas_ui_config")
-    if not data and palette_payload is None and grillas_payload is None:
+    if not data and palette_payload is None:
         return {"mensaje": "Sin cambios"}
     if data:
         supabase.table("contratos").update(data).eq("id", contrato_id).execute()
     if palette_payload is not None:
         _guardar_export_palette_contrato(contrato_id, palette_payload)
-    if grillas_payload is not None:
-        _guardar_grillas_ui_config_contrato(contrato_id, grillas_payload)
     return {"mensaje": "Contrato actualizado"}
 
 @app.delete("/contratos/{contrato_id}")
