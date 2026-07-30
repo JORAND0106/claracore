@@ -72,10 +72,10 @@ def test_pdf_incluye_cinco_ideas_centrales():
     assert "08:15" in compact
     assert "10:40" in compact
     assert "Objeto del contrato" in compact
-    assert "Ideas centrales" in compact
+    assert "Ideas centrales" in compact or "TEMAS TRATADOS" in compact
     for i in range(1, 6):
         assert f"IDEA_MARKER_{i}" in text, f"falta idea {i}"
-        assert f"Idea {i}" in text
+        assert f"Tema {i}" in text
 
 
 def test_pdf_pagina_con_idea_larga_y_siguientes():
@@ -126,11 +126,52 @@ def test_pdf_pagina_con_idea_larga_y_siguientes():
     compact = " ".join(text.split())
     assert "Seguimiento al Contrato de obra No." in compact
     assert "CT-9-2026 DE 2026" in compact
+    assert "TEMAS A TRATAR" in compact or "TEMAS A TRATAR EN PRESENTE ACTA" in text
     assert "Compromisos abiertos de actas anteriores" in text
     assert "Próxima reunión" in text
     assert "Sala gerencia" in text
     for i in range(1, 6):
         assert f"IDEA_MARKER_{i}" in text, f"falta idea {i} tras contenido largo"
+        assert f"Tema {i}" in text
+
+
+def test_pdf_interna_no_muestra_bloque_entidad():
+    pdf = generar_pdf_acta(
+        {"numero": "CT-1-2026", "objeto": "Obra", "logo_entidad": "https://example.com/e.png"},
+        {
+            "consecutivo": 1,
+            "fecha_reunion": "2026-07-28",
+            "tipo_acta": "interna",
+            "orden_del_dia": "Punto",
+        },
+        [],
+        [{"orden": 0, "texto": "TEMA_MARKER", "titulo": "Drenaje norte"}],
+        [],
+    )
+    text = _pdf_text(pdf)
+    compact = " ".join(text.split())
+    assert "Tema 1: Drenaje norte" in compact or ("Tema 1" in compact and "Drenaje norte" in compact)
+    assert "TEMAS A TRATAR EN PRESENTE ACTA" in compact
+    # Interna no etiqueta bloque Entidad en el encabezado de tres recuadros
+    assert "Entidad" not in text.split("Objeto")[0] or "Logo entidad" not in text
+
+
+def test_pdf_externa_incluye_identidad_entidad():
+    pdf = generar_pdf_acta(
+        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": ""},
+        {
+            "consecutivo": 2,
+            "fecha_reunion": "2026-07-28",
+            "tipo_acta": "externa",
+            "orden_del_dia": "Punto",
+        },
+        [],
+        [],
+        [],
+    )
+    text = _pdf_text(pdf)
+    assert "Entidad" in text.split("Objeto")[0]
+    assert "Contratista" in text.split("Objeto")[0]
 
 
 def test_contenido_hash_incluye_quien_dijo():

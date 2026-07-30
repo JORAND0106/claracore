@@ -13,7 +13,10 @@ from topografia_utils import _html_logo_pdf, to_pdf_bytes
 _COLOR = "#0f172a"
 _BORDE = "#334155"
 _BORDE_SUAVE = "#94a3b8"
-_BG_H = "#f8fafc"
+# Encabezados de tabla / sección: oscuro institucional (texto claro).
+_BG_H = "#1e293b"
+_FG_H = "#ffffff"
+_LOGO_MAX_H = 22  # pt — altura discreta en el encabezado
 
 
 def _esc(val) -> str:
@@ -74,6 +77,7 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
         parts.append("|".join([
             str(i.get("texto") or ""),
             str(i.get("quien_dijo") or i.get("interviniente") or ""),
+            str(i.get("titulo") or ""),
             str(i.get("orden") if i.get("orden") is not None else ""),
         ]))
     for ap in apartados or []:
@@ -139,9 +143,14 @@ def _encabezado_oficial_html(
     logo_contratista: str,
     logo_entidad: str,
 ) -> str:
-    """Encabezado tipo formato oficial: logos + título + tabla lateral + objeto."""
+    """Encabezado tipo formato oficial: logos según tipo + título + tabla lateral + objeto.
+
+    Interna: solo identidad contratista (un logo).
+    Externa: tres recuadros (contratista | título | entidad) + meta debajo.
+    """
     titulo = _titulo_seguimiento_contrato(contrato, acta)
     tipo_raw = str(acta.get("tipo_acta") or "").lower()
+    es_externa = tipo_raw == "externa"
     tipo_lbl = {"interna": "Interna", "externa": "Externa"}.get(tipo_raw, "")
     consec = acta.get("consecutivo") or "—"
     dia, mes, anio = _fecha_partes_dia_mes_anio(acta.get("fecha_reunion"))
@@ -150,76 +159,99 @@ def _encabezado_oficial_html(
     cto_interv = _esc(_numero_interventoria(contrato))
     objeto = _esc((contrato or {}).get("objeto") or "—")
     tipo_line = (
-        f'<div style="font-size:8pt;color:#475569;margin-top:3pt;">Acta { _esc(tipo_lbl) }</div>'
+        f'<div style="font-size:8pt;color:#475569;margin-top:3pt;">Acta {_esc(tipo_lbl)}</div>'
         if tipo_lbl else ""
     )
 
     meta = (
         f'<table width="100%" cellspacing="0" cellpadding="0" '
         f'style="border-collapse:collapse;font-size:7.5pt;">'
-        # Acta No.
         f'<tr>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;width:38%;">Acta No.</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;width:38%;'
+        f'background:{_BG_H};color:{_FG_H};">Acta No.</td>'
         f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;">'
         f'{_esc(consec)}</td>'
         f'</tr>'
-        # Fecha headers
         f'<tr>'
         f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
-        f'vertical-align:middle;">Fecha</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Día</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Mes</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Año</td>'
+        f'vertical-align:middle;background:{_BG_H};color:{_FG_H};">Fecha</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Día</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Mes</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Año</td>'
         f'</tr>'
         f'<tr>'
         f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(dia)}</td>'
         f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(mes)}</td>'
         f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(anio)}</td>'
         f'</tr>'
-        # Hora
         f'<tr>'
         f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
-        f'vertical-align:middle;">Hora</td>'
-        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Inicio</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Fin</td>'
+        f'vertical-align:middle;background:{_BG_H};color:{_FG_H};">Hora</td>'
+        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Inicio</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Fin</td>'
         f'</tr>'
         f'<tr>'
         f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_ini}</td>'
         f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_fin}</td>'
         f'</tr>'
-        # Contrato interventoría
         f'<tr>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;">Contrato de<br/>Interventoría</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
+        f'background:{_BG_H};color:{_FG_H};">Contrato de<br/>Interventoría</td>'
         f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;'
         f'font-size:7pt;">{cto_interv}</td>'
         f'</tr>'
         f'</table>'
     )
 
-    logos = (
-        f'<div style="margin-bottom:4pt;">{logo_contratista}</div>'
-        f'<div>{logo_entidad}</div>'
-    )
     titulo_html = (
         f'<div style="font-size:11pt;font-weight:700;text-align:center;line-height:1.3;">'
         f'{_esc(titulo)}</div>{tipo_line}'
     )
 
-    header = (
-        f'<table width="100%" cellspacing="0" cellpadding="0" '
-        f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
-        f'<tr>'
-        f'<td style="width:18%;border-right:1pt solid {_BORDE};padding:6pt 4pt;'
-        f'vertical-align:middle;text-align:center;">{logos}</td>'
-        f'<td style="width:44%;border-right:1pt solid {_BORDE};padding:10pt 8pt;'
-        f'vertical-align:middle;">{titulo_html}</td>'
-        f'<td style="width:38%;padding:4pt;vertical-align:middle;">{meta}</td>'
-        f'</tr>'
-        f'</table>'
-    )
+    if es_externa:
+        # Tres recuadros: contratista | título | entidad (separación de identidades).
+        header = (
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
+            f'<tr>'
+            f'<td style="width:20%;border-right:1pt solid {_BORDE};padding:4pt;'
+            f'vertical-align:middle;text-align:center;">'
+            f'<div style="font-size:6.5pt;color:#64748b;margin-bottom:2pt;">Contratista</div>'
+            f'{logo_contratista}</td>'
+            f'<td style="width:50%;border-right:1pt solid {_BORDE};padding:8pt;'
+            f'vertical-align:middle;">{titulo_html}</td>'
+            f'<td style="width:30%;padding:4pt;vertical-align:middle;text-align:center;">'
+            f'<div style="font-size:6.5pt;color:#64748b;margin-bottom:2pt;">Entidad</div>'
+            f'{logo_entidad}</td>'
+            f'</tr>'
+            f'</table>'
+            f'<div style="height:3pt;"></div>'
+            f'{meta}'
+        )
+    else:
+        # Interna: unificada bajo identidad del contratista (sin bloque entidad).
+        header = (
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
+            f'<tr>'
+            f'<td style="width:18%;border-right:1pt solid {_BORDE};padding:4pt;'
+            f'vertical-align:middle;text-align:center;">{logo_contratista}</td>'
+            f'<td style="width:44%;border-right:1pt solid {_BORDE};padding:8pt;'
+            f'vertical-align:middle;">{titulo_html}</td>'
+            f'<td style="width:38%;padding:4pt;vertical-align:middle;">{meta}</td>'
+            f'</tr>'
+            f'</table>'
+        )
+
     objeto_row = (
         f'<table width="100%" cellspacing="0" cellpadding="0" '
-        f'style="border-collapse:collapse;border:1pt solid {_BORDE};border-top:none;margin:0;">'
+        f'style="border-collapse:collapse;border:1pt solid {_BORDE};'
+        f'{"border-top:none;" if not es_externa else "margin-top:3pt;"}margin:0;">'
         f'<tr>'
         f'<td style="padding:5pt 6pt;font-size:8.5pt;"><b>Objeto del contrato:</b> {objeto}</td>'
         f'</tr>'
@@ -228,8 +260,10 @@ def _encabezado_oficial_html(
     return header + objeto_row
 
 
-def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = 48) -> str:
-    """Logo embebido (data-URI) o placeholder con borde."""
+def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = None) -> str:
+    """Logo embebido (data-URI) o placeholder con borde. Altura contenida por defecto."""
+    if max_h is None:
+        max_h = _LOGO_MAX_H
     uri = ""
     if url and str(url).strip():
         try:
@@ -238,13 +272,14 @@ def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = 48) -> str:
             uri = ""
     if uri:
         return (
-            f'<div style="text-align:center;padding:4pt;">'
-            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:100%;object-fit:contain;"/>'
+            f'<div style="text-align:center;padding:2pt;">'
+            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:90%;'
+            f'height:auto;object-fit:contain;"/>'
             f"</div>"
         )
     return (
-        f'<div style="border:0.6pt dashed {_BORDE_SUAVE};min-height:{max_h}pt;'
-        f'text-align:center;padding:10pt 4pt;font-size:7pt;color:#94a3b8;">'
+        f'<div style="border:0.5pt dashed {_BORDE_SUAVE};min-height:{max(14, max_h - 4)}pt;'
+        f'text-align:center;padding:4pt 2pt;font-size:6pt;color:#94a3b8;">'
         f"{_esc(placeholder)}</div>"
     )
 
@@ -257,12 +292,13 @@ def _box_row(cells_html: str) -> str:
     )
 
 
-def _section(title: str, body: str) -> str:
-    # Div+borde (no tabla anidada): xhtml2pdf falla con tablas anidadas y contenido largo.
+def _section(title: str, body: str, *, bordered: bool = True) -> str:
+    """Sección con encabezado oscuro. bordered=False suaviza el marco (acta interna)."""
+    border = f"border:1pt solid {_BORDE};" if bordered else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
     return (
-        f'<div class="sec" style="border:1pt solid {_BORDE};margin:6pt 0 0;page-break-inside:auto;">'
+        f'<div class="sec" style="{border}margin:6pt 0 0;page-break-inside:auto;">'
         f'<div style="background:{_BG_H};border-bottom:1pt solid {_BORDE};'
-        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_COLOR};">{_esc(title)}</div>'
+        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_FG_H};">{_esc(title)}</div>'
         f'<div style="padding:6pt;font-size:9pt;">{body}</div>'
         f"</div>"
     )
@@ -280,6 +316,22 @@ def _cell(content: str, *, width: str = "", border_right: bool = True, align: st
     )
 
 
+def _titulo_tema_fallback(texto: str) -> str:
+    """Título corto local si la idea aún no tiene titulo Clara."""
+    t = " ".join((texto or "").strip().split())
+    if not t:
+        return ""
+    for sep in (".", ";", ":", "\n"):
+        if sep in t[:110]:
+            cand = t.split(sep, 1)[0].strip()
+            if len(cand) >= 8:
+                t = cand
+                break
+    if len(t) > 72:
+        t = t[:72].rsplit(" ", 1)[0].strip() + "…"
+    return t
+
+
 def generar_pdf_acta(
     contrato: dict,
     acta: dict,
@@ -295,14 +347,21 @@ def generar_pdf_acta(
     compromisos_previos = compromisos_previos or []
     firma_by_asistente = {int(f["asistente_id"]): f for f in firmas if f.get("asistente_id") is not None}
 
-    logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista", max_h=36)
-    logo_entidad = _logo_cell((contrato or {}).get("logo_entidad"), "Logo entidad", max_h=36)
+    tipo_raw = str((acta or {}).get("tipo_acta") or "").lower()
+    es_externa = tipo_raw == "externa"
+    logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista")
+    logo_entidad = (
+        _logo_cell((contrato or {}).get("logo_entidad"), "Logo entidad")
+        if es_externa
+        else ""
+    )
     header_block = _encabezado_oficial_html(
         contrato or {},
         acta or {},
         logo_contratista=logo_contratista,
         logo_entidad=logo_entidad,
     )
+    sec_border = es_externa  # Externa: secciones delimitadas; Interna: flujo unificado.
 
     asis_rows = "".join(
         f"<tr>"
@@ -319,10 +378,10 @@ def generar_pdf_acta(
     asis_table = (
         f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;font-size:8.5pt;'>"
         f"<tr style='background:{_BG_H};'>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;'>Nombre</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;'>Cargo</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;'>Empresa</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;'>Correo</th>"
+        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Nombre</th>"
+        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Cargo</th>"
+        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Empresa</th>"
+        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Correo</th>"
         f"</tr>{asis_rows}</table>"
     )
 
@@ -335,8 +394,10 @@ def generar_pdf_acta(
     )
     ideas_html = ""
     for idx, idea in enumerate(ideas_sorted, start=1):
-        # Consecutivo visible = posición por orden (1-based), no el id de BD.
         num = int(idea.get("orden") if idea.get("orden") is not None else idx - 1) + 1
+        titulo_tema = (idea.get("titulo") or "").strip()
+        if not titulo_tema:
+            titulo_tema = _titulo_tema_fallback(idea.get("texto") or "") or f"Tema {num}"
         quien = (idea.get("quien_dijo") or idea.get("interviniente") or "").strip()
         quien_line = (
             f"<div style='font-size:8pt;color:#475569;margin:1pt 0 3pt;'>"
@@ -346,13 +407,13 @@ def generar_pdf_acta(
         ideas_html += (
             f"<div class='pdf-idea' style='margin:0 0 8pt;padding-bottom:6pt;"
             f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
-            f"<div style='font-size:9pt;font-weight:700;'>Idea {num}</div>"
+            f"<div style='font-size:9pt;font-weight:700;'>Tema {num}: {_esc(titulo_tema)}</div>"
             f"{quien_line}"
             f"<div style='font-size:9pt;'>{_nl2br(idea.get('texto') or '')}</div>"
             f"</div>"
         )
     if not ideas_html:
-        ideas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin ideas centrales.</div>"
+        ideas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin temas registrados.</div>"
 
     def _comp_table(rows_src: list, empty_msg: str) -> str:
         if not rows_src:
@@ -370,10 +431,10 @@ def generar_pdf_acta(
         return (
             f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;font-size:8pt;'>"
             f"<tr style='background:{_BG_H};'>"
-            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;'>Compromiso</th>"
-            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;'>Asignado</th>"
-            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;'>Vence</th>"
-            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;'>Estado</th>"
+            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Compromiso</th>"
+            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Asignado</th>"
+            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Vence</th>"
+            f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Estado</th>"
             f"</tr>{rows}</table>"
         )
 
@@ -468,20 +529,22 @@ body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9
 </style></head><body>
 {header_block}
 
-{_section("Asistentes", asis_table)}
-{_section("Orden del día", _orden_del_dia_html(acta.get("orden_del_dia")))}
+{_section("Asistentes", asis_table, bordered=sec_border)}
+{_section("TEMAS A TRATAR EN PRESENTE ACTA", _orden_del_dia_html(acta.get("orden_del_dia")), bordered=sec_border)}
 {_section(
     "Compromisos abiertos de actas anteriores",
     _comp_table(compromisos_previos, "No hay compromisos abiertos de actas anteriores."),
+    bordered=sec_border,
 )}
-{_section(f"Ideas centrales o temas nuevos tratados ({n_ideas})", ideas_html)}
+{_section(f"TEMAS TRATADOS EN PRESENTE ACTA ({n_ideas})", ideas_html, bordered=sec_border)}
 {_section(
     "Compromisos generados",
     _comp_table(compromisos, "Sin compromisos generados en esta acta."),
+    bordered=sec_border,
 )}
-{_section("Apartados o temas adicionales", apartados_html)}
-{_section("Firmas", firmas_html)}
-{_section("Próxima reunión (reserva)", proxima_html)}
+{_section("Apartados o temas adicionales", apartados_html, bordered=sec_border)}
+{_section("Firmas", firmas_html, bordered=sec_border)}
+{_section("Próxima reunión (reserva)", proxima_html, bordered=sec_border)}
 </body></html>"""
     return to_pdf_bytes(doc, landscape=False)
 
