@@ -179,3 +179,62 @@ def test_contenido_hash_incluye_quien_dijo():
     h1 = contenido_hash_acta(base, [], [{"texto": "X", "quien_dijo": "A", "orden": 0}], [])
     h2 = contenido_hash_acta(base, [], [{"texto": "X", "quien_dijo": "B", "orden": 0}], [])
     assert h1 != h2
+
+
+def test_encabezado_compacto_constantes_y_legibilidad():
+    """El bloque de encabezado usa dimensiones ~50% más compactas y sigue legible."""
+    from seguimiento_pdf import (
+        _HDR_META_FS,
+        _HDR_PAD,
+        _HDR_TITLE_FS,
+        _LOGO_MAX_H,
+        _encabezado_oficial_html,
+        _logo_cell,
+    )
+
+    assert _LOGO_MAX_H <= 12
+    assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
+    assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
+    assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
+
+    logo = _logo_cell(None, "Logo")
+    assert f"max-height:{_LOGO_MAX_H}pt" in logo or "min-height" in logo
+
+    for tipo in ("interna", "externa"):
+        html = _encabezado_oficial_html(
+            {"numero": "CT-9-2026", "objeto": "Obra de prueba", "numero_interventoria": "INT-1"},
+            {
+                "consecutivo": 3,
+                "fecha_reunion": "2026-07-28",
+                "tipo_acta": tipo,
+                "hora_inicio": "08:00",
+                "hora_fin": "09:30",
+            },
+            logo_contratista=_logo_cell(None, "C"),
+            logo_entidad=_logo_cell(None, "E"),
+        )
+        assert "Acta No." in html
+        assert "08:00" in html and "09:30" in html
+        assert "INT-1" in html
+        assert "Objeto del contrato" in html
+        # Padding compacto en celdas del encabezado (no el padding antiguo 8pt del título).
+        assert "padding:8pt" not in html
+        assert "padding:3pt 4pt" not in html
+        pdf = generar_pdf_acta(
+            {"numero": "CT-9-2026", "objeto": "Obra de prueba", "numero_interventoria": "INT-1"},
+            {
+                "consecutivo": 3,
+                "fecha_reunion": "2026-07-28",
+                "tipo_acta": tipo,
+                "hora_inicio": "08:00",
+                "hora_fin": "09:30",
+                "orden_del_dia": "Punto",
+            },
+            [{"nombre": "A", "cargo": "C", "entidad": "E", "email": "a@x.com"}],
+            [{"orden": 0, "texto": "Contenido", "titulo": "Tema compacto"}],
+            [],
+        )
+        text = _pdf_text(pdf)
+        assert "CT-9-2026" in text
+        assert "08:00" in text
+        assert "Tema 1" in text
