@@ -16,7 +16,12 @@ _BORDE_SUAVE = "#94a3b8"
 # Encabezados de tabla / sección: oscuro institucional (texto claro).
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
-_LOGO_MAX_H = 22  # pt — altura discreta en el encabezado
+# Encabezado compacto (~50% menos altura que la versión previa).
+_LOGO_MAX_H = 11  # pt
+_HDR_TITLE_FS = "7.5pt"
+_HDR_META_FS = "6pt"
+_HDR_PAD = "1pt 2pt"
+_HDR_PAD_CELL = "2pt"
 
 
 def _esc(val) -> str:
@@ -147,6 +152,7 @@ def _encabezado_oficial_html(
 
     Interna: solo identidad contratista (un logo).
     Externa: tres recuadros (contratista | título | entidad) + meta debajo.
+    Dimensiones compactas (~50% de la altura previa) sin perder legibilidad.
     """
     titulo = _titulo_seguimiento_contrato(contrato, acta)
     tipo_raw = str(acta.get("tipo_acta") or "").lower()
@@ -159,101 +165,89 @@ def _encabezado_oficial_html(
     cto_interv = _esc(_numero_interventoria(contrato))
     objeto = _esc((contrato or {}).get("objeto") or "—")
     tipo_line = (
-        f'<div style="font-size:8pt;color:#475569;margin-top:3pt;">Acta {_esc(tipo_lbl)}</div>'
+        f'<div style="font-size:5.5pt;color:#475569;margin-top:1pt;line-height:1.1;">'
+        f"Acta {_esc(tipo_lbl)}</div>"
         if tipo_lbl else ""
     )
 
+    # Tabla lateral en 4 filas (Fecha y Hora en una sola fila cada una) → menos altura.
+    th = (
+        f"border:0.5pt solid {_BORDE};padding:{_HDR_PAD};font-weight:700;"
+        f"background:{_BG_H};color:{_FG_H};vertical-align:middle;"
+    )
+    td = f"border:0.5pt solid {_BORDE};padding:{_HDR_PAD};text-align:center;vertical-align:middle;"
     meta = (
         f'<table width="100%" cellspacing="0" cellpadding="0" '
-        f'style="border-collapse:collapse;font-size:7.5pt;">'
+        f'style="border-collapse:collapse;font-size:{_HDR_META_FS};line-height:1.15;">'
         f'<tr>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;width:38%;'
-        f'background:{_BG_H};color:{_FG_H};">Acta No.</td>'
-        f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;">'
-        f'{_esc(consec)}</td>'
+        f'<td style="{th}width:34%;">Acta No.</td>'
+        f'<td colspan="3" style="{td}">{_esc(consec)}</td>'
         f'</tr>'
         f'<tr>'
-        f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
-        f'vertical-align:middle;background:{_BG_H};color:{_FG_H};">Fecha</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Día</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Mes</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Año</td>'
+        f'<td style="{th}">Fecha</td>'
+        f'<td style="{td}"><span style="font-size:5pt;color:#64748b;">Día</span><br/>{_esc(dia)}</td>'
+        f'<td style="{td}"><span style="font-size:5pt;color:#64748b;">Mes</span><br/>{_esc(mes)}</td>'
+        f'<td style="{td}"><span style="font-size:5pt;color:#64748b;">Año</span><br/>{_esc(anio)}</td>'
         f'</tr>'
         f'<tr>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(dia)}</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(mes)}</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(anio)}</td>'
+        f'<td style="{th}">Hora</td>'
+        f'<td colspan="2" style="{td}"><span style="font-size:5pt;color:#64748b;">Inicio</span><br/>{hora_ini}</td>'
+        f'<td style="{td}"><span style="font-size:5pt;color:#64748b;">Fin</span><br/>{hora_fin}</td>'
         f'</tr>'
         f'<tr>'
-        f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
-        f'vertical-align:middle;background:{_BG_H};color:{_FG_H};">Hora</td>'
-        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Inicio</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Fin</td>'
-        f'</tr>'
-        f'<tr>'
-        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_ini}</td>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_fin}</td>'
-        f'</tr>'
-        f'<tr>'
-        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
-        f'background:{_BG_H};color:{_FG_H};">Contrato de<br/>Interventoría</td>'
-        f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;'
-        f'font-size:7pt;">{cto_interv}</td>'
+        f'<td style="{th}">Cto. Interventoría</td>'
+        f'<td colspan="3" style="{td}font-size:5.5pt;">{cto_interv}</td>'
         f'</tr>'
         f'</table>'
     )
 
     titulo_html = (
-        f'<div style="font-size:11pt;font-weight:700;text-align:center;line-height:1.3;">'
-        f'{_esc(titulo)}</div>{tipo_line}'
+        f'<div style="font-size:{_HDR_TITLE_FS};font-weight:700;text-align:center;'
+        f'line-height:1.15;">{_esc(titulo)}</div>{tipo_line}'
     )
 
     if es_externa:
-        # Tres recuadros: contratista | título | entidad (separación de identidades).
+        # Tres recuadros compactos: contratista | título | entidad.
         header = (
             f'<table width="100%" cellspacing="0" cellpadding="0" '
-            f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
+            f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
             f'<tr>'
-            f'<td style="width:20%;border-right:1pt solid {_BORDE};padding:4pt;'
+            f'<td style="width:18%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
             f'vertical-align:middle;text-align:center;">'
-            f'<div style="font-size:6.5pt;color:#64748b;margin-bottom:2pt;">Contratista</div>'
+            f'<div style="font-size:5pt;color:#64748b;margin-bottom:1pt;line-height:1;">Contratista</div>'
             f'{logo_contratista}</td>'
-            f'<td style="width:50%;border-right:1pt solid {_BORDE};padding:8pt;'
+            f'<td style="width:52%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
             f'vertical-align:middle;">{titulo_html}</td>'
-            f'<td style="width:30%;padding:4pt;vertical-align:middle;text-align:center;">'
-            f'<div style="font-size:6.5pt;color:#64748b;margin-bottom:2pt;">Entidad</div>'
+            f'<td style="width:30%;padding:{_HDR_PAD_CELL};vertical-align:middle;text-align:center;">'
+            f'<div style="font-size:5pt;color:#64748b;margin-bottom:1pt;line-height:1;">Entidad</div>'
             f'{logo_entidad}</td>'
             f'</tr>'
             f'</table>'
-            f'<div style="height:3pt;"></div>'
+            f'<div style="height:1pt;"></div>'
             f'{meta}'
         )
     else:
         # Interna: unificada bajo identidad del contratista (sin bloque entidad).
         header = (
             f'<table width="100%" cellspacing="0" cellpadding="0" '
-            f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
+            f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
             f'<tr>'
-            f'<td style="width:18%;border-right:1pt solid {_BORDE};padding:4pt;'
+            f'<td style="width:16%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
             f'vertical-align:middle;text-align:center;">{logo_contratista}</td>'
-            f'<td style="width:44%;border-right:1pt solid {_BORDE};padding:8pt;'
+            f'<td style="width:46%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
             f'vertical-align:middle;">{titulo_html}</td>'
-            f'<td style="width:38%;padding:4pt;vertical-align:middle;">{meta}</td>'
+            f'<td style="width:38%;padding:1pt 2pt;vertical-align:middle;">{meta}</td>'
             f'</tr>'
             f'</table>'
         )
 
     objeto_row = (
         f'<table width="100%" cellspacing="0" cellpadding="0" '
-        f'style="border-collapse:collapse;border:1pt solid {_BORDE};'
-        f'{"border-top:none;" if not es_externa else "margin-top:3pt;"}margin:0;">'
+        f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};'
+        f'{"border-top:none;" if not es_externa else "margin-top:1pt;"}margin:0;">'
         f'<tr>'
-        f'<td style="padding:5pt 6pt;font-size:8.5pt;"><b>Objeto del contrato:</b> {objeto}</td>'
+        f'<td style="padding:2pt 4pt;font-size:7pt;line-height:1.2;">'
+        f'<b>Objeto del contrato:</b> {objeto}</td>'
         f'</tr>'
         f'</table>'
     )
@@ -272,14 +266,14 @@ def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = None) -> st
             uri = ""
     if uri:
         return (
-            f'<div style="text-align:center;padding:2pt;">'
-            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:90%;'
+            f'<div style="text-align:center;padding:0;">'
+            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:88%;'
             f'height:auto;object-fit:contain;"/>'
             f"</div>"
         )
     return (
-        f'<div style="border:0.5pt dashed {_BORDE_SUAVE};min-height:{max(14, max_h - 4)}pt;'
-        f'text-align:center;padding:4pt 2pt;font-size:6pt;color:#94a3b8;">'
+        f'<div style="border:0.4pt dashed {_BORDE_SUAVE};min-height:{max(8, max_h - 2)}pt;'
+        f'text-align:center;padding:1pt;font-size:5pt;color:#94a3b8;line-height:1.1;">'
         f"{_esc(placeholder)}</div>"
     )
 
