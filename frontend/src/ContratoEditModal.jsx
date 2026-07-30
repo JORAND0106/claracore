@@ -266,6 +266,13 @@ export default function ContratoEditModal({
               <div>
                 <label style={lbl}>INTERVENTORÍA</label>
                 <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={(e) => setForm((f) => ({ ...f, interventoria: e.target.value }))} />
+                <label style={lbl}>Nº CONTRATO DE INTERVENTORÍA</label>
+                <input
+                  style={inp}
+                  placeholder="Ej: ICCU-INT-0123-2025"
+                  value={form.numero_interventoria || ''}
+                  onChange={(e) => setForm((f) => ({ ...f, numero_interventoria: e.target.value }))}
+                />
                 <label style={lbl}>LOGO INTERVENTORÍA</label>
                 <label style={fileDropStyle}>
                   {form.logo_interventoria ? "✅ Logo cargado" : "📂 Cargar logo interventoría"}

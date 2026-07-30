@@ -1,16 +1,32 @@
-"""PDF de acta: estructura institucional y todas las ideas centrales."""
+"""PDF de acta: encabezado oficial y todas las ideas centrales."""
 from __future__ import annotations
 
 import io
 
 from pypdf import PdfReader
 
-from seguimiento_pdf import contenido_hash_acta, generar_pdf_acta
+from seguimiento_pdf import (
+    _anio_contrato,
+    _fecha_partes_dia_mes_anio,
+    _titulo_seguimiento_contrato,
+    contenido_hash_acta,
+    generar_pdf_acta,
+)
 
 
 def _pdf_text(pdf_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     return "\n".join((p.extract_text() or "") for p in reader.pages)
+
+
+def test_titulo_seguimiento_incluye_numero_y_anio():
+    titulo = _titulo_seguimiento_contrato(
+        {"numero": "ICCU-CTO-1614-2025"},
+        {"fecha_reunion": "2026-07-28"},
+    )
+    assert "Seguimiento al Contrato de obra No. ICCU-CTO-1614-2025 DE 2025" == titulo
+    assert _anio_contrato("CT-9", "2026-07-28") == "2026"
+    assert _fecha_partes_dia_mes_anio("2026-07-28") == ("28", "07", "2026")
 
 
 def test_pdf_incluye_cinco_ideas_centrales():
@@ -24,7 +40,12 @@ def test_pdf_incluye_cinco_ideas_centrales():
         for i in range(1, 6)
     ]
     pdf = generar_pdf_acta(
-        {"numero": "CT-1", "id": 1, "objeto": "Obra de prueba"},
+        {
+            "numero": "ICCU-CTO-1614-2025",
+            "id": 1,
+            "objeto": "Obra de prueba",
+            "numero_interventoria": "ICCU-INT-0099-2025",
+        },
         {
             "consecutivo": 12,
             "fecha_reunion": "2026-07-28",
@@ -33,6 +54,8 @@ def test_pdf_incluye_cinco_ideas_centrales():
             "tipo_acta": "interna",
             "estado": "borrador",
             "orden_del_dia": "Punto 1",
+            "hora_inicio": "08:15",
+            "hora_fin": "10:40",
         },
         [{"nombre": "A", "cargo": "C", "entidad": "E", "email": "a@x.com"}],
         ideas,
@@ -41,9 +64,15 @@ def test_pdf_incluye_cinco_ideas_centrales():
         compromisos=[],
     )
     text = _pdf_text(pdf)
-    assert "Acta de Comité de Seguimiento" in text
-    assert "(Interna)" in text
-    assert "Ideas centrales" in text
+    compact = " ".join(text.split())
+    assert "Seguimiento al Contrato de obra No." in compact
+    assert "ICCU-CTO-1614-2025 DE 2025" in compact
+    assert "Acta No." in compact or "Acta No" in compact
+    assert "ICCU-INT-0099-2025" in compact
+    assert "08:15" in compact
+    assert "10:40" in compact
+    assert "Objeto del contrato" in compact
+    assert "Ideas centrales" in compact
     for i in range(1, 6):
         assert f"IDEA_MARKER_{i}" in text, f"falta idea {i}"
         assert f"Idea {i}" in text
@@ -69,7 +98,7 @@ def test_pdf_pagina_con_idea_larga_y_siguientes():
         for i in range(1, 8)
     ]
     pdf = generar_pdf_acta(
-        {"numero": "CT-9", "id": 9, "objeto": "Objeto largo de contrato de obra"},
+        {"numero": "CT-9-2026", "id": 9, "objeto": "Objeto largo de contrato de obra"},
         {
             "consecutivo": 3,
             "fecha_reunion": "2026-07-28",
@@ -94,7 +123,9 @@ def test_pdf_pagina_con_idea_larga_y_siguientes():
     text = _pdf_text(pdf)
     reader = PdfReader(io.BytesIO(pdf))
     assert len(reader.pages) >= 2
-    assert "(Externa)" in text
+    compact = " ".join(text.split())
+    assert "Seguimiento al Contrato de obra No." in compact
+    assert "CT-9-2026 DE 2026" in compact
     assert "Compromisos abiertos de actas anteriores" in text
     assert "Próxima reunión" in text
     assert "Sala gerencia" in text
