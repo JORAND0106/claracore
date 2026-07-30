@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import re
 from typing import Any, Dict, List, Optional
 
 from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
@@ -59,6 +60,8 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
         str(acta.get("proxima_fecha") or ""),
         str(acta.get("proxima_hora") or ""),
         str(acta.get("proxima_lugar") or ""),
+        str(acta.get("hora_inicio") or ""),
+        str(acta.get("hora_fin") or ""),
     ]
     for a in asistentes or []:
         parts.append("|".join([
@@ -82,6 +85,147 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
 def _nl2br(text: str) -> str:
     """Convierte saltos de línea a <br/> (xhtml2pdf pagina mejor que white-space:pre-wrap)."""
     return _esc(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br/>")
+
+
+def _anio_contrato(numero: str, fecha_reunion=None) -> str:
+    """Año del contrato: último 20xx del número, o año de la fecha de reunión."""
+    years = re.findall(r"20\d{2}", str(numero or ""))
+    if years:
+        return years[-1]
+    s = str(fecha_reunion or "")[:10]
+    if len(s) >= 4 and s[:4].isdigit():
+        return s[:4]
+    try:
+        from datetime import date as _date
+
+        return str(_date.today().year)
+    except Exception:
+        return "—"
+
+
+def _fecha_partes_dia_mes_anio(fecha_raw) -> tuple:
+    """Desglosa fecha de reunión en (día, mes, año) para el encabezado oficial."""
+    s = str(fecha_raw or "")[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s[8:10], s[5:7], s[0:4]
+    # Fallback vía formateo Bogotá
+    fmt = fmt_fecha_bogota(fecha_raw)
+    if fmt and fmt != "—" and "/" in fmt:
+        parts = fmt.split("/")
+        if len(parts) == 3:
+            return parts[0], parts[1], parts[2]
+    return "—", "—", "—"
+
+
+def _numero_interventoria(contrato: dict) -> str:
+    raw = (
+        (contrato or {}).get("numero_interventoria")
+        or (contrato or {}).get("numero_contrato_interventoria")
+        or ""
+    )
+    return str(raw).strip() or "—"
+
+
+def _titulo_seguimiento_contrato(contrato: dict, acta: dict) -> str:
+    numero = str((contrato or {}).get("numero") or (contrato or {}).get("id") or "—").strip()
+    anio = _anio_contrato(numero, acta.get("fecha_reunion"))
+    return f"Seguimiento al Contrato de obra No. {numero} DE {anio}"
+
+
+def _encabezado_oficial_html(
+    contrato: dict,
+    acta: dict,
+    *,
+    logo_contratista: str,
+    logo_entidad: str,
+) -> str:
+    """Encabezado tipo formato oficial: logos + título + tabla lateral + objeto."""
+    titulo = _titulo_seguimiento_contrato(contrato, acta)
+    tipo_raw = str(acta.get("tipo_acta") or "").lower()
+    tipo_lbl = {"interna": "Interna", "externa": "Externa"}.get(tipo_raw, "")
+    consec = acta.get("consecutivo") or "—"
+    dia, mes, anio = _fecha_partes_dia_mes_anio(acta.get("fecha_reunion"))
+    hora_ini = _esc((acta.get("hora_inicio") or "").strip() or "—")
+    hora_fin = _esc((acta.get("hora_fin") or "").strip() or "—")
+    cto_interv = _esc(_numero_interventoria(contrato))
+    objeto = _esc((contrato or {}).get("objeto") or "—")
+    tipo_line = (
+        f'<div style="font-size:8pt;color:#475569;margin-top:3pt;">Acta { _esc(tipo_lbl) }</div>'
+        if tipo_lbl else ""
+    )
+
+    meta = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="border-collapse:collapse;font-size:7.5pt;">'
+        # Acta No.
+        f'<tr>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;width:38%;">Acta No.</td>'
+        f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;">'
+        f'{_esc(consec)}</td>'
+        f'</tr>'
+        # Fecha headers
+        f'<tr>'
+        f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
+        f'vertical-align:middle;">Fecha</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Día</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Mes</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Año</td>'
+        f'</tr>'
+        f'<tr>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(dia)}</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(mes)}</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{_esc(anio)}</td>'
+        f'</tr>'
+        # Hora
+        f'<tr>'
+        f'<td rowspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;'
+        f'vertical-align:middle;">Hora</td>'
+        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Inicio</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:2pt;text-align:center;font-weight:700;">Fin</td>'
+        f'</tr>'
+        f'<tr>'
+        f'<td colspan="2" style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_ini}</td>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 2pt;text-align:center;">{hora_fin}</td>'
+        f'</tr>'
+        # Contrato interventoría
+        f'<tr>'
+        f'<td style="border:0.6pt solid {_BORDE};padding:3pt 4pt;font-weight:700;">Contrato de<br/>Interventoría</td>'
+        f'<td colspan="3" style="border:0.6pt solid {_BORDE};padding:3pt 4pt;text-align:center;'
+        f'font-size:7pt;">{cto_interv}</td>'
+        f'</tr>'
+        f'</table>'
+    )
+
+    logos = (
+        f'<div style="margin-bottom:4pt;">{logo_contratista}</div>'
+        f'<div>{logo_entidad}</div>'
+    )
+    titulo_html = (
+        f'<div style="font-size:11pt;font-weight:700;text-align:center;line-height:1.3;">'
+        f'{_esc(titulo)}</div>{tipo_line}'
+    )
+
+    header = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="border-collapse:collapse;border:1pt solid {_BORDE};">'
+        f'<tr>'
+        f'<td style="width:18%;border-right:1pt solid {_BORDE};padding:6pt 4pt;'
+        f'vertical-align:middle;text-align:center;">{logos}</td>'
+        f'<td style="width:44%;border-right:1pt solid {_BORDE};padding:10pt 8pt;'
+        f'vertical-align:middle;">{titulo_html}</td>'
+        f'<td style="width:38%;padding:4pt;vertical-align:middle;">{meta}</td>'
+        f'</tr>'
+        f'</table>'
+    )
+    objeto_row = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="border-collapse:collapse;border:1pt solid {_BORDE};border-top:none;margin:0;">'
+        f'<tr>'
+        f'<td style="padding:5pt 6pt;font-size:8.5pt;"><b>Objeto del contrato:</b> {objeto}</td>'
+        f'</tr>'
+        f'</table>'
+    )
+    return header + objeto_row
 
 
 def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = 48) -> str:
@@ -151,37 +295,13 @@ def generar_pdf_acta(
     compromisos_previos = compromisos_previos or []
     firma_by_asistente = {int(f["asistente_id"]): f for f in firmas if f.get("asistente_id") is not None}
 
-    num_ct = _esc((contrato or {}).get("numero") or (contrato or {}).get("id") or "—")
-    objeto = _esc((contrato or {}).get("objeto") or "—")
-    consec = acta.get("consecutivo") or "—"
-    fecha = fmt_fecha_bogota(acta.get("fecha_reunion"))
-    tipo_raw = str(acta.get("tipo_acta") or "").lower()
-    tipo_paren = "(Interna)" if tipo_raw == "interna" else ("(Externa)" if tipo_raw == "externa" else "")
-    titulo = f"Acta de Comité de Seguimiento {tipo_paren}".strip()
-
-    logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista")
-    logo_entidad = _logo_cell((contrato or {}).get("logo_entidad"), "Logo entidad")
-
-    header = _box_row(
-        _cell(logo_contratista, width="22%", align="center", valign="middle")
-        + _cell(
-            f'<div style="font-size:13pt;font-weight:700;text-align:center;line-height:1.25;">'
-            f"{_esc(titulo)}</div>",
-            width="56%",
-            align="center",
-            valign="middle",
-            pad="10pt 8pt",
-        )
-        + _cell(logo_entidad, width="22%", border_right=False, align="center", valign="middle")
-    )
-
-    meta_fecha = _box_row(
-        _cell(f"<b>Fecha del acta:</b> {fecha}", width="50%")
-        + _cell(f"<b>Nº de acta:</b> {_esc(consec)}", width="50%", border_right=False)
-    )
-    meta_contrato = _box_row(
-        _cell(f"<b>Nº de contrato:</b> {num_ct}", width="28%")
-        + _cell(f"<b>Objeto del contrato:</b> {objeto}", width="72%", border_right=False)
+    logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista", max_h=36)
+    logo_entidad = _logo_cell((contrato or {}).get("logo_entidad"), "Logo entidad", max_h=36)
+    header_block = _encabezado_oficial_html(
+        contrato or {},
+        acta or {},
+        logo_contratista=logo_contratista,
+        logo_entidad=logo_entidad,
     )
 
     asis_rows = "".join(
@@ -346,11 +466,7 @@ body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9
 .pdf-firma {{ page-break-inside: avoid; }}
 .sec {{ page-break-inside: auto; }}
 </style></head><body>
-{header}
-<div style="height:4pt;"></div>
-{meta_fecha}
-<div style="height:0;"></div>
-{meta_contrato}
+{header_block}
 
 {_section("Asistentes", asis_table)}
 {_section("Orden del día", _orden_del_dia_html(acta.get("orden_del_dia")))}

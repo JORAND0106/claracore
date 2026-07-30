@@ -2698,6 +2698,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
     numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
+    numero_interventoria: '',
     entidad: '', entidad_otra: '', logo_entidad: '', plano_geojson: null, centro_lat: null, centro_lng: null,
     logo_contratista: '', logo_interventoria: '', aiu: '', iva: '',
     valor_componente_ambiental: '', valor_componente_social: '', valor_componente_pmt: '', costo_directo_contrato: '',
@@ -2853,6 +2854,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       contratista: d.contratista || '',
       nit: d.nit || '',
       interventoria: d.interventoria || '',
+      numero_interventoria: d.numero_interventoria || d.numero_contrato_interventoria || '',
       entidad: d.entidad || '',
       entidad_otra: d.entidad_otra || '',
       logo_entidad: d.logo_entidad || '',

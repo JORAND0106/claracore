@@ -815,6 +815,7 @@ class ContratoCreate(BaseModel):
     centro_lng: Optional[float] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
+    numero_interventoria: Optional[str] = None
     aiu: Optional[float] = None
     iva: Optional[float] = None
     valor_componente_ambiental: Optional[float] = None
@@ -876,6 +877,7 @@ class ContratoUpdate(BaseModel):
     centro_lng: Optional[float] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
+    numero_interventoria: Optional[str] = None
     fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
     aiu: Optional[float] = None
     iva: Optional[float] = None
@@ -6979,6 +6981,7 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "centro_lng": contrato.centro_lng,
         "logo_contratista": contrato.logo_contratista,
         "logo_interventoria": contrato.logo_interventoria,
+        "numero_interventoria": (contrato.numero_interventoria or "").strip() or None,
         "aiu": contrato.aiu,
         "iva": contrato.iva,
         "valor_componente_ambiental": contrato.valor_componente_ambiental,

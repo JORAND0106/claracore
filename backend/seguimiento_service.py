@@ -645,6 +645,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "idea_quien_dijo": None,
     "asignado_externo_id": None,
     "acta_proxima_reunion": None,
+    "acta_horas_reunion": None,
 }
 
 
@@ -692,6 +693,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "acta_proxima_reunion":
             sb.table("seguimiento_acta").select("id,proxima_fecha,proxima_hora,proxima_lugar").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "acta_horas_reunion":
+            sb.table("seguimiento_acta").select("id,hora_inicio,hora_fin").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -711,6 +715,11 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
             _is_missing_column_error(exc, "proxima_fecha")
             or _is_missing_column_error(exc, "proxima_hora")
             or _is_missing_column_error(exc, "proxima_lugar")
+        ):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "acta_horas_reunion" and (
+            _is_missing_column_error(exc, "hora_inicio")
+            or _is_missing_column_error(exc, "hora_fin")
         ):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
@@ -774,6 +783,69 @@ def _ensure_acta_proxima_reunion_columns(sb) -> bool:
         except Exception:
             pass
     return _schema_has(sb, "acta_proxima_reunion", force=True)
+
+
+def _ensure_acta_horas_reunion_columns(sb) -> bool:
+    """Confirma columnas hora_inicio / hora_fin del acta; reintenta tras reload."""
+    if _schema_has(sb, "acta_horas_reunion"):
+        return True
+    _SCHEMA_CAPS["acta_horas_reunion"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "acta_horas_reunion", force=True)
+
+
+def _hora_ahora_bogota() -> str:
+    return _now_bogota().strftime("%H:%M")
+
+
+def _maybe_set_acta_hora_inicio(sb, acta_id: Optional[int]) -> None:
+    """Registra hora_inicio una sola vez: primera gestión sobre un compromiso del acta."""
+    if not acta_id:
+        return
+    if not _ensure_acta_horas_reunion_columns(sb):
+        return
+    try:
+        rows = (
+            sb.table("seguimiento_acta")
+            .select("id,hora_inicio")
+            .eq("id", int(acta_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return
+        if (rows[0].get("hora_inicio") or "").strip():
+            return
+        sb.table("seguimiento_acta").update({
+            "hora_inicio": _hora_ahora_bogota(),
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(acta_id)).execute()
+    except Exception as exc:
+        _log.warning("hora_inicio acta=%s: %s", acta_id, exc)
+
+
+def _touch_acta_hora_fin(sb, acta_id: Optional[int]) -> None:
+    """Actualiza hora_fin al evento más reciente de idea/apartado (siempre la última)."""
+    if not acta_id:
+        return
+    if not _ensure_acta_horas_reunion_columns(sb):
+        return
+    try:
+        sb.table("seguimiento_acta").update({
+            "hora_fin": _hora_ahora_bogota(),
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(acta_id)).execute()
+    except Exception as exc:
+        _log.warning("hora_fin acta=%s: %s", acta_id, exc)
 
 
 def _require_idea_quien_dijo(sb) -> None:
@@ -1011,6 +1083,13 @@ def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_
                     attempt.pop("proxima_fecha", None)
                     attempt.pop("proxima_hora", None)
                     attempt.pop("proxima_lugar", None)
+                    changed = True
+                    break
+            for col in ("hora_inicio", "hora_fin"):
+                if col in attempt and _is_missing_column_error(exc, col):
+                    _SCHEMA_CAPS["acta_horas_reunion"] = False
+                    attempt.pop("hora_inicio", None)
+                    attempt.pop("hora_fin", None)
                     changed = True
                     break
             if not changed:
@@ -1629,6 +1708,8 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             )
             if not comps:
                 sb.table("seguimiento_acta_idea").delete().eq("id", int(e["id"])).execute()
+    if ideas:
+        _touch_acta_hora_fin(sb, acta_id)
 
 
 def _sync_apartados(sb, acta_id: int, apartados: list) -> None:
@@ -1643,6 +1724,7 @@ def _sync_apartados(sb, acta_id: int, apartados: list) -> None:
         })
     if rows:
         sb.table("seguimiento_acta_apartado").insert(rows).execute()
+        _touch_acta_hora_fin(sb, acta_id)
 
 
 def add_idea(
@@ -1666,6 +1748,7 @@ def add_idea(
     }).execute().data
     if not ins:
         raise ValueError("No se pudo agregar la idea")
+    _touch_acta_hora_fin(sb, acta_id)
     return ins[0]
 
 
@@ -1701,6 +1784,7 @@ def update_idea(
         "texto": (texto or "").strip(),
         "updated_at": _now_utc().isoformat(),
     }).eq("id", int(idea_id)).execute().data
+    _touch_acta_hora_fin(sb, int(idea_row["acta_id"]))
     return (upd or [idea_row])[0]
 
 
@@ -1983,6 +2067,9 @@ def actualizar_estado_gestion(
         new_estado=estado,
         actor_id=user_id,
     )
+    # Primera acción de gestión sobre un compromiso del acta → hora de inicio.
+    if (item.get("origen") or "").strip().lower() == "compromiso" and item.get("acta_id"):
+        _maybe_set_acta_hora_inicio(sb, int(item["acta_id"]))
     return get_item(sb, item_id)
 
 
