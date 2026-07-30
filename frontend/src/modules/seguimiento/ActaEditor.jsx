@@ -48,7 +48,7 @@ function emptyAsistente() {
 }
 
 function emptyIdea() {
-  return { _key: newRowKey('idea'), texto: '', quien_dijo: '' }
+  return { _key: newRowKey('idea'), texto: '', quien_dijo: '', titulo: '' }
 }
 
 function emptyApartado() {
@@ -119,12 +119,15 @@ function mergeIdeaIds(local = [], server = []) {
     used.add(match.id)
     const quienServer = String(match.quien_dijo || match.interviniente || '').trim()
     const quienLocal = String(row.quien_dijo || row.interviniente || '').trim()
+    const tituloServer = String(match.titulo || '').trim()
+    const tituloLocal = String(row.titulo || '').trim()
     return {
       ...row,
       id: match.id,
       // Preferir valor persistido en servidor (evita enmascarar fallos de guardado).
       orden: match.orden != null ? Number(match.orden) : row.orden,
       quien_dijo: quienServer || quienLocal || '',
+      titulo: tituloServer || tituloLocal || '',
     }
   })
   return [...merged].sort((a, b) => {
@@ -319,6 +322,7 @@ export default function ActaEditor({
                   id: x.id,
                   texto: x.texto || '',
                   quien_dijo: x.quien_dijo || x.interviniente || '',
+                  titulo: x.titulo || '',
                   orden: x.orden != null ? Number(x.orden) : i,
                 }))
               : [emptyIdea()],
@@ -423,6 +427,7 @@ export default function ActaEditor({
           texto: i.texto || '',
           quien_dijo: quien,
           interviniente: quien,
+          titulo: (i.titulo || '').trim() || null,
           // Consecutivo interno = posición actual en UI (tras reordenar).
           orden: idx,
         }
@@ -464,12 +469,42 @@ export default function ActaEditor({
   }
 
   /** Guarda (crea o actualiza) y deja el acta e ideas con id listos para compromisos. */
+  const asegurarTitulosTema = async (ideasList) => {
+    const list = Array.isArray(ideasList) ? ideasList : []
+    const out = []
+    for (const idea of list) {
+      const texto = String(idea.texto || '').trim()
+      const tituloActual = String(idea.titulo || '').trim()
+      if (!texto || tituloActual) {
+        out.push(idea)
+        continue
+      }
+      let titulo = ''
+      try {
+        const r = await api.redaccionClara({
+          texto,
+          modo: 'titulo_tema',
+          instruccion: '',
+        })
+        titulo = String(r?.titulo || r?.texto || '').trim()
+      } catch {
+        // Fallback local: primera frase / fragmento
+        const first = texto.split(/[.:;\n]/)[0] || texto
+        titulo = first.trim().slice(0, 72)
+      }
+      out.push({ ...idea, titulo: titulo || idea.titulo || '' })
+    }
+    return out
+  }
+
   const persistActa = async (extra = {}, formSrc = null) => {
     const src = formSrc || form
     if (!src.elaborador_id) {
       throw new Error('Seleccione un elaborador registrado en el contrato')
     }
-    const payload = buildPayload(extra, src)
+    const ideasConTitulo = await asegurarTitulosTema(src.ideas || [])
+    patchList('ideas', () => ideasConTitulo)
+    const payload = buildPayload(extra, { ...src, ideas: ideasConTitulo })
     const row = localActaId
       ? await api.updateActa(localActaId, payload)
       : await api.createActa(payload)
@@ -977,7 +1012,7 @@ export default function ActaEditor({
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
           {soloLectura
             ? 'Pulse una idea para expandirla. Solo una permanece abierta a la vez.'
-            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. El consecutivo (Idea 1, 2…) sigue el orden actual y se guarda al Guardar.'}
+            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. Tema 1, 2… sigue el orden; el título lo genera Clara al redactar o guardar.'}
         </div>
         {form.ideas.map((idea, idx) => {
           const ideaKey = idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${idx}`)
@@ -992,8 +1027,9 @@ export default function ActaEditor({
           const consecutivoIdea = (idea.orden != null && idea.orden !== ''
             ? Number(idea.orden)
             : idx) + 1
+          const tituloTema = String(idea.titulo || '').trim()
           const headLine = [
-            `Idea ${consecutivoIdea}`,
+            tituloTema ? `Tema ${consecutivoIdea}: ${tituloTema}` : `Tema ${consecutivoIdea}`,
             interviniente || null,
           ].filter(Boolean).join(' · ')
           // Institucional (primary) si hay compromiso; verde solo si está Cumplido.
@@ -1445,13 +1481,44 @@ export default function ActaEditor({
           api={api}
           textoInicial={form.ideas[claraIdx]?.texto || ''}
           onClose={() => setClaraIdx(null)}
-          onEnviarAlActa={(texto) => {
-            patchList('ideas', (list) => list.map((row, i) => (i === claraIdx ? { ...row, texto } : row)))
+          onEnviarAlActa={async (texto) => {
+            const idx = claraIdx
+            let titulo = ''
+            try {
+              const r = await api.redaccionClara({
+                texto,
+                modo: 'titulo_tema',
+                instruccion: '',
+              })
+              titulo = String(r?.titulo || r?.texto || '').trim()
+            } catch { /* fallback abajo */ }
+            if (!titulo) {
+              const first = String(texto || '').split(/[.:;\n]/)[0] || texto
+              titulo = first.trim().slice(0, 72)
+            }
+            patchList('ideas', (list) => list.map((row, i) => (
+              i === idx ? { ...row, texto, titulo } : row
+            )))
             setClaraIdx(null)
           }}
           onGenerarCompromiso={async (texto) => {
             const idx = claraIdx
-            patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+            let titulo = ''
+            try {
+              const r = await api.redaccionClara({
+                texto,
+                modo: 'titulo_tema',
+                instruccion: '',
+              })
+              titulo = String(r?.titulo || r?.texto || '').trim()
+            } catch { /* ignore */ }
+            if (!titulo) {
+              const first = String(texto || '').split(/[.:;\n]/)[0] || texto
+              titulo = first.trim().slice(0, 72)
+            }
+            patchList('ideas', (list) => list.map((row, i) => (
+              i === idx ? { ...row, texto, titulo } : row
+            )))
             setClaraIdx(null)
             await abrirCompromiso(idx, texto)
           }}

@@ -98,6 +98,8 @@ class IdeaBody(BaseModel):
     # Persistido como quien_dijo; "interviniente" es alias de API/UI.
     quien_dijo: Optional[str] = None
     interviniente: Optional[str] = None
+    # Título institucional corto (Tema N: …), generado por Clara.
+    titulo: Optional[str] = None
     orden: Optional[int] = None
 
 
@@ -256,8 +258,10 @@ class RevisarJustificacionBody(BaseModel):
 
 class RedaccionClaraBody(BaseModel):
     texto: str = ""
-    instruccion: str = Field(..., min_length=1)
+    instruccion: Optional[str] = None
     historial: Optional[List[Dict[str, str]]] = None
+    # "redaccion" (default) | "titulo_tema" (título corto institucional)
+    modo: Optional[str] = "redaccion"
 
 
 class FirmaBody(BaseModel):
@@ -538,13 +542,17 @@ def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depend
 @router.post("/redaccion-clara")
 async def route_redaccion_clara(body: RedaccionClaraBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "editar")
+    modo = (body.modo or "redaccion").strip().lower()
+    if modo == "redaccion" and not (body.instruccion or "").strip():
+        raise HTTPException(status_code=422, detail="instruccion es requerida para modo redaccion")
     try:
         return await redaccion_asistida_clara(
             supabase,
             str(_uid(current_user)),
             body.texto,
-            body.instruccion,
+            body.instruccion or "",
             body.historial,
+            modo=modo,
         )
     except HTTPException:
         raise

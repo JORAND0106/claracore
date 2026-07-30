@@ -646,6 +646,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "asignado_externo_id": None,
     "acta_proxima_reunion": None,
     "acta_horas_reunion": None,
+    "idea_titulo": None,
 }
 
 
@@ -687,6 +688,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_quien_dijo":
             sb.table("seguimiento_acta_idea").select("id,quien_dijo").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "idea_titulo":
+            sb.table("seguimiento_acta_idea").select("id,titulo").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "asignado_externo_id":
             sb.table("seguimiento_item").select("id,asignado_externo_id").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
@@ -708,6 +712,8 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "asistente_email" and _is_missing_column_error(exc, "email"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "idea_quien_dijo" and _is_missing_column_error(exc, "quien_dijo"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "idea_titulo" and _is_missing_column_error(exc, "titulo"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asignado_externo_id" and _is_missing_column_error(exc, "asignado_externo_id"):
             _SCHEMA_CAPS[cap] = False
@@ -846,6 +852,21 @@ def _touch_acta_hora_fin(sb, acta_id: Optional[int]) -> None:
         }).eq("id", int(acta_id)).execute()
     except Exception as exc:
         _log.warning("hora_fin acta=%s: %s", acta_id, exc)
+
+
+def _ensure_idea_titulo_column(sb) -> bool:
+    if _schema_has(sb, "idea_titulo"):
+        return True
+    _SCHEMA_CAPS["idea_titulo"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "idea_titulo", force=True)
 
 
 def _require_idea_quien_dijo(sb) -> None:
@@ -1672,18 +1693,33 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
     for i, idea in enumerate(ideas or []):
         texto = (idea.get("texto") or "").strip()
         quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None
+        titulo_raw = (idea.get("titulo") or "").strip()
+        if not titulo_raw and texto:
+            titulo_raw = titulo_tema_desde_texto(texto)
+        titulo = titulo_raw or None
         iid = idea.get("id")
         # orden siempre alineado al índice del payload (consecutivo visible = orden+1).
         orden = int(idea.get("orden") if idea.get("orden") is not None else i)
+        include_titulo = _ensure_idea_titulo_column(sb)
         payload = {
             "texto": texto,
             "orden": orden,
             "quien_dijo": quien,
             "updated_at": _now_utc().isoformat(),
         }
+        if include_titulo:
+            payload["titulo"] = titulo
         if iid:
             keep_ids.add(int(iid))
-            _write_update(payload, int(iid))
+            try:
+                _write_update(payload, int(iid))
+            except Exception as exc:
+                if include_titulo and "titulo" in payload and _is_missing_column_error(exc, "titulo"):
+                    _SCHEMA_CAPS["idea_titulo"] = False
+                    payload.pop("titulo", None)
+                    _write_update(payload, int(iid))
+                else:
+                    raise
         else:
             row = {
                 "acta_id": int(acta_id),
@@ -1691,7 +1727,17 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                 "orden": orden,
                 "quien_dijo": quien,
             }
-            inserted = _write_insert(row)
+            if include_titulo:
+                row["titulo"] = titulo
+            try:
+                inserted = _write_insert(row)
+            except Exception as exc:
+                if include_titulo and "titulo" in row and _is_missing_column_error(exc, "titulo"):
+                    _SCHEMA_CAPS["idea_titulo"] = False
+                    row.pop("titulo", None)
+                    inserted = _write_insert(row)
+                else:
+                    raise
             if inserted and inserted.get("id") is not None:
                 keep_ids.add(int(inserted["id"]))
     for e in existing:
@@ -3665,11 +3711,32 @@ async def redaccion_asistida_clara(
     texto: str,
     instruccion: str,
     historial: Optional[list] = None,
+    *,
+    modo: str = "redaccion",
 ) -> dict:
-    """Usa el stack AVI/Clara con prompt de redacción para ideas de acta."""
+    """Usa el stack AVI/Clara con prompt de redacción o de título institucional."""
     from avi_service import llamar_avi, verificar_y_registrar_uso
 
     restantes = await verificar_y_registrar_uso(str(usuario_id), sb)
+    modo_n = (modo or "redaccion").strip().lower()
+    if modo_n == "titulo_tema":
+        prompt = (
+            "Eres asistente de actas de obra pública (ClaraCore). "
+            "A partir del texto de una idea central, genera ÚNICAMENTE un título corto "
+            "institucional en español (entre 4 y 12 palabras), formal y descriptivo, "
+            "sin numeración, sin comillas, sin dos puntos al final y sin explicaciones.\n\n"
+            f"Texto de la idea:\n{(texto or '').strip() or '(vacío)'}"
+        )
+        hist: list = []
+        respuesta, _, _, _ = await llamar_avi(
+            mensaje=prompt,
+            modulo_actual="seguimiento",
+            historial=hist,
+            imagen_base64=None,
+        )
+        titulo = _limpiar_titulo_tema(respuesta or "") or titulo_tema_desde_texto(texto)
+        return {"titulo": titulo, "texto": titulo, "mensajes_restantes_hoy": restantes}
+
     prompt = (
         "Estoy redactando una idea central de un acta de reunión de obra pública en ClaraCore. "
         "Devuélveme ÚNICAMENTE el texto mejorado (español formal, claro y listo para el acta), "
@@ -3685,3 +3752,30 @@ async def redaccion_asistida_clara(
         imagen_base64=None,
     )
     return {"texto": (respuesta or "").strip(), "mensajes_restantes_hoy": restantes}
+
+
+def _limpiar_titulo_tema(raw: str) -> str:
+    t = (raw or "").strip().strip('"').strip("'").strip()
+    t = re.sub(r"^(tema\s*\d+\s*[:.\-–—]\s*)", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+", " ", t).strip(" .;:")
+    if len(t) > 120:
+        t = t[:120].rsplit(" ", 1)[0].strip()
+    return t
+
+
+def titulo_tema_desde_texto(texto: str) -> str:
+    """Fallback local si Clara no responde: primera frase / fragmento corto."""
+    t = " ".join((texto or "").strip().split())
+    if not t:
+        return ""
+    for sep in (".", ";", ":", "\n"):
+        if sep in t[:110]:
+            cand = t.split(sep, 1)[0].strip()
+            if len(cand) >= 8:
+                t = cand
+                break
+    if len(t) > 72:
+        t = t[:72].rsplit(" ", 1)[0].strip() + "…"
+    if t:
+        t = t[0].upper() + t[1:]
+    return _limpiar_titulo_tema(t)
