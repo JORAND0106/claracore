@@ -54,6 +54,13 @@ def client(monkeypatch):
         },
     )
     monkeypatch.setattr(sr, "registrar_log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sr,
+        "compromisos_abiertos_contrato",
+        lambda sb, cid, excluir_acta_id=None, tipo_acta=None: [
+            {"id": 1, "titulo": "Solo interna", "acta_tipo": tipo_acta or "interna"}
+        ],
+    )
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -95,6 +102,13 @@ def test_crear_acta_ok(client):
     body = r.json()
     assert body["ubicacion"] == "Sala test"
     assert body["consecutivo"] == 7
+
+
+def test_compromisos_abiertos_acepta_tipo_acta(client):
+    r = client.get("/seguimiento/1/compromisos-abiertos?tipo_acta=externa&excluir_acta_id=9")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["acta_tipo"] == "externa"
 
 
 def test_static_routes_registered_before_param_routes():

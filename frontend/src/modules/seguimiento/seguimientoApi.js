@@ -85,8 +85,13 @@ export function createSeguimientoApi(contratoId, token) {
     },
     listUsuarios: () => get(`/seguimiento/${cid}/usuarios`),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
-    compromisosAbiertos: (excluirActaId) =>
-      get(`/seguimiento/${cid}/compromisos-abiertos${excluirActaId ? `?excluir_acta_id=${excluirActaId}` : ''}`),
+    compromisosAbiertos: (excluirActaId, tipoActa) => {
+      const q = new URLSearchParams()
+      if (excluirActaId != null && excluirActaId !== '') q.set('excluir_acta_id', String(excluirActaId))
+      if (tipoActa) q.set('tipo_acta', String(tipoActa))
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/compromisos-abiertos${qs ? `?${qs}` : ''}`)
+    },
     getActa: (actaId) => get(`/seguimiento/${cid}/actas/${actaId}`),
     createActa: (body) => send('POST', `/seguimiento/${cid}/actas`, body),
     updateActa: (actaId, body) => send('PUT', `/seguimiento/${cid}/actas/${actaId}`, body),

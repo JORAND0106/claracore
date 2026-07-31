@@ -342,7 +342,8 @@ export default function ActaEditor({
           setActaCompromisos(Array.isArray(a.compromisos) ? a.compromisos : [])
           hydratedActaIdRef.current = a.id
           try {
-            const abiertos = await client.compromisosAbiertos(actaId)
+            const tipo = a.tipo_acta || 'interna'
+            const abiertos = await client.compromisosAbiertos(actaId, tipo)
             if (!cancelled) setPrevios(abiertos || [])
           } catch (e) {
             if (!cancelled && !isAbortLike(e)) {
@@ -350,9 +351,10 @@ export default function ActaEditor({
             }
           }
         } else {
+          const tipoNueva = 'interna'
           const [prox, abiertos] = await Promise.all([
             client.proximoConsecutivo(),
-            client.compromisosAbiertos().catch((e) => {
+            client.compromisosAbiertos(undefined, tipoNueva).catch((e) => {
               if (!isAbortLike(e)) console.warn('[ActaEditor] compromisos abiertos', e?.message || e)
               return []
             }),
@@ -373,6 +375,24 @@ export default function ActaEditor({
   }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
+
+  // Recargar compromisos previos al cambiar tipo (interna ↔ externa no se mezclan).
+  useEffect(() => {
+    if (loading) return
+    const tipo = form.tipo_acta || 'interna'
+    let cancelled = false
+    ;(async () => {
+      try {
+        const abiertos = await apiRef.current.compromisosAbiertos(localActaId || undefined, tipo)
+        if (!cancelled) setPrevios(abiertos || [])
+      } catch (e) {
+        if (!cancelled && !isAbortLike(e)) {
+          console.warn('[ActaEditor] compromisos abiertos por tipo', e?.message || e)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [form.tipo_acta, localActaId, loading])
 
   useEffect(() => {
     if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
@@ -834,9 +854,13 @@ export default function ActaEditor({
 
       {tab === 'ideas' && (
       <section style={card(t)}>
-        <h3 style={h3(t)}>Compromisos abiertos de actas anteriores</h3>
+        <h3 style={h3(t)}>
+          Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
+        </h3>
         {previos.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>No hay compromisos abiertos previos.</div>
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+            No hay compromisos abiertos previos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'}.
+          </div>
         ) : (
           <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
             <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 640 }}>
@@ -1558,7 +1582,10 @@ export default function ActaEditor({
             setError('')
             setOkMsg('Compromiso incorporado a la bandeja.')
             try {
-              const abiertos = await api.compromisosAbiertos(localActaId || undefined)
+              const abiertos = await api.compromisosAbiertos(
+                localActaId || undefined,
+                form.tipo_acta || 'interna',
+              )
               setPrevios(abiertos || [])
             } catch { /* ignore */ }
           }}
@@ -1579,7 +1606,10 @@ export default function ActaEditor({
           onClose={() => setDetalleCompromisoId(null)}
           onChanged={async () => {
             try {
-              const abiertos = await api.compromisosAbiertos(localActaId || undefined)
+              const abiertos = await api.compromisosAbiertos(
+                localActaId || undefined,
+                form.tipo_acta || 'interna',
+              )
               setPrevios(abiertos || [])
             } catch { /* ignore */ }
           }}

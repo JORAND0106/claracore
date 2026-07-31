@@ -1274,7 +1274,17 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
     return acta
 
 
-def compromisos_abiertos_contrato(sb, contrato_id: int, excluir_acta_id: Optional[int] = None) -> List[dict]:
+def compromisos_abiertos_contrato(
+    sb,
+    contrato_id: int,
+    excluir_acta_id: Optional[int] = None,
+    tipo_acta: Optional[str] = None,
+) -> List[dict]:
+    """Compromisos abiertos del contrato, opcionalmente filtrados por tipo de acta origen.
+
+    Interna y externa no se mezclan: si se pide tipo_acta, solo se incluyen
+    compromisos cuya acta de origen sea del mismo tipo (legacy sin tipo → interna).
+    """
     q = (
         sb.table("seguimiento_item")
         .select("*")
@@ -1289,21 +1299,44 @@ def compromisos_abiertos_contrato(sb, contrato_id: int, excluir_acta_id: Optiona
     acta_ids = list({int(r["acta_id"]) for r in rows if r.get("acta_id")})
     actas_map: Dict[int, dict] = {}
     if acta_ids:
-        arows = (
-            sb.table("seguimiento_acta")
-            .select("id, consecutivo, fecha_reunion")
-            .in_("id", acta_ids)
-            .execute()
-            .data
-            or []
-        )
-        actas_map = {int(a["id"]): a for a in arows}
+        select_cols = "id, consecutivo, fecha_reunion, tipo_acta, orden_del_dia"
+        try:
+            arows = (
+                sb.table("seguimiento_acta")
+                .select(select_cols)
+                .in_("id", acta_ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            arows = (
+                sb.table("seguimiento_acta")
+                .select("id, consecutivo, fecha_reunion, orden_del_dia")
+                .in_("id", acta_ids)
+                .execute()
+                .data
+                or []
+            )
+        actas_map = {int(a["id"]): _enrich_acta_row(dict(a)) for a in arows}
+    want_tipo = None
+    if tipo_acta:
+        try:
+            want_tipo = _norm_tipo_acta(tipo_acta)
+        except ValueError:
+            want_tipo = None
+    out: List[dict] = []
     for r in rows:
         a = actas_map.get(int(r["acta_id"])) if r.get("acta_id") else None
+        origen_tipo = _norm_tipo_acta((a or {}).get("tipo_acta") or "interna")
+        if want_tipo and origen_tipo != want_tipo:
+            continue
         r["acta_consecutivo"] = a.get("consecutivo") if a else None
         r["acta_fecha"] = a.get("fecha_reunion") if a else None
         r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
-    return rows
+        r["acta_tipo"] = origen_tipo if a else None
+        out.append(r)
+    return out
 
 
 def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
@@ -3529,7 +3562,12 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
         _log.warning("contenido_hash acta=%s: %s", acta_id, exc)
     previos = []
     try:
-        previos = compromisos_abiertos_contrato(sb, int(contrato_id), excluir_acta_id=int(acta_id))
+        previos = compromisos_abiertos_contrato(
+            sb,
+            int(contrato_id),
+            excluir_acta_id=int(acta_id),
+            tipo_acta=acta.get("tipo_acta") or "interna",
+        )
     except Exception as exc:
         _log.warning("compromisos abiertos pdf acta=%s: %s", acta_id, exc)
     try:
