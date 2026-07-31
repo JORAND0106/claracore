@@ -17,7 +17,11 @@ _BORDE_SUAVE = "#94a3b8"
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
 # Encabezado compacto (~50% menos altura que la versión previa).
-_LOGO_MAX_H = 11  # pt
+_LOGO_MAX_H = 11  # pt — logo contratista / default
+_LOGO_MAX_W_PCT = 88  # % del recuadro
+# Entidad (acta externa): ~40% del tamaño del logo estándar, misma proporción.
+_LOGO_ENTIDAD_MAX_H = max(4, int(round(_LOGO_MAX_H * 0.4)))  # 4 pt
+_LOGO_ENTIDAD_MAX_W_PCT = max(20, int(round(_LOGO_MAX_W_PCT * 0.4)))  # 35%
 _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
@@ -254,10 +258,21 @@ def _encabezado_oficial_html(
     return header + objeto_row
 
 
-def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = None) -> str:
-    """Logo embebido (data-URI) o placeholder con borde. Altura contenida por defecto."""
+def _logo_cell(
+    url: Optional[str],
+    placeholder: str,
+    *,
+    max_h: int = None,
+    max_w_pct: int = None,
+) -> str:
+    """Logo embebido (data-URI) o placeholder con borde. Altura contenida por defecto.
+
+    Conserva proporción (height:auto + object-fit:contain) y centra en el recuadro.
+    """
     if max_h is None:
         max_h = _LOGO_MAX_H
+    if max_w_pct is None:
+        max_w_pct = _LOGO_MAX_W_PCT
     uri = ""
     if url and str(url).strip():
         try:
@@ -266,13 +281,15 @@ def _logo_cell(url: Optional[str], placeholder: str, *, max_h: int = None) -> st
             uri = ""
     if uri:
         return (
-            f'<div style="text-align:center;padding:0;">'
-            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:88%;'
-            f'height:auto;object-fit:contain;"/>'
+            f'<div style="text-align:center;padding:0;line-height:0;">'
+            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:{max_w_pct}%;'
+            f'width:auto;height:auto;object-fit:contain;display:inline-block;'
+            f'vertical-align:middle;"/>'
             f"</div>"
         )
+    # Placeholder acotado al tope del logo (no inflar el encabezado).
     return (
-        f'<div style="border:0.4pt dashed {_BORDE_SUAVE};min-height:{max(8, max_h - 2)}pt;'
+        f'<div style="border:0.4pt dashed {_BORDE_SUAVE};min-height:{max_h}pt;'
         f'text-align:center;padding:1pt;font-size:5pt;color:#94a3b8;line-height:1.1;">'
         f"{_esc(placeholder)}</div>"
     )
@@ -345,7 +362,12 @@ def generar_pdf_acta(
     es_externa = tipo_raw == "externa"
     logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista")
     logo_entidad = (
-        _logo_cell((contrato or {}).get("logo_entidad"), "Logo entidad")
+        _logo_cell(
+            (contrato or {}).get("logo_entidad"),
+            "Logo entidad",
+            max_h=_LOGO_ENTIDAD_MAX_H,
+            max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
+        )
         if es_externa
         else ""
     )
