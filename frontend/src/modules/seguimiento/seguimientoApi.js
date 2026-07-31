@@ -98,6 +98,8 @@ export function createSeguimientoApi(contratoId, token) {
     deleteActa: (actaId) => send('DELETE', `/seguimiento/${cid}/actas/${actaId}`),
     addIdea: (actaId, texto = '') => send('POST', `/seguimiento/${cid}/actas/${actaId}/ideas`, { texto }),
     updateIdea: (ideaId, texto) => send('PUT', `/seguimiento/${cid}/ideas/${ideaId}`, { texto }),
+    pegarImagenIdea: (ideaId, body) =>
+      send('POST', `/seguimiento/${cid}/ideas/${ideaId}/imagen`, body),
     crearCompromiso: (actaId, ideaId, body) =>
       send('POST', `/seguimiento/${cid}/actas/${actaId}/ideas/${ideaId}/compromiso`, body),
     firmarActa: (actaId, asistenteId) =>

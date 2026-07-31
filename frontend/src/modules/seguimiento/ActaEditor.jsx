@@ -14,6 +14,7 @@ import {
   labelTipoActa,
   numeroActaLabel,
 } from './seguimientoTheme'
+import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
 /** Verde institucional solo para compromiso cumplido. */
@@ -49,7 +50,12 @@ function emptyAsistente() {
 }
 
 function emptyIdea() {
-  return { _key: newRowKey('idea'), texto: '', quien_dijo: '', titulo: '' }
+  return { _key: newRowKey('idea'), texto: '', quien_dijo: '', titulo: '', imagenes: [] }
+}
+
+function normalizeIdeaImagenes(list) {
+  if (!Array.isArray(list)) return []
+  return list.filter((im) => im && (im.data_uri || im.blob_path || im.url))
 }
 
 function emptyApartado() {
@@ -122,6 +128,9 @@ function mergeIdeaIds(local = [], server = []) {
     const quienLocal = String(row.quien_dijo || row.interviniente || '').trim()
     const tituloServer = String(match.titulo || '').trim()
     const tituloLocal = String(row.titulo || '').trim()
+    const localImgs = normalizeIdeaImagenes(row.imagenes)
+    const pending = localImgs.filter((im) => im.pending && im.data_uri)
+    const serverImgs = normalizeIdeaImagenes(match.imagenes)
     return {
       ...row,
       id: match.id,
@@ -129,6 +138,7 @@ function mergeIdeaIds(local = [], server = []) {
       orden: match.orden != null ? Number(match.orden) : row.orden,
       quien_dijo: quienServer || quienLocal || '',
       titulo: tituloServer || tituloLocal || '',
+      imagenes: [...serverImgs, ...pending],
     }
   })
   return [...merged].sort((a, b) => {
@@ -405,6 +415,7 @@ export default function ActaEditor({
                   quien_dijo: x.quien_dijo || x.interviniente || '',
                   titulo: x.titulo || '',
                   orden: x.orden != null ? Number(x.orden) : i,
+                  imagenes: normalizeIdeaImagenes(x.imagenes),
                 }))
               : [emptyIdea()],
             apartados: (a.apartados || []).length
@@ -520,9 +531,21 @@ export default function ActaEditor({
         usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
       })),
     ideas: (formSrc.ideas || [])
-      .filter((i) => (i.texto || '').trim() || (i.quien_dijo || '').trim() || i.id)
+      .filter((i) => (i.texto || '').trim() || (i.quien_dijo || '').trim() || i.id
+        || normalizeIdeaImagenes(i.imagenes).length)
       .map((i, idx) => {
         const quien = (i.quien_dijo || i.interviniente || '').trim() || null
+        // Solo refs ya persistidas; las pending se suben tras guardar.
+        const imagenes = normalizeIdeaImagenes(i.imagenes)
+          .filter((im) => !im.pending && (im.blob_path || im.url))
+          .map((im) => ({
+            nombre: im.nombre || 'esquema.png',
+            blob_path: im.blob_path || null,
+            mime_type: im.mime_type || 'image/png',
+            created_at: im.created_at || null,
+            kind: im.kind || 'esquema',
+            ...(im.url && !im.blob_path ? { url: im.url } : {}),
+          }))
         return {
           id: i.id || undefined,
           texto: i.texto || '',
@@ -531,6 +554,7 @@ export default function ActaEditor({
           titulo: (i.titulo || '').trim() || null,
           // Consecutivo interno = posición actual en UI (tras reordenar).
           orden: idx,
+          imagenes,
         }
       }),
     apartados: (formSrc.apartados || [])
@@ -606,10 +630,60 @@ export default function ActaEditor({
     const ideasConTitulo = await asegurarTitulosTema(src.ideas || [])
     patchList('ideas', () => ideasConTitulo)
     const payload = buildPayload(extra, { ...src, ideas: ideasConTitulo })
-    const row = localActaId
+    let row = localActaId
       ? await api.updateActa(localActaId, payload)
       : await api.createActa(payload)
-    return applySavedActa(row)
+    applySavedActa(row)
+    // Subir esquemas/gráficos pendientes (requieren idea.id).
+    const merged = mergeIdeaIds(ideasConTitulo, row.ideas || [])
+    let uploaded = false
+    for (const idea of merged) {
+      if (idea.id == null) continue
+      const pending = normalizeIdeaImagenes(idea.imagenes).filter((im) => im.pending && im.data_uri)
+      for (const im of pending) {
+        await api.pegarImagenIdea(idea.id, {
+          nombre: im.nombre || `esquema-${Date.now()}.png`,
+          data_base64: im.data_uri,
+          mime_type: im.mime_type || 'image/png',
+        })
+        uploaded = true
+      }
+    }
+    if (uploaded) {
+      row = await api.getActa(row.id)
+      applySavedActa(row)
+    }
+    return row
+  }
+
+  const addIdeaImagen = (ideaIdx, file) => {
+    if (!file || !file.type?.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const neu = {
+        nombre: file.name || `esquema-${Date.now()}.png`,
+        data_uri: reader.result,
+        mime_type: file.type || 'image/png',
+        created_at: new Date().toISOString(),
+        kind: 'esquema',
+        pending: true,
+      }
+      patchList('ideas', (list) => list.map((row, i) => {
+        if (i !== ideaIdx) return row
+        const prev = normalizeIdeaImagenes(row.imagenes)
+        if (prev.length >= 8) return row
+        return { ...row, imagenes: [...prev, neu] }
+      }))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeIdeaImagen = (ideaIdx, imgIdx) => {
+    patchList('ideas', (list) => list.map((row, i) => {
+      if (i !== ideaIdx) return row
+      const next = normalizeIdeaImagenes(row.imagenes).filter((_, j) => j !== imgIdx)
+      return { ...row, imagenes: next }
+    }))
   }
 
   const guardar = async ({ estadoExtra } = {}) => {
@@ -1312,6 +1386,105 @@ export default function ActaEditor({
                     style={inp(t)}
                     placeholder="Redacción de la idea central…"
                   />
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted }}>
+                        Esquemas y gráficos
+                      </div>
+                      {!soloLectura && normalizeIdeaImagenes(idea.imagenes).length < 8 && (
+                        <label style={{ ...ghost(t), display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
+                          + Adjuntar
+                          <input
+                            type="file"
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0]
+                              if (f) addIdeaImagen(idx, f)
+                              e.target.value = ''
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                    {normalizeIdeaImagenes(idea.imagenes).length === 0 ? (
+                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                        Opcional. Se mostrarán a tamaño estándar en el PDF.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {normalizeIdeaImagenes(idea.imagenes).map((im, imgIdx) => {
+                          const src = imagenSrc(im)
+                          return (
+                            <div
+                              key={`${im.blob_path || im.nombre || 'img'}-${imgIdx}`}
+                              style={{
+                                width: 88,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                                alignItems: 'center',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                title={im.nombre || 'Ver imagen'}
+                                onClick={() => openImageInNewTab(im)}
+                                style={{
+                                  width: 88,
+                                  height: 72,
+                                  padding: 0,
+                                  border: `1px solid ${t.border}`,
+                                  borderRadius: 8,
+                                  background: t.bg || '#fff',
+                                  overflow: 'hidden',
+                                  cursor: src ? 'pointer' : 'default',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                {src ? (
+                                  <img
+                                    src={src}
+                                    alt={im.nombre || 'Esquema'}
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'contain',
+                                      display: 'block',
+                                    }}
+                                  />
+                                ) : (
+                                  <span style={{ fontSize: 10, color: t.textMuted, padding: 4 }}>Sin vista</span>
+                                )}
+                              </button>
+                              <div style={{
+                                fontSize: 10,
+                                color: t.textMuted,
+                                maxWidth: 88,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              >
+                                {im.pending ? 'Pendiente' : (im.nombre || 'Esquema')}
+                              </div>
+                              {!soloLectura && (
+                                <button
+                                  type="button"
+                                  style={{ ...ghost(t), padding: '2px 8px', fontSize: 11 }}
+                                  onClick={() => removeIdeaImagen(idx, imgIdx)}
+                                >
+                                  Quitar
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                   {compsIdea.length > 0 && (
                     <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {compsIdea.map((c) => {

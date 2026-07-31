@@ -647,6 +647,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "acta_proxima_reunion": None,
     "acta_horas_reunion": None,
     "idea_titulo": None,
+    "idea_imagenes": None,
 }
 
 
@@ -691,6 +692,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_titulo":
             sb.table("seguimiento_acta_idea").select("id,titulo").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "idea_imagenes":
+            sb.table("seguimiento_acta_idea").select("id,imagenes").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "asignado_externo_id":
             sb.table("seguimiento_item").select("id,asignado_externo_id").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
@@ -714,6 +718,8 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_quien_dijo" and _is_missing_column_error(exc, "quien_dijo"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "idea_titulo" and _is_missing_column_error(exc, "titulo"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "idea_imagenes" and _is_missing_column_error(exc, "imagenes"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asignado_externo_id" and _is_missing_column_error(exc, "asignado_externo_id"):
             _SCHEMA_CAPS[cap] = False
@@ -867,6 +873,61 @@ def _ensure_idea_titulo_column(sb) -> bool:
         except Exception:
             pass
     return _schema_has(sb, "idea_titulo", force=True)
+
+
+def _ensure_idea_imagenes_column(sb) -> bool:
+    if _schema_has(sb, "idea_imagenes"):
+        return True
+    _SCHEMA_CAPS["idea_imagenes"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "idea_imagenes", force=True)
+
+
+def _normalizar_imagenes_idea(raw) -> List[dict]:
+    """Lista persistible de esquemas/gráficos (máx. 8; sin data_uri si hay blob)."""
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for im in raw:
+        ref = _normalizar_imagen_ref(im)
+        if not ref:
+            continue
+        # En sync solo se conservan refs ya subidas (blob/url); pending va por endpoint.
+        if not ref.get("blob_path") and not ref.get("url"):
+            continue
+        row = {
+            "nombre": ref.get("nombre") or "esquema.png",
+            "blob_path": ref.get("blob_path"),
+            "mime_type": ref.get("mime_type") or "image/png",
+            "created_at": ref.get("created_at") or _now_utc().isoformat(),
+        }
+        if ref.get("kind"):
+            row["kind"] = ref["kind"]
+        if ref.get("url") and not row.get("blob_path"):
+            row["url"] = ref["url"]
+        out.append(row)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _enrich_idea_row(idea: dict) -> dict:
+    if not idea:
+        return idea
+    out = dict(idea)
+    imgs = out.get("imagenes")
+    if isinstance(imgs, list):
+        out["imagenes"] = [_enrich_imagen_preview(x) or x for x in imgs if isinstance(x, dict)]
+    else:
+        out["imagenes"] = []
+    return out
 
 
 def _require_idea_quien_dijo(sb) -> None:
@@ -1245,7 +1306,7 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
     acta["asistentes"] = (
         sb.table("seguimiento_acta_asistente").select("*").eq("acta_id", aid).order("orden").execute().data or []
     )
-    acta["ideas"] = (
+    ideas_raw = (
         sb.table("seguimiento_acta_idea")
         .select("*")
         .eq("acta_id", aid)
@@ -1255,6 +1316,7 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
         .data
         or []
     )
+    acta["ideas"] = [_enrich_idea_row(x) for x in ideas_raw]
     acta["apartados"] = (
         sb.table("seguimiento_acta_apartado").select("*").eq("acta_id", aid).order("orden").execute().data or []
     )
@@ -1734,6 +1796,7 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
         # orden siempre alineado al índice del payload (consecutivo visible = orden+1).
         orden = int(idea.get("orden") if idea.get("orden") is not None else i)
         include_titulo = _ensure_idea_titulo_column(sb)
+        include_imagenes = _ensure_idea_imagenes_column(sb)
         payload = {
             "texto": texto,
             "orden": orden,
@@ -1742,6 +1805,9 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
         }
         if include_titulo:
             payload["titulo"] = titulo
+        # Solo actualiza imagenes si el cliente envía la clave (permite borrar/reordenar).
+        if include_imagenes and "imagenes" in idea:
+            payload["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
         if iid:
             keep_ids.add(int(iid))
             try:
@@ -1750,6 +1816,10 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                 if include_titulo and "titulo" in payload and _is_missing_column_error(exc, "titulo"):
                     _SCHEMA_CAPS["idea_titulo"] = False
                     payload.pop("titulo", None)
+                    _write_update(payload, int(iid))
+                elif include_imagenes and "imagenes" in payload and _is_missing_column_error(exc, "imagenes"):
+                    _SCHEMA_CAPS["idea_imagenes"] = False
+                    payload.pop("imagenes", None)
                     _write_update(payload, int(iid))
                 else:
                     raise
@@ -1762,12 +1832,18 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
             }
             if include_titulo:
                 row["titulo"] = titulo
+            if include_imagenes and "imagenes" in idea:
+                row["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
             try:
                 inserted = _write_insert(row)
             except Exception as exc:
                 if include_titulo and "titulo" in row and _is_missing_column_error(exc, "titulo"):
                     _SCHEMA_CAPS["idea_titulo"] = False
                     row.pop("titulo", None)
+                    inserted = _write_insert(row)
+                elif include_imagenes and "imagenes" in row and _is_missing_column_error(exc, "imagenes"):
+                    _SCHEMA_CAPS["idea_imagenes"] = False
+                    row.pop("imagenes", None)
                     inserted = _write_insert(row)
                 else:
                     raise
@@ -2447,12 +2523,19 @@ def _enrich_tarea_media(item: dict) -> dict:
     return item
 
 
-def _store_imagen_bytes(item_id: int, nombre: str, content: bytes, mime: str) -> dict:
+def _store_imagen_bytes(
+    item_id: int,
+    nombre: str,
+    content: bytes,
+    mime: str,
+    *,
+    prefix: str = "seguimiento-tareas",
+) -> dict:
     from azure_blob_storage import upload_blob_private
 
     safe = re.sub(r"[^\w.\-]", "_", (nombre or "imagen.png").strip())[:120]
     ts = _now_utc().strftime("%Y%m%dT%H%M%SZ")
-    blob_path = f"seguimiento-tareas/{int(item_id)}/{ts}_{safe}"
+    blob_path = f"{prefix}/{int(item_id)}/{ts}_{safe}"
     data_uri = None
     stored_path = None
     try:
@@ -2470,6 +2553,104 @@ def _store_imagen_bytes(item_id: int, nombre: str, content: bytes, mime: str) ->
         "mime_type": mime or "image/png",
         "created_at": _now_utc().isoformat(),
     }
+
+
+def adjuntar_imagen_idea_base64(
+    sb,
+    contrato_id: int,
+    idea_id: int,
+    user_id: int,
+    nombre: str,
+    data_b64: str,
+    mime: str = "image/png",
+    *,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """Adjunta un esquema/gráfico a una idea central (máx. 8 por idea)."""
+    if not _ensure_idea_imagenes_column(sb):
+        raise ValueError(
+            "La columna imagenes de ideas no está disponible. "
+            "Aplique la migración 20260731210000_seguimiento_idea_imagenes.sql "
+            "y ejecute NOTIFY pgrst, 'reload schema'."
+        )
+    rows = (
+        sb.table("seguimiento_acta_idea")
+        .select("*")
+        .eq("id", int(idea_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Idea no encontrada")
+    idea = rows[0]
+    acta = get_acta(sb, int(idea["acta_id"]), contrato_id)
+    _assert_puede_editar_acta(acta, int(user_id), current_user)
+
+    raw = data_b64 or ""
+    if "," in raw and raw.strip().startswith("data:"):
+        header, raw = raw.split(",", 1)
+        m = re.search(r"data:([^;]+)", header)
+        if m:
+            mime = m.group(1)
+    try:
+        content = base64.b64decode(raw)
+    except Exception as exc:
+        raise ValueError("Imagen inválida") from exc
+    if len(content) > 8_000_000:
+        raise ValueError("La imagen supera 8 MB")
+    if not (mime or "").startswith("image/"):
+        raise ValueError("Solo se permiten archivos de imagen")
+
+    actuales = idea.get("imagenes") if isinstance(idea.get("imagenes"), list) else []
+    if len(actuales) >= 8:
+        raise ValueError("Máximo 8 esquemas/gráficos por idea")
+
+    ref = _store_imagen_bytes(
+        int(idea_id),
+        nombre or "esquema.png",
+        content,
+        mime or "image/png",
+        prefix="seguimiento-acta-ideas",
+    )
+    ref["kind"] = "esquema"
+    persist = _normalizar_imagen_ref(ref) or ref
+    # Persistir sin data_uri si hay blob
+    store_row = {
+        "nombre": persist.get("nombre") or "esquema.png",
+        "blob_path": persist.get("blob_path"),
+        "mime_type": persist.get("mime_type") or "image/png",
+        "created_at": persist.get("created_at") or _now_utc().isoformat(),
+        "kind": "esquema",
+    }
+    if not store_row.get("blob_path") and ref.get("data_uri"):
+        store_row["data_uri"] = ref["data_uri"]
+
+    nuevos = list(actuales) + [store_row]
+    sb.table("seguimiento_acta_idea").update({
+        "imagenes": nuevos,
+        "updated_at": _now_utc().isoformat(),
+    }).eq("id", int(idea_id)).execute()
+    _touch_acta_hora_fin(sb, int(idea["acta_id"]))
+
+    # Devolver idea enriquecida
+    refreshed = (
+        sb.table("seguimiento_acta_idea")
+        .select("*")
+        .eq("id", int(idea_id))
+        .limit(1)
+        .execute()
+        .data
+        or [idea]
+    )
+    out = _enrich_idea_row(refreshed[0])
+    # Asegurar preview inmediata de la recién subida
+    if ref.get("data_uri") and out.get("imagenes"):
+        last = out["imagenes"][-1]
+        if isinstance(last, dict) and not last.get("data_uri"):
+            last["data_uri"] = ref["data_uri"]
+    return out
 
 
 def crear_tarea(sb, data: dict, user_id: int) -> dict:

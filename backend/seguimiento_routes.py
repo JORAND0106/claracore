@@ -22,6 +22,7 @@ from seguimiento_service import (
     actualizar_estado_asignado,
     actualizar_estado_gestion,
     actualizar_fecha_compromiso,
+    adjuntar_imagen_idea_base64,
     adjuntar_imagen_tarea_base64,
     agregar_comentario,
     cargar_evidencia,
@@ -101,6 +102,8 @@ class IdeaBody(BaseModel):
     # Título institucional corto (Tema N: …), generado por Clara.
     titulo: Optional[str] = None
     orden: Optional[int] = None
+    # Esquemas/gráficos ya persistidos (blob_path). Los pending se suben por /ideas/{id}/imagen.
+    imagenes: Optional[List[Any]] = None
 
 
 class ApartadoBody(BaseModel):
@@ -532,6 +535,30 @@ def route_tarea_imagen(item_id: int, body: ImagenBase64Body, current_user=Depend
             body.mime_type or "image/png",
             destino=body.destino or "checklist",
             checklist_id=body.checklist_id,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/ideas/{idea_id}/imagen")
+def route_idea_imagen(
+    contrato_id: int,
+    idea_id: int,
+    body: ImagenBase64Body,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return adjuntar_imagen_idea_base64(
+            supabase,
+            contrato_id,
+            idea_id,
+            _uid(current_user),
+            body.nombre,
+            body.data_base64,
+            body.mime_type or "image/png",
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

@@ -1,10 +1,11 @@
 """Generación PDF — actas de reunión y llamados de atención (Seguimiento)."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
 from almacen_firma_pdf import firma_url_a_data_uri
@@ -26,6 +27,11 @@ _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
+
+# Esquemas/gráficos de ideas: caja fija (xhtml2pdf ignora max-height).
+_IDEA_IMG_BOX_W_PT = 240.0
+_IDEA_IMG_BOX_H_PT = 135.0
+_IDEA_IMG_MAX_PER_IDEA = 8
 
 
 def _esc(val) -> str:
@@ -83,11 +89,18 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
             str(a.get("email") or ""),
         ]))
     for i in ideas or []:
+        imgs = i.get("imagenes") if isinstance(i.get("imagenes"), list) else []
+        img_keys = []
+        for im in imgs:
+            if not isinstance(im, dict):
+                continue
+            img_keys.append(str(im.get("blob_path") or im.get("nombre") or ""))
         parts.append("|".join([
             str(i.get("texto") or ""),
             str(i.get("quien_dijo") or i.get("interviniente") or ""),
             str(i.get("titulo") or ""),
             str(i.get("orden") if i.get("orden") is not None else ""),
+            ",".join(img_keys),
         ]))
     for ap in apartados or []:
         parts.append("|".join([str(ap.get("titulo") or ""), str(ap.get("contenido") or "")]))
@@ -295,6 +308,108 @@ def _logo_cell(
     )
 
 
+def _data_uri_pixel_size(uri: str) -> Tuple[Optional[int], Optional[int]]:
+    """Lee ancho/alto en px de un data-URI PNG/JPEG."""
+    try:
+        if not uri or not uri.startswith("data:image"):
+            return None, None
+        header, b64 = uri.split(",", 1)
+        raw = base64.b64decode(b64, validate=False)
+        hdr = header.lower()
+        if "png" in hdr and len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
+        if ("jpeg" in hdr or "jpg" in hdr) and raw[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(raw):
+                if raw[i] != 0xFF:
+                    break
+                marker = raw[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    h = int.from_bytes(raw[i + 5 : i + 7], "big")
+                    w = int.from_bytes(raw[i + 7 : i + 9], "big")
+                    return w, h
+                if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0x01, 0xDA, 0xD9):
+                    break
+                seglen = int.from_bytes(raw[i + 2 : i + 4], "big")
+                i += 2 + seglen
+        return None, None
+    except Exception:
+        return None, None
+
+
+def _fit_image_in_box_pt(
+    uri: str,
+    *,
+    box_w: float = _IDEA_IMG_BOX_W_PT,
+    box_h: float = _IDEA_IMG_BOX_H_PT,
+) -> Tuple[float, float]:
+    """Escala la imagen para caber en la caja fija, sin deformar (contain)."""
+    box_w = max(1.0, float(box_w))
+    box_h = max(1.0, float(box_h))
+    px_w, px_h = _data_uri_pixel_size(uri)
+    if not px_w or not px_h:
+        return round(box_w, 2), round(box_h, 2)
+    nat_w = px_w * 72.0 / 96.0
+    nat_h = px_h * 72.0 / 96.0
+    scale = min(box_w / nat_w, box_h / nat_h, 1.0)
+    return round(nat_w * scale, 2), round(nat_h * scale, 2)
+
+
+def _resolve_idea_image_uri(im: dict) -> str:
+    """Obtiene data-URI embebible desde ref de imagen de idea."""
+    if not isinstance(im, dict):
+        return ""
+    uri = (im.get("data_uri") or "").strip()
+    if uri.startswith("data:image"):
+        return uri
+    url = (im.get("url") or "").strip()
+    if url:
+        try:
+            return firma_url_a_data_uri(url) or ""
+        except Exception:
+            return ""
+    path = (im.get("blob_path") or "").strip()
+    if not path:
+        return ""
+    if path.startswith("data:image"):
+        return path
+    try:
+        from azure_blob_storage import download_blob_bytes_private
+
+        content = download_blob_bytes_private(path)
+        if not content or len(content) > 6_000_000:
+            return ""
+        mime = im.get("mime_type") or "image/png"
+        return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+    except Exception:
+        return ""
+
+
+def _idea_imagenes_html(imagenes: Optional[list]) -> str:
+    """Renderiza esquemas/gráficos a tamaño estándar fijo (width/height explícitos)."""
+    if not isinstance(imagenes, list) or not imagenes:
+        return ""
+    blocks = []
+    for im in imagenes[:_IDEA_IMG_MAX_PER_IDEA]:
+        uri = _resolve_idea_image_uri(im if isinstance(im, dict) else {})
+        if not uri:
+            continue
+        w_pt, h_pt = _fit_image_in_box_pt(uri)
+        nombre = _esc((im or {}).get("nombre") or "Esquema")
+        blocks.append(
+            f'<div style="margin:6pt 0 4pt;text-align:center;page-break-inside:avoid;">'
+            f'<div style="width:{_IDEA_IMG_BOX_W_PT}pt;height:{_IDEA_IMG_BOX_H_PT}pt;'
+            f'border:0.4pt solid {_BORDE_SUAVE};margin:0 auto;text-align:center;'
+            f'line-height:{_IDEA_IMG_BOX_H_PT}pt;overflow:hidden;">'
+            f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+            f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;vertical-align:middle;"/>'
+            f"</div>"
+            f'<div style="font-size:7pt;color:#64748b;margin-top:2pt;">{nombre}</div>'
+            f"</div>"
+        )
+    return "".join(blocks)
+
+
 def _box_row(cells_html: str) -> str:
     return (
         f'<table class="sec-outer" width="100%" cellspacing="0" cellpadding="0" '
@@ -420,12 +535,14 @@ def generar_pdf_acta(
             f"Interviniente: {_esc(quien)}</div>"
             if quien else ""
         )
+        imgs_html = _idea_imagenes_html(idea.get("imagenes"))
         ideas_html += (
             f"<div class='pdf-idea' style='margin:0 0 8pt;padding-bottom:6pt;"
             f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
             f"<div style='font-size:9pt;font-weight:700;'>Tema {num}: {_esc(titulo_tema)}</div>"
             f"{quien_line}"
             f"<div style='font-size:9pt;'>{_nl2br(idea.get('texto') or '')}</div>"
+            f"{imgs_html}"
             f"</div>"
         )
     if not ideas_html:
