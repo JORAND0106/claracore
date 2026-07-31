@@ -240,6 +240,18 @@ def path_contrato_orden_pago(contrato_id: int, numero_corte: int) -> str:
     )
 
 
+def path_contrato_orden_pago_factura(
+    contrato_id: int, numero_corte: int, nombre_archivo: str
+) -> str:
+    """Factura emitida (PDF/imagen) adjunta a una orden de pago — contenedor privado."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "factura").strip())[:120]
+    return (
+        f"contratos-ordenes-pago/{int(contrato_id)}/"
+        f"corte-{int(numero_corte):04d}/factura_{ts}_{safe}"
+    )
+
+
 def path_contabilidad_soporte(transaccion_id: int, nombre_archivo: str) -> str:
     """Soporte adjunto de transacción contable (contenedor privado)."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

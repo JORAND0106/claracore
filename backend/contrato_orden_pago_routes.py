@@ -9,14 +9,16 @@ import io
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from contrato_orden_pago_pdf import PDFOrdenPagoError
 from contrato_orden_pago_service import (
     _parse_date,
+    download_factura_orden_pago_bytes,
     download_orden_pago_bytes,
+    eliminar_factura_orden_pago,
     eliminar_orden_pago,
     generar_orden_pago,
     get_cobro_config,
@@ -26,6 +28,7 @@ from contrato_orden_pago_service import (
     resumen_alertas_ordenes_pago,
     resumen_ordenes_pago,
     update_orden_estado,
+    upload_factura_orden_pago,
     upsert_cobro_config,
 )
 from main import get_supabase, registrar_log, require_solo_desarrollador
@@ -284,6 +287,121 @@ def descargar_orden_pago(
             "Cache-Control": "private, no-store",
         },
     )
+
+
+@router.post("/admin/contratos/{contrato_id}/ordenes-pago/{orden_id}/factura")
+async def subir_factura_orden_pago(
+    contrato_id: int,
+    orden_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Adjunta o reemplaza la factura emitida (PDF o imagen) de la orden."""
+    sb = get_supabase()
+    uid = _uid(current_user)
+    prev = get_orden_pago(sb, orden_id, contrato_id)
+    if not prev:
+        raise HTTPException(status_code=404, detail="Orden de pago no encontrada")
+    data = await archivo.read()
+    try:
+        row = upload_factura_orden_pago(
+            sb,
+            orden_id,
+            contrato_id,
+            data,
+            archivo.content_type,
+            archivo.filename or "factura_emitida",
+            uid,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("upload factura orden %s", orden_id)
+        raise HTTPException(status_code=503, detail=f"No se pudo guardar la factura: {exc!s}") from exc
+
+    registrar_log(
+        _audit_user(current_user, contrato_id),
+        "ACTUALIZAR",
+        "ADMIN",
+        "contrato_orden_pago",
+        str(orden_id),
+        {
+            "accion": "cargar_factura_orden_pago",
+            "reemplazo": bool((prev.get("factura_azure_blob_path") or "").strip()),
+            "factura_nombre_archivo": row.get("factura_nombre_archivo"),
+            "factura_mime_type": row.get("factura_mime_type"),
+            "factura_tamano_bytes": row.get("factura_tamano_bytes"),
+        },
+    )
+    # No exponer ruta de blob al cliente.
+    safe = dict(row)
+    safe.pop("factura_azure_blob_path", None)
+    safe.pop("azure_blob_path", None)
+    safe["tiene_factura"] = True
+    return {"ok": True, "orden": safe}
+
+
+@router.get("/admin/contratos/{contrato_id}/ordenes-pago/{orden_id}/factura")
+def descargar_factura_orden_pago(
+    contrato_id: int,
+    orden_id: int,
+    inline: bool = Query(False),
+    current_user=Depends(require_solo_desarrollador),
+):
+    sb = get_supabase()
+    orden = get_orden_pago(sb, orden_id, contrato_id)
+    if not orden:
+        raise HTTPException(status_code=404, detail="Orden de pago no encontrada")
+    try:
+        data, mime, filename = download_factura_orden_pago_bytes(orden)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.warning("descarga factura orden %s: %s", orden_id, exc)
+        raise HTTPException(status_code=404, detail="No se pudo leer la factura") from exc
+    disposition = "inline" if inline else "attachment"
+    safe = filename.replace('"', "'")
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.delete("/admin/contratos/{contrato_id}/ordenes-pago/{orden_id}/factura")
+def quitar_factura_orden_pago(
+    contrato_id: int,
+    orden_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    sb = get_supabase()
+    uid = _uid(current_user)
+    prev = get_orden_pago(sb, orden_id, contrato_id)
+    if not prev:
+        raise HTTPException(status_code=404, detail="Orden de pago no encontrada")
+    try:
+        row = eliminar_factura_orden_pago(sb, orden_id, contrato_id, uid)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+    registrar_log(
+        _audit_user(current_user, contrato_id),
+        "ELIMINAR",
+        "ADMIN",
+        "contrato_orden_pago",
+        str(orden_id),
+        {
+            "accion": "eliminar_factura_orden_pago",
+            "factura_nombre_archivo": prev.get("factura_nombre_archivo"),
+        },
+    )
+    safe = dict(row)
+    safe.pop("factura_azure_blob_path", None)
+    safe.pop("azure_blob_path", None)
+    return {"ok": True, "orden": safe}
 
 
 @router.delete("/admin/contratos/{contrato_id}/ordenes-pago/{orden_id}")
