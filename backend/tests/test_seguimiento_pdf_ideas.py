@@ -181,18 +181,48 @@ def test_contenido_hash_incluye_quien_dijo():
     assert h1 != h2
 
 
+def test_logo_entidad_externa_es_aprox_40_por_ciento():
+    """En acta externa el logo de entidad usa ~40% del tamaño del logo estándar."""
+    from seguimiento_pdf import (
+        _LOGO_ENTIDAD_MAX_H,
+        _LOGO_ENTIDAD_MAX_W_PCT,
+        _LOGO_MAX_H,
+        _LOGO_MAX_W_PCT,
+        _logo_cell,
+    )
+
+    assert _LOGO_ENTIDAD_MAX_H == max(4, int(round(_LOGO_MAX_H * 0.4)))
+    assert _LOGO_ENTIDAD_MAX_W_PCT == max(20, int(round(_LOGO_MAX_W_PCT * 0.4)))
+    assert _LOGO_ENTIDAD_MAX_H < _LOGO_MAX_H
+    assert _LOGO_ENTIDAD_MAX_W_PCT < _LOGO_MAX_W_PCT
+
+    contratista = _logo_cell("https://example.com/c.png", "C")
+    entidad = _logo_cell(
+        "https://example.com/e.png",
+        "E",
+        max_h=_LOGO_ENTIDAD_MAX_H,
+        max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
+    )
+    # Si no hay data-URI (URL remota no resuelta), al menos el placeholder respeta el tope.
+    assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in entidad or f"max-height:{_LOGO_ENTIDAD_MAX_H}pt" in entidad
+    assert f"min-height:{_LOGO_MAX_H}pt" in contratista or f"max-height:{_LOGO_MAX_H}pt" in contratista
+
+
 def test_encabezado_compacto_constantes_y_legibilidad():
     """El bloque de encabezado usa dimensiones ~50% más compactas y sigue legible."""
     from seguimiento_pdf import (
         _HDR_META_FS,
         _HDR_PAD,
         _HDR_TITLE_FS,
+        _LOGO_ENTIDAD_MAX_H,
+        _LOGO_ENTIDAD_MAX_W_PCT,
         _LOGO_MAX_H,
         _encabezado_oficial_html,
         _logo_cell,
     )
 
     assert _LOGO_MAX_H <= 12
+    assert _LOGO_ENTIDAD_MAX_H <= max(4, int(round(_LOGO_MAX_H * 0.4)))
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
@@ -201,6 +231,12 @@ def test_encabezado_compacto_constantes_y_legibilidad():
     assert f"max-height:{_LOGO_MAX_H}pt" in logo or "min-height" in logo
 
     for tipo in ("interna", "externa"):
+        logo_ent = _logo_cell(
+            None,
+            "E",
+            max_h=_LOGO_ENTIDAD_MAX_H,
+            max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
+        ) if tipo == "externa" else _logo_cell(None, "E")
         html = _encabezado_oficial_html(
             {"numero": "CT-9-2026", "objeto": "Obra de prueba", "numero_interventoria": "INT-1"},
             {
@@ -211,7 +247,7 @@ def test_encabezado_compacto_constantes_y_legibilidad():
                 "hora_fin": "09:30",
             },
             logo_contratista=_logo_cell(None, "C"),
-            logo_entidad=_logo_cell(None, "E"),
+            logo_entidad=logo_ent,
         )
         assert "Acta No." in html
         assert "08:00" in html and "09:30" in html
