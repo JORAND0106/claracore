@@ -15,8 +15,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from azure_blob_storage import (
+    delete_blob_private,
     download_blob_bytes_private,
     path_contrato_orden_pago,
+    path_contrato_orden_pago_factura,
     upload_blob_private,
 )
 from contrato_documentos_service import (
@@ -34,6 +36,20 @@ ORDEN_ESTADOS_ACTIVOS = frozenset({"emitida", "aprobada", "facturada"})
 ORDEN_ESTADOS_CARTERA = frozenset({"emitida", "aprobada"})
 LOGO_RECEPTOR_OPTS = frozenset({"contratista", "interventoria", "ninguno"})
 TIPO_PERIODO_OPTS = frozenset({"mensual", "quincenal"})
+
+FACTURA_MIMES = frozenset({
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
+MAX_FACTURA_BYTES = 20 * 1024 * 1024
+MIME_EXT = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 
 COBRO_CONFIG_FIELDS = (
     "plan_descripcion",
@@ -500,14 +516,16 @@ def logo_receptor_url(contrato_row: dict, logo_tipo: str) -> str:
 
 
 def list_ordenes_pago(sb, contrato_id: int) -> List[dict]:
-    return (
+    rows = (
         sb.table("contrato_orden_pago")
         .select(
             "id, contrato_id, numero_corte, periodo_inicio, periodo_fin, "
             "fecha_emision, fecha_vencimiento, descripcion_servicio, subtotal, "
             "iva_tasa, iva_valor, total, saldo_cartera, total_a_pagar, estado, "
             "nombre_archivo, created_at, created_by, updated_at, "
-            "envio_estado, ultimo_envio_at, ultimo_envio_destinatarios"
+            "envio_estado, ultimo_envio_at, ultimo_envio_destinatarios, "
+            "factura_nombre_archivo, factura_mime_type, factura_tamano_bytes, "
+            "factura_uploaded_at, factura_azure_blob_path"
         )
         .eq("contrato_id", int(contrato_id))
         .order("numero_corte", desc=True)
@@ -515,6 +533,13 @@ def list_ordenes_pago(sb, contrato_id: int) -> List[dict]:
         .data
         or []
     )
+    out: List[dict] = []
+    for r in rows:
+        item = dict(r)
+        path = (item.pop("factura_azure_blob_path", None) or "").strip()
+        item["tiene_factura"] = bool(path)
+        out.append(item)
+    return out
 
 
 def get_orden_pago(sb, orden_id: int, contrato_id: int) -> Optional[dict]:
@@ -528,6 +553,123 @@ def get_orden_pago(sb, orden_id: int, contrato_id: int) -> Optional[dict]:
         .data
     )
     return rows[0] if rows else None
+
+
+def _normalize_factura_mime(content_type: Optional[str]) -> str:
+    mime = (content_type or "").split(";")[0].strip().lower()
+    if mime == "image/jpg":
+        return "image/jpeg"
+    return mime
+
+
+def validate_factura_upload(content_type: Optional[str], size: int) -> str:
+    if size <= 0:
+        raise ValueError("Archivo vacío.")
+    if size > MAX_FACTURA_BYTES:
+        raise ValueError(
+            f"El archivo supera el máximo de {MAX_FACTURA_BYTES // (1024 * 1024)} MB."
+        )
+    mime = _normalize_factura_mime(content_type)
+    if mime not in FACTURA_MIMES:
+        raise ValueError("Formato no permitido. Use PDF o imagen (JPEG, PNG, WebP).")
+    return mime
+
+
+def _nombre_factura_safe(nombre_archivo: str, mime: str) -> str:
+    raw = (nombre_archivo or "factura_emitida").strip() or "factura_emitida"
+    base = re.sub(r"\.[^.]+$", "", raw)
+    base = re.sub(r"[^\w.\-]", "_", base)[:200] or "factura_emitida"
+    ext = MIME_EXT.get(mime, "")
+    return f"{base}{ext}"
+
+
+def upload_factura_orden_pago(
+    sb,
+    orden_id: int,
+    contrato_id: int,
+    data: bytes,
+    content_type: Optional[str],
+    nombre_archivo: str,
+    user_id: int,
+) -> dict:
+    """Adjunta o reemplaza la factura emitida (PDF/imagen) de una orden."""
+    orden = get_orden_pago(sb, orden_id, contrato_id)
+    if not orden:
+        raise ValueError("Orden de pago no encontrada")
+    mime = validate_factura_upload(content_type, len(data))
+    nombre = _nombre_factura_safe(nombre_archivo, mime)
+    numero_corte = int(orden.get("numero_corte") or 0)
+    old_path = (orden.get("factura_azure_blob_path") or "").strip()
+    blob_path = path_contrato_orden_pago_factura(contrato_id, numero_corte, nombre)
+    upload_blob_private(blob_path, data, mime, overwrite=True)
+
+    sb.table("contrato_orden_pago").update(
+        {
+            "factura_azure_blob_path": blob_path,
+            "factura_nombre_archivo": nombre[:255],
+            "factura_mime_type": mime,
+            "factura_tamano_bytes": len(data),
+            "factura_uploaded_at": _now_iso(),
+            "factura_uploaded_by": int(user_id),
+            "updated_at": _now_iso(),
+            "updated_by": int(user_id),
+        }
+    ).eq("id", int(orden_id)).eq("contrato_id", int(contrato_id)).execute()
+
+    if old_path and old_path != blob_path:
+        try:
+            delete_blob_private(old_path)
+        except Exception as exc:
+            _log.warning("No se pudo eliminar factura anterior orden %s: %s", orden_id, exc)
+
+    refreshed = get_orden_pago(sb, orden_id, contrato_id) or orden
+    refreshed["tiene_factura"] = bool((refreshed.get("factura_azure_blob_path") or "").strip())
+    return refreshed
+
+
+def download_factura_orden_pago_bytes(orden_row: dict) -> Tuple[bytes, str, str]:
+    path = (orden_row.get("factura_azure_blob_path") or "").strip()
+    if not path:
+        raise ValueError("La orden no tiene factura emitida adjunta")
+    data = download_blob_bytes_private(path)
+    mime = (orden_row.get("factura_mime_type") or "application/octet-stream").split(";")[0].strip()
+    name = (
+        orden_row.get("factura_nombre_archivo")
+        or f"factura_orden_{orden_row.get('id')}.pdf"
+    ).strip()
+    return data, mime, name
+
+
+def eliminar_factura_orden_pago(
+    sb, orden_id: int, contrato_id: int, user_id: int
+) -> dict:
+    orden = get_orden_pago(sb, orden_id, contrato_id)
+    if not orden:
+        raise ValueError("Orden de pago no encontrada")
+    path = (orden.get("factura_azure_blob_path") or "").strip()
+    if not path:
+        raise ValueError("La orden no tiene factura emitida adjunta")
+    try:
+        delete_blob_private(path)
+    except Exception as exc:
+        _log.warning("No se pudo borrar blob factura orden %s: %s", orden_id, exc)
+
+    sb.table("contrato_orden_pago").update(
+        {
+            "factura_azure_blob_path": None,
+            "factura_nombre_archivo": None,
+            "factura_mime_type": None,
+            "factura_tamano_bytes": None,
+            "factura_uploaded_at": None,
+            "factura_uploaded_by": None,
+            "updated_at": _now_iso(),
+            "updated_by": int(user_id),
+        }
+    ).eq("id", int(orden_id)).eq("contrato_id", int(contrato_id)).execute()
+
+    refreshed = get_orden_pago(sb, orden_id, contrato_id) or orden
+    refreshed["tiene_factura"] = False
+    return refreshed
 
 
 def validate_orden_estado(estado: str) -> str:
@@ -1069,8 +1211,6 @@ def eliminar_orden_pago(sb, orden_id: int, contrato_id: int) -> dict:
     Elimina orden y blob. numero_corte solo se libera para reutilización si era
     el máximo actual de la secuencia del contrato.
     """
-    from azure_blob_storage import delete_blob_private
-
     assert_contrato_exists(sb, contrato_id)
     orden = get_orden_pago(sb, orden_id, contrato_id)
     if not orden:
@@ -1085,6 +1225,13 @@ def eliminar_orden_pago(sb, orden_id: int, contrato_id: int) -> dict:
             delete_blob_private(blob_path)
         except Exception as exc:
             _log.warning("No se pudo borrar blob orden %s: %s", orden_id, exc)
+
+    factura_path = (orden.get("factura_azure_blob_path") or "").strip()
+    if factura_path:
+        try:
+            delete_blob_private(factura_path)
+        except Exception as exc:
+            _log.warning("No se pudo borrar blob factura orden %s: %s", orden_id, exc)
 
     sb.table("contrato_orden_pago").delete().eq("id", int(orden_id)).eq(
         "contrato_id", int(contrato_id)

@@ -1,7 +1,7 @@
 /**
  * Órdenes de pago — licenciamiento ClaraCore (solo Desarrollador).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
 import CcConfirmModal from "./components/CcConfirmModal";
@@ -126,6 +126,44 @@ async function descargarOrden(token, contratoId, ordenId, { inline = false, nomb
   URL.revokeObjectURL(url);
 }
 
+async function descargarFacturaOrden(token, contratoId, ordenId, { inline = false, nombre } = {}) {
+  const res = await fetchAutenticado(
+    token,
+    `/admin/contratos/${contratoId}/ordenes-pago/${ordenId}/factura?inline=${inline ? "1" : "0"}`,
+  );
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  if (inline) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre || `factura_orden_${ordenId}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function subirFacturaOrden(token, contratoId, ordenId, file) {
+  const fd = new FormData();
+  fd.append("archivo", file);
+  const res = await fetchAutenticado(
+    token,
+    `/admin/contratos/${contratoId}/ordenes-pago/${ordenId}/factura`,
+    { method: "POST", body: fd },
+  );
+  return res.json();
+}
+
+function fmtBytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return "";
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function configAFormulario(cfg) {
   const correos = Array.isArray(cfg?.correos_notificacion) ? cfg.correos_notificacion : [];
   return {
@@ -206,6 +244,9 @@ export function ContratoOrdenesPagoPanel({
   const [confirmEliminar, setConfirmEliminar] = useState(null);
   const [eliminando, setEliminando] = useState(false);
   const [reenviando, setReenviando] = useState(false);
+  const [facturaBusyId, setFacturaBusyId] = useState(null);
+  const facturaInputRef = useRef(null);
+  const facturaTargetOrdenRef = useRef(null);
 
   const cargar = useCallback(async () => {
     if (!contratoId) return;
@@ -375,6 +416,38 @@ export function ContratoOrdenesPagoPanel({
     }
   }
 
+  function abrirSelectorFactura(orden) {
+    facturaTargetOrdenRef.current = orden;
+    if (facturaInputRef.current) {
+      facturaInputRef.current.value = "";
+      facturaInputRef.current.click();
+    }
+  }
+
+  async function onFacturaFileChange(e) {
+    const file = e.target.files?.[0];
+    const orden = facturaTargetOrdenRef.current;
+    e.target.value = "";
+    if (!file || !orden?.id) return;
+    setFacturaBusyId(orden.id);
+    setMsg(null);
+    try {
+      await subirFacturaOrden(token, contratoId, orden.id, file);
+      await cargar();
+      setMsg({
+        type: "success",
+        text: orden.tiene_factura
+          ? `Factura reemplazada — corte N.° ${String(orden.numero_corte).padStart(3, "0")}.`
+          : `Factura cargada — corte N.° ${String(orden.numero_corte).padStart(3, "0")}.`,
+      });
+    } catch (err) {
+      setMsg({ type: "error", text: err.message || "No se pudo cargar la factura." });
+    } finally {
+      setFacturaBusyId(null);
+      facturaTargetOrdenRef.current = null;
+    }
+  }
+
   async function confirmarGeneracion() {
     if (!confirmGenerar?.periodo) return;
     await generarOrden(confirmGenerar.periodo);
@@ -453,6 +526,13 @@ export function ContratoOrdenesPagoPanel({
             }
       }
     >
+      <input
+        ref={facturaInputRef}
+        type="file"
+        accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/*"
+        style={{ display: "none" }}
+        onChange={(e) => void onFacturaFileChange(e)}
+      />
       <div style={{ fontSize: font.title, fontWeight: 700, color: ui.primary, marginBottom: 4 }}>
         💳 Órdenes de pago
       </div>
@@ -972,6 +1052,78 @@ export function ContratoOrdenesPagoPanel({
                                   >
                                     PDF
                                   </button>
+                                  {o.tiene_factura ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        title={
+                                          o.factura_nombre_archivo
+                                            ? `Ver factura emitida (${o.factura_nombre_archivo}${
+                                                o.factura_tamano_bytes
+                                                  ? ` · ${fmtBytes(o.factura_tamano_bytes)}`
+                                                  : ""
+                                              })`
+                                            : "Ver factura emitida"
+                                        }
+                                        disabled={facturaBusyId === o.id}
+                                        onClick={() =>
+                                          void descargarFacturaOrden(token, contratoId, o.id, {
+                                            inline: true,
+                                            nombre: o.factura_nombre_archivo,
+                                          })
+                                        }
+                                        style={{
+                                          background: `${ui.primary}18`,
+                                          border: `1px solid ${ui.primary}55`,
+                                          borderRadius: 5,
+                                          padding: "3px 8px",
+                                          color: ui.primary,
+                                          fontSize: font.caption,
+                                          cursor: facturaBusyId === o.id ? "wait" : "pointer",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        📄 Factura
+                                      </button>
+                                      <button
+                                        type="button"
+                                        title="Reemplazar factura emitida"
+                                        disabled={facturaBusyId === o.id || eliminando}
+                                        onClick={() => abrirSelectorFactura(o)}
+                                        style={{
+                                          background: "transparent",
+                                          border: `1px solid ${ui.border}`,
+                                          borderRadius: 5,
+                                          padding: "3px 8px",
+                                          color: ui.textMuted,
+                                          fontSize: font.caption,
+                                          cursor: facturaBusyId === o.id ? "wait" : "pointer",
+                                        }}
+                                      >
+                                        ↻
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      title="Cargar factura emitida"
+                                      disabled={facturaBusyId === o.id || eliminando}
+                                      onClick={() => abrirSelectorFactura(o)}
+                                      aria-label="Cargar factura emitida"
+                                      style={{
+                                        background: `${ui.warnText}14`,
+                                        border: `1px solid ${ui.warnText}44`,
+                                        borderRadius: 5,
+                                        padding: "3px 8px",
+                                        color: ui.warnText,
+                                        fontSize: font.caption,
+                                        cursor: facturaBusyId === o.id ? "wait" : "pointer",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      ⬆ Factura
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     disabled={eliminando || cambiandoEstado}
