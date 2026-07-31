@@ -25,6 +25,7 @@ const TABS_ACTA = [
   { id: 'orden', label: 'Orden del día' },
   { id: 'asistentes', label: 'Asistentes' },
   { id: 'ideas', label: 'Ideas y compromisos' },
+  { id: 'compromisos', label: 'Compromisos abiertos' },
   { id: 'apartados', label: 'Apartados' },
   { id: 'acciones', label: 'Vista previa y acciones' },
 ]
@@ -678,6 +679,9 @@ export default function ActaEditor({
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => {
           const locked = tabsBloqueadas && tb.id !== 'encabezado'
+          const label = tb.id === 'compromisos' && previos.length > 0
+            ? `${tb.label} (${previos.length})`
+            : tb.label
           return (
             <button
               key={tb.id}
@@ -702,7 +706,7 @@ export default function ActaEditor({
                 opacity: locked ? 0.55 : 1,
               }}
             >
-              {tb.label}
+              {label}
             </button>
           )
         })}
@@ -851,59 +855,6 @@ export default function ActaEditor({
       </section>
       )}
 
-
-      {tab === 'ideas' && (
-      <section style={card(t)}>
-        <h3 style={h3(t)}>
-          Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
-        </h3>
-        {previos.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-            No hay compromisos abiertos previos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'}.
-          </div>
-        ) : (
-          <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-            <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 640 }}>
-              <thead>
-                <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Acta origen</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Compromiso</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Asignado</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Vence</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {previos.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => setDetalleCompromisoId(c.id)}
-                    style={{
-                      cursor: 'pointer',
-                      borderTop: `1px solid ${t.border}`,
-                      background: ORIGEN_COLOR.compromiso.bg,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
-                  >
-                    <td data-label="Acta origen" style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
-                      {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : '—')}
-                      {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
-                    </td>
-                    <td data-label="Compromiso" style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
-                    <td data-label="Asignado" style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
-                    <td data-label="Vence" style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
-                    <td data-label="Estado" style={{ padding: '8px 10px', color: t.textMuted }}>
-                      {ESTADOS.find((x) => x.value === c.estado_gestion)?.label || c.estado_gestion}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-      )}
 
       {tab === 'asistentes' && (
       <section style={card(t)}>
@@ -1341,6 +1292,62 @@ export default function ActaEditor({
             </div>
           )
         })}
+      </section>
+      )}
+
+      {tab === 'compromisos' && (
+      <section style={card(t)}>
+        <h3 style={h3(t)}>
+          Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
+        </h3>
+        <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+          Solo se listan compromisos pendientes del mismo tipo de acta. Pulse una fila para revisar o actualizar su estado.
+        </p>
+        {previos.length === 0 ? (
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+            No hay compromisos abiertos previos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'}.
+          </div>
+        ) : (
+          <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
+            <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 640 }}>
+              <thead>
+                <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Acta origen</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Compromiso</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Asignado</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Vence</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previos.map((c) => (
+                  <tr
+                    key={c.id}
+                    onClick={() => setDetalleCompromisoId(c.id)}
+                    style={{
+                      cursor: 'pointer',
+                      borderTop: `1px solid ${t.border}`,
+                      background: ORIGEN_COLOR.compromiso.bg,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
+                  >
+                    <td data-label="Acta origen" style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
+                      {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : '—')}
+                      {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
+                    </td>
+                    <td data-label="Compromiso" style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
+                    <td data-label="Asignado" style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
+                    <td data-label="Vence" style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
+                    <td data-label="Estado" style={{ padding: '8px 10px', color: t.textMuted }}>
+                      {ESTADOS.find((x) => x.value === c.estado_gestion)?.label || c.estado_gestion}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
       )}
 
