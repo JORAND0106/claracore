@@ -1,10 +1,11 @@
 """Generación PDF — actas de reunión y llamados de atención (Seguimiento)."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
 from almacen_firma_pdf import firma_url_a_data_uri
@@ -22,10 +23,34 @@ _LOGO_MAX_W_PCT = 88  # % del recuadro
 # Entidad (acta externa): ~40% del tamaño del logo estándar, misma proporción.
 _LOGO_ENTIDAD_MAX_H = max(4, int(round(_LOGO_MAX_H * 0.4)))  # 4 pt
 _LOGO_ENTIDAD_MAX_W_PCT = max(20, int(round(_LOGO_MAX_W_PCT * 0.4)))  # 35%
+# Ancho estimado del recuadro Entidad (30% del área útil letter portrait).
+_LOGO_ENTIDAD_CELL_W_PT = 150.0
+_LOGO_CONTRATISTA_CELL_W_PT = 90.0
 _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
+
+# Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
+PDF_ACTA_TEMPLATE_VERSION = "2026-07-31.2-logo-entidad-explicit"
+
+
+def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
+    """Clave de caché: versión de plantilla + hash de contenido del acta."""
+    h = (contenido_hash or "").strip()
+    return f"{template_version}:{h}"
+
+
+def parse_pdf_acta_cache_key(raw: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Devuelve (template_version, contenido_hash) o (None, raw) si es legacy sin versión."""
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+    if ":" in s:
+        ver, rest = s.split(":", 1)
+        if ver and rest:
+            return ver, rest
+    return None, s
 
 
 def _esc(val) -> str:
@@ -258,21 +283,81 @@ def _encabezado_oficial_html(
     return header + objeto_row
 
 
+def _data_uri_pixel_size(uri: str) -> Tuple[Optional[int], Optional[int]]:
+    """Lee ancho/alto en px de un data-URI PNG/JPEG (sin dependencia externa)."""
+    try:
+        if not uri or not uri.startswith("data:image"):
+            return None, None
+        header, b64 = uri.split(",", 1)
+        raw = base64.b64decode(b64, validate=False)
+        hdr = header.lower()
+        if "png" in hdr and len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n":
+            w = int.from_bytes(raw[16:20], "big")
+            h = int.from_bytes(raw[20:24], "big")
+            return w, h
+        if ("jpeg" in hdr or "jpg" in hdr) and raw[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(raw):
+                if raw[i] != 0xFF:
+                    break
+                marker = raw[i + 1]
+                if marker == 0xD9:
+                    break
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    h = int.from_bytes(raw[i + 5 : i + 7], "big")
+                    w = int.from_bytes(raw[i + 7 : i + 9], "big")
+                    return w, h
+                if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0x01) or marker == 0xDA:
+                    break
+                seglen = int.from_bytes(raw[i + 2 : i + 4], "big")
+                i += 2 + seglen
+        return None, None
+    except Exception:
+        return None, None
+
+
+def _fit_logo_pt(
+    uri: str,
+    *,
+    max_h_pt: float,
+    max_w_pt: float,
+) -> Tuple[float, float]:
+    """Dimensiones en pt que caben en el recuadro, conservando proporción.
+
+    xhtml2pdf ignora max-height/max-width en <img>; hay que fijar width/height explícitos.
+    """
+    max_h_pt = max(1.0, float(max_h_pt))
+    max_w_pt = max(1.0, float(max_w_pt))
+    px_w, px_h = _data_uri_pixel_size(uri)
+    if not px_w or not px_h:
+        # Sin metadatos: forzar altura (xhtml2pdf respeta height en pt).
+        return round(max_w_pt * 0.5, 2), round(max_h_pt, 2)
+    # Asumir 96 dpi → pt = px * 72/96
+    nat_w = px_w * 72.0 / 96.0
+    nat_h = px_h * 72.0 / 96.0
+    scale = min(max_h_pt / nat_h, max_w_pt / nat_w, 1.0)
+    return round(nat_w * scale, 2), round(nat_h * scale, 2)
+
+
 def _logo_cell(
     url: Optional[str],
     placeholder: str,
     *,
     max_h: int = None,
     max_w_pct: int = None,
+    cell_width_pt: float = None,
 ) -> str:
-    """Logo embebido (data-URI) o placeholder con borde. Altura contenida por defecto.
+    """Logo embebido (data-URI) o placeholder con borde.
 
-    Conserva proporción (height:auto + object-fit:contain) y centra en el recuadro.
+    Usa width/height explícitos en pt (xhtml2pdf no respeta max-height/max-width).
     """
     if max_h is None:
         max_h = _LOGO_MAX_H
     if max_w_pct is None:
         max_w_pct = _LOGO_MAX_W_PCT
+    if cell_width_pt is None:
+        cell_width_pt = _LOGO_CONTRATISTA_CELL_W_PT
+    max_w_pt = max(4.0, float(cell_width_pt) * (float(max_w_pct) / 100.0))
     uri = ""
     if url and str(url).strip():
         try:
@@ -280,11 +365,11 @@ def _logo_cell(
         except Exception:
             uri = ""
     if uri:
+        w_pt, h_pt = _fit_logo_pt(uri, max_h_pt=float(max_h), max_w_pt=max_w_pt)
         return (
             f'<div style="text-align:center;padding:0;line-height:0;">'
-            f'<img src="{uri}" style="max-height:{max_h}pt;max-width:{max_w_pct}%;'
-            f'width:auto;height:auto;object-fit:contain;display:inline-block;'
-            f'vertical-align:middle;"/>'
+            f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+            f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/>'
             f"</div>"
         )
     # Placeholder acotado al tope del logo (no inflar el encabezado).
@@ -360,13 +445,18 @@ def generar_pdf_acta(
 
     tipo_raw = str((acta or {}).get("tipo_acta") or "").lower()
     es_externa = tipo_raw == "externa"
-    logo_contratista = _logo_cell((contrato or {}).get("logo_contratista"), "Logo contratista")
+    logo_contratista = _logo_cell(
+        (contrato or {}).get("logo_contratista"),
+        "Logo contratista",
+        cell_width_pt=_LOGO_CONTRATISTA_CELL_W_PT,
+    )
     logo_entidad = (
         _logo_cell(
             (contrato or {}).get("logo_entidad"),
             "Logo entidad",
             max_h=_LOGO_ENTIDAD_MAX_H,
             max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
+            cell_width_pt=_LOGO_ENTIDAD_CELL_W_PT,
         )
         if es_externa
         else ""
