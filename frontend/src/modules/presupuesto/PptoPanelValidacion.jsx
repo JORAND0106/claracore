@@ -457,6 +457,7 @@ export default function PptoPanelValidacion({
         verValoresEconomicos={verValoresEconomicos}
         expandido={expandido}
         setExpandido={setExpandido}
+        th={th}
         btnAtras={btnAtras}
         btnLimpiar={btnLimpiar}
         btnBuscar={btnBuscar}
@@ -494,6 +495,7 @@ function PptoPanelValidacionInner({
   verValoresEconomicos,
   expandido,
   setExpandido,
+  th,
   btnAtras,
   btnLimpiar,
   btnBuscar,
