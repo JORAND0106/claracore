@@ -679,6 +679,9 @@ export default function ActaEditor({
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => {
           const locked = tabsBloqueadas && tb.id !== 'encabezado'
+          const label = tb.id === 'compromisos' && previos.length > 0
+            ? `${tb.label} (${previos.length})`
+            : tb.label
           return (
             <button
               key={tb.id}
@@ -703,7 +706,7 @@ export default function ActaEditor({
                 opacity: locked ? 0.55 : 1,
               }}
             >
-              {tb.label}
+              {label}
             </button>
           )
         })}
