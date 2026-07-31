@@ -175,20 +175,95 @@ function parseOrdenDia(raw) {
   return [{ texto: '', hecho: false, key: newRowKey('ord') }]
 }
 
-/** Textarea que crece con el contenido (sin scroll interno). */
-function AutoGrowTextarea({ value, onChange, style, minRows = 3, ...rest }) {
+/** Altura de línea usada para auto-crecimiento del textarea de ideas. */
+const AUTO_GROW_LINE_PX = 22
+/**
+ * Tope de crecimiento (~14 líneas / ~308px de contenido).
+ * Por debajo: el cuadro crece con el texto (sin scroll).
+ * Al alcanzar el tope: scroll interno y el caret permanece visible.
+ */
+const AUTO_GROW_MAX_ROWS = 14
+
+/** Mantiene la posición del cursor dentro del área visible del textarea. */
+function scrollTextareaCaretIntoView(el) {
+  if (!el || typeof el.selectionStart !== 'number') return
+  const value = el.value || ''
+  const caret = el.selectionEnd ?? el.selectionStart
+  // Caso más frecuente al redactar: escribir al final → anclar al fondo.
+  if (caret >= value.length) {
+    el.scrollTop = el.scrollHeight
+    return
+  }
+  // Edición a mitad del texto: medir con un espejo el offset del caret.
+  try {
+    const style = window.getComputedStyle(el)
+    const mirror = document.createElement('div')
+    const props = [
+      'boxSizing', 'width', 'font', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle',
+      'letterSpacing', 'lineHeight', 'textTransform', 'wordSpacing', 'textIndent',
+      'whiteSpace', 'wordWrap', 'wordBreak', 'overflowWrap', 'padding', 'border',
+    ]
+    props.forEach((p) => { mirror.style[p] = style[p] })
+    mirror.style.position = 'absolute'
+    mirror.style.visibility = 'hidden'
+    mirror.style.height = 'auto'
+    mirror.style.maxHeight = 'none'
+    mirror.style.overflow = 'hidden'
+    mirror.style.whiteSpace = 'pre-wrap'
+    mirror.style.overflowWrap = 'break-word'
+    mirror.style.width = `${el.clientWidth}px`
+    mirror.textContent = value.slice(0, caret)
+    const marker = document.createElement('span')
+    marker.textContent = value.slice(caret, caret + 1) || '.'
+    mirror.appendChild(marker)
+    document.body.appendChild(mirror)
+    const caretTop = marker.offsetTop
+    const caretBottom = caretTop + Math.max(marker.offsetHeight, AUTO_GROW_LINE_PX)
+    document.body.removeChild(mirror)
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+    if (caretTop < viewTop) el.scrollTop = caretTop
+    else if (caretBottom > viewBottom) el.scrollTop = caretBottom - el.clientHeight
+  } catch {
+    /* ignore measurement errors */
+  }
+}
+
+/**
+ * Textarea que crece con el contenido hasta maxRows.
+ * Al tope: overflow interno y caret siempre visible (como un editor convencional).
+ */
+function AutoGrowTextarea({
+  value,
+  onChange,
+  style,
+  minRows = 3,
+  maxRows = AUTO_GROW_MAX_ROWS,
+  ...rest
+}) {
   const ref = useRef(null)
+  const minH = Math.max(minRows, 2) * AUTO_GROW_LINE_PX
+  const maxH = Math.max(minH, maxRows * AUTO_GROW_LINE_PX)
+
   const fit = () => {
     const el = ref.current
     if (!el) return
+    // Medir sin scroll para obtener scrollHeight real del contenido.
+    el.style.overflowY = 'hidden'
     el.style.height = 'auto'
-    const line = 22
-    const minH = Math.max(minRows, 2) * line
-    el.style.height = `${Math.max(el.scrollHeight, minH)}px`
+    const needed = Math.max(el.scrollHeight, minH)
+    const next = Math.min(needed, maxH)
+    el.style.height = `${next}px`
+    el.style.overflowY = needed > maxH ? 'auto' : 'hidden'
+    scrollTextareaCaretIntoView(el)
   }
+
   useEffect(() => {
     fit()
-  }, [value])
+    // minH/maxH derivan de minRows/maxRows; reajustar al cambiar valor o tope.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, minRows, maxRows])
+
   return (
     <textarea
       {...rest}
@@ -199,11 +274,16 @@ function AutoGrowTextarea({ value, onChange, style, minRows = 3, ...rest }) {
         onChange?.(e)
         requestAnimationFrame(fit)
       }}
+      onKeyUp={() => scrollTextareaCaretIntoView(ref.current)}
+      onClick={() => scrollTextareaCaretIntoView(ref.current)}
+      onSelect={() => scrollTextareaCaretIntoView(ref.current)}
       style={{
         ...style,
-        overflow: 'hidden',
+        overflowX: 'hidden',
+        overflowY: 'hidden',
         resize: 'none',
-        minHeight: Math.max(minRows, 2) * 22,
+        minHeight: minH,
+        maxHeight: maxH,
       }}
     />
   )
