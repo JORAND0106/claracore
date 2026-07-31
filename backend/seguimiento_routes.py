@@ -614,11 +614,17 @@ def route_proximo_consecutivo(contrato_id: int, current_user=Depends(get_current
 def route_compromisos_abiertos(
     contrato_id: int,
     excluir_acta_id: Optional[int] = Query(None),
+    tipo_acta: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
-    return compromisos_abiertos_contrato(supabase, contrato_id, excluir_acta_id)
+    return compromisos_abiertos_contrato(
+        supabase,
+        contrato_id,
+        excluir_acta_id=excluir_acta_id,
+        tipo_acta=tipo_acta,
+    )
 
 
 @router.post("/{contrato_id}/actas")
