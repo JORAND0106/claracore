@@ -780,11 +780,16 @@ def route_eliminar_acta(contrato_id: int, acta_id: int, current_user=Depends(get
 
 
 @router.get("/{contrato_id}/actas/{acta_id}/pdf")
-def route_pdf_acta(contrato_id: int, acta_id: int, current_user=Depends(get_current_user)):
+def route_pdf_acta(
+    contrato_id: int,
+    acta_id: int,
+    force: bool = Query(False, description="Ignorar caché Blob y regenerar el PDF"),
+    current_user=Depends(get_current_user),
+):
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     try:
-        pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id)
+        pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id, force=force)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     except Exception as exc:
@@ -795,7 +800,12 @@ def route_pdf_acta(contrato_id: int, acta_id: int, current_user=Depends(get_curr
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="acta_seguimiento_{acta_id}.pdf"'},
+        headers={
+            "Content-Disposition": f'inline; filename="acta_seguimiento_{acta_id}.pdf"',
+            # Evita que el navegador/CDN reutilice un PDF generado con plantilla anterior.
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
     )
 
 

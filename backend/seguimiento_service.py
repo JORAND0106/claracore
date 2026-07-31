@@ -17,9 +17,11 @@ from prog_obra_calendar import (
     siguiente_dia_habil,
 )
 from seguimiento_pdf import (
+    PDF_ACTA_TEMPLATE_VERSION,
     contenido_hash_acta,
     generar_pdf_acta,
     generar_pdf_llamado_atencion,
+    pdf_acta_cache_key,
 )
 
 _log = logging.getLogger("claracore.seguimiento")
@@ -3730,17 +3732,96 @@ def _contrato(sb, contrato_id: int) -> dict:
     return rows[0] if rows else {"id": contrato_id}
 
 
-def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
+def _try_load_pdf_acta_cache(sb, acta: dict, cache_key: str) -> Optional[bytes]:
+    """Sirve PDF desde Blob solo si la clave (plantilla+contenido) coincide."""
+    blob_path = (acta.get("pdf_blob_path") or "").strip()
+    stored = (acta.get("contenido_hash") or "").strip()
+    if not blob_path or not stored or stored != cache_key:
+        return None
+    try:
+        from azure_blob_storage import download_blob_bytes_private
+
+        data = download_blob_bytes_private(blob_path)
+        if data and len(data) > 20:
+            return data
+    except Exception as exc:
+        _log.warning("pdf cache miss acta=%s path=%s: %s", acta.get("id"), blob_path, exc)
+    return None
+
+
+def _persist_pdf_acta_cache(sb, contrato_id: int, acta_id: int, pdf: bytes, cache_key: str) -> None:
+    """Guarda PDF en Blob y actualiza pdf_blob_path + contenido_hash versionado."""
+    if not pdf:
+        return
+    blob_path = f"seguimiento-actas/{int(contrato_id)}/{int(acta_id)}/acta_{PDF_ACTA_TEMPLATE_VERSION}.pdf"
+    try:
+        from azure_blob_storage import upload_blob_private
+
+        upload_blob_private(blob_path, pdf, content_type="application/pdf", overwrite=True)
+        sb.table("seguimiento_acta").update({
+            "pdf_blob_path": blob_path,
+            "contenido_hash": cache_key,
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(acta_id)).execute()
+    except Exception as exc:
+        _log.warning("pdf cache store acta=%s: %s", acta_id, exc)
+        try:
+            sb.table("seguimiento_acta").update({
+                "contenido_hash": cache_key,
+                "updated_at": _now_utc().isoformat(),
+            }).eq("id", int(acta_id)).execute()
+        except Exception:
+            pass
+
+
+def invalidar_pdf_acta_cache(sb, acta_id: int) -> None:
+    """Borra pdf_blob_path para forzar regeneración en el próximo request."""
+    try:
+        sb.table("seguimiento_acta").update({
+            "pdf_blob_path": None,
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(acta_id)).execute()
+    except Exception as exc:
+        _log.warning("invalidar pdf cache acta=%s: %s", acta_id, exc)
+
+
+def generar_preview_pdf_acta(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    *,
+    force: bool = False,
+) -> bytes:
+    """Genera (o sirve desde caché) el PDF del acta.
+
+    La clave de caché incluye PDF_ACTA_TEMPLATE_VERSION: un cambio de plantilla/estilo
+    invalida PDFs previos aunque el contenido del acta no haya cambiado.
+    force=True ignora Blob y regenera siempre (p. ej. botón «Vista previa»).
+    """
     acta = get_acta(sb, acta_id, contrato_id)
     try:
         contrato = _contrato(sb, contrato_id)
     except Exception:
         contrato = {"id": contrato_id}
+
+    content_h = ""
     try:
-        h = contenido_hash_acta(acta, acta.get("asistentes"), acta.get("ideas"), acta.get("apartados"))
-        sb.table("seguimiento_acta").update({"contenido_hash": h, "updated_at": _now_utc().isoformat()}).eq("id", int(acta_id)).execute()
+        content_h = contenido_hash_acta(
+            acta, acta.get("asistentes"), acta.get("ideas"), acta.get("apartados")
+        )
     except Exception as exc:
         _log.warning("contenido_hash acta=%s: %s", acta_id, exc)
+    cache_key = pdf_acta_cache_key(content_h) if content_h else ""
+
+    if not force and cache_key:
+        cached = _try_load_pdf_acta_cache(sb, acta, cache_key)
+        if cached:
+            return cached
+
+    # Caché obsoleta (p. ej. plantilla vieja): limpiar path para no reutilizarlo.
+    if (acta.get("pdf_blob_path") or "").strip() and (acta.get("contenido_hash") or "") != cache_key:
+        invalidar_pdf_acta_cache(sb, acta_id)
+
     previos = []
     try:
         previos = compromisos_abiertos_contrato(
@@ -3751,8 +3832,9 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
         )
     except Exception as exc:
         _log.warning("compromisos abiertos pdf acta=%s: %s", acta_id, exc)
+
     try:
-        return generar_pdf_acta(
+        pdf = generar_pdf_acta(
             contrato,
             acta,
             acta.get("asistentes") or [],
@@ -3766,7 +3848,7 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
         _log.exception("PDF acta %s: %s", acta_id, exc)
         # Reintento sin firmas/imágenes remotas
         acta_safe = {**acta, "ubicacion": acta.get("ubicacion"), "elaborador_nombre": acta.get("elaborador_nombre")}
-        return generar_pdf_acta(
+        pdf = generar_pdf_acta(
             {"id": contrato_id, "numero": (contrato or {}).get("numero")},
             acta_safe,
             [
@@ -3779,6 +3861,10 @@ def generar_preview_pdf_acta(sb, contrato_id: int, acta_id: int) -> bytes:
             compromisos=acta.get("compromisos") or [],
             compromisos_previos=previos,
         )
+
+    if cache_key and pdf:
+        _persist_pdf_acta_cache(sb, contrato_id, acta_id, pdf, cache_key)
+    return pdf
 
 
 def registrar_firma_asistente(sb, contrato_id: int, acta_id: int, asistente_id: int, user_id: int) -> dict:

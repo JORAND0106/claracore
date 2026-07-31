@@ -183,11 +183,19 @@ def test_contenido_hash_incluye_quien_dijo():
 
 def test_logo_entidad_externa_es_aprox_40_por_ciento():
     """En acta externa el logo de entidad usa ~40% del tamaño del logo estándar."""
+    import base64
+    import io
+    import re
+
+    from PIL import Image
+
     from seguimiento_pdf import (
+        _LOGO_ENTIDAD_CELL_W_PT,
         _LOGO_ENTIDAD_MAX_H,
         _LOGO_ENTIDAD_MAX_W_PCT,
         _LOGO_MAX_H,
         _LOGO_MAX_W_PCT,
+        _fit_logo_pt,
         _logo_cell,
     )
 
@@ -196,16 +204,61 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     assert _LOGO_ENTIDAD_MAX_H < _LOGO_MAX_H
     assert _LOGO_ENTIDAD_MAX_W_PCT < _LOGO_MAX_W_PCT
 
-    contratista = _logo_cell("https://example.com/c.png", "C")
-    entidad = _logo_cell(
-        "https://example.com/e.png",
-        "E",
-        max_h=_LOGO_ENTIDAD_MAX_H,
-        max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
+    img = Image.new("RGB", (400, 200), (20, 80, 160))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+    max_w_ent = _LOGO_ENTIDAD_CELL_W_PT * (_LOGO_ENTIDAD_MAX_W_PCT / 100.0)
+    w_pt, h_pt = _fit_logo_pt(uri, max_h_pt=float(_LOGO_ENTIDAD_MAX_H), max_w_pt=max_w_ent)
+    assert h_pt <= _LOGO_ENTIDAD_MAX_H + 0.01
+    assert w_pt <= max_w_ent + 0.01
+
+    # xhtml2pdf respeta height/width explícitos (no max-height).
+    entidad = (
+        f'<div style="text-align:center;padding:0;line-height:0;">'
+        f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+        f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/></div>'
     )
-    # Si no hay data-URI (URL remota no resuelta), al menos el placeholder respeta el tope.
-    assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in entidad or f"max-height:{_LOGO_ENTIDAD_MAX_H}pt" in entidad
-    assert f"min-height:{_LOGO_MAX_H}pt" in contratista or f"max-height:{_LOGO_MAX_H}pt" in contratista
+    assert f"height:{h_pt}pt" in entidad
+    assert f"height:{_LOGO_MAX_H}pt" not in entidad or h_pt == float(_LOGO_MAX_H)
+
+    placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
+    assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
+
+    # Escala en el PDF real: matriz cm con altura ≈ h_pt
+    from xhtml2pdf import pisa
+    from pypdf import PdfReader
+
+    out = io.BytesIO()
+    pisa.CreatePDF(f"<html><body>{entidad}</body></html>", dest=out)
+    page = PdfReader(io.BytesIO(out.getvalue())).pages[0]
+    data = page.get_contents().get_data()
+    cms = re.findall(rb"([\d\.\-]+) 0 0 ([\d\.\-]+) [\d\.\-]+ [\d\.\-]+ cm", data)
+    assert cms, "se esperaba matriz de escala de imagen"
+    rendered_h = float(cms[-1][1])
+    # xhtml2pdf puede redondear unos pt; debe quedar en el orden del tope (~4pt), no del intrínseco (~150pt).
+    assert rendered_h <= _LOGO_ENTIDAD_MAX_H + 1.5, (rendered_h, h_pt)
+    assert rendered_h < 20, rendered_h
+
+
+def test_pdf_acta_cache_key_incluye_version_plantilla():
+    from seguimiento_pdf import (
+        PDF_ACTA_TEMPLATE_VERSION,
+        parse_pdf_acta_cache_key,
+        pdf_acta_cache_key,
+    )
+
+    key = pdf_acta_cache_key("abc123")
+    assert key.startswith(f"{PDF_ACTA_TEMPLATE_VERSION}:")
+    assert key.endswith("abc123")
+    ver, h = parse_pdf_acta_cache_key(key)
+    assert ver == PDF_ACTA_TEMPLATE_VERSION
+    assert h == "abc123"
+    # Legacy sin versión → no coincide con la plantilla actual
+    ver_legacy, h_legacy = parse_pdf_acta_cache_key("abc123")
+    assert ver_legacy is None and h_legacy == "abc123"
+    assert pdf_acta_cache_key("abc123") != "abc123"
 
 
 def test_encabezado_compacto_constantes_y_legibilidad():
@@ -228,7 +281,7 @@ def test_encabezado_compacto_constantes_y_legibilidad():
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
 
     logo = _logo_cell(None, "Logo")
-    assert f"max-height:{_LOGO_MAX_H}pt" in logo or "min-height" in logo
+    assert f"min-height:{_LOGO_MAX_H}pt" in logo
 
     for tipo in ("interna", "externa"):
         logo_ent = _logo_cell(

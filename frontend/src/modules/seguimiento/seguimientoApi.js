@@ -104,10 +104,17 @@ export function createSeguimientoApi(contratoId, token) {
       send('POST', `/seguimiento/${cid}/actas/${actaId}/ideas/${ideaId}/compromiso`, body),
     firmarActa: (actaId, asistenteId) =>
       send('POST', `/seguimiento/${cid}/actas/${actaId}/firmar`, { asistente_id: asistenteId }),
-    async pdfActaBlob(actaId) {
+    async pdfActaBlob(actaId, { force = true } = {}) {
+      // force=true en vista previa: regenera con la plantilla actual (no sirve Blob obsoleto).
       const sig = apiFetchSignal(90000)
-      const res = await fetch(`${API_BASE}/seguimiento/${cid}/actas/${actaId}/pdf`, {
-        headers: authHeaders(t, false),
+      const qs = force ? '?force=1' : ''
+      const res = await fetch(`${API_BASE}/seguimiento/${cid}/actas/${actaId}/pdf${qs}`, {
+        headers: {
+          ...authHeaders(t, false),
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+        },
+        cache: 'no-store',
         ...(sig ? { signal: sig } : {}),
       })
       if (!res.ok) {
