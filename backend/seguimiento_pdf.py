@@ -31,8 +31,13 @@ _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
 
+# Esquemas/gráficos de ideas: caja fija (xhtml2pdf ignora max-height).
+_IDEA_IMG_BOX_W_PT = 240.0
+_IDEA_IMG_BOX_H_PT = 135.0
+_IDEA_IMG_MAX_PER_IDEA = 8
+
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-07-31.2-logo-entidad-explicit"
+PDF_ACTA_TEMPLATE_VERSION = "2026-07-31.3-idea-esquemas"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -108,11 +113,18 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
             str(a.get("email") or ""),
         ]))
     for i in ideas or []:
+        imgs = i.get("imagenes") if isinstance(i.get("imagenes"), list) else []
+        img_keys = []
+        for im in imgs:
+            if not isinstance(im, dict):
+                continue
+            img_keys.append(str(im.get("blob_path") or im.get("nombre") or ""))
         parts.append("|".join([
             str(i.get("texto") or ""),
             str(i.get("quien_dijo") or i.get("interviniente") or ""),
             str(i.get("titulo") or ""),
             str(i.get("orden") if i.get("orden") is not None else ""),
+            ",".join(img_keys),
         ]))
     for ap in apartados or []:
         parts.append("|".join([str(ap.get("titulo") or ""), str(ap.get("contenido") or "")]))
@@ -380,6 +392,71 @@ def _logo_cell(
     )
 
 
+def _fit_image_in_box_pt(
+    uri: str,
+    *,
+    box_w: float = _IDEA_IMG_BOX_W_PT,
+    box_h: float = _IDEA_IMG_BOX_H_PT,
+) -> Tuple[float, float]:
+    """Escala la imagen para caber en la caja fija, sin deformar (contain)."""
+    return _fit_logo_pt(uri, max_h_pt=box_h, max_w_pt=box_w)
+
+
+def _resolve_idea_image_uri(im: dict) -> str:
+    """Obtiene data-URI embebible desde ref de imagen de idea."""
+    if not isinstance(im, dict):
+        return ""
+    uri = (im.get("data_uri") or "").strip()
+    if uri.startswith("data:image"):
+        return uri
+    url = (im.get("url") or "").strip()
+    if url:
+        try:
+            return firma_url_a_data_uri(url) or ""
+        except Exception:
+            return ""
+    path = (im.get("blob_path") or "").strip()
+    if not path:
+        return ""
+    if path.startswith("data:image"):
+        return path
+    try:
+        from azure_blob_storage import download_blob_bytes_private
+
+        content = download_blob_bytes_private(path)
+        if not content or len(content) > 6_000_000:
+            return ""
+        mime = im.get("mime_type") or "image/png"
+        return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+    except Exception:
+        return ""
+
+
+def _idea_imagenes_html(imagenes: Optional[list]) -> str:
+    """Renderiza esquemas/gráficos a tamaño estándar fijo (width/height explícitos)."""
+    if not isinstance(imagenes, list) or not imagenes:
+        return ""
+    blocks = []
+    for im in imagenes[:_IDEA_IMG_MAX_PER_IDEA]:
+        uri = _resolve_idea_image_uri(im if isinstance(im, dict) else {})
+        if not uri:
+            continue
+        w_pt, h_pt = _fit_image_in_box_pt(uri)
+        nombre = _esc((im or {}).get("nombre") or "Esquema")
+        blocks.append(
+            f'<div style="margin:6pt 0 4pt;text-align:center;page-break-inside:avoid;">'
+            f'<div style="width:{_IDEA_IMG_BOX_W_PT}pt;height:{_IDEA_IMG_BOX_H_PT}pt;'
+            f'border:0.4pt solid {_BORDE_SUAVE};margin:0 auto;text-align:center;'
+            f'line-height:{_IDEA_IMG_BOX_H_PT}pt;overflow:hidden;">'
+            f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+            f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;vertical-align:middle;"/>'
+            f"</div>"
+            f'<div style="font-size:7pt;color:#64748b;margin-top:2pt;">{nombre}</div>'
+            f"</div>"
+        )
+    return "".join(blocks)
+
+
 def _box_row(cells_html: str) -> str:
     return (
         f'<table class="sec-outer" width="100%" cellspacing="0" cellpadding="0" '
@@ -510,12 +587,14 @@ def generar_pdf_acta(
             f"Interviniente: {_esc(quien)}</div>"
             if quien else ""
         )
+        imgs_html = _idea_imagenes_html(idea.get("imagenes"))
         ideas_html += (
             f"<div class='pdf-idea' style='margin:0 0 8pt;padding-bottom:6pt;"
             f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
             f"<div style='font-size:9pt;font-weight:700;'>Tema {num}: {_esc(titulo_tema)}</div>"
             f"{quien_line}"
             f"<div style='font-size:9pt;'>{_nl2br(idea.get('texto') or '')}</div>"
+            f"{imgs_html}"
             f"</div>"
         )
     if not ideas_html:
