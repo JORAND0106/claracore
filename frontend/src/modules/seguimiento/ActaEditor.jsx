@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import ItemDetalleModal from './ItemDetalleModal'
@@ -336,6 +337,8 @@ export default function ActaEditor({
     proxima_lugar: '',
   })
   const [claraIdx, setClaraIdx] = useState(null)
+  /** Índice de idea cuyo editor de esquema está abierto. */
+  const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
   const [compromisoCtx, setCompromisoCtx] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
@@ -656,26 +659,70 @@ export default function ActaEditor({
     return row
   }
 
+  const pushIdeaImagenPending = (ideaIdx, { nombre, data_uri, mime_type = 'image/png' }) => {
+    if (!data_uri) return false
+    let added = false
+    patchList('ideas', (list) => list.map((row, i) => {
+      if (i !== ideaIdx) return row
+      const prev = normalizeIdeaImagenes(row.imagenes)
+      if (prev.length >= 8) return row
+      added = true
+      return {
+        ...row,
+        imagenes: [...prev, {
+          nombre: nombre || `esquema-${Date.now()}.png`,
+          data_uri,
+          mime_type: mime_type || 'image/png',
+          created_at: new Date().toISOString(),
+          kind: 'esquema',
+          pending: true,
+        }],
+      }
+    }))
+    return added
+  }
+
   const addIdeaImagen = (ideaIdx, file) => {
     if (!file || !file.type?.startsWith('image/')) return
     const reader = new FileReader()
     reader.onload = () => {
-      const neu = {
-        nombre: file.name || `esquema-${Date.now()}.png`,
+      const ok = pushIdeaImagenPending(ideaIdx, {
+        nombre: file.name || `captura-${Date.now()}.png`,
         data_uri: reader.result,
         mime_type: file.type || 'image/png',
-        created_at: new Date().toISOString(),
-        kind: 'esquema',
-        pending: true,
+      })
+      if (!ok) setError('Máximo 8 esquemas/gráficos por idea')
+      else {
+        setError('')
+        setOkMsg('Imagen adjunta a la idea. Guarde el acta para persistirla.')
       }
-      patchList('ideas', (list) => list.map((row, i) => {
-        if (i !== ideaIdx) return row
-        const prev = normalizeIdeaImagenes(row.imagenes)
-        if (prev.length >= 8) return row
-        return { ...row, imagenes: [...prev, neu] }
-      }))
     }
     reader.readAsDataURL(file)
+  }
+
+  const handleIdeaPaste = (ideaIdx, e) => {
+    if (soloLectura) return
+    const items = e.clipboardData?.items
+    if (!items?.length) return
+    let imageItem = null
+    for (const item of items) {
+      if (item.type?.startsWith('image/')) {
+        imageItem = item
+        break
+      }
+    }
+    if (!imageItem) return
+    e.preventDefault()
+    e.stopPropagation()
+    const file = imageItem.getAsFile()
+    if (!file) return
+    // Mismo pipeline que «Adjuntar» / archivo: pending → pegarImagenIdea al guardar.
+    const named = new File(
+      [file],
+      file.name || `captura-${Date.now()}.png`,
+      { type: file.type || 'image/png' },
+    )
+    addIdeaImagen(ideaIdx, named)
   }
 
   const removeIdeaImagen = (ideaIdx, imgIdx) => {
@@ -1357,7 +1404,11 @@ export default function ActaEditor({
                 </button>
               </div>
               {expanded && (
-                <div className="cc-seguim-idea-accordion__body" style={{ padding: '0 12px 12px' }}>
+                <div
+                  className="cc-seguim-idea-accordion__body"
+                  style={{ padding: '0 12px 12px' }}
+                  onPaste={(e) => handleIdeaPaste(idx, e)}
+                >
                   <Field t={t} label="Interviniente">
                     <QuienDijoAutocomplete
                       t={t}
@@ -1383,33 +1434,44 @@ export default function ActaEditor({
                       const texto = e.target.value
                       patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
                     }}
+                    onPaste={(e) => handleIdeaPaste(idx, e)}
                     style={inp(t)}
-                    placeholder="Redacción de la idea central…"
+                    placeholder="Redacción de la idea central… (Ctrl+V pega capturas como esquema)"
                   />
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted }}>
                         Esquemas y gráficos
                       </div>
                       {!soloLectura && normalizeIdeaImagenes(idea.imagenes).length < 8 && (
-                        <label style={{ ...ghost(t), display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
-                          + Adjuntar
-                          <input
-                            type="file"
-                            accept="image/*"
-                            style={{ display: 'none' }}
-                            onChange={(e) => {
-                              const f = e.target.files?.[0]
-                              if (f) addIdeaImagen(idx, f)
-                              e.target.value = ''
-                            }}
-                          />
-                        </label>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <label style={{ ...ghost(t), display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
+                            + Adjuntar
+                            <input
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0]
+                                if (f) addIdeaImagen(idx, f)
+                                e.target.value = ''
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            style={ghost(t)}
+                            title="Abrir editor de esquema (misma herramienta de tareas / SICOE obra)"
+                            onClick={() => setEsquemaIdeaIdx(idx)}
+                          >
+                            Dibujar esquema
+                          </button>
+                        </div>
                       )}
                     </div>
                     {normalizeIdeaImagenes(idea.imagenes).length === 0 ? (
                       <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                        Opcional. Se mostrarán a tamaño estándar en el PDF.
+                        Opcional: adjuntar archivo, pegar captura (Ctrl+V) o dibujar. Tamaño estándar en el PDF.
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -1805,6 +1867,28 @@ export default function ActaEditor({
             )))
             setClaraIdx(null)
             await abrirCompromiso(idx, texto)
+          }}
+        />
+      )}
+
+      {esquemaIdeaIdx != null && form.ideas[esquemaIdeaIdx] && (
+        <EsquemaEditorModal
+          t={t}
+          title={`Esquema · Idea ${(esquemaIdeaIdx + 1)}`}
+          onClose={() => setEsquemaIdeaIdx(null)}
+          onSave={(dataUrl) => {
+            const idx = esquemaIdeaIdx
+            const ok = pushIdeaImagenPending(idx, {
+              nombre: `esquema-idea-${idx + 1}-${Date.now()}.png`,
+              data_uri: dataUrl,
+              mime_type: 'image/png',
+            })
+            setEsquemaIdeaIdx(null)
+            if (!ok) setError('Máximo 8 esquemas/gráficos por idea')
+            else {
+              setError('')
+              setOkMsg('Esquema dibujado. Guarde el acta para persistirlo.')
+            }
           }}
         />
       )}
