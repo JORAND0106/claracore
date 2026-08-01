@@ -1995,11 +1995,45 @@ def crear_compromiso_desde_idea(
     return created[0] if len(created) == 1 else {"items": created, "count": len(created)}
 
 
-def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data: dict, user_id: int) -> dict:
+def crear_compromiso_libre(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    data: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """Crea compromiso(s) del acta sin amarrarlos a una idea/tema concreto (idea_id=NULL)."""
     acta = get_acta(sb, acta_id, contrato_id)
-    ideas = {int(i["id"]): i for i in acta.get("ideas") or []}
-    if int(idea_id) not in ideas:
-        raise ValueError("La idea no pertenece al acta")
+    _assert_puede_editar_acta(acta, user_id, current_user)
+    asignados = data.get("asignados") or []
+    if not asignados and data.get("asignado_a_id"):
+        asignados = [{
+            "asignado_a_id": data["asignado_a_id"],
+            "asignado_a_nombre": data.get("asignado_a_nombre"),
+        }]
+    if not asignados:
+        raise ValueError("Debe indicar al menos un asignado")
+    created = []
+    for a in asignados:
+        payload = {**data, **a}
+        created.append(_crear_un_compromiso(sb, contrato_id, acta_id, None, payload, user_id))
+    return created[0] if len(created) == 1 else {"items": created, "count": len(created)}
+
+
+def _crear_un_compromiso(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    idea_id: Optional[int],
+    data: dict,
+    user_id: int,
+) -> dict:
+    acta = get_acta(sb, acta_id, contrato_id)
+    if idea_id is not None:
+        ideas = {int(i["id"]): i for i in acta.get("ideas") or []}
+        if int(idea_id) not in ideas:
+            raise ValueError("La idea no pertenece al acta")
 
     # Atribución de origen: el compromiso proviene del acta/comité, no del operador.
     consec = acta.get("consecutivo")
@@ -2097,7 +2131,7 @@ def _crear_un_compromiso(sb, contrato_id: int, acta_id: int, idea_id: int, data:
         "fecha_limite_gracia": limite.astimezone(timezone.utc).isoformat(),
         "contrato_id": int(contrato_id),
         "acta_id": int(acta_id),
-        "idea_id": int(idea_id),
+        "idea_id": int(idea_id) if idea_id is not None else None,
         "solicitante_id": solicitante_id,
         "solicitante_nombre": solicitante_nombre,
         "consecutivo": consec_item,

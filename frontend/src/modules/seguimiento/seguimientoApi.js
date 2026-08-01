@@ -102,6 +102,9 @@ export function createSeguimientoApi(contratoId, token) {
       send('POST', `/seguimiento/${cid}/ideas/${ideaId}/imagen`, body),
     crearCompromiso: (actaId, ideaId, body) =>
       send('POST', `/seguimiento/${cid}/actas/${actaId}/ideas/${ideaId}/compromiso`, body),
+    /** Compromiso libre (sin idea_id): punto de entrada independiente en Ideas y compromisos. */
+    crearCompromisoLibre: (actaId, body) =>
+      send('POST', `/seguimiento/${cid}/actas/${actaId}/compromisos`, body),
     firmarActa: (actaId, asistenteId) =>
       send('POST', `/seguimiento/${cid}/actas/${actaId}/firmar`, { asistente_id: asistenteId }),
     async pdfActaBlob(actaId, { force = true } = {}) {

@@ -17,22 +17,26 @@ _BORDE_SUAVE = "#94a3b8"
 # Encabezados de tabla / sección: oscuro institucional (texto claro).
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
-# Encabezado compacto: logos legibles dentro del recuadro (sin inflar la estructura).
+# Encabezado compacto: grilla unificada [logo | título | meta].
 # Nota: attrs HTML width/height unitless se interpretan como px en xhtml2pdf (×0.75);
 # por eso _logo_cell solo usa style con unidades pt.
 _LOGO_BASE_H_PT = 22  # referencia histórica (pre-compactación)
-_LOGO_MAX_H = 36  # pt — contratista / default (visible en el recuadro compacto)
+_LOGO_MAX_H = 40  # pt — logo único del encabezado (ligero aumento sobre 36pt)
 _LOGO_MAX_W_PCT = 94  # % del recuadro
-# Entidad (acta externa): mismo tope de altura; el recuadro es más ancho (sellos).
+# Mismo tope para entidad (externa) y contratista (interna).
 _LOGO_ENTIDAD_MAX_H = _LOGO_MAX_H
 _LOGO_ENTIDAD_MAX_W_PCT = _LOGO_MAX_W_PCT
-# Anchos estimados de recuadro (letter portrait, % del área útil).
-_LOGO_ENTIDAD_CELL_W_PT = 155.0
+# Ancho estimado del recuadro de logo izquierdo (~18% letter portrait).
+_LOGO_ENTIDAD_CELL_W_PT = 110.0
 _LOGO_CONTRATISTA_CELL_W_PT = 110.0
 _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
+# Tabla de asistentes: filas compactas.
+_ASIS_PAD = "2pt 4pt"
+_ASIS_PAD_EMPTY = "3pt 4pt"
+_ASIS_FS = "8pt"
 
 # Esquemas/gráficos de ideas: caja fija (xhtml2pdf ignora max-height).
 _IDEA_IMG_BOX_W_PT = 240.0
@@ -40,7 +44,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.6-logo-36pt-style-pt"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.7-header-3col-logo40"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -192,11 +196,11 @@ def _encabezado_oficial_html(
     logo_contratista: str,
     logo_entidad: str,
 ) -> str:
-    """Encabezado tipo formato oficial: logos según tipo + título + tabla lateral + objeto.
+    """Encabezado unificado: [logo único | título | tabla de datos] + objeto.
 
-    Interna: solo identidad contratista (un logo).
-    Externa: tres recuadros (contratista | título | entidad) + meta debajo.
-    Dimensiones compactas (~50% de la altura previa) sin perder legibilidad.
+    Externa: logo de entidad a la izquierda.
+    Interna: logo de contratista a la izquierda.
+    En ambos casos la meta (Acta No., Fecha, Hora, Cto. Interventoría) va a la derecha.
     """
     titulo = _titulo_seguimiento_contrato(contrato, acta)
     tipo_raw = str(acta.get("tipo_acta") or "").lower()
@@ -250,43 +254,25 @@ def _encabezado_oficial_html(
         f'line-height:1.15;">{_esc(titulo)}</div>{tipo_line}'
     )
 
-    if es_externa:
-        # Tres recuadros compactos: contratista | título | entidad (sin etiquetas de texto).
-        header = (
-            f'<table width="100%" cellspacing="0" cellpadding="0" '
-            f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
-            f'<tr>'
-            f'<td style="width:18%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
-            f'vertical-align:middle;text-align:center;">'
-            f'{logo_contratista}</td>'
-            f'<td style="width:52%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
-            f'vertical-align:middle;">{titulo_html}</td>'
-            f'<td style="width:30%;padding:{_HDR_PAD_CELL};vertical-align:middle;text-align:center;">'
-            f'{logo_entidad}</td>'
-            f'</tr>'
-            f'</table>'
-            f'<div style="height:1pt;"></div>'
-            f'{meta}'
-        )
-    else:
-        # Interna: unificada bajo identidad del contratista (sin bloque entidad).
-        header = (
-            f'<table width="100%" cellspacing="0" cellpadding="0" '
-            f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
-            f'<tr>'
-            f'<td style="width:16%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
-            f'vertical-align:middle;text-align:center;">{logo_contratista}</td>'
-            f'<td style="width:46%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
-            f'vertical-align:middle;">{titulo_html}</td>'
-            f'<td style="width:38%;padding:1pt 2pt;vertical-align:middle;">{meta}</td>'
-            f'</tr>'
-            f'</table>'
-        )
+    # Logo único según tipo: entidad (externa) / contratista (interna).
+    logo_unico = logo_entidad if es_externa else logo_contratista
+    header = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
+        f'<tr>'
+        f'<td style="width:18%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
+        f'vertical-align:middle;text-align:center;">{logo_unico}</td>'
+        f'<td style="width:44%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
+        f'vertical-align:middle;">{titulo_html}</td>'
+        f'<td style="width:38%;padding:1pt 2pt;vertical-align:middle;">{meta}</td>'
+        f'</tr>'
+        f'</table>'
+    )
 
     objeto_row = (
         f'<table width="100%" cellspacing="0" cellpadding="0" '
         f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};'
-        f'{"border-top:none;" if not es_externa else "margin-top:1pt;"}margin:0;">'
+        f'border-top:none;margin:0;">'
         f'<tr>'
         f'<td style="padding:2pt 4pt;font-size:7pt;line-height:1.2;">'
         f'<b>Objeto del contrato:</b> {objeto}</td>'
@@ -551,23 +537,24 @@ def generar_pdf_acta(
 
     asis_rows = "".join(
         f"<tr>"
-        f"<td style='padding:4pt 5pt;border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('nombre'))}</td>"
-        f"<td style='padding:4pt 5pt;border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('cargo'))}</td>"
-        f"<td style='padding:4pt 5pt;border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('entidad'))}</td>"
-        f"<td style='padding:4pt 5pt;border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('email'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('nombre'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('cargo'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('entidad'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('email'))}</td>"
         f"</tr>"
         for a in (asistentes or [])
     ) or (
-        f"<tr><td colspan='4' style='padding:6pt;border:0.5pt solid {_BORDE};color:#94a3b8;'>"
+        f"<tr><td colspan='4' style='padding:{_ASIS_PAD_EMPTY};border:0.5pt solid {_BORDE};color:#94a3b8;'>"
         "Sin asistentes registrados</td></tr>"
     )
     asis_table = (
-        f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;font-size:8.5pt;'>"
+        f"<table width='100%' cellspacing='0' cellpadding='0' "
+        f"style='border-collapse:collapse;font-size:{_ASIS_FS};'>"
         f"<tr style='background:{_BG_H};'>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Nombre</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Cargo</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Empresa</th>"
-        f"<th style='padding:4pt 5pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Correo</th>"
+        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Nombre</th>"
+        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Cargo</th>"
+        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Empresa</th>"
+        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Correo</th>"
         f"</tr>{asis_rows}</table>"
     )
 

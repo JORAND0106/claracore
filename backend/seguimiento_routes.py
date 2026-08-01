@@ -29,6 +29,7 @@ from seguimiento_service import (
     compromisos_abiertos_contrato,
     create_acta,
     crear_compromiso_desde_idea,
+    crear_compromiso_libre,
     crear_tarea,
     destinar_item,
     eliminar_acta,
@@ -762,6 +763,32 @@ def route_crear_compromiso(
         )
         log_id = str(row.get("id") or (row.get("items") or [{}])[0].get("id") or idea_id)
         registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", log_id, {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/compromisos")
+def route_crear_compromiso_libre(
+    contrato_id: int,
+    acta_id: int,
+    body: CompromisoCreateBody,
+    current_user=Depends(get_current_user),
+):
+    """Compromiso puntual del acta sin ligarlo a una idea/tema completo."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = crear_compromiso_libre(
+            supabase,
+            contrato_id,
+            acta_id,
+            body.model_dump(),
+            _uid(current_user),
+            current_user=current_user,
+        )
+        log_id = str(row.get("id") or (row.get("items") or [{}])[0].get("id") or acta_id)
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_compromiso", log_id, {"libre": True})
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
