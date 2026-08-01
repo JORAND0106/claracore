@@ -2617,29 +2617,41 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   useEffect(() => {
     if (!contrato_id || reporte?._cargandoDetalle) return
     const sortCaps = caps => [...caps].sort((a, b) => {
-      const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
-      const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+      const na = parseInt(String(a).match(/^(\d+)/)?.[1] || '9999')
+      const nb = parseInt(String(b).match(/^(\d+)/)?.[1] || '9999')
       return na - nb
     })
-    const authH = { Authorization: `Bearer ${getToken()}` }
+    let cancelled = false
     const loadCaps = fetchSicoeCapitulosCached(API, contrato_id, getToken())
-      .then((caps) => { if (caps.length) setListaCapitulos(sortCaps(caps)) })
-      .catch(() => {})
+      .then((caps) => {
+        if (cancelled) return
+        // Siempre actualizar (antes `if (caps.length)` dejaba el select vacío tras un fallo)
+        setListaCapitulos(sortCaps(Array.isArray(caps) ? caps : []))
+      })
+      .catch(() => {
+        if (!cancelled) setListaCapitulos([])
+      })
     const loadComp = fetchSicoeCompetenciasCached(API, contrato_id, getToken())
-      .then((arr) => setCompetenciasApi(Array.isArray(arr) ? arr : []))
-      .catch(() => setCompetenciasApi([]))
+      .then((arr) => { if (!cancelled) setCompetenciasApi(Array.isArray(arr) ? arr : []) })
+      .catch(() => { if (!cancelled) setCompetenciasApi([]) })
     void Promise.all([loadCaps, loadComp])
+    return () => { cancelled = true }
   }, [contrato_id, API, reporte?._cargandoDetalle])
 
-  // Ítems del capítulo seleccionado
+  // Ítems del capítulo: catálogo base + re-consulta al servidor cuando hay texto de búsqueda
   useEffect(() => {
     if (!contrato_id || !capituloHoja) { setTodosLosItems([]); setItemsLista([]); return }
     let cancelled = false
-    fetchSicoeListadoPreciosCached(API, contrato_id, capituloHoja, '', getToken())
-      .then((d) => { if (!cancelled) setTodosLosItems(d) })
-      .catch(() => { if (!cancelled) setTodosLosItems([]) })
-    return () => { cancelled = true }
-  }, [capituloHoja, contrato_id, API])
+    const qServer = (!itemSel && itemBusqueda && String(itemBusqueda).trim().length >= 1)
+      ? String(itemBusqueda).trim()
+      : ''
+    const tmr = setTimeout(() => {
+      fetchSicoeListadoPreciosCached(API, contrato_id, capituloHoja, qServer, getToken())
+        .then((d) => { if (!cancelled) setTodosLosItems(Array.isArray(d) ? d : []) })
+        .catch(() => { if (!cancelled) setTodosLosItems([]) })
+    }, qServer ? 280 : 0)
+    return () => { cancelled = true; clearTimeout(tmr) }
+  }, [capituloHoja, contrato_id, API, itemBusqueda, itemSel])
 
   useEffect(() => {
     return () => {
@@ -5331,7 +5343,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         const [subs, insp, caps, pks] = await Promise.all([
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()),
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()),
-          fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs }).then(r => r.json()),
+          fetchSicoeCapitulosCached(API_URL, contrato_id, getToken()),
           fetchSicoePkIdsCached(API_URL, contrato_id, getToken()),
         ])
         setListaSubs(Array.isArray(subs) ? subs : [])

@@ -1,6 +1,9 @@
 /**
  * Caché en memoria + deduplicación in-flight para catálogos SICOE (nodos, pk-ids, ítems).
  * Evita tormentas cuando muchos HojaRegistro o re-renders repiten la misma URL.
+ *
+ * Importante: respuestas HTTP de error NO se cachean (antes `!r.ok → []` envenenaba
+ * el catálogo 10 min y dejaba capítulos/ítems vacíos en la hoja de registro).
  */
 
 const TTL_MS = 10 * 60 * 1000
@@ -38,6 +41,17 @@ async function cachedFetch(key, fetcher) {
   return p
 }
 
+/** @internal test helper */
+export function _sicoeCatalogoCacheSizeForTests() {
+  return cache.size
+}
+
+/** @internal test helper */
+export function _sicoeCatalogoCacheClearForTests() {
+  cache.clear()
+  inflight.clear()
+}
+
 export function invalidateSicoeCatalogoCache(contratoId) {
   if (contratoId == null) {
     cache.clear()
@@ -56,17 +70,25 @@ export function invalidateSicoeCatalogoCache(contratoId) {
   }
 }
 
+async function fetchJsonOk(url, token) {
+  const r = await fetch(url, { headers: authHeaders(token) })
+  if (!r.ok) {
+    const err = new Error(`HTTP ${r.status}`)
+    err.status = r.status
+    throw err
+  }
+  return r.json()
+}
+
 export function fetchSicoeNodosCached(apiBase, contratoId, capitulo, token) {
   const cap = String(capitulo || '').trim()
   if (!apiBase || !contratoId || !cap) return Promise.resolve([])
   const key = cacheKey(['nodos', contratoId, cap])
   return cachedFetch(key, async () => {
-    const r = await fetch(
+    const d = await fetchJsonOk(
       `${apiBase}/sicoe-obra/${contratoId}/nodos?capitulo=${encodeURIComponent(cap)}`,
-      { headers: authHeaders(token) },
+      token,
     )
-    if (!r.ok) return []
-    const d = await r.json()
     return Array.isArray(d) ? d : []
   })
 }
@@ -75,9 +97,7 @@ export function fetchSicoePkIdsCached(apiBase, contratoId, token) {
   if (!apiBase || !contratoId) return Promise.resolve([])
   const key = cacheKey(['pk-ids', contratoId])
   return cachedFetch(key, async () => {
-    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/pk-ids`, { headers: authHeaders(token) })
-    if (!r.ok) return []
-    const d = await r.json()
+    const d = await fetchJsonOk(`${apiBase}/sicoe-obra/${contratoId}/pk-ids`, token)
     return Array.isArray(d) ? d : []
   })
 }
@@ -86,9 +106,7 @@ export function fetchSicoeCompetenciasCached(apiBase, contratoId, token) {
   if (!apiBase || !contratoId) return Promise.resolve([])
   const key = cacheKey(['competencias', contratoId])
   return cachedFetch(key, async () => {
-    const r = await fetch(`${apiBase}/contratos/${contratoId}/competencias`, { headers: authHeaders(token) })
-    if (!r.ok) return []
-    const d = await r.json()
+    const d = await fetchJsonOk(`${apiBase}/contratos/${contratoId}/competencias`, token)
     return Array.isArray(d?.competencias) ? d.competencias : []
   })
 }
@@ -97,7 +115,9 @@ export function fetchSicoeActaRpoVigenteCached(apiBase, contratoId, token) {
   if (!apiBase || !contratoId) return Promise.resolve(null)
   const key = cacheKey(['acta-rpo-vigente', contratoId])
   return cachedFetch(key, async () => {
-    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/acta-rpo-vigente`, { headers: authHeaders(token) })
+    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/acta-rpo-vigente`, {
+      headers: authHeaders(token),
+    })
     if (!r.ok) return null
     const d = await r.json().catch(() => null)
     return d && d.id ? d : null
@@ -108,9 +128,7 @@ export function fetchSicoeCapitulosCached(apiBase, contratoId, token) {
   if (!apiBase || !contratoId) return Promise.resolve([])
   const key = cacheKey(['capitulos', contratoId])
   return cachedFetch(key, async () => {
-    const r = await fetch(`${apiBase}/sicoe-obra/${contratoId}/capitulos`, { headers: authHeaders(token) })
-    if (!r.ok) return []
-    const d = await r.json()
+    const d = await fetchJsonOk(`${apiBase}/sicoe-obra/${contratoId}/capitulos`, token)
     if (!Array.isArray(d)) return []
     return d
       .map((c) => (typeof c === 'string' ? c : c?.capitulo))
@@ -126,12 +144,10 @@ export function fetchSicoeListadoPreciosCached(apiBase, contratoId, capitulo, q,
   return cachedFetch(key, async () => {
     const p = new URLSearchParams({ capitulo: cap })
     if (query) p.set('q', query)
-    const r = await fetch(
+    const d = await fetchJsonOk(
       `${apiBase}/sicoe-obra/${contratoId}/listado-precios-busqueda?${p.toString()}`,
-      { headers: authHeaders(token) },
+      token,
     )
-    if (!r.ok) return []
-    const d = await r.json()
     return Array.isArray(d) ? d : []
   })
 }
@@ -141,12 +157,10 @@ export function fetchSicoePlantillasCached(apiBase, contratoId, capitulo, token)
   if (!apiBase || !contratoId || !cap) return Promise.resolve([])
   const key = cacheKey(['plantillas', contratoId, cap])
   return cachedFetch(key, async () => {
-    const r = await fetch(
+    const d = await fetchJsonOk(
       `${apiBase}/sicoe-obra/${contratoId}/plantillas?capitulo=${encodeURIComponent(cap)}`,
-      { headers: authHeaders(token) },
+      token,
     )
-    if (!r.ok) return []
-    const d = await r.json()
     return Array.isArray(d) ? d : []
   })
 }

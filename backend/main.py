@@ -15760,18 +15760,34 @@ def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user))
 
 @app.get("/sicoe-obra/{contrato_id}/capitulos")
 def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_user)):
-    def _q():
-        return supabase.table("listado_precios")\
-            .select("capitulo")\
-            .eq("contrato_id", contrato_id)\
-            .execute().data
-    rows = supabase_execute(_q)
-    import re
-    def orden_capitulo(c):
-        m = re.match(r'^(\d+)', c)
-        return (int(m.group(1)) if m else 9999, c)
-    caps = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")), key=orden_capitulo)
-    return [{"capitulo": c} for c in caps]
+    """
+    Capítulos distintos de listado_precios del contrato.
+    Pagina por lotes (PostgREST ~1000 filas/respuesta): sin .range solo se veían
+    los primeros ~1000 precios y podían faltar capítulos.
+    """
+    from sicoe_catalogo import capitulos_distinct_desde_filas, capitulos_payload
+
+    _require_contract_access(current_user, contrato_id)
+    rows: List[dict] = []
+    offset = 0
+    while True:
+        def _q(o=offset):
+            return (
+                supabase.table("listado_precios")
+                .select("capitulo")
+                .eq("contrato_id", contrato_id)
+                .order("id")
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q) or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return capitulos_payload(capitulos_distinct_desde_filas(rows))
 
 @app.get("/sicoe-obra/{contrato_id}/next-reporte")
 def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)):
