@@ -204,7 +204,7 @@ def test_contenido_hash_incluye_quien_dijo():
 
 
 def test_logo_encabezado_tamano_intermedio_visible():
-    """Contratista y entidad comparten tope intermedio (~16pt), entre 9pt invisible y 22pt excesivo."""
+    """Contratista y entidad a ~36pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
     import base64
     import io
     import re
@@ -223,11 +223,11 @@ def test_logo_encabezado_tamano_intermedio_visible():
     )
 
     assert _LOGO_BASE_H_PT == 22
-    assert _LOGO_MAX_H == 16
+    assert _LOGO_MAX_H == 36
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
     assert _LOGO_ENTIDAD_MAX_W_PCT == _LOGO_MAX_W_PCT
-    # Intermedio: mayor que el 9pt casi invisible y menor que el original 22pt.
-    assert 12 <= _LOGO_MAX_H < _LOGO_BASE_H_PT
+    # Visibilidad: claramente por encima del 9pt que quedó ilegible.
+    assert _LOGO_MAX_H >= 30
     assert _LOGO_ENTIDAD_MAX_H > 9
 
     img = Image.new("RGB", (400, 200), (20, 80, 160))
@@ -240,13 +240,10 @@ def test_logo_encabezado_tamano_intermedio_visible():
     assert h_pt <= _LOGO_ENTIDAD_MAX_H + 0.01
     assert w_pt <= max_w_ent + 0.01
 
-    # xhtml2pdf respeta height/width explícitos (no max-height).
-    entidad = (
-        f'<div style="text-align:center;padding:0;line-height:0;">'
-        f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
-        f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/></div>'
-    )
+    # xhtml2pdf: solo style en pt (attrs width/height unitless se interpretan como px).
+    entidad = _logo_cell(uri, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"height:{h_pt}pt" in entidad
+    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (36→27pt)
 
     placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
@@ -261,10 +258,9 @@ def test_logo_encabezado_tamano_intermedio_visible():
     cms = re.findall(rb"([\d\.\-]+) 0 0 ([\d\.\-]+) [\d\.\-]+ [\d\.\-]+ cm", data)
     assert cms, "se esperaba matriz de escala de imagen"
     rendered_h = float(cms[-1][1])
-    # ~16pt intermedio: claramente >9pt y por debajo del original 22pt.
-    assert rendered_h <= _LOGO_ENTIDAD_MAX_H + 1.5, (rendered_h, h_pt)
-    assert rendered_h >= 12.0, rendered_h
-    assert rendered_h < _LOGO_BASE_H_PT + 1.0, rendered_h
+    # Debe respetar el tope en pt (no el 75% de la conversión px→pt).
+    assert abs(rendered_h - float(_LOGO_ENTIDAD_MAX_H)) < 1.5, (rendered_h, h_pt)
+    assert rendered_h >= 30.0, rendered_h
 
 
 def test_pdf_acta_cache_key_incluye_version_plantilla():
@@ -300,9 +296,9 @@ def test_encabezado_compacto_constantes_y_legibilidad():
         _logo_cell,
     )
 
-    assert _LOGO_MAX_H == 16
+    assert _LOGO_MAX_H == 36
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
-    assert _LOGO_MAX_H < _LOGO_BASE_H_PT
+    assert _LOGO_MAX_H >= 30
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD

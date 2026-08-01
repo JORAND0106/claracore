@@ -17,17 +17,18 @@ _BORDE_SUAVE = "#94a3b8"
 # Encabezados de tabla / sección: oscuro institucional (texto claro).
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
-# Encabezado compacto: logos a tamaño intermedio (visible sin volver al original ~22pt).
-# Progresión: 22pt (excesivo) → 11/9pt (casi invisible) → 16pt (punto medio usable).
+# Encabezado compacto: logos legibles dentro del recuadro (sin inflar la estructura).
+# Nota: attrs HTML width/height unitless se interpretan como px en xhtml2pdf (×0.75);
+# por eso _logo_cell solo usa style con unidades pt.
 _LOGO_BASE_H_PT = 22  # referencia histórica (pre-compactación)
-_LOGO_MAX_H = 16  # pt — contratista / default (intermedio visible)
-_LOGO_MAX_W_PCT = 88  # % del recuadro
-# Entidad (acta externa): mismo tope que contratista para que ambos se lean igual.
+_LOGO_MAX_H = 36  # pt — contratista / default (visible en el recuadro compacto)
+_LOGO_MAX_W_PCT = 94  # % del recuadro
+# Entidad (acta externa): mismo tope de altura; el recuadro es más ancho (sellos).
 _LOGO_ENTIDAD_MAX_H = _LOGO_MAX_H
 _LOGO_ENTIDAD_MAX_W_PCT = _LOGO_MAX_W_PCT
-# Ancho estimado del recuadro Entidad (30% del área útil letter portrait).
-_LOGO_ENTIDAD_CELL_W_PT = 150.0
-_LOGO_CONTRATISTA_CELL_W_PT = 90.0
+# Anchos estimados de recuadro (letter portrait, % del área útil).
+_LOGO_ENTIDAD_CELL_W_PT = 155.0
+_LOGO_CONTRATISTA_CELL_W_PT = 110.0
 _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
@@ -39,7 +40,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.2-logo-16pt-sin-etiquetas"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.6-logo-36pt-style-pt"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -378,9 +379,11 @@ def _logo_cell(
             uri = ""
     if uri:
         w_pt, h_pt = _fit_logo_pt(uri, max_h_pt=float(max_h), max_w_pt=max_w_pt)
+        # Solo style con unidades pt: los attrs width/height unitless los trata
+        # xhtml2pdf como px (28 → 21pt) y pisan el tamaño real.
         return (
             f'<div style="text-align:center;padding:0;line-height:0;">'
-            f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+            f'<img src="{uri}" '
             f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/>'
             f"</div>"
         )
