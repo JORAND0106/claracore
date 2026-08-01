@@ -1941,8 +1941,9 @@ select.cc-dashboard-acta-select--light option {
   }
 }
 
-/* Tablet / iPad (≤1024): grilla desktop visible — evitar solape de columnas */
+/* Tablet / iPad (≤1024): grilla desktop visible — encabezados y celdas sin solape */
 @media (max-width: 1024px) {
+  .cc-ppto-table-scroll,
   .cc-ppto-table-scroll.cc-ppto-table-desktop {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
@@ -1950,19 +1951,32 @@ select.cc-dashboard-acta-select--light option {
     touch-action: pan-x pan-y;
   }
 
+  /* La tabla crece según min-width de columnas; no se comprime al 100% del viewport */
   .cc-ppto-data-table {
+    width: max-content !important;
+    min-width: 0 !important;
     font-size: 11px !important;
+    table-layout: auto !important;
   }
 
   .cc-ppto-data-table th,
   .cc-ppto-data-table td {
     font-size: 11px !important;
-    padding: 6px 6px !important;
+    padding: 6px 4px !important;
     white-space: nowrap !important;
     vertical-align: middle !important;
-    line-height: 1.25 !important;
+    line-height: 1.2 !important;
     height: auto !important;
     min-height: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Encabezados: nunca partir ni montar el texto; la tabla scrollea en X */
+  .cc-ppto-data-table th {
+    letter-spacing: 0 !important;
+    white-space: nowrap !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
   }
 
   .cc-ppto-data-row > td {
@@ -1970,15 +1984,29 @@ select.cc-dashboard-acta-select--light option {
     min-height: 36px !important;
   }
 
+  /* min-width por columna: compactas (Und/Ancho/Espesor) vs amplias (Desc/Nodos/Abs) */
+  .cc-ppto-data-table .cc-ppto-col-check { min-width: 48px !important; width: 48px; }
+  .cc-ppto-data-table .cc-ppto-col-id { min-width: 76px !important; }
+  .cc-ppto-data-table .cc-ppto-col-cap { min-width: 110px !important; max-width: 140px; }
+  .cc-ppto-data-table .cc-ppto-col-comp { min-width: 96px !important; max-width: 120px; }
+  .cc-ppto-data-table .cc-ppto-col-item { min-width: 56px !important; }
+  .cc-ppto-data-table .cc-ppto-col-desc { min-width: 180px !important; max-width: 240px; }
+  .cc-ppto-data-table .cc-ppto-col-und { min-width: 40px !important; width: 40px; }
+  .cc-ppto-data-table .cc-ppto-col-ancho,
+  .cc-ppto-data-table .cc-ppto-col-espesor { min-width: 48px !important; width: 48px; }
+  .cc-ppto-data-table .cc-ppto-col-nodo { min-width: 88px !important; }
+  .cc-ppto-data-table .cc-ppto-col-abs { min-width: 96px !important; }
+  .cc-ppto-data-table .cc-ppto-col-area { min-width: 72px !important; }
+  .cc-ppto-data-table .cc-ppto-col-cant { min-width: 72px !important; }
+  .cc-ppto-data-table .cc-ppto-col-vlr { min-width: 76px !important; }
+  .cc-ppto-data-table .cc-ppto-col-costo { min-width: 92px !important; }
+  .cc-ppto-data-table .cc-ppto-col-semaforo { min-width: 88px !important; }
+  .cc-ppto-data-table .cc-ppto-col-icon { min-width: 40px !important; width: 40px; }
+
   .cc-ppto-col-ellipsis {
-    max-width: 120px;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
-  }
-
-  .cc-ppto-col-desc.cc-ppto-col-ellipsis {
-    max-width: 160px;
   }
 
   /* Liberar espacio horizontal en iPad / pantallas táctiles */

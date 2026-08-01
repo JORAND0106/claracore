@@ -6762,34 +6762,38 @@ async function restaurar(id) {
             })}
           </div>
         )}
-        <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
-          <table className="cc-ppto-data-table" style={{ width:'max-content', minWidth: '100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
+        <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflowX:'auto',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
+          <table className="cc-ppto-data-table" style={{ width:'max-content', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
-                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={thStyle}>ID_POL</th>
-                <th className="cc-ppto-col-ellipsis" style={thStyle}>Capítulo</th>
-                <th className="cc-ppto-col-ellipsis" style={thStyle}>Competencia</th>
-                <th style={thStyle}>Ítem</th>
-                <th className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={thStyle}>Descripción</th>
-                <th style={thStyle}>Und</th>
-                <th className="cc-ppto-col-ellipsis" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
-                <th className="cc-ppto-col-ellipsis" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
-                <th className="cc-ppto-col-ellipsis" style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa inicio">Abs. Inicio</th>
-                <th className="cc-ppto-col-ellipsis" style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa final">Abs. Final</th>
-                <th style={thStyle}>Área/Long</th>
-                <th className="cc-ppto-col-secondary" style={thStyle}>Ancho</th>
-                <th className="cc-ppto-col-secondary" style={thStyle}>Espesor</th>
-                <th style={thStyle}>Cant.Total</th>
-                <th style={thStyle}>Vlr Unit.</th>
-                <th style={thStyle}>Costo Directo</th>
-                {mostrarColumnaDepuracion && (
-                  <th style={thStyle} title="Residente de Costos u Obra — antes de Interventoría">Depuración</th>
+                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
+                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={thStyle}>ID_POL</th>
+                <th className="cc-ppto-col-cap" style={thStyle}>Capítulo</th>
+                <th className="cc-ppto-col-comp" style={thStyle}>Competencia</th>
+                <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
+                <th className="cc-ppto-col-desc" style={thStyle}>Descripción</th>
+                <th className="cc-ppto-col-und" style={thStyle}>Und</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
+                <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa inicio">Abs. Inicio</th>
+                <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa final">Abs. Final</th>
+                <th className="cc-ppto-col-area" style={thStyle}>Área/Long</th>
+                <th className="cc-ppto-col-secondary cc-ppto-col-ancho" style={thStyle}>Ancho</th>
+                <th className="cc-ppto-col-secondary cc-ppto-col-espesor" style={thStyle}>Espesor</th>
+                <th className="cc-ppto-col-cant" style={thStyle}>Cant.Total</th>
+                {nivelInfo.verValoresEconomicos && (
+                  <th className="cc-ppto-col-vlr" style={thStyle}>Vlr Unit.</th>
                 )}
-                <th style={thStyle}>Revisado</th>
-                <th style={thStyle} title="Trazabilidad / auditoría">📜</th>
-                <th style={thStyle}>💬</th>
-                <th style={thStyle}></th>
+                {nivelInfo.verValoresEconomicos && (
+                  <th className="cc-ppto-col-costo" style={thStyle}>Costo Directo</th>
+                )}
+                {mostrarColumnaDepuracion && (
+                  <th className="cc-ppto-col-semaforo" style={thStyle} title="Residente de Costos u Obra — antes de Interventoría">Depuración</th>
+                )}
+                <th className="cc-ppto-col-semaforo" style={thStyle}>Revisado</th>
+                <th className="cc-ppto-col-icon" style={thStyle} title="Trazabilidad / auditoría">📜</th>
+                <th className="cc-ppto-col-icon" style={thStyle}>💬</th>
+                <th className="cc-ppto-col-icon" style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
@@ -6798,7 +6802,7 @@ async function restaurar(id) {
                 return (
                   <tr key={r.id} data-id={r.id} className="cc-ppto-data-row" style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { navegarRegistroEnPlano(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
-                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
                           style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
@@ -6812,7 +6816,7 @@ async function restaurar(id) {
                         </button>
                       </div>
                     </td>
-                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                    <td className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                       <span
                         onClick={() => abrirDetallePptoDesdeFila(r)}
                         title="Ver detalle"
@@ -6820,12 +6824,12 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
-                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
-                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
-                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
-                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
-                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
+                    <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
+                    <td className="cc-ppto-col-comp cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
+                    <td className="cc-ppto-col-item cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
+                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
+                    <td className="cc-ppto-col-und" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
+                    <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
@@ -6833,7 +6837,7 @@ async function restaurar(id) {
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_inicio || '-')}
                     </td>
-                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_final || undefined}>
+                    <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_final || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
@@ -6842,20 +6846,20 @@ async function restaurar(id) {
                         : (r.no_final || '-')}
                     </td>
                     <td
-                      className="cc-ppto-col-ellipsis"
-                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      className="cc-ppto-col-abs cc-ppto-col-ellipsis"
+                      style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={r.abs_inicio != null && String(r.abs_inicio).trim() ? String(r.abs_inicio) : undefined}
                     >
                       {r.abs_inicio != null && String(r.abs_inicio).trim() ? r.abs_inicio : '-'}
                     </td>
                     <td
-                      className="cc-ppto-col-ellipsis"
-                      style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      className="cc-ppto-col-abs cc-ppto-col-ellipsis"
+                      style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={r.abs_final != null && String(r.abs_final).trim() ? String(r.abs_final) : undefined}
                     >
                       {r.abs_final != null && String(r.abs_final).trim() ? r.abs_final : '-'}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-area" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAreaLongNodInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
@@ -6864,29 +6868,29 @@ async function restaurar(id) {
                           ? renderDimBloqueadaCad(fmtN(r.area_long_nod), MSG_AREA_LONG_DESDE_PLANO)
                           : fmtN(r.area_long_nod)}
                     </td>
-                    <td className="cc-ppto-col-secondary" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-secondary cc-ppto-col-ancho" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.ancho)}
                     </td>
-                    <td className="cc-ppto-col-secondary" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-secondary cc-ppto-col-espesor" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.espesor)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
+                    <td className="cc-ppto-col-cant" style={{ ...tdStyle,textAlign:'right',fontWeight:'600', whiteSpace: 'nowrap' }}>{fmtN(r.cant_total)}</td>
                     {nivelInfo.verValoresEconomicos && (
-                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmt(r.vlr_unitario)}</td>
+                    <td className="cc-ppto-col-vlr" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }}>{fmt(r.vlr_unitario)}</td>
                     )}
                     {nivelInfo.verValoresEconomicos && (
-                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
+                    <td className="cc-ppto-col-costo" style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary, whiteSpace: 'nowrap' }}>{fmt(r.costo_directo)}</td>
                     )}
                     {mostrarColumnaDepuracion && (
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-semaforo" style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', justifyContent:'center' }}>
                         <PptoValidacionIcon
                           eje="depuracion"
@@ -6900,7 +6904,7 @@ async function restaurar(id) {
                       </div>
                     </td>
                     )}
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-semaforo" style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
                         <PptoValidacionIcon
                           eje="interventoria"
@@ -6939,7 +6943,7 @@ async function restaurar(id) {
                         )}
                       </div>
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-icon" style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
                       <button
                         type="button"
                         title="Trazabilidad y auditoría de este registro"
@@ -6955,7 +6959,7 @@ async function restaurar(id) {
                         }}
                       >📜</button>
                     </td>
-                    <td style={{ ...tdStyle, minWidth:'80px' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-icon" style={{ ...tdStyle, minWidth:'80px' }} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'4px', alignItems:'center', justifyContent:'center' }}>
                         {[
                           { tipo:'dims',          icono:'📐', color:'#F59E0B', label:'Dims' },
