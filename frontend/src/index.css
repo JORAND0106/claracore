@@ -1941,6 +1941,52 @@ select.cc-dashboard-acta-select--light option {
   }
 }
 
+/* Tablet / iPad (≤1024): grilla desktop visible — evitar solape de columnas */
+@media (max-width: 1024px) {
+  .cc-ppto-table-scroll.cc-ppto-table-desktop {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x pan-y;
+  }
+
+  .cc-ppto-data-table {
+    font-size: 11px !important;
+  }
+
+  .cc-ppto-data-table th,
+  .cc-ppto-data-table td {
+    font-size: 11px !important;
+    padding: 6px 6px !important;
+    white-space: nowrap !important;
+    vertical-align: middle !important;
+    line-height: 1.25 !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  .cc-ppto-data-row > td {
+    height: auto !important;
+    min-height: 36px !important;
+  }
+
+  .cc-ppto-col-ellipsis {
+    max-width: 120px;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .cc-ppto-col-desc.cc-ppto-col-ellipsis {
+    max-width: 160px;
+  }
+
+  /* Liberar espacio horizontal en iPad / pantallas táctiles */
+  .cc-ppto-col-secondary {
+    display: none !important;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════
    Topografía — móvil (portrait ≤767 / landscape ≤932)
    Solo presentación. Desktop sin cambios.

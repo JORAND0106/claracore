@@ -6763,23 +6763,23 @@ async function restaurar(id) {
           </div>
         )}
         <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
-          <table className="cc-ppto-data-table" style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)', minWidth: 1240 }}>
+          <table className="cc-ppto-data-table" style={{ width:'max-content', minWidth: '100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
             <thead style={{ background:t.bg }}>
               <tr>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id" style={thStyle}>ID_POL</th>
-                <th style={thStyle}>Capítulo</th>
-                <th style={thStyle}>Competencia</th>
+                <th className="cc-ppto-col-ellipsis" style={thStyle}>Capítulo</th>
+                <th className="cc-ppto-col-ellipsis" style={thStyle}>Competencia</th>
                 <th style={thStyle}>Ítem</th>
-                <th style={thStyle}>Descripción</th>
+                <th className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={thStyle}>Descripción</th>
                 <th style={thStyle}>Und</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
-                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa inicio">Abs. Inicio</th>
-                <th style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa final">Abs. Final</th>
+                <th className="cc-ppto-col-ellipsis" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
+                <th className="cc-ppto-col-ellipsis" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
+                <th className="cc-ppto-col-ellipsis" style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa inicio">Abs. Inicio</th>
+                <th className="cc-ppto-col-ellipsis" style={{ ...thStyle, width: 72, maxWidth: 80 }} title="Abscisa final">Abs. Final</th>
                 <th style={thStyle}>Área/Long</th>
-                <th style={thStyle}>Ancho</th>
-                <th style={thStyle}>Espesor</th>
+                <th className="cc-ppto-col-secondary" style={thStyle}>Ancho</th>
+                <th className="cc-ppto-col-secondary" style={thStyle}>Espesor</th>
                 <th style={thStyle}>Cant.Total</th>
                 <th style={thStyle}>Vlr Unit.</th>
                 <th style={thStyle}>Costo Directo</th>
@@ -6820,12 +6820,12 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
-                    <td style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.competencia||'—'}</td>
-                    <td style={tdStyle}>{r.item}</td>
-                    <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
-                    <td style={tdStyle}>{r.und}</td>
-                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
+                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
+                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
+                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
+                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
@@ -6833,7 +6833,7 @@ async function restaurar(id) {
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_inicio || '-')}
                     </td>
-                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_final || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
@@ -6842,18 +6842,20 @@ async function restaurar(id) {
                         : (r.no_final || '-')}
                     </td>
                     <td
+                      className="cc-ppto-col-ellipsis"
                       style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={r.abs_inicio != null && String(r.abs_inicio).trim() ? String(r.abs_inicio) : undefined}
                     >
                       {r.abs_inicio != null && String(r.abs_inicio).trim() ? r.abs_inicio : '-'}
                     </td>
                     <td
+                      className="cc-ppto-col-ellipsis"
                       style={{ ...tdStyle, width: 72, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={r.abs_final != null && String(r.abs_final).trim() ? String(r.abs_final) : undefined}
                     >
                       {r.abs_final != null && String(r.abs_final).trim() ? r.abs_final : '-'}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    <td style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAreaLongNodInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
@@ -6862,14 +6864,14 @@ async function restaurar(id) {
                           ? renderDimBloqueadaCad(fmtN(r.area_long_nod), MSG_AREA_LONG_DESDE_PLANO)
                           : fmtN(r.area_long_nod)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-secondary" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.ancho)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                    <td className="cc-ppto-col-secondary" style={{ ...tdStyle,textAlign:'right', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
