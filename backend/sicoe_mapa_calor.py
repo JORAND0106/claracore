@@ -28,7 +28,12 @@ def build_mapa_calor_geojson(
 ) -> dict:
     """
     FeatureCollection de puntos ponderados por costo_directo.
-    Preferencia: coords del registro; fallback: coords del reporte (loc. única).
+
+    La intensidad (weight) es siempre relativa al conjunto `registros` recibido
+    (ya filtrado por el caller): max(costo_directo) de ese conjunto = weight 1.0.
+    No usa un máximo absoluto del contrato ni de otra consulta.
+
+    Preferencia de coords: registro; fallback: reporte (loc. única).
     """
     costos = []
     for r in registros or []:
@@ -38,6 +43,7 @@ def build_mapa_calor_geojson(
             c = 0.0
         if c > 0:
             costos.append(c)
+    # Máximo del conjunto filtrado actual (recalculado en cada respuesta).
     max_costo = max(costos) if costos else 0.0
 
     features: List[dict] = []
@@ -109,6 +115,7 @@ def build_mapa_calor_geojson(
             "con_coords": len(features),
             "sin_coords": sin_coords,
             "max_costo_directo": max_costo,
+            "intensidad": "relativa_conjunto_filtrado",
             "truncado": truncado,
             "max_features": max_features,
         },

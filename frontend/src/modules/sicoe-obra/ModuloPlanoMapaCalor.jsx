@@ -16,6 +16,7 @@ import { fetchSicoeMapaCalor } from './sicoeMapaCalorApi'
 import { fmtCostoMapa } from './sicoeMapaCalorParams'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
+import { sanitizePlanoFeatureCollection } from '../../geoPlanoSanitize'
 import {
   MAPBOX_PLANO_PAINT_LABELS,
   MAPBOX_ABSCISA_TEXT_FIELD,
@@ -26,6 +27,7 @@ import {
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
+const DEFAULT_CENTER = [-74.05, 4.72]
 
 const FILTER_MAPBOX_LABEL_PK = [
   'all',
@@ -81,25 +83,112 @@ function bundleVacio() {
   }
 }
 
-function boundsFromPoints(fc) {
-  const feats = fc?.features || []
-  if (!feats.length) return null
-  let minLng = Infinity
-  let minLat = Infinity
-  let maxLng = -Infinity
-  let maxLat = -Infinity
-  for (const f of feats) {
-    const c = f?.geometry?.coordinates
-    if (!Array.isArray(c) || c.length < 2) continue
-    const [lng, lat] = c
-    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue
-    minLng = Math.min(minLng, lng)
-    maxLng = Math.max(maxLng, lng)
-    minLat = Math.min(minLat, lat)
-    maxLat = Math.max(maxLat, lat)
+function bundleInicialDesdeSesion(contratoId) {
+  if (!contratoId) return bundleVacio()
+  try {
+    const saved = cargarSicoeFiltroSesion(contratoId)
+    if (saved && sicoeBundleTieneCriteriosUsuario(saved)) {
+      return sicoeFiltroSnapshot(saved)
+    }
+  } catch { /* ignore */ }
+  return bundleVacio()
+}
+
+function normalizePlanoFc(plano) {
+  if (plano == null || plano === '') return EMPTY_FC
+  let p = plano
+  if (typeof p === 'string') {
+    try { p = JSON.parse(p) } catch { return EMPTY_FC }
   }
-  if (!Number.isFinite(minLng)) return null
-  return [[minLng, minLat], [maxLng, maxLat]]
+  if (!p || typeof p !== 'object') return EMPTY_FC
+  let fc
+  if (p.type === 'FeatureCollection' && Array.isArray(p.features)) fc = p
+  else if (p.type === 'Feature' && p.geometry) fc = { type: 'FeatureCollection', features: [p] }
+  else if (Array.isArray(p.features)) fc = { type: 'FeatureCollection', features: p.features }
+  else return EMPTY_FC
+  try {
+    return sanitizePlanoFeatureCollection(fc) || fc
+  } catch {
+    return fc
+  }
+}
+
+function forEachLngLat(node, fn) {
+  if (!Array.isArray(node)) return
+  if (typeof node[0] === 'number' && typeof node[1] === 'number') {
+    fn(node[0], node[1])
+    return
+  }
+  for (let i = 0; i < node.length; i += 1) forEachLngLat(node[i], fn)
+}
+
+function boundsFromGeometry(geom) {
+  if (!geom?.type) return null
+  let minLng = Infinity
+  let maxLng = -Infinity
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let n = 0
+  const consider = (lng, lat) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+    n += 1
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
+  const walk = (g) => {
+    if (!g?.type) return
+    if (g.type === 'GeometryCollection') {
+      for (const sub of g.geometries || []) walk(sub)
+      return
+    }
+    if (g.coordinates) forEachLngLat(g.coordinates, consider)
+  }
+  walk(geom)
+  if (!n) return null
+  return { minLng, maxLng, minLat, maxLat }
+}
+
+function boundsFromFeatureCollection(fc) {
+  const feats = fc?.features
+  if (!Array.isArray(feats) || !feats.length) return null
+  let minLng = Infinity
+  let maxLng = -Infinity
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let any = false
+  for (const f of feats) {
+    const b = f?.type === 'Feature' ? boundsFromGeometry(f.geometry) : boundsFromGeometry(f)
+    if (!b) continue
+    any = true
+    if (b.minLng < minLng) minLng = b.minLng
+    if (b.maxLng > maxLng) maxLng = b.maxLng
+    if (b.minLat < minLat) minLat = b.minLat
+    if (b.maxLat > maxLat) maxLat = b.maxLat
+  }
+  if (!any) return null
+  return { minLng, maxLng, minLat, maxLat }
+}
+
+function boundsFromPoints(fc) {
+  return boundsFromFeatureCollection(fc)
+}
+
+function fitMapBounds(map, bounds, { padding = 48, maxZoom = 17, duration = 0 } = {}) {
+  if (!map || !bounds) return
+  let { minLng, maxLng, minLat, maxLat } = bounds
+  if (minLng === maxLng) { minLng -= 1e-4; maxLng += 1e-4 }
+  if (minLat === maxLat) { minLat -= 1e-4; maxLat += 1e-4 }
+  try {
+    map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+      padding,
+      bearing: 270,
+      pitch: 0,
+      maxZoom,
+      duration,
+    })
+  } catch { /* ignore */ }
 }
 
 function nivelEstadoResumen(props) {
@@ -133,14 +222,21 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const popupRef = useRef(null)
   const abortRef = useRef(null)
   const puntosRef = useRef(EMPTY_FC)
+  const mapReadyRef = useRef(false)
+  const centeredPlanoRef = useRef(false)
+  const fetchGenRef = useRef(0)
+  /** Evita doble GET: auto-sesión una vez; Buscar/Actualizar van por handler directo. */
+  const autoBusquedaHechaRef = useRef(false)
 
-  const [bundleAplicado, setBundleAplicado] = useState(() => bundleVacio())
+  const [bundleAplicado, setBundleAplicado] = useState(() => bundleInicialDesdeSesion(contratoId))
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const [buscando, setBuscando] = useState(false)
   const [errorMsg, setErrorMsg] = useState(null)
   const [meta, setMeta] = useState(null)
   const [puntosFc, setPuntosFc] = useState(EMPTY_FC)
-  const [planoGeojson, setPlanoGeojson] = useState(null)
+  const [planoGeojson, setPlanoGeojson] = useState(EMPTY_FC)
+  const [centroContrato, setCentroContrato] = useState(null)
+  const [mapReady, setMapReady] = useState(false)
   const [mostrarPlano, setMostrarPlano] = useState(true)
   const [mostrarHeat, setMostrarHeat] = useState(true)
   const [mostrarPuntos, setMostrarPuntos] = useState(true)
@@ -167,13 +263,28 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     [bundleAplicado],
   )
 
-  // Cargar sesión de filtros SicoeObra + opciones auxiliares
-  useEffect(() => {
-    if (!contratoId || !token) return
-    const saved = cargarSicoeFiltroSesion(contratoId)
-    if (saved && sicoeBundleTieneCriteriosUsuario(saved)) {
-      setBundleAplicado(sicoeFiltroSnapshot(saved))
+  const centrarEnProyecto = useCallback((map, { duration = 0 } = {}) => {
+    if (!map) return false
+    const bPlano = boundsFromFeatureCollection(planoGeojson)
+    if (bPlano) {
+      fitMapBounds(map, bPlano, { padding: 48, maxZoom: 17, duration })
+      centeredPlanoRef.current = true
+      return true
     }
+    if (Array.isArray(centroContrato) && centroContrato.length >= 2) {
+      try {
+        map.jumpTo({ center: centroContrato, zoom: 13, bearing: 270, pitch: 0 })
+        centeredPlanoRef.current = true
+        return true
+      } catch { /* ignore */ }
+    }
+    return false
+  }, [planoGeojson, centroContrato])
+
+  // Cargar plano + opciones auxiliares (filtros de sesión ya van en el state inicial)
+  useEffect(() => {
+    if (!contratoId || !token) return undefined
+    centeredPlanoRef.current = false
     const hdrs = { Authorization: `Bearer ${token}` }
     fetch(`${API_BASE}/sicoe-obra/${contratoId}/subcontratistas-activos`, { headers: hdrs })
       .then((r) => (r.ok ? r.json() : []))
@@ -195,29 +306,64 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         setEncabezadoPorNivel(enc)
       })
       .catch(() => {})
+
+    let cancelled = false
     getContratoPlanoGeojson(API_BASE, contratoId, token)
-      .then((d) => setPlanoGeojson(d?.plano_geojson || null))
-      .catch(() => setPlanoGeojson(null))
+      .then((d) => {
+        if (cancelled) return
+        setPlanoGeojson(normalizePlanoFc(d?.plano_geojson))
+        const la = d?.centro_lat != null ? Number(d.centro_lat) : NaN
+        const ln = d?.centro_lng != null ? Number(d.centro_lng) : NaN
+        if (Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0)) {
+          setCentroContrato([ln, la])
+        } else {
+          setCentroContrato(null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPlanoGeojson(EMPTY_FC)
+          setCentroContrato(null)
+        }
+      })
+    return () => { cancelled = true }
   }, [contratoId, token])
+
+  // Si cambia el contrato, rehidratar filtros de sesión
+  useEffect(() => {
+    autoBusquedaHechaRef.current = false
+    setBundleAplicado(bundleInicialDesdeSesion(contratoId))
+    setBusquedaRealizada(false)
+    setPuntosFc(EMPTY_FC)
+    setMeta(null)
+    setErrorMsg(null)
+    setSeleccionado(null)
+    puntosRef.current = EMPTY_FC
+    fetchGenRef.current += 1
+  }, [contratoId])
 
   const aplicarPuntosAlMapa = useCallback((fc, { fit = false } = {}) => {
     const map = mapInstance.current
-    puntosRef.current = fc || EMPTY_FC
-    if (!map?.getSource) return
+    const data = fc?.type === 'FeatureCollection' ? fc : EMPTY_FC
+    puntosRef.current = data
+    if (!map || !mapReadyRef.current) return
     const src = map.getSource('sicoe-calor')
-    if (src) src.setData(fc || EMPTY_FC)
+    if (src) {
+      try { src.setData(data) } catch { /* ignore */ }
+    }
     if (fit) {
-      const b = boundsFromPoints(fc)
-      if (b) {
-        try {
-          map.fitBounds(b, { padding: 56, bearing: 270, maxZoom: 16, duration: 600 })
-        } catch { /* ignore */ }
+      const bPts = boundsFromPoints(data)
+      if (bPts) {
+        fitMapBounds(map, bPts, { padding: 56, maxZoom: 16, duration: 600 })
+      } else {
+        centrarEnProyecto(map, { duration: 0 })
       }
     }
-  }, [])
+  }, [centrarEnProyecto])
 
   const cargarMapaCalor = useCallback(async (bundle) => {
     if (!contratoId || !token) return
+    const gen = ++fetchGenRef.current
     if (!sicoeBundleTieneCriteriosUsuario(bundle)) {
       setPuntosFc(EMPTY_FC)
       setMeta(null)
@@ -232,65 +378,91 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     setErrorMsg(null)
     try {
       const data = await fetchSicoeMapaCalor(contratoId, token, bundle, { signal: ac.signal })
-      const fc = data?.type === 'FeatureCollection'
-        ? data
-        : { type: 'FeatureCollection', features: data?.features || [] }
+      if (gen !== fetchGenRef.current) return
+      if (!data || data.type !== 'FeatureCollection') {
+        throw new Error(
+          typeof data?.detail === 'string'
+            ? data.detail
+            : 'Respuesta inválida del mapa de calor',
+        )
+      }
+      const fc = {
+        type: 'FeatureCollection',
+        features: Array.isArray(data.features) ? data.features : [],
+      }
       setPuntosFc(fc)
-      setMeta(data?.meta || null)
+      setMeta(data.meta || null)
       setBusquedaRealizada(true)
-      aplicarPuntosAlMapa(fc, { fit: true })
+      aplicarPuntosAlMapa(fc, { fit: fc.features.length > 0 })
     } catch (e) {
       if (e?.name === 'AbortError') return
+      if (gen !== fetchGenRef.current) return
       setErrorMsg(e?.message || String(e))
       setPuntosFc(EMPTY_FC)
       setMeta(null)
+      setBusquedaRealizada(true)
       aplicarPuntosAlMapa(EMPTY_FC)
     } finally {
       if (abortRef.current === ac) abortRef.current = null
-      setBuscando(false)
+      if (gen === fetchGenRef.current) setBuscando(false)
     }
   }, [contratoId, token, aplicarPuntosAlMapa])
 
-  // Auto-buscar si hay sesión con criterios
+  // Auto-buscar una vez si la sesión ya trae criterios (el Bug previo: el effect no veía el bundle restaurado)
   useEffect(() => {
     if (!contratoId || !token) return
-    if (sicoeBundleTieneCriteriosUsuario(bundleAplicado) && !busquedaRealizada && !buscando) {
-      void cargarMapaCalor(bundleAplicado)
-    }
-    // solo al montar / cambio contrato
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contratoId, token])
+    if (!tieneCriterios) return
+    if (autoBusquedaHechaRef.current || busquedaRealizada || buscando) return
+    autoBusquedaHechaRef.current = true
+    void cargarMapaCalor(bundleAplicado)
+  }, [contratoId, token, tieneCriterios, bundleAplicado, busquedaRealizada, buscando, cargarMapaCalor])
 
   const onBuscar = useCallback((snap) => {
     const b = sicoeFiltroSnapshot(snap)
     setBundleAplicado(b)
     guardarSicoeFiltroSesion(contratoId, b)
     setSeleccionado(null)
+    // Carga directa (el efecto de auto-búsqueda no reentra si ya está buscando / realizada)
     void cargarMapaCalor(b)
   }, [contratoId, cargarMapaCalor])
 
   const onLimpiar = useCallback(() => {
+    fetchGenRef.current += 1
+    if (abortRef.current) {
+      try { abortRef.current.abort() } catch { /* ignore */ }
+      abortRef.current = null
+    }
     const vacio = bundleVacio()
     setBundleAplicado(vacio)
     limpiarSicoeFiltroSesion(contratoId)
     setBusquedaRealizada(false)
+    setBuscando(false)
     setPuntosFc(EMPTY_FC)
     setMeta(null)
     setSeleccionado(null)
     setErrorMsg(null)
     aplicarPuntosAlMapa(EMPTY_FC)
-  }, [contratoId, aplicarPuntosAlMapa])
+    const map = mapInstance.current
+    if (map) centrarEnProyecto(map, { duration: 400 })
+  }, [contratoId, aplicarPuntosAlMapa, centrarEnProyecto])
 
   // Inicializar mapa Mapbox
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapRef.current) return undefined
-    if (mapInstance.current) return undefined
+
+    mapReadyRef.current = false
+    setMapReady(false)
+    if (mapInstance.current) {
+      try { mapInstance.current.remove() } catch { /* ignore */ }
+      mapInstance.current = null
+    }
 
     mapboxgl.accessToken = MAPBOX_TOKEN
+    const initialCenter = Array.isArray(centroContrato) ? centroContrato : DEFAULT_CENTER
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72],
+      center: initialCenter,
       zoom: 12,
       bearing: 270,
     })
@@ -299,8 +471,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     mapInstance.current = map
     popupRef.current = new mapboxgl.Popup({ closeButton: true, maxWidth: '320px' })
 
-    map.on('load', () => {
-      // Underlay plano (opcional, baja opacidad)
+    const onLoad = () => {
       map.addSource('plano-underlay', {
         type: 'geojson',
         data: planoGeojson || EMPTY_FC,
@@ -309,13 +480,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         id: 'plano-underlay-fill',
         type: 'fill',
         source: 'plano-underlay',
-        paint: { 'fill-color': '#94a3b8', 'fill-opacity': 0.12 },
+        paint: { 'fill-color': '#94a3b8', 'fill-opacity': 0.14 },
       })
       map.addLayer({
         id: 'plano-underlay-line',
         type: 'line',
         source: 'plano-underlay',
-        paint: { 'line-color': '#64748b', 'line-width': 1, 'line-opacity': 0.35 },
+        paint: { 'line-color': '#64748b', 'line-width': 1, 'line-opacity': 0.4 },
       })
       map.addLayer({
         id: 'plano-underlay-labels-pk',
@@ -345,9 +516,15 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         source: 'sicoe-calor',
         maxzoom: 18,
         paint: {
-          'heatmap-weight': ['interpolate', ['linear'], ['get', 'weight'], 0, 0, 1, 1],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.6, 15, 1.4],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 18, 15, 36],
+          // weight ya viene normalizado 0–1 respecto al max costo_directo del filtro activo
+          'heatmap-weight': [
+            'interpolate', ['linear'],
+            ['coalesce', ['to-number', ['get', 'weight']], 0],
+            0, 0,
+            1, 1,
+          ],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.7, 15, 1.5],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 18, 15, 40],
           'heatmap-opacity': 0.85,
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
@@ -368,33 +545,32 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
-            10, 3,
-            14, 6,
+            10, 3.5,
+            14, 6.5,
             17, 9,
           ],
           'circle-color': [
-            'interpolate', ['linear'], ['get', 'weight'],
+            'interpolate', ['linear'],
+            ['coalesce', ['to-number', ['get', 'weight']], 0],
             0, '#93c5fd',
             0.5, '#f59e0b',
             1, '#dc2626',
           ],
           'circle-stroke-width': 1.2,
           'circle-stroke-color': '#0f172a',
-          'circle-opacity': 0.9,
+          'circle-opacity': 0.92,
         },
       })
 
-      const onEnter = () => { map.getCanvas().style.cursor = 'pointer' }
-      const onLeave = () => { map.getCanvas().style.cursor = '' }
-      map.on('mouseenter', 'sicoe-calor-puntos', onEnter)
-      map.on('mouseleave', 'sicoe-calor-puntos', onLeave)
+      map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
       map.on('click', 'sicoe-calor-puntos', (e) => {
         const f = e.features?.[0]
         if (!f) return
         const props = { ...f.properties }
-        // Mapbox serializa numbers as strings sometimes
         if (props.costo_directo != null) props.costo_directo = Number(props.costo_directo)
         if (props.cantidad_total != null) props.cantidad_total = Number(props.cantidad_total)
+        if (props.weight != null) props.weight = Number(props.weight)
         setSeleccionado(props)
         const coords = f.geometry?.coordinates
         if (coords && popupRef.current) {
@@ -413,29 +589,57 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           popupRef.current.setLngLat(coords).setHTML(html).addTo(map)
         }
       })
-    })
+
+      try { map.resize() } catch { /* ignore */ }
+      mapReadyRef.current = true
+      setMapReady(true)
+      centrarEnProyecto(map, { duration: 0 })
+      const srcCalor = map.getSource('sicoe-calor')
+      if (srcCalor) {
+        try { srcCalor.setData(puntosRef.current || EMPTY_FC) } catch { /* ignore */ }
+      }
+    }
+
+    if (map.loaded()) onLoad()
+    else map.on('load', onLoad)
+
+    let ro
+    try {
+      ro = new ResizeObserver(() => {
+        try { map.resize() } catch { /* ignore */ }
+      })
+      if (mapRef.current) ro.observe(mapRef.current)
+    } catch { /* ResizeObserver no disponible */ }
 
     return () => {
+      mapReadyRef.current = false
+      try { ro?.disconnect() } catch { /* ignore */ }
       try { unreg() } catch { /* ignore */ }
       try { popupRef.current?.remove() } catch { /* ignore */ }
       try { map.remove() } catch { /* ignore */ }
       mapInstance.current = null
+      setMapReady(false)
     }
+  // Recrear al cambiar tema; el plano/centro se aplican por efectos aparte
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t.bg])
+  }, [t.bg, contratoId])
 
-  // Actualizar underlay cuando llega el plano
+  // Actualizar underlay + recentrar al proyecto cuando llega el plano
   useEffect(() => {
     const map = mapInstance.current
-    if (!map?.getSource) return
+    if (!map || !mapReady) return
     const src = map.getSource('plano-underlay')
-    if (src && planoGeojson) src.setData(planoGeojson)
-  }, [planoGeojson])
+    if (src) {
+      try { src.setData(planoGeojson || EMPTY_FC) } catch { /* ignore */ }
+    }
+    const nPts = puntosRef.current?.features?.length || 0
+    if (!nPts) centrarEnProyecto(map, { duration: centeredPlanoRef.current ? 0 : 400 })
+  }, [planoGeojson, centroContrato, mapReady, centrarEnProyecto])
 
   // Visibilidad de capas
   useEffect(() => {
     const map = mapInstance.current
-    if (!map?.getLayer) return
+    if (!map || !mapReady) return
     const visPlano = mostrarPlano ? 'visible' : 'none'
     const visHeat = mostrarHeat ? 'visible' : 'none'
     const visPts = mostrarPuntos ? 'visible' : 'none'
@@ -447,12 +651,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     } catch { /* ignore */ }
     if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', visHeat)
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
-  }, [mostrarPlano, mostrarHeat, mostrarPuntos])
+  }, [mostrarPlano, mostrarHeat, mostrarPuntos, mapReady])
 
-  // Sync puntos si el mapa se crea después de la data
+  // Sync puntos cuando el mapa queda listo o cambia la data
   useEffect(() => {
+    if (!mapReady) return
     aplicarPuntosAlMapa(puntosFc)
-  }, [puntosFc, aplicarPuntosAlMapa])
+  }, [puntosFc, mapReady, aplicarPuntosAlMapa])
 
   if (!MAPBOX_TOKEN) {
     return (
@@ -466,6 +671,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   }
 
   const nPts = puntosFc?.features?.length || 0
+  const sinCoords = meta?.sin_coords || 0
+  const totalRegs = meta?.total_registros || 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: 'calc(100vh - 140px)' }}>
@@ -475,7 +682,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             🗺️ Mapa de calor · Reportes por costo directo
           </div>
           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
-            Intensidad = costo directo acumulado de los registros que cumplen los filtros activos.
+            Intensidad relativa al filtro activo: el mayor <em>costo directo</em> del conjunto filtrado = calor máximo.
             Sin filtros no se muestra ningún dato.
           </div>
         </div>
@@ -510,7 +717,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
       }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
 
-        {/* Controles capas */}
         <div style={{
           position: 'absolute', top: 12, left: 12, zIndex: 5,
           background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
@@ -529,7 +735,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           ))}
         </div>
 
-        {/* Estado vacío / loading / meta */}
         {!tieneCriterios && (
           <div style={{
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
@@ -540,7 +745,23 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             <div style={{ fontWeight: 800, color: t.text, marginBottom: 6 }}>Defina filtros para ver el mapa</div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
               Abra <strong>Filtros</strong>, elija criterios (capítulo, fechas, subcontratista, etc.)
-              y pulse <strong>Buscar</strong>. El calor refleja el costo directo de esos reportes.
+              y pulse <strong>Buscar</strong>. El calor se escala al mayor costo directo de ese resultado.
+            </div>
+          </div>
+        )}
+
+        {tieneCriterios && busquedaRealizada && !buscando && nPts === 0 && !errorMsg && (
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            maxWidth: 440, textAlign: 'center', zIndex: 6,
+            background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
+            borderRadius: 12, padding: '16px 20px', boxShadow: t.shadow,
+          }}>
+            <div style={{ fontWeight: 800, color: t.text, marginBottom: 6 }}>Sin puntos georreferenciados</div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+              {totalRegs > 0
+                ? `Hay ${totalRegs} registro${totalRegs === 1 ? '' : 's'} con el filtro actual, pero ${sinCoords || totalRegs} sin coordenadas GPS.`
+                : 'Ningún registro cumple los filtros activos.'}
             </div>
           </div>
         )}
@@ -567,33 +788,32 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           </div>
         )}
 
-        {/* Leyenda */}
         <div style={{
           position: 'absolute', bottom: 20, left: 12, zIndex: 5,
           background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
           borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
         }}>
           <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-            INTENSIDAD · COSTO DIRECTO
+            INTENSIDAD RELATIVA · COSTO DIRECTO
           </div>
           <div style={{
             height: 10, borderRadius: 6, marginBottom: 6,
             background: 'linear-gradient(90deg,#2166ac,#fdae61,#b2182b)',
           }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-            <span>Menor</span>
-            <span>Mayor</span>
+            <span>Menor del filtro</span>
+            <span>Máx. del filtro</span>
           </div>
           {busquedaRealizada && meta && (
             <div style={{ marginTop: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
               {nPts} punto{nPts === 1 ? '' : 's'}
+              {meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
               {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
               {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
             </div>
           )}
         </div>
 
-        {/* Panel detalle lateral (refuerzo del popup) */}
         {seleccionado && (
           <div style={{
             position: 'absolute', top: 12, right: 56, zIndex: 6,

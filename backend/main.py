@@ -18547,6 +18547,7 @@ def analisis_registros_obra(
                 "con_coords": 0,
                 "sin_coords": 0,
                 "max_costo_directo": 0,
+                "intensidad": "relativa_conjunto_filtrado",
                 "truncado": False,
                 "max_features": SICOE_MAPA_CALOR_MAX_FEATURES,
             },

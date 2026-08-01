@@ -94,3 +94,28 @@ def test_build_mapa_calor_truncates_at_max_features():
     assert len(geo["features"]) == 3
     assert geo["meta"]["truncado"] is True
     assert geo["meta"]["max_features"] == 3
+
+
+def test_intensidad_relativa_al_conjunto_filtrado():
+    """El mismo costo absoluto escala distinto si cambia el máximo del filtro."""
+    base = {
+        "id": 1,
+        "reporte_id": 1,
+        "costo_directo": 100,
+        "coord_lat": 4.7,
+        "coord_lng": -74.0,
+    }
+    filtro_acta = [
+        base,
+        {**base, "id": 2, "costo_directo": 400, "coord_lat": 4.71},
+    ]
+    filtro_item = [base]  # solo el de 100
+    g_acta = build_mapa_calor_geojson(filtro_acta, {1: {}})
+    g_item = build_mapa_calor_geojson(filtro_item, {1: {}})
+    w_acta = next(f["properties"]["weight"] for f in g_acta["features"] if f["properties"]["id"] == 1)
+    w_item = next(f["properties"]["weight"] for f in g_item["features"] if f["properties"]["id"] == 1)
+    assert w_acta == 0.25  # 100/400
+    assert w_item == 1.0   # 100/100 → máximo del filtro
+    assert g_acta["meta"]["intensidad"] == "relativa_conjunto_filtrado"
+    assert g_acta["meta"]["max_costo_directo"] == 400
+    assert g_item["meta"]["max_costo_directo"] == 100
