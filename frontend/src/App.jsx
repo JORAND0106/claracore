@@ -91,8 +91,11 @@ import {
   inferLoteLocIdxEnRegistros,
   graficosPorLoteFromRegistros,
   graficosPayloadDesdeHistorial,
+  urlADataUriParaEsquema,
+  dataUriEsquemaAFile,
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
+import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import {
@@ -2402,6 +2405,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [graficosHistLocal, setGraficosHistLocal] = useState(() => parseGraficosHistorial(registro))
   const [graficoIdx, setGraficoIdx] = useState(0)
   const [eliminandoGraf, setEliminandoGraf] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
+  const [esquemaCargando, setEsquemaCargando] = useState(false)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
   const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
@@ -2862,6 +2868,41 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       await subirGrafico(file, { origen: 'mapa' })
     } catch (e) {
       console.error('guardarGraficoDesdeMapa', e)
+    }
+  }
+
+  /** Abre el editor de esquema (mismo que Seguimiento / wizard) asociado a este registro. */
+  const abrirEsquemaEditor = async () => {
+    if (!editableFotoGrafico || esquemaCargando || uploadingGraf) return
+    setEsquemaCargando(true)
+    try {
+      const base = grafVista || null
+      const dataUri = base ? await urlADataUriParaEsquema(base) : null
+      setEsquemaInitialDataUri(dataUri)
+      setEsquemaOpen(true)
+    } catch (e) {
+      console.error('abrirEsquemaEditor', e)
+      setEsquemaInitialDataUri(null)
+      setEsquemaOpen(true)
+    } finally {
+      setEsquemaCargando(false)
+    }
+  }
+
+  /** Guarda el PNG del editor como gráfico de este registro (next-grafico + upload + PUT). */
+  const guardarEsquemaComoGrafico = async (dataUrl) => {
+    if (!dataUrl || uploadingGraf) return
+    try {
+      const file = await dataUriEsquemaAFile(
+        dataUrl,
+        `esquema_reg${registro.numero_registro ?? registro.id}`,
+      )
+      if (!file) throw new Error('No se pudo convertir el esquema')
+      setEsquemaOpen(false)
+      setEsquemaInitialDataUri(null)
+      await subirGrafico(file, { origen: 'esquema' })
+    } catch (e) {
+      alert('Error guardando esquema: ' + (e?.message || String(e)))
     }
   }
 
@@ -4086,7 +4127,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </div>
             )}
           </div>
-          {/* Gráfico / plano (historial: automático del mapa + cargas manuales) */}
+          {/* Gráfico / plano — editor de esquema (mismo que Seguimiento / wizard) + historial */}
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
             {grafVista ? (
               <>
@@ -4128,9 +4169,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', flexDirection:'column', gap:'4px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'6px' }}>
                     <span>📐 Gráfico / Plano{graficosLista.length > 1 ? ` (${graficoIdx + 1}/${graficosLista.length})` : ''}</span>
-                    <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                    <div style={{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' }}>
                       {editableFotoGrafico && (
-                        <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
+                        <button
+                          type="button"
+                          onClick={abrirEsquemaEditor}
+                          disabled={esquemaCargando || uploadingGraf}
+                          title="Editar con el editor de esquema (lápiz, figuras, hatch, texto, tabla…)"
+                          style={{ background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
+                        >
+                          {esquemaCargando ? '…' : '✎ Editar esquema'}
+                        </button>
+                      )}
+                      {editableFotoGrafico && (
+                        <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
                           + Añadir
                           <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                             onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
@@ -4153,20 +4205,57 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </div>
               </>
             ) : (
-              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableFotoGrafico ? 'pointer' : 'default', gap:'8px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:'160px', background:t.bg, gap:'8px', padding:'12px 10px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                 {uploadingGraf
                   ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo plano...</span>
                   : <>
                       <span style={{ fontSize:'32px' }}>📐</span>
-                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 10px' }}>Gráfico del registro</span>
-                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', padding:'0 12px', lineHeight:1.35 }}>Se genera al localizar en el mapa, o toque para cargar manualmente</span>
+                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center' }}>Gráfico del registro</span>
+                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', padding:'0 8px', lineHeight:1.35 }}>
+                        Dibuje con el editor de esquema, o se genera al localizar en el mapa
+                      </span>
+                      {editableFotoGrafico && (
+                        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', justifyContent:'center', marginTop:'4px' }}>
+                          <button
+                            type="button"
+                            onClick={abrirEsquemaEditor}
+                            disabled={esquemaCargando}
+                            title="Crear esquema a mano (mismo editor que Seguimiento)"
+                            style={{
+                              background:t.primary, color:'#fff', border:'none', borderRadius:'6px',
+                              padding:'6px 14px', fontSize:'var(--cc-label)', fontWeight:700,
+                              cursor: esquemaCargando ? 'wait' : 'pointer',
+                            }}
+                          >
+                            {esquemaCargando ? '⏳…' : '✎ Crear esquema'}
+                          </button>
+                          <label style={{
+                            background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                            borderRadius:'6px', padding:'6px 12px', fontSize:'var(--cc-label)',
+                            cursor:'pointer', fontWeight:600,
+                          }}>
+                            + Adjuntar archivo
+                            <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                              onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
+                          </label>
+                        </div>
+                      )}
                     </>
                 }
-                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableFotoGrafico}
-                  onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
-              </label>
+              </div>
             )}
           </div>
+          {esquemaOpen && (
+            <EsquemaEditorModal
+              t={t}
+              title={grafVista
+                ? `Editar esquema · registro ${registro.numero_registro ?? ''}`
+                : `Crear esquema · registro ${registro.numero_registro ?? ''}`}
+              initialDataUri={esquemaInitialDataUri}
+              onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
+              onSave={guardarEsquemaComoGrafico}
+            />
+          )}
         </div>
       </div>
 

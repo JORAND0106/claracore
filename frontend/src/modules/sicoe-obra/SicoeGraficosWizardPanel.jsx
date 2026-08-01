@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
-import { agregarEntradaGraficoHistorial, fmtFechaGrafico, etiquetaOrigenGrafico } from './sicoeGraficosHelpers'
+import {
+  agregarEntradaGraficoHistorial,
+  fmtFechaGrafico,
+  etiquetaOrigenGrafico,
+  dataUriEsquemaAFile,
+  urlADataUriParaEsquema,
+} from './sicoeGraficosHelpers'
 
 function sicoeNumeroDesdeNextApi(j) {
   if (j == null) return null
@@ -48,6 +54,8 @@ export default function SicoeGraficosWizardPanel({
   const [idx, setIdx] = useState(0)
   const [subiendo, setSubiendo] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
+  const [esquemaCargando, setEsquemaCargando] = useState(false)
   const lista = Array.isArray(graficos) ? graficos : []
   const safeIdx = Math.min(idx, Math.max(0, lista.length - 1))
   const actual = lista[safeIdx] || null
@@ -95,17 +103,28 @@ export default function SicoeGraficosWizardPanel({
     }
   }
 
+  const abrirEsquemaEditor = async () => {
+    if (subiendo || esquemaCargando) return
+    setEsquemaCargando(true)
+    try {
+      const dataUri = actual?.url ? await urlADataUriParaEsquema(actual.url) : null
+      setEsquemaInitialDataUri(dataUri)
+      setEsquemaOpen(true)
+    } catch {
+      setEsquemaInitialDataUri(null)
+      setEsquemaOpen(true)
+    } finally {
+      setEsquemaCargando(false)
+    }
+  }
+
   const guardarEsquemaComoGrafico = async (dataUrl) => {
     if (!dataUrl || subiendo) return
     try {
-      const resp = await fetch(dataUrl)
-      const blob = await resp.blob()
-      const file = new File(
-        [blob],
-        `esquema_${Date.now()}.png`,
-        { type: blob.type || 'image/png' },
-      )
+      const file = await dataUriEsquemaAFile(dataUrl, 'esquema')
+      if (!file) throw new Error('No se pudo convertir el esquema')
       setEsquemaOpen(false)
+      setEsquemaInitialDataUri(null)
       await subirArchivo(file, { origen: 'esquema' })
     } catch (err) {
       alert('Error guardando esquema: ' + (err?.message || String(err)))
@@ -232,16 +251,16 @@ export default function SicoeGraficosWizardPanel({
         </label>
         <button
           type="button"
-          disabled={subiendo}
-          onClick={() => setEsquemaOpen(true)}
+          disabled={subiendo || esquemaCargando}
+          onClick={() => void abrirEsquemaEditor()}
           style={{
             background: 'transparent', border: `1px solid ${t.border}`, color: t.textMuted,
             borderRadius: '6px', padding: '5px 12px', fontSize: 'var(--cc-label)',
-            cursor: subiendo ? 'wait' : 'pointer', fontWeight: 600,
+            cursor: (subiendo || esquemaCargando) ? 'wait' : 'pointer', fontWeight: 600,
           }}
-          title="Crear esquema a mano (mismo editor que Seguimiento)"
+          title="Crear o continuar esquema a mano (mismo editor que Seguimiento)"
         >
-          ✎ Crear esquema
+          {esquemaCargando ? '⏳…' : (actual ? '✎ Editar esquema' : '✎ Crear esquema')}
         </button>
         {actual && (
           <button
@@ -265,9 +284,9 @@ export default function SicoeGraficosWizardPanel({
       {esquemaOpen && (
         <EsquemaEditorModal
           t={t}
-          title="Crear esquema · gráfico del registro"
-          initialDataUri={null}
-          onClose={() => setEsquemaOpen(false)}
+          title={actual ? 'Editar esquema · gráfico del registro' : 'Crear esquema · gráfico del registro'}
+          initialDataUri={esquemaInitialDataUri}
+          onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
           onSave={guardarEsquemaComoGrafico}
         />
       )}
