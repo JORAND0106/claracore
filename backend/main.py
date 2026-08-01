@@ -18334,6 +18334,7 @@ def _sicoe_analisis_response_cache_key(
     usuario_id=None,
     usuario_accion=None,
     pendiente_item=False,
+    formato=None,
 ) -> tuple:
     """Clave estable para caché HTTP de GET /sicoe-obra/.../analisis (TTL compartido con dashboard)."""
     uid = _dashboard_resumen_user_cache_key(current_user)
@@ -18375,6 +18376,7 @@ def _sicoe_analisis_response_cache_key(
             "usuario_id": usuario_id,
             "usuario_accion": usuario_accion,
             "pendiente_item": pendiente_item,
+            "formato": formato,
         }.items()
     ):
         if v is None:
@@ -18390,6 +18392,13 @@ def _sicoe_analisis_response_cache_key(
         else:
             parts.append((k, v))
     return ("sicoe_analisis_v3", int(contrato_id), uid, tuple(parts))
+
+
+from sicoe_mapa_calor import (  # noqa: E402
+    SICOE_MAPA_CALOR_MAX_FEATURES,
+    build_mapa_calor_geojson as _sicoe_build_mapa_calor_geojson,
+    parse_coord_wgs84 as _sicoe_parse_coord_wgs84,
+)
 
 
 def _sicoe_analisis_fetch_registros_paginated(build_q):
@@ -18472,9 +18481,14 @@ def analisis_registros_obra(
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
     pendiente_item: bool = Query(False),
+    formato: Optional[str] = Query(
+        None,
+        description="Si 'mapa_calor', devuelve FeatureCollection de puntos ponderados por costo_directo.",
+    ),
     current_user=Depends(get_current_user)
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
+    _formato_mapa = (formato or "").strip().lower() == "mapa_calor"
     _analisis_cache_key = _sicoe_analisis_response_cache_key(
         contrato_id,
         current_user,
@@ -18513,6 +18527,7 @@ def analisis_registros_obra(
         usuario_id=usuario_id,
         usuario_accion=usuario_accion,
         pendiente_item=pendiente_item,
+        formato="mapa_calor" if _formato_mapa else None,
     )
     _cached_analisis = _dashboard_response_cache_get(_analisis_cache_key)
     if _cached_analisis is not None:
@@ -18523,18 +18538,32 @@ def analisis_registros_obra(
     )
     _filtro_fu_rep = _amb_fu == "reporte" and _tiene_fu
     _filtro_fu_reg = _amb_fu == "registro" and _tiene_fu
-    _empty = {
-        "modo": "general",
-        "encabezado": "Sin resultados",
-        "grupos": [],
-        "total_costo_directo": 0,
-        "total_registros": 0,
-        "total_cantidad": 0,
-        "total_aprobados": 0,
-        "total_pendientes": 0,
-        "total_rechazados": 0,
-        "verificacion": {"suma_costo_directo_registros": 0, "conteo_registros": 0, "metodo": "suma_linea_a_linea_por_id_unico"},
-    }
+    if _formato_mapa:
+        _empty = {
+            "type": "FeatureCollection",
+            "features": [],
+            "meta": {
+                "total_registros": 0,
+                "con_coords": 0,
+                "sin_coords": 0,
+                "max_costo_directo": 0,
+                "truncado": False,
+                "max_features": SICOE_MAPA_CALOR_MAX_FEATURES,
+            },
+        }
+    else:
+        _empty = {
+            "modo": "general",
+            "encabezado": "Sin resultados",
+            "grupos": [],
+            "total_costo_directo": 0,
+            "total_registros": 0,
+            "total_cantidad": 0,
+            "total_aprobados": 0,
+            "total_pendientes": 0,
+            "total_rechazados": 0,
+            "verificacion": {"suma_costo_directo_registros": 0, "conteo_registros": 0, "metodo": "suma_linea_a_linea_por_id_unico"},
+        }
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
     caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
@@ -18746,9 +18775,21 @@ def analisis_registros_obra(
         _capas_sql = None if _defer_capas_or_ana else capas_ana
         _nr = numero_registro
 
+        _select_regs_ana = (
+            "id, reporte_id, costo_directo, cantidad_total, vlr_unitario, item_numero, "
+            "item_descripcion, unidad, acta_rpo_id, "
+            + SICOE_SELECT_NIVELES_ESTADO
+            + ", capitulo, subcontratista_id"
+        )
+        if _formato_mapa:
+            _select_regs_ana += (
+                ", numero_registro, coord_lat, coord_lng, created_at, observacion, "
+                "tramo, margen, abs_inicio, abs_final, pk_id_id"
+            )
+
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
             q = supabase.table("so_registros")\
-                .select("id, reporte_id, costo_directo, cantidad_total, vlr_unitario, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
+                .select(_select_regs_ana)\
                 .eq("contrato_id", contrato_id)
             q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
             if _nr is not None:
@@ -18857,16 +18898,26 @@ def analisis_registros_obra(
     if rep_ids_found:
         # Procesar en lotes de 500 para no exceder límites de URL con .in_()
         _cid_l = contrato_id
+        _sel_rep = (
+            "id, capitulo, estado, numero_reporte, descripcion_actividad, coord_lat, coord_lng"
+            if _formato_mapa
+            else "id, capitulo, estado"
+        )
         for chunk_start in range(0, len(rep_ids_found), 500):
             chunk = rep_ids_found[chunk_start:chunk_start + 500]
             try:
-                def _ri(ids=chunk):
-                    return supabase.table("so_reportes").select("id, capitulo, estado")\
+                def _ri(ids=chunk, sel=_sel_rep):
+                    return supabase.table("so_reportes").select(sel)\
                         .eq("contrato_id", _cid_l).in_("id", ids).execute().data
                 for r in supabase_execute(_ri):
                     reporte_map[r["id"]] = r
             except Exception:
                 pass
+
+    if _formato_mapa:
+        geo = _sicoe_build_mapa_calor_geojson(registros, reporte_map)
+        _dashboard_response_cache_set(_analisis_cache_key, geo)
+        return geo
 
     # ── 7. Agrupar según modo ─────────────────────────────────────────────────
     # Una sola lectura de niveles activos (antes: una query Supabase por cada registro → extremadamente lento).

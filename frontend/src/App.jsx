@@ -55,6 +55,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
+import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
 import {
   PanelCalculadoraProvider,
@@ -22042,7 +22043,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           />
         )}
         {moduloActivo === 'semaforo' && (
-          <ModuloPlanoSemaforo key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
+          <ModuloPlanoMapaCalor key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
         )}
 
         </div>{/* fin contenido principal */}
