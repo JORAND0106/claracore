@@ -72,6 +72,36 @@ export function usuarioPuedeEditarRegistrosSicoe(usuario, contratoId) {
   return !!(p?.editar)
 }
 
+function _normTxt(txt) {
+  return String(txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+/**
+ * Roles/cargos excluidos del popup e informe semanal de validación.
+ * Incluye «Operativo Gerencial» (pedido funcional) y «Contratista Gerencial»
+ * (rol existente en plataforma que concentra el perfil gerencial).
+ */
+export function esRolExcluidoInformeValidacion(usuario) {
+  const rol = _normTxt(usuario?.rol_nombre || usuario?.rol || '')
+  const cargo = _normTxt(usuario?.cargo_nombre || usuario?.cargo || '')
+  const excluded = ['operativo gerencial', 'contratista gerencial']
+  return excluded.some((x) => rol.includes(x) || cargo.includes(x))
+}
+
+/**
+ * Popup diario 9:00: permiso editar Dashboard de validación (Reporte de Cantidades)
+ * y sin rol Operativo/Contratista Gerencial.
+ */
+export function usuarioDebeVerInformePeriodicoPopup(usuario, contratoId) {
+  if (esRolExcluidoInformeValidacion(usuario)) return false
+  return usuarioPuedeEditarRegistrosSicoe(usuario, contratoId)
+}
+
 /** Web Push: editar o validar SICOE, o cargo Administrador/Desarrollador. */
 export function usuarioDebeSuscribirsePush(usuario, contratoId) {
   if (esDesarrolladorUsuario(usuario)) return true

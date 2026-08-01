@@ -1,9 +1,14 @@
--- pg_cron: invocar notificaciones email cada 5 min (lun–vie, hora UTC del servidor Supabase).
+-- pg_cron: invocar notificaciones email cada 5 min (todos los días, hora UTC del servidor Supabase).
 -- Requisitos previos:
 --   • Backend desplegado en Azure con el módulo notificaciones_email.
 --   • CLARACORE_CRON_SECRET en Azure App Service (mismo valor que abajo).
 --   • SMTP configurado en Azure (CLARACORE_CONTACTO_SMTP_*).
---   • Migración 20260718230000_notificaciones_email.sql ya aplicada.
+--   • Migraciones notificaciones_email + snapshot periodo aplicadas.
+--
+-- Nota: el runner filtra por tipo de job:
+--   • matriz_snapshot → todos los días (incluye Sáb/Dom para el informe semanal)
+--   • admin_resumen_semanal → solo lunes 08:00 America/Bogota
+--   • sin_item / validacion_pendiente → lun–vie
 --
 -- INSTRUCCIÓN: reemplace SOLO la línea marcada con <<<PEGAR_CRON_SECRET>>>
 -- por el valor exacto de CLARACORE_CRON_SECRET configurado en Azure.
@@ -21,7 +26,7 @@ BEGIN
 
     PERFORM cron.schedule(
       'claracore_notificaciones_email',
-      '*/5 * * * 1-5',
+      '*/5 * * * *',
       $cmd$
       SELECT net.http_post(
         url := 'https://claracore-backend.azurewebsites.net/internal/cron/notificaciones-email/run',
@@ -33,7 +38,7 @@ BEGIN
       );
       $cmd$
     );
-    RAISE NOTICE 'Job claracore_notificaciones_email programado (lun–vie, cada 5 min).';
+    RAISE NOTICE 'Job claracore_notificaciones_email programado (diario, cada 5 min).';
   END IF;
 END;
 $cron$;

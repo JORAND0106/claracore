@@ -208,6 +208,21 @@ def email_validacion_pendiente(
     return subject, text, html_body
 
 
+def email_admin_resumen_semanal(
+    nombre: str,
+    contrato_num: str,
+    lunes,
+    domingo,
+    semana: dict,
+) -> tuple[str, str, str]:
+    from notificaciones_email_semanal import build_informe_semanal_contenido
+
+    subject, text, title_html, body_inner = build_informe_semanal_contenido(
+        nombre, contrato_num, lunes, domingo, semana
+    )
+    return subject, text, _wrap_html(title_html, body_inner)
+
+
 def email_admin_resumen(
     nombre: str,
     contrato_num: str,
