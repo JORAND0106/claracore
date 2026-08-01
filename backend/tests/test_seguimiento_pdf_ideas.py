@@ -157,33 +157,37 @@ def test_pdf_interna_no_muestra_bloque_entidad():
 
 
 def test_pdf_externa_incluye_identidad_entidad():
-    """Externa incluye recuadro de entidad (placeholder) sin etiquetas Contratista/Entidad."""
+    """Externa: grilla [logo entidad | título | meta]; sin logo contratista ni etiquetas."""
     from seguimiento_pdf import _encabezado_oficial_html, _logo_cell
 
     html = _encabezado_oficial_html(
-        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": ""},
+        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": "", "numero_interventoria": "INT-9"},
         {
             "consecutivo": 2,
             "fecha_reunion": "2026-07-28",
             "tipo_acta": "externa",
+            "hora_inicio": "08:00",
+            "hora_fin": "09:00",
         },
         logo_contratista=_logo_cell(None, "Logo contratista"),
         logo_entidad=_logo_cell(None, "Logo entidad"),
     )
     assert "Logo entidad" in html
-    assert "Logo contratista" in html
-    # Etiquetas de texto sobre los recuadros: eliminadas del formato oficial.
+    # Un solo logo a la izquierda: no se renderiza el placeholder de contratista.
+    assert "Logo contratista" not in html
+    assert "Acta No." in html and "INT-9" in html
+    assert "08:00" in html and "09:00" in html
     assert ">Contratista<" not in html
     assert ">Entidad<" not in html
-    assert 'margin-bottom:1pt;line-height:1;">Contratista</div>' not in html
-    assert 'margin-bottom:1pt;line-height:1;">Entidad</div>' not in html
 
     pdf = generar_pdf_acta(
-        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": ""},
+        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": "", "numero_interventoria": "INT-9"},
         {
             "consecutivo": 2,
             "fecha_reunion": "2026-07-28",
             "tipo_acta": "externa",
+            "hora_inicio": "08:00",
+            "hora_fin": "09:00",
             "orden_del_dia": "Punto",
         },
         [],
@@ -192,8 +196,11 @@ def test_pdf_externa_incluye_identidad_entidad():
     )
     text = _pdf_text(pdf)
     header = text.split("Objeto")[0]
-    assert "Logo entidad" in header or "Logo contratista" in header
+    assert "Logo entidad" in header
+    assert "Logo contratista" not in header
     assert "Acta Externa" in header or "Externa" in header
+    assert "INT-9" in header
+    assert "08:00" in header
 
 
 def test_contenido_hash_incluye_quien_dijo():
@@ -204,7 +211,7 @@ def test_contenido_hash_incluye_quien_dijo():
 
 
 def test_logo_encabezado_tamano_intermedio_visible():
-    """Contratista y entidad a ~36pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
+    """Contratista y entidad a ~40pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
     import base64
     import io
     import re
@@ -223,11 +230,11 @@ def test_logo_encabezado_tamano_intermedio_visible():
     )
 
     assert _LOGO_BASE_H_PT == 22
-    assert _LOGO_MAX_H == 36
+    assert _LOGO_MAX_H == 40
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
     assert _LOGO_ENTIDAD_MAX_W_PCT == _LOGO_MAX_W_PCT
     # Visibilidad: claramente por encima del 9pt que quedó ilegible.
-    assert _LOGO_MAX_H >= 30
+    assert _LOGO_MAX_H >= 36
     assert _LOGO_ENTIDAD_MAX_H > 9
 
     img = Image.new("RGB", (400, 200), (20, 80, 160))
@@ -243,7 +250,7 @@ def test_logo_encabezado_tamano_intermedio_visible():
     # xhtml2pdf: solo style en pt (attrs width/height unitless se interpretan como px).
     entidad = _logo_cell(uri, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"height:{h_pt}pt" in entidad
-    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (36→27pt)
+    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (40→30pt)
 
     placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
@@ -260,7 +267,7 @@ def test_logo_encabezado_tamano_intermedio_visible():
     rendered_h = float(cms[-1][1])
     # Debe respetar el tope en pt (no el 75% de la conversión px→pt).
     assert abs(rendered_h - float(_LOGO_ENTIDAD_MAX_H)) < 1.5, (rendered_h, h_pt)
-    assert rendered_h >= 30.0, rendered_h
+    assert rendered_h >= 36.0, rendered_h
 
 
 def test_pdf_acta_cache_key_incluye_version_plantilla():
@@ -283,12 +290,12 @@ def test_pdf_acta_cache_key_incluye_version_plantilla():
 
 
 def test_encabezado_compacto_constantes_y_legibilidad():
-    """Encabezado compacto: logos intermedios visibles y sin etiquetas Contratista/Entidad."""
+    """Grilla unificada [logo|título|meta]; logo 40pt; asistentes compactos."""
     from seguimiento_pdf import (
+        _ASIS_PAD,
         _HDR_META_FS,
         _HDR_PAD,
         _HDR_TITLE_FS,
-        _LOGO_BASE_H_PT,
         _LOGO_ENTIDAD_MAX_H,
         _LOGO_ENTIDAD_MAX_W_PCT,
         _LOGO_MAX_H,
@@ -296,9 +303,10 @@ def test_encabezado_compacto_constantes_y_legibilidad():
         _logo_cell,
     )
 
-    assert _LOGO_MAX_H == 36
+    assert _LOGO_MAX_H == 40
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
-    assert _LOGO_MAX_H >= 30
+    assert _LOGO_MAX_H >= 36
+    assert _ASIS_PAD == "2pt 4pt"
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
@@ -309,10 +317,10 @@ def test_encabezado_compacto_constantes_y_legibilidad():
     for tipo in ("interna", "externa"):
         logo_ent = _logo_cell(
             None,
-            "E",
+            "Logo entidad",
             max_h=_LOGO_ENTIDAD_MAX_H,
             max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT,
-        ) if tipo == "externa" else _logo_cell(None, "E")
+        )
         html = _encabezado_oficial_html(
             {"numero": "CT-9-2026", "objeto": "Obra de prueba", "numero_interventoria": "INT-1"},
             {
@@ -322,19 +330,23 @@ def test_encabezado_compacto_constantes_y_legibilidad():
                 "hora_inicio": "08:00",
                 "hora_fin": "09:30",
             },
-            logo_contratista=_logo_cell(None, "C"),
+            logo_contratista=_logo_cell(None, "Logo contratista"),
             logo_entidad=logo_ent,
         )
         assert "Acta No." in html
         assert "08:00" in html and "09:30" in html
         assert "INT-1" in html
         assert "Objeto del contrato" in html
-        # Sin etiquetas de texto sobre los recuadros de logo.
+        assert "width:18%" in html and "width:44%" in html and "width:38%" in html
+        if tipo == "externa":
+            assert "Logo entidad" in html
+            assert "Logo contratista" not in html
+        else:
+            assert "Logo contratista" in html
+            assert "Logo entidad" not in html
         assert ">Contratista<" not in html
         assert ">Entidad<" not in html
-        # Padding compacto en celdas del encabezado (no el padding antiguo 8pt del título).
         assert "padding:8pt" not in html
-        assert "padding:3pt 4pt" not in html
         pdf = generar_pdf_acta(
             {"numero": "CT-9-2026", "objeto": "Obra de prueba", "numero_interventoria": "INT-1"},
             {

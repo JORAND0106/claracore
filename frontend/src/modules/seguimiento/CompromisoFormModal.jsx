@@ -4,7 +4,8 @@ import { numeroActaLabel } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
 /**
- * Formulario para generar compromiso(s) desde una idea de acta.
+ * Formulario para generar compromiso(s) desde una idea de acta,
+ * o de forma libre (sin idea) cuando textoIdea llega vacío.
  * Asignables: usuarios de plataforma + asistentes externos del acta actual.
  * Origen atribuido al acta/comité (no al operador del formulario).
  */
@@ -208,7 +209,7 @@ export default function CompromisoFormModal({
         <div className={viewportCompact ? 'cc-seguim-compromiso-form cc-seguim-compromiso-form--compact' : 'cc-seguim-compromiso-form'}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>
-            Generar compromiso
+            {(textoIdea || '').trim() ? 'Generar compromiso' : 'Agregar compromiso'}
           </div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
         </div>

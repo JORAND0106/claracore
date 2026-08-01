@@ -799,6 +799,21 @@ export default function ActaEditor({
     }
   }
 
+  /** Compromiso puntual sin ligarlo a una idea/tema completo. */
+  const abrirCompromisoLibre = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const row = await persistActa()
+      if (!row?.id) throw new Error('Guarde el acta antes de agregar un compromiso')
+      setCompromisoCtx({ actaId: row.id, ideaId: null, texto: '', libre: true })
+    } catch (e) {
+      setError(friendlyFetchError(e, 'No se pudo preparar el compromiso'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const previewPdf = async () => {
     setPdfBusy(true)
     setError('')
@@ -1170,19 +1185,33 @@ export default function ActaEditor({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <h3 style={h3(t)}>Ideas centrales</h3>
           {!soloLectura && (
-            <button
-              type="button"
-              style={primary(t)}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                const neu = emptyIdea()
-                patchList('ideas', (list) => [...list, neu].map((row, i) => ({ ...row, orden: i })))
-                // Nueva idea: expandir solo esa para redactar; el resto sigue colapsado.
-                setIdeaExpandidaKey(neu._key)
-              }}
-            >
-              + Agregar idea
-            </button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {permisos?.crear && (
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  disabled={saving}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => abrirCompromisoLibre()}
+                  title="Registrar un compromiso puntual sin convertir todo un tema en un solo compromiso"
+                >
+                  + Agregar compromiso
+                </button>
+              )}
+              <button
+                type="button"
+                style={primary(t)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const neu = emptyIdea()
+                  patchList('ideas', (list) => [...list, neu].map((row, i) => ({ ...row, orden: i })))
+                  // Nueva idea: expandir solo esa para redactar; el resto sigue colapsado.
+                  setIdeaExpandidaKey(neu._key)
+                }}
+              >
+                + Agregar idea
+              </button>
+            </div>
           )}
         </div>
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
@@ -1607,6 +1636,48 @@ export default function ActaEditor({
             </div>
           )
         })}
+        {(() => {
+          const libres = (actaCompromisos || []).filter((c) => c.idea_id == null || c.idea_id === '')
+          if (!libres.length) return null
+          return (
+            <div style={{ marginTop: 16 }}>
+              <h4 style={{ ...h3(t), fontSize: 'var(--cc-body)', marginBottom: 8 }}>
+                Compromisos independientes de esta acta
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {libres.map((c) => {
+                  const cump = String(c.estado_gestion || '').toLowerCase() === 'cumplido'
+                  const cAccent = cump ? COLOR_CUMPLIDO : t.primary
+                  return (
+                    <div
+                      key={c.id}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: `1px solid ${cAccent}`,
+                        background: cump ? BG_CUMPLIDO : `${t.primary}12`,
+                        fontSize: 'var(--cc-sm)',
+                        color: t.text,
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
+                        Compromiso
+                        {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
+                        {cump ? ' · Cumplido' : ''}
+                      </div>
+                      <div style={{ marginTop: 2 }}>{c.titulo || c.descripcion || '—'}</div>
+                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
+                        Vence {fmtFecha(c.fecha_vencimiento)}
+                        {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
+                        {' · '}Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
       </section>
       )}
 
@@ -1903,7 +1974,9 @@ export default function ActaEditor({
           actaConsecutivo={consecutivo}
           onClose={() => setCompromisoCtx(null)}
           onSubmit={async (body) => {
-            const created = await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
+            const created = compromisoCtx.libre || compromisoCtx.ideaId == null
+              ? await api.crearCompromisoLibre(compromisoCtx.actaId, body)
+              : await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)
             const items = Array.isArray(created?.items)
               ? created.items
               : (created?.id ? [created] : [])
