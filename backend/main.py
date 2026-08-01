@@ -4451,6 +4451,25 @@ def _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids: List[int]):
     return q.in_("acta_rpo_id", aids)
 
 
+def _sicoe_analisis_aplicar_filtro_actas(
+    q,
+    contrato_id: int,
+    acta_rpo_ids: List[int],
+    *,
+    mapa_calor: bool,
+):
+    """
+    Panel /analisis (KPI): filtra por acta en la *línea* (totales alineados a SQL de validación).
+    Mapa de calor: filtra por acta en la *cabecera* del reporte (mismo alcance que la grilla
+    y que la vista de detalle, donde las coords GPS suelen vivir en so_reportes).
+    """
+    if not acta_rpo_ids:
+        return q
+    if mapa_calor:
+        return _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), acta_rpo_ids)
+    return _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids)
+
+
 def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
     """Varios ítems vía JSON `items_filtro` o un solo `item` (query legado). Sin duplicados, orden estable."""
     out: List[str] = []
@@ -18796,7 +18815,9 @@ def analisis_registros_obra(
             if _nr is not None:
                 q = q.eq("numero_registro", _nr)
             if _aids_l:
-                q = _sicoe_registros_q_filtrar_actas_linea(q, _aids_l)
+                q = _sicoe_analisis_aplicar_filtro_actas(
+                    q, contrato_id, _aids_l, mapa_calor=_formato_mapa
+                )
             if _s_l is not None:
                 q = q.eq("semana_id", _s_l)
             q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
