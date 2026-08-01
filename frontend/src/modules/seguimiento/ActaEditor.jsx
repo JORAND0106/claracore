@@ -845,6 +845,53 @@ export default function ActaEditor({
     }
   }
 
+  const pdfFilename = () => {
+    const n = consecutivo != null ? String(consecutivo) : (localActaId != null ? String(localActaId) : 'borrador')
+    return `acta_seguimiento_${n}.pdf`
+  }
+
+  /** Descarga directa del PDF (usa la vista previa en memoria o genera una nueva). */
+  const downloadPdf = async () => {
+    setError('')
+    setOkMsg('')
+    try {
+      if (!encabezadoGuardado) {
+        throw new Error('Guarde el encabezado antes de descargar el PDF')
+      }
+      let url = pdfUrl
+      let revokeAfter = false
+      if (!url) {
+        setPdfBusy(true)
+        if (!form.elaborador_id) {
+          throw new Error('Indique el elaborador antes de generar el PDF')
+        }
+        const row = await persistActa()
+        const blob = await api.pdfActaBlob(row.id)
+        url = URL.createObjectURL(blob)
+        setPdfUrl(url)
+        revokeAfter = false
+      }
+      const a = document.createElement('a')
+      a.href = url
+      a.download = pdfFilename()
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      if (revokeAfter) URL.revokeObjectURL(url)
+      setOkMsg('Descarga del PDF iniciada.')
+    } catch (e) {
+      setError(friendlyFetchError(e, 'No se pudo descargar el PDF'))
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  const openPdfCompleto = () => {
+    if (!pdfUrl) return
+    window.open(pdfUrl, '_blank', 'noopener,noreferrer')
+  }
+
   const firmar = async (asistenteId) => {
     try {
       let aid = localActaId
@@ -1783,24 +1830,97 @@ export default function ActaEditor({
       {tab === 'acciones' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>Vista previa y acciones del sistema</h3>
-        <div className="cc-seguim-acta-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+        <div
+          className="cc-seguim-acta-actions"
+          style={{
+            display: 'flex',
+            flexWrap: 'nowrap',
+            gap: 6,
+            alignItems: 'center',
+            marginBottom: 14,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 2,
+          }}
+        >
           {puedeEditar && (permisos?.crear || permisos?.editar) && (
-            <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>{saving ? 'Guardando…' : 'Guardar acta'}</button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => guardar()}
+              title={saving ? 'Guardando…' : 'Guardar acta'}
+              aria-label={saving ? 'Guardando…' : 'Guardar acta'}
+              style={{ ...iconBtn(t), opacity: saving ? 0.45 : 1 }}
+            >
+              <IconSave />
+            </button>
           )}
           {puedeEditar && (permisos?.crear || permisos?.editar) && form.estado === 'borrador' && encabezadoGuardado && (
-            <button type="button" disabled={saving} onClick={() => guardar({ estadoExtra: 'realizada' })} style={primary(t)}>Marcar como Realizada</button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => guardar({ estadoExtra: 'realizada' })}
+              title="Marcar como Realizada"
+              aria-label="Marcar como Realizada"
+              style={{ ...iconBtn(t), opacity: saving ? 0.45 : 1 }}
+            >
+              <IconCheckCircle />
+            </button>
           )}
           {(permisos?.crear || permisos?.editar || permisos?.ver) && (
-            <button type="button" disabled={pdfBusy || saving || !encabezadoGuardado} onClick={previewPdf} style={ghost(t)}>{pdfBusy ? 'Generando PDF…' : 'Generar vista previa PDF'}</button>
+            <button
+              type="button"
+              disabled={pdfBusy || saving || !encabezadoGuardado}
+              onClick={previewPdf}
+              title={pdfBusy ? 'Generando PDF…' : 'Generar vista previa PDF'}
+              aria-label={pdfBusy ? 'Generando PDF…' : 'Generar vista previa PDF'}
+              style={{ ...iconBtn(t), opacity: (pdfBusy || saving || !encabezadoGuardado) ? 0.45 : 1 }}
+            >
+              <IconPdfPreview />
+            </button>
+          )}
+          {(permisos?.crear || permisos?.editar || permisos?.ver) && (
+            <button
+              type="button"
+              disabled={!pdfUrl || pdfBusy}
+              onClick={openPdfCompleto}
+              title={pdfUrl ? 'Abrir PDF completo' : 'Genere la vista previa primero'}
+              aria-label="Abrir PDF completo"
+              style={{ ...iconBtn(t), opacity: (!pdfUrl || pdfBusy) ? 0.45 : 1 }}
+            >
+              <IconPdfOpen />
+            </button>
+          )}
+          {(permisos?.crear || permisos?.editar || permisos?.ver) && (
+            <button
+              type="button"
+              disabled={pdfBusy || saving || !encabezadoGuardado}
+              onClick={downloadPdf}
+              title={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
+              aria-label="Descargar PDF"
+              style={{ ...iconBtn(t), opacity: (pdfBusy || saving || !encabezadoGuardado) ? 0.45 : 1 }}
+            >
+              <IconPdfDownload />
+            </button>
           )}
           {form.estado === 'realizada' && permisos?.validar && (
-            <button type="button" style={ghost(t)} onClick={() => { setTab('asistentes'); setOkMsg('Use el botón ✎ junto a cada asistente para registrar la firma de perfil.') }}>Enviar a firma</button>
+            <button
+              type="button"
+              onClick={() => { setTab('asistentes'); setOkMsg('Use el botón ✎ junto a cada asistente para registrar la firma de perfil.') }}
+              title="Enviar a firma"
+              aria-label="Enviar a firma"
+              style={iconBtn(t)}
+            >
+              <IconSign />
+            </button>
           )}
           {esDev && sellada && localActaId && (
             <button
               type="button"
               disabled={saving}
-              style={ghost(t)}
+              title="Revertir a borrador (Dev)"
+              aria-label="Revertir a borrador (Dev)"
+              style={{ ...iconBtn(t), opacity: saving ? 0.45 : 1 }}
               onClick={async () => {
                 if (!window.confirm('¿Revertir esta acta sellada a borrador editable?')) return
                 setSaving(true)
@@ -1817,30 +1937,33 @@ export default function ActaEditor({
                 }
               }}
             >
-              Revertir a borrador (Dev)
+              <IconUndo />
             </button>
           )}
           {permisos?.esDesarrollador && localActaId && (
-            <button type="button" style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }} onClick={async () => {
-              if (!window.confirm('¿Eliminar definitivamente esta acta?')) return
-              try { await api.deleteActa(localActaId); onCancel?.(); onSaved?.(null, { deleted: true }) } catch (e) { setError(e.message) }
-            }}>Eliminar</button>
+            <button
+              type="button"
+              title="Eliminar acta"
+              aria-label="Eliminar acta"
+              style={{
+                ...iconBtn(t),
+                color: 'var(--cc-color-danger,#b91c1c)',
+                borderColor: 'var(--cc-color-danger,#b91c1c)',
+                background: 'color-mix(in srgb, var(--cc-color-danger,#b91c1c) 10%, transparent)',
+              }}
+              onClick={async () => {
+                if (!window.confirm('¿Eliminar definitivamente esta acta?')) return
+                try { await api.deleteActa(localActaId); onCancel?.(); onSaved?.(null, { deleted: true }) } catch (e) { setError(e.message) }
+              }}
+            >
+              <IconTrash />
+            </button>
           )}
         </div>
         {pdfUrl ? (
           <div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-              <a
-                href={pdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ ...ghost(t), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
-              >
-                Abrir PDF completo
-              </a>
-              <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                En iPad/tablet deslice dentro del visor o ábralo en otra pestaña para ver todas las páginas.
-              </span>
+            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+              En iPad/tablet deslice dentro del visor o use «Abrir PDF completo» para ver todas las páginas.
             </div>
             <iframe title="PDF acta" src={pdfUrl} style={{ width: '100%', height: 'min(70vh, 640px)', border: `1px solid ${t.border}`, borderRadius: 8 }} />
           </div>
@@ -2092,4 +2215,120 @@ function primary(t) {
 }
 function ghost(t) {
   return { border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer', background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)' }
+}
+
+/** Botón-icono compacto (mismo criterio visual que el editor de esquema). */
+function iconBtn(t) {
+  return {
+    width: 34,
+    height: 34,
+    padding: 0,
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    cursor: 'pointer',
+    border: `1px solid ${t.border}`,
+    background: 'transparent',
+    color: t.text,
+  }
+}
+
+function iconSvgProps() {
+  return {
+    width: 18,
+    height: 18,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': true,
+  }
+}
+
+function IconSave() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+      <path d="M17 21v-8H7v8" />
+      <path d="M7 3v5h8" />
+    </svg>
+  )
+}
+
+function IconCheckCircle() {
+  return (
+    <svg {...iconSvgProps()}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+    </svg>
+  )
+}
+
+function IconPdfPreview() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <circle cx="11" cy="14" r="2.5" />
+      <path d="m13 16 2.5 2.5" />
+    </svg>
+  )
+}
+
+function IconPdfOpen() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <path d="M10 13h4" />
+      <path d="M12 11v4" />
+      <path d="M17 17h3v-3" />
+      <path d="m20 17-4-4" />
+    </svg>
+  )
+}
+
+function IconPdfDownload() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <path d="M12 11v6" />
+      <path d="m9 14 3 3 3-3" />
+    </svg>
+  )
+}
+
+function IconSign() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+function IconUndo() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M3 7v6h6" />
+      <path d="M3 13a9 9 0 1 0 3-7.7L3 7" />
+    </svg>
+  )
+}
+
+function IconTrash() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  )
 }
