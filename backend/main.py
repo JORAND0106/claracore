@@ -21638,6 +21638,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
             "foto_url", "foto_numero", "foto_descripcion",
             "grafico_url", "grafico_numero", "grafico_descripcion",
+            "graficos_historial",
         }
         otros = {k: v for k, v in data.items() if k not in _CAMPOS_N3_PERMITIDOS}
         if otros:

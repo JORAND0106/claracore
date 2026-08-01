@@ -1637,6 +1637,8 @@ function drawImageObj(ctx, obj) {
     return
   }
   const image = new Image()
+  // URLs remotas (Azure Blob, etc.): anonymous evita canvas tainted al exportar PNG
+  if (/^https?:\/\//i.test(String(key || ''))) image.crossOrigin = 'anonymous'
   cache[key] = image
   image.onload = () => paint(image)
   image.src = key

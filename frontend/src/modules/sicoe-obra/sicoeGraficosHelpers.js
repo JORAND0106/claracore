@@ -120,3 +120,63 @@ export function graficosPayloadDesdeHistorial(hist) {
     graficos_historial: lista,
   }
 }
+
+/**
+ * Convierte URL/blob/data URI a data URI para cargarlo en EsquemaEditorModal
+ * sin tainting del canvas (necesario al reabrir un gráfico remoto del registro).
+ * Si no se puede leer (CORS, etc.), devuelve null → editor en blanco.
+ */
+export async function urlADataUriParaEsquema(src) {
+  if (src == null) return null
+  const s = String(src).trim()
+  if (!s || s === 'null' || s === 'undefined') return null
+  if (s.startsWith('data:')) return s
+
+  const blobToDataUri = (blob) => new Promise((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => resolve(typeof fr.result === 'string' ? fr.result : null)
+    fr.onerror = () => reject(fr.error || new Error('FileReader failed'))
+    fr.readAsDataURL(blob)
+  })
+
+  try {
+    const res = await fetch(s, { mode: 'cors', credentials: 'omit' })
+    if (res.ok) {
+      const blob = await res.blob()
+      if (blob && blob.size > 0) return await blobToDataUri(blob)
+    }
+  } catch {
+    /* fallback Image + canvas */
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas')
+        c.width = img.naturalWidth || img.width || 1
+        c.height = img.naturalHeight || img.height || 1
+        const ctx = c.getContext('2d')
+        ctx.drawImage(img, 0, 0)
+        resolve(c.toDataURL('image/png'))
+      } catch {
+        resolve(null)
+      }
+    }
+    img.onerror = () => resolve(null)
+    img.src = s
+  })
+}
+
+/** PNG data URI del editor → File listo para upload-grafico. */
+export async function dataUriEsquemaAFile(dataUrl, nombreBase = 'esquema') {
+  if (!dataUrl) return null
+  const resp = await fetch(dataUrl)
+  const blob = await resp.blob()
+  return new File(
+    [blob],
+    `${nombreBase}_${Date.now()}.png`,
+    { type: blob.type || 'image/png' },
+  )
+}
