@@ -211,7 +211,7 @@ def test_contenido_hash_incluye_quien_dijo():
 
 
 def test_logo_encabezado_tamano_intermedio_visible():
-    """Contratista y entidad a ~40pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
+    """Contratista y entidad a ~46pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
     import base64
     import io
     import re
@@ -230,11 +230,11 @@ def test_logo_encabezado_tamano_intermedio_visible():
     )
 
     assert _LOGO_BASE_H_PT == 22
-    assert _LOGO_MAX_H == 40
+    assert _LOGO_MAX_H == 46
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
     assert _LOGO_ENTIDAD_MAX_W_PCT == _LOGO_MAX_W_PCT
-    # Visibilidad: claramente por encima del 9pt que quedó ilegible.
-    assert _LOGO_MAX_H >= 36
+    # ~15% sobre el tope previo de 40pt.
+    assert _LOGO_MAX_H >= 46
     assert _LOGO_ENTIDAD_MAX_H > 9
 
     img = Image.new("RGB", (400, 200), (20, 80, 160))
@@ -250,7 +250,7 @@ def test_logo_encabezado_tamano_intermedio_visible():
     # xhtml2pdf: solo style en pt (attrs width/height unitless se interpretan como px).
     entidad = _logo_cell(uri, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"height:{h_pt}pt" in entidad
-    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (40→30pt)
+    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (46→34.5pt)
 
     placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
@@ -267,7 +267,7 @@ def test_logo_encabezado_tamano_intermedio_visible():
     rendered_h = float(cms[-1][1])
     # Debe respetar el tope en pt (no el 75% de la conversión px→pt).
     assert abs(rendered_h - float(_LOGO_ENTIDAD_MAX_H)) < 1.5, (rendered_h, h_pt)
-    assert rendered_h >= 36.0, rendered_h
+    assert rendered_h >= 40.0, rendered_h
 
 
 def test_pdf_acta_cache_key_incluye_version_plantilla():
@@ -292,6 +292,7 @@ def test_pdf_acta_cache_key_incluye_version_plantilla():
 def test_encabezado_compacto_constantes_y_legibilidad():
     """Grilla unificada [logo|título|meta]; logo 40pt; asistentes compactos."""
     from seguimiento_pdf import (
+        _ASIS_BORDER,
         _ASIS_PAD,
         _HDR_META_FS,
         _HDR_PAD,
@@ -303,10 +304,12 @@ def test_encabezado_compacto_constantes_y_legibilidad():
         _logo_cell,
     )
 
-    assert _LOGO_MAX_H == 40
+    assert _LOGO_MAX_H == 46
     assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
-    assert _LOGO_MAX_H >= 36
+    assert _LOGO_MAX_H >= 46
     assert _ASIS_PAD == "2pt 4pt"
+    assert "0.3pt" in _ASIS_BORDER
+    assert "94a3b8" in _ASIS_BORDER
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
