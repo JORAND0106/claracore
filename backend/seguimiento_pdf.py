@@ -17,19 +17,18 @@ _BORDE_SUAVE = "#94a3b8"
 # Encabezados de tabla / sección: oscuro institucional (texto claro).
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
-# Encabezado compacto (~50% menos altura que la versión previa).
-# Referencia previa a compactar (usado solo para calcular el 40% de entidad sin cascada).
-_LOGO_BASE_H_PT = 22
-_LOGO_MAX_H = 11  # pt — logo contratista / default (compacto)
-_LOGO_MAX_W_PCT = 88  # % del recuadro
-# Entidad (acta externa): ~40% del tamaño ORIGINAL (_LOGO_BASE_H_PT), NO del compacto.
-# Evita cascada 50%×40% ≈ 16–18% (11×0.4=4) que dejó el logo demasiado pequeño.
-_LOGO_ENTIDAD_MAX_H = max(5, int(round(_LOGO_BASE_H_PT * 0.4)))  # 9 pt
-# El ancho no se vuelve a reducir al 40%: la altura fija la escala (contain).
+# Encabezado compacto: logos legibles dentro del recuadro (sin inflar la estructura).
+# Nota: attrs HTML width/height unitless se interpretan como px en xhtml2pdf (×0.75);
+# por eso _logo_cell solo usa style con unidades pt.
+_LOGO_BASE_H_PT = 22  # referencia histórica (pre-compactación)
+_LOGO_MAX_H = 36  # pt — contratista / default (visible en el recuadro compacto)
+_LOGO_MAX_W_PCT = 94  # % del recuadro
+# Entidad (acta externa): mismo tope de altura; el recuadro es más ancho (sellos).
+_LOGO_ENTIDAD_MAX_H = _LOGO_MAX_H
 _LOGO_ENTIDAD_MAX_W_PCT = _LOGO_MAX_W_PCT
-# Ancho estimado del recuadro Entidad (30% del área útil letter portrait).
-_LOGO_ENTIDAD_CELL_W_PT = 150.0
-_LOGO_CONTRATISTA_CELL_W_PT = 90.0
+# Anchos estimados de recuadro (letter portrait, % del área útil).
+_LOGO_ENTIDAD_CELL_W_PT = 155.0
+_LOGO_CONTRATISTA_CELL_W_PT = 110.0
 _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
@@ -41,7 +40,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.1-logo-entidad-40-base"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.6-logo-36pt-style-pt"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -252,19 +251,17 @@ def _encabezado_oficial_html(
     )
 
     if es_externa:
-        # Tres recuadros compactos: contratista | título | entidad.
+        # Tres recuadros compactos: contratista | título | entidad (sin etiquetas de texto).
         header = (
             f'<table width="100%" cellspacing="0" cellpadding="0" '
             f'style="border-collapse:collapse;border:0.8pt solid {_BORDE};">'
             f'<tr>'
             f'<td style="width:18%;border-right:0.8pt solid {_BORDE};padding:{_HDR_PAD_CELL};'
             f'vertical-align:middle;text-align:center;">'
-            f'<div style="font-size:5pt;color:#64748b;margin-bottom:1pt;line-height:1;">Contratista</div>'
             f'{logo_contratista}</td>'
             f'<td style="width:52%;border-right:0.8pt solid {_BORDE};padding:2pt 4pt;'
             f'vertical-align:middle;">{titulo_html}</td>'
             f'<td style="width:30%;padding:{_HDR_PAD_CELL};vertical-align:middle;text-align:center;">'
-            f'<div style="font-size:5pt;color:#64748b;margin-bottom:1pt;line-height:1;">Entidad</div>'
             f'{logo_entidad}</td>'
             f'</tr>'
             f'</table>'
@@ -382,9 +379,11 @@ def _logo_cell(
             uri = ""
     if uri:
         w_pt, h_pt = _fit_logo_pt(uri, max_h_pt=float(max_h), max_w_pt=max_w_pt)
+        # Solo style con unidades pt: los attrs width/height unitless los trata
+        # xhtml2pdf como px (28 → 21pt) y pisan el tamaño real.
         return (
             f'<div style="text-align:center;padding:0;line-height:0;">'
-            f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
+            f'<img src="{uri}" '
             f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/>'
             f"</div>"
         )

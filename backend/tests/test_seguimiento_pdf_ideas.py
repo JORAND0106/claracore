@@ -157,6 +157,27 @@ def test_pdf_interna_no_muestra_bloque_entidad():
 
 
 def test_pdf_externa_incluye_identidad_entidad():
+    """Externa incluye recuadro de entidad (placeholder) sin etiquetas Contratista/Entidad."""
+    from seguimiento_pdf import _encabezado_oficial_html, _logo_cell
+
+    html = _encabezado_oficial_html(
+        {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": ""},
+        {
+            "consecutivo": 2,
+            "fecha_reunion": "2026-07-28",
+            "tipo_acta": "externa",
+        },
+        logo_contratista=_logo_cell(None, "Logo contratista"),
+        logo_entidad=_logo_cell(None, "Logo entidad"),
+    )
+    assert "Logo entidad" in html
+    assert "Logo contratista" in html
+    # Etiquetas de texto sobre los recuadros: eliminadas del formato oficial.
+    assert ">Contratista<" not in html
+    assert ">Entidad<" not in html
+    assert 'margin-bottom:1pt;line-height:1;">Contratista</div>' not in html
+    assert 'margin-bottom:1pt;line-height:1;">Entidad</div>' not in html
+
     pdf = generar_pdf_acta(
         {"numero": "CT-2-2026", "objeto": "Obra", "logo_entidad": ""},
         {
@@ -170,8 +191,9 @@ def test_pdf_externa_incluye_identidad_entidad():
         [],
     )
     text = _pdf_text(pdf)
-    assert "Entidad" in text.split("Objeto")[0]
-    assert "Contratista" in text.split("Objeto")[0]
+    header = text.split("Objeto")[0]
+    assert "Logo entidad" in header or "Logo contratista" in header
+    assert "Acta Externa" in header or "Externa" in header
 
 
 def test_contenido_hash_incluye_quien_dijo():
@@ -181,8 +203,8 @@ def test_contenido_hash_incluye_quien_dijo():
     assert h1 != h2
 
 
-def test_logo_entidad_externa_es_aprox_40_por_ciento():
-    """Entidad = ~40% del tamaño ORIGINAL (22pt), no del compacto (evita cascada ~16%)."""
+def test_logo_encabezado_tamano_intermedio_visible():
+    """Contratista y entidad a ~36pt reales en pt (xhtml2pdf no debe aplicar ×0.75 de attrs px)."""
     import base64
     import io
     import re
@@ -201,13 +223,12 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     )
 
     assert _LOGO_BASE_H_PT == 22
-    assert _LOGO_ENTIDAD_MAX_H == max(5, int(round(_LOGO_BASE_H_PT * 0.4)))  # 9
-    assert _LOGO_ENTIDAD_MAX_H == 9
-    # No cascada sobre el compacto (11×0.4=4).
-    assert _LOGO_ENTIDAD_MAX_H != max(4, int(round(_LOGO_MAX_H * 0.4)))
-    assert abs(_LOGO_ENTIDAD_MAX_H / _LOGO_BASE_H_PT - 0.4) < 0.05
-    # Ancho: misma holgura que el logo estándar (la altura fija la escala).
+    assert _LOGO_MAX_H == 36
+    assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
     assert _LOGO_ENTIDAD_MAX_W_PCT == _LOGO_MAX_W_PCT
+    # Visibilidad: claramente por encima del 9pt que quedó ilegible.
+    assert _LOGO_MAX_H >= 30
+    assert _LOGO_ENTIDAD_MAX_H > 9
 
     img = Image.new("RGB", (400, 200), (20, 80, 160))
     buf = io.BytesIO()
@@ -219,13 +240,10 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     assert h_pt <= _LOGO_ENTIDAD_MAX_H + 0.01
     assert w_pt <= max_w_ent + 0.01
 
-    # xhtml2pdf respeta height/width explícitos (no max-height).
-    entidad = (
-        f'<div style="text-align:center;padding:0;line-height:0;">'
-        f'<img src="{uri}" width="{w_pt}" height="{h_pt}" '
-        f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/></div>'
-    )
+    # xhtml2pdf: solo style en pt (attrs width/height unitless se interpretan como px).
+    entidad = _logo_cell(uri, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"height:{h_pt}pt" in entidad
+    assert 'width="' not in entidad  # attrs unitless reducirían el tamaño (36→27pt)
 
     placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
@@ -240,10 +258,9 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     cms = re.findall(rb"([\d\.\-]+) 0 0 ([\d\.\-]+) [\d\.\-]+ [\d\.\-]+ cm", data)
     assert cms, "se esperaba matriz de escala de imagen"
     rendered_h = float(cms[-1][1])
-    # ~9pt (40% de 22), no ~4pt (cascada) ni el intrínseco enorme.
-    assert rendered_h <= _LOGO_ENTIDAD_MAX_H + 1.5, (rendered_h, h_pt)
-    assert rendered_h >= 6.0, rendered_h
-    assert rendered_h < 20, rendered_h
+    # Debe respetar el tope en pt (no el 75% de la conversión px→pt).
+    assert abs(rendered_h - float(_LOGO_ENTIDAD_MAX_H)) < 1.5, (rendered_h, h_pt)
+    assert rendered_h >= 30.0, rendered_h
 
 
 def test_pdf_acta_cache_key_incluye_version_plantilla():
@@ -266,11 +283,12 @@ def test_pdf_acta_cache_key_incluye_version_plantilla():
 
 
 def test_encabezado_compacto_constantes_y_legibilidad():
-    """El bloque de encabezado usa dimensiones ~50% más compactas y sigue legible."""
+    """Encabezado compacto: logos intermedios visibles y sin etiquetas Contratista/Entidad."""
     from seguimiento_pdf import (
         _HDR_META_FS,
         _HDR_PAD,
         _HDR_TITLE_FS,
+        _LOGO_BASE_H_PT,
         _LOGO_ENTIDAD_MAX_H,
         _LOGO_ENTIDAD_MAX_W_PCT,
         _LOGO_MAX_H,
@@ -278,9 +296,9 @@ def test_encabezado_compacto_constantes_y_legibilidad():
         _logo_cell,
     )
 
-    assert _LOGO_MAX_H <= 12
-    # Entidad = 40% del original (22pt) → 9pt; no del compacto (evita cascada).
-    assert _LOGO_ENTIDAD_MAX_H == 9
+    assert _LOGO_MAX_H == 36
+    assert _LOGO_ENTIDAD_MAX_H == _LOGO_MAX_H
+    assert _LOGO_MAX_H >= 30
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD
@@ -311,6 +329,9 @@ def test_encabezado_compacto_constantes_y_legibilidad():
         assert "08:00" in html and "09:30" in html
         assert "INT-1" in html
         assert "Objeto del contrato" in html
+        # Sin etiquetas de texto sobre los recuadros de logo.
+        assert ">Contratista<" not in html
+        assert ">Entidad<" not in html
         # Padding compacto en celdas del encabezado (no el padding antiguo 8pt del título).
         assert "padding:8pt" not in html
         assert "padding:3pt 4pt" not in html
