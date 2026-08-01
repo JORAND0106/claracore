@@ -96,6 +96,35 @@ def test_build_mapa_calor_truncates_at_max_features():
     assert geo["meta"]["max_features"] == 3
 
 
+def test_fallback_coords_desde_reporte_como_detalle_unica():
+    """Detalle loc. única muestra so_reportes.coord_*; el mapa debe usarlas si la línea no tiene GPS."""
+    registros = [
+        {
+            "id": 1,
+            "reporte_id": 50,
+            "costo_directo": 1000,
+            "coord_lat": None,
+            "coord_lng": None,
+            "numero_registro": 7,
+        }
+    ]
+    reporte_map = {
+        50: {
+            "id": 50,
+            "numero_reporte": 12,
+            "estado": "Enviado",
+            "coord_lat": 4.760271,
+            "coord_lng": -74.031242,
+        }
+    }
+    geo = build_mapa_calor_geojson(registros, reporte_map)
+    assert geo["meta"]["con_coords"] == 1
+    assert geo["meta"]["sin_coords"] == 0
+    f0 = geo["features"][0]
+    assert f0["geometry"]["coordinates"] == [-74.031242, 4.760271]
+    assert f0["properties"]["origen_coord"] == "reporte"
+
+
 def test_intensidad_relativa_al_conjunto_filtrado():
     """El mismo costo absoluto escala distinto si cambia el máximo del filtro."""
     base = {
