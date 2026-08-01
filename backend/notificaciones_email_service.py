@@ -1,11 +1,11 @@
-"""Orquestación de notificaciones automáticas por correo (lun–vie, America/Bogota)."""
+"""Orquestación de notificaciones automáticas por correo (America/Bogota)."""
 
 from __future__ import annotations
 
 import html
 import logging
 from datetime import datetime, timedelta
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pytz
 
@@ -17,11 +17,16 @@ from notificaciones_email_config import (
 )
 from notificaciones_email_mail import (
     email_admin_resumen,
+    email_admin_resumen_semanal,
     email_informe_no_copiado,
     email_sin_item_asignado,
     email_validacion_pendiente,
     smtp_configured,
     try_send_notification_email,
+)
+from notificaciones_email_semanal import (
+    build_semana_snapshots,
+    semana_anterior_lunes_domingo,
 )
 from notificaciones_push_service import NotificacionesPushSender
 from usuarios_notif_elegibilidad import (
@@ -46,14 +51,27 @@ def _minutes_since_midnight(dt: datetime) -> int:
 
 
 def jobs_due_now(dt: Optional[datetime] = None) -> List[JobRunSpec]:
+    """
+    Jobs cuya hora cae en la ventana de tolerancia.
+
+    - matriz_snapshot: todos los días (incluye fin de semana para columnas Sáb/Dom)
+    - admin_resumen_semanal: solo lunes
+    - resto (sin_item / validacion_pendiente): lun–vie
+    """
     dt = dt or _bogota_now()
-    if not is_weekday_bogota(dt):
-        return []
     now_m = _minutes_since_midnight(dt)
+    weekday = dt.weekday()  # Mon=0
     due: List[JobRunSpec] = []
     for job in all_scheduled_jobs():
         target = job.hour * 60 + job.minute
-        if target <= now_m < target + CRON_MATCH_WINDOW_MIN:
+        if not (target <= now_m < target + CRON_MATCH_WINDOW_MIN):
+            continue
+        if job.job_type == "matriz_snapshot":
+            due.append(job)
+        elif job.job_type == "admin_resumen_semanal":
+            if weekday == 0:
+                due.append(job)
+        elif is_weekday_bogota(dt):
             due.append(job)
     return due
 
@@ -88,11 +106,12 @@ class NotificacionesEmailRunner:
         acta_rpo_vigente_row: Callable[[int], Optional[dict]],
         es_desarrollador_user_id: Callable[[int], bool],
         destinatarios_resumen_jornada: Callable[[Optional[int]], List[int]],
-        fetch_matriz_validacion_email: Callable[[int], dict],
-        fetch_capitulos_financiero_email: Callable[[int], dict],
-        ids_cargo_por_nombre: Callable[[str], List[int]],
-        usuarios_activos_por_cargos: Callable[[List[int]], List[dict]],
-        usuario_vinculado_contrato: Callable[[int, int], bool],
+        destinatarios_informe_validacion: Optional[Callable[[Optional[int]], List[int]]] = None,
+        fetch_matriz_validacion_email: Callable[[int], dict] = None,
+        fetch_capitulos_financiero_email: Callable[[int], dict] = None,
+        ids_cargo_por_nombre: Callable[[str], List[int]] = None,
+        usuarios_activos_por_cargos: Callable[[List[int]], List[dict]] = None,
+        usuario_vinculado_contrato: Callable[[int, int], bool] = None,
     ):
         self.supabase = supabase
         self.supabase_execute = supabase_execute
@@ -102,6 +121,8 @@ class NotificacionesEmailRunner:
         self._acta_vigente = acta_rpo_vigente_row
         self._es_dev = es_desarrollador_user_id
         self._resumen_dest = destinatarios_resumen_jornada
+        # Popup / semanal: editar RC excl. Operativo/Contratista Gerencial (+ Dev)
+        self._informe_dest = destinatarios_informe_validacion or destinatarios_resumen_jornada
         self._fetch_matriz = fetch_matriz_validacion_email
         self._fetch_capitulos = fetch_capitulos_financiero_email
         self._ids_cargo = ids_cargo_por_nombre
@@ -479,11 +500,11 @@ class NotificacionesEmailRunner:
         matriz: dict,
         capitulos: dict,
     ) -> Optional[dict]:
-        """Guarda (mañana) o carga (tarde) el snapshot de comparación de jornada."""
+        """Guarda (mañana) o carga (tarde) el snapshot de comparación de jornada (temp/prueba)."""
         if periodo_efectivo == "manana":
-            self._guardar_resumen_snapshot(contrato_id, fecha, matriz, capitulos)
+            self._guardar_resumen_snapshot(contrato_id, fecha, matriz, capitulos, periodo="apertura")
             return None
-        return self._cargar_resumen_snapshot(contrato_id, fecha)
+        return self._cargar_resumen_snapshot(contrato_id, fecha, periodo="apertura")
 
     def _admin_resumen_preparar_contrato(
         self, contrato_id: int, fecha: str, periodo_efectivo: str
@@ -496,11 +517,18 @@ class NotificacionesEmailRunner:
         return cnum, matriz, capitulos, snapshot_manana
 
     def _guardar_resumen_snapshot(
-        self, contrato_id: int, fecha: str, matriz: dict, capitulos: dict
+        self,
+        contrato_id: int,
+        fecha: str,
+        matriz: dict,
+        capitulos: dict,
+        periodo: str = "apertura",
     ) -> None:
+        periodo_norm = "cierre" if periodo == "cierre" else "apertura"
         row = {
             "contrato_id": int(contrato_id),
             "fecha": fecha,
+            "periodo": periodo_norm,
             "matriz": matriz,
             "capitulos": capitulos,
         }
@@ -508,28 +536,53 @@ class NotificacionesEmailRunner:
         def _upsert():
             return (
                 self.supabase.table("notificaciones_email_resumen_snapshot")
-                .upsert(row, on_conflict="contrato_id,fecha")
+                .upsert(row, on_conflict="contrato_id,fecha,periodo")
                 .execute()
             )
 
         try:
             self.supabase_execute(_upsert)
         except Exception:
+            # Compat: esquema legacy sin columna periodo (unique contrato_id,fecha)
+            if periodo_norm == "apertura":
+                try:
+                    row_legacy = {
+                        "contrato_id": int(contrato_id),
+                        "fecha": fecha,
+                        "matriz": matriz,
+                        "capitulos": capitulos,
+                    }
+
+                    def _upsert_legacy():
+                        return (
+                            self.supabase.table("notificaciones_email_resumen_snapshot")
+                            .upsert(row_legacy, on_conflict="contrato_id,fecha")
+                            .execute()
+                        )
+
+                    self.supabase_execute(_upsert_legacy)
+                    return
+                except Exception:
+                    pass
             _log.exception(
-                "No se pudo guardar snapshot resumen contrato %s fecha %s",
+                "No se pudo guardar snapshot resumen contrato %s fecha %s periodo %s",
                 contrato_id,
                 fecha,
+                periodo_norm,
             )
 
     def _cargar_resumen_snapshot(
-        self, contrato_id: int, fecha: str
+        self, contrato_id: int, fecha: str, periodo: str = "apertura"
     ) -> Optional[dict]:
+        periodo_norm = "cierre" if periodo == "cierre" else "apertura"
+
         def _fetch():
             return (
                 self.supabase.table("notificaciones_email_resumen_snapshot")
-                .select("matriz, capitulos")
+                .select("matriz, capitulos, periodo")
                 .eq("contrato_id", int(contrato_id))
                 .eq("fecha", fecha)
+                .eq("periodo", periodo_norm)
                 .limit(1)
                 .execute()
                 .data
@@ -537,14 +590,74 @@ class NotificacionesEmailRunner:
 
         try:
             rows = self.supabase_execute(_fetch) or []
-            return rows[0] if rows else None
+            if rows:
+                return rows[0]
+        except Exception:
+            pass
+
+        # Compat legacy: una sola fila por día (= apertura)
+        if periodo_norm == "apertura":
+            try:
+                def _fetch_legacy():
+                    return (
+                        self.supabase.table("notificaciones_email_resumen_snapshot")
+                        .select("matriz, capitulos")
+                        .eq("contrato_id", int(contrato_id))
+                        .eq("fecha", fecha)
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+
+                rows = self.supabase_execute(_fetch_legacy) or []
+                return rows[0] if rows else None
+            except Exception:
+                _log.exception(
+                    "No se pudo cargar snapshot resumen contrato %s fecha %s",
+                    contrato_id,
+                    fecha,
+                )
+                return None
+        return None
+
+    def _cargar_snapshots_rango(
+        self, contrato_id: int, fecha_desde: str, fecha_hasta: str
+    ) -> Dict[Tuple[str, str], dict]:
+        """Mapa (fecha_iso, periodo) → {matriz, capitulos}."""
+        out: Dict[Tuple[str, str], dict] = {}
+
+        def _fetch():
+            return (
+                self.supabase.table("notificaciones_email_resumen_snapshot")
+                .select("fecha, periodo, matriz, capitulos")
+                .eq("contrato_id", int(contrato_id))
+                .gte("fecha", fecha_desde)
+                .lte("fecha", fecha_hasta)
+                .execute()
+                .data
+            )
+
+        try:
+            rows = self.supabase_execute(_fetch) or []
         except Exception:
             _log.exception(
-                "No se pudo cargar snapshot resumen contrato %s fecha %s",
+                "No se pudieron cargar snapshots contrato %s %s..%s",
                 contrato_id,
-                fecha,
+                fecha_desde,
+                fecha_hasta,
             )
-            return None
+            return out
+        for r in rows:
+            f = str(r.get("fecha") or "")[:10]
+            periodo = str(r.get("periodo") or "apertura").strip().lower()
+            if periodo not in ("apertura", "cierre"):
+                periodo = "apertura"
+            if f:
+                out[(f, periodo)] = {
+                    "matriz": r.get("matriz") or {},
+                    "capitulos": r.get("capitulos") or {},
+                }
+        return out
 
     def run_admin_resumen_prueba_temp(
         self,
@@ -609,6 +722,10 @@ class NotificacionesEmailRunner:
         }
 
     def run_admin_resumen(self, fecha: str, periodo: str, log_key: str) -> dict:
+        """
+        Legacy: correos diarios apertura/cierre — deshabilitados en el scheduler.
+        Se conserva para pruebas temp / compatibilidad.
+        """
         enviados = 0
         push_enviados = 0
         periodo_efectivo = "manana" if periodo == "manana" else "tarde"
@@ -673,18 +790,132 @@ class NotificacionesEmailRunner:
             "push_enviados": push_enviados,
         }
 
+    def run_matriz_snapshot(self, fecha: str, periodo: str, log_key: str) -> dict:
+        """Guarda snapshot apertura/cierre sin enviar correo (alimenta informe semanal)."""
+        periodo_norm = "cierre" if periodo == "cierre" else "apertura"
+        contratos = self._fetch_contratos_activos()
+        guardados = 0
+        for c in contratos:
+            try:
+                cid = int(c["id"])
+            except (TypeError, ValueError):
+                continue
+            try:
+                _cnum, matriz, capitulos = self._admin_resumen_cargar_contrato(cid)
+            except LookupError:
+                continue
+            self._guardar_resumen_snapshot(cid, fecha, matriz, capitulos, periodo=periodo_norm)
+            # Marca dedupe por contrato (usuario_id null)
+            if not self._ya_enviado("matriz_snapshot", log_key, None, cid):
+                self._registrar_envio(
+                    "matriz_snapshot",
+                    log_key,
+                    None,
+                    cid,
+                    f"snapshot:{periodo_norm}",
+                    True,
+                    meta={"periodo": periodo_norm},
+                )
+            guardados += 1
+        return {
+            "contratos_evaluados": len(contratos),
+            "snapshots_guardados": guardados,
+            "periodo": periodo_norm,
+        }
+
+    def run_admin_resumen_semanal(self, fecha_ref: str, log_key: str) -> dict:
+        """Informe semanal (lunes 08:00) con matriz día a día y curvas de desviación."""
+        enviados = 0
+        push_enviados = 0
+        try:
+            ref = datetime.strptime(fecha_ref, "%Y-%m-%d").date()
+        except ValueError:
+            ref = _bogota_now().date()
+        lunes, domingo = semana_anterior_lunes_domingo(ref)
+        # Incluir domingo previo (acumulado) en el rango de carga
+        fecha_desde = (lunes - timedelta(days=1)).isoformat()
+        fecha_hasta = domingo.isoformat()
+        contratos = self._fetch_contratos_activos()
+        for c in contratos:
+            try:
+                cid = int(c["id"])
+            except (TypeError, ValueError):
+                continue
+            dest_ids = self._informe_dest(cid)
+            if not dest_ids:
+                continue
+            cnum = str(c.get("numero") or cid)
+            snaps = self._cargar_snapshots_rango(cid, fecha_desde, fecha_hasta)
+            semana = build_semana_snapshots(snaps, lunes)
+            for uid in dest_ids:
+                urows = (
+                    self.supabase.table("usuarios")
+                    .select("id, email, nombre, apellidos, estado, activo")
+                    .eq("id", uid)
+                    .eq("activo", True)
+                    .eq("estado", "aprobado")
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if not urows:
+                    continue
+                u = urows[0]
+                if not usuario_puede_recibir_notificaciones_automaticas(u):
+                    continue
+                subj, txt, html_b = email_admin_resumen_semanal(
+                    _usuario_display_name(u),
+                    cnum,
+                    lunes,
+                    domingo,
+                    semana,
+                )
+                en, pn = self._enviar_canales(
+                    "admin_resumen_semanal",
+                    log_key,
+                    int(u["id"]),
+                    cid,
+                    (u.get("email") or "").strip(),
+                    subj,
+                    txt,
+                    html_b,
+                    meta={
+                        "semana_inicio": lunes.isoformat(),
+                        "semana_fin": domingo.isoformat(),
+                    },
+                )
+                enviados += en
+                push_enviados += pn
+        return {
+            "contratos_evaluados": len(contratos),
+            "enviados": enviados,
+            "push_enviados": push_enviados,
+            "semana_inicio": lunes.isoformat(),
+            "semana_fin": domingo.isoformat(),
+        }
+
     def run_due_jobs(self, dt: Optional[datetime] = None) -> dict:
         dt = dt or _bogota_now()
-        if not smtp_configured() and not self._push.configured():
-            return {"skipped": "sin_canales_configurados", "jobs": []}
-
         fecha = dt.strftime("%Y-%m-%d")
+        due = jobs_due_now(dt)
+        if not due:
+            return {
+                "fecha": fecha,
+                "hora_bogota": dt.strftime("%H:%M"),
+                "jobs": [],
+                "skipped": None if is_weekday_bogota(dt) else "fin_de_semana_sin_jobs",
+            }
+
+        # Snapshots no requieren SMTP/push; el resto sí
+        needs_channel = any(j.job_type != "matriz_snapshot" for j in due)
+        if needs_channel and not smtp_configured() and not self._push.configured():
+            due = [j for j in due if j.job_type == "matriz_snapshot"]
+            if not due:
+                return {"skipped": "sin_canales_configurados", "jobs": []}
+
         results: List[dict] = []
-
-        if not is_weekday_bogota(dt):
-            return {"skipped": "fin_de_semana", "jobs": []}
-
-        for job in jobs_due_now(dt):
+        for job in due:
             log_key = _slot_log_key(fecha, job)
             try:
                 if job.job_type == "informe_no_copiado":
@@ -695,6 +926,10 @@ class NotificacionesEmailRunner:
                     stats = self.run_validacion_pendiente(log_key)
                 elif job.job_type == "admin_resumen":
                     stats = self.run_admin_resumen(fecha, job.slot_key, log_key)
+                elif job.job_type == "matriz_snapshot":
+                    stats = self.run_matriz_snapshot(fecha, job.slot_key, log_key)
+                elif job.job_type == "admin_resumen_semanal":
+                    stats = self.run_admin_resumen_semanal(fecha, log_key)
                 else:
                     stats = {"error": "tipo_desconocido"}
                 results.append({"job": job.job_type, "slot": job.slot_key, **stats})
@@ -721,6 +956,7 @@ def build_runner_from_main(main_module) -> NotificacionesEmailRunner:
         acta_rpo_vigente_row=m._acta_rpo_vigente_row,
         es_desarrollador_user_id=_es_dev_uid,
         destinatarios_resumen_jornada=m._destinatarios_resumen_jornada,
+        destinatarios_informe_validacion=m._destinatarios_informe_validacion_dashboard,
         fetch_matriz_validacion_email=m._fetch_matriz_validacion_vigente_email,
         fetch_capitulos_financiero_email=m._fetch_capitulos_financiero_email,
         ids_cargo_por_nombre=m._ids_cargo_por_nombre,

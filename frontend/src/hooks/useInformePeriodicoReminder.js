@@ -5,11 +5,13 @@ import {
   shouldShowInformePeriodicoReminder,
 } from '../utils/informePeriodicoSchedule'
 import { registrarInformePeriodicoCopiaServidor } from '../utils/informePeriodicoServer'
-import { usuarioPuedeEditarRegistrosSicoe } from '../utils/permisosContrato'
+import { usuarioDebeVerInformePeriodicoPopup } from '../utils/permisosContrato'
 
 /**
  * Controla cuándo mostrar el modal de informe periódico.
- * Reaparece en cada cambio de módulo / recarga hasta que se copia la captura en la ventana vigente.
+ * Una sola ventana diaria (9:00, lun–vie) para cargos con editar en Dashboard
+ * de validación, excluyendo Operativo/Contratista Gerencial.
+ * Reaparece al cambiar de módulo / recargar hasta copiar la captura del día.
  */
 export function useInformePeriodicoReminder({
   usuario,
@@ -25,7 +27,7 @@ export function useInformePeriodicoReminder({
   const pendingRef = useRef(false)
   const slotRef = useRef(null)
 
-  const eligible = usuarioPuedeEditarRegistrosSicoe(usuario, contratoId)
+  const eligible = usuarioDebeVerInformePeriodicoPopup(usuario, contratoId)
 
   const evaluate = useCallback(() => {
     if (!eligible || !usuario?.id || !contratoId) {

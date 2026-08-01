@@ -1,9 +1,6 @@
-/** Horarios de producción (lun–vie). NO modificar sin acuerdo funcional. */
+/** Horario del popup de informe de validación (lun–vie). Una sola ventana diaria a las 9:00. */
 export const INFORME_PERIODICO_SLOTS_PROD = [
-  { key: '0800', startMinutes: 8 * 60 + 0 },
-  { key: '1030', startMinutes: 10 * 60 + 30 },
-  { key: '1300', startMinutes: 13 * 60 + 0 },
-  { key: '1530', startMinutes: 15 * 60 + 30 },
+  { key: '0900', startMinutes: 9 * 60 + 0 },
 ]
 
 /** Slots activos (producción). Ordenados por hora. */
@@ -31,8 +28,10 @@ function formatSlotId(date, slot) {
 }
 
 /**
- * Identificador estable de la ventana horaria activa, p. ej. "2026-07-18_1030".
+ * Identificador estable de la ventana horaria activa, p. ej. "2026-08-03_0900".
  * null si fuera de horario o fin de semana.
+ * Con un solo slot a las 9:00, la ventana permanece activa el resto del día hábil
+ * (hasta que el usuario complete la copia).
  */
 export function getActiveInformePeriodicoSlotId(date = new Date()) {
   if (!isInformePeriodicoWeekday(date)) return null

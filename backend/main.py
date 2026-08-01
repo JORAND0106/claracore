@@ -6078,8 +6078,10 @@ def _usuarios_activos_por_roles(rol_ids: List[int]) -> List[dict]:
 
 def _destinatarios_resumen_jornada(contrato_id: Optional[int]) -> List[int]:
     """
-    Resumen inicio/fin de jornada: Desarrolladores (todos) +
+    Legacy (pruebas temp): Desarrolladores (todos) +
     Contratista Gerencial vinculado al contrato (por rol, no por permiso admin).
+    Los correos diarios apertura/cierre ya no se programan; el informe semanal
+    usa `_destinatarios_informe_validacion_dashboard`.
     """
     dest: Set[int] = set()
     for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("desarrollador")):
@@ -6100,6 +6102,120 @@ def _destinatarios_resumen_jornada(contrato_id: Optional[int]) -> List[int]:
         except (TypeError, ValueError, KeyError):
             continue
         if _usuario_vinculado_a_contrato(uid, cid):
+            dest.add(uid)
+    return sorted(dest)
+
+
+def _ids_roles_excluidos_informe_validacion() -> Set[int]:
+    """IDs de rol Operativo Gerencial / Contratista Gerencial (excluidos del informe)."""
+    from notificaciones_email_config import ROLES_EXCLUIDOS_INFORME_VALIDACION
+
+    out: Set[int] = set()
+    targets = tuple(ROLES_EXCLUIDOS_INFORME_VALIDACION)
+    # Coincidencia exacta por helper existente
+    for nombre in targets:
+        for rid in _ids_rol_por_nombre(nombre):
+            out.add(int(rid))
+    # También por substring (p. ej. variaciones de nombre en BD)
+    try:
+        rows = supabase.table("roles").select("id, nombre").execute().data or []
+        for r in rows:
+            nom = (r.get("nombre") or "").strip().lower()
+            if any(t in nom for t in targets):
+                if r.get("id") is not None:
+                    out.add(int(r["id"]))
+    except Exception:
+        pass
+    return out
+
+
+def _usuario_es_rol_excluido_informe_validacion(user_id: int) -> bool:
+    """True si el usuario tiene rol Operativo/Contratista Gerencial."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    excluidos = _ids_roles_excluidos_informe_validacion()
+    if not excluidos:
+        return False
+    try:
+        rows = (
+            supabase.table("usuarios")
+            .select("id, rol_id")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return False
+        rid = rows[0].get("rol_id")
+        return rid is not None and int(rid) in excluidos
+    except Exception:
+        return False
+
+
+def _destinatarios_informe_validacion_dashboard(contrato_id: Optional[int]) -> List[int]:
+    """
+    Popup 9:00 + informe semanal lunes 8:00:
+    Desarrolladores + usuarios vinculados con permiso editar en «Reporte de Cantidades»,
+    excluyendo rol Operativo Gerencial / Contratista Gerencial.
+    """
+    dest: Set[int] = set()
+    for u in _usuarios_activos_por_cargos(_ids_cargo_por_nombre("desarrollador")):
+        try:
+            uid = int(u["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not _usuario_es_rol_excluido_informe_validacion(uid):
+            dest.add(uid)
+    if contrato_id is None:
+        return sorted(dest)
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return sorted(dest)
+
+    # Candidatos vinculados al contrato (misma lógica que runner email)
+    uid_set: Set[int] = set()
+    try:
+        prim = (
+            supabase.table("usuarios")
+            .select("id")
+            .eq("contrato_id", cid)
+            .eq("activo", True)
+            .eq("estado", "aprobado")
+            .execute()
+            .data
+            or []
+        )
+        for r in prim:
+            uid_set.add(int(r["id"]))
+    except Exception:
+        pass
+    try:
+        uc = (
+            supabase.table("usuario_contratos")
+            .select("usuario_id")
+            .eq("contrato_id", cid)
+            .execute()
+            .data
+            or []
+        )
+        for r in uc:
+            uid_set.add(int(r["usuario_id"]))
+    except Exception:
+        pass
+
+    for uid in uid_set:
+        if not _usuario_vinculado_a_contrato(uid, cid):
+            continue
+        if _usuario_es_rol_excluido_informe_validacion(uid):
+            continue
+        if _es_desarrollador({"sub": str(uid)}) or _cargo_permiso_reporte_cantidades_user_id(
+            uid, "editar", cid
+        ):
             dest.add(uid)
     return sorted(dest)
 
