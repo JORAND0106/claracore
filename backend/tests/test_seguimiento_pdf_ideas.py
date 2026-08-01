@@ -182,7 +182,7 @@ def test_contenido_hash_incluye_quien_dijo():
 
 
 def test_logo_entidad_externa_es_aprox_40_por_ciento():
-    """En acta externa el logo de entidad usa ~40% del tamaño del logo estándar."""
+    """Entidad = ~40% del tamaño ORIGINAL (22pt), no del compacto (evita cascada ~16%)."""
     import base64
     import io
     import re
@@ -190,6 +190,7 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     from PIL import Image
 
     from seguimiento_pdf import (
+        _LOGO_BASE_H_PT,
         _LOGO_ENTIDAD_CELL_W_PT,
         _LOGO_ENTIDAD_MAX_H,
         _LOGO_ENTIDAD_MAX_W_PCT,
@@ -199,10 +200,14 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
         _logo_cell,
     )
 
-    assert _LOGO_ENTIDAD_MAX_H == max(4, int(round(_LOGO_MAX_H * 0.4)))
-    assert _LOGO_ENTIDAD_MAX_W_PCT == max(20, int(round(_LOGO_MAX_W_PCT * 0.4)))
-    assert _LOGO_ENTIDAD_MAX_H < _LOGO_MAX_H
-    assert _LOGO_ENTIDAD_MAX_W_PCT < _LOGO_MAX_W_PCT
+    assert _LOGO_BASE_H_PT == 22
+    assert _LOGO_ENTIDAD_MAX_H == max(5, int(round(_LOGO_BASE_H_PT * 0.4)))  # 9
+    assert _LOGO_ENTIDAD_MAX_H == 9
+    # No cascada sobre el compacto (11×0.4=4).
+    assert _LOGO_ENTIDAD_MAX_H != max(4, int(round(_LOGO_MAX_H * 0.4)))
+    assert abs(_LOGO_ENTIDAD_MAX_H / _LOGO_BASE_H_PT - 0.4) < 0.05
+    # Ancho: misma holgura que el logo estándar (la altura fija la escala).
+    assert _LOGO_ENTIDAD_MAX_W_PCT == _LOGO_MAX_W_PCT
 
     img = Image.new("RGB", (400, 200), (20, 80, 160))
     buf = io.BytesIO()
@@ -221,12 +226,10 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
         f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;"/></div>'
     )
     assert f"height:{h_pt}pt" in entidad
-    assert f"height:{_LOGO_MAX_H}pt" not in entidad or h_pt == float(_LOGO_MAX_H)
 
     placeholder = _logo_cell(None, "E", max_h=_LOGO_ENTIDAD_MAX_H, max_w_pct=_LOGO_ENTIDAD_MAX_W_PCT)
     assert f"min-height:{_LOGO_ENTIDAD_MAX_H}pt" in placeholder
 
-    # Escala en el PDF real: matriz cm con altura ≈ h_pt
     from xhtml2pdf import pisa
     from pypdf import PdfReader
 
@@ -237,8 +240,9 @@ def test_logo_entidad_externa_es_aprox_40_por_ciento():
     cms = re.findall(rb"([\d\.\-]+) 0 0 ([\d\.\-]+) [\d\.\-]+ [\d\.\-]+ cm", data)
     assert cms, "se esperaba matriz de escala de imagen"
     rendered_h = float(cms[-1][1])
-    # xhtml2pdf puede redondear unos pt; debe quedar en el orden del tope (~4pt), no del intrínseco (~150pt).
+    # ~9pt (40% de 22), no ~4pt (cascada) ni el intrínseco enorme.
     assert rendered_h <= _LOGO_ENTIDAD_MAX_H + 1.5, (rendered_h, h_pt)
+    assert rendered_h >= 6.0, rendered_h
     assert rendered_h < 20, rendered_h
 
 
@@ -275,7 +279,8 @@ def test_encabezado_compacto_constantes_y_legibilidad():
     )
 
     assert _LOGO_MAX_H <= 12
-    assert _LOGO_ENTIDAD_MAX_H <= max(4, int(round(_LOGO_MAX_H * 0.4)))
+    # Entidad = 40% del original (22pt) → 9pt; no del compacto (evita cascada).
+    assert _LOGO_ENTIDAD_MAX_H == 9
     assert "7.5" in _HDR_TITLE_FS or float(_HDR_TITLE_FS.replace("pt", "")) <= 8.0
     assert float(_HDR_META_FS.replace("pt", "")) <= 6.5
     assert "1pt" in _HDR_PAD or "2pt" in _HDR_PAD

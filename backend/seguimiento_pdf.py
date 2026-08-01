@@ -18,11 +18,15 @@ _BORDE_SUAVE = "#94a3b8"
 _BG_H = "#1e293b"
 _FG_H = "#ffffff"
 # Encabezado compacto (~50% menos altura que la versión previa).
-_LOGO_MAX_H = 11  # pt — logo contratista / default
+# Referencia previa a compactar (usado solo para calcular el 40% de entidad sin cascada).
+_LOGO_BASE_H_PT = 22
+_LOGO_MAX_H = 11  # pt — logo contratista / default (compacto)
 _LOGO_MAX_W_PCT = 88  # % del recuadro
-# Entidad (acta externa): ~40% del tamaño del logo estándar, misma proporción.
-_LOGO_ENTIDAD_MAX_H = max(4, int(round(_LOGO_MAX_H * 0.4)))  # 4 pt
-_LOGO_ENTIDAD_MAX_W_PCT = max(20, int(round(_LOGO_MAX_W_PCT * 0.4)))  # 35%
+# Entidad (acta externa): ~40% del tamaño ORIGINAL (_LOGO_BASE_H_PT), NO del compacto.
+# Evita cascada 50%×40% ≈ 16–18% (11×0.4=4) que dejó el logo demasiado pequeño.
+_LOGO_ENTIDAD_MAX_H = max(5, int(round(_LOGO_BASE_H_PT * 0.4)))  # 9 pt
+# El ancho no se vuelve a reducir al 40%: la altura fija la escala (contain).
+_LOGO_ENTIDAD_MAX_W_PCT = _LOGO_MAX_W_PCT
 # Ancho estimado del recuadro Entidad (30% del área útil letter portrait).
 _LOGO_ENTIDAD_CELL_W_PT = 150.0
 _LOGO_CONTRATISTA_CELL_W_PT = 90.0
@@ -37,7 +41,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-07-31.3-idea-esquemas"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.1-logo-entidad-40-base"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
