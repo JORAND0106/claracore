@@ -21,7 +21,7 @@ _FG_H = "#ffffff"
 # Nota: attrs HTML width/height unitless se interpretan como px en xhtml2pdf (×0.75);
 # por eso _logo_cell solo usa style con unidades pt.
 _LOGO_BASE_H_PT = 22  # referencia histórica (pre-compactación)
-_LOGO_MAX_H = 40  # pt — logo único del encabezado (ligero aumento sobre 36pt)
+_LOGO_MAX_H = 46  # pt — ~15% sobre 40pt; cabe en la celda sin subir altura del encabezado
 _LOGO_MAX_W_PCT = 94  # % del recuadro
 # Mismo tope para entidad (externa) y contratista (interna).
 _LOGO_ENTIDAD_MAX_H = _LOGO_MAX_H
@@ -33,10 +33,11 @@ _HDR_TITLE_FS = "7.5pt"
 _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
-# Tabla de asistentes: filas compactas.
+# Tabla de asistentes: filas compactas y bordes tenues.
 _ASIS_PAD = "2pt 4pt"
 _ASIS_PAD_EMPTY = "3pt 4pt"
 _ASIS_FS = "8pt"
+_ASIS_BORDER = f"0.3pt solid {_BORDE_SUAVE}"
 
 # Esquemas/gráficos de ideas: caja fija (xhtml2pdf ignora max-height).
 _IDEA_IMG_BOX_W_PT = 240.0
@@ -44,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.7-header-3col-logo40"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.8-logo46-asis-borde-tenue"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -537,24 +538,24 @@ def generar_pdf_acta(
 
     asis_rows = "".join(
         f"<tr>"
-        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('nombre'))}</td>"
-        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('cargo'))}</td>"
-        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:22%;'>{_esc(a.get('entidad'))}</td>"
-        f"<td style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};width:28%;'>{_esc(a.get('email'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};width:28%;'>{_esc(a.get('nombre'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};width:22%;'>{_esc(a.get('cargo'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};width:22%;'>{_esc(a.get('entidad'))}</td>"
+        f"<td style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};width:28%;'>{_esc(a.get('email'))}</td>"
         f"</tr>"
         for a in (asistentes or [])
     ) or (
-        f"<tr><td colspan='4' style='padding:{_ASIS_PAD_EMPTY};border:0.5pt solid {_BORDE};color:#94a3b8;'>"
+        f"<tr><td colspan='4' style='padding:{_ASIS_PAD_EMPTY};border:{_ASIS_BORDER};color:#94a3b8;'>"
         "Sin asistentes registrados</td></tr>"
     )
     asis_table = (
         f"<table width='100%' cellspacing='0' cellpadding='0' "
         f"style='border-collapse:collapse;font-size:{_ASIS_FS};'>"
         f"<tr style='background:{_BG_H};'>"
-        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Nombre</th>"
-        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Cargo</th>"
-        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Empresa</th>"
-        f"<th style='padding:{_ASIS_PAD};border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Correo</th>"
+        f"<th style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};text-align:left;color:{_FG_H};'>Nombre</th>"
+        f"<th style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};text-align:left;color:{_FG_H};'>Cargo</th>"
+        f"<th style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};text-align:left;color:{_FG_H};'>Empresa</th>"
+        f"<th style='padding:{_ASIS_PAD};border:{_ASIS_BORDER};text-align:left;color:{_FG_H};'>Correo</th>"
         f"</tr>{asis_rows}</table>"
     )
 

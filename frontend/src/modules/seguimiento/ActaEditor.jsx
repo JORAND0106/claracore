@@ -26,8 +26,8 @@ const TABS_ACTA = [
   { id: 'encabezado', label: 'Encabezado' },
   { id: 'orden', label: 'Orden del día' },
   { id: 'asistentes', label: 'Asistentes' },
-  { id: 'ideas', label: 'Ideas y compromisos' },
   { id: 'compromisos', label: 'Compromisos abiertos' },
+  { id: 'ideas', label: 'Temas y Compromisos' },
   { id: 'apartados', label: 'Apartados' },
   { id: 'acciones', label: 'Vista previa y acciones' },
 ]
