@@ -8,8 +8,12 @@ import {
   numeroActaLabel,
 } from './seguimientoTheme'
 
+export const MSG_ACTA_ACCESO_RESTRINGIDO =
+  'No tiene acceso a esta acta. Solo el elaborador, los asistentes registrados y los roles Administrador o Desarrollador pueden consultarla.'
+
 /**
  * Repositorio consultable de actas (grilla + filtros + palabras clave).
+ * Las actas sin permiso de contenido siguen visibles pero bloqueadas al abrir.
  */
 export default function ActasRepositorio({
   t,
@@ -22,6 +26,7 @@ export default function ActasRepositorio({
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [accesoMsg, setAccesoMsg] = useState('')
   const [filtros, setFiltros] = useState({
     estado: '',
     tipo_acta: '',
@@ -48,6 +53,16 @@ export default function ActasRepositorio({
 
   useEffect(() => { load() }, [load])
 
+  const handleAbrir = (a) => {
+    const bloqueada = a?.puede_abrir === false || a?.acceso_restringido === true
+    if (bloqueada) {
+      setAccesoMsg(MSG_ACTA_ACCESO_RESTRINGIDO)
+      return
+    }
+    setAccesoMsg('')
+    onAbrir?.(a.id)
+  }
+
   return (
     <div className={viewportCompact ? 'cc-seguim-actas cc-seguim-actas--compact' : 'cc-seguim-actas'}>
       <div className="cc-seguim-filters" style={{
@@ -58,7 +73,7 @@ export default function ActasRepositorio({
             value={filtros.q}
             onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
             onKeyDown={(e) => { if (e.key === 'Enter') load() }}
-            placeholder="Buscar en contenido del acta…"
+            placeholder="Buscar en actas con acceso; en bloqueadas solo metadatos…"
             style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
           />
         </Field>
@@ -87,6 +102,29 @@ export default function ActasRepositorio({
       </div>
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>{error}</div>}
+      {accesoMsg && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 10,
+            padding: '10px 12px',
+            borderRadius: 8,
+            border: `1px solid color-mix(in srgb, ${t.primary} 45%, ${t.border})`,
+            background: `${t.primary}12`,
+            color: t.text,
+            fontSize: 'var(--cc-sm)',
+            display: 'flex',
+            gap: 10,
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>{accesoMsg}</span>
+          <button type="button" onClick={() => setAccesoMsg('')} style={{ ...ghost(t), padding: '4px 8px', flexShrink: 0 }}>
+            Cerrar
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div style={{ color: t.textMuted }}>Cargando repositorio…</div>
@@ -104,33 +142,62 @@ export default function ActasRepositorio({
                 <th style={th}>Ubicación</th>
                 <th style={th}>Elaborador</th>
                 <th style={th}>Estado</th>
+                <th style={th}>Acceso</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
-                <tr
-                  key={a.id}
-                  onClick={() => onAbrir?.(a.id)}
-                  style={{ cursor: 'pointer', borderTop: `1px solid ${t.border}`, background: t.bgCard }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary}10` }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = t.bgCard }}
-                >
-                  <td data-label="Consecutivo" style={td}>{a.consecutivo ?? '—'}</td>
-                  <td data-label="Número de acta" style={{ ...td, fontWeight: 700, color: t.text }}>{numeroActaLabel(a.consecutivo)}</td>
-                  <td data-label="Fecha" style={td}>{fmtFecha(a.fecha_reunion)}</td>
-                  <td data-label="Tipo" style={td}>{labelTipoActa(a.tipo_acta || 'interna')}</td>
-                  <td data-label="Ubicación" style={{ ...td, maxWidth: 220 }}>{a.ubicacion || '—'}</td>
-                  <td data-label="Elaborador" style={td}>{a.elaborador_nombre || '—'}</td>
-                  <td data-label="Estado" style={td}>
-                    <span style={{
-                      display: 'inline-block', padding: '2px 8px', borderRadius: 6,
-                      border: `1px solid ${t.border}`, fontWeight: 600, fontSize: 'var(--cc-xs)',
-                    }}>
-                      {labelEstadoActa(a.estado)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((a) => {
+                const bloqueada = a?.puede_abrir === false || a?.acceso_restringido === true
+                return (
+                  <tr
+                    key={a.id}
+                    onClick={() => handleAbrir(a)}
+                    title={bloqueada ? MSG_ACTA_ACCESO_RESTRINGIDO : 'Abrir acta'}
+                    style={{
+                      cursor: bloqueada ? 'not-allowed' : 'pointer',
+                      borderTop: `1px solid ${t.border}`,
+                      background: t.bgCard,
+                      opacity: bloqueada ? 0.78 : 1,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary}10` }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = t.bgCard }}
+                  >
+                    <td data-label="Consecutivo" style={td}>{a.consecutivo ?? '—'}</td>
+                    <td data-label="Número de acta" style={{ ...td, fontWeight: 700, color: t.text }}>{numeroActaLabel(a.consecutivo)}</td>
+                    <td data-label="Fecha" style={td}>{fmtFecha(a.fecha_reunion)}</td>
+                    <td data-label="Tipo" style={td}>{labelTipoActa(a.tipo_acta || 'interna')}</td>
+                    <td data-label="Ubicación" style={{ ...td, maxWidth: 220 }}>{a.ubicacion || '—'}</td>
+                    <td data-label="Elaborador" style={td}>{a.elaborador_nombre || '—'}</td>
+                    <td data-label="Estado" style={td}>
+                      <span style={{
+                        display: 'inline-block', padding: '2px 8px', borderRadius: 6,
+                        border: `1px solid ${t.border}`, fontWeight: 600, fontSize: 'var(--cc-xs)',
+                      }}>
+                        {labelEstadoActa(a.estado)}
+                      </span>
+                    </td>
+                    <td data-label="Acceso" style={td}>
+                      {bloqueada ? (
+                        <span style={{
+                          display: 'inline-block', padding: '2px 8px', borderRadius: 6,
+                          border: `1px solid ${t.border}`, fontWeight: 600, fontSize: 'var(--cc-xs)',
+                          color: t.textMuted,
+                        }}>
+                          Bloqueada
+                        </span>
+                      ) : (
+                        <span style={{
+                          display: 'inline-block', padding: '2px 8px', borderRadius: 6,
+                          border: `1px solid ${t.border}`, fontWeight: 600, fontSize: 'var(--cc-xs)',
+                          color: t.text,
+                        }}>
+                          Disponible
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

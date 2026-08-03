@@ -6,6 +6,124 @@ import pytest
 import seguimiento_service as svc
 
 
+def test_usuario_puede_ver_acta_elaborador_asistente_y_roles():
+    acta = {
+        "id": 7,
+        "elaborador_id": 10,
+        "asistentes": [
+            {"usuario_id": 20, "nombre": "Ana"},
+            {"usuario_id": None, "nombre": "Externo"},
+        ],
+    }
+    assert svc.usuario_puede_ver_acta(None, acta, 10, {"rol_nombre": "Operativo"}) is True
+    assert svc.usuario_puede_ver_acta(None, acta, 20, {"rol_nombre": "Operativo"}) is True
+    assert svc.usuario_puede_ver_acta(None, acta, 99, {"rol_nombre": "Operativo"}) is False
+    assert svc.usuario_puede_ver_acta(
+        None, acta, 99, {"cargo_nombre": "Administrador"},
+    ) is True
+    assert svc.usuario_puede_ver_acta(
+        None, acta, 99, {"rol_nombre": "Desarrollador"},
+    ) is True
+
+
+def test_assert_puede_ver_acta_lanza_acceso_denegado():
+    acta = {"id": 1, "elaborador_id": 10, "asistentes": []}
+    with pytest.raises(svc.ActaAccesoDenegado):
+        svc.assert_puede_ver_acta(None, acta, 99, {"rol_nombre": "Operativo"})
+
+
+def test_anexar_flags_acceso_actas_redacta_orden(monkeypatch):
+    rows = [
+        {"id": 1, "elaborador_id": 10, "orden_del_dia": '["secreto"]', "consecutivo": 1},
+        {"id": 2, "elaborador_id": 11, "orden_del_dia": '["otro"]', "consecutivo": 2},
+    ]
+    monkeypatch.setattr(svc, "_ids_actas_donde_es_asistente", lambda *_a, **_k: {2})
+    out = svc.anexar_flags_acceso_actas(None, rows, user_id=20, current_user={"rol_nombre": "x"})
+    assert out[0]["puede_abrir"] is False
+    assert out[0]["orden_del_dia"] is None
+    assert out[0]["acceso_restringido"] is True
+    assert out[1]["puede_abrir"] is True
+    assert out[1]["orden_del_dia"] == '["otro"]'
+
+
+def test_resumen_acta_restringida_sin_contenido():
+    full = {
+        "id": 3,
+        "consecutivo": 12,
+        "fecha_reunion": "2026-07-01",
+        "tipo_acta": "interna",
+        "estado": "borrador",
+        "elaborador_id": 10,
+        "elaborador_nombre": "Luis",
+        "ubicacion": "Sala",
+        "orden_del_dia": "secreto",
+        "ideas": [{"texto": "x"}],
+        "asistentes": [{"nombre": "A"}],
+    }
+    r = svc.resumen_acta_restringida(full)
+    assert r["consecutivo"] == 12
+    assert r["puede_abrir"] is False
+    assert "ideas" not in r
+    assert "asistentes" not in r
+    assert "orden_del_dia" not in r
+
+
+def test_get_item_detalle_redacta_acta_sin_acceso(monkeypatch):
+    item = {
+        "id": 5,
+        "origen": "compromiso",
+        "acta_id": 3,
+        "contrato_id": 1,
+        "titulo": "Entregar",
+    }
+    acta = {
+        "id": 3,
+        "consecutivo": 9,
+        "elaborador_id": 10,
+        "estado": "borrador",
+        "tipo_acta": "interna",
+        "orden_del_dia": "secreto",
+        "asistentes": [{"usuario_id": 10}],
+        "ideas": [{"texto": "tema oculto"}],
+        "apartados": [],
+        "compromisos": [],
+        "firmas": [],
+    }
+
+    class FakeQ:
+        def __init__(self):
+            self._data = []
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": list(self._data)})()
+
+    class FakeSb:
+        def table(self, _n):
+            return FakeQ()
+
+    monkeypatch.setattr(svc, "get_item", lambda *_a, **_k: dict(item))
+    monkeypatch.setattr(svc, "get_acta", lambda *_a, **_k: dict(acta))
+
+    denied = svc.get_item_detalle(FakeSb(), 5, user_id=99, current_user={"rol_nombre": "Operativo"})
+    assert denied["puede_ver_acta"] is False
+    assert denied["acta"]["consecutivo"] == 9
+    assert "ideas" not in denied["acta"]
+    assert denied["acta"].get("orden_del_dia") is None
+
+    allowed = svc.get_item_detalle(FakeSb(), 5, user_id=10, current_user={"rol_nombre": "Operativo"})
+    assert allowed["puede_ver_acta"] is True
+    assert allowed["acta"]["ideas"][0]["texto"] == "tema oculto"
+
+
 def test_acta_sellada_helper():
     assert svc._acta_esta_sellada({"estado": "borrador"}) is False
     assert svc._acta_esta_sellada({"estado": "realizada"}) is True

@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
 from seguimiento_service import (
+    ActaAccesoDenegado,
+    MSG_ACTA_ACCESO_RESTRINGIDO,
     add_idea,
     actualizar_estado_asignado,
     actualizar_estado_gestion,
@@ -25,6 +27,7 @@ from seguimiento_service import (
     adjuntar_imagen_idea_base64,
     adjuntar_imagen_tarea_base64,
     agregar_comentario,
+    assert_puede_ver_acta,
     cargar_evidencia,
     compromisos_abiertos_contrato,
     create_acta,
@@ -69,6 +72,13 @@ def _http_value_error(exc: ValueError) -> HTTPException:
     if "no encontrad" in msg.lower():
         return HTTPException(status_code=404, detail=msg)
     return HTTPException(status_code=400, detail=msg)
+
+
+def _http_acta_acceso(exc: ActaAccesoDenegado) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail=getattr(exc, "detail", None) or MSG_ACTA_ACCESO_RESTRINGIDO,
+    )
 
 
 def _check_contrato(current_user, contrato_id: int) -> None:
@@ -333,7 +343,12 @@ def route_bandeja_widget(
 def route_get_item(item_id: int, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "ver")
     try:
-        return get_item_detalle(supabase, item_id)
+        return get_item_detalle(
+            supabase,
+            item_id,
+            user_id=_uid(current_user),
+            current_user=current_user,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -628,6 +643,8 @@ def route_list_actas(
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         q=q,
+        user_id=_uid(current_user),
+        current_user=current_user,
     )
 
 
@@ -672,7 +689,13 @@ def route_get_acta(contrato_id: int, acta_id: int, current_user=Depends(get_curr
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     try:
-        return get_acta(supabase, acta_id, contrato_id)
+        acta = get_acta(supabase, acta_id, contrato_id)
+        assert_puede_ver_acta(supabase, acta, _uid(current_user), current_user)
+        acta["puede_abrir"] = True
+        acta["acceso_restringido"] = False
+        return acta
+    except ActaAccesoDenegado as exc:
+        raise _http_acta_acceso(exc) from exc
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -816,7 +839,16 @@ def route_pdf_acta(
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     try:
-        pdf = generar_preview_pdf_acta(supabase, contrato_id, acta_id, force=force)
+        pdf = generar_preview_pdf_acta(
+            supabase,
+            contrato_id,
+            acta_id,
+            force=force,
+            user_id=_uid(current_user),
+            current_user=current_user,
+        )
+    except ActaAccesoDenegado as exc:
+        raise _http_acta_acceso(exc) from exc
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     except Exception as exc:

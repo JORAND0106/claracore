@@ -315,6 +315,7 @@ export default function ActaEditor({
   const [loading, setLoading] = useState(!!actaId)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [accesoDenegado, setAccesoDenegado] = useState('')
   const [okMsg, setOkMsg] = useState('')
   const [consecutivo, setConsecutivo] = useState(null)
   const [previos, setPrevios] = useState([])
@@ -389,6 +390,7 @@ export default function ActaEditor({
       try {
         if (actaId) {
           setLoading(true)
+          setAccesoDenegado('')
           const a = await client.getActa(actaId)
           if (cancelled) return
           setLocalActaId(a.id)
@@ -461,7 +463,17 @@ export default function ActaEditor({
           hydratedActaIdRef.current = 'new'
         }
       } catch (e) {
-        if (!cancelled && !isAbortLike(e)) setError(friendlyFetchError(e, 'Error cargando acta'))
+        if (!cancelled && !isAbortLike(e)) {
+          if (e?.status === 403) {
+            setAccesoDenegado(
+              e.message
+              || 'No tiene acceso a esta acta. Solo el elaborador, los asistentes registrados y los roles Administrador o Desarrollador pueden consultarla.',
+            )
+            setError('')
+          } else {
+            setError(friendlyFetchError(e, 'Error cargando acta'))
+          }
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -909,6 +921,37 @@ export default function ActaEditor({
 
   if (loading) {
     return <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)', padding: 16 }}>Cargando acta…</div>
+  }
+
+  if (accesoDenegado) {
+    const blocked = (
+      <div style={{
+        padding: 20, maxWidth: 520, margin: '24px auto',
+        border: `1px solid ${t.border}`, borderRadius: 12, background: t.bgCard,
+      }}>
+        <div style={{ fontWeight: 700, fontSize: 'var(--cc-title)', color: t.text, marginBottom: 8 }}>
+          Acceso restringido
+        </div>
+        <p style={{ margin: '0 0 16px', color: t.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+          {accesoDenegado}
+        </p>
+        <button type="button" onClick={onCancel} style={ghost(t)}>
+          {asModal ? 'Cerrar' : 'Volver al repositorio'}
+        </button>
+      </div>
+    )
+    if (asModal) {
+      return (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 80,
+          background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-start',
+          justifyContent: 'center', padding: 16, overflow: 'auto',
+        }}>
+          {blocked}
+        </div>
+      )
+    }
+    return blocked
   }
 
   const asistenteOpciones = (form.asistentes || [])

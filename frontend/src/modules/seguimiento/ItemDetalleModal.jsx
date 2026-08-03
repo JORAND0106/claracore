@@ -54,12 +54,18 @@ export default function ItemDetalleModal({
       const d = await api.getItem(itemId)
       applyItem(d)
       setEstadoSel('')
-      if (d.origen === 'compromiso' && d.acta_id) {
+      const puedeVerActa = d.puede_ver_acta !== false
+        && d.acta?.puede_abrir !== false
+        && d.acta?.acceso_restringido !== true
+      if (d.origen === 'compromiso' && d.acta_id && puedeVerActa) {
         try {
           const blob = await api.pdfActaBlob(d.acta_id)
           if (pdfUrl) URL.revokeObjectURL(pdfUrl)
           setPdfUrl(URL.createObjectURL(blob))
         } catch { /* preview opcional */ }
+      } else if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl)
+        setPdfUrl(null)
       }
     } catch (e) {
       setError(e.message || 'Error')
@@ -523,13 +529,33 @@ export default function ItemDetalleModal({
       {esCompromiso && (
         <section style={{ marginTop: 16 }}>
           <h4 style={h4(t)}>Acta de origen</h4>
-          {pdfUrl ? (
-            <iframe title="Acta" src={pdfUrl} style={{ width: '100%', height: 280, border: `1px solid ${t.border}`, borderRadius: 8 }} />
-          ) : (
-            <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-              {item.acta ? `Acta Nº ${item.acta.consecutivo}` : 'Sin vista previa de acta'}
-            </div>
-          )}
+          {(() => {
+            const puedeVerActa = item.puede_ver_acta !== false
+              && item.acta?.puede_abrir !== false
+              && item.acta?.acceso_restringido !== true
+            if (pdfUrl && puedeVerActa) {
+              return (
+                <iframe title="Acta" src={pdfUrl} style={{ width: '100%', height: 280, border: `1px solid ${t.border}`, borderRadius: 8 }} />
+              )
+            }
+            const num = item.acta?.consecutivo != null
+              ? `Acta Nº ${item.acta.consecutivo}`
+              : (item.acta_id ? `Acta #${item.acta_id}` : null)
+            if (!puedeVerActa && num) {
+              return (
+                <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+                  <div style={{ fontWeight: 600, color: t.text, marginBottom: 4 }}>{num}</div>
+                  Referencia de origen disponible. No tiene permiso para ver el contenido completo de esta acta
+                  (solo elaborador, asistentes registrados o roles Administrador/Desarrollador).
+                </div>
+              )
+            }
+            return (
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+                {num || 'Sin vista previa de acta'}
+              </div>
+            )
+          })()}
         </section>
       )}
 
