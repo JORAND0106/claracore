@@ -126,7 +126,9 @@ export function createSeguimientoApi(contratoId, token) {
           const j = await res.json()
           if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
         } catch { /* ignore */ }
-        throw new Error(detail)
+        const err = new Error(detail)
+        err.status = res.status
+        throw err
       }
       const buf = await res.arrayBuffer()
       if (!buf || buf.byteLength < 20) throw new Error('El PDF generado está vacío')

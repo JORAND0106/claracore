@@ -136,6 +136,180 @@ def es_desarrollador_seguimiento(current_user: Optional[dict] = None) -> bool:
         return rol == "desarrollador" or cargo == "desarrollador"
 
 
+MSG_ACTA_ACCESO_RESTRINGIDO = (
+    "No tiene acceso a esta acta. Solo el elaborador, los asistentes registrados "
+    "y los roles Administrador o Desarrollador pueden consultarla."
+)
+
+
+class ActaAccesoDenegado(Exception):
+    """El usuario no puede ver el contenido interno del acta (HTTP 403)."""
+
+    def __init__(self, detail: str = MSG_ACTA_ACCESO_RESTRINGIDO):
+        self.detail = detail
+        super().__init__(detail)
+
+
+def es_administrador_seguimiento(current_user: Optional[dict] = None) -> bool:
+    """Cargo/rol Administrador: puede consultar cualquier acta (sin bypass de edición)."""
+    if not current_user:
+        return False
+    try:
+        from main import _es_cargo_administrador_sicoe
+
+        if bool(_es_cargo_administrador_sicoe(current_user)):
+            return True
+    except Exception:
+        pass
+    rol = (current_user.get("rol_nombre") or "").strip().lower()
+    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+    return rol == "administrador" or cargo == "administrador"
+
+
+def es_admin_o_desarrollador_seguimiento(current_user: Optional[dict] = None) -> bool:
+    return es_desarrollador_seguimiento(current_user) or es_administrador_seguimiento(current_user)
+
+
+def _usuario_es_asistente_registrado(sb, acta_id: int, user_id: int) -> bool:
+    try:
+        rows = (
+            sb.table("seguimiento_acta_asistente")
+            .select("id")
+            .eq("acta_id", int(acta_id))
+            .eq("usuario_id", int(user_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def _ids_actas_donde_es_asistente(sb, user_id: int, acta_ids: List[int]) -> Set[int]:
+    if not acta_ids:
+        return set()
+    try:
+        rows = (
+            sb.table("seguimiento_acta_asistente")
+            .select("acta_id")
+            .eq("usuario_id", int(user_id))
+            .in_("acta_id", [int(x) for x in acta_ids])
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return set()
+    return {int(r["acta_id"]) for r in rows if r.get("acta_id") is not None}
+
+
+def usuario_puede_ver_acta(
+    sb,
+    acta: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> bool:
+    """
+    Contenido completo del acta: elaborador, asistente registrado (usuario_id),
+    o rol Administrador / Desarrollador.
+    """
+    if not acta:
+        return False
+    if es_admin_o_desarrollador_seguimiento(current_user):
+        return True
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    elab = acta.get("elaborador_id")
+    if elab is not None:
+        try:
+            if int(elab) == uid:
+                return True
+        except (TypeError, ValueError):
+            pass
+    asistentes = acta.get("asistentes")
+    if isinstance(asistentes, list):
+        for a in asistentes:
+            try:
+                if a.get("usuario_id") is not None and int(a["usuario_id"]) == uid:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        # Lista cargada y vacía / sin match → no consultar de nuevo
+        return False
+    aid = acta.get("id")
+    if aid is None:
+        return False
+    return _usuario_es_asistente_registrado(sb, int(aid), uid)
+
+
+def assert_puede_ver_acta(
+    sb,
+    acta: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> None:
+    if not usuario_puede_ver_acta(sb, acta, user_id, current_user):
+        raise ActaAccesoDenegado()
+
+
+def resumen_acta_restringida(acta: dict) -> dict:
+    """Metadatos seguros para bandeja / listados sin revelar contenido interno."""
+    return {
+        "id": acta.get("id"),
+        "consecutivo": acta.get("consecutivo"),
+        "fecha_reunion": acta.get("fecha_reunion"),
+        "tipo_acta": acta.get("tipo_acta"),
+        "estado": acta.get("estado"),
+        "elaborador_id": acta.get("elaborador_id"),
+        "elaborador_nombre": acta.get("elaborador_nombre"),
+        "ubicacion": acta.get("ubicacion"),
+        "puede_abrir": False,
+        "acceso_restringido": True,
+    }
+
+
+def anexar_flags_acceso_actas(
+    sb,
+    rows: List[dict],
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> List[dict]:
+    """Marca puede_abrir en cada fila del repositorio y redacta campos sensibles."""
+    if not rows:
+        return rows
+    privilegiado = es_admin_o_desarrollador_seguimiento(current_user)
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        uid = -1
+    asis_ids: Set[int] = set()
+    if not privilegiado and uid > 0:
+        asis_ids = _ids_actas_donde_es_asistente(
+            sb, uid, [int(r["id"]) for r in rows if r.get("id") is not None]
+        )
+    for r in rows:
+        puede = privilegiado
+        if not puede:
+            elab = r.get("elaborador_id")
+            try:
+                if elab is not None and int(elab) == uid:
+                    puede = True
+            except (TypeError, ValueError):
+                pass
+        if not puede and r.get("id") is not None:
+            puede = int(r["id"]) in asis_ids
+        r["puede_abrir"] = bool(puede)
+        r["acceso_restringido"] = not bool(puede)
+        if not puede:
+            # No filtrar del listado: solo ocultar contenido interno expuesto en la fila.
+            r["orden_del_dia"] = None
+    return rows
+
+
 def ids_usuarios_bajo_gestion(sb, gerencial_id: int, contrato_id: Optional[int] = None) -> Set[int]:
     """Usuarios del mismo contrato con rol Operativo/Contratista (bajo gerencial)."""
     g = _usuario_row(sb, gerencial_id)
@@ -1192,6 +1366,8 @@ def list_actas(
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
     q: Optional[str] = None,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
 ) -> List[dict]:
     query = (
         sb.table("seguimiento_acta")
@@ -1224,6 +1400,8 @@ def list_actas(
     if tipo_acta:
         want_t = _norm_tipo_acta(tipo_acta)
         out = [r for r in out if _norm_tipo_acta(r.get("tipo_acta") or "interna") == want_t]
+    if user_id is not None:
+        anexar_flags_acceso_actas(sb, out, int(user_id), current_user)
     if not (q or "").strip():
         return out
     return _filtrar_actas_por_keywords(sb, out, q)
@@ -1236,61 +1414,78 @@ def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
     ids = [int(r["id"]) for r in rows]
     if not ids:
         return []
-    ideas = sb.table("seguimiento_acta_idea").select("acta_id,texto").in_("acta_id", ids).execute().data or []
-    apartados = (
-        sb.table("seguimiento_acta_apartado")
-        .select("acta_id,titulo,contenido")
-        .in_("acta_id", ids)
-        .execute()
-        .data
-        or []
-    )
-    asis_cols = "acta_id,nombre,cargo,entidad"
-    if _schema_has(sb, "asistente_email"):
-        asis_cols += ",email"
-    try:
-        asistentes = (
-            sb.table("seguimiento_acta_asistente")
-            .select(asis_cols)
-            .in_("acta_id", ids)
-            .execute()
-            .data
-            or []
-        )
-    except Exception:
-        asistentes = (
-            sb.table("seguimiento_acta_asistente")
-            .select("acta_id,nombre,cargo,entidad")
-            .in_("acta_id", ids)
-            .execute()
-            .data
-            or []
-        )
+    # Contenido interno solo para actas que el usuario puede abrir (evita filtrar por secretos).
+    open_ids = [int(r["id"]) for r in rows if r.get("puede_abrir", True)]
     by_id: Dict[int, List[str]] = {i: [] for i in ids}
-    for idea in ideas:
-        by_id.setdefault(int(idea["acta_id"]), []).append(str(idea.get("texto") or ""))
-    for ap in apartados:
-        by_id.setdefault(int(ap["acta_id"]), []).extend([
-            str(ap.get("titulo") or ""),
-            str(ap.get("contenido") or ""),
-        ])
-    for a in asistentes:
-        by_id.setdefault(int(a["acta_id"]), []).extend([
-            str(a.get("nombre") or ""),
-            str(a.get("cargo") or ""),
-            str(a.get("entidad") or ""),
-            str(a.get("email") or ""),
-        ])
+    if open_ids:
+        ideas = (
+            sb.table("seguimiento_acta_idea")
+            .select("acta_id,texto")
+            .in_("acta_id", open_ids)
+            .execute()
+            .data
+            or []
+        )
+        apartados = (
+            sb.table("seguimiento_acta_apartado")
+            .select("acta_id,titulo,contenido")
+            .in_("acta_id", open_ids)
+            .execute()
+            .data
+            or []
+        )
+        asis_cols = "acta_id,nombre,cargo,entidad"
+        if _schema_has(sb, "asistente_email"):
+            asis_cols += ",email"
+        try:
+            asistentes = (
+                sb.table("seguimiento_acta_asistente")
+                .select(asis_cols)
+                .in_("acta_id", open_ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            asistentes = (
+                sb.table("seguimiento_acta_asistente")
+                .select("acta_id,nombre,cargo,entidad")
+                .in_("acta_id", open_ids)
+                .execute()
+                .data
+                or []
+            )
+        for idea in ideas:
+            by_id.setdefault(int(idea["acta_id"]), []).append(str(idea.get("texto") or ""))
+        for ap in apartados:
+            by_id.setdefault(int(ap["acta_id"]), []).extend([
+                str(ap.get("titulo") or ""),
+                str(ap.get("contenido") or ""),
+            ])
+        for a in asistentes:
+            by_id.setdefault(int(a["acta_id"]), []).extend([
+                str(a.get("nombre") or ""),
+                str(a.get("cargo") or ""),
+                str(a.get("entidad") or ""),
+                str(a.get("email") or ""),
+            ])
     out = []
     for r in rows:
-        corpus = " ".join([
+        public = [
             str(r.get("ubicacion") or ""),
             str(r.get("elaborador_nombre") or ""),
-            str(r.get("orden_del_dia") or ""),
             str(r.get("tipo_acta") or ""),
             str(r.get("consecutivo") or ""),
-            *by_id.get(int(r["id"]), []),
-        ]).lower()
+            str(r.get("estado") or ""),
+        ]
+        if r.get("puede_abrir", True):
+            corpus = " ".join([
+                *public,
+                str(r.get("orden_del_dia") or ""),
+                *by_id.get(int(r["id"]), []),
+            ]).lower()
+        else:
+            corpus = " ".join(public).lower()
         if all(t in corpus for t in tokens):
             out.append(r)
     return out
@@ -2921,7 +3116,7 @@ def update_tarea(sb, item_id: int, data: dict, user_id: int, current_user: Optio
         new_estado=new_estado,
         actor_id=user_id,
     )
-    return get_item_detalle(sb, item_id)
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
 def actualizar_estado_asignado(
@@ -3064,7 +3259,7 @@ def actualizar_estado_asignado(
     _notificar_delegante_cumplido_total(
         sb, item_after, actor_id=user_id, prev_estado=prev_global, new_estado=new_global,
     )
-    return get_item_detalle(sb, item_id)
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
 def adjuntar_imagen_tarea_base64(
@@ -3133,7 +3328,7 @@ def adjuntar_imagen_tarea_base64(
     patch["campos_libres"] = _normalizar_campos_libres_tarea(libres)
 
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
-    return get_item_detalle(sb, item_id)
+    return get_item_detalle(sb, item_id, user_id=user_id)
 
 
 # ── Bandeja / detalle ────────────────────────────────────────────────────────
@@ -3145,7 +3340,13 @@ def get_item(sb, item_id: int) -> dict:
     return rows[0]
 
 
-def get_item_detalle(sb, item_id: int) -> dict:
+def get_item_detalle(
+    sb,
+    item_id: int,
+    *,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
+) -> dict:
     item = get_item(sb, item_id)
     iid = int(item["id"])
     item["comentarios"] = (
@@ -3186,9 +3387,21 @@ def get_item_detalle(sb, item_id: int) -> dict:
     )
     if item.get("origen") == "compromiso" and item.get("acta_id"):
         try:
-            item["acta"] = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+            acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+            if user_id is not None and not usuario_puede_ver_acta(
+                sb, acta, int(user_id), current_user
+            ):
+                item["acta"] = resumen_acta_restringida(acta)
+                item["puede_ver_acta"] = False
+            else:
+                if isinstance(acta, dict):
+                    acta["puede_abrir"] = True
+                    acta["acceso_restringido"] = False
+                item["acta"] = acta
+                item["puede_ver_acta"] = True
         except ValueError:
             item["acta"] = None
+            item["puede_ver_acta"] = False
     if item.get("origen") == "tarea":
         # Migración suave: descripción legacy → checklist de un ítem
         libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
@@ -3426,7 +3639,7 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
             entidad_tipo="seguimiento_item",
             entidad_id=str(item_id),
         )
-    return get_item_detalle(sb, item_id)
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
 def eliminar_item(sb, item_id: int, current_user: dict) -> dict:
@@ -3597,7 +3810,7 @@ def actualizar_fecha_compromiso(
         user_id,
         {"fecha_vencimiento": fv.isoformat(), "hora_vencimiento": hora},
     )
-    return get_item_detalle(sb, item_id)
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
 def cargar_evidencia(
@@ -3756,7 +3969,9 @@ def revisar_justificacion(
             entidad_tipo="seguimiento_compromiso",
             entidad_id=str(item["id"]),
         )
-    return get_item_detalle(sb, int(item["id"]))
+    return get_item_detalle(
+        sb, int(item["id"]), user_id=user_id, current_user=current_user,
+    )
 
 
 # ── PDF / firmas / jobs ──────────────────────────────────────────────────────
@@ -3825,6 +4040,8 @@ def generar_preview_pdf_acta(
     acta_id: int,
     *,
     force: bool = False,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
 ) -> bytes:
     """Genera (o sirve desde caché) el PDF del acta.
 
@@ -3833,6 +4050,8 @@ def generar_preview_pdf_acta(
     force=True ignora Blob y regenera siempre (p. ej. botón «Vista previa»).
     """
     acta = get_acta(sb, acta_id, contrato_id)
+    if user_id is not None:
+        assert_puede_ver_acta(sb, acta, int(user_id), current_user)
     try:
         contrato = _contrato(sb, contrato_id)
     except Exception:
