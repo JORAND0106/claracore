@@ -81,6 +81,7 @@ import {
   sicoeLocSpreadEnRegistro,
   fmtLocCorta,
 } from './modules/sicoe-obra/sicoeLocalizacionHelpers'
+import { sicoeDatosMapaPortadaPk } from './modules/sicoe-obra/sicoeMapaPortadaPk'
 import {
   listaGraficosRegistro,
   parseGraficosHistorial,
@@ -1154,18 +1155,26 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
 
 
 // ─── MAPA PORTADA (localización en consulta/edición de reporte) ───────────────
-// Estilo outdoors: relieve y curvas de nivel; clic sigue actualizando coordenadas vía map.on('click').
-function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds = null, pkMapHint = null }) {
+// Estilo outdoors: relieve y curvas de nivel; dibuja polígono PK + abscisado del plano.
+function MapaPortada({
+  lat, lng, modoEdicion, onCoordsChange, t,
+  fallbackBounds = null, pkMapHint = null,
+  planoGeojson = null, extremosAbs = null,
+}) {
   const containerRef = useRef(null)
   const mapRef       = useRef(null)
   const markerRef    = useRef(null)
+  const absMarkersRef = useRef([])
   const modoRef      = useRef(modoEdicion)
   const [mapError, setMapError] = useState(null)
   useEffect(() => { modoRef.current = modoEdicion }, [modoEdicion])
 
+  const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
+  const planoFc = _normalizeContratoPlanoGeojson(planoGeojson)
+  const tienePlano = !!planoFc?.features?.length
+
   useEffect(() => {
     if (!containerRef.current) return
-    const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
     const cLat = hasCoords ? parseFloat(lat) : 4.71
     const cLng = hasCoords ? parseFloat(lng) : -74.07
     const { map, error } = crearMapboxMapSeguro(containerRef.current, {
@@ -1199,10 +1208,13 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
     })
     return () => {
       try { unregAttrib() } catch { /* ignore */ }
+      absMarkersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
+      absMarkersRef.current = []
       try { map.remove() } catch { /* ignore */ }
       mapRef.current = null
       markerRef.current = null
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mapa se crea una sola vez
   }, [])
 
   useEffect(() => {
@@ -1215,19 +1227,127 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
         markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
           .setLngLat([lo, la]).addTo(mapRef.current)
       }
-      mapRef.current.flyTo({ center: [lo, la], zoom: 15, duration: 800 })
+      // Si hay plano del PK, el efecto de capas hace fitBounds; no sobreescribir con flyTo al punto.
+      if (!tienePlano && !fallbackBounds) {
+        mapRef.current.flyTo({ center: [lo, la], zoom: 15, duration: 800 })
+      }
     }
-  }, [lat, lng])
+  }, [lat, lng, tienePlano, fallbackBounds])
 
   useEffect(() => {
-    if (!mapRef.current || !fallbackBounds) return
-    const la = parseFloat(lat), lo = parseFloat(lng)
-    if (!isNaN(la) && !isNaN(lo)) return
     const map = mapRef.current
-    const fit = () => _mapboxFitBoundsLngLat(map, fallbackBounds, { padding: 56, maxZoom: 16, duration: 650 })
-    if (map.isStyleLoaded()) fit()
-    else map.once('load', fit)
-  }, [fallbackBounds, lat, lng])
+    if (!map) return
+
+    const pintar = () => {
+      const fc = _normalizeContratoPlanoGeojson(planoGeojson)
+      try {
+        if (fc?.features?.length) {
+          if (map.getSource('portada-plano')) {
+            map.getSource('portada-plano').setData(fc)
+          } else {
+            map.addSource('portada-plano', { type: 'geojson', data: fc })
+            map.addLayer({
+              id: 'portada-plano-fill',
+              type: 'fill',
+              source: 'portada-plano',
+              paint: { 'fill-color': '#0077B6', 'fill-opacity': 0.32 },
+            })
+            map.addLayer({
+              id: 'portada-plano-line',
+              type: 'line',
+              source: 'portada-plano',
+              paint: { 'line-color': '#00A896', 'line-width': 1.6 },
+            })
+            map.addLayer({
+              id: 'portada-labels-pk',
+              type: 'symbol',
+              source: 'portada-plano',
+              filter: _FILTER_MAPBOX_LABEL_PK,
+              layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'pk_id'], ['get', 'PK_ID'], ['get', 'Layer'], '']),
+              paint: MAPBOX_PLANO_PAINT_LABELS,
+            })
+            _addMapboxAbscisaLabelLayers(map, {
+              idPrefix: 'portada-labels-abscisa',
+              source: 'portada-plano',
+              layout: _mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+              paint: MAPBOX_PLANO_PAINT_LABELS,
+            })
+          }
+        } else if (map.getSource('portada-plano')) {
+          map.getSource('portada-plano').setData({ type: 'FeatureCollection', features: [] })
+        }
+      } catch { /* capas ya existentes o estilo no listo */ }
+
+      absMarkersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
+      absMarkersRef.current = []
+      const extremos = Array.isArray(extremosAbs) ? extremosAbs : []
+      extremos.forEach((pt) => {
+        if (pt?.lng == null || pt?.lat == null) return
+        const el = document.createElement('div')
+        const esIni = pt.rol === 'inicio'
+        el.style.minWidth = '22px'
+        el.style.height = '22px'
+        el.style.padding = '0 6px'
+        el.style.borderRadius = '11px'
+        el.style.background = esIni ? '#0D9488' : '#F59E0B'
+        el.style.color = '#fff'
+        el.style.fontSize = '10px'
+        el.style.fontWeight = '800'
+        el.style.display = 'flex'
+        el.style.alignItems = 'center'
+        el.style.justifyContent = 'center'
+        el.style.border = '2px solid #fff'
+        el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.35)'
+        el.style.whiteSpace = 'nowrap'
+        el.style.cursor = 'default'
+        el.textContent = esIni ? 'Ini' : 'Fin'
+        el.title = pt.label || (esIni ? 'Abs. Inicio' : 'Abs. Final')
+        const m = new mapboxgl.Marker({ element: el, offset: [0, -4] })
+          .setLngLat([+pt.lng, +pt.lat])
+          .setPopup(new mapboxgl.Popup({ offset: 12, closeButton: false }).setText(pt.label || ''))
+          .addTo(map)
+        absMarkersRef.current.push(m)
+      })
+
+      let fitTarget = fc?.features?.length ? _boundsFromFeatureCollection(fc) : null
+      if (extremos.length) {
+        const extFc = {
+          type: 'FeatureCollection',
+          features: extremos
+            .filter((p) => p?.lng != null && p?.lat != null)
+            .map((p) => ({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [+p.lng, +p.lat] },
+              properties: {},
+            })),
+        }
+        const bExt = _boundsFromFeatureCollection(extFc)
+        if (bExt) {
+          fitTarget = fitTarget
+            ? {
+              minLng: Math.min(fitTarget.minLng, bExt.minLng),
+              maxLng: Math.max(fitTarget.maxLng, bExt.maxLng),
+              minLat: Math.min(fitTarget.minLat, bExt.minLat),
+              maxLat: Math.max(fitTarget.maxLat, bExt.maxLat),
+            }
+            : bExt
+        }
+      }
+      fitTarget = fitTarget || fallbackBounds
+      if (fitTarget) {
+        _mapboxFitBoundsLngLat(map, fitTarget, { padding: 56, maxZoom: 17, duration: 650 })
+      } else {
+        const la = parseFloat(lat), lo = parseFloat(lng)
+        if (!isNaN(la) && !isNaN(lo)) {
+          map.flyTo({ center: [lo, la], zoom: 15, duration: 650 })
+        }
+      }
+      try { map.resize() } catch { /* ignore */ }
+    }
+
+    if (map.isStyleLoaded()) pintar()
+    else map.once('load', pintar)
+  }, [planoGeojson, extremosAbs, fallbackBounds, lat, lng])
 
   useEffect(() => {
     const map = mapRef.current
@@ -1254,21 +1374,27 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds 
     }
   }, [mapError])
 
-  const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
   if (mapError) {
     return <MapaNoDisponible t={t} mensaje={mapError} minHeight={340} />
   }
+  const mostrarOverlayVacio = !hasCoords && !tienePlano && !fallbackBounds
+  const mostrarHintPlano = !hasCoords && (tienePlano || !!fallbackBounds)
   return (
     <div className="cc-sicoe-mapa-portada" style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
       <div ref={containerRef} style={{ width:'100%', height:'100%', minHeight:'340px' }} />
-      {!hasCoords && (
+      {mostrarOverlayVacio && (
         <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:`${t.bgCard}EE`, gap:'8px', pointerEvents:'none' }}>
           <span style={{ fontSize:'36px' }}>📍</span>
           <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
-            {pkMapHint && fallbackBounds
-              ? `Vista del plano en la zona del PK ${pkMapHint}. ${modoEdicion ? 'Haz clic en el mapa para fijar el punto de localización.' : 'Sin punto de localización en mapa.'}`
-              : modoEdicion ? 'Haz clic en el mapa para fijar el punto de localización' : 'Sin punto de localización en mapa'}
+            {modoEdicion ? 'Haz clic en el mapa para fijar el punto de localización' : 'Sin punto de localización en mapa'}
           </span>
+        </div>
+      )}
+      {mostrarHintPlano && (
+        <div style={{ position:'absolute', left:10, bottom:10, right:10, background:`${t.bgCard}DD`, borderRadius:8, padding:'8px 10px', fontSize:'var(--cc-caption)', color:t.textMuted, pointerEvents:'none', lineHeight:1.4 }}>
+          {pkMapHint
+            ? `Polígono y abscisado del PK ${pkMapHint}.${modoEdicion ? ' Haz clic para fijar el punto de localización.' : ''}`
+            : `Plano de referencia del tramo.${modoEdicion ? ' Haz clic para fijar el punto de localización.' : ''}`}
         </div>
       )}
       {modoEdicion && hasCoords && (
@@ -4934,10 +5060,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const pkTextoPlano = String(
     reporte?.pk_id_valor || listaPkIds.find((p) => p.id === reporte?.pk_id_id)?.pk_id || '',
   ).trim()
-  const portadaMapBounds = useMemo(
-    () => sicoeBoundsForPkInPlano(planoGeojsonPortada, pkTextoPlano),
-    [planoGeojsonPortada, pkTextoPlano],
+  const portadaMapaPk = useMemo(
+    () => sicoeDatosMapaPortadaPk(
+      planoGeojsonPortada,
+      pkTextoPlano,
+      reporte?.abs_inicio,
+      reporte?.abs_final,
+    ),
+    [planoGeojsonPortada, pkTextoPlano, reporte?.abs_inicio, reporte?.abs_final],
   )
+  const portadaMapBounds = portadaMapaPk.bounds
+    || sicoeBoundsForPkInPlano(planoGeojsonPortada, pkTextoPlano)
 
   const esLocMultipleReporte = (reporte?.tipo_localizacion || 'unica') === 'multiple'
 
@@ -6616,6 +6749,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     t={t}
                     fallbackBounds={portadaMapBounds}
                     pkMapHint={pkTextoPlano || null}
+                    planoGeojson={portadaMapaPk.planoFc}
+                    extremosAbs={portadaMapaPk.extremos}
                   />
                 </div>
                 )}
