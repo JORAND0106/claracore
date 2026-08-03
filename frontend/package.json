@@ -11,7 +11,8 @@
     "test:cache": "node --test src/cache/vistaCache.test.js",
     "test:informe": "node --test src/utils/informePeriodicoSchedule.test.js src/utils/informePeriodicoCapture.test.js src/utils/permisosContratoInforme.test.js",
     "test:informes-pdf": "node --test src/informesVistaPreviaPdf.test.js",
-    "test:sicoe-mapa-portada": "node --test src/modules/sicoe-obra/sicoeMapaPortadaPk.test.js"
+    "test:sicoe-mapa-portada": "node --test src/modules/sicoe-obra/sicoeMapaPortadaPk.test.js",
+    "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js"
   },
   "dependencies": {
     "@microsoft/applicationinsights-web": "^3.4.3",

@@ -1,4 +1,7 @@
 import { API_BASE } from '../../apiBase'
+import { sicoeItemsSugerenciasParams } from './sicoeFiltroItemHelpers'
+
+export { sicoeItemPickerPuedeBuscar, sicoeItemsSugerenciasParams } from './sicoeFiltroItemHelpers'
 
 const API = API_BASE
 
@@ -83,9 +86,11 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
       .catch(() => []),
   ])
 
+  // Prefetch acotado (capítulo/acta/semana). La búsqueda libre de ítem sin capítulo
+  // la hace SicoeItemPickerInline vía fetchSicoeItemsSugerencias(?q=...).
   let items = []
   const capSingle = ctx.capitulo || (Array.isArray(ctx.caps) && ctx.caps.length === 1 ? ctx.caps[0] : '')
-  if (capSingle || ctx.acta_rpo) {
+  if (capSingle || ctx.acta_rpo || ctx.semana) {
     const pIt = new URLSearchParams(pCap)
     if (capSingle) pIt.set('capitulo', capSingle)
     items = await fetch(`${API}/sicoe-obra/${contratoId}/filtros/items?${pIt}`, { headers: hdrs })
@@ -122,11 +127,8 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
   }
 }
 
-export async function fetchSicoeItemsSugerencias(contratoId, token, { q, capitulo, acta_rpo, semana }) {
-  const params = new URLSearchParams({ q: q || '' })
-  if (capitulo) params.set('capitulo', capitulo)
-  if (acta_rpo) params.set('acta_rpo', acta_rpo)
-  if (semana) params.set('semana', semana)
+export async function fetchSicoeItemsSugerencias(contratoId, token, { q, capitulo, acta_rpo, semana } = {}) {
+  const params = sicoeItemsSugerenciasParams({ q, capitulo, acta_rpo, semana })
   const r = await fetch(`${API}/sicoe-obra/${contratoId}/filtros/items?${params}`, {
     headers: authHeaders(token),
   })
