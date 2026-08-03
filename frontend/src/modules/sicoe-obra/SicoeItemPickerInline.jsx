@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { pptoMatchItemNumero } from '../presupuesto/pptoFiltroCatalogo'
+import { sicoeItemPickerPuedeBuscar } from './sicoeFiltroItemHelpers'
 import { fetchSicoeItemsSugerencias } from './sicoeFiltrosApi'
 
 const inp = (t) => ({
@@ -49,7 +50,11 @@ function TagsLista({ lista, onRemove, t, labelFn }) {
   )
 }
 
-/** Ítem con sugerencias remotas (acta / capítulo / semana), no solo lista precargada. */
+/**
+ * Ítem con sugerencias remotas.
+ * Capítulo / acta / semana son acotadores opcionales: se puede buscar y seleccionar
+ * un ítem solo por código o descripción, aunque exista en varios capítulos.
+ */
 export default function SicoeItemPickerInline({
   t,
   contratoId,
@@ -71,8 +76,9 @@ export default function SicoeItemPickerInline({
     if (!contratoId || !token) return
     let cancelled = false
     const q = busq.trim()
-    if (q.length < 1 && !acta_rpo && !capitulo) {
+    if (!sicoeItemPickerPuedeBuscar({ q, acta_rpo, capitulo, semana })) {
       setRemotas([])
+      setCargando(false)
       return
     }
     setCargando(true)
@@ -135,6 +141,11 @@ export default function SicoeItemPickerInline({
   }
 
   const labelItem = (v) => itemLabels[v] || opts.find((o) => o.value === v)?.descripcion || v
+  const qTrim = busq.trim()
+  const acotado = Boolean(acta_rpo || capitulo || semana)
+  const placeholder = acotado
+    ? 'Buscar ítem (acotado por acta/capítulo/semana)…'
+    : 'Buscar ítem por código o descripción…'
 
   return (
     <div>
@@ -143,14 +154,13 @@ export default function SicoeItemPickerInline({
         value={busq}
         onChange={(e) => { setBusq(e.target.value); setOpen(true) }}
         onFocus={() => setOpen(true)}
-        placeholder={acta_rpo || capitulo ? 'Buscar ítem (acta/capítulo)…' : 'Indique acta o capítulo para buscar ítems…'}
+        placeholder={placeholder}
         style={inp(t)}
         onKeyDown={(e) => {
           if (e.key !== 'Enter') return
           e.preventDefault()
-          const q = busq.trim()
           if (filtrados[0]) pick(filtrados[0].value)
-          else if (q && (acta_rpo || capitulo)) pick(q)
+          else if (qTrim) pick(qTrim)
         }}
       />
       {cargando && (
@@ -193,10 +203,10 @@ export default function SicoeItemPickerInline({
           ))}
         </div>
       )}
-      {open && !cargando && busq.trim() && filtrados.length === 0 && (acta_rpo || capitulo) && (
+      {open && !cargando && qTrim && filtrados.length === 0 && (
         <button
           type="button"
-          onClick={() => pick(busq.trim())}
+          onClick={() => pick(qTrim)}
           style={{
             display: 'block',
             width: '100%',
@@ -211,12 +221,12 @@ export default function SicoeItemPickerInline({
             fontSize: 'var(--cc-sm)',
           }}
         >
-          Usar ítem «<strong style={{ color: t.primary }}>{busq.trim()}</strong>»
+          Usar ítem «<strong style={{ color: t.primary }}>{qTrim}</strong>»
         </button>
       )}
-      {open && !cargando && busq.trim() && filtrados.length === 0 && !(acta_rpo || capitulo) && (
+      {open && !cargando && !qTrim && !acotado && filtrados.length === 0 && (
         <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
-          Indique acta RPO o capítulo para buscar ítems.
+          Escriba el código o la descripción del ítem. Capítulo y acta son opcionales para acotar.
         </div>
       )}
     </div>
