@@ -359,7 +359,7 @@ function estiloCantidad(cell) {
   cell.alignment = { horizontal: 'right', vertical: 'middle' }
 }
 
-function estiloFilaDatos(row, colCount, rowNum) {
+function estiloFilaDatos(row, colCount, rowNum, { wrapAll = false } = {}) {
   const rn = rowNum ?? row.number ?? 1
   row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
     if (colNumber > colCount) return
@@ -368,7 +368,7 @@ function estiloFilaDatos(row, colCount, rowNum) {
     cell.alignment = {
       horizontal: colNumber >= 5 ? 'right' : 'left',
       vertical: 'middle',
-      wrapText: colNumber <= 3,
+      wrapText: wrapAll || colNumber <= 3,
     }
     bordeCeldaTabla(cell)
   })
@@ -387,6 +387,33 @@ function ajustarAnchos(ws, desdeFila, colCount) {
     })
     ws.getColumn(c).width = Math.min(Math.max(max * 1.05 + 2, 12), 44)
   }
+}
+
+/** Memorias de ítem: A–M = 11, N = 45. */
+function ajustarAnchosMemoriaItem(ws, colCount = 14) {
+  for (let c = 1; c <= colCount; c += 1) {
+    ws.getColumn(c).width = c < colCount ? 11 : 45
+  }
+}
+
+function aplicarWrapTextRango(ws, fromRow, toRow, colCount) {
+  if (!fromRow || !toRow || toRow < fromRow) return
+  for (let r = fromRow; r <= toRow; r += 1) {
+    const row = ws.getRow(r)
+    for (let c = 1; c <= colCount; c += 1) {
+      const cell = row.getCell(c)
+      const prev = cell.alignment || {}
+      cell.alignment = { ...prev, wrapText: true, vertical: prev.vertical || 'middle' }
+    }
+  }
+}
+
+/** Resumen: A=30, B=10, C=50; resto auto-ajustado. */
+function ajustarAnchosResumen(ws, desdeFila, colCount) {
+  ajustarAnchos(ws, desdeFila, colCount)
+  ws.getColumn(1).width = 30
+  if (colCount >= 2) ws.getColumn(2).width = 10
+  if (colCount >= 3) ws.getColumn(3).width = 50
 }
 
 function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
@@ -584,7 +611,7 @@ const DET_HEADERS = [
   'ID_POL',
   'PK_ID',
   'Tramo',
-  'Calzada',
+  'Infraestructura',
   'Abscisa Inicial',
   'Abscisa Final',
   'Nodo Inicial',
@@ -641,7 +668,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       reg.id_pol,
       reg.pk_id,
       reg.tramo,
-      reg.calzada,
+      reg.infraestructura,
       reg.abs_inicio,
       reg.abs_final,
       reg.no_inicio,
@@ -657,7 +684,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     estiloCantidad(r.getCell(COL_ANCHO))
     estiloCantidad(r.getCell(COL_ESPESOR))
     estiloCantidad(r.getCell(COL_CANT_TOTAL))
-    estiloFilaDatos(r, TOTAL_COLS_DET, r.number)
+    estiloFilaDatos(r, TOTAL_COLS_DET, r.number, { wrapAll: true })
   }
 
   let cantTotalRow = null
@@ -692,7 +719,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const firmRowStart = (cantTotalRow || (regs.length > 0 ? lastDetRow : tableRow)) + 2
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, colectarFirmantes(regs))
 
-  ajustarAnchos(ws, tableRow, TOTAL_COLS_DET)
+  ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET)
+  const wrapHasta = cantTotalRow || lastDetRow || tableRow
+  aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
   return {
     sheetName,
@@ -786,7 +815,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
-  ajustarAnchos(wsRes, tableHeaderRow, totalColsResumen)
+  ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen)
   return wsRes
 }
 

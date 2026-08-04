@@ -5332,7 +5332,7 @@ def _pk_ids_map_id_por_codigo(contrato_id: int) -> Dict[str, int]:
 
 
 def _pk_ids_ubicacion_por_codigo(contrato_id: int) -> Dict[str, dict]:
-    """Mapa pk_id (CAPA) → tramo/calzada vigentes en el maestro pk_ids."""
+    """Mapa pk_id (CAPA) → tramo/calzada/infraestructura vigentes en el maestro pk_ids."""
     out: Dict[str, dict] = {}
     for r in _pk_ids_maestro_filas(contrato_id):
         code = str(r.get("pk_id") or "").strip()
@@ -5341,6 +5341,7 @@ def _pk_ids_ubicacion_por_codigo(contrato_id: int) -> Dict[str, dict]:
         out[code] = {
             "tramo": r.get("tramo"),
             "calzada": r.get("calzada"),
+            "infraestructura": r.get("infraestructura"),
         }
     return out
 
@@ -10104,6 +10105,14 @@ def exportar_presupuesto_informe(
     else:
         rows = _presupuesto_fetch_export_rows(contrato_id, body, current_user)
 
+    # Infraestructura no vive en presupuesto: enriquecer desde maestro pk_ids
+    pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        info = pk_ubic.get(pk) or {}
+        if not (r.get("infraestructura") or "").strip():
+            r["infraestructura"] = (info.get("infraestructura") or "") or ""
+
     resumen_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
@@ -10160,7 +10169,7 @@ def exportar_presupuesto_informe(
             "id_pol": r.get("id_pol") or "",
             "pk_id": r.get("pk_id") or "",
             "tramo": r.get("tramo") or "",
-            "calzada": r.get("calzada") or "",
+            "infraestructura": (r.get("infraestructura") or "").strip(),
             "abs_inicio": r.get("abs_inicio"),
             "abs_final": r.get("abs_final"),
             "no_inicio": r.get("no_inicio"),

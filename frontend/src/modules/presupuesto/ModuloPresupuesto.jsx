@@ -3223,6 +3223,56 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   const hayMasRegistrosVista = visibleRegistrosCount < registrosOrdenados.length
 
+  const pptoFilaTecladoIdxRef = useRef(-1)
+
+  const handlePptoGrillaKeyDown = useCallback((e) => {
+    const key = e.key
+    if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'ArrowUp' && key !== 'ArrowDown') return
+
+    const target = e.target
+    if (target instanceof HTMLElement) {
+      const tag = target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return
+      if (target.closest('button, a, [role="button"], [role="menuitem"], [contenteditable="true"]')) return
+    }
+
+    const wrap = pptoTablaScrollRef.current
+    if (!wrap) return
+
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      e.preventDefault()
+      e.stopPropagation()
+      wrap.scrollBy({ left: key === 'ArrowLeft' ? -120 : 120, behavior: 'smooth' })
+      return
+    }
+
+    const rows = registrosPagina
+    if (!rows.length) return
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    let idx = pptoFilaTecladoIdxRef.current
+    if (idx < 0 || idx >= rows.length) {
+      const zoomIdx = filaZoom != null ? rows.findIndex((r) => r.id === filaZoom) : -1
+      idx = zoomIdx >= 0 ? zoomIdx : 0
+    } else {
+      idx = key === 'ArrowDown' ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0)
+    }
+    pptoFilaTecladoIdxRef.current = idx
+    const row = rows[idx]
+    if (!row) return
+    setFilaZoom(row.id)
+    const tr = wrap.querySelector(`tr[data-id="${row.id}"]`)
+    tr?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [registrosPagina, filaZoom])
+
+  useEffect(() => {
+    if (filaZoom == null) return
+    const idx = registrosPagina.findIndex((r) => r.id === filaZoom)
+    if (idx >= 0) pptoFilaTecladoIdxRef.current = idx
+  }, [filaZoom, registrosPagina])
+
   const handleCargarMasRegistrosVista = (increment) => {
     const el = pptoTablaScrollRef.current
     const prevH = el?.scrollHeight ?? 0
@@ -6762,16 +6812,30 @@ async function restaurar(id) {
             })}
           </div>
         )}
-        <div ref={pptoTablaScrollRef} className="cc-ppto-table-scroll cc-ppto-table-desktop" style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflowX:'auto',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined }}>
+        <div
+          ref={pptoTablaScrollRef}
+          className="cc-ppto-table-scroll cc-ppto-table-desktop"
+          tabIndex={0}
+          role="grid"
+          aria-label="Grilla de presupuesto"
+          onKeyDown={handlePptoGrillaKeyDown}
+          onMouseDown={(e) => {
+            const t = e.target
+            if (!(t instanceof HTMLElement)) return
+            if (t.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
+            pptoTablaScrollRef.current?.focus({ preventScroll: true })
+          }}
+          style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflowX:'auto',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:t.shadow, '--ppto-sticky-bg': t.bgCard, '--ppto-sticky-head': t.bg, display: pptoCompact ? 'none' : undefined, outline: 'none' }}
+        >
           <table className="cc-ppto-data-table" style={{ width:'max-content', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
             <thead style={{ background:t.bg }}>
               <tr>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={thStyle}>ID_POL</th>
-                <th className="cc-ppto-col-cap" style={thStyle}>Capítulo</th>
+                <th className="cc-ppto-col-cap" style={{ ...thStyle, maxWidth: 70, width: 70 }}>Capítulo</th>
                 <th className="cc-ppto-col-comp" style={thStyle}>Competencia</th>
                 <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
-                <th className="cc-ppto-col-desc" style={thStyle}>Descripción</th>
+                <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 120, width: 120 }}>Descripción</th>
                 <th className="cc-ppto-col-und" style={thStyle}>Und</th>
                 <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
                 <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
@@ -6824,10 +6888,10 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
+                    <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 70, width: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
                     <td className="cc-ppto-col-comp cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
                     <td className="cc-ppto-col-item cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
-                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
+                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 120, width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
                     <td className="cc-ppto-col-und" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
                     <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
