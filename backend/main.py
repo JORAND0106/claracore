@@ -608,6 +608,35 @@ async def unhandled_exception_to_json(request: Request, exc: Exception):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=cors)
     if isinstance(exc, RequestValidationError):
         return JSONResponse(status_code=422, content={"detail": exc.errors()}, headers=cors)
+    # PostgREST 401 por cliente httpx corrupto / KEY inválida → 503 recuperable (no 500 opaco).
+    try:
+        if _is_supabase_auth_error(exc):
+            try:
+                reset_supabase_client()
+            except Exception:
+                pass
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "El servicio de datos rechazó la autenticación (PostgREST 401). "
+                        "Reintenta; si persiste, revise SUPABASE_KEY en Azure App Service."
+                    )
+                },
+                headers=cors,
+            )
+        if _is_supabase_transport_error(exc):
+            try:
+                reset_supabase_client()
+            except Exception:
+                pass
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "El servicio de datos no respondió a tiempo. Intente de nuevo en unos segundos."},
+                headers=cors,
+            )
+    except Exception:
+        pass
     _log_api.exception("Error no manejado: %s %s", request.method, request.url.path)
     try:
         registrar_log_sistema(
@@ -638,16 +667,70 @@ _SUPABASE_HTTP_TIMEOUT = httpx.Timeout(
     pool=float(os.getenv("SUPABASE_HTTP_POOL_TIMEOUT", "30")),
 )
 
-def get_supabase():
+# httpx.Client NO es thread-safe. Un único cliente global compartido entre el worker
+# principal y ThreadPoolExecutor corrompe Authorization → PostgREST responde 401
+# y el backend empieza a devolver 500/503 en casi todos los endpoints hasta reiniciar.
+_supabase_tls = threading.local()
+
+
+def _supabase_credentials():
+    """Lee URL/KEY en cada creación (permite rotar App Settings sin redeploy de código)."""
+    url = (os.getenv("SUPABASE_URL") or _SUPABASE_URL or "").strip()
+    key = (os.getenv("SUPABASE_KEY") or _SUPABASE_KEY or "").strip()
+    return url, key
+
+
+def _close_supabase_httpx(client) -> None:
+    if client is None:
+        return
+    session = None
+    try:
+        session = getattr(getattr(client, "postgrest", None), "session", None)
+    except Exception:
+        session = None
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+def _make_supabase_client():
+    url, key = _supabase_credentials()
     return create_client(
-        _SUPABASE_URL,
-        _SUPABASE_KEY,
+        url,
+        key,
         options=ClientOptions(
             httpx_client=httpx.Client(http2=False, timeout=_SUPABASE_HTTP_TIMEOUT)
         ),
     )
 
-supabase = get_supabase()
+
+def get_supabase():
+    """Cliente Supabase del hilo actual (un httpx.Client por hilo)."""
+    client = getattr(_supabase_tls, "client", None)
+    if client is None:
+        client = _make_supabase_client()
+        _supabase_tls.client = client
+    return client
+
+
+def reset_supabase_client():
+    """Descarta el cliente del hilo (p. ej. tras 401/timeout) y crea uno nuevo."""
+    old = getattr(_supabase_tls, "client", None)
+    _supabase_tls.client = None
+    _close_supabase_httpx(old)
+    return get_supabase()
+
+
+class _SupabaseThreadLocalProxy:
+    """Proxy para que `supabase.table(...)` use siempre el cliente del hilo actual."""
+
+    def __getattr__(self, name):
+        return getattr(get_supabase(), name)
+
+
+supabase = _SupabaseThreadLocalProxy()
 security = HTTPBearer(auto_error=False)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -696,8 +779,13 @@ async def exigir_politicas_confidencialidad(request: Request, call_next):
             return await call_next(request)
         _politicas_cache_set(uid, "pend")
         return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
-    except Exception:
-        # Columna aún no migrada u otro error: no bloquear despliegue
+    except Exception as e:
+        # Columna aún no migrada u cliente Supabase corrupto: no bloquear; reset si es 401.
+        try:
+            if _is_supabase_auth_error(e) or _is_supabase_transport_error(e):
+                reset_supabase_client()
+        except Exception:
+            pass
         return await call_next(request)
 
 
@@ -1186,16 +1274,64 @@ def _is_supabase_statement_timeout(err: Exception) -> bool:
     return False
 
 
+def _is_supabase_auth_error(err: Exception) -> bool:
+    """PostgREST 401 / JWT inválido (cliente httpx corrupto o SUPABASE_KEY inválida)."""
+    if err is None:
+        return False
+    code = str(getattr(err, "code", "") or "")
+    if code in ("401", "PGRST301", "PGRST302"):
+        return True
+    status = getattr(err, "status_code", None) or getattr(err, "status", None)
+    if status == 401:
+        return True
+    s = str(err).lower()
+    if "invalid jwt" in s or "jwt expired" in s or "invalid api key" in s:
+        return True
+    if "401" in s and ("unauthorized" in s or "jwt" in s or "api key" in s):
+        return True
+    d = getattr(err, "dict", None)
+    if callable(d):
+        try:
+            di = d()
+            if isinstance(di, dict):
+                if str(di.get("code") or "") in ("401", "PGRST301", "PGRST302"):
+                    return True
+                msg = str(di.get("message") or "").lower()
+                if "invalid jwt" in msg or "invalid api key" in msg:
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def _is_supabase_transport_error(err: Exception) -> bool:
+    return isinstance(
+        err,
+        (
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+        ),
+    )
+
+
 def supabase_execute(fn, retries=3, delay=0.5):
     import time
-    global supabase
     last_err = None
     for i in range(retries):
         try:
             return fn()
         except Exception as e:
             last_err = e
-            supabase = get_supabase()
+            # Recrear cliente del hilo: recupera Authorization tras corrupción / timeout.
+            if _is_supabase_auth_error(e) or _is_supabase_transport_error(e) or i == 0:
+                try:
+                    reset_supabase_client()
+                except Exception:
+                    pass
             if i < retries - 1:
                 time.sleep(delay)
     try:
@@ -1214,6 +1350,16 @@ def supabase_execute(fn, retries=3, delay=0.5):
         raise HTTPException(
             status_code=503,
             detail="La base de datos está ocupada o la consulta tardó demasiado. Reintenta en unos segundos o acota el filtro.",
+        )
+    if _is_supabase_auth_error(last_err):
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de datos rechazó la autenticación (PostgREST 401). Reintenta; si persiste, revise SUPABASE_KEY en Azure App Service.",
+        )
+    if _is_supabase_transport_error(last_err):
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de datos no respondió a tiempo. Intente de nuevo en unos segundos.",
         )
     raise last_err
 
@@ -7597,11 +7743,17 @@ def refresh_token(current_user=Depends(get_current_user)):
         return {"access_token": new_token, "token_type": "bearer"}
     except HTTPException:
         raise
-    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
-        raise HTTPException(
-            status_code=503,
-            detail="El servicio de datos no respondió a tiempo. Intente de nuevo en unos segundos.",
-        ) from e
+    except Exception as e:
+        if _is_supabase_auth_error(e) or _is_supabase_transport_error(e):
+            try:
+                reset_supabase_client()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=503,
+                detail="El servicio de datos no está disponible temporalmente. Intente de nuevo en unos segundos.",
+            ) from e
+        raise
 
 
 @app.post("/auth/logout")
@@ -11834,14 +11986,18 @@ class CadEjeCreate(BaseModel):
 def list_cad_ejes(contrato_id: int, current_user=Depends(get_current_user)):
     """Lista ejes CAD registrados para el contrato."""
     try:
-        rows = (
-            supabase.table("cad_ejes")
-            .select("id, contrato_id, nombre, axis_context_json, created_at")
-            .eq("contrato_id", contrato_id)
-            .order("created_at", desc=True)
-            .execute()
-            .data
-        )
+        def _q():
+            return (
+                supabase.table("cad_ejes")
+                .select("id, contrato_id, nombre, axis_context_json, created_at")
+                .eq("contrato_id", contrato_id)
+                .order("created_at", desc=True)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q, retries=3, delay=0.4)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error leyendo cad_ejes: {e}")
     return rows or []
@@ -13946,19 +14102,23 @@ def admin_soporte_list(
     """
     del current_user
     filtro_norm = (filtro or "todos").strip().lower()
-    rows = (
-        supabase.table("notificaciones")
-        .select(
-            "id, created_at, asunto, mensaje, remitente_nombre, modulo, contrato_id, "
-            "soporte_estado, soporte_gestionado_at, soporte_gestionado_por_nombre, soporte_gestion_origen"
+
+    def _q_soporte():
+        return (
+            supabase.table("notificaciones")
+            .select(
+                "id, created_at, asunto, mensaje, remitente_nombre, modulo, contrato_id, "
+                "soporte_estado, soporte_gestionado_at, soporte_gestionado_por_nombre, soporte_gestion_origen"
+            )
+            .eq("tipo", "SOPORTE")
+            .order("created_at", desc=True)
+            .limit(500)
+            .execute()
+            .data
+            or []
         )
-        .eq("tipo", "SOPORTE")
-        .order("created_at", desc=True)
-        .limit(500)
-        .execute()
-        .data
-        or []
-    )
+
+    rows = supabase_execute(_q_soporte, retries=3, delay=0.4)
     contrato_nums = _contratos_numero_map([r.get("contrato_id") for r in rows])
 
     kpis = {
