@@ -6832,10 +6832,10 @@ async function restaurar(id) {
               <tr>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={thStyle}>ID_POL</th>
-                <th className="cc-ppto-col-cap" style={{ ...thStyle, maxWidth: 70, width: 70 }}>Capítulo</th>
+                <th className="cc-ppto-col-cap" style={{ ...thStyle, maxWidth: 95, width: 95 }}>Capítulo</th>
                 <th className="cc-ppto-col-comp" style={thStyle}>Competencia</th>
                 <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
-                <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 120, width: 120 }}>Descripción</th>
+                <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 162, width: 162 }}>Descripción</th>
                 <th className="cc-ppto-col-und" style={thStyle}>Und</th>
                 <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
                 <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
@@ -6888,10 +6888,10 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 70, width: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
+                    <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 95, width: 95, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
                     <td className="cc-ppto-col-comp cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
                     <td className="cc-ppto-col-item cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
-                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 120, width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
+                    <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 162, width: 162, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
                     <td className="cc-ppto-col-und" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
                     <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)

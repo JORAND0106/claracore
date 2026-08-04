@@ -444,10 +444,19 @@ function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
 }
 
 function moverHojaAlInicio(wb, sheetName) {
-  const idx = wb.worksheets.findIndex((w) => w.name === sheetName)
+  const sheets = wb.worksheets.slice()
+  const idx = sheets.findIndex((w) => w.name === sheetName)
   if (idx <= 0) return
-  const [sheet] = wb.worksheets.splice(idx, 1)
-  wb.worksheets.unshift(sheet)
+  const target = sheets[idx]
+  if (typeof wb.moveWorksheet === 'function') {
+    wb.moveWorksheet(target.id, 0)
+    return
+  }
+  // ExcelJS ordena por orderNo; mutar el array de worksheets no basta
+  const ordered = [target, ...sheets.filter((_, i) => i !== idx)]
+  ordered.forEach((s, i) => {
+    s.orderNo = i + 1
+  })
 }
 
 const PARTICULAS_NOMBRE = new Set(['de', 'del', 'la', 'las', 'los', 'y'])
@@ -723,6 +732,11 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
+  // Alturas fijas de cabecera / bloque ítem / encabezado de tabla
+  ws.getRow(2).height = 30
+  ws.getRow(7).height = 30
+  ws.getRow(9).height = 30
+
   return {
     sheetName,
     cantTotalRow,
@@ -730,7 +744,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 }
 
-function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = []) {
+function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = [], wsExistente = null) {
   const resumenHeaders = [
     'Capítulo',
     'Ítem',
@@ -741,7 +755,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     'Costo directo',
   ]
   const totalColsResumen = resumenHeaders.length
-  const wsRes = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
+  const wsRes = wsExistente || wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
   aplicarPaginaHorizontal(wsRes)
   aplicarPiePaginaClaraCore(wsRes, claraLogoImageId, meta.numero || meta.contrato, 'Resumen')
 
@@ -903,6 +917,10 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   const itemRefs = new Map()
   const todosRegistros = []
 
+  // Crear Resumen primero para que sea la pestaña inicial; se rellena tras las memorias
+  // (las fórmulas de cantidad dependen de los totales por ítem).
+  const wsResumen = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
+
   items.forEach((itemInfo, idx) => {
     const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoImageId, claraLogoImageId)
     if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
@@ -920,6 +938,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
     logoImageId,
     claraLogoImageId,
     todosRegistros,
+    wsResumen,
   )
 
   moverHojaAlInicio(wb, 'Resumen')
