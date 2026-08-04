@@ -1691,6 +1691,27 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
+.cc-ppto-table-scroll:focus-visible {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+/* Capítulo / Descripción: ~50% del ancho previo, truncar con ellipsis + title */
+.cc-ppto-data-table .cc-ppto-col-cap {
+  max-width: 70px;
+  width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-ppto-data-table .cc-ppto-col-desc {
+  max-width: 120px;
+  width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cc-ppto-panel-table-scroll {
   width: 100%;
   max-width: 100%;
@@ -1987,10 +2008,10 @@ select.cc-dashboard-acta-select--light option {
   /* min-width por columna: compactas (Und/Ancho/Espesor) vs amplias (Desc/Nodos/Abs) */
   .cc-ppto-data-table .cc-ppto-col-check { min-width: 48px !important; width: 48px; }
   .cc-ppto-data-table .cc-ppto-col-id { min-width: 76px !important; }
-  .cc-ppto-data-table .cc-ppto-col-cap { min-width: 110px !important; max-width: 140px; }
+  .cc-ppto-data-table .cc-ppto-col-cap { min-width: 55px !important; max-width: 70px !important; width: 70px; }
   .cc-ppto-data-table .cc-ppto-col-comp { min-width: 96px !important; max-width: 120px; }
   .cc-ppto-data-table .cc-ppto-col-item { min-width: 56px !important; }
-  .cc-ppto-data-table .cc-ppto-col-desc { min-width: 180px !important; max-width: 240px; }
+  .cc-ppto-data-table .cc-ppto-col-desc { min-width: 90px !important; max-width: 120px !important; width: 120px; }
   .cc-ppto-data-table .cc-ppto-col-und { min-width: 40px !important; width: 40px; }
   .cc-ppto-data-table .cc-ppto-col-ancho,
   .cc-ppto-data-table .cc-ppto-col-espesor { min-width: 48px !important; width: 48px; }
