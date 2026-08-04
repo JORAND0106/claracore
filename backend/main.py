@@ -4859,6 +4859,7 @@ def healthz():
         "acta_cierre_defer_mover": True,
         "acta_mover_residuales_lote": True,
         "cors_asgi_wrap": True,
+        "supabase_threadlocal": True,
     }
 
 
