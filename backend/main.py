@@ -8528,18 +8528,37 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
     return {"mensaje": f"{len(items)} items cargados"}
 
 @app.put("/listado-precios/item/{item_id}")
-def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
+def update_precio(
+    item_id: int,
+    body: ListadoPrecioItem,
+    confirm_meta: bool = Query(
+        False,
+        description="Obligatorio true si cambian ítem/descripción/unidad (tras popup de impacto).",
+    ),
+    current_user=Depends(get_current_user),
+):
     raw = body.dict()
     data = {k: v for k, v in raw.items() if v is not None and k not in ("agrupador_nombre", "agrupador_codigo_wbs")}
+    prev_rows = (
+        supabase.table("listado_precios")
+        .select("id, contrato_id, capitulo, competencia, item_numero, descripcion, unidad")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not prev_rows:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    prev = prev_rows[0]
+    _require_contract_access(current_user, int(prev["contrato_id"]))
+
     if "agrupador_id" in raw:
         data["agrupador_id"] = raw["agrupador_id"]
     elif body.agrupador_nombre or body.agrupador_codigo_wbs:
         cap = (body.capitulo or "").strip()
         if not cap:
-            prev = supabase.table("listado_precios").select("capitulo").eq("id", item_id).limit(1).execute().data
-            cap = (prev[0].get("capitulo") if prev else "") or ""
-        cid_row = supabase.table("listado_precios").select("contrato_id").eq("id", item_id).limit(1).execute().data
-        cid = cid_row[0]["contrato_id"] if cid_row else None
+            cap = (prev.get("capitulo") or "") or ""
+        cid = prev.get("contrato_id")
         if cid:
             ag_id = _resolve_agrupador_id(int(cid), cap, body)
             if ag_id is None:
@@ -8557,9 +8576,61 @@ def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(ge
         except (ValueError, TypeError):
             f_val, m_val = 0, 0
         data["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
+
+    from listado_precios_meta import meta_fields_changed
+
+    propuesto = {
+        "item_numero": data.get("item_numero", prev.get("item_numero")),
+        "descripcion": data.get("descripcion", prev.get("descripcion")),
+        "unidad": data.get("unidad", prev.get("unidad")),
+    }
+    cambios_meta = meta_fields_changed(prev, propuesto)
+    if cambios_meta and not confirm_meta:
+        impacto = _listado_impacto_edicion_meta(int(item_id), campos_cambiados=cambios_meta)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirm_meta_required",
+                "message": (
+                    "Cambiar ítem, descripción o unidad afecta registros de Presupuesto y SicoeObra. "
+                    "Confirme el impacto antes de guardar."
+                ),
+                "campos_cambiados": cambios_meta,
+                "impacto": impacto,
+            },
+        )
+
+    old_item = (prev.get("item_numero") or "").strip()
+    new_item = str(propuesto.get("item_numero") or "").strip()
+    old_cap = prev.get("capitulo") or ""
+    new_cap = data.get("capitulo", old_cap) or ""
+    contrato_id = int(prev["contrato_id"])
+
     supabase.table("listado_precios").update(data).eq("id", item_id).execute()
-    registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios", str(item_id),
-                  {"tipo_precio": data.get("tipo_precio"), "estado_precio": data.get("estado_precio")})
+
+    propagados = {"presupuesto": 0, "sicoe_registros": 0}
+    if "item_numero" in cambios_meta and old_item and new_item and old_item != new_item:
+        propagados = _propagar_cambio_item_numero_listado(
+            contrato_id=contrato_id,
+            capitulo=old_cap or new_cap,
+            item_anterior=old_item,
+            item_nuevo=new_item,
+        )
+
+    _dash_agg_cache_invalidate_listado(contrato_id)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRECIOS",
+        "listado_precios",
+        str(item_id),
+        {
+            "tipo_precio": data.get("tipo_precio"),
+            "estado_precio": data.get("estado_precio"),
+            "campos_meta": cambios_meta,
+            "propagados": propagados,
+        },
+    )
     # Devolver fila actualizada para que el front no reutilice estado_precio stale del formulario.
     refreshed = (
         supabase.table("listado_precios")
@@ -8570,8 +8641,17 @@ def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(ge
         .data
     )
     if refreshed:
-        return refreshed[0]
-    return {"ok": True, "id": item_id, **{k: data[k] for k in ("tipo_precio", "estado_precio", "acta_fijacion", "acta_modificatoria") if k in data}}
+        out = dict(refreshed[0])
+        out["propagados"] = propagados
+        out["campos_meta_cambiados"] = cambios_meta
+        return out
+    return {
+        "ok": True,
+        "id": item_id,
+        "propagados": propagados,
+        "campos_meta_cambiados": cambios_meta,
+        **{k: data[k] for k in ("tipo_precio", "estado_precio", "acta_fijacion", "acta_modificatoria") if k in data},
+    }
 
 @app.delete("/listado-precios/item/{item_id}")
 def delete_precio(item_id: int, current_user=Depends(get_current_user)):
@@ -8693,6 +8773,255 @@ def get_listado_precios_cantidades(contrato_id: int, current_user=Depends(get_cu
             "delta_valor": round(cant_calc * pu - cant_aprob * pu),
         })
     return out
+
+
+def _listado_impacto_edicion_meta(
+    item_id: int,
+    *,
+    campos_cambiados: Optional[List[str]] = None,
+) -> dict:
+    """Cuenta presupuesto/Sicoe ligados al ítem y lista actas RPO / reportes afectados."""
+    from listado_precios_meta import build_impacto_edicion_meta
+
+    precio_rows = (
+        supabase.table("listado_precios")
+        .select("id, contrato_id, capitulo, competencia, item_numero, descripcion, unidad")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not precio_rows:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    precio = precio_rows[0]
+    contrato_id = int(precio["contrato_id"])
+    item_numero = precio.get("item_numero") or ""
+    capitulo = precio.get("capitulo") or ""
+    competencia = precio.get("competencia") or ""
+
+    ppto_q = (
+        supabase.table("presupuesto")
+        .select("id, capitulo, competencia, item")
+        .eq("contrato_id", contrato_id)
+        .eq("item", item_numero)
+        .eq("dado_de_baja", False)
+    )
+    if capitulo:
+        ppto_q = ppto_q.eq("capitulo", capitulo)
+    if competencia:
+        ppto_q = ppto_q.eq("competencia", competencia)
+    ppto_rows = ppto_q.execute().data or []
+
+    # Fallback por clave normalizada si el match exacto no trae filas (copias con punto final, etc.).
+    if not ppto_rows:
+        cap_k = _dash_norm_capitulo_key_py(capitulo)
+        it_k = _dash_norm_item_key_py(item_numero)
+        off = 0
+        while True:
+            batch = (
+                supabase.table("presupuesto")
+                .select("id, capitulo, competencia, item")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .order("id")
+                .range(off, off + 999)
+                .execute()
+                .data
+            ) or []
+            for r in batch:
+                if it_k and _dash_norm_item_key_py(r.get("item")) != it_k:
+                    continue
+                if cap_k and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_k:
+                    continue
+                if competencia and (r.get("competencia") or "").strip() != competencia.strip():
+                    continue
+                ppto_rows.append(r)
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+    sicoe_rows: List[dict] = []
+    off = 0
+    cap_k = _dash_norm_capitulo_key_py(capitulo)
+    it_k = _dash_norm_item_key_py(item_numero)
+    comp_f = competencia.strip()
+    while True:
+        batch = (
+            supabase.table("so_registros")
+            .select("id, capitulo, competencia, item_numero, acta_rpo_id, reporte_id")
+            .eq("contrato_id", contrato_id)
+            .order("id")
+            .range(off, off + 999)
+            .execute()
+            .data
+        ) or []
+        for r in batch:
+            if it_k and _dash_norm_item_key_py(r.get("item_numero")) != it_k:
+                continue
+            if cap_k and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_k:
+                continue
+            if comp_f and (r.get("competencia") or "").strip() != comp_f:
+                continue
+            sicoe_rows.append(r)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    acta_ids = sorted({
+        int(r["acta_rpo_id"])
+        for r in sicoe_rows
+        if r.get("acta_rpo_id") is not None
+    })
+    reporte_ids = sorted({
+        int(r["reporte_id"])
+        for r in sicoe_rows
+        if r.get("reporte_id") is not None
+    })
+
+    actas_by_id: Dict[int, dict] = {}
+    for i in range(0, len(acta_ids), 200):
+        chunk = acta_ids[i : i + 200]
+        if not chunk:
+            continue
+        rows = (
+            supabase.table("actas")
+            .select("id, numero_rpo")
+            .in_("id", chunk)
+            .execute()
+            .data
+        ) or []
+        for a in rows:
+            try:
+                actas_by_id[int(a["id"])] = a
+            except (TypeError, ValueError, KeyError):
+                continue
+
+    reportes_by_id: Dict[int, dict] = {}
+    for i in range(0, len(reporte_ids), 200):
+        chunk = reporte_ids[i : i + 200]
+        if not chunk:
+            continue
+        rows = (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte, acta_rpo_id, estado")
+            .in_("id", chunk)
+            .execute()
+            .data
+        ) or []
+        for rep in rows:
+            try:
+                reportes_by_id[int(rep["id"])] = rep
+            except (TypeError, ValueError, KeyError):
+                continue
+
+    firmadas = _actas_rpo_firmadas_ids(contrato_id)
+    return build_impacto_edicion_meta(
+        precio=precio,
+        ppto_rows=ppto_rows,
+        sicoe_rows=sicoe_rows,
+        actas_by_id=actas_by_id,
+        reportes_by_id=reportes_by_id,
+        firmadas_ids=firmadas,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+        campos_cambiados=campos_cambiados,
+    )
+
+
+def _propagar_cambio_item_numero_listado(
+    *,
+    contrato_id: int,
+    capitulo: str,
+    item_anterior: str,
+    item_nuevo: str,
+) -> Dict[str, int]:
+    """Actualiza la clave de ítem en presupuesto y so_registros tras renombrar en listado."""
+    old_k = _dash_norm_item_key_py(item_anterior)
+    new_item = (item_nuevo or "").strip()
+    if not old_k or not new_item:
+        return {"presupuesto": 0, "sicoe_registros": 0}
+
+    n_ppto = 0
+    off = 0
+    cap_k = _dash_norm_capitulo_key_py(capitulo)
+    while True:
+        batch = (
+            supabase.table("presupuesto")
+            .select("id, capitulo, item")
+            .eq("contrato_id", int(contrato_id))
+            .order("id")
+            .range(off, off + 999)
+            .execute()
+            .data
+        ) or []
+        ids = [
+            int(r["id"])
+            for r in batch
+            if _dash_norm_item_key_py(r.get("item")) == old_k
+            and (not cap_k or _dash_norm_capitulo_key_py(r.get("capitulo")) == cap_k)
+        ]
+        for i in range(0, len(ids), 100):
+            chunk = ids[i : i + 100]
+            if not chunk:
+                continue
+            supabase.table("presupuesto").update({"item": new_item}).in_("id", chunk).execute()
+            n_ppto += len(chunk)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    n_sicoe = 0
+    off = 0
+    while True:
+        batch = (
+            supabase.table("so_registros")
+            .select("id, capitulo, item_numero")
+            .eq("contrato_id", int(contrato_id))
+            .order("id")
+            .range(off, off + 999)
+            .execute()
+            .data
+        ) or []
+        ids = [
+            int(r["id"])
+            for r in batch
+            if _dash_norm_item_key_py(r.get("item_numero")) == old_k
+            and (not cap_k or _dash_norm_capitulo_key_py(r.get("capitulo")) == cap_k)
+        ]
+        for i in range(0, len(ids), 100):
+            chunk = ids[i : i + 100]
+            if not chunk:
+                continue
+            supabase.table("so_registros").update({"item_numero": new_item}).in_("id", chunk).execute()
+            n_sicoe += len(chunk)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    return {"presupuesto": n_ppto, "sicoe_registros": n_sicoe}
+
+
+@app.get("/listado-precios/item/{item_id}/impacto-edicion-meta")
+def get_impacto_edicion_meta_listado(
+    item_id: int,
+    current_user=Depends(get_current_user),
+):
+    """
+    Impacto de editar ítem / descripción / unidad en el listado:
+    conteos en Presupuesto y SicoeObra + actas RPO y reportes específicos.
+    """
+    precio = (
+        supabase.table("listado_precios")
+        .select("contrato_id")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not precio:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    _require_contract_access(current_user, int(precio[0]["contrato_id"]))
+    return _listado_impacto_edicion_meta(int(item_id))
 
 
 @app.get("/listado-precios/item/{item_id}/stats")
@@ -9258,7 +9587,8 @@ def get_presupuesto(
 
     if limit is not None:
         q = _q_base()
-        return q.order("id").range(offset, offset + limit - 1).execute().data
+        rows = q.order("id").range(offset, offset + limit - 1).execute().data
+        return _overlay_presupuesto_meta_vivo(contrato_id, rows or [])
 
     PAGE = 1000
     all_rows = []
@@ -9269,7 +9599,7 @@ def get_presupuesto(
         if len(batch) < PAGE:
             break
         off += PAGE
-    return all_rows
+    return _overlay_presupuesto_meta_vivo(contrato_id, all_rows)
 
 
 @app.get("/presupuesto/{contrato_id}/conteo")
@@ -10004,7 +10334,8 @@ def get_items_presupuesto(
         items[it]["total_registros"] += 1
         items[it]["revisados"].append(r.get("revisado") or "No Revisado")
     result = sorted(items.values(), key=lambda x: x["item"])
-    return result
+    # Ficha vigente del listado (descripcion / und / item canónico).
+    return _overlay_presupuesto_meta_vivo(contrato_id, result)
 
 
 _PRESUPUESTO_EXPORT_SELECT = (
@@ -10390,6 +10721,10 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     row = supabase.table("presupuesto").select("*").eq("id", item_id).single().execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
+    cid = row.get("contrato_id")
+    if cid is not None:
+        overlayed = _overlay_presupuesto_meta_vivo(int(cid), [row])
+        return overlayed[0] if overlayed else row
     return row
 
 # Campos que cuentan como “edición” para reapertura de registro sellado (no basta con el motivo solo).
@@ -15706,7 +16041,8 @@ def registros_bulk_offline(
         if acta_id is not None:
             q = q.eq("acta_rpo_id", acta_id)
         return q.limit(5000).execute().data
-    return supabase_execute(_q)
+    rows = supabase_execute(_q) or []
+    return _overlay_sicoe_meta_vivo(contrato_id, rows)
 
 
 @app.get("/sicoe-obra/{contrato_id}/offline-pack")
@@ -15768,6 +16104,7 @@ def offline_pack(
             off += 1000
             if off >= 5000:   # techo de seguridad
                 break
+        registros = _overlay_sicoe_meta_vivo(contrato_id, registros)
     except Exception as e:
         errores["registros"] = str(e)
 
@@ -19122,6 +19459,9 @@ def analisis_registros_obra(
             except Exception:
                 pass
 
+    # Ítem / descripción / unidad en vivo desde listado (mapa y grupos).
+    registros = _overlay_sicoe_meta_vivo(contrato_id, registros or [])
+
     if _formato_mapa:
         geo = _sicoe_build_mapa_calor_geojson(registros, reporte_map)
         _dashboard_response_cache_set(_analisis_cache_key, geo)
@@ -19819,7 +20159,7 @@ def obtener_reporte(
     else:
         _enriquecer_num_comentarios_visibles(regs_raw, current_user)
         _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
-    r["registros"] = regs_raw
+    r["registros"] = _overlay_sicoe_meta_vivo(contrato_id, regs_raw or [])
     r["puntos"] = puntos_rows
     if aplicar_filtros_busqueda:
         r["registros_vista_filtrada"] = True
@@ -28523,6 +28863,45 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         off += 1000
     _dash_agg_cache_set("listado_precios_vu_idx_v2", contrato_id, idx)
     return idx
+
+
+def _dash_agg_cache_invalidate_listado(contrato_id: int) -> None:
+    """Invalida índices de listado tras editar ficha (ítem/desc/unidad/V.U.)."""
+    key = f"listado_precios_vu_idx_v2:{int(contrato_id)}"
+    key2 = f"listado_precios_tipo_idx:{int(contrato_id)}"
+    with _DASH_AGG_CACHE_LOCK:
+        _DASH_AGG_CACHE.pop(key, None)
+        _DASH_AGG_CACHE.pop(key2, None)
+
+
+def _overlay_presupuesto_meta_vivo(contrato_id: int, rows: list) -> list:
+    """Resuelve ítem/descripcion/und en vivo desde listado_precios."""
+    if not rows:
+        return rows
+    from listado_precios_meta import overlay_presupuesto_rows
+
+    idx = _listado_precios_vu_by_cap_item(int(contrato_id))
+    return overlay_presupuesto_rows(
+        rows,
+        idx,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
+
+
+def _overlay_sicoe_meta_vivo(contrato_id: int, rows: list) -> list:
+    """Resuelve item_numero/item_descripcion/unidad en vivo desde listado_precios."""
+    if not rows:
+        return rows
+    from listado_precios_meta import overlay_sicoe_rows
+
+    idx = _listado_precios_vu_by_cap_item(int(contrato_id))
+    return overlay_sicoe_rows(
+        rows,
+        idx,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
 
 
 def _ppto_presupuesto_obra_by_cap_item(
