@@ -390,7 +390,7 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    Otras acciones con selección (fuera del modal de edición masiva):
    - «🗑️ Dar de baja (N)»: requiere permiso «eliminar»; comentario obligatorio; solo si hay más de una fila seleccionada.
    - Validación fila a fila: clic en círculos de color en columnas Dep. e Interventoría de la grilla.
-   - Edición inline en grilla: al seleccionar una fila puede editar No.Ini, No.Fin, Ancho, Espesor (según permiso);
+   - Edición inline en grilla: al seleccionar una fila puede editar Tramo, Infraestructura, Ancho, Espesor (según permiso);
      el recálculo de cantidades puede pedir confirmación aparte (no sustituye al modal masivo).
 
    Cambio masivo de tipo de ejecución:
