@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
 from almacen_firma_pdf import firma_url_a_data_uri
+from seguimiento_richtext import render_tema_html_for_pdf, sanitize_tema_html
 from topografia_utils import _html_logo_pdf, to_pdf_bytes
 
 _COLOR = "#0f766e"
@@ -33,7 +34,7 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
             str(a.get("entidad") or ""),
         ]))
     for i in ideas or []:
-        parts.append(str(i.get("texto") or ""))
+        parts.append(sanitize_tema_html(i.get("texto") or ""))
     for ap in apartados or []:
         parts.append("|".join([str(ap.get("titulo") or ""), str(ap.get("contenido") or "")]))
     raw = "\n".join(parts).encode("utf-8")
@@ -94,12 +95,12 @@ def generar_pdf_acta(
     for idx, idea in enumerate(ideas or [], start=1):
         ideas_html += (
             f"<div style='margin:6pt 0;'>"
-            f"<div style='font-size:9pt;font-weight:700;color:{_COLOR};'>Idea central {idx}</div>"
-            f"<div style='font-size:9pt;white-space:pre-wrap;'>{_esc(idea.get('texto'))}</div>"
+            f"<div style='font-size:9pt;font-weight:700;color:{_COLOR};'>Tema {idx}</div>"
+            f"{render_tema_html_for_pdf(idea.get('texto'))}"
             f"</div>"
         )
     if not ideas_html:
-        ideas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin ideas centrales.</div>"
+        ideas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin temas registrados.</div>"
 
     apartados_html = ""
     for ap in apartados or []:
@@ -180,7 +181,7 @@ h2 {{ color: {_COLOR}; font-size: 11pt; margin: 12pt 0 4pt; border-bottom: 1pt s
 {asis_rows}
 </table>
 
-<h2>Ideas centrales</h2>
+<h2>Temas y Compromisos</h2>
 {ideas_html}
 
 {comp_html}

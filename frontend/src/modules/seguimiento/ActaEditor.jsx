@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
+import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
+import TemaRichEditor from './TemaRichEditor'
 import { ESTADOS, ORIGEN_COLOR, fmtFecha } from './seguimientoTheme'
 
 export default function ActaEditor({
@@ -90,7 +92,7 @@ export default function ActaEditor({
       const payload = {
         ...form,
         asistentes: form.asistentes.filter((a) => a.nombre.trim()),
-        ideas: form.ideas.filter((i) => (i.texto || '').trim() || i.id),
+        ideas: form.ideas.filter((i) => !isRichTextEmpty(i.texto) || i.id),
         apartados: form.apartados.filter((a) => (a.titulo || a.contenido || '').trim()),
       }
       const row = actaId
@@ -268,36 +270,42 @@ export default function ActaEditor({
         ))}
       </section>
 
-      {/* Ideas centrales */}
+      {/* Temas / ideas centrales — editor enriquecido (no aplica a Apartados) */}
       <section style={card(t)}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={h3(t)}>Ideas centrales</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ ...h3(t), marginBottom: 2 }}>Temas y Compromisos</h3>
+            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+              Redacción enriquecida por tema (viñetas, numeración 1. / 1.1. / 1.1.1., negrita, cursiva, subrayado)
+            </div>
+          </div>
           <button
             type="button"
             style={primary(t)}
             onClick={() => setField('ideas', [...form.ideas, { texto: '' }])}
           >
-            + Agregar idea
+            + Agregar tema
           </button>
         </div>
         {form.ideas.map((idea, idx) => (
-          <div key={idea.id || idx} style={{
-            marginTop: 10, padding: 12, borderRadius: 8, border: `1px solid ${t.border}`,
+          <div key={idea.id || `idea-${idx}`} style={{
+            marginTop: 12, padding: 12, borderRadius: 8, border: `1px solid ${t.border}`,
           }}>
-            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 6 }}>
-              Idea {idx + 1}
+            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, marginBottom: 8 }}>
+              Tema {idx + 1}
             </div>
-            <textarea
-              rows={4}
-              value={idea.texto}
-              onChange={(e) => {
+            <TemaRichEditor
+              t={t}
+              value={idea.texto || ''}
+              editable={!!(permisos?.crear || permisos?.editar)}
+              placeholder="Redacte el tema: use viñetas, numeración multinivel y formato…"
+              onChange={(html) => {
                 const next = [...form.ideas]
-                next[idx] = { ...idea, texto: e.target.value }
+                next[idx] = { ...idea, texto: html }
                 setField('ideas', next)
               }}
-              style={inp(t)}
             />
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
               <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>
                 Redactar con Clara
               </button>
@@ -305,7 +313,10 @@ export default function ActaEditor({
                 <button
                   type="button"
                   style={ghost(t)}
-                  onClick={() => setCompromisoCtx({ ideaId: idea.id, texto: idea.texto })}
+                  onClick={() => setCompromisoCtx({
+                    ideaId: idea.id,
+                    texto: htmlToPlainText(idea.texto),
+                  })}
                 >
                   Generar compromiso
                 </button>
@@ -368,18 +379,18 @@ export default function ActaEditor({
         <IdeaClaraModal
           t={t}
           api={api}
-          textoInicial={form.ideas[claraIdx]?.texto || ''}
+          textoInicial={htmlToPlainText(form.ideas[claraIdx]?.texto || '')}
           onClose={() => setClaraIdx(null)}
           onEnviarAlActa={(texto) => {
             const next = [...form.ideas]
-            next[claraIdx] = { ...next[claraIdx], texto }
+            next[claraIdx] = { ...next[claraIdx], texto: plainTextToHtml(texto) }
             setField('ideas', next)
             setClaraIdx(null)
           }}
           onGenerarCompromiso={(texto) => {
             const idea = form.ideas[claraIdx]
             const next = [...form.ideas]
-            next[claraIdx] = { ...idea, texto }
+            next[claraIdx] = { ...idea, texto: plainTextToHtml(texto) }
             setField('ideas', next)
             const ideaId = idea?.id
             setClaraIdx(null)
@@ -387,7 +398,7 @@ export default function ActaEditor({
               setError('Guarde el acta (para obtener id de idea) antes de generar el compromiso.')
               return
             }
-            setCompromisoCtx({ ideaId, texto })
+            setCompromisoCtx({ ideaId, texto: htmlToPlainText(texto) })
           }}
         />
       )}

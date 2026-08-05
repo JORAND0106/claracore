@@ -386,10 +386,12 @@ def _sync_asistentes(sb, acta_id: int, asistentes: list) -> None:
 
 def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
     """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes."""
+    from seguimiento_richtext import sanitize_tema_html
+
     existing = sb.table("seguimiento_acta_idea").select("id").eq("acta_id", int(acta_id)).execute().data or []
     keep_ids: Set[int] = set()
     for i, idea in enumerate(ideas or []):
-        texto = (idea.get("texto") or "").strip()
+        texto = sanitize_tema_html(idea.get("texto") or "")
         iid = idea.get("id")
         if iid:
             keep_ids.add(int(iid))
@@ -437,6 +439,8 @@ def _sync_apartados(sb, acta_id: int, apartados: list) -> None:
 
 
 def add_idea(sb, contrato_id: int, acta_id: int, texto: str = "") -> dict:
+    from seguimiento_richtext import sanitize_tema_html
+    texto = sanitize_tema_html(texto)
     get_acta(sb, acta_id, contrato_id)
     existing = sb.table("seguimiento_acta_idea").select("orden").eq("acta_id", int(acta_id)).order("orden", desc=True).limit(1).execute().data or []
     orden = (int(existing[0]["orden"]) + 1) if existing else 0
@@ -451,6 +455,9 @@ def add_idea(sb, contrato_id: int, acta_id: int, texto: str = "") -> dict:
 
 
 def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
+    from seguimiento_richtext import sanitize_tema_html
+
+    texto = sanitize_tema_html(texto)
     idea = sb.table("seguimiento_acta_idea").select("*, seguimiento_acta!inner(contrato_id)").eq("id", int(idea_id)).limit(1).execute().data
     # Fallback sin join si PostgREST no resuelve el alias
     if not idea:
@@ -469,7 +476,7 @@ def update_idea(sb, contrato_id: int, idea_id: int, texto: str) -> dict:
         if acta_cid is not None and int(acta_cid) != int(contrato_id):
             raise ValueError("Idea no pertenece al contrato")
     upd = sb.table("seguimiento_acta_idea").update({
-        "texto": (texto or "").strip(),
+        "texto": texto,
         "updated_at": _now_utc().isoformat(),
     }).eq("id", int(idea_id)).execute().data
     return (upd or [idea_row])[0]
@@ -493,10 +500,14 @@ def crear_compromiso_desde_idea(sb, contrato_id: int, acta_id: int, idea_id: int
         raise ValueError("Fecha de vencimiento requerida")
     cache = CalendarioNoHabilesCache(loader=make_calendar_loader(sb))
     limite = calcular_fecha_limite_gracia(contrato_id, fv, cache)
-    titulo = (data.get("titulo") or data.get("redaccion") or "").strip()
+    from seguimiento_richtext import html_to_plain_text
+
+    titulo = html_to_plain_text(data.get("titulo") or data.get("redaccion") or "").strip()
     if not titulo:
         raise ValueError("Debe indicar la redacción del compromiso")
-    descripcion = (data.get("descripcion") or data.get("redaccion") or titulo).strip()
+    descripcion = html_to_plain_text(
+        data.get("descripcion") or data.get("redaccion") or titulo
+    ).strip()
     row = {
         "origen": "compromiso",
         "titulo": titulo[:500],
