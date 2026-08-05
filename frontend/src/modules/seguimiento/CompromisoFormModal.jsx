@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import IdeaClaraModal from './IdeaClaraModal'
 import { nombreUser } from './UserSearchSelect'
 import { numeroActaLabel } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
@@ -11,6 +12,7 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimient
  */
 export default function CompromisoFormModal({
   t,
+  api,
   usuario,
   textoIdea,
   usuarios = [],
@@ -32,6 +34,7 @@ export default function CompromisoFormModal({
   const [highlight, setHighlight] = useState(-1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [claraOpen, setClaraOpen] = useState(false)
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -319,6 +322,18 @@ export default function CompromisoFormModal({
         </div>
         <Field t={t} label="Redacción del compromiso">
           <textarea rows={5} value={form.redaccion} onChange={(e) => set('redaccion', e.target.value)} style={inp(t)} />
+          {api && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => setClaraOpen(true)}
+                style={ghost(t)}
+                title="Ajustar y mejorar la redacción con Clara"
+              >
+                Redactar con Clara
+              </button>
+            </div>
+          )}
         </Field>
         {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)' }}>{error}</div>}
         <div className="cc-seguim-modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
@@ -329,6 +344,24 @@ export default function CompromisoFormModal({
         </div>
         </div>
       </div>
+
+      {claraOpen && api && (
+        <IdeaClaraModal
+          t={t}
+          api={api}
+          textoInicial={form.redaccion}
+          modo="compromiso"
+          zIndex={12200}
+          textoLabel="Redacción del compromiso"
+          aplicarLabel="Usar esta redacción"
+          subtitulo="Ajuste el compromiso de forma iterativa. Al finalizar, incorpore el texto al formulario."
+          onClose={() => setClaraOpen(false)}
+          onEnviarAlActa={(texto) => {
+            set('redaccion', texto)
+            setClaraOpen(false)
+          }}
+        />
+      )}
     </div>
   )
 }

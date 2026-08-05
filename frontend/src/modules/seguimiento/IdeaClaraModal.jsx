@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 
 /**
  * Ventana de redacción asistida con Clara.
- * Acciones finales: enviar texto al cuerpo del acta, o generar compromiso.
+ * Reutilizable para ideas centrales (enviar al acta / generar compromiso)
+ * y para la redacción de un compromiso (aplicar texto al formulario).
  */
 export default function IdeaClaraModal({
   t,
@@ -11,6 +12,16 @@ export default function IdeaClaraModal({
   onClose,
   onEnviarAlActa,
   onGenerarCompromiso,
+  /** Etiqueta del botón principal de aplicar texto. */
+  aplicarLabel = 'Enviar al acta',
+  /** Subtítulo bajo el título del modal. */
+  subtitulo = 'Ajuste la idea de forma iterativa. Al finalizar, envíela al acta o genere un compromiso.',
+  /** Etiqueta del textarea principal. */
+  textoLabel = 'Texto de la idea',
+  /** Modo enviado a /redaccion-clara: "redaccion" | "compromiso". */
+  modo = 'redaccion',
+  /** z-index del overlay (útil al anidar sobre otros modales). */
+  zIndex = 12000,
 }) {
   const [texto, setTexto] = useState(textoInicial || '')
   const [instruccion, setInstruccion] = useState('')
@@ -32,6 +43,7 @@ export default function IdeaClaraModal({
         texto,
         instruccion: instruccion.trim(),
         historial,
+        modo,
       })
       const nuevo = r.texto || texto
       setHistorial((h) => [
@@ -77,7 +89,7 @@ export default function IdeaClaraModal({
       role="dialog"
       aria-modal="true"
       style={{
-        position: 'fixed', inset: 0, zIndex: 12000,
+        position: 'fixed', inset: 0, zIndex,
         background: 'rgba(15,23,42,0.45)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
@@ -99,14 +111,14 @@ export default function IdeaClaraModal({
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>Redacción con Clara</div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-              Ajuste la idea de forma iterativa. Al finalizar, envíela al acta o genere un compromiso.
+              {subtitulo}
             </div>
           </div>
           <button type="button" onClick={onClose} style={btnGhost(t)}>✕</button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-          <label style={{ ...labelStyle(t), marginBottom: 0 }}>Texto de la idea</label>
+          <label style={{ ...labelStyle(t), marginBottom: 0 }}>{textoLabel}</label>
           <button
             type="button"
             onClick={copiarTexto}
@@ -152,22 +164,26 @@ export default function IdeaClaraModal({
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
           <button type="button" onClick={onClose} style={btnGhost(t)}>Cancelar</button>
-          <button
-            type="button"
-            onClick={() => onEnviarAlActa?.(texto)}
-            disabled={!texto.trim()}
-            style={btnPrimary(t)}
-          >
-            Enviar al acta
-          </button>
-          <button
-            type="button"
-            onClick={() => onGenerarCompromiso?.(texto)}
-            disabled={!texto.trim()}
-            style={{ ...btnPrimary(t), background: 'var(--cc-color-positive, #0f766e)' }}
-          >
-            Generar compromiso
-          </button>
+          {typeof onEnviarAlActa === 'function' && (
+            <button
+              type="button"
+              onClick={() => onEnviarAlActa?.(texto)}
+              disabled={!texto.trim()}
+              style={btnPrimary(t)}
+            >
+              {aplicarLabel}
+            </button>
+          )}
+          {typeof onGenerarCompromiso === 'function' && (
+            <button
+              type="button"
+              onClick={() => onGenerarCompromiso?.(texto)}
+              disabled={!texto.trim()}
+              style={{ ...btnPrimary(t), background: 'var(--cc-color-positive, #0f766e)' }}
+            >
+              Generar compromiso
+            </button>
+          )}
         </div>
       </div>
     </div>
