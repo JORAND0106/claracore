@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 from presupuesto_versiones_service import PPTO_TIPO_OBRA, assert_version_del_contrato
 
-# Columnas válidas en presupuesto_version_items (sin backup_1/backup_2 del vivo).
+# Columnas válidas en presupuesto_version_items (sin backup_1/backup_2 ni
+# item_backup_1/descripcion_backup_1/und_backup_1 del vivo).
 PRESUPUESTO_VERSION_ITEM_INSERT_KEYS = (
     "presupuesto_item_id_origen",
     "contrato_id",

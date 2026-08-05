@@ -424,6 +424,13 @@ function useApi(token, opts = {}) {
       let msg = "Error del servidor";
       if (typeof err.detail === "string") msg = err.detail;
       else if (Array.isArray(err.detail)) msg = err.detail.map(e => e.msg).join(", ");
+      else if (err.detail && typeof err.detail === "object") {
+        msg = err.detail.message || err.detail.code || "Error del servidor";
+        const e = new Error(msg);
+        e.detail = err.detail;
+        e.status = res.status;
+        throw e;
+      }
       else if (err.message) msg = err.message;
       throw new Error(msg);
     }
@@ -3868,11 +3875,14 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const contratoCargaGenRef = useRef(0);
   const [msg,              setMsg]              = useState(null);
   const [popup,            setPopup]            = useState(null);
+  const [popupOriginal,    setPopupOriginal]    = useState(null);
   const [stats,            setStats]            = useState(null);
   const [statsLoading,     setStatsLoading]     = useState(false);
   const [saving,           setSaving]           = useState(false);
   const [recalculando,     setRecalculando]     = useState(false);
   const [recalcMsg,        setRecalcMsg]        = useState(null);
+  const [metaImpacto,      setMetaImpacto]      = useState(null);
+  const [metaImpactoLoading, setMetaImpactoLoading] = useState(false);
   const [showCrear,        setShowCrear]        = useState(false);
   const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
   const [creating,         setCreating]         = useState(false);
@@ -4478,7 +4488,14 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   // ── Popup detalle ──────────────────────────────────────────────────────────
   const abrirDetalle = async (item) => {
-    setPopup({ ...item });
+    const snap = { ...item };
+    setPopup(snap);
+    setPopupOriginal({
+      item_numero: snap.item_numero || "",
+      descripcion: snap.descripcion || "",
+      unidad: snap.unidad || "",
+    });
+    setMetaImpacto(null);
     setStats(null);
     setRecalcMsg(null);
     setUModoCustomP(false);
@@ -4487,6 +4504,57 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     try { setStats(await call("GET", `/listado-precios/item/${item.id}/stats`)); }
     catch { setStats(null); }
     finally { setStatsLoading(false); }
+  };
+
+  const camposMetaCambiados = (actual, original) => {
+    if (!actual || !original) return [];
+    const keys = ["item_numero", "descripcion", "unidad"];
+    return keys.filter((k) => String(actual[k] ?? "").trim() !== String(original[k] ?? "").trim());
+  };
+
+  const ejecutarGuardadoPrecio = async ({ confirmMeta = false } = {}) => {
+    if (!popup) return;
+    setSaving(true);
+    try {
+      const payload = { ...popup };
+      if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
+      // El backend recalcula estado_precio; no forzar el valor stale del formulario.
+      delete payload.estado_precio;
+      const qs = confirmMeta ? "?confirm_meta=true" : "";
+      const saved = await call("PUT", `/listado-precios/item/${popup.id}${qs}`, payload);
+      setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
+      const [freshStats, freshCant] = await Promise.all([
+        call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
+        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
+      ]);
+      const fromServer = saved && typeof saved === "object" && saved.id ? saved : {};
+      const mergedBase = { ...popup, ...payload, ...fromServer };
+      if (mergedBase.tipo_precio === "Precio Contractual") {
+        mergedBase.acta_fijacion = "Contractual";
+        mergedBase.acta_modificatoria = "";
+      }
+      mergedBase.estado_precio = fromServer.estado_precio || resolverEstadoPrecioGuardado(mergedBase);
+      const { ok: _okIgnored, propagados: _p, campos_meta_cambiados: _c, ...merged } = mergedBase;
+      setItems((prev) => prev.map((i) => (i.id === popup.id ? { ...i, ...merged } : i)));
+      if (freshCant?.length) setCantidades(freshCant);
+      setPopup({ ...merged });
+      setPopupOriginal({
+        item_numero: merged.item_numero || "",
+        descripcion: merged.descripcion || "",
+        unidad: merged.unidad || "",
+      });
+      setMetaImpacto(null);
+      if (freshStats) setStats(freshStats);
+    } catch (e) {
+      const detail = e?.detail || e?.response?.data?.detail;
+      if (detail?.code === "confirm_meta_required" && detail?.impacto) {
+        setMetaImpacto(detail.impacto);
+      } else {
+        setMsg({ type:"error", text:e.message });
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   const setPopupField = (k, v) => setPopup(p => ({ ...p, [k]: v }));
@@ -4511,32 +4579,24 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const guardarEdicion = async () => {
     if (!popup) return;
-    setSaving(true);
+    const cambiados = camposMetaCambiados(popup, popupOriginal);
+    if (cambiados.length === 0) {
+      await ejecutarGuardadoPrecio({ confirmMeta: false });
+      return;
+    }
+    setMetaImpactoLoading(true);
     try {
-      const payload = { ...popup };
-      if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
-      // El backend recalcula estado_precio; no forzar el valor stale del formulario.
-      delete payload.estado_precio;
-      const saved = await call("PUT", `/listado-precios/item/${popup.id}`, payload);
-      setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
-      const [freshStats, freshCant] = await Promise.all([
-        call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
-        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
-      ]);
-      const fromServer = saved && typeof saved === "object" && saved.id ? saved : {};
-      const mergedBase = { ...popup, ...payload, ...fromServer };
-      if (mergedBase.tipo_precio === "Precio Contractual") {
-        mergedBase.acta_fijacion = "Contractual";
-        mergedBase.acta_modificatoria = "";
-      }
-      mergedBase.estado_precio = fromServer.estado_precio || resolverEstadoPrecioGuardado(mergedBase);
-      const { ok: _okIgnored, ...merged } = mergedBase;
-      setItems((prev) => prev.map((i) => (i.id === popup.id ? { ...i, ...merged } : i)));
-      if (freshCant?.length) setCantidades(freshCant);
-      setPopup({ ...merged });
-      if (freshStats) setStats(freshStats);
-    } catch (e) { setMsg({ type:"error", text:e.message }); }
-    finally { setSaving(false); }
+      const impacto = await call("GET", `/listado-precios/item/${popup.id}/impacto-edicion-meta`);
+      setMetaImpacto({ ...impacto, campos_cambiados: cambiados });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "No se pudo calcular el impacto del cambio." });
+    } finally {
+      setMetaImpactoLoading(false);
+    }
+  };
+
+  const confirmarGuardadoMeta = async () => {
+    await ejecutarGuardadoPrecio({ confirmMeta: true });
   };
 
   const recalcular = async () => {
@@ -5327,12 +5387,141 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             </div>
 
             <div style={modalFoot}>
-              <button style={S.btn("ghost")} onClick={() => setPopup(null)}>Cerrar</button>
+              <button style={S.btn("ghost")} onClick={() => { setPopup(null); setPopupOriginal(null); setMetaImpacto(null); }}>Cerrar</button>
               {perms?.editar && (
-                <button style={S.btn("primary")} onClick={guardarEdicion} disabled={saving}>
-                  {saving?"Guardando...":"💾 Guardar cambios"}
+                <button style={S.btn("primary")} onClick={guardarEdicion} disabled={saving || metaImpactoLoading}>
+                  {metaImpactoLoading ? "Calculando impacto..." : saving ? "Guardando..." : "💾 Guardar cambios"}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Advertencia institucional: impacto ítem / descripción / unidad ── */}
+      {metaImpacto && (
+        <div
+          style={{ ...overlayStyle, zIndex: 10050 }}
+          onClick={(e) => e.target === e.currentTarget && !saving && setMetaImpacto(null)}
+        >
+          <div style={{ ...modalStyle(560), padding: 0 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{
+              ...modalHead,
+              background: isDarkMode(theme) ? "rgba(180,83,9,0.18)" : "rgba(254,243,199,0.95)",
+              borderBottom: `1px solid ${isDarkMode(theme) ? "rgba(245,158,11,0.35)" : "#f59e0b"}`,
+            }}>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>
+                  Advertencia: cambio en ficha del ítem
+                </div>
+                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>
+                  Ítem · descripción · unidad se resuelven en vivo desde el listado
+                </div>
+              </div>
+              <button type="button" style={S.closeBtn(theme)} onClick={() => !saving && setMetaImpacto(null)} disabled={saving}>✕</button>
+            </div>
+            <div style={{ ...modalScroll, padding: "16px 20px" }}>
+              <p style={{ fontSize: "var(--cc-sm)", color: col.textPrimary, lineHeight: 1.55, margin: "0 0 12px" }}>
+                Está por modificar{" "}
+                <strong>
+                  {(metaImpacto.campos_cambiados || []).map((c) => (
+                    c === "item_numero" ? "número de ítem"
+                      : c === "descripcion" ? "descripción"
+                        : c === "unidad" ? "unidad" : c
+                  )).join(", ") || "la ficha del ítem"}
+                </strong>
+                {" "}del ítem <strong>{popup?.item_numero || metaImpacto.item_numero}</strong>.
+                Los registros asociados en Presupuesto y SicoeObra reflejarán el cambio de inmediato.
+                {" "}<strong>Esta acción no se puede deshacer.</strong>
+              </p>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 8,
+                marginBottom: 14,
+              }}>
+                {[
+                  { label: "Registros Presupuesto", value: metaImpacto.presupuesto_count ?? 0 },
+                  { label: "Registros SicoeObra", value: metaImpacto.sicoe_registros_count ?? 0 },
+                  { label: "Actas RPO", value: metaImpacto.actas_rpo_count ?? 0 },
+                  { label: "Reportes", value: metaImpacto.reportes_count ?? 0 },
+                ].map((card) => (
+                  <div key={card.label} style={{
+                    border: `1px solid ${tTok.border}`,
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    background: isDarkMode(theme) ? "rgba(0,175,197,0.06)" : "rgba(14,116,144,0.04)",
+                  }}>
+                    <div style={{ fontSize: 10, color: col.textSecondary, textTransform: "uppercase", letterSpacing: 0.6 }}>{card.label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: tTok.primary, fontFamily: "'Rajdhani',sans-serif" }}>
+                      {Number(card.value).toLocaleString("es-CO")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {(metaImpacto.actas_rpo || []).length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: col.textPrimary, marginBottom: 6 }}>Actas RPO afectadas</div>
+                  <div style={{
+                    maxHeight: 120,
+                    overflowY: "auto",
+                    border: `1px solid ${tTok.border}`,
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontSize: "var(--cc-sm)",
+                  }}>
+                    {(metaImpacto.actas_rpo || []).map((a) => (
+                      <div key={a.id} style={{ padding: "4px 0", borderBottom: `1px solid ${tTok.border}55` }}>
+                        Acta RPO {a.numero_rpo ?? a.id}
+                        {a.firmada ? " · firmada" : ""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(metaImpacto.reportes || []).length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: col.textPrimary, marginBottom: 6 }}>Reportes afectados</div>
+                  <div style={{
+                    maxHeight: 140,
+                    overflowY: "auto",
+                    border: `1px solid ${tTok.border}`,
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontSize: "var(--cc-sm)",
+                  }}>
+                    {(metaImpacto.reportes || []).slice(0, 80).map((r) => (
+                      <div key={r.id} style={{ padding: "4px 0", borderBottom: `1px solid ${tTok.border}55` }}>
+                        Reporte {r.numero_reporte ?? r.id}
+                        {r.numero_rpo != null ? ` · Acta RPO ${r.numero_rpo}` : ""}
+                        {r.estado ? ` · ${r.estado}` : ""}
+                      </div>
+                    ))}
+                    {(metaImpacto.reportes || []).length > 80 && (
+                      <div style={{ paddingTop: 6, color: col.textSecondary }}>
+                        … y {(metaImpacto.reportes.length - 80).toLocaleString("es-CO")} más
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {(metaImpacto.presupuesto_count ?? 0) === 0
+                && (metaImpacto.sicoe_registros_count ?? 0) === 0 && (
+                <p style={{ fontSize: "var(--cc-sm)", color: col.textSecondary, margin: "8px 0 0" }}>
+                  No hay registros asociados actualmente; el cambio solo afecta la ficha del listado.
+                </p>
+              )}
+            </div>
+            <div style={modalFoot}>
+              <button type="button" style={S.btn("ghost")} onClick={() => setMetaImpacto(null)} disabled={saving}>
+                Cancelar
+              </button>
+              <button type="button" style={S.btn("danger")} onClick={confirmarGuardadoMeta} disabled={saving}>
+                {saving ? "Guardando..." : "Confirmar y guardar"}
+              </button>
             </div>
           </div>
         </div>
