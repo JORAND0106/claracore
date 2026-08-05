@@ -4,6 +4,8 @@ import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import ItemDetalleModal from './ItemDetalleModal'
 import QuienDijoAutocomplete from './QuienDijoAutocomplete'
+import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
+import TemaRichEditor from './TemaRichEditor'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import {
@@ -546,7 +548,7 @@ export default function ActaEditor({
         usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
       })),
     ideas: (formSrc.ideas || [])
-      .filter((i) => (i.texto || '').trim() || (i.quien_dijo || '').trim() || i.id
+      .filter((i) => !isRichTextEmpty(i.texto) || (i.quien_dijo || '').trim() || i.id
         || normalizeIdeaImagenes(i.imagenes).length)
       .map((i, idx) => {
         const quien = (i.quien_dijo || i.interviniente || '').trim() || null
@@ -613,23 +615,23 @@ export default function ActaEditor({
     const list = Array.isArray(ideasList) ? ideasList : []
     const out = []
     for (const idea of list) {
-      const texto = String(idea.texto || '').trim()
+      const textoPlano = htmlToPlainText(idea.texto || '')
       const tituloActual = String(idea.titulo || '').trim()
-      if (!texto || tituloActual) {
+      if (!textoPlano || tituloActual) {
         out.push(idea)
         continue
       }
       let titulo = ''
       try {
         const r = await api.redaccionClara({
-          texto,
+          texto: textoPlano,
           modo: 'titulo_tema',
           instruccion: '',
         })
         titulo = String(r?.titulo || r?.texto || '').trim()
       } catch {
         // Fallback local: primera frase / fragmento
-        const first = texto.split(/[.:;\n]/)[0] || texto
+        const first = textoPlano.split(/[.:;\n]/)[0] || textoPlano
         titulo = first.trim().slice(0, 72)
       }
       out.push({ ...idea, titulo: titulo || idea.titulo || '' })
@@ -791,7 +793,9 @@ export default function ActaEditor({
       ideaId = byTexto?.id || saved[ideaIdxHint]?.id
     }
     if (!ideaId) throw new Error('No se pudo identificar la idea tras guardar el acta')
-    return { actaId: row.id, ideaId, texto: textoHint || ideaLocal?.texto || '' }
+    const textoHtml = textoHint || ideaLocal?.texto || ''
+    // El modal de compromiso usa textarea plano: enviar texto sin etiquetas.
+    return { actaId: row.id, ideaId, texto: htmlToPlainText(textoHtml) }
   }
 
   const abrirCompromiso = async (ideaIdx, texto) => {
@@ -834,7 +838,7 @@ export default function ActaEditor({
       if (!form.elaborador_id) {
         throw new Error('Indique el elaborador antes de generar la vista previa')
       }
-      const localesConTexto = (form.ideas || []).filter((i) => (i.texto || '').trim()).length
+      const localesConTexto = (form.ideas || []).filter((i) => !isRichTextEmpty(i.texto)).length
       const row = await persistActa()
       const guardadas = Array.isArray(row?.ideas) ? row.ideas.length : 0
       const blob = await api.pdfActaBlob(row.id)
@@ -1545,17 +1549,25 @@ export default function ActaEditor({
                       }}
                     />
                   </Field>
-                  <AutoGrowTextarea
-                    minRows={3}
-                    disabled={soloLectura}
-                    value={idea.texto}
-                    onChange={(e) => {
-                      const texto = e.target.value
-                      patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, texto } : row)))
+                  <TemaRichEditor
+                    t={t}
+                    value={idea.texto || ''}
+                    editable={!soloLectura}
+                    placeholder="Redacción del tema… (viñetas, 1./1.1./1.1.1., negrita Ctrl+N, cursiva Ctrl+K, subrayado Ctrl+S; Ctrl+V con imagen adjunta esquema)"
+                    onChange={(html) => {
+                      patchList('ideas', (list) => list.map((row, i) => (
+                        i === idx ? { ...row, texto: html } : row
+                      )))
                     }}
-                    onPaste={(e) => handleIdeaPaste(idx, e)}
-                    style={inp(t)}
-                    placeholder="Redacción de la idea central… (Ctrl+V pega capturas como esquema)"
+                    onPasteImage={(file) => {
+                      if (soloLectura || !file) return
+                      const named = new File(
+                        [file],
+                        file.name || `captura-${Date.now()}.png`,
+                        { type: file.type || 'image/png' },
+                      )
+                      addIdeaImagen(idx, named)
+                    }}
                   />
                   <div style={{ marginTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -1704,7 +1716,14 @@ export default function ActaEditor({
                     <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                       <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>Redactar con Clara</button>
                       {permisos?.crear && (
-                        <button type="button" style={ghost(t)} disabled={saving || !(idea.texto || '').trim()} onClick={() => abrirCompromiso(idx, idea.texto)}>Generar compromiso</button>
+                        <button
+                          type="button"
+                          style={ghost(t)}
+                          disabled={saving || isRichTextEmpty(idea.texto)}
+                          onClick={() => abrirCompromiso(idx, idea.texto)}
+                        >
+                          Generar compromiso
+                        </button>
                       )}
                       <button
                         type="button"
@@ -2062,48 +2081,52 @@ export default function ActaEditor({
         <IdeaClaraModal
           t={t}
           api={api}
-          textoInicial={form.ideas[claraIdx]?.texto || ''}
+          textoInicial={htmlToPlainText(form.ideas[claraIdx]?.texto || '')}
           onClose={() => setClaraIdx(null)}
           onEnviarAlActa={async (texto) => {
             const idx = claraIdx
+            const plano = String(texto || '')
             let titulo = ''
             try {
               const r = await api.redaccionClara({
-                texto,
+                texto: plano,
                 modo: 'titulo_tema',
                 instruccion: '',
               })
               titulo = String(r?.titulo || r?.texto || '').trim()
             } catch { /* fallback abajo */ }
             if (!titulo) {
-              const first = String(texto || '').split(/[.:;\n]/)[0] || texto
+              const first = plano.split(/[.:;\n]/)[0] || plano
               titulo = first.trim().slice(0, 72)
             }
+            const html = plainTextToHtml(plano)
             patchList('ideas', (list) => list.map((row, i) => (
-              i === idx ? { ...row, texto, titulo } : row
+              i === idx ? { ...row, texto: html, titulo } : row
             )))
             setClaraIdx(null)
           }}
           onGenerarCompromiso={async (texto) => {
             const idx = claraIdx
+            const plano = String(texto || '')
             let titulo = ''
             try {
               const r = await api.redaccionClara({
-                texto,
+                texto: plano,
                 modo: 'titulo_tema',
                 instruccion: '',
               })
               titulo = String(r?.titulo || r?.texto || '').trim()
             } catch { /* ignore */ }
             if (!titulo) {
-              const first = String(texto || '').split(/[.:;\n]/)[0] || texto
+              const first = plano.split(/[.:;\n]/)[0] || plano
               titulo = first.trim().slice(0, 72)
             }
+            const html = plainTextToHtml(plano)
             patchList('ideas', (list) => list.map((row, i) => (
-              i === idx ? { ...row, texto, titulo } : row
+              i === idx ? { ...row, texto: html, titulo } : row
             )))
             setClaraIdx(null)
-            await abrirCompromiso(idx, texto)
+            await abrirCompromiso(idx, html)
           }}
         />
       )}

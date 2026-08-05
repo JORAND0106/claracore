@@ -45,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-01.8-logo46-asis-borde-tenue"
+PDF_ACTA_TEMPLATE_VERSION = "2026-08-05.1-tema-richtext"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -143,6 +143,13 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
 def _nl2br(text: str) -> str:
     """Convierte saltos de línea a <br/> (xhtml2pdf pagina mejor que white-space:pre-wrap)."""
     return _esc(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br/>")
+
+
+def _render_tema_texto_pdf(texto: str) -> str:
+    """HTML de tema con formato TipTap (listas jerárquicas, negrita/cursiva/subrayado)."""
+    from seguimiento_richtext import render_tema_html_for_pdf
+
+    return render_tema_html_for_pdf(texto)
 
 
 def _anio_contrato(numero: str, fecha_reunion=None) -> str:
@@ -481,7 +488,9 @@ def _cell(content: str, *, width: str = "", border_right: bool = True, align: st
 
 def _titulo_tema_fallback(texto: str) -> str:
     """Título corto local si la idea aún no tiene titulo Clara."""
-    t = " ".join((texto or "").strip().split())
+    from seguimiento_richtext import html_to_plain_text
+
+    t = " ".join(html_to_plain_text(texto).replace("\n", " ").split()).strip()
     if not t:
         return ""
     for sep in (".", ";", ":", "\n"):
@@ -584,7 +593,7 @@ def generar_pdf_acta(
             f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
             f"<div style='font-size:9pt;font-weight:700;'>Tema {num}: {_esc(titulo_tema)}</div>"
             f"{quien_line}"
-            f"<div style='font-size:9pt;'>{_nl2br(idea.get('texto') or '')}</div>"
+            f"{_render_tema_texto_pdf(idea.get('texto') or '')}"
             f"{imgs_html}"
             f"</div>"
         )
