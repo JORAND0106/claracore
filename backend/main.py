@@ -10781,7 +10781,7 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     if ("no_inicio" in data or "no_final" in data) and not _ppto_puede_editar_nodos_y_area_long_como_dev(_cid_row, current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo Desarrollador o (contrato autorizado con permiso «editar registros presupuesto») pueden modificar los nodos (No.Ini / No.Fin).",
+            detail="Solo Desarrollador o (contrato autorizado con permiso «editar registros presupuesto») pueden modificar Tramo / Infraestructura (nodos).",
         )
     reabrir = False
     if prev_row.get("sellado"):
