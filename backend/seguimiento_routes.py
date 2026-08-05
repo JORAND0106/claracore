@@ -274,7 +274,7 @@ class RedaccionClaraBody(BaseModel):
     texto: str = ""
     instruccion: Optional[str] = None
     historial: Optional[List[Dict[str, str]]] = None
-    # "redaccion" (default) | "titulo_tema" (título corto institucional)
+    # "redaccion" (default) | "compromiso" | "titulo_tema" (título corto institucional)
     modo: Optional[str] = "redaccion"
 
 
@@ -586,8 +586,8 @@ def route_idea_imagen(
 async def route_redaccion_clara(body: RedaccionClaraBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "editar")
     modo = (body.modo or "redaccion").strip().lower()
-    if modo == "redaccion" and not (body.instruccion or "").strip():
-        raise HTTPException(status_code=422, detail="instruccion es requerida para modo redaccion")
+    if modo in ("redaccion", "compromiso") and not (body.instruccion or "").strip():
+        raise HTTPException(status_code=422, detail="instruccion es requerida para modo redaccion/compromiso")
     try:
         return await redaccion_asistida_clara(
             supabase,

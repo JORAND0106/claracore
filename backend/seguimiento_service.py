@@ -4295,13 +4295,22 @@ async def redaccion_asistida_clara(
         titulo = _limpiar_titulo_tema(respuesta or "") or titulo_tema_desde_texto(texto)
         return {"titulo": titulo, "texto": titulo, "mensajes_restantes_hoy": restantes}
 
-    prompt = (
-        "Estoy redactando una idea central de un acta de reunión de obra pública en ClaraCore. "
-        "Devuélveme ÚNICAMENTE el texto mejorado (español formal, claro y listo para el acta), "
-        "sin preámbulos, sin comillas y sin explicaciones.\n\n"
-        f"Texto actual:\n{texto or '(vacío)'}\n\n"
-        f"Instrucción:\n{instruccion or 'Mejora claridad, precisión y formalidad.'}"
-    )
+    if modo_n == "compromiso":
+        prompt = (
+            "Estoy redactando un compromiso de un acta de reunión de obra pública en ClaraCore. "
+            "Devuélveme ÚNICAMENTE el texto mejorado del compromiso (español formal, concreto, "
+            "accionable y listo para asignar), sin preámbulos, sin comillas y sin explicaciones.\n\n"
+            f"Texto actual:\n{texto or '(vacío)'}\n\n"
+            f"Instrucción:\n{instruccion or 'Mejora claridad, precisión y formalidad.'}"
+        )
+    else:
+        prompt = (
+            "Estoy redactando una idea central de un acta de reunión de obra pública en ClaraCore. "
+            "Devuélveme ÚNICAMENTE el texto mejorado (español formal, claro y listo para el acta), "
+            "sin preámbulos, sin comillas y sin explicaciones.\n\n"
+            f"Texto actual:\n{texto or '(vacío)'}\n\n"
+            f"Instrucción:\n{instruccion or 'Mejora claridad, precisión y formalidad.'}"
+        )
     hist = list(historial or [])
     respuesta, _, _, _ = await llamar_avi(
         mensaje=prompt,

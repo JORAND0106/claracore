@@ -2133,6 +2133,7 @@ export default function ActaEditor({
       {compromisoCtx && (
         <CompromisoFormModal
           t={t}
+          api={api}
           usuario={usuario}
           textoIdea={compromisoCtx.texto}
           usuarios={usuariosContrato}
