@@ -765,12 +765,12 @@ useEffect(() => {
 
   const esDevPpto    = esDeveloper || esDesarrolladorPresupuesto(usuario)
   const _permPpto    = permisoEditarRegistrosPresupuesto(usuario, contratoId)
-  /** Contrato 2: editores con matriz «editar» pueden tratar No.Ini / No.Fin y área/long como Desarrollador (backend alineado). */
+  /** Contrato 2: editores con matriz «editar» pueden tratar Tramo / Infraestructura (no_inicio / no_final) y área/long como Desarrollador (backend alineado). */
   const PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
   const puedeEditarNodosYAreaLongComoDev =
     esDeveloper ||
     (Number(contratoId) === PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG && !!(_permPpto?.editar))
-  /** Editar No.Ini / No.Fin en grilla (y payload de nodos en «Aplicar cambios»). */
+  /** Editar Tramo / Infraestructura (no_inicio / no_final) en grilla (y payload de nodos en «Aplicar cambios»). */
   const puedeEditarNodosGrilla = puedeEditarNodosYAreaLongComoDev
   /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
   const puedeEditarDimensiones = (esDeveloper || (_permPpto?.editar ?? false)) && !versionVistaTemporal
@@ -6837,8 +6837,8 @@ async function restaurar(id) {
                 <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
                 <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 162, width: 162 }}>Descripción</th>
                 <th className="cc-ppto-col-und" style={thStyle}>Und</th>
-                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
-                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>Tramo</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>Infraestructura</th>
                 <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa inicio">Abs. Inicio</th>
                 <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa final">Abs. Final</th>
                 <th className="cc-ppto-col-area" style={thStyle}>Área/Long</th>
@@ -6897,7 +6897,7 @@ async function restaurar(id) {
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
-                            placeholder="No.Ini"
+                            placeholder="Tramo"
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_inicio || '-')}
                     </td>
@@ -6905,7 +6905,7 @@ async function restaurar(id) {
                       {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
                             onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
-                            placeholder="No.Fin"
+                            placeholder="Infraestructura"
                             style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
                         : (r.no_final || '-')}
                     </td>
