@@ -23,6 +23,7 @@ from seguimiento_pdf import (
     generar_pdf_llamado_atencion,
     pdf_acta_cache_key,
 )
+from seguimiento_richtext import html_to_plain_text, sanitize_tema_html
 
 _log = logging.getLogger("claracore.seguimiento")
 BOGOTA = ZoneInfo("America/Bogota")
@@ -1983,11 +1984,11 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                 _log.debug("recover idea insert id: %s", exc)
         return inserted
     for i, idea in enumerate(ideas or []):
-        texto = (idea.get("texto") or "").strip()
+        texto = sanitize_tema_html(idea.get("texto") or "")
         quien = (idea.get("interviniente") or idea.get("quien_dijo") or "").strip() or None
         titulo_raw = (idea.get("titulo") or "").strip()
         if not titulo_raw and texto:
-            titulo_raw = titulo_tema_desde_texto(texto)
+            titulo_raw = titulo_tema_desde_texto(html_to_plain_text(texto))
         titulo = titulo_raw or None
         iid = idea.get("id")
         # orden siempre alineado al índice del payload (consecutivo visible = orden+1).
@@ -2095,7 +2096,7 @@ def add_idea(
     orden = (int(existing[0]["orden"]) + 1) if existing else 0
     ins = sb.table("seguimiento_acta_idea").insert({
         "acta_id": int(acta_id),
-        "texto": (texto or "").strip(),
+        "texto": sanitize_tema_html(texto),
         "orden": orden,
     }).execute().data
     if not ins:
@@ -2133,7 +2134,7 @@ def update_idea(
     if user_id is not None:
         _assert_puede_editar_acta(acta, int(user_id), current_user)
     upd = sb.table("seguimiento_acta_idea").update({
-        "texto": (texto or "").strip(),
+        "texto": sanitize_tema_html(texto),
         "updated_at": _now_utc().isoformat(),
     }).eq("id", int(idea_id)).execute().data
     _touch_acta_hora_fin(sb, int(idea_row["acta_id"]))
@@ -4332,7 +4333,7 @@ def _limpiar_titulo_tema(raw: str) -> str:
 
 def titulo_tema_desde_texto(texto: str) -> str:
     """Fallback local si Clara no responde: primera frase / fragmento corto."""
-    t = " ".join((texto or "").strip().split())
+    t = " ".join(html_to_plain_text(texto).replace("\n", " ").split()).strip()
     if not t:
         return ""
     for sep in (".", ";", ":", "\n"):

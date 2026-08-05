@@ -30,7 +30,12 @@
     "react-leaflet": "^5.0.0",
     "recharts": "^3.8.0",
     "uuid": "^14.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "@tiptap/extension-placeholder": "^2.27.2",
+    "@tiptap/extension-underline": "^2.27.2",
+    "@tiptap/pm": "^2.27.2",
+    "@tiptap/react": "^2.27.2",
+    "@tiptap/starter-kit": "^2.27.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
