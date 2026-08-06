@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
-import { API_BASE, apiFetchSignal } from '../../apiBase'
-import ActaEditor from './ActaEditor'
-import SeguimientoCalendario from './SeguimientoCalendario'
-import { createSeguimientoApi } from './seguimientoApi'
+import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
 
@@ -13,47 +10,18 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     () => accesoSeguimiento(usuario, contratoId ?? usuario?.contrato_id),
     [usuario, contratoId],
   )
-  const api = useMemo(
-    () => createSeguimientoApi(contratoId ?? usuario?.contrato_id, token),
-    [contratoId, usuario?.contrato_id, token],
-  )
   const compact = useSeguimientoCompact()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
-  const [usuariosContrato, setUsuariosContrato] = useState([])
-  const [editingActaId, setEditingActaId] = useState(null)
-  const [creating, setCreating] = useState(false)
   const [calKey, setCalKey] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
-
-  const loadUsuarios = useCallback(async () => {
-    const cid = contratoId ?? usuario?.contrato_id
-    if (!cid || !token) return
-    try {
-      const data = await api.listUsuarios()
-      setUsuariosContrato(Array.isArray(data) ? data : [])
-    } catch {
-      try {
-        const sig = apiFetchSignal(20000)
-        const res = await fetch(`${API_BASE}/actas/${cid}/usuarios-contrato`, {
-          headers: { Authorization: `Bearer ${token}` },
-          ...(sig ? { signal: sig } : {}),
-        })
-        if (res.ok) {
-          const data = await res.json()
-          setUsuariosContrato(Array.isArray(data) ? data : [])
-        }
-      } catch { /* ignore */ }
-    }
-  }, [api, contratoId, usuario?.contrato_id, token])
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
     setCalKey((n) => n + 1)
     setUpdatedAt(Date.now())
-    await loadUsuarios()
     setRefreshBusy(false)
-  }, [loadUsuarios])
+  }, [])
 
   useEffect(() => {
     setModuloRefresh({
@@ -66,9 +34,8 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    loadUsuarios()
     setUpdatedAt(Date.now())
-  }, [loadUsuarios])
+  }, [])
 
   if (permisos.bloqueado) {
     return (
@@ -105,44 +72,15 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         />
       </div>
 
-      <SeguimientoCalendario
+      <SeguimientoCalendarioPanel
         t={t}
-        api={api}
         usuario={usuario}
-        usuarios={usuariosContrato}
-        permisos={permisos}
+        token={token}
+        contratoId={contratoId}
         viewportCompact={compact}
         refreshKey={calKey}
-        onNuevaActa={() => { setCreating(true); setEditingActaId(null) }}
-        onAbrirActa={(id) => { setEditingActaId(id); setCreating(false) }}
+        showFilters
       />
-
-      {(creating || editingActaId != null) && (
-        <ActaEditor
-          t={t}
-          api={api}
-          usuario={usuario}
-          usuariosContrato={usuariosContrato}
-          actaId={editingActaId}
-          permisos={permisos}
-          compact={compact}
-          asModal
-          onCancel={() => { setCreating(false); setEditingActaId(null); setCalKey((n) => n + 1) }}
-          onSaved={async (row, meta) => {
-            if (meta?.deleted) {
-              setCreating(false)
-              setEditingActaId(null)
-              setCalKey((n) => n + 1)
-              return
-            }
-            if (row?.id) {
-              setCreating(false)
-              setEditingActaId((prev) => (Number(prev) === Number(row.id) ? prev : row.id))
-            }
-            if (!meta?.stay) setCalKey((n) => n + 1)
-          }}
-        />
-      )}
     </div>
   )
 }
