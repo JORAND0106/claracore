@@ -15,6 +15,7 @@ import {
   buildCalendarioEvents,
   dayHasVencidos,
   filterEventsByOrigen,
+  formatDayCountLabelShort,
   resolveFetchRange,
   summarizeDayCounts,
   toDateOnly,
@@ -24,6 +25,9 @@ import {
  * Calendario Seguimiento (FullCalendar): mes/semana/día, filtros, CTAs,
  * contador por día, menú rápido al clic y resaltado pasivo de vencidos.
  * Reutilizable en el módulo Seguimiento y en la página de inicio.
+ *
+ * `widgetMode`: versión compacta para Inicio (misma fila que el carrete).
+ * En mes oculta chips de eventos y muestra solo contadores por día.
  */
 export default function SeguimientoCalendario({
   t,
@@ -36,7 +40,9 @@ export default function SeguimientoCalendario({
   onNuevaActa,
   onAbrirActa,
   showFilters = true,
+  widgetMode = false,
 }) {
+  const filtersVisible = showFilters && !widgetMode
   const calendarRef = useRef(null)
   const genRef = useRef(0)
   const rangeRef = useRef({ start: null, end: null })
@@ -194,15 +200,20 @@ export default function SeguimientoCalendario({
     const isMonth = arg.view?.type === 'dayGridMonth'
     const dateStr = toDateOnly(arg.date)
     const summary = isMonth ? summarizeDayCounts(events, dateStr) : null
+    const countText = summary?.total > 0
+      ? (widgetMode
+        ? formatDayCountLabelShort(summary)
+        : summary.label)
+      : ''
     return (
-      <div className="cc-seguim-cal-daycell">
+      <div className={`cc-seguim-cal-daycell${widgetMode ? ' cc-seguim-cal-daycell--widget' : ''}`}>
         <span className="cc-seguim-cal-daynum">{arg.dayNumberText}</span>
-        {isMonth && summary?.total > 0 ? (
-          <span className="cc-seguim-cal-daycount" title={summary.label}>{summary.label}</span>
+        {isMonth && countText ? (
+          <span className="cc-seguim-cal-daycount" title={summary.label}>{countText}</span>
         ) : null}
       </div>
     )
-  }, [events])
+  }, [events, widgetMode])
 
   const dayCellClassNames = useCallback((arg) => {
     const dateStr = toDateOnly(arg.date)
@@ -236,9 +247,34 @@ export default function SeguimientoCalendario({
     return { left, top }
   }, [dayMenu])
 
+  const rootClass = [
+    'cc-seguim-cal',
+    viewportCompact ? 'cc-seguim-cal--compact' : '',
+    widgetMode ? 'cc-seguim-cal--widget' : '',
+  ].filter(Boolean).join(' ')
+
   return (
-    <div className={viewportCompact ? 'cc-seguim-cal cc-seguim-cal--compact' : 'cc-seguim-cal'}>
-      {showFilters && (
+    <div className={rootClass}>
+      {widgetMode && (
+        <div className="cc-seguim-cal-widget-head" style={{
+          padding: '12px 16px',
+          borderBottom: `1px solid ${t.border}`,
+          background: `${t.primary}0c`,
+        }}>
+          <div style={{
+            fontSize: 'var(--cc-xs)', fontWeight: 800, letterSpacing: '0.5px',
+            textTransform: 'uppercase', color: t.primary,
+          }}>
+            📅 Seguimiento
+          </div>
+          <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+            Tareas, compromisos y actas · clic en un día para acciones
+            {loading ? ' · actualizando…' : ''}
+          </div>
+        </div>
+      )}
+
+      {filtersVisible && (
         <div className="cc-seguim-filters" style={{
           display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
         }}>
@@ -332,30 +368,35 @@ export default function SeguimientoCalendario({
       )}
 
       <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 10, alignItems: 'center',
-        fontSize: 'var(--cc-sm)', color: t.textMuted,
+        display: 'flex', flexWrap: 'wrap', gap: widgetMode ? 8 : 12,
+        marginBottom: widgetMode ? 6 : 10, alignItems: 'center',
+        fontSize: widgetMode ? 'var(--cc-xs)' : 'var(--cc-sm)',
+        color: t.textMuted,
+        padding: widgetMode ? '0 12px' : 0,
       }}>
         {legend.map((k) => (
-          <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span style={{
-              width: 12, height: 12, borderRadius: 3, background: k.color, display: 'inline-block',
+              width: widgetMode ? 9 : 12, height: widgetMode ? 9 : 12,
+              borderRadius: 3, background: k.color, display: 'inline-block',
             }}
             />
             <span aria-hidden>{k.icon}</span>
-            {k.label}
+            {!widgetMode && k.label}
           </span>
         ))}
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <span style={{
-            width: 12, height: 12, borderRadius: 3,
+            width: widgetMode ? 9 : 12, height: widgetMode ? 9 : 12, borderRadius: 3,
             background: 'color-mix(in srgb, #dc2626 28%, transparent)',
             border: '1px solid #facc15',
             display: 'inline-block',
           }}
           />
-          Día con vencidos
+          {!widgetMode && 'Día con vencidos'}
+          {widgetMode && 'Venc.'}
         </span>
-        {loading && <span style={{ marginLeft: 'auto' }}>Actualizando…</span>}
+        {!widgetMode && loading && <span style={{ marginLeft: 'auto' }}>Actualizando…</span>}
       </div>
 
       {error && (
@@ -387,12 +428,12 @@ export default function SeguimientoCalendario({
         </div>
       )}
 
-      {showFilters && permisos?.esDesarrollador && (
+      {filtersVisible && permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista Desarrollador: acceso completo a compromisos, tareas, justificaciones y aprobaciones.
         </div>
       )}
-      {showFilters && permisos?.esGerencial && !permisos?.esDesarrollador && (
+      {filtersVisible && permisos?.esGerencial && !permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista gerencial: incluye compromisos y tareas de usuarios bajo su gestión.
         </div>
@@ -401,10 +442,12 @@ export default function SeguimientoCalendario({
       <div
         className="cc-seguim-cal-shell"
         style={{
-          background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 10,
-          padding: viewportCompact ? 8 : 12,
+          background: widgetMode ? 'transparent' : t.bgCard,
+          border: widgetMode ? 'none' : `1px solid ${t.border}`,
+          borderRadius: widgetMode ? 0 : 10,
+          padding: widgetMode ? 8 : (viewportCompact ? 8 : 12),
+          flex: widgetMode ? 1 : undefined,
+          minHeight: widgetMode ? 0 : undefined,
           '--cc-seguim-fc-border': t.border,
           '--cc-seguim-fc-text': t.text,
           '--cc-seguim-fc-muted': t.textMuted,
@@ -416,14 +459,16 @@ export default function SeguimientoCalendario({
         <FullCalendar
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView={viewportCompact ? 'timeGridDay' : 'dayGridMonth'}
-          headerToolbar={{
-            left: 'prev,next today',
-            center: 'title',
-            right: viewportCompact
-              ? 'timeGridDay,timeGridWeek,dayGridMonth'
-              : 'dayGridMonth,timeGridWeek,timeGridDay',
-          }}
+          initialView="dayGridMonth"
+          headerToolbar={widgetMode
+            ? { left: 'prev,next', center: 'title', right: 'today dayGridMonth,timeGridWeek,timeGridDay' }
+            : {
+              left: 'prev,next today',
+              center: 'title',
+              right: viewportCompact
+                ? 'timeGridDay,timeGridWeek,dayGridMonth'
+                : 'dayGridMonth,timeGridWeek,timeGridDay',
+            }}
           buttonText={{
             today: 'Hoy',
             month: 'Mes',
@@ -431,7 +476,7 @@ export default function SeguimientoCalendario({
             day: 'Día',
           }}
           locale={esLocale}
-          height="auto"
+          height={widgetMode ? '100%' : 'auto'}
           stickyHeaderDates
           events={events}
           datesSet={handleDatesSet}
@@ -440,7 +485,7 @@ export default function SeguimientoCalendario({
           eventContent={eventContent}
           dayCellContent={dayCellContent}
           dayCellClassNames={dayCellClassNames}
-          dayMaxEvents={viewportCompact ? 3 : 4}
+          dayMaxEvents={widgetMode ? false : (viewportCompact ? 3 : 4)}
           moreLinkClick="popover"
           nowIndicator
           navLinks={false}
