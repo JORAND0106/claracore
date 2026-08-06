@@ -7260,6 +7260,70 @@ def _suma_costos_adicionales_cop(lista: List[dict]) -> Optional[float]:
     return t
 
 
+def _is_pgrst_missing_column(exc: BaseException, column: str) -> bool:
+    """True si PostgREST reporta PGRST204 / schema cache para la columna dada."""
+    text = str(exc or "")
+    low = text.lower()
+    col = (column or "").lower()
+    if col not in low:
+        return False
+    return "pgrst204" in low or "schema cache" in low or "could not find" in low
+
+
+def _try_reload_postgrest_schema_contratos() -> bool:
+    """Best-effort: pide a PostgREST recargar el schema cache (RPC NOTIFY)."""
+    try:
+        supabase.rpc("sicoe_reload_postgrest_schema").execute()
+        return True
+    except Exception:
+        pass
+    try:
+        supabase.rpc("pg_notify", {"channel": "pgrst", "payload": "reload schema"}).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _contratos_write_with_schema_retry(op_name: str, write_fn, *, has_numero_interventoria: bool):
+    """Ejecuta insert/update; si falla por numero_interventoria en caché, recarga y reintenta una vez."""
+    try:
+        return write_fn()
+    except Exception as exc:
+        if not (has_numero_interventoria and _is_pgrst_missing_column(exc, "numero_interventoria")):
+            raise
+        reloaded = _try_reload_postgrest_schema_contratos()
+        if reloaded:
+            try:
+                import time as _time
+
+                _time.sleep(0.8)
+            except Exception:
+                pass
+            try:
+                return write_fn()
+            except Exception as exc2:
+                if _is_pgrst_missing_column(exc2, "numero_interventoria"):
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "PostgREST no reconoce aún la columna contratos.numero_interventoria "
+                            "(caché de esquema). Ejecute en Supabase SQL Editor el script "
+                            "backend/sql/fix_contratos_numero_interventoria_schema.sql "
+                            "(incluye verificación al catálogo + NOTIFY pgrst, 'reload schema') "
+                            "y reintente en unos segundos."
+                        ),
+                    ) from exc2
+                raise
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo guardar numero_interventoria: la columna no está en el schema cache "
+                "de PostgREST y no fue posible recargarlo desde la API. Ejecute en Supabase: "
+                "backend/sql/fix_contratos_numero_interventoria_schema.sql"
+            ),
+        ) from exc
+
+
 @app.post("/contratos")
 def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_user)):
     existe = supabase.table("contratos").select("id").eq("numero", contrato.numero).execute()
@@ -7269,7 +7333,7 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
     costos_cop = _suma_costos_adicionales_cop(norm)
     if not norm and contrato.costos_adicionales is not None:
         costos_cop = contrato.costos_adicionales
-    result = supabase.table("contratos").insert({
+    payload = {
         "numero": contrato.numero,
         "objeto": contrato.objeto,
         "contratista": contrato.contratista,
@@ -7292,7 +7356,16 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "costo_directo_contrato": contrato.costo_directo_contrato,
         "costos_adicionales": costos_cop,
         "costos_adicionales_lista": norm,
-    }).execute()
+    }
+
+    def _ins():
+        return supabase.table("contratos").insert(payload).execute()
+
+    result = _contratos_write_with_schema_retry(
+        "insert",
+        _ins,
+        has_numero_interventoria=("numero_interventoria" in payload),
+    )
     nuevo = result.data[0]
     if contrato.export_palette is not None:
         try:
@@ -7316,10 +7389,59 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
     if not data and palette_payload is None:
         return {"mensaje": "Sin cambios"}
     if data:
-        supabase.table("contratos").update(data).eq("id", contrato_id).execute()
+        def _upd():
+            return supabase.table("contratos").update(data).eq("id", contrato_id).execute()
+
+        _contratos_write_with_schema_retry(
+            "update",
+            _upd,
+            has_numero_interventoria=("numero_interventoria" in data),
+        )
     if palette_payload is not None:
         _guardar_export_palette_contrato(contrato_id, palette_payload)
     return {"mensaje": "Contrato actualizado"}
+
+
+@app.get("/admin/contratos/schema-numero-interventoria")
+def admin_diagnostico_numero_interventoria(current_user=Depends(get_current_user)):
+    """
+    Diagnóstico liviano (vía PostgREST, no catálogo SQL):
+    indica si la API ve contratos.numero_interventoria y fuerza reload best-effort.
+    """
+    visto = False
+    err_msg = None
+    try:
+        supabase.table("contratos").select("id,numero_interventoria").limit(1).execute()
+        visto = True
+    except Exception as exc:
+        err_msg = str(exc)
+        visto = not _is_pgrst_missing_column(exc, "numero_interventoria")
+        if _is_pgrst_missing_column(exc, "numero_interventoria"):
+            visto = False
+    reloaded = _try_reload_postgrest_schema_contratos()
+    visto_tras_reload = visto
+    if not visto and reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.8)
+            supabase.table("contratos").select("id,numero_interventoria").limit(1).execute()
+            visto_tras_reload = True
+            err_msg = None
+        except Exception as exc2:
+            visto_tras_reload = False
+            err_msg = str(exc2)
+    return {
+        "columna": "numero_interventoria",
+        "tabla": "contratos",
+        "postgrest_ve_columna": visto_tras_reload,
+        "reload_solicitado": reloaded,
+        "error": err_msg,
+        "accion_si_falla": (
+            "Ejecutar en Supabase SQL Editor: "
+            "backend/sql/fix_contratos_numero_interventoria_schema.sql"
+        ),
+    }
 
 @app.delete("/contratos/{contrato_id}")
 def eliminar_contrato(contrato_id: int, current_user=Depends(get_current_user)):
