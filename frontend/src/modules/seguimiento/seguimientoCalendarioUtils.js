@@ -2,7 +2,7 @@
  * Mapeo bandeja/actas → eventos FullCalendar.
  * Diferenciación visual: color de bloque + icono por tipo.
  */
-import { fechaVencimientoEfectiva } from './vencimientoLevels.js'
+import { fechaVencimientoEfectiva, hoyBogotaDate } from './vencimientoLevels.js'
 import { numeroActaLabel } from './seguimientoTheme.js'
 
 export const CALENDARIO_KIND = {
@@ -160,4 +160,63 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = []) {
 export function filterEventsByOrigen(events, origen) {
   if (!origen) return events
   return (events || []).filter((ev) => ev?.extendedProps?.kind === origen)
+}
+
+/** Eventos cuya fecha de inicio cae en `dateStr` (YYYY-MM-DD). */
+export function eventsForDate(events, dateStr) {
+  const d = toDateOnly(dateStr)
+  if (!d) return []
+  return (events || []).filter((ev) => toDateOnly(ev?.start) === d)
+}
+
+/**
+ * Conteos por tipo en un día (vista mes).
+ * @returns {{ tareas: number, compromisos: number, actas: number, total: number, label: string }}
+ */
+export function summarizeDayCounts(events, dateStr) {
+  let tareas = 0
+  let compromisos = 0
+  let actas = 0
+  for (const ev of eventsForDate(events, dateStr)) {
+    const kind = ev?.extendedProps?.kind
+    if (kind === 'tarea') tareas += 1
+    else if (kind === 'compromiso') compromisos += 1
+    else if (kind === 'acta') actas += 1
+  }
+  return {
+    tareas,
+    compromisos,
+    actas,
+    total: tareas + compromisos + actas,
+    label: formatDayCountLabel({ tareas, compromisos, actas }),
+  }
+}
+
+export function formatDayCountLabel({ tareas = 0, compromisos = 0, actas = 0 } = {}) {
+  const parts = []
+  if (tareas > 0) parts.push(`${tareas} tarea${tareas === 1 ? '' : 's'}`)
+  if (compromisos > 0) parts.push(`${compromisos} compromiso${compromisos === 1 ? '' : 's'}`)
+  if (actas > 0) parts.push(`${actas} acta${actas === 1 ? '' : 's'}`)
+  return parts.join(' · ')
+}
+
+/**
+ * Tarea/compromiso vencido: fecha del evento &lt; hoy (Bogotá) y no cumplido/cancelado.
+ * Las actas no marcan el día como vencido.
+ */
+export function isEventoVencido(ev, hoy = hoyBogotaDate()) {
+  const kind = ev?.extendedProps?.kind
+  if (kind !== 'tarea' && kind !== 'compromiso') return false
+  const raw = ev?.extendedProps?.raw
+  const estado = String(raw?.estado_gestion || '').toLowerCase()
+  if (estado === 'cumplido' || estado === 'cancelado') return false
+  if (estado === 'vencido') return true
+  const day = toDateOnly(ev?.start)
+  const hoyStr = toDateOnly(hoy)
+  return !!(day && hoyStr && day < hoyStr)
+}
+
+/** True si el día tiene al menos una tarea/compromiso vencido. */
+export function dayHasVencidos(events, dateStr, hoy = hoyBogotaDate()) {
+  return eventsForDate(events, dateStr).some((ev) => isEventoVencido(ev, hoy))
 }

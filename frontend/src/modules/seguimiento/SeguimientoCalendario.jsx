@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
@@ -8,16 +9,21 @@ import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
 import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import { ACTA_TIPOS, ESTADOS } from './seguimientoTheme'
+import { hoyBogotaDate } from './vencimientoLevels'
 import {
   CALENDARIO_KIND,
   buildCalendarioEvents,
+  dayHasVencidos,
   filterEventsByOrigen,
   resolveFetchRange,
+  summarizeDayCounts,
+  toDateOnly,
 } from './seguimientoCalendarioUtils'
 
 /**
- * Vista principal del módulo Seguimiento: calendario tipo Google Calendar
- * con filtros migrados de Bandeja/Actas y CTAs Crear Tarea / Crear Acta.
+ * Calendario Seguimiento (FullCalendar): mes/semana/día, filtros, CTAs,
+ * contador por día, menú rápido al clic y resaltado pasivo de vencidos.
+ * Reutilizable en el módulo Seguimiento y en la página de inicio.
  */
 export default function SeguimientoCalendario({
   t,
@@ -29,10 +35,12 @@ export default function SeguimientoCalendario({
   refreshKey = 0,
   onNuevaActa,
   onAbrirActa,
+  showFilters = true,
 }) {
   const calendarRef = useRef(null)
   const genRef = useRef(0)
   const rangeRef = useRef({ start: null, end: null })
+  const dayMenuRef = useRef(null)
 
   const [filtros, setFiltros] = useState({
     estado: '',
@@ -49,7 +57,9 @@ export default function SeguimientoCalendario({
   const [accesoMsg, setAccesoMsg] = useState('')
   const [detalleId, setDetalleId] = useState(null)
   const [showTarea, setShowTarea] = useState(false)
+  const [fechaTareaInicial, setFechaTareaInicial] = useState(null)
   const [reloadTick, setReloadTick] = useState(0)
+  const [dayMenu, setDayMenu] = useState(null)
 
   const load = useCallback(async () => {
     const { start, end } = rangeRef.current
@@ -121,6 +131,22 @@ export default function SeguimientoCalendario({
 
   useEffect(() => { load() }, [load, refreshKey, reloadTick])
 
+  useEffect(() => {
+    if (!dayMenu) return undefined
+    const onDoc = (e) => {
+      if (dayMenuRef.current && !dayMenuRef.current.contains(e.target)) {
+        setDayMenu(null)
+      }
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setDayMenu(null) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [dayMenu])
+
   const handleDatesSet = useCallback((info) => {
     rangeRef.current = { start: info.start, end: info.end }
     setReloadTick((n) => n + 1)
@@ -128,6 +154,8 @@ export default function SeguimientoCalendario({
 
   const handleEventClick = useCallback((info) => {
     info.jsEvent?.preventDefault?.()
+    info.jsEvent?.stopPropagation?.()
+    setDayMenu(null)
     const { kind, sourceId, accesoRestringido } = info.event.extendedProps || {}
     if (kind === 'acta') {
       if (accesoRestringido) {
@@ -141,6 +169,16 @@ export default function SeguimientoCalendario({
     if (sourceId != null) setDetalleId(sourceId)
   }, [onAbrirActa])
 
+  const handleDateClick = useCallback((info) => {
+    info.jsEvent?.preventDefault?.()
+    const dateStr = toDateOnly(info.dateStr || info.date)
+    if (!dateStr) return
+    const rect = info.dayEl?.getBoundingClientRect?.()
+    const x = info.jsEvent?.clientX ?? (rect ? rect.left + rect.width / 2 : 80)
+    const y = info.jsEvent?.clientY ?? (rect ? rect.top + 28 : 80)
+    setDayMenu({ dateStr, x, y })
+  }, [])
+
   const eventContent = useCallback((arg) => {
     const icon = arg.event.extendedProps?.icon || ''
     const title = arg.event.title.replace(/^[^\s]+\s/, '')
@@ -152,94 +190,146 @@ export default function SeguimientoCalendario({
     )
   }, [])
 
+  const dayCellContent = useCallback((arg) => {
+    const isMonth = arg.view?.type === 'dayGridMonth'
+    const dateStr = toDateOnly(arg.date)
+    const summary = isMonth ? summarizeDayCounts(events, dateStr) : null
+    return (
+      <div className="cc-seguim-cal-daycell">
+        <span className="cc-seguim-cal-daynum">{arg.dayNumberText}</span>
+        {isMonth && summary?.total > 0 ? (
+          <span className="cc-seguim-cal-daycount" title={summary.label}>{summary.label}</span>
+        ) : null}
+      </div>
+    )
+  }, [events])
+
+  const dayCellClassNames = useCallback((arg) => {
+    const dateStr = toDateOnly(arg.date)
+    if (dayHasVencidos(events, dateStr, hoyBogotaDate())) {
+      return ['cc-seguim-cal-day--vencido']
+    }
+    return []
+  }, [events])
+
+  const abrirDetalleDia = useCallback((dateStr) => {
+    setDayMenu(null)
+    const apiCal = calendarRef.current?.getApi?.()
+    if (apiCal && dateStr) {
+      apiCal.changeView('timeGridDay', dateStr)
+    }
+  }, [])
+
   const legend = useMemo(() => Object.values(CALENDARIO_KIND), [])
+
+  const menuPos = useMemo(() => {
+    if (!dayMenu) return null
+    const pad = 8
+    const w = 220
+    const h = 140
+    let left = dayMenu.x
+    let top = dayMenu.y
+    if (typeof window !== 'undefined') {
+      left = Math.min(Math.max(pad, left), window.innerWidth - w - pad)
+      top = Math.min(Math.max(pad, top), window.innerHeight - h - pad)
+    }
+    return { left, top }
+  }, [dayMenu])
 
   return (
     <div className={viewportCompact ? 'cc-seguim-cal cc-seguim-cal--compact' : 'cc-seguim-cal'}>
-      <div className="cc-seguim-filters" style={{
-        display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
-      }}>
-        <Filter t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
-          <input
-            value={filtros.q}
-            onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
-            onKeyDown={(e) => { if (e.key === 'Enter') setReloadTick((n) => n + 1) }}
-            placeholder="Título, descripción, actas…"
-            style={{ ...inp(t), minWidth: viewportCompact ? 0 : 200, width: '100%' }}
-          />
-        </Filter>
-        <Filter t={t} label="Estado" className="cc-seguim-filter">
-          <select
-            value={filtros.estado}
-            onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
-            style={{ ...inp(t), width: '100%' }}
-            disabled={filtros.origen === 'acta'}
-            title={filtros.origen === 'acta' ? 'El estado de gestión aplica a tareas y compromisos' : undefined}
-          >
-            {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-          </select>
-        </Filter>
-        <Filter t={t} label="Origen" className="cc-seguim-filter">
-          <select
-            value={filtros.origen}
-            onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
-            style={{ ...inp(t), width: '100%' }}
-          >
-            <option value="">Todos</option>
-            <option value="compromiso">Compromisos</option>
-            <option value="tarea">Tareas</option>
-            <option value="acta">Actas</option>
-          </select>
-        </Filter>
-        <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
-          <select
-            value={filtros.tipo_acta}
-            onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
-            style={{ ...inp(t), width: '100%' }}
-            disabled={filtros.origen === 'tarea' || filtros.origen === 'compromiso'}
-          >
-            {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-          </select>
-        </Filter>
-        <Filter t={t} label="Desde" className="cc-seguim-filter">
-          <input
-            type="date"
-            className="cc-seguim-date"
-            value={filtros.fecha_desde}
-            onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
-            style={{ ...inp(t), width: '100%' }}
-          />
-        </Filter>
-        <Filter t={t} label="Hasta" className="cc-seguim-filter">
-          <input
-            type="date"
-            className="cc-seguim-date"
-            value={filtros.fecha_hasta}
-            onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
-            style={{ ...inp(t), width: '100%' }}
-          />
-        </Filter>
-        <label className="cc-seguim-filter cc-seguim-filter--check" style={{
-          display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+      {showFilters && (
+        <div className="cc-seguim-filters" style={{
+          display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
         }}>
-          <input
-            type="checkbox"
-            checked={!!filtros.incluir_cerrados}
-            onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
-            disabled={filtros.origen === 'acta'}
-          />
-          Incluir cumplidos / cancelados
-        </label>
-        <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
-          {permisos?.crear && (
-            <>
-              <button type="button" onClick={() => setShowTarea(true)} style={primary(t)}>Crear Tarea</button>
-              <button type="button" onClick={() => onNuevaActa?.()} style={primary(t)}>Crear Acta</button>
-            </>
-          )}
+          <Filter t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
+            <input
+              value={filtros.q}
+              onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === 'Enter') setReloadTick((n) => n + 1) }}
+              placeholder="Título, descripción, actas…"
+              style={{ ...inp(t), minWidth: viewportCompact ? 0 : 200, width: '100%' }}
+            />
+          </Filter>
+          <Filter t={t} label="Estado" className="cc-seguim-filter">
+            <select
+              value={filtros.estado}
+              onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+              disabled={filtros.origen === 'acta'}
+              title={filtros.origen === 'acta' ? 'El estado de gestión aplica a tareas y compromisos' : undefined}
+            >
+              {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+            </select>
+          </Filter>
+          <Filter t={t} label="Origen" className="cc-seguim-filter">
+            <select
+              value={filtros.origen}
+              onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+            >
+              <option value="">Todos</option>
+              <option value="compromiso">Compromisos</option>
+              <option value="tarea">Tareas</option>
+              <option value="acta">Actas</option>
+            </select>
+          </Filter>
+          <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
+            <select
+              value={filtros.tipo_acta}
+              onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+              disabled={filtros.origen === 'tarea' || filtros.origen === 'compromiso'}
+            >
+              {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+            </select>
+          </Filter>
+          <Filter t={t} label="Desde" className="cc-seguim-filter">
+            <input
+              type="date"
+              className="cc-seguim-date"
+              value={filtros.fecha_desde}
+              onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+            />
+          </Filter>
+          <Filter t={t} label="Hasta" className="cc-seguim-filter">
+            <input
+              type="date"
+              className="cc-seguim-date"
+              value={filtros.fecha_hasta}
+              onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
+              style={{ ...inp(t), width: '100%' }}
+            />
+          </Filter>
+          <label className="cc-seguim-filter cc-seguim-filter--check" style={{
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+          }}>
+            <input
+              type="checkbox"
+              checked={!!filtros.incluir_cerrados}
+              onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
+              disabled={filtros.origen === 'acta'}
+            />
+            Incluir cumplidos / cancelados
+          </label>
+          <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
+            {permisos?.crear && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setFechaTareaInicial(null); setShowTarea(true) }}
+                  style={primary(t)}
+                >
+                  Crear Tarea
+                </button>
+                <button type="button" onClick={() => onNuevaActa?.()} style={primary(t)}>Crear Acta</button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={{
         display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 10, alignItems: 'center',
@@ -255,6 +345,16 @@ export default function SeguimientoCalendario({
             {k.label}
           </span>
         ))}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            width: 12, height: 12, borderRadius: 3,
+            background: 'color-mix(in srgb, #dc2626 28%, transparent)',
+            border: '1px solid #facc15',
+            display: 'inline-block',
+          }}
+          />
+          Día con vencidos
+        </span>
         {loading && <span style={{ marginLeft: 'auto' }}>Actualizando…</span>}
       </div>
 
@@ -287,12 +387,12 @@ export default function SeguimientoCalendario({
         </div>
       )}
 
-      {permisos?.esDesarrollador && (
+      {showFilters && permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista Desarrollador: acceso completo a compromisos, tareas, justificaciones y aprobaciones.
         </div>
       )}
-      {permisos?.esGerencial && !permisos?.esDesarrollador && (
+      {showFilters && permisos?.esGerencial && !permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista gerencial: incluye compromisos y tareas de usuarios bajo su gestión.
         </div>
@@ -336,11 +436,14 @@ export default function SeguimientoCalendario({
           events={events}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
+          dateClick={handleDateClick}
           eventContent={eventContent}
+          dayCellContent={dayCellContent}
+          dayCellClassNames={dayCellClassNames}
           dayMaxEvents={viewportCompact ? 3 : 4}
           moreLinkClick="popover"
           nowIndicator
-          navLinks
+          navLinks={false}
           eventDisplay="block"
           displayEventTime
           eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
@@ -348,6 +451,69 @@ export default function SeguimientoCalendario({
           slotMaxTime="22:00:00"
         />
       </div>
+
+      {dayMenu && menuPos && createPortal(
+        <div
+          ref={dayMenuRef}
+          role="menu"
+          className="cc-seguim-cal-daymenu"
+          style={{
+            position: 'fixed',
+            left: menuPos.left,
+            top: menuPos.top,
+            zIndex: 5200,
+            minWidth: 200,
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 10,
+            boxShadow: '0 10px 28px rgba(15,23,42,0.18)',
+            padding: 6,
+          }}
+        >
+          <div style={{
+            fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700,
+            padding: '6px 10px 4px',
+          }}>
+            {dayMenu.dateStr.split('-').reverse().join('/')}
+          </div>
+          {permisos?.crear && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setFechaTareaInicial(dayMenu.dateStr)
+                  setShowTarea(true)
+                  setDayMenu(null)
+                }}
+                style={menuItem(t)}
+              >
+                ✅ Nueva tarea
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onNuevaActa?.(dayMenu.dateStr)
+                  setDayMenu(null)
+                }}
+                style={menuItem(t)}
+              >
+                📝 Nueva acta
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => abrirDetalleDia(dayMenu.dateStr)}
+            style={menuItem(t)}
+          >
+            📅 Ver detalle del día
+          </button>
+        </div>,
+        document.body,
+      )}
 
       {detalleId != null && (
         <ItemDetalleModal
@@ -369,8 +535,13 @@ export default function SeguimientoCalendario({
           usuario={usuario}
           usuarios={usuarios}
           viewportCompact={viewportCompact}
-          onClose={() => setShowTarea(false)}
-          onCreated={() => { setShowTarea(false); setReloadTick((n) => n + 1) }}
+          fechaInicial={fechaTareaInicial}
+          onClose={() => { setShowTarea(false); setFechaTareaInicial(null) }}
+          onCreated={() => {
+            setShowTarea(false)
+            setFechaTareaInicial(null)
+            setReloadTick((n) => n + 1)
+          }}
         />
       )}
     </div>
@@ -405,5 +576,21 @@ function ghost(t) {
   return {
     border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer',
     background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)',
+  }
+}
+
+function menuItem(t) {
+  return {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    border: 'none',
+    background: 'transparent',
+    color: t.text,
+    fontSize: 'var(--cc-sm)',
+    fontWeight: 600,
+    padding: '10px 12px',
+    borderRadius: 8,
+    cursor: 'pointer',
   }
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import TareaChecklistEditor from './TareaChecklistEditor'
+import TareaChecklistEditor, { newChecklistItem } from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
@@ -10,11 +10,18 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimient
  * - Personal o delegada a uno/varios usuarios (asignación formal colectiva).
  * - Referencia sigue siendo un solo destinatario (fuera del multi-cumplimiento).
  */
-export default function TareaFormModal({ t, api, usuario, usuarios = [], onClose, onCreated, viewportCompact: viewportCompactProp }) {
+export default function TareaFormModal({
+  t, api, usuario, usuarios = [], onClose, onCreated,
+  viewportCompact: viewportCompactProp,
+  fechaInicial = null,
+}) {
   const viewportCompactHook = useSeguimientoCompact()
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [titulo, setTitulo] = useState('')
-  const [checklist, setChecklist] = useState([])
+  const [checklist, setChecklist] = useState(() => {
+    const f = fechaInicial ? String(fechaInicial).slice(0, 10) : ''
+    return f ? [newChecklistItem({ fecha: f })] : []
+  })
   const [destinoTipo, setDestinoTipo] = useState('personal') // 'personal' | 'delegar'
   const [destUsers, setDestUsers] = useState([])
   const [askModo, setAskModo] = useState(false)

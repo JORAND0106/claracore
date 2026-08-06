@@ -6,8 +6,12 @@ import {
   actaToEvent,
   bandejaItemToEvent,
   buildCalendarioEvents,
+  dayHasVencidos,
   filterEventsByOrigen,
+  formatDayCountLabel,
+  isEventoVencido,
   resolveFetchRange,
+  summarizeDayCounts,
   toDateOnly,
   CALENDARIO_KIND,
 } from './seguimientoCalendarioUtils.js'
@@ -95,5 +99,34 @@ assert(events.length === 3, 'build une tipos')
 assert(filterEventsByOrigen(events, 'acta').length === 1, 'filtro origen acta')
 assert(filterEventsByOrigen(events, 'tarea').length === 1, 'filtro origen tarea')
 assert(filterEventsByOrigen(events, '').length === 3, 'sin filtro → todos')
+
+const daySum = summarizeDayCounts([
+  { start: '2026-08-10', extendedProps: { kind: 'tarea' } },
+  { start: '2026-08-10T09:00:00', extendedProps: { kind: 'tarea' } },
+  { start: '2026-08-10', extendedProps: { kind: 'acta' } },
+  { start: '2026-08-11', extendedProps: { kind: 'compromiso' } },
+], '2026-08-10')
+assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.total === 3, 'conteo día')
+assert(daySum.label === '2 tareas · 1 acta', 'label día')
+assert(formatDayCountLabel({ compromisos: 1 }) === '1 compromiso', 'label singular')
+
+const hoy = new Date(2026, 7, 20) // 20-ago-2026 local
+const evVenc = {
+  start: '2026-08-10',
+  extendedProps: { kind: 'tarea', raw: { estado_gestion: 'abierto' } },
+}
+const evOk = {
+  start: '2026-08-10',
+  extendedProps: { kind: 'tarea', raw: { estado_gestion: 'cumplido' } },
+}
+const evActa = {
+  start: '2026-08-10',
+  extendedProps: { kind: 'acta', raw: {} },
+}
+assert(isEventoVencido(evVenc, hoy) === true, 'tarea pasada abierta → vencida')
+assert(isEventoVencido(evOk, hoy) === false, 'cumplida no vence')
+assert(isEventoVencido(evActa, hoy) === false, 'acta no marca vencido')
+assert(dayHasVencidos([evVenc, evActa], '2026-08-10', hoy) === true, 'día con vencidos')
+assert(dayHasVencidos([evOk], '2026-08-10', hoy) === false, 'día sin vencidos')
 
 console.log('seguimientoCalendarioUtils.test.mjs OK')

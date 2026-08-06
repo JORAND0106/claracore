@@ -313,6 +313,7 @@ export default function ActaEditor({
   permisos,
   compact: viewportCompact = false,
   asModal = false,
+  fechaReunionInicial = null,
 }) {
   const [loading, setLoading] = useState(!!actaId)
   const [saving, setSaving] = useState(false)
@@ -325,7 +326,9 @@ export default function ActaEditor({
   const [tab, setTab] = useState('encabezado')
   const [pdfBusy, setPdfBusy] = useState(false)
   const [form, setForm] = useState({
-    fecha_reunion: new Date().toISOString().slice(0, 10),
+    fecha_reunion: (fechaReunionInicial
+      ? String(fechaReunionInicial).slice(0, 10)
+      : new Date().toISOString().slice(0, 10)),
     ubicacion: '',
     tipo_acta: 'interna',
     orden_items: [{ texto: '', hecho: false, key: newRowKey('ord') }],

@@ -2856,6 +2856,50 @@ select.cc-dashboard-acta-select--light option {
   font-weight: 600;
 }
 
+.cc-seguim-cal-daycell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  width: 100%;
+  padding: 2px 4px 0;
+  box-sizing: border-box;
+}
+
+.cc-seguim-cal-daynum {
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cc-seguim-cal-daycount {
+  display: block;
+  width: 100%;
+  text-align: right;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--cc-seguim-fc-muted, #64748b);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido {
+  background: color-mix(in srgb, #dc2626 14%, transparent) !important;
+}
+
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daynum {
+  color: #facc15 !important;
+  font-weight: 800;
+}
+
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daycount {
+  color: color-mix(in srgb, #facc15 75%, #78716c);
+}
+
+.cc-seguim-cal-daymenu button:hover {
+  background: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 12%, transparent);
+}
+
 .cc-seguim-cal-event {
   display: flex;
   align-items: center;

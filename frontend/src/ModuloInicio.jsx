@@ -4,7 +4,7 @@ import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
 import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
-import SeguimientoWidget from './components/inicio/SeguimientoWidget.jsx'
+import SeguimientoCalendarioPanel from './modules/seguimiento/SeguimientoCalendarioPanel.jsx'
 
 function useInicioMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
@@ -299,10 +299,18 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0, sinEntrada = false }) {
 }
 
 /** Bandeja a ancho completo; plegable; filas estilo correo (leída = tono suave). */
-function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCargando, token, puedePublicarNovedades }) {
+function BandejaNovedadesInicio({
+  novedades, setNovedades, t, fs, novedadesCargando, token, puedePublicarNovedades,
+  limite = null,
+  compact = false,
+}) {
   const [abierta, setAbierta] = useState(true)
   const [detalle, setDetalle] = useState(null)
-  const sinLeer = novedades.filter((n) => !n.leida).length
+  const visibles = useMemo(() => {
+    const arr = Array.isArray(novedades) ? novedades : []
+    return limite != null ? arr.slice(0, limite) : arr
+  }, [novedades, limite])
+  const sinLeer = visibles.filter((n) => !n.leida).length
 
   const marcarLeidaRemoto = (nov) => {
     if (!nov?.id || nov.leida) return
@@ -367,7 +375,8 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
                 padding: '1px 8px',
               }}
             >
-              {novedades.length}{sinLeer > 0 ? ` · ${sinLeer} sin leer` : ''}
+              {visibles.length}{sinLeer > 0 ? ` · ${sinLeer} sin leer` : ''}
+              {limite != null ? ' · recientes' : ''}
             </span>
           )}
         </span>
@@ -377,14 +386,14 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
         <div
           style={{
             borderTop: `1px solid ${t.border}`,
-            maxHeight: 'min(50vh, 360px)',
+            maxHeight: compact ? 'min(36vh, 220px)' : 'min(50vh, 360px)',
             overflowY: 'auto',
             fontSize: fs.autor,
           }}
         >
           {novedadesCargando ? (
             <div style={{ padding: '12px', color: t.textMuted }}>Cargando…</div>
-          ) : novedades.length === 0 ? (
+          ) : visibles.length === 0 ? (
             <div style={{ padding: '12px', color: t.textMuted, lineHeight: 1.5 }}>
               {puedePublicarNovedades
                 ? 'Aún no hay novedades. Publícalas desde Admin → Página de inicio.'
@@ -392,15 +401,17 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
             </div>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: t.bg, color: t.textMuted, fontSize: fs.autor, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Fecha</th>
-                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Enviada por</th>
-                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Título</th>
-                </tr>
-              </thead>
+              {!compact && (
+                <thead>
+                  <tr style={{ background: t.bg, color: t.textMuted, fontSize: fs.autor, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Fecha</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Enviada por</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Título</th>
+                  </tr>
+                </thead>
+              )}
               <tbody>
-                {novedades.map((nov) => {
+                {visibles.map((nov) => {
                   const leida = !!nov.leida
                   return (
                     <tr
@@ -415,17 +426,24 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
                         fontWeight: leida ? '500' : '700',
                       }}
                     >
-                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', width: '1%' }}>
+                      <td style={{ padding: compact ? '7px 10px' : '8px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', width: '1%' }}>
                         {nov.fecha ? String(nov.fecha).slice(0, 10) : '—'}
                       </td>
-                      <td style={{ padding: '8px 10px', verticalAlign: 'top', maxWidth: '200px' }}>
-                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={nov.autor || ''}>
-                          {nov.autor || '—'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 10px', verticalAlign: 'top' }}>
+                      {!compact && (
+                        <td style={{ padding: '8px 10px', verticalAlign: 'top', maxWidth: '200px' }}>
+                          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={nov.autor || ''}>
+                            {nov.autor || '—'}
+                          </span>
+                        </td>
+                      )}
+                      <td style={{ padding: compact ? '7px 10px' : '8px 10px', verticalAlign: 'top' }}>
                         <span style={{ marginRight: '6px' }}>{nov.icono || '📢'}</span>
                         {nov.titulo}
+                        {compact && nov.autor ? (
+                          <span style={{ display: 'block', fontWeight: 500, color: t.textMuted, marginTop: 2 }}>
+                            {nov.autor}
+                          </span>
+                        ) : null}
                       </td>
                     </tr>
                   )
@@ -751,7 +769,7 @@ function BarraClima({ t, fs, contratoId, token }) {
 }
 
 // ─── Saludo + contenido del día (cita, reflexión, dato, etc.) ─────────────────
-function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
+function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible, compact = false }) {
   const userId = usuario?.id || 'guest'
   const [estado, setEstado] = useState('visible')
   const [tipoActivo, setTipoActivo] = useState(() => leerTipoPredeterminado(userId))
@@ -859,29 +877,38 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
     <div style={{
       background: `linear-gradient(135deg, ${t.primary}18 0%, ${t.bgCard} 55%)`,
       border: `1px solid ${t.border}`,
-      borderRadius: '14px',
-      padding: '16px 18px',
+      borderRadius: compact ? '12px' : '14px',
+      padding: compact ? '12px 14px' : '16px 18px',
       width: '100%',
+      height: compact ? '100%' : undefined,
       boxSizing: 'border-box',
       transition: 'all 0.5s ease',
       transform: saludoVisible ? 'translateY(0)' : 'translateY(-10px)',
       opacity: saludoVisible ? 1 : 0,
     }}>
-      <div style={{ fontSize: fs.titulo, fontWeight: '800', color: t.text, marginBottom: '6px', lineHeight: 1.3 }}>
+      <div style={{
+        fontSize: compact ? fs.h2 : fs.titulo,
+        fontWeight: '800',
+        color: t.text,
+        marginBottom: compact ? '4px' : '6px',
+        lineHeight: 1.25,
+      }}>
         {saludo}
       </div>
       <div style={{
-        fontSize: fs.sm, color: t.textMuted, marginBottom: '10px',
+        fontSize: fs.sm, color: t.textMuted, marginBottom: compact ? '8px' : '10px',
         textTransform: 'capitalize', lineHeight: 1.4,
       }}>
         {fechaHora}
       </div>
 
-      <div style={{ marginBottom: '12px' }}>
-        <div style={{ fontSize: fs.badge, fontWeight: '700', color: t.textMuted, marginBottom: '6px', letterSpacing: '0.3px' }}>
-          ¿Qué quieres leer hoy?
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+      <div style={{ marginBottom: compact ? '8px' : '12px' }}>
+        {!compact && (
+          <div style={{ fontSize: fs.badge, fontWeight: '700', color: t.textMuted, marginBottom: '6px', letterSpacing: '0.3px' }}>
+            ¿Qué quieres leer hoy?
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: compact ? '4px' : '6px', alignItems: 'center' }}>
           {OPCIONES_CONTENIDO_DIA.map((op) => {
             const activo = tipoActivo === op.id
             const esDefault = tipoPredeterminado === op.id
@@ -894,12 +921,12 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 5,
+                  gap: compact ? 3 : 5,
                   background: activo ? op.color : t.bgCard,
                   color: activo ? '#fff' : t.textMuted,
                   border: `1px solid ${activo ? op.color : t.border}`,
                   borderRadius: 999,
-                  padding: '5px 11px',
+                  padding: compact ? '3px 8px' : '5px 11px',
                   fontSize: fs.badge,
                   fontWeight: 700,
                   cursor: 'pointer',
@@ -914,7 +941,7 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
             )
           })}
         </div>
-        {!esPredeterminado ? (
+        {!compact && (!esPredeterminado ? (
           <button
             type="button"
             onClick={() => marcarComoPredeterminado(tipoActivo)}
@@ -937,7 +964,7 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
           <div style={{ marginTop: '8px', fontSize: fs.badge, color: t.textMuted, fontWeight: 600 }}>
             ★ «{metaContenidoDia(tipoActivo).etiqueta}» es tu lectura predeterminada
           </div>
-        )}
+        ))}
       </div>
 
       {estado === 'cargando' && (
@@ -966,12 +993,16 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
               {meta.icono} {meta.etiqueta}
             </div>
             <div style={{
-              fontSize: fs.card,
+              fontSize: compact ? fs.base : fs.card,
               fontWeight: meta.citar ? '500' : '600',
               color: t.text,
-              lineHeight: 1.55,
+              lineHeight: 1.5,
               fontStyle: meta.citar ? 'italic' : 'normal',
               marginBottom: frase.autor ? '6px' : 0,
+              display: compact ? '-webkit-box' : undefined,
+              WebkitLineClamp: compact ? 4 : undefined,
+              WebkitBoxOrient: compact ? 'vertical' : undefined,
+              overflow: compact ? 'hidden' : undefined,
             }}>
               {meta.citar ? `«${frase.frase}»` : frase.frase}
             </div>
@@ -1468,19 +1499,50 @@ export default function ModuloInicio({
           {/* ── Zona 1: clima ── */}
           <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
-          {/* ── Zona 2: bandeja Seguimiento (bajo el clima, visible) ── */}
-          <div style={{ marginBottom: isMobile ? '14px' : '16px' }}>
-            <SeguimientoWidget
-              t={t}
-              fs={fs}
-              usuario={usuario}
-              token={token}
-              contratoId={contratoId}
-              onIrSeguimiento={onIrSeguimiento}
-            />
+          {/* ── Zona 2: saludo compacto | novedades (3 recientes) ── */}
+          <div
+            className="cc-inicio-saludo-novedades"
+            style={{
+              display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
+              alignItems: 'stretch',
+              gap: isMobile ? '14px' : '12px',
+              marginBottom: isMobile ? '14px' : '16px',
+            }}
+          >
+            <div style={{
+              flex: isMobile ? '1 1 auto' : '1 1 50%',
+              width: isMobile ? '100%' : undefined,
+              minWidth: 0,
+            }}>
+              <PanelSaludoContenidoDia
+                t={t}
+                fs={fs}
+                usuario={usuario}
+                saludoVisible={saludoVisible}
+                compact
+              />
+            </div>
+            <div style={{
+              flex: isMobile ? '1 1 auto' : '1 1 50%',
+              width: isMobile ? '100%' : undefined,
+              minWidth: 0,
+            }}>
+              <BandejaNovedadesInicio
+                novedades={novedades}
+                setNovedades={setNovedades}
+                t={t}
+                fs={fs}
+                novedadesCargando={novedadesCargando}
+                token={token}
+                puedePublicarNovedades={puedePublicarNovedades}
+                limite={3}
+                compact
+              />
+            </div>
           </div>
 
-          {/* ── Zona 3: saludo + cita + novedades | carrusel ── */}
+          {/* ── Zona 3: calendario Seguimiento | carrete fotos ── */}
           <div
             className="cc-inicio-main-grid"
             style={{
@@ -1493,26 +1555,21 @@ export default function ModuloInicio({
             }}
           >
             <div style={{
-              flex: isMobile ? '1 1 auto' : '1 1 360px',
+              flex: isMobile ? '1 1 auto' : '1 1 50%',
               width: isMobile ? '100%' : undefined,
               minWidth: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: isMobile ? '14px' : '12px',
             }}>
-              <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
-              <BandejaNovedadesInicio
-                novedades={novedades}
-                setNovedades={setNovedades}
+              <SeguimientoCalendarioPanel
                 t={t}
-                fs={fs}
-                novedadesCargando={novedadesCargando}
+                usuario={usuario}
                 token={token}
-                puedePublicarNovedades={puedePublicarNovedades}
+                contratoId={contratoId}
+                viewportCompact={isMobile}
+                showFilters
               />
             </div>
             <div style={{
-              flex: isMobile ? '1 1 auto' : '1 1 360px',
+              flex: isMobile ? '1 1 auto' : '1 1 50%',
               width: isMobile ? '100%' : undefined,
               minWidth: 0,
             }}>
