@@ -5493,6 +5493,25 @@ def _pk_ids_ubicacion_por_codigo(contrato_id: int) -> Dict[str, dict]:
     return out
 
 
+def _enrich_presupuesto_ubicacion_desde_pk_ids(
+    contrato_id: int,
+    rows: Optional[List[dict]],
+) -> List[dict]:
+    """
+    Asegura infraestructura (y tramo vacío) desde maestro pk_ids.
+    Infraestructura no vive en tabla presupuesto; se resuelve por pk_id.
+    """
+    from presupuesto_ubicacion import enrich_presupuesto_ubicacion_desde_pk_map
+
+    if not rows:
+        return rows or []
+    try:
+        pk_ubic = _pk_ids_ubicacion_por_codigo(int(contrato_id))
+    except Exception:
+        pk_ubic = {}
+    return enrich_presupuesto_ubicacion_desde_pk_map(rows, pk_ubic)
+
+
 def _aplicar_ubicacion_presupuesto_desde_pk_ids(row: dict, maestro: Dict[str, dict]) -> bool:
     """
     Sobrescribe tramo y calzada desde pk_ids al insertar en presupuesto.
@@ -9588,7 +9607,8 @@ def get_presupuesto(
     if limit is not None:
         q = _q_base()
         rows = q.order("id").range(offset, offset + limit - 1).execute().data
-        return _overlay_presupuesto_meta_vivo(contrato_id, rows or [])
+        rows = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, rows or [])
+        return _overlay_presupuesto_meta_vivo(contrato_id, rows)
 
     PAGE = 1000
     all_rows = []
@@ -9599,6 +9619,7 @@ def get_presupuesto(
         if len(batch) < PAGE:
             break
         off += PAGE
+    all_rows = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, all_rows)
     return _overlay_presupuesto_meta_vivo(contrato_id, all_rows)
 
 
@@ -10723,8 +10744,9 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     cid = row.get("contrato_id")
     if cid is not None:
-        overlayed = _overlay_presupuesto_meta_vivo(int(cid), [row])
-        return overlayed[0] if overlayed else row
+        enriched = _enrich_presupuesto_ubicacion_desde_pk_ids(int(cid), [row])
+        overlayed = _overlay_presupuesto_meta_vivo(int(cid), enriched)
+        return overlayed[0] if overlayed else (enriched[0] if enriched else row)
     return row
 
 # Campos que cuentan como “edición” para reapertura de registro sellado (no basta con el motivo solo).

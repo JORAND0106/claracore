@@ -765,12 +765,12 @@ useEffect(() => {
 
   const esDevPpto    = esDeveloper || esDesarrolladorPresupuesto(usuario)
   const _permPpto    = permisoEditarRegistrosPresupuesto(usuario, contratoId)
-  /** Contrato 2: editores con matriz «editar» pueden tratar Tramo / Infraestructura (no_inicio / no_final) y área/long como Desarrollador (backend alineado). */
+  /** Contrato 2: editores con matriz «editar» pueden tratar nodos (no_inicio / no_final) y área/long como Desarrollador (backend alineado). */
   const PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
   const puedeEditarNodosYAreaLongComoDev =
     esDeveloper ||
     (Number(contratoId) === PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG && !!(_permPpto?.editar))
-  /** Editar Tramo / Infraestructura (no_inicio / no_final) en grilla (y payload de nodos en «Aplicar cambios»). */
+  /** Editar nodos (no_inicio / no_final) vía detalle / Aplicar cambios (no en columnas Tramo/Infraestructura). */
   const puedeEditarNodosGrilla = puedeEditarNodosYAreaLongComoDev
   /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
   const puedeEditarDimensiones = (esDeveloper || (_permPpto?.editar ?? false)) && !versionVistaTemporal
@@ -5386,7 +5386,7 @@ async function restaurar(id) {
                           <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px' }}>{fmtFechaHoraRecalculo(r.calculo_en)}</div>
                         </div>
                       </div>
-                      <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
+                      <Row><F label="TRAMO" val={r.tramo}/><F label="INFRAESTRUCTURA" val={r.infraestructura}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                       <BigF
                         label="OBSERVACIÓN"
                         val={r.observacion != null && String(r.observacion).trim() ? String(r.observacion).trim() : null}
@@ -6837,8 +6837,8 @@ async function restaurar(id) {
                 <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
                 <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 162, width: 162 }}>Descripción</th>
                 <th className="cc-ppto-col-und" style={thStyle}>Und</th>
-                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>Tramo</th>
-                <th className="cc-ppto-col-nodo" style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>Infraestructura</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title="Tramo del registro (presupuesto.tramo / maestro pk_ids)">Tramo</th>
+                <th className="cc-ppto-col-nodo" style={thStyle} title="Infraestructura del PK (maestro pk_ids)">Infraestructura</th>
                 <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa inicio">Abs. Inicio</th>
                 <th className="cc-ppto-col-abs" style={thStyle} title="Abscisa final">Abs. Final</th>
                 <th className="cc-ppto-col-area" style={thStyle}>Área/Long</th>
@@ -6893,21 +6893,19 @@ async function restaurar(id) {
                     <td className="cc-ppto-col-item cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
                     <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 162, width: 162, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
                     <td className="cc-ppto-col-und" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
-                    <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_inicio || undefined}>
-                      {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
-                        ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
-                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
-                            placeholder="Tramo"
-                            style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
-                        : (r.no_inicio || '-')}
+                    <td
+                      className="cc-ppto-col-nodo cc-ppto-col-ellipsis"
+                      style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={r.tramo || undefined}
+                    >
+                      {(r.tramo && String(r.tramo).trim()) ? r.tramo : '-'}
                     </td>
-                    <td className="cc-ppto-col-nodo cc-ppto-col-ellipsis" style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={e=>e.stopPropagation()} title={r.no_final || undefined}>
-                      {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
-                        ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
-                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
-                            placeholder="Infraestructura"
-                            style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
-                        : (r.no_final || '-')}
+                    <td
+                      className="cc-ppto-col-nodo cc-ppto-col-ellipsis"
+                      style={{ ...tdStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={r.infraestructura || undefined}
+                    >
+                      {(r.infraestructura && String(r.infraestructura).trim()) ? r.infraestructura : '-'}
                     </td>
                     <td
                       className="cc-ppto-col-abs cc-ppto-col-ellipsis"
