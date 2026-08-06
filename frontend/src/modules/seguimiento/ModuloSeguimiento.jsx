@@ -3,16 +3,10 @@ import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE, apiFetchSignal } from '../../apiBase'
 import ActaEditor from './ActaEditor'
-import ActasRepositorio from './ActasRepositorio'
-import BandejaPanel from './BandejaPanel'
+import SeguimientoCalendario from './SeguimientoCalendario'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
-
-const TABS = [
-  { id: 'bandeja', label: 'Bandeja', icon: '📥' },
-  { id: 'actas', label: 'Actas', icon: '📝' },
-]
 
 export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const permisos = useMemo(
@@ -25,11 +19,10 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   )
   const compact = useSeguimientoCompact()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
-  const [tab, setTab] = useState('bandeja')
   const [usuariosContrato, setUsuariosContrato] = useState([])
   const [editingActaId, setEditingActaId] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [repoKey, setRepoKey] = useState(0)
+  const [calKey, setCalKey] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
 
@@ -56,7 +49,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
-    setRepoKey((n) => n + 1)
+    setCalKey((n) => n + 1)
     setUpdatedAt(Date.now())
     await loadUsuarios()
     setRefreshBusy(false)
@@ -100,7 +93,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         <div>
           <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text }}>Seguimiento</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Actas de reunión y bandeja unificada de compromisos y tareas
+            Calendario de tareas, compromisos y actas de reunión
           </div>
         </div>
         <ModuloDataRefreshBar
@@ -112,50 +105,17 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         />
       </div>
 
-      <div className="cc-seguim-tabs" style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-        {TABS.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            onClick={() => setTab(tb.id)}
-            style={{
-              border: `1px solid ${tab === tb.id ? t.primary : t.border}`,
-              background: tab === tb.id ? `${t.primary}22` : t.bgCard,
-              color: tab === tb.id ? t.primary : t.textMuted,
-              fontWeight: tab === tb.id ? 700 : 500,
-              borderRadius: 8,
-              padding: '8px 14px',
-              cursor: 'pointer',
-              fontSize: 'var(--cc-sm)',
-            }}
-          >
-            {tb.icon} {tb.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'bandeja' && (
-        <BandejaPanel
-          t={t}
-          api={api}
-          usuario={usuario}
-          usuarios={usuariosContrato}
-          permisos={permisos}
-          viewportCompact={compact}
-        />
-      )}
-
-      {tab === 'actas' && (
-        <ActasRepositorio
-          key={repoKey}
-          t={t}
-          api={api}
-          permisos={permisos}
-          viewportCompact={compact}
-          onNueva={() => { setCreating(true); setEditingActaId(null) }}
-          onAbrir={(id) => { setEditingActaId(id); setCreating(false) }}
-        />
-      )}
+      <SeguimientoCalendario
+        t={t}
+        api={api}
+        usuario={usuario}
+        usuarios={usuariosContrato}
+        permisos={permisos}
+        viewportCompact={compact}
+        refreshKey={calKey}
+        onNuevaActa={() => { setCreating(true); setEditingActaId(null) }}
+        onAbrirActa={(id) => { setEditingActaId(id); setCreating(false) }}
+      />
 
       {(creating || editingActaId != null) && (
         <ActaEditor
@@ -167,22 +127,19 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           permisos={permisos}
           compact={compact}
           asModal
-          onCancel={() => { setCreating(false); setEditingActaId(null); setRepoKey((n) => n + 1) }}
+          onCancel={() => { setCreating(false); setEditingActaId(null); setCalKey((n) => n + 1) }}
           onSaved={async (row, meta) => {
             if (meta?.deleted) {
               setCreating(false)
               setEditingActaId(null)
-              setRepoKey((n) => n + 1)
-              setTab('actas')
+              setCalKey((n) => n + 1)
               return
             }
             if (row?.id) {
               setCreating(false)
-              // Evita re-disparar hidratación si el id no cambió.
               setEditingActaId((prev) => (Number(prev) === Number(row.id) ? prev : row.id))
             }
-            // Refrescar listado solo al cerrar o borrar; no remount mientras se edita.
-            if (!meta?.stay) setRepoKey((n) => n + 1)
+            if (!meta?.stay) setCalKey((n) => n + 1)
           }}
         />
       )}
