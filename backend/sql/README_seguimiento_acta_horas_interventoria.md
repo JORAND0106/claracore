@@ -31,3 +31,11 @@ NOTIFY pgrst, 'reload schema';
 1. En Admin → Contrato, completar **Número de interventoría**.
 2. Abrir un acta, editar una idea o generar un compromiso: debe grabarse `hora_inicio` / actualizarse `hora_fin`.
 3. Vista previa PDF: campos Hora Inicio/Fin y Cto. Interventoría dejan de mostrar "—".
+
+## Si reaparece PGRST204 (`numero_interventoria` / schema cache)
+
+Ejecutar el script de diagnóstico + fix (SELECT al catálogo + `ADD IF NOT EXISTS` + doble `NOTIFY`):
+
+- `backend/sql/fix_contratos_numero_interventoria_schema.sql`
+
+Diagnóstico vía API (sin SQL Editor): `GET /admin/contratos/schema-numero-interventoria`.
