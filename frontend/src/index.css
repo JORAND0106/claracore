@@ -2446,7 +2446,8 @@ select.cc-dashboard-acta-select--light option {
 /* Filtros en grilla 2 columnas */
 .cc-seguim-root--compact .cc-seguim-filters,
 .cc-seguim-bandeja--compact .cc-seguim-filters,
-.cc-seguim-actas--compact .cc-seguim-filters {
+.cc-seguim-actas--compact .cc-seguim-filters,
+.cc-seguim-cal--compact .cc-seguim-filters {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -2455,27 +2456,31 @@ select.cc-dashboard-acta-select--light option {
 
 .cc-seguim-root--compact .cc-seguim-filter--wide,
 .cc-seguim-bandeja--compact .cc-seguim-filter--wide,
-.cc-seguim-actas--compact .cc-seguim-filter--wide {
+.cc-seguim-actas--compact .cc-seguim-filter--wide,
+.cc-seguim-cal--compact .cc-seguim-filter--wide {
   grid-column: 1 / -1;
 }
 
 .cc-seguim-root--compact .cc-seguim-filter--check,
 .cc-seguim-bandeja--compact .cc-seguim-filter--check,
-.cc-seguim-actas--compact .cc-seguim-filter--check {
+.cc-seguim-actas--compact .cc-seguim-filter--check,
+.cc-seguim-cal--compact .cc-seguim-filter--check {
   grid-column: 1 / -1;
   margin-bottom: 0 !important;
 }
 
 .cc-seguim-root--compact .cc-seguim-filter-actions,
 .cc-seguim-bandeja--compact .cc-seguim-filter-actions,
-.cc-seguim-actas--compact .cc-seguim-filter-actions {
+.cc-seguim-actas--compact .cc-seguim-filter-actions,
+.cc-seguim-cal--compact .cc-seguim-filter-actions {
   grid-column: 1 / -1;
   width: 100%;
 }
 
 .cc-seguim-root--compact .cc-seguim-filter-actions button,
 .cc-seguim-bandeja--compact .cc-seguim-filter-actions button,
-.cc-seguim-actas--compact .cc-seguim-filter-actions button {
+.cc-seguim-actas--compact .cc-seguim-filter-actions button,
+.cc-seguim-cal--compact .cc-seguim-filter-actions button {
   flex: 1 1 auto;
   min-height: 44px;
 }
@@ -2486,7 +2491,9 @@ select.cc-dashboard-acta-select--light option {
 .cc-seguim-bandeja--compact input,
 .cc-seguim-bandeja--compact select,
 .cc-seguim-actas--compact input,
-.cc-seguim-actas--compact select {
+.cc-seguim-actas--compact select,
+.cc-seguim-cal--compact input,
+.cc-seguim-cal--compact select {
   min-height: 44px;
   font-size: var(--cc-input, 16px);
 }
@@ -2787,15 +2794,103 @@ select.cc-dashboard-acta-select--light option {
 @media (min-width: 768px) and (max-width: 1366px) {
   .cc-seguim-root--compact .cc-seguim-filters,
   .cc-seguim-bandeja--compact .cc-seguim-filters,
-  .cc-seguim-actas--compact .cc-seguim-filters {
+  .cc-seguim-actas--compact .cc-seguim-filters,
+  .cc-seguim-cal--compact .cc-seguim-filters {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .cc-seguim-root--compact .cc-seguim-filter--wide,
   .cc-seguim-bandeja--compact .cc-seguim-filter--wide,
-  .cc-seguim-actas--compact .cc-seguim-filter--wide {
+  .cc-seguim-actas--compact .cc-seguim-filter--wide,
+  .cc-seguim-cal--compact .cc-seguim-filter--wide {
     grid-column: 1 / -1;
   }
+}
+
+/* Calendario Seguimiento (FullCalendar) */
+.cc-seguim-cal-shell {
+  --fc-border-color: var(--cc-seguim-fc-border, #e2e8f0);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 6%, transparent);
+  --fc-list-event-hover-bg-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 10%, transparent);
+  --fc-today-bg-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 8%, transparent);
+  --fc-button-bg-color: var(--cc-seguim-fc-primary, #2563eb);
+  --fc-button-border-color: var(--cc-seguim-fc-primary, #2563eb);
+  --fc-button-hover-bg-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 85%, #000);
+  --fc-button-hover-border-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 85%, #000);
+  --fc-button-active-bg-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 75%, #000);
+  --fc-button-active-border-color: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 75%, #000);
+  --fc-button-text-color: #fff;
+  color: var(--cc-seguim-fc-text, inherit);
+}
+
+.cc-seguim-cal-shell .fc {
+  font-size: var(--cc-sm);
+}
+
+.cc-seguim-cal-shell .fc .fc-toolbar-title {
+  font-size: var(--cc-lg);
+  font-weight: 700;
+  color: var(--cc-seguim-fc-text, inherit);
+}
+
+.cc-seguim-cal-shell .fc .fc-col-header-cell-cushion,
+.cc-seguim-cal-shell .fc .fc-daygrid-day-number,
+.cc-seguim-cal-shell .fc .fc-timegrid-axis-cushion,
+.cc-seguim-cal-shell .fc .fc-timegrid-slot-label-cushion {
+  color: var(--cc-seguim-fc-muted, inherit);
+  text-decoration: none;
+}
+
+.cc-seguim-cal-shell .fc .fc-button {
+  font-weight: 600;
+  border-radius: 8px;
+  text-transform: none;
+  box-shadow: none;
+}
+
+.cc-seguim-cal-shell .fc .fc-daygrid-event,
+.cc-seguim-cal-shell .fc .fc-timegrid-event {
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.cc-seguim-cal-event {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 1px 3px;
+  line-height: 1.25;
+}
+
+.cc-seguim-cal-event-icon {
+  flex-shrink: 0;
+  font-size: 0.95em;
+}
+
+.cc-seguim-cal-event-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-seguim-cal--compact .cc-seguim-cal-shell .fc .fc-toolbar {
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.cc-seguim-cal--compact .cc-seguim-cal-shell .fc .fc-toolbar-chunk {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.cc-seguim-cal--compact .cc-seguim-cal-shell .fc .fc-button {
+  min-height: 40px;
 }
 
 

@@ -15,8 +15,18 @@
     "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js"
   },
   "dependencies": {
+    "@fullcalendar/core": "^6.1.21",
+    "@fullcalendar/daygrid": "^6.1.21",
+    "@fullcalendar/interaction": "^6.1.21",
+    "@fullcalendar/react": "^6.1.21",
+    "@fullcalendar/timegrid": "^6.1.21",
     "@microsoft/applicationinsights-web": "^3.4.3",
     "@supabase/supabase-js": "^2.105.4",
+    "@tiptap/extension-placeholder": "^2.27.2",
+    "@tiptap/extension-underline": "^2.27.2",
+    "@tiptap/pm": "^2.27.2",
+    "@tiptap/react": "^2.27.2",
+    "@tiptap/starter-kit": "^2.27.2",
     "@turf/helpers": "^7.3.5",
     "@turf/unkink-polygon": "^7.3.5",
     "dexie": "^4.4.2",
@@ -30,12 +40,7 @@
     "react-leaflet": "^5.0.0",
     "recharts": "^3.8.0",
     "uuid": "^14.0.0",
-    "xlsx": "^0.18.5",
-    "@tiptap/extension-placeholder": "^2.27.2",
-    "@tiptap/extension-underline": "^2.27.2",
-    "@tiptap/pm": "^2.27.2",
-    "@tiptap/react": "^2.27.2",
-    "@tiptap/starter-kit": "^2.27.2"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
