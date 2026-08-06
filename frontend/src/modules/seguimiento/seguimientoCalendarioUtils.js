@@ -200,6 +200,15 @@ export function formatDayCountLabel({ tareas = 0, compromisos = 0, actas = 0 } =
   return parts.join(' · ')
 }
 
+/** Etiqueta corta para widget de inicio (espacio reducido). */
+export function formatDayCountLabelShort({ tareas = 0, compromisos = 0, actas = 0 } = {}) {
+  const parts = []
+  if (tareas > 0) parts.push(`${tareas}T`)
+  if (compromisos > 0) parts.push(`${compromisos}C`)
+  if (actas > 0) parts.push(`${actas}A`)
+  return parts.join(' · ')
+}
+
 /**
  * Tarea/compromiso vencido: fecha del evento &lt; hoy (Bogotá) y no cumplido/cancelado.
  * Las actas no marcan el día como vencido.

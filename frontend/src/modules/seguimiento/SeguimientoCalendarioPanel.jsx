@@ -18,6 +18,7 @@ export default function SeguimientoCalendarioPanel({
   viewportCompact: viewportCompactProp,
   refreshKey = 0,
   showFilters = true,
+  widgetMode = false,
 }) {
   const cid = contratoId ?? usuario?.contrato_id
   const permisos = useMemo(() => accesoSeguimiento(usuario, cid), [usuario, cid])
@@ -66,28 +67,51 @@ export default function SeguimientoCalendarioPanel({
 
   if (!permisos.ver) return null
 
+  const calendar = (
+    <SeguimientoCalendario
+      t={t}
+      api={api}
+      usuario={usuario}
+      usuarios={usuariosContrato}
+      permisos={permisos}
+      viewportCompact={viewportCompact}
+      refreshKey={Number(refreshKey) + localKey}
+      showFilters={showFilters && !widgetMode}
+      widgetMode={widgetMode}
+      onNuevaActa={(fecha) => {
+        setFechaActaInicial(fecha ? String(fecha).slice(0, 10) : null)
+        setCreating(true)
+        setEditingActaId(null)
+      }}
+      onAbrirActa={(id) => {
+        setFechaActaInicial(null)
+        setEditingActaId(id)
+        setCreating(false)
+      }}
+    />
+  )
+
   return (
     <>
-      <SeguimientoCalendario
-        t={t}
-        api={api}
-        usuario={usuario}
-        usuarios={usuariosContrato}
-        permisos={permisos}
-        viewportCompact={viewportCompact}
-        refreshKey={Number(refreshKey) + localKey}
-        showFilters={showFilters}
-        onNuevaActa={(fecha) => {
-          setFechaActaInicial(fecha ? String(fecha).slice(0, 10) : null)
-          setCreating(true)
-          setEditingActaId(null)
-        }}
-        onAbrirActa={(id) => {
-          setFechaActaInicial(null)
-          setEditingActaId(id)
-          setCreating(false)
-        }}
-      />
+      {widgetMode ? (
+        <div
+          className="cc-seguim-cal-widget-card"
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 12,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            width: '100%',
+            height: '100%',
+            minHeight: 280,
+            boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
+          }}
+        >
+          {calendar}
+        </div>
+      ) : calendar}
 
       {(creating || editingActaId != null) && (
         <ActaEditor

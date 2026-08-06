@@ -1542,37 +1542,29 @@ export default function ModuloInicio({
             </div>
           </div>
 
-          {/* ── Zona 3: calendario Seguimiento | carrete fotos ── */}
+          {/* ── Zona 3: calendario widget | carrete fotos (misma fila, igual ancho) ── */}
           <div
             className="cc-inicio-main-grid"
             style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              flexWrap: isMobile ? 'nowrap' : 'wrap',
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
               alignItems: 'stretch',
               gap: isMobile ? '14px' : '12px',
               marginBottom: isMobile ? '14px' : '16px',
             }}
           >
-            <div style={{
-              flex: isMobile ? '1 1 auto' : '1 1 50%',
-              width: isMobile ? '100%' : undefined,
-              minWidth: 0,
-            }}>
+            <div className="cc-inicio-cal-col" style={{ minWidth: 0, display: 'flex' }}>
               <SeguimientoCalendarioPanel
                 t={t}
                 usuario={usuario}
                 token={token}
                 contratoId={contratoId}
                 viewportCompact={isMobile}
-                showFilters
+                showFilters={false}
+                widgetMode
               />
             </div>
-            <div style={{
-              flex: isMobile ? '1 1 auto' : '1 1 50%',
-              width: isMobile ? '100%' : undefined,
-              minWidth: 0,
-            }}>
+            <div className="cc-inicio-fotos-col" style={{ minWidth: 0, display: 'flex' }}>
               <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
             </div>
           </div>

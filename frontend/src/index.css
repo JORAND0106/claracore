@@ -2883,6 +2883,77 @@ select.cc-dashboard-acta-select--light option {
   word-break: break-word;
 }
 
+/* Widget de inicio: misma proporción que el carrete de fotos */
+.cc-inicio-cal-col > *,
+.cc-inicio-fotos-col > * {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.cc-seguim-cal--widget {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 280px;
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cc-seguim-cal--widget .fc {
+  flex: 1 1 auto;
+  min-height: min(400px, 52vh);
+  font-size: 11px;
+}
+
+.cc-seguim-cal--widget .fc .fc-toolbar {
+  gap: 4px;
+  margin-bottom: 0.5em !important;
+  flex-wrap: wrap;
+}
+
+.cc-seguim-cal--widget .fc .fc-toolbar-title {
+  font-size: var(--cc-sm) !important;
+}
+
+.cc-seguim-cal--widget .fc .fc-button {
+  padding: 0.25em 0.45em;
+  font-size: 0.85em;
+  min-height: 0;
+}
+
+.cc-seguim-cal--widget .fc .fc-daygrid-day-frame {
+  min-height: 3.1em;
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-daycell--widget {
+  align-items: center;
+  padding: 2px 1px 0;
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-daycount {
+  font-size: 9px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+.cc-seguim-cal--widget .fc-daygrid-body,
+.cc-seguim-cal--widget .fc-scrollgrid-sync-table {
+  width: 100% !important;
+}
+
+/* Mes en widget: solo contadores; semana/día conservan eventos */
+.cc-seguim-cal--widget .fc-dayGridMonth-view .fc-daygrid-event-harness,
+.cc-seguim-cal--widget .fc-dayGridMonth-view .fc-daygrid-more-link {
+  display: none !important;
+}
+
 .cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido {
   background: color-mix(in srgb, #dc2626 14%, transparent) !important;
 }

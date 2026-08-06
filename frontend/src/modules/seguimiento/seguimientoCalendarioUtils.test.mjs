@@ -9,6 +9,7 @@ import {
   dayHasVencidos,
   filterEventsByOrigen,
   formatDayCountLabel,
+  formatDayCountLabelShort,
   isEventoVencido,
   resolveFetchRange,
   summarizeDayCounts,
@@ -109,6 +110,7 @@ const daySum = summarizeDayCounts([
 assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.total === 3, 'conteo día')
 assert(daySum.label === '2 tareas · 1 acta', 'label día')
 assert(formatDayCountLabel({ compromisos: 1 }) === '1 compromiso', 'label singular')
+assert(formatDayCountLabelShort({ tareas: 2, actas: 1 }) === '2T · 1A', 'label corto widget')
 
 const hoy = new Date(2026, 7, 20) // 20-ago-2026 local
 const evVenc = {
