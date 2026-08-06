@@ -2709,7 +2709,7 @@ const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
 /** GET/PUT/POST de contrato con `plano_geojson` grande (decenas de MB): el timeout por defecto del panel (~48 s) corta con "signal timed out" antes de terminar. */
 const CONTRATO_API_PLANO_TIMEOUT = { timeoutMs: 30 * 60 * 1000, maxRetries: 1 };
 
-function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false }, isDeveloper = false, token = null, theme = "dark", t = null, openContratoRequest = null, onOpenContratoHandled = null }) {
+function SeccionContratos({ call, contratos, recargarContratos, onContratosMutated, perms = { crear: false, editar: false }, isDeveloper = false, token = null, theme = "dark", t = null, openContratoRequest = null, onOpenContratoHandled = null }) {
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
     numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
@@ -3395,6 +3395,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         if (planoFileInputRef.current) planoFileInputRef.current.value = "";
       }
       recargarContratos();
+      onContratosMutated?.();
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Error al guardar contrato' });
     } finally { setSaving(false); }
@@ -8164,7 +8165,7 @@ const ADMIN_PANEL_TABS = [
   { id: "licencias-claracad", label: "Licencias ClaraCAD", soloDeveloper: true },
 ];
 
-export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
+export default function AdminPanel({ user, token, onClose, onContratosMutated, activeTheme, t: tProp }) {
   const call = useApi(token, { maxRetries: 3, timeoutMs: 48000 });
   const [cargos, setCargos] = useState([]);
   const [contratos, setContratos] = useState([]);
@@ -8476,6 +8477,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} contratos={contratosVisibles} user={user} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratosVisibles} recargarContratos={cargarContratos}
+            onContratosMutated={onContratosMutated}
             theme={activeTheme}
             t={t}
             isDeveloper={isDeveloper}

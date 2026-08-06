@@ -16766,7 +16766,7 @@ function DashResumenEdadBadge({ updatedAt, t, du, dashInfoColor, dashKpiLoading,
   )
 }
 
-function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
+function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [nivelesDashContrato, setNivelesDashContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
@@ -22229,7 +22229,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         <AdminPanel
           user={usuario}
           token={getToken()}
-          onClose={() => setShowAdmin(false)}
+          onClose={() => {
+            setShowAdmin(false)
+            // Tras crear/editar contratos en Admin, refrescar selector (Desarrollador ve todos).
+            void onRefreshContratos?.()
+          }}
+          onContratosMutated={() => { void onRefreshContratos?.() }}
           activeTheme={activeTheme}
           t={t}
         />
@@ -22405,6 +22410,18 @@ export default function App() {
           return
         }
         const fresh = await res.json()
+        let contratosSesion = null
+        try {
+          const resUc = await fetch(`${API}/admin/usuario-contratos/${usuario.id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            ...meOpt,
+          })
+          if (resUc.ok) {
+            const raw = await resUc.json()
+            if (Array.isArray(raw)) contratosSesion = raw
+          }
+        } catch { /* selector: mantener lista previa */ }
+        if (cancelled) return
         setUsuario(prev => {
           if (!prev || cancelled) return prev
           const next = {
@@ -22412,7 +22429,7 @@ export default function App() {
             ...fresh,
             contrato_id: prev.contrato_id,
             contrato_numero: prev.contrato_numero,
-            _contratos: prev._contratos,
+            _contratos: contratosSesion != null ? contratosSesion : prev._contratos,
             logo_contratista: prev.logo_contratista,
             logo_interventoria: prev.logo_interventoria,
             permisos: fresh.permisos ?? prev.permisos,
@@ -22443,6 +22460,31 @@ export default function App() {
   const lastActivityPersistRef = useRef(0)
 
   useEffect(() => { usuarioRef.current = usuario }, [usuario])
+
+  /** Refresca `_contratos` del selector (Desarrollador recibe todos vía API). */
+  const refreshUsuarioContratos = useCallback(async (userId = null, tokenOverride = null) => {
+    const token = tokenOverride || getToken()
+    const uid = userId ?? usuarioRef.current?.id
+    if (!token || uid == null) return null
+    try {
+      const res = await fetch(`${API}/admin/usuario-contratos/${uid}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return null
+      const contratos = await res.json()
+      const list = Array.isArray(contratos) ? contratos : []
+      setUsuario((prev) => {
+        if (!prev || Number(prev.id) !== Number(uid)) return prev
+        const next = { ...prev, _contratos: list }
+        const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+        storage.setItem('cc_usuario', JSON.stringify(next))
+        return next
+      })
+      return list
+    } catch {
+      return null
+    }
+  }, [])
 
   // Sesiones antiguas sin marca de actividad: validar token al reabrir la app
   useEffect(() => {
@@ -22702,37 +22744,37 @@ export default function App() {
     touchSessionActivity()
     try {
       const res = await fetch(`${API}/admin/usuario-contratos/${u.id}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
       })
-        const contratos = res.ok ? await res.json() : []
-      const uConContratos = { ...u, _contratos: contratos }
+      const contratos = res.ok ? await res.json() : []
+      const list = Array.isArray(contratos) ? contratos : []
+      const uConContratos = { ...u, _contratos: list }
       const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
       storage.setItem('cc_usuario', JSON.stringify(uConContratos))
-if (contratos.length > 1) {
+      if (list.length > 1) {
         setPendingUser({ ...uConContratos, _token: token })
-        setPendingContratos(contratos)
+        setPendingContratos(list)
         setModal('selector_contrato')
-      } else {
-        if (contratos.length === 1) {
-          const c = contratos[0]
-          const uWithLogos = {
-            ...uConContratos,
-            contrato_id:        uConContratos.contrato_id        ?? c.id,
-            contrato_numero:    uConContratos.contrato_numero    ?? c.numero,
-            logo_contratista:   uConContratos.logo_contratista   ?? c.logo_contratista   ?? null,
-            logo_interventoria: uConContratos.logo_interventoria ?? c.logo_interventoria ?? null,
-            contrato_fase:      c.fase ?? 'PRESUPUESTO',
-          }
-          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-          storage.setItem('cc_usuario', JSON.stringify(uWithLogos))
-          setUsuario(uWithLogos)
-        } else {
-          setUsuario(uConContratos)
+      } else if (list.length === 1) {
+        const c = list[0]
+        const uWithLogos = {
+          ...uConContratos,
+          contrato_id: uConContratos.contrato_id ?? c.id,
+          contrato_numero: uConContratos.contrato_numero ?? c.numero,
+          logo_contratista: uConContratos.logo_contratista ?? c.logo_contratista ?? null,
+          logo_interventoria: uConContratos.logo_interventoria ?? c.logo_interventoria ?? null,
+          contrato_fase: c.fase ?? 'PRESUPUESTO',
         }
+        storage.setItem('cc_usuario', JSON.stringify(uWithLogos))
+        setUsuario(uWithLogos)
+        setModal(null)
+      } else {
+        setUsuario(uConContratos)
         setModal(null)
       }
     } catch {
-      setUsuario(u); setModal(null)
+      setUsuario(u)
+      setModal(null)
     }
   }
 
@@ -23081,6 +23123,7 @@ if (contratos.length > 1) {
         <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
           onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
           onCambiarContrato={cambiarContratoActivo}
+          onRefreshContratos={refreshUsuarioContratos}
           topOffset={totalTopOffset}
           fontSize={fontSize} onFontSize={cambiarFuente}
           onOpenPerfil={() => setPerfilModalAbierto(true)}
