@@ -7822,17 +7822,43 @@ def verificar_inactividad(current_user=Depends(get_current_user)):
     registrar_log(current_user, "VERIFICAR_INACTIVIDAD", "USUARIOS", None, None, {"afectados": afectados})
     return {"afectados": afectados}
 
-@app.get("/admin/usuario-contratos/{usuario_id}")
-def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user)):
-    result = supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", usuario_id).execute()
-    ids = [r["contrato_id"] for r in result.data]
+# Campos del selector de contrato en sesión / Admin UC (payload liviano).
+_CONTRATOS_SELECT_SELECTOR = (
+    "id, numero, contratista, interventoria, entidad, entidad_otra, logo_entidad, "
+    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase"
+)
+
+
+def _listar_contratos_selector(ids=None):
+    """Lista contratos para el selector. Si ids es None → todos; si [] → []."""
+    q = supabase.table("contratos").select(_CONTRATOS_SELECT_SELECTOR).order("numero")
+    if ids is None:
+        return q.execute().data or []
     if not ids:
         return []
-    contratos = supabase.table("contratos").select(
-        "id, numero, contratista, interventoria, entidad, entidad_otra, logo_entidad, "
-        "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase"
-    ).in_("id", ids).execute()
-    return contratos.data
+    return q.in_("id", list(ids)).execute().data or []
+
+
+@app.get("/admin/usuario-contratos/{usuario_id}")
+def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user)):
+    """Contratos del selector de sesión.
+
+    Desarrollador consultando su propia lista: acceso irrestricto a todos los
+    contratos (existentes y futuros), sin depender de filas en usuario_contratos.
+    Para terceros (p. ej. UI de asignaciones Admin) se mantiene el vínculo explícito.
+    """
+    try:
+        uid = int(usuario_id)
+        caller_id = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    if caller_id == uid and _es_desarrollador(current_user):
+        return _listar_contratos_selector(None)
+
+    result = supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", uid).execute()
+    ids = [r["contrato_id"] for r in (result.data or [])]
+    return _listar_contratos_selector(ids)
 
 @app.post("/admin/usuario-contratos")
 def agregar_usuario_contrato(body: UsuarioContratoCreate, current_user=Depends(get_current_user)):
@@ -14949,7 +14975,7 @@ def get_usuarios_destinatarios(
         if crow:
             cargo_nom = (crow[0].get("nombre") or "").strip().lower()
 
-    es_dev = cargo_nom == "desarrollador"
+    es_dev = _es_desarrollador(current_user) or cargo_nom == "desarrollador"
     scope = set()
 
     if contrato_id is not None:
