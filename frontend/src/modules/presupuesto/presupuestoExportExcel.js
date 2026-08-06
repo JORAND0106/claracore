@@ -135,12 +135,23 @@ async function prepararLogoWorkbook(wb, logoUrl) {
   }
 }
 
-function insertarLogoEncabezado(ws, logoImageId) {
+/** Tamaño estándar compartido: contratista e interventoría (iguales entre sí). */
+const LOGO_PAR_W = 96
+const LOGO_PAR_H = 40
+/** Entidad a la derecha: caja comparable, ligeramente más ancha. */
+const LOGO_ENTIDAD_W = 104
+const LOGO_ENTIDAD_H = 40
+
+function insertarLogoEnCelda(ws, logoImageId, { col, row = 0.12, width, height }) {
   if (logoImageId == null) return
   ws.addImage(logoImageId, {
-    tl: { col: 0.1, row: 0.1 },
-    ext: { width: 112, height: 44 },
+    tl: { col, row },
+    ext: { width, height },
   })
+}
+
+function insertarLogoEncabezado(ws, logoImageId) {
+  insertarLogoEnCelda(ws, logoImageId, { col: 0.1, width: LOGO_PAR_W, height: LOGO_PAR_H })
 }
 
 function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
@@ -197,13 +208,22 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
   }
 }
 
-function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoImageId = null, { soloCantidad = false, totalsTier = 'titulo_2' } = {}) {
+function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoImageId = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null } = {}) {
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
-  const tieneLogo = logoImageId != null
-  const logoSpan = tieneLogo ? 2 : 0
-  const titleStart = logoSpan + 1
+  const logoContratistaId = logos?.contratista ?? null
+  const logoInterventoriaId = logos?.interventoria ?? null
+  const logoEntidadId = logos?.entidad ?? null
+  const legacySoloContratista = logoImageId != null && logos == null
+  const tieneParIzq = logoContratistaId != null || logoInterventoriaId != null
+  const tieneEntidad = logoEntidadId != null
+  const tieneLogoIzq = tieneParIzq || legacySoloContratista
+  const tieneLogo = tieneLogoIzq || tieneEntidad
+  const leftSpan = tieneLogoIzq ? 2 : 0
+  const rightSpan = tieneEntidad ? Math.min(2, Math.max(1, cols - leftSpan - 3)) : 0
+  const titleStart = leftSpan + 1
+  const titleEnd = Math.max(titleStart, cols - rightSpan)
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
@@ -211,11 +231,36 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   ws.addRow(new Array(cols).fill(''))
   ws.getRow(1).height = tieneLogo ? TITLE_ROW_HEIGHT : TITLE_ROW_HEIGHT_NO_LOGO
 
-  if (tieneLogo) {
-    ws.mergeCells(1, 1, 1, logoSpan)
-    ws.getCell(1, 1).fill = FILL_TITLE
+  for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
+
+  if (tieneParIzq) {
+    ws.mergeCells(1, 1, 1, leftSpan)
+    // Contratista e interventoría: mismo tamaño (LOGO_PAR_*), lado a lado.
+    if (logoContratistaId != null) {
+      insertarLogoEnCelda(ws, logoContratistaId, { col: 0.08, width: LOGO_PAR_W, height: LOGO_PAR_H })
+    }
+    if (logoInterventoriaId != null) {
+      insertarLogoEnCelda(ws, logoInterventoriaId, { col: 1.05, width: LOGO_PAR_W, height: LOGO_PAR_H })
+    }
+  } else if (legacySoloContratista) {
+    ws.mergeCells(1, 1, 1, leftSpan)
     insertarLogoEncabezado(ws, logoImageId)
-    ws.mergeCells(1, titleStart, 1, cols)
+  }
+
+  if (tieneEntidad) {
+    const entStart = titleEnd + 1
+    if (entStart <= cols) {
+      ws.mergeCells(1, entStart, 1, cols)
+      insertarLogoEnCelda(ws, logoEntidadId, {
+        col: entStart - 1 + 0.15,
+        width: LOGO_ENTIDAD_W,
+        height: LOGO_ENTIDAD_H,
+      })
+    }
+  }
+
+  if (tieneLogo) {
+    ws.mergeCells(1, titleStart, 1, titleEnd)
     ws.getCell(1, titleStart).value = titulo
     ws.getCell(1, titleStart).fill = FILL_TITLE
     ws.getCell(1, titleStart).font = { bold: true, size: 14, color: { argb: CC.titleText } }
@@ -638,7 +683,7 @@ const COL_ANCHO = DET_HEADERS.indexOf('Ancho') + 1
 const COL_ESPESOR = DET_HEADERS.indexOf('Espesor') + 1
 const COL_CANT_TOTAL = DET_HEADERS.indexOf('Cant. Total') + 1
 
-function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoImageId, claraLogoImageId) {
+function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoImageId, claraLogoImageId, logos = null) {
   const baseName = safeSheetName(`${itemInfo.item || 'Item'}_${idx + 1}`, `Item_${idx + 1}`)
   let sheetName = baseName
   let n = 1
@@ -662,7 +707,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     (itemInfo.registros || []).length,
     generatedAt,
     logoImageId,
-    { soloCantidad: true, totalsTier: 'titulo_2' },
+    { soloCantidad: true, totalsTier: 'titulo_2', logos },
   )
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
@@ -744,7 +789,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 }
 
-function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = [], wsExistente = null) {
+function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = [], wsExistente = null, logos = null) {
   const resumenHeaders = [
     'Capítulo',
     'Ítem',
@@ -768,7 +813,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     totalRegistros,
     generatedAt,
     logoImageId,
-    { totalsTier: 'titulo_1' },
+    { totalsTier: 'titulo_1', logos },
   )
 
   wsRes.addRow(resumenHeaders)
@@ -910,6 +955,11 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   wb.creator = 'ClaraCore · Presupuesto'
 
   const logoImageId = await prepararLogoWorkbook(wb, meta.logo_contratista)
+  const logos = {
+    contratista: logoImageId,
+    interventoria: await prepararLogoWorkbook(wb, meta.logo_interventoria),
+    entidad: await prepararLogoWorkbook(wb, meta.logo_entidad),
+  }
   const claraLogoImageId = await cargarLogoClaraCore(wb)
   const contratoLabel = meta.numero || meta.contrato || String(contratoId ?? '')
 
@@ -922,7 +972,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   const wsResumen = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
 
   items.forEach((itemInfo, idx) => {
-    const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoImageId, claraLogoImageId)
+    const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoImageId, claraLogoImageId, logos)
     if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
     for (const reg of itemInfo.registros || []) todosRegistros.push(reg)
   })
@@ -939,6 +989,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
     claraLogoImageId,
     todosRegistros,
     wsResumen,
+    logos,
   )
 
   moverHojaAlInicio(wb, 'Resumen')

@@ -169,6 +169,7 @@ import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './
 import { applyClaraThemeTokens } from './theme/adminPanelTheme'
 import { useClaraViewport, CLARA_BP } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
+import { logosDesdeContratosActivo } from './utils/usuarioLogosContrato'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import {
   mapboxPlanoSymbolLayout as _mapboxPlanoSymbolLayout,
@@ -688,6 +689,7 @@ function restoreUsuarioFromStorage() {
     return null
   }
 }
+
 
 function TestModeBadge() {
   if (!TEST_MODE) return null
@@ -22424,14 +22426,16 @@ export default function App() {
         if (cancelled) return
         setUsuario(prev => {
           if (!prev || cancelled) return prev
+          const list = contratosSesion != null ? contratosSesion : prev._contratos
+          const logos = logosDesdeContratosActivo(prev, list)
           const next = {
             ...prev,
             ...fresh,
             contrato_id: prev.contrato_id,
             contrato_numero: prev.contrato_numero,
-            _contratos: contratosSesion != null ? contratosSesion : prev._contratos,
-            logo_contratista: prev.logo_contratista,
-            logo_interventoria: prev.logo_interventoria,
+            _contratos: list,
+            logo_contratista: logos.logo_contratista,
+            logo_interventoria: logos.logo_interventoria,
             permisos: fresh.permisos ?? prev.permisos,
           }
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
@@ -22475,7 +22479,8 @@ export default function App() {
       const list = Array.isArray(contratos) ? contratos : []
       setUsuario((prev) => {
         if (!prev || Number(prev.id) !== Number(uid)) return prev
-        const next = { ...prev, _contratos: list }
+        const logos = logosDesdeContratosActivo(prev, list)
+        const next = { ...prev, _contratos: list, ...logos }
         const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
         storage.setItem('cc_usuario', JSON.stringify(next))
         return next
@@ -22761,8 +22766,8 @@ export default function App() {
           ...uConContratos,
           contrato_id: uConContratos.contrato_id ?? c.id,
           contrato_numero: uConContratos.contrato_numero ?? c.numero,
-          logo_contratista: uConContratos.logo_contratista ?? c.logo_contratista ?? null,
-          logo_interventoria: uConContratos.logo_interventoria ?? c.logo_interventoria ?? null,
+          logo_contratista: c.logo_contratista ?? uConContratos.logo_contratista ?? null,
+          logo_interventoria: c.logo_interventoria ?? uConContratos.logo_interventoria ?? null,
           contrato_fase: c.fase ?? 'PRESUPUESTO',
         }
         storage.setItem('cc_usuario', JSON.stringify(uWithLogos))

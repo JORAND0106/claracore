@@ -675,22 +675,54 @@ def _logo_url_pdf_safe(url: str) -> str:
         return url  # fallback silencioso
 
 
+# Caja estándar para logos de contratista e interventoría en memorias FO-EO-04
+# (mismo alto/ancho de referencia; object-fit:contain evita deformar).
+_FO_EO04_LOGO_PAR_MAX_H = "40px"
+_FO_EO04_LOGO_PAR_MAX_W = "110px"
+_FO_EO04_LOGO_ENTIDAD_MAX_H = "44px"
+
+
+def _html_logo_memoria_caja(
+    logo_url: Optional[str],
+    *,
+    placeholder: str,
+    max_h: str = _FO_EO04_LOGO_PAR_MAX_H,
+    max_w: str = _FO_EO04_LOGO_PAR_MAX_W,
+) -> str:
+    """Logo en caja de tamaño fijo (contain) para encabezados de memorias."""
+    box = (
+        f'display:table;width:{max_w};height:{max_h};min-width:{max_w};min-height:{max_h};'
+        f'max-width:{max_w};max-height:{max_h};box-sizing:border-box;margin:0 auto;'
+    )
+    if not logo_url or not str(logo_url).strip():
+        ph = html.escape(str(placeholder or "Logo")).replace("\n", "<br/>")
+        return (
+            f'<div style="{box}border:1px dashed #cbd5e1;">'
+            f'<div style="display:table-cell;width:100%;height:{max_h};vertical-align:middle;'
+            f'text-align:center;font-size:5pt;color:#94a3b8;line-height:1.15;">'
+            f'{ph}</div></div>'
+        )
+    u = html.escape(_logo_url_pdf_safe(str(logo_url).strip()), quote=True)
+    return (
+        f'<div style="{box}">'
+        f'<div style="display:table-cell;width:100%;height:{max_h};vertical-align:middle;text-align:center;">'
+        f'<img src="{u}" alt="" style="max-width:{max_w};max-height:{max_h};width:auto;height:auto;'
+        f'display:inline-block;object-fit:contain;vertical-align:middle;margin:0;" />'
+        f'</div></div>'
+    )
+
+
 def _html_logo_entidad(logo_url: Optional[str]) -> str:
-    """Recuadro del logo de la entidad para el encabezado del FO-EO-04.
+    """Recuadro del logo de la entidad para el encabezado del FO-EO-04 (derecha).
 
     Si no hay URL muestra un placeholder con borde punteado.
     Convierte GIF a PNG antes de embeber (limitación de xhtml2pdf).
     """
-    if not logo_url or not str(logo_url).strip():
-        return (
-            '<div style="border:1px dashed #cbd5e1;min-height:50px;'
-            'text-align:center;padding:6px 4px;font-size:5pt;color:#94a3b8;">'
-            'Logo<br/>entidad</div>'
-        )
-    u = html.escape(_logo_url_pdf_safe(str(logo_url).strip()), quote=True)
-    return (
-        f'<img src="{u}" alt="" '
-        'style="max-width:100%;max-height:44px;display:block;margin:0 auto;object-fit:contain;" />'
+    return _html_logo_memoria_caja(
+        logo_url,
+        placeholder="Logo\nentidad",
+        max_h=_FO_EO04_LOGO_ENTIDAD_MAX_H,
+        max_w="120px",
     )
 
 
@@ -8674,6 +8706,10 @@ def _fo_eo_04_img_block_html(
 def _html_idu_fo_eo_04_v2_plantilla_vacia(
     logo_entidad: Optional[str] = None,
     logo_entidad_html: Optional[str] = None,
+    logo_contratista: Optional[str] = None,
+    logo_contratista_html: Optional[str] = None,
+    logo_interventoria: Optional[str] = None,
+    logo_interventoria_html: Optional[str] = None,
     entidad: str = "IDU",
     subsistema: str = "vial",
     num_contrato: str = "",
@@ -8753,9 +8789,17 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
         "en la entrega mensual para la verificación final del acta de recibo parcial de obra."
     )
 
-    # Logo precargado en data-URI (evita N descargas HTTP al renderizar cada memoria)
+    # Logos precargados en data-URI (evita N descargas HTTP al renderizar cada memoria)
     if not logo_entidad_html:
         logo_entidad_html = _html_logo_entidad(logo_entidad)
+    if not logo_contratista_html:
+        logo_contratista_html = _html_logo_memoria_caja(
+            logo_contratista, placeholder="Logo\ncontratista"
+        )
+    if not logo_interventoria_html:
+        logo_interventoria_html = _html_logo_memoria_caja(
+            logo_interventoria, placeholder="Logo\ninterventoría"
+        )
 
     # ── Sección institucional debajo del encabezado ──────────────────────────
     _lbl_inst = (
@@ -8913,37 +8957,46 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
 <!-- ═══ ENCABEZADO INSTITUCIONAL ═══ -->
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd}">
 
-  <!-- FILA 1: Título (colspan 3) + Logo (rowspan 2) -->
+  <!-- FILA 1: Logos C+I (izq, mismo tamaño) | Título | Logo entidad (derecha, rowspan 2) -->
   <tr>
-    <td colspan="3" style="text-align:center;padding:3px 14px;
+    <td rowspan="2" style="width:12%;border-right:1px solid {navy};vertical-align:middle;
+                           text-align:center;padding:2px 4px;">
+      {logo_contratista_html}
+    </td>
+    <td rowspan="2" style="width:12%;border-right:1px solid {navy};vertical-align:middle;
+                           text-align:center;padding:2px 4px;">
+      {logo_interventoria_html}
+    </td>
+    <td colspan="3" style="text-align:center;padding:3px 10px;
                            border-bottom:1px solid {navy};border-right:1px solid {navy};">
       <div style="font-size:6pt;color:{navy};">FORMATO</div>
       <div style="font-size:8.5pt;font-weight:bold;color:{navy_hdr};margin-top:1px;">
         MEMORIA DE C&#193;LCULO DE CANTIDADES DE OBRA
       </div>
-</td>
+    </td>
     <td rowspan="2" style="width:14%;vertical-align:middle;text-align:center;padding:2px 6px;">
       {logo_entidad_html}
-</td>
+    </td>
   </tr>
 
   <!-- FILA 2: CÓDIGO | PROCESO | VERSIÓN -->
   <tr>
-    <td style="width:17%;border-right:1px solid {navy};padding:2px 6px;
+    <td style="width:14%;border-right:1px solid {navy};padding:2px 6px;
                text-align:center;vertical-align:middle;">
       <div class="lbl">C&#243;digo</div>
       <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">FO-EO-04</div>
-</td>
-    <td style="width:55%;border-right:1px solid {navy};padding:2px 6px;
+    </td>
+    <td style="width:36%;border-right:1px solid {navy};padding:2px 6px;
                text-align:center;vertical-align:middle;">
       <div class="lbl">Proceso</div>
       <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">CONSTRUCCI&#211;N DE PROYECTOS</div>
     </td>
-    <td style="width:14%;padding:2px 6px;text-align:center;vertical-align:middle;">
+    <td style="width:12%;padding:2px 6px;text-align:center;vertical-align:middle;
+               border-right:1px solid {navy};">
       <div class="lbl">Versi&#243;n</div>
       <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">2.0</div>
-</td>
-</tr>
+    </td>
+  </tr>
 
 </table>
 
@@ -9420,6 +9473,8 @@ def _build_fo_eo_04_html(
 
     _prog(5, "Leyendo datos del contrato…")
     logo_entidad: Optional[str] = None
+    logo_contratista: Optional[str] = None
+    logo_interventoria: Optional[str] = None
     entidad: str = "IDU"
     num_contrato: str = ""
     año_contrato: str = ""
@@ -9430,11 +9485,14 @@ def _build_fo_eo_04_html(
     try:
         contrato_row = _row(
             "contratos",
-            "logo_entidad, entidad, entidad_otra, numero, objeto, contratista, interventoria",
+            "logo_entidad, logo_contratista, logo_interventoria, entidad, entidad_otra, "
+            "numero, objeto, contratista, interventoria",
             id=contrato_id,
         )
         if contrato_row:
             logo_entidad = contrato_row.get("logo_entidad") or None
+            logo_contratista = contrato_row.get("logo_contratista") or None
+            logo_interventoria = contrato_row.get("logo_interventoria") or None
             ent = (contrato_row.get("entidad") or "").strip().upper()
             if ent == "OTRA":
                 ent = (contrato_row.get("entidad_otra") or "OTRA").strip().upper()
@@ -9447,14 +9505,28 @@ def _build_fo_eo_04_html(
     except Exception:
         pass
 
-    logo_entidad_html = _html_logo_entidad(None)
-    if logo_entidad:
+    def _fo_logo_html(url: Optional[str], *, es_entidad: bool = False, placeholder: str = "Logo") -> str:
+        def _build(u: Optional[str]) -> str:
+            if es_entidad:
+                return _html_logo_entidad(u)
+            return _html_logo_memoria_caja(u, placeholder=placeholder)
+
+        if not url:
+            return _build(None)
         try:
-            logo_du = _url_a_data_url_pdf(logo_entidad, for_logo=True)
-            logo_entidad_html = _html_logo_entidad(logo_du or logo_entidad)
+            logo_du = _url_a_data_url_pdf(url, for_logo=True)
+            return _build(logo_du or url)
         except Exception as exc:
-            _log.warning("fo_eo_04 logo entidad: %s", exc)
-            logo_entidad_html = _html_logo_entidad(logo_entidad)
+            _log.warning("fo_eo_04 logo (%s): %s", placeholder, exc)
+            return _build(url)
+
+    logo_entidad_html = _fo_logo_html(logo_entidad, es_entidad=True, placeholder="Logo entidad")
+    logo_contratista_html = _fo_logo_html(
+        logo_contratista, placeholder="Logo\ncontratista"
+    )
+    logo_interventoria_html = _fo_logo_html(
+        logo_interventoria, placeholder="Logo\ninterventoría"
+    )
 
     _prog(15, "Consultando datos del acta…")
     num_acta: str = ""
@@ -9489,6 +9561,10 @@ def _build_fo_eo_04_html(
     _base_kwargs = dict(
         logo_entidad=logo_entidad,
         logo_entidad_html=logo_entidad_html,
+        logo_contratista=logo_contratista,
+        logo_contratista_html=logo_contratista_html,
+        logo_interventoria=logo_interventoria,
+        logo_interventoria_html=logo_interventoria_html,
         entidad=entidad,
         subsistema=subsistema_norm,
         num_contrato=num_contrato,

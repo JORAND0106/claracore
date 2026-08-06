@@ -262,6 +262,13 @@ export default function ContratoEditModal({
                   {form.logo_contratista ? "✅ Logo cargado" : "📂 Cargar logo contratista"}
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_contratista", e)} />
                 </label>
+                {form.logo_contratista ? (
+                  <img
+                    src={form.logo_contratista}
+                    alt="Vista previa logo contratista"
+                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
+                  />
+                ) : null}
               </div>
               <div>
                 <label style={lbl}>INTERVENTORÍA</label>
@@ -278,6 +285,13 @@ export default function ContratoEditModal({
                   {form.logo_interventoria ? "✅ Logo cargado" : "📂 Cargar logo interventoría"}
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_interventoria", e)} />
                 </label>
+                {form.logo_interventoria ? (
+                  <img
+                    src={form.logo_interventoria}
+                    alt="Vista previa logo interventoría"
+                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
+                  />
+                ) : null}
                 <label style={lbl}>ENTIDAD *</label>
                 <select style={inp} value={form.entidad} onChange={(e) => setForm((f) => ({ ...f, entidad: e.target.value, entidad_otra: e.target.value === "OTRA" ? f.entidad_otra : "" }))}>
                   <option value="">Selecciona entidad...</option>
@@ -298,6 +312,13 @@ export default function ContratoEditModal({
                   {form.logo_entidad ? "✅ Logo entidad cargado" : "📂 Cargar logo de entidad"}
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_entidad", e)} />
                 </label>
+                {form.logo_entidad ? (
+                  <img
+                    src={form.logo_entidad}
+                    alt="Vista previa logo entidad"
+                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
+                  />
+                ) : null}
               </div>
               <div style={{ gridColumn: "1 / -1" }}>
                 <label style={lbl}>CARGAR PLANO (GEOJSON)</label>
