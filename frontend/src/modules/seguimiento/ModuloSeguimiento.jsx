@@ -50,8 +50,13 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
 
   return (
     <div
-      className={compact ? 'cc-seguim-root cc-seguim-root--compact' : 'cc-seguim-root'}
-      style={{ width: '100%', maxWidth: compact ? '100%' : 1200 }}
+      className={compact ? 'cc-seguim-root cc-seguim-root--compact' : 'cc-seguim-root cc-seguim-root--wide'}
+      style={{
+        width: '100%',
+        maxWidth: compact ? '100%' : 1540,
+        margin: '0 auto',
+        boxSizing: 'border-box',
+      }}
     >
       <div className="cc-seguim-page-head" style={{
         display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',

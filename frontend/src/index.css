@@ -2426,6 +2426,19 @@ select.cc-dashboard-acta-select--light option {
   max-width: 100%;
 }
 
+.cc-seguim-root--wide {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.cc-seguim-root--wide .cc-seguim-cal-shell {
+  width: 100%;
+}
+
+.cc-seguim-root--wide .cc-seguim-cal-shell .fc {
+  width: 100%;
+}
+
 .cc-seguim-root--compact .cc-seguim-page-head {
   flex-direction: column;
   align-items: stretch !important;
@@ -2967,8 +2980,28 @@ select.cc-dashboard-acta-select--light option {
   color: color-mix(in srgb, #facc15 75%, #78716c);
 }
 
-.cc-seguim-cal-daymenu button:hover {
-  background: color-mix(in srgb, var(--cc-seguim-fc-primary, #2563eb) 12%, transparent);
+/* Widget inicio: número de día en azul negrita (buen contraste, también en vencidos) */
+.cc-seguim-cal--widget .cc-seguim-cal-daynum {
+  color: #2563eb !important;
+  font-weight: 800;
+}
+
+.cc-seguim-cal--widget .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daynum {
+  color: #1d4ed8 !important;
+  font-weight: 800;
+}
+
+.cc-seguim-cal--widget .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daycount {
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.cc-seguim-cal-daymodal-overlay {
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-seguim-cal-daymodal button:hover {
+  filter: brightness(0.98);
 }
 
 .cc-seguim-cal-event {

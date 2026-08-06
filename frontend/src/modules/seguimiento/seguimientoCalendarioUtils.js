@@ -169,6 +169,40 @@ export function eventsForDate(events, dateStr) {
   return (events || []).filter((ev) => toDateOnly(ev?.start) === d)
 }
 
+const KIND_SORT = { tarea: 0, compromiso: 1, acta: 2 }
+
+/**
+ * Ordena elementos de un día: tipo → hora (si hay) → título.
+ * Sin hora es válido; van después de los que sí tienen hora.
+ */
+export function sortDayEvents(events) {
+  return [...(events || [])].sort((a, b) => {
+    const ka = KIND_SORT[a?.extendedProps?.kind] ?? 9
+    const kb = KIND_SORT[b?.extendedProps?.kind] ?? 9
+    if (ka !== kb) return ka - kb
+    const sa = String(a?.start || '')
+    const sb = String(b?.start || '')
+    const aTime = sa.includes('T')
+    const bTime = sb.includes('T')
+    if (aTime && bTime) return sa.localeCompare(sb)
+    if (aTime !== bTime) return aTime ? -1 : 1
+    return String(a?.title || '').localeCompare(String(b?.title || ''), 'es')
+  })
+}
+
+/** Título sin el emoji/icono inicial del evento. */
+export function eventDisplayTitle(ev) {
+  return String(ev?.title || '').replace(/^[^\s]+\s/, '').trim() || 'Sin título'
+}
+
+/** Hora HH:MM si el start es timed; null si es solo fecha. */
+export function eventDisplayTime(ev) {
+  const s = String(ev?.start || '')
+  if (!s.includes('T')) return null
+  const m = /T(\d{2}:\d{2})/.exec(s)
+  return m ? m[1] : null
+}
+
 /**
  * Conteos por tipo en un día (vista mes).
  * @returns {{ tareas: number, compromisos: number, actas: number, total: number, label: string }}

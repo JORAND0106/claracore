@@ -14,9 +14,13 @@ import {
   CALENDARIO_KIND,
   buildCalendarioEvents,
   dayHasVencidos,
+  eventDisplayTime,
+  eventDisplayTitle,
+  eventsForDate,
   filterEventsByOrigen,
   formatDayCountLabelShort,
   resolveFetchRange,
+  sortDayEvents,
   summarizeDayCounts,
   toDateOnly,
 } from './seguimientoCalendarioUtils'
@@ -223,29 +227,27 @@ export default function SeguimientoCalendario({
     return []
   }, [events])
 
-  const abrirDetalleDia = useCallback((dateStr) => {
-    setDayMenu(null)
-    const apiCal = calendarRef.current?.getApi?.()
-    if (apiCal && dateStr) {
-      apiCal.changeView('timeGridDay', dateStr)
-    }
-  }, [])
-
   const legend = useMemo(() => Object.values(CALENDARIO_KIND), [])
 
-  const menuPos = useMemo(() => {
-    if (!dayMenu) return null
-    const pad = 8
-    const w = 220
-    const h = 140
-    let left = dayMenu.x
-    let top = dayMenu.y
-    if (typeof window !== 'undefined') {
-      left = Math.min(Math.max(pad, left), window.innerWidth - w - pad)
-      top = Math.min(Math.max(pad, top), window.innerHeight - h - pad)
+  const dayEvents = useMemo(() => {
+    if (!dayMenu?.dateStr) return []
+    return sortDayEvents(eventsForDate(events, dayMenu.dateStr))
+  }, [dayMenu, events])
+
+  const openDayEvent = useCallback((ev) => {
+    const { kind, sourceId, accesoRestringido } = ev?.extendedProps || {}
+    setDayMenu(null)
+    if (kind === 'acta') {
+      if (accesoRestringido) {
+        setAccesoMsg(MSG_ACTA_ACCESO_RESTRINGIDO)
+        return
+      }
+      setAccesoMsg('')
+      onAbrirActa?.(sourceId)
+      return
     }
-    return { left, top }
-  }, [dayMenu])
+    if (sourceId != null) setDetalleId(sourceId)
+  }, [onAbrirActa])
 
   const rootClass = [
     'cc-seguim-cal',
@@ -497,65 +499,172 @@ export default function SeguimientoCalendario({
         />
       </div>
 
-      {dayMenu && menuPos && createPortal(
+      {dayMenu && createPortal(
         <div
-          ref={dayMenuRef}
-          role="menu"
-          className="cc-seguim-cal-daymenu"
+          className="cc-seguim-cal-daymodal-overlay"
+          role="presentation"
+          onClick={() => setDayMenu(null)}
           style={{
             position: 'fixed',
-            left: menuPos.left,
-            top: menuPos.top,
+            inset: 0,
             zIndex: 5200,
-            minWidth: 200,
-            background: t.bgCard,
-            border: `1px solid ${t.border}`,
-            borderRadius: 10,
-            boxShadow: '0 10px 28px rgba(15,23,42,0.18)',
-            padding: 6,
+            background: 'rgba(15,23,42,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            boxSizing: 'border-box',
           }}
         >
-          <div style={{
-            fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700,
-            padding: '6px 10px 4px',
-          }}>
-            {dayMenu.dateStr.split('-').reverse().join('/')}
-          </div>
-          {permisos?.crear && (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setFechaTareaInicial(dayMenu.dateStr)
-                  setShowTarea(true)
-                  setDayMenu(null)
-                }}
-                style={menuItem(t)}
-              >
-                ✅ Nueva tarea
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  onNuevaActa?.(dayMenu.dateStr)
-                  setDayMenu(null)
-                }}
-                style={menuItem(t)}
-              >
-                📝 Nueva acta
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => abrirDetalleDia(dayMenu.dateStr)}
-            style={menuItem(t)}
+          <div
+            ref={dayMenuRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Detalle del ${dayMenu.dateStr}`}
+            className="cc-seguim-cal-daymodal"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(560px, 96vw)',
+              maxHeight: 'min(80vh, 640px)',
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 12,
+              boxShadow: '0 16px 40px rgba(15,23,42,0.22)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
           >
-            📅 Ver detalle del día
-          </button>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              padding: '14px 16px',
+              borderBottom: `1px solid ${t.border}`,
+              background: `${t.primary}0c`,
+            }}>
+              <div>
+                <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>
+                  {dayMenu.dateStr.split('-').reverse().join('/')}
+                </div>
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
+                  {dayEvents.length === 0
+                    ? 'Sin elementos este día'
+                    : `${dayEvents.length} elemento${dayEvents.length === 1 ? '' : 's'}`}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDayMenu(null)}
+                style={{ ...ghost(t), padding: '6px 10px' }}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {permisos?.crear && (
+              <div style={{
+                display: 'flex', flexWrap: 'wrap', gap: 8,
+                padding: '12px 16px',
+                borderBottom: `1px solid ${t.border}`,
+              }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFechaTareaInicial(dayMenu.dateStr)
+                    setShowTarea(true)
+                    setDayMenu(null)
+                  }}
+                  style={primary(t)}
+                >
+                  ✅ Nueva tarea
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onNuevaActa?.(dayMenu.dateStr)
+                    setDayMenu(null)
+                  }}
+                  style={primary(t)}
+                >
+                  📝 Nueva acta
+                </button>
+              </div>
+            )}
+
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '8px 10px 12px',
+            }}>
+              {dayEvents.length === 0 ? (
+                <div style={{
+                  padding: '18px 12px',
+                  color: t.textMuted,
+                  fontSize: 'var(--cc-sm)',
+                  textAlign: 'center',
+                }}>
+                  No hay tareas, compromisos ni actas para este día.
+                </div>
+              ) : (
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {dayEvents.map((ev) => {
+                    const kind = ev.extendedProps?.kind || 'tarea'
+                    const meta = CALENDARIO_KIND[kind] || CALENDARIO_KIND.tarea
+                    const hora = eventDisplayTime(ev)
+                    const titulo = eventDisplayTitle(ev)
+                    return (
+                      <li key={ev.id}>
+                        <button
+                          type="button"
+                          onClick={() => openDayEvent(ev)}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: 10,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: 8,
+                            background: t.bg || `${meta.color}10`,
+                            borderLeft: `4px solid ${meta.color}`,
+                            padding: '10px 12px',
+                            marginBottom: 8,
+                            cursor: 'pointer',
+                            color: t.text,
+                          }}
+                        >
+                          <span aria-hidden style={{ fontSize: '1.1em', lineHeight: 1.2 }}>{meta.icon}</span>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{
+                              display: 'block',
+                              fontSize: 'var(--cc-xs)',
+                              fontWeight: 700,
+                              color: meta.color,
+                              marginBottom: 2,
+                            }}>
+                              {meta.label}
+                              {hora ? ` · ${hora}` : ' · Sin hora'}
+                            </span>
+                            <span style={{
+                              display: 'block',
+                              fontSize: 'var(--cc-sm)',
+                              fontWeight: 600,
+                              lineHeight: 1.35,
+                              wordBreak: 'break-word',
+                            }}>
+                              {titulo}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>,
         document.body,
       )}
@@ -624,18 +733,3 @@ function ghost(t) {
   }
 }
 
-function menuItem(t) {
-  return {
-    display: 'block',
-    width: '100%',
-    textAlign: 'left',
-    border: 'none',
-    background: 'transparent',
-    color: t.text,
-    fontSize: 'var(--cc-sm)',
-    fontWeight: 600,
-    padding: '10px 12px',
-    borderRadius: 8,
-    cursor: 'pointer',
-  }
-}

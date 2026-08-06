@@ -8,10 +8,13 @@ import {
   buildCalendarioEvents,
   dayHasVencidos,
   filterEventsByOrigen,
+  eventDisplayTime,
+  eventDisplayTitle,
   formatDayCountLabel,
   formatDayCountLabelShort,
   isEventoVencido,
   resolveFetchRange,
+  sortDayEvents,
   summarizeDayCounts,
   toDateOnly,
   CALENDARIO_KIND,
@@ -130,5 +133,17 @@ assert(isEventoVencido(evOk, hoy) === false, 'cumplida no vence')
 assert(isEventoVencido(evActa, hoy) === false, 'acta no marca vencido')
 assert(dayHasVencidos([evVenc, evActa], '2026-08-10', hoy) === true, 'día con vencidos')
 assert(dayHasVencidos([evOk], '2026-08-10', hoy) === false, 'día sin vencidos')
+
+const sorted = sortDayEvents([
+  { id: 'a', title: '📝 Acta', start: '2026-08-10', extendedProps: { kind: 'acta' } },
+  { id: 'b', title: '✅ Tarde', start: '2026-08-10T15:00:00', extendedProps: { kind: 'tarea' } },
+  { id: 'c', title: '✅ Mañana', start: '2026-08-10T09:00:00', extendedProps: { kind: 'tarea' } },
+  { id: 'd', title: '📋 Comp', start: '2026-08-10', extendedProps: { kind: 'compromiso' } },
+  { id: 'e', title: '✅ Sin hora', start: '2026-08-10', extendedProps: { kind: 'tarea' } },
+])
+assert(sorted.map((x) => x.id).join(',') === 'c,b,e,d,a', 'orden tipo→hora→sin hora')
+assert(eventDisplayTitle({ title: '✅ Revisar planos' }) === 'Revisar planos', 'título sin icono')
+assert(eventDisplayTime({ start: '2026-08-10T09:30:00' }) === '09:30', 'hora timed')
+assert(eventDisplayTime({ start: '2026-08-10' }) === null, 'sin hora → null')
 
 console.log('seguimientoCalendarioUtils.test.mjs OK')
