@@ -301,12 +301,15 @@ export default function PptoVersionador({
         {
           ...(metaContrato || {}),
           logo_contratista: metaContrato?.logo_contratista || usuario?.logo_contratista || null,
+          logo_interventoria:
+            metaContrato?.logo_interventoria || usuario?.logo_interventoria || null,
+          logo_entidad: metaContrato?.logo_entidad || null,
         },
         contratoId,
         `presupuesto_version_${slug}_${contratoId}.xlsx`,
       )
     },
-    [API, contratoId, authToken, usuario?.logo_contratista],
+    [API, contratoId, authToken, usuario?.logo_contratista, usuario?.logo_interventoria],
   )
 
   const iniciarEliminar = useCallback(

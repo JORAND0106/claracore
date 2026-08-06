@@ -3645,9 +3645,9 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    {c.logo_entidad && <img src={c.logo_entidad} alt="logo entidad" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                    {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                    {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                    {c.logo_entidad && <img key={`le-${c.id}-${String(c.logo_entidad).length}`} src={c.logo_entidad} alt="logo entidad" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                    {c.logo_contratista && <img key={`lc-${c.id}-${String(c.logo_contratista).length}`} src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                    {c.logo_interventoria && <img key={`li-${c.id}-${String(c.logo_interventoria).length}`} src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>

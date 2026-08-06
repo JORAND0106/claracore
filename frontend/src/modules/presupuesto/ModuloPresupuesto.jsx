@@ -1660,7 +1660,11 @@ useEffect(() => {
       const payload = await res.json()
       const metaExport = {
         ...(exportMetaContrato || {}),
-        logo_contratista: exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
+        logo_contratista:
+          exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
+        logo_interventoria:
+          exportMetaContrato?.logo_interventoria || usuario?.logo_interventoria || null,
+        logo_entidad: exportMetaContrato?.logo_entidad || null,
       }
       if (esCrudo || payload?.formato === 'crudo') {
         if (!payload?.filas?.length) {
@@ -1691,6 +1695,7 @@ useEffect(() => {
     drill,
     capExpandido,
     usuario?.logo_contratista,
+    usuario?.logo_interventoria,
   ])
 
   const detalleConItem = !!drill.find(d => d.campo === 'item' || d.campo === 'items')
