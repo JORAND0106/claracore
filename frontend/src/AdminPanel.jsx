@@ -551,17 +551,25 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   };
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
+  const toOptInt = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    const s = String(v).trim().toLowerCase();
+    if (!s || s === "none" || s === "null" || s === "undefined" || s === "nan") return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
   const guardar = async (uid, override = null) => {
     setSaving(uid);
     const e = { ...edits[uid], ...(override || {}) };
     const orig = usuarios.find(x => x.id === uid);
-    // Convertir "" a null para campos int — Pydantic rechaza string vacío en Optional[int]
+    // Convertir "" / "None" a null para campos int — evita 22P02 en PostgREST
     const payload = {
-      cargo_id:          e.cargo_id          ? parseInt(e.cargo_id)          : null,
-      rol_id:            e.rol_id            ? parseInt(e.rol_id)            : null,
-      contrato_id:       e.contrato_id       ? parseInt(e.contrato_id)       : null,
+      cargo_id:          toOptInt(e.cargo_id),
+      rol_id:            toOptInt(e.rol_id),
+      contrato_id:       toOptInt(e.contrato_id),
       estado:            e.estado            || null,
-      subcontratista_id: e.subcontratista_id ? parseInt(e.subcontratista_id) : null,
+      subcontratista_id: toOptInt(e.subcontratista_id),
     };
     if (orig && e.politicas_aceptadas !== undefined && e.politicas_aceptadas !== (orig.politicas_aceptadas === true)) {
       payload.politicas_aceptadas = e.politicas_aceptadas;

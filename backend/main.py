@@ -7456,6 +7456,50 @@ def todos_usuarios(current_user=Depends(get_current_user)):
     filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
     return filtered
 
+def _admin_usuario_fk_int_o_none(value) -> Optional[int]:
+    """Normaliza FK opcionales: None/''/'None' → None; evita .eq(id, None) → 22P02."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return None
+        return int(value)
+    s = str(value).strip()
+    if not s or s.lower() in ("none", "null", "undefined", "nan"):
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _admin_usuario_nombre_fk(tabla: str, col: str, fk_id) -> Optional[str]:
+    """Resuelve nombre legible de FK; no consulta si el id es nulo (PostgREST manda 'None' como texto)."""
+    fk = _admin_usuario_fk_int_o_none(fk_id)
+    if fk is None:
+        return None
+    r = supabase.table(tabla).select(col).eq("id", fk).limit(1).execute()
+    if r.data and r.data[0].get(col) is not None:
+        return r.data[0][col]
+    return str(fk)
+
+
+def _admin_usuario_enriquecer_detalle_log(data: dict) -> dict:
+    """Sustituye cargo_id/rol_id/contrato_id por nombres; tolera nulls (p. ej. Sin rol)."""
+    detalle = dict(data or {})
+    if "cargo_id" in detalle:
+        detalle["cargo"] = _admin_usuario_nombre_fk("cargos", "nombre", detalle.pop("cargo_id"))
+    if "rol_id" in detalle:
+        detalle["rol"] = _admin_usuario_nombre_fk("roles", "nombre", detalle.pop("rol_id"))
+    if "contrato_id" in detalle:
+        detalle["contrato"] = _admin_usuario_nombre_fk("contratos", "numero", detalle.pop("contrato_id"))
+    return detalle
+
+
 @app.put("/admin/usuarios/{usuario_id}")
 def actualizar_usuario(
     usuario_id: int,
@@ -7480,6 +7524,9 @@ def actualizar_usuario(
 
     # exclude_unset=True: campos no enviados no se tocan; null explícito sí borra el campo
     data = body.dict(exclude_unset=True)
+    for fk in ("cargo_id", "rol_id", "contrato_id", "subcontratista_id"):
+        if fk in data:
+            data[fk] = _admin_usuario_fk_int_o_none(data.get(fk))
     if body.estado == "aprobado":
         data["activo"] = True
     elif body.estado == "rechazado":
@@ -7497,7 +7544,7 @@ def actualizar_usuario(
             if u_data:
                 u = u_data[0]
                 u_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip()
-                u_contrato_id = u.get("contrato_id")
+                u_contrato_id = _admin_usuario_fk_int_o_none(u.get("contrato_id"))
             supabase.table("logs").insert({
                 "usuario_id":   usuario_id,
                 "usuario_nombre": u_nombre,
@@ -7522,34 +7569,19 @@ def actualizar_usuario(
             background_tasks.add_task(
                 _enviar_bienvenida_usuario_aprobado, usuario_id, aprobado_por
             )
-    # Enriquecer detalle con nombres legibles
-    detalle_log = dict(data)
-    if "cargo_id" in detalle_log:
-        r = supabase.table("cargos").select("nombre").eq("id", detalle_log["cargo_id"]).execute()
-        detalle_log["cargo"] = r.data[0]["nombre"] if r.data else str(detalle_log["cargo_id"])
-        del detalle_log["cargo_id"]
-    if "rol_id" in detalle_log:
-        r = supabase.table("roles").select("nombre").eq("id", detalle_log["rol_id"]).execute()
-        detalle_log["rol"] = r.data[0]["nombre"] if r.data else str(detalle_log["rol_id"])
-        del detalle_log["rol_id"]
-    if "contrato_id" in detalle_log:
-        r = supabase.table("contratos").select("numero").eq("id", detalle_log["contrato_id"]).execute()
-        detalle_log["contrato"] = r.data[0]["numero"] if r.data else str(detalle_log["contrato_id"])
-        del detalle_log["contrato_id"]
+    # Enriquecer detalle con nombres legibles (sin .eq(id, None) → 22P02)
+    detalle_log = _admin_usuario_enriquecer_detalle_log(data)
 
     def _usuario_audit_enriquecido(row: dict) -> dict:
         if not row:
             return {}
         o = dict(row)
-        if row.get("cargo_id"):
-            cr = supabase.table("cargos").select("nombre").eq("id", row["cargo_id"]).execute()
-            o["cargo"] = cr.data[0]["nombre"] if cr.data else str(row["cargo_id"])
-        if row.get("rol_id"):
-            rr = supabase.table("roles").select("nombre").eq("id", row["rol_id"]).execute()
-            o["rol"] = rr.data[0]["nombre"] if rr.data else str(row["rol_id"])
-        if row.get("contrato_id"):
-            ct = supabase.table("contratos").select("numero").eq("id", row["contrato_id"]).execute()
-            o["contrato"] = ct.data[0]["numero"] if ct.data else str(row["contrato_id"])
+        if _admin_usuario_fk_int_o_none(row.get("cargo_id")) is not None:
+            o["cargo"] = _admin_usuario_nombre_fk("cargos", "nombre", row.get("cargo_id"))
+        if _admin_usuario_fk_int_o_none(row.get("rol_id")) is not None:
+            o["rol"] = _admin_usuario_nombre_fk("roles", "nombre", row.get("rol_id"))
+        if _admin_usuario_fk_int_o_none(row.get("contrato_id")) is not None:
+            o["contrato"] = _admin_usuario_nombre_fk("contratos", "numero", row.get("contrato_id"))
         return o
 
     after_snap = supabase.table("usuarios").select(
