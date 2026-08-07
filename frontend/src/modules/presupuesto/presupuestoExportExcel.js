@@ -11,6 +11,7 @@ import {
   LOGO_LEFT_COL_CHARS,
   LOGO_PAIR_GAP_PX,
   RESUMEN_COL_B_MAX_CHARS,
+  RESUMEN_COL_D_CHARS,
   RESUMEN_HEADER_ENTIDAD_END,
   RESUMEN_HEADER_ENTIDAD_START,
   RESUMEN_HEADER_LEFT_END,
@@ -32,6 +33,7 @@ import {
   sizeContainInBox,
 } from './presupuestoExportLogos.js'
 import { agruparRegistrosPorTipoEntidad } from './pptoTipoEntidad.js'
+import { filtrarGraficosPorGrupoEntidad } from './pptoGraficosExport.js'
 import {
   costoDirectoResumenFila,
   formulaSumaFilas,
@@ -404,38 +406,6 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
   estiloMetaCell(ws.getCell(r4, 9), { rowNum: r4 })
 }
 
-/**
- * Segundo bloque de encabezado (filas 1–4) al final de la memoria, antes de gráficos.
- * @returns {{ titleRow: number, endRow: number, logoRowHeightPt: number }}
- */
-function escribirBloqueEncabezadoItemOffset(ws, startRow, meta, titulo, logosEff) {
-  const cols = ITEM_HEADER_COLS
-  const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
-  const layout = planLayoutItemEncabezado(logosEff)
-  const tieneLogo = layout.tieneLogo
-
-  ws.addRow(new Array(cols).fill(''))
-  const titleRow = startRow
-  ws.getRow(titleRow).height = tieneLogo ? logoRowHeightPt : TITLE_ROW_HEIGHT_NO_LOGO
-  for (let c = 1; c <= cols; c += 1) ws.getCell(titleRow, c).fill = FILL_TITLE
-  ws.mergeCells(titleRow, ITEM_HEADER_LEFT_START, titleRow, ITEM_HEADER_LEFT_END)
-  ws.mergeCells(titleRow, ITEM_HEADER_TITLE_START, titleRow, ITEM_HEADER_TITLE_END)
-  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).value = titulo
-  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).fill = FILL_TITLE
-  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
-  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
-
-  escribirFilasMetaItem(ws, meta, cols, titleRow + 1)
-  return {
-    titleRow,
-    endRow: titleRow + 3,
-    logoRowHeightPt,
-    logoContratista: layout.logoContratista,
-    logoInterventoria: layout.logoInterventoria,
-    entidadLogo: layout.entidadLogo,
-  }
-}
-
 /** Contenedor fijo por gráfico (px) — 3 columnas uniformes en hoja de 13 cols. */
 const GRAFICO_BOX_W_PX = 220
 const GRAFICO_BOX_H_PX = 150
@@ -448,9 +418,10 @@ const GRAFICO_COLS_POR_CELDA = [
 
 /**
  * Inserta gráficos en 3 columnas, contain sin stretch, con pie de foto.
- * @returns {number} última fila escrita (caption)
+ * No escribe firmas (el panel de firmas de gráficos va una sola vez al cierre del ítem).
+ * @returns {number} siguiente fila disponible tras el bloque
  */
-function escribirBloqueGraficosItem(ws, startRow, graficosPrep, firmantes) {
+function escribirBloqueGraficosItem(ws, startRow, graficosPrep) {
   const cols = ITEM_HEADER_COLS
   let row = startRow
   const list = Array.isArray(graficosPrep) ? graficosPrep.filter((g) => g?.image) : []
@@ -510,8 +481,7 @@ function escribirBloqueGraficosItem(ws, startRow, graficosPrep, firmantes) {
     }
   }
 
-  const firmStart = ws.rowCount + 2
-  return escribirBloqueFirmas(ws, firmStart, cols, firmantes)
+  return row
 }
 
 /** Helpers locales EMU (evitan exportar internos de logos). */
@@ -952,6 +922,8 @@ function ajustarAnchosResumen(ws, desdeFila, colCount, { logoLeftSpan = 0, logoR
   for (let c = colCount - logoRightSpan + 1; c <= colCount; c += 1) {
     if (c >= 1) ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
   }
+  // Columna D (Unidad) fija: no debe variar por subtotales ni auto-ajuste de contenido.
+  if (colCount >= 4) ws.getColumn(4).width = RESUMEN_COL_D_CHARS
 }
 
 function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
@@ -1253,6 +1225,14 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     } else {
       lastTableRow = headerRow
     }
+
+    // Gráficos del tipo de entidad, justo después de la subtabla (sin encabezado repetido).
+    const grafsGrupo = filtrarGraficosPorGrupoEntidad(graficosPrep, grupo.key)
+    if (grafsGrupo.length) {
+      ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+      escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafsGrupo)
+      lastTableRow = ws.rowCount
+    }
   })
 
   if (firstHeaderRow != null) {
@@ -1264,7 +1244,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     cantTotalRow = ws.rowCount
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
-    // Suma única al final del ítem (cubre todas las subtablas; encabezados/texto se ignoran en SUM).
+    // Suma única al final del ítem (cubre todas las subtablas; encabezados/texto/gráficos se ignoran en SUM).
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
       formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDataRowGlobal}:${colToLetter(COL_CANT_TOTAL)}${lastDataRowGlobal})`,
     }
@@ -1287,6 +1267,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     lastTableRow = cantTotalRow
   }
 
+  // Un solo panel de firmas al cierre (después de la última subtabla y sus gráficos).
   const firmantes = colectarFirmantes(regs)
   const firmRowStart = lastTableRow + 2
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, firmantes)
@@ -1307,28 +1288,6 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   // Fila 2 ya fijada en 25 por escribirFilasMetaItem; bloque ítem / encabezado tabla.
   ws.getRow(7).height = 30
   ws.getRow(9).height = 30
-
-  const grafs = Array.isArray(graficosPrep) ? graficosPrep.filter((g) => g?.image) : []
-  if (grafs.length > 0) {
-    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-    const headerStart = ws.rowCount + 1
-    const enc2 = escribirBloqueEncabezadoItemOffset(
-      ws,
-      headerStart,
-      meta,
-      'PRESUPUESTO - SOPORTE DE CANTIDADES',
-      logos,
-    )
-    insertarLogosEncabezadoItem(ws, {
-      logoC: enc2.logoContratista,
-      logoI: enc2.logoInterventoria,
-      logoE: enc2.entidadLogo,
-      rowHeightPt: enc2.logoRowHeightPt,
-      nativeRow: enc2.titleRow - 1,
-    })
-    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-    escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafs, firmantes)
-  }
 
   return {
     sheetName,
@@ -1477,6 +1436,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     logoRightSpan: logoRightSpan || 0,
   })
   aplicarAnchosBloqueLogosResumen(wsRes, logoContratista, logoInterventoria)
+  // Reafirmar D=15 por si algún ajuste de logos/contenido lo movió.
+  wsRes.getColumn(4).width = RESUMEN_COL_D_CHARS
   insertarLogosEncabezadoResumen(wsRes, {
     logoC: logoContratista,
     logoI: logoInterventoria,
@@ -1600,6 +1561,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
       .map((g) => ({
         caption: g.caption,
         orden: g.orden,
+        tipos_entidad: Array.isArray(g.tipos_entidad) ? g.tipos_entidad : [],
         image: grafUrlCache.get((g?.url || '').trim()) || null,
       }))
       .filter((g) => g.image)

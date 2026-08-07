@@ -23,6 +23,7 @@ import {
   LOGO_PAIR_PAD_LEFT_PX,
   LOGO_LEFT_COL_CHARS,
   RESUMEN_COL_B_MAX_CHARS,
+  RESUMEN_COL_D_CHARS,
   RESUMEN_HEADER_TITLE_START,
   RESUMEN_HEADER_TITLE_END,
   RESUMEN_HEADER_ENTIDAD_START,
@@ -118,6 +119,7 @@ describe('planLayoutResumenEncabezado', () => {
     assert.equal(layout.entidadStart, RESUMEN_HEADER_ENTIDAD_START)
     assert.equal(layout.entidadEnd, RESUMEN_HEADER_ENTIDAD_END)
     assert.equal(RESUMEN_COL_B_MAX_CHARS, 15)
+    assert.equal(RESUMEN_COL_D_CHARS, 15)
   })
 })
 
