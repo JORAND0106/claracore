@@ -31,6 +31,7 @@ import {
   resolverMetaLogosPresupuesto,
   sizeContainInBox,
 } from './presupuestoExportLogos.js'
+import { agruparRegistrosPorTipoEntidad } from './pptoTipoEntidad.js'
 
 export { resolverMetaLogosPresupuesto }
 
@@ -1107,7 +1108,8 @@ function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
 }
 
 // Sin columna «Validación Dep. / Int.» (ex-M eliminada); Observación queda en M.
-const DET_HEADERS = [
+// Columna 9 (Área/Long/Nodo) se renombra por subtabla según tipo_entidad.
+const DET_HEADERS_BASE = [
   'ID_POL',
   'PK_ID',
   'Tramo',
@@ -1116,17 +1118,47 @@ const DET_HEADERS = [
   'Abscisa Final',
   'Nodo Inicial',
   'Nodo Final',
-  'Longitud (Área/Long/Nodo)',
+  'Área/Long/Nodo',
   'Ancho',
   'Espesor',
   'Cant. Total',
   'Observación',
 ]
-const TOTAL_COLS_DET = DET_HEADERS.length
-const COL_AREA_LONG = DET_HEADERS.indexOf('Longitud (Área/Long/Nodo)') + 1
-const COL_ANCHO = DET_HEADERS.indexOf('Ancho') + 1
-const COL_ESPESOR = DET_HEADERS.indexOf('Espesor') + 1
-const COL_CANT_TOTAL = DET_HEADERS.indexOf('Cant. Total') + 1
+const TOTAL_COLS_DET = DET_HEADERS_BASE.length
+const COL_AREA_LONG = 9
+const COL_ANCHO = DET_HEADERS_BASE.indexOf('Ancho') + 1
+const COL_ESPESOR = DET_HEADERS_BASE.indexOf('Espesor') + 1
+const COL_CANT_TOTAL = DET_HEADERS_BASE.indexOf('Cant. Total') + 1
+
+function headersDetallePorGrupo(colLabel) {
+  const headers = DET_HEADERS_BASE.slice()
+  headers[COL_AREA_LONG - 1] = colLabel || 'Área/Long/Nodo'
+  return headers
+}
+
+function escribirFilaRegistroDetalle(ws, reg) {
+  const r = ws.addRow([
+    reg.id_pol,
+    reg.pk_id,
+    reg.tramo,
+    reg.infraestructura,
+    reg.abs_inicio,
+    reg.abs_final,
+    reg.no_inicio,
+    reg.no_final,
+    reg.area_long_nod,
+    reg.ancho,
+    reg.espesor,
+    reg.cant_total,
+    reg.observacion,
+  ])
+  estiloCantidad(r.getCell(COL_AREA_LONG))
+  estiloCantidad(r.getCell(COL_ANCHO))
+  estiloCantidad(r.getCell(COL_ESPESOR))
+  estiloCantidad(r.getCell(COL_CANT_TOTAL))
+  estiloFilaDatos(r, TOTAL_COLS_DET, r.number, { wrapAll: true })
+  return r
+}
 
 function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoLegacy, claraLogoImageId, logos = null, graficosPrep = []) {
   const baseName = safeSheetName(`${itemInfo.item || 'Item'}_${idx + 1}`, `Item_${idx + 1}`)
@@ -1143,57 +1175,72 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   aplicarPaginaHorizontal(ws)
   aplicarPiePaginaClaraCore(ws, claraLogoImageId, meta.numero || meta.contrato, sheetName)
 
+  const regs = itemInfo.registros || []
   const enc = escribirEncabezadoCompacto(
     ws,
     TOTAL_COLS_DET,
     'PRESUPUESTO - SOPORTE DE CANTIDADES',
     meta,
     modoLabel,
-    (itemInfo.registros || []).length,
+    regs.length,
     generatedAt,
     logoLegacy,
     { soloCantidad: true, totalsTier: 'titulo_2', logos, headerLayout: 'item13' },
   )
 
-  const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
-  ws.addRow(DET_HEADERS)
-  estiloFilaHeader(ws.getRow(tableRow), TOTAL_COLS_DET)
-  ws.pageSetup.printTitlesRow = `${tableRow}:${tableRow}`
-  const firstDetRow = tableRow + 1
-  const regs = itemInfo.registros || []
+  const afterItemMeta = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
+  const grupos = agruparRegistrosPorTipoEntidad(regs)
 
-  for (const reg of regs) {
-    const r = ws.addRow([
-      reg.id_pol,
-      reg.pk_id,
-      reg.tramo,
-      reg.infraestructura,
-      reg.abs_inicio,
-      reg.abs_final,
-      reg.no_inicio,
-      reg.no_final,
-      reg.area_long_nod,
-      reg.ancho,
-      reg.espesor,
-      reg.cant_total,
-      reg.observacion,
-    ])
-    estiloCantidad(r.getCell(COL_AREA_LONG))
-    estiloCantidad(r.getCell(COL_ANCHO))
-    estiloCantidad(r.getCell(COL_ESPESOR))
-    estiloCantidad(r.getCell(COL_CANT_TOTAL))
-    estiloFilaDatos(r, TOTAL_COLS_DET, r.number, { wrapAll: true })
+  let firstDataRowGlobal = null
+  let lastDataRowGlobal = null
+  let firstHeaderRow = null
+  let lastTableRow = afterItemMeta - 1
+
+  grupos.forEach((grupo, gIdx) => {
+    // Separación visual entre subtablas (fila en blanco).
+    if (gIdx > 0) {
+      ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+      const sepRow = ws.rowCount
+      ws.getRow(sepRow).height = 10
+      for (let c = 1; c <= TOTAL_COLS_DET; c += 1) {
+        const cell = ws.getCell(sepRow, c)
+        cell.border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
+      }
+    }
+
+    const headers = headersDetallePorGrupo(grupo.colLabel)
+    ws.addRow(headers)
+    const headerRow = ws.rowCount
+    if (firstHeaderRow == null) firstHeaderRow = headerRow
+    estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
+
+    const firstDet = headerRow + 1
+    for (const reg of grupo.registros) {
+      escribirFilaRegistroDetalle(ws, reg)
+    }
+    const lastDet = grupo.registros.length > 0 ? firstDet + grupo.registros.length - 1 : null
+    if (lastDet != null) {
+      if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
+      lastDataRowGlobal = lastDet
+      aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
+      lastTableRow = lastDet
+    } else {
+      lastTableRow = headerRow
+    }
+  })
+
+  if (firstHeaderRow != null) {
+    ws.pageSetup.printTitlesRow = `${firstHeaderRow}:${firstHeaderRow}`
   }
 
   let cantTotalRow = null
-  const lastDetRow = regs.length > 0 ? firstDetRow + regs.length - 1 : null
-
-  if (regs.length > 0) {
-    cantTotalRow = lastDetRow + 1
+  if (firstDataRowGlobal != null && lastDataRowGlobal != null) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    cantTotalRow = ws.rowCount
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
+    // Suma única al final del ítem (cubre todas las subtablas; encabezados/texto se ignoran en SUM).
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
-      formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDetRow}:${colToLetter(COL_CANT_TOTAL)}${lastDetRow})`,
+      formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDataRowGlobal}:${colToLetter(COL_CANT_TOTAL)}${lastDataRowGlobal})`,
     }
     estiloTitulo2Cell(ws.getCell(cantTotalRow, 1))
     estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
@@ -1203,19 +1250,19 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       ws,
       enc.totalsSummaryRow,
       null,
-      firstDetRow,
-      lastDetRow,
+      firstDataRowGlobal,
+      lastDataRowGlobal,
       5,
       null,
       COL_CANT_TOTAL,
       null,
       enc.totalsTier,
     )
-    aplicarBordesTabla(ws, tableRow, cantTotalRow, TOTAL_COLS_DET)
+    lastTableRow = cantTotalRow
   }
 
   const firmantes = colectarFirmantes(regs)
-  const firmRowStart = (cantTotalRow || (regs.length > 0 ? lastDetRow : tableRow)) + 2
+  const firmRowStart = lastTableRow + 2
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, firmantes)
 
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
@@ -1228,8 +1275,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     rowHeightPt: enc.logoRowHeightPt,
     nativeRow: 0,
   })
-  const wrapHasta = cantTotalRow || lastDetRow || tableRow
-  aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
+  const wrapHasta = lastTableRow || afterItemMeta
+  aplicarWrapTextRango(ws, afterItemMeta, wrapHasta, TOTAL_COLS_DET)
 
   // Fila 2 ya fijada en 25 por escribirFilasMetaItem; bloque ítem / encabezado tabla.
   ws.getRow(7).height = 30
