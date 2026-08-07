@@ -210,7 +210,7 @@ function leerAnchosColumnasPx(ws, colCount) {
 
 /**
  * Logos de memoria de ítem tras anchos definitivos:
- * C+I en extremos de A:D; entidad centrada en M.
+ * C+I en extremos de A:D; entidad centrada en M1 (col 13, ex-N tras borrar M).
  */
 function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt }) {
   const widths = leerAnchosColumnasPx(ws, ITEM_HEADER_COLS)
@@ -223,6 +223,7 @@ function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt }) {
   if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
   if (par.interventoria) insertarImagenFlotante(ws, logoI, par.interventoria)
 
+  // Entidad en última columna (= M1 con 13 cols).
   const posE = posicionLogoCentradoEnRango({
     logo: logoE,
     colStart: ITEM_HEADER_ENTIDAD_COL,
@@ -353,7 +354,8 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS) {
   ws.mergeCells(2, 2, 2, 3)
   ws.getCell(2, 4).value = 'Objeto:'
   ws.getCell(2, 5).value = objetoTxt
-  ws.mergeCells(2, 5, 2, 13)
+  // E2:M2 (hasta columna de entidad / última col tras eliminar ex-M).
+  ws.mergeCells(2, 5, 2, ITEM_HEADER_ENTIDAD_COL)
   ws.getRow(2).height = 25
   estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
   estiloMetaCell(ws.getCell(2, 2), { rowNum: 2 })
@@ -451,7 +453,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   // Par C+I: altura 1.8 cm; I al extremo derecho del bloque (Resumen A:B / Ítem A:D).
   const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
   const isResumen7 = headerLayout === 'resumen7'
-  const isItem14 = headerLayout === 'item14'
+  const isItemMemoria = headerLayout === 'item13' || headerLayout === 'item14'
 
   let hasEntidad
   let entidadLogo
@@ -472,7 +474,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
       logoContratista,
       logoInterventoria,
     } = layout)
-  } else if (isItem14) {
+  } else if (isItemMemoria) {
     const layout = planLayoutItemEncabezado(logosEff)
     ;({
       hasEntidad,
@@ -517,15 +519,14 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).fill = FILL_TITLE
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
-  } else if (isItem14) {
-    // A1:D1 logos | E1:L1 título | M1 entidad (sin merge). Logos tras anchos.
+  } else if (isItemMemoria) {
+    // A1:D1 logos | E1:L1 título | M1 entidad (ex-N1 tras eliminar columna M).
     ws.mergeCells(1, ITEM_HEADER_LEFT_START, 1, ITEM_HEADER_LEFT_END)
     ws.mergeCells(1, ITEM_HEADER_TITLE_START, 1, ITEM_HEADER_TITLE_END)
     ws.getCell(1, ITEM_HEADER_TITLE_START).value = titulo
     ws.getCell(1, ITEM_HEADER_TITLE_START).fill = FILL_TITLE
     ws.getCell(1, ITEM_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, ITEM_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
-    // M1 y N1 solo fondo título (entidad flota en M).
   } else {
     const titleStart = leftSpan + 1
     const titleEnd = Math.max(titleStart, cols - rightSpan)
@@ -564,7 +565,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   if (isResumen7) {
     escribirFilasMetaResumen(ws, meta, cols)
-  } else if (isItem14) {
+  } else if (isItemMemoria) {
     escribirFilasMetaItem(ws, meta, cols)
   } else {
     const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -623,7 +624,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     logoInterventoria,
     logoRowHeightPt,
     headerCols: cols,
-    headerLayout: isResumen7 ? 'resumen7' : isItem14 ? 'item14' : 'auto',
+    headerLayout: isResumen7 ? 'resumen7' : isItemMemoria ? 'item13' : 'auto',
   }
 }
 
@@ -745,8 +746,8 @@ function ajustarAnchos(ws, desdeFila, colCount) {
   }
 }
 
-/** Memorias de ítem: A–M = 11, N = 45. A–D mín. 14 para logos; M hereda 11 (entidad). */
-function ajustarAnchosMemoriaItem(ws, colCount = 14, { logoLeftSpan = 0 } = {}) {
+/** Memorias de ítem (13 cols): A–L = 11, M = 45. A–D mín. 14 para logos. */
+function ajustarAnchosMemoriaItem(ws, colCount = ITEM_HEADER_COLS, { logoLeftSpan = 0 } = {}) {
   for (let c = 1; c <= colCount; c += 1) {
     ws.getColumn(c).width = c < colCount ? 11 : 45
   }
@@ -754,7 +755,6 @@ function ajustarAnchosMemoriaItem(ws, colCount = 14, { logoLeftSpan = 0 } = {}) 
   for (let c = 1; c <= left; c += 1) {
     ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 14)
   }
-  // Columna M (entidad): conservar ancho heredado (11); no ampliar por logoRightSpan.
 }
 
 function aplicarWrapTextRango(ws, fromRow, toRow, colCount) {
@@ -832,27 +832,6 @@ function moverHojaAlInicio(wb, sheetName) {
   ordered.forEach((s, i) => {
     s.orderNo = i + 1
   })
-}
-
-const PARTICULAS_NOMBRE = new Set(['de', 'del', 'la', 'las', 'los', 'y'])
-
-/** Iniciales a partir del nombre completo (p. ej. Diego Rafael Manrique → DRM). */
-function inicialesNombre(nombre) {
-  const raw = safeStr(nombre).trim()
-  if (!raw) return ''
-  const partes = raw.split(/\s+/).filter((p) => p && !PARTICULAS_NOMBRE.has(p.toLowerCase()))
-  if (partes.length === 0) return ''
-  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase()
-  return partes.map((p) => p[0]).join('').toUpperCase()
-}
-
-/** Celda Validación Dep./Int.: solo iniciales de quien validó; vacío si nadie validó. */
-function formatValidacionDepInt(reg) {
-  const dep = inicialesNombre(reg?.pre_interv_por)
-  const int = inicialesNombre(reg?.validado_por)
-  if (!dep && !int) return ''
-  if (dep && int) return `${dep} / ${int}`
-  return dep || int
 }
 
 function colectarFirmantes(registros) {
@@ -991,6 +970,7 @@ function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
   return rRol
 }
 
+// Sin columna «Validación Dep. / Int.» (ex-M eliminada); Observación queda en M.
 const DET_HEADERS = [
   'ID_POL',
   'PK_ID',
@@ -1004,7 +984,6 @@ const DET_HEADERS = [
   'Ancho',
   'Espesor',
   'Cant. Total',
-  'Validación Dep. / Int.',
   'Observación',
 ]
 const TOTAL_COLS_DET = DET_HEADERS.length
@@ -1037,7 +1016,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     (itemInfo.registros || []).length,
     generatedAt,
     logoLegacy,
-    { soloCantidad: true, totalsTier: 'titulo_2', logos, headerLayout: 'item14' },
+    { soloCantidad: true, totalsTier: 'titulo_2', logos, headerLayout: 'item13' },
   )
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
@@ -1061,7 +1040,6 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       reg.ancho,
       reg.espesor,
       reg.cant_total,
-      formatValidacionDepInt(reg),
       reg.observacion,
     ])
     estiloCantidad(r.getCell(COL_AREA_LONG))

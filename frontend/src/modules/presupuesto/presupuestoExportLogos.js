@@ -38,15 +38,16 @@ export const RESUMEN_HEADER_ENTIDAD_END = 7
 export const RESUMEN_COL_B_MAX_CHARS = 15
 
 /**
- * Encabezado fijo memorias de ítem (14 cols A–N):
- * A1:D1 logos C+I · E1:L1 título · M1 entidad · N libre.
+ * Encabezado fijo memorias de ítem (13 cols A–M tras eliminar ex-columna M):
+ * A1:D1 logos C+I · E1:L1 título · M1 entidad (antes N1; corrimiento al borrar M).
  */
 export const ITEM_HEADER_LEFT_START = 1
 export const ITEM_HEADER_LEFT_END = 4
 export const ITEM_HEADER_TITLE_START = 5
 export const ITEM_HEADER_TITLE_END = 12
+/** Columna final (M): logo de entidad. */
 export const ITEM_HEADER_ENTIDAD_COL = 13
-export const ITEM_HEADER_COLS = 14
+export const ITEM_HEADER_COLS = 13
 
 /** @param {...(string|null|undefined)} candidates */
 export function pickLogoUrl(...candidates) {
