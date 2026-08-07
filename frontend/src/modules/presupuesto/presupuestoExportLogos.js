@@ -1,15 +1,28 @@
 /**
  * Resolución y layout de logos para export Excel de Presupuesto.
- * Contratista e interventoría: misma caja máxima; entidad a la derecha.
- * Escalado proporcional (contain) — nunca deformar.
+ *
+ * - Altura fija 1.8 cm para los tres logos; ancho proporcional al aspect ratio.
+ * - Interventoría pegada al contratista por coordenadas (no al inicio de columna).
+ * - Entidad a la derecha.
  */
 
-/** Caja máx. compartida contratista / interventoría (px). */
-export const LOGO_PAR_MAX_W = 96
-export const LOGO_PAR_MAX_H = 40
-/** Caja máx. entidad (px). */
-export const LOGO_ENTIDAD_MAX_W = 104
-export const LOGO_ENTIDAD_MAX_H = 40
+/** Altura estándar de los tres logos. */
+export const LOGO_HEIGHT_CM = 1.8
+/** 96 dpi → px/cm = 96/2.54 */
+export const LOGO_HEIGHT_PX = Math.round((LOGO_HEIGHT_CM * 96) / 2.54) // 68 px
+/**
+ * Separación horizontal entre logo contratista e interventoría.
+ * 8 px ≈ 0.21 cm a 96 dpi — margen pequeño y consistente.
+ */
+export const LOGO_PAIR_GAP_PX = 8
+/** Padding izquierdo del primer logo respecto al borde del encabezado (px). */
+export const LOGO_PAIR_PAD_LEFT_PX = 6
+/** Ancho de columna (chars Excel) usado en el bloque izquierdo para convertir px→col. */
+export const LOGO_LEFT_COL_CHARS = 12
+/** DrawingML: EMUs por píxel a 96 dpi (mismo factor que ExcelJS ExtXform). */
+export const EMU_PER_PX = 9525
+/** DrawingML: EMUs por punto tipográfico. */
+export const EMU_PER_POINT = 12700
 
 /** @param {...(string|null|undefined)} candidates */
 export function pickLogoUrl(...candidates) {
@@ -56,60 +69,147 @@ export function dimensionesImagenBuffer(buf) {
 }
 
 /**
- * Escala contain dentro de maxW×maxH conservando proporción.
- * @returns {{ width: number, height: number, offsetX: number, offsetY: number }}
+ * Altura fija; ancho = altura × (natW/natH). Siempre 1.8 cm de alto.
+ * @returns {{ width: number, height: number }}
  */
-export function fitLogoContain(natW, natH, maxW, maxH) {
-  const mw = Math.max(1, Number(maxW) || 1)
-  const mh = Math.max(1, Number(maxH) || 1)
-  const nw = Math.max(1, Number(natW) || mw)
-  const nh = Math.max(1, Number(natH) || mh)
-  const scale = Math.min(mw / nw, mh / nh, 1)
-  const width = Math.max(1, Math.round(nw * scale))
-  const height = Math.max(1, Math.round(nh * scale))
+export function sizeLogoFixedHeight(natW, natH, heightPx = LOGO_HEIGHT_PX) {
+  const height = Math.max(1, Math.round(Number(heightPx) || LOGO_HEIGHT_PX))
+  const nw = Math.max(1, Number(natW) || height)
+  const nh = Math.max(1, Number(natH) || height)
+  const width = Math.max(1, Math.round(height * (nw / nh)))
+  return { width, height }
+}
+
+/** Conversión Excel (ancho en chars) → píxeles (fórmula clásica de Excel). */
+export function excelColWidthToPx(widthChars) {
+  const w = Number(widthChars)
+  if (!Number.isFinite(w) || w <= 0) return 64
+  if (w < 1) return Math.max(1, Math.floor(w * 12))
+  return Math.max(1, Math.floor(((256 * w + Math.floor(128 / 7)) / 256) * 7))
+}
+
+export function pxToEmu(px) {
+  return Math.round(Math.max(0, Number(px) || 0) * EMU_PER_PX)
+}
+
+export function pointsToEmu(pt) {
+  return Math.round(Math.max(0, Number(pt) || 0) * EMU_PER_POINT)
+}
+
+/**
+ * Offset horizontal en px (desde col A) → ancla nativa ExcelJS en EMUs reales.
+ * Evita fracciones `col` (ExcelJS las convierte con width*10000, no EMUs).
+ * @param {number} px
+ * @param {number[]} colWidthsPx anchos sucesivos de columnas desde A
+ */
+export function pxOffsetToNativeCol(px, colWidthsPx) {
+  let remaining = Math.max(0, Number(px) || 0)
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length ? colWidthsPx : [64]
+  let col = 0
+  for (let i = 0; i < 64; i += 1) {
+    const cw = widths[i] ?? widths[widths.length - 1] ?? 64
+    if (remaining < cw) {
+      return { nativeCol: col, nativeColOff: pxToEmu(remaining) }
+    }
+    remaining -= cw
+    col += 1
+  }
+  return { nativeCol: col, nativeColOff: pxToEmu(remaining) }
+}
+
+function rowNativeOffCentered(rowHeightPt, logoHeightPx) {
+  const rowEmu = pointsToEmu(rowHeightPt)
+  const logoEmu = pxToEmu(logoHeightPx)
   return {
-    width,
-    height,
-    offsetX: Math.max(0, (mw - width) / 2),
-    offsetY: Math.max(0, (mh - height) / 2),
+    nativeRow: 0,
+    nativeRowOff: Math.max(0, Math.floor((rowEmu - logoEmu) / 2)),
+  }
+}
+
+function makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, logoHeightPx) {
+  return {
+    ...pxOffsetToNativeCol(cursorPx, colWidthsPx),
+    ...rowNativeOffCentered(rowHeightPt, logoHeightPx),
   }
 }
 
 /**
- * Posición flotante (fracción de columna/fila) centrada en un hueco del encabezado.
- * ExcelJS con `ext` fija el tamaño en EMUs (no se deforma al cambiar columnas).
+ * Posiciones flotantes del par C+I: interventoría justo a la derecha del contratista.
  *
- * @param {{ colStart: number, slotCols?: number, maxW: number, maxH: number, natW?: number|null, natH?: number|null, rowHeightPt?: number }} opts
- * colStart es 1-based (columna Excel).
+ * @param {{ logoC?: object|null, logoI?: object|null, colChars?: number, gapPx?: number, padLeftPx?: number, rowHeightPt?: number }} opts
  */
-export function posicionLogoFlotante({
+export function posicionParLogosFlotante({
+  logoC = null,
+  logoI = null,
+  colChars = LOGO_LEFT_COL_CHARS,
+  gapPx = LOGO_PAIR_GAP_PX,
+  padLeftPx = LOGO_PAIR_PAD_LEFT_PX,
+  rowHeightPt = 54,
+} = {}) {
+  const colPx = excelColWidthToPx(colChars)
+  const colWidthsPx = [colPx]
+
+  const sizeC = logoImageId(logoC) != null
+    ? sizeLogoFixedHeight(logoNatSize(logoC).natW, logoNatSize(logoC).natH)
+    : null
+  const sizeI = logoImageId(logoI) != null
+    ? sizeLogoFixedHeight(logoNatSize(logoI).natW, logoNatSize(logoI).natH)
+    : null
+
+  let cursorPx = padLeftPx
+  let contratista = null
+  let interventoria = null
+
+  if (sizeC) {
+    contratista = {
+      tl: makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, sizeC.height),
+      ext: { width: sizeC.width, height: sizeC.height },
+    }
+    cursorPx += sizeC.width
+  }
+  if (sizeI) {
+    if (sizeC) cursorPx += gapPx
+    interventoria = {
+      tl: makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, sizeI.height),
+      ext: { width: sizeI.width, height: sizeI.height },
+    }
+    cursorPx += sizeI.width
+  }
+
+  const pairWidthPx = cursorPx + padLeftPx
+  const leftSpanCols = Math.max(2, Math.ceil(pairWidthPx / colPx))
+
+  return { contratista, interventoria, pairWidthPx, leftSpanCols, colChars, colPx }
+}
+
+/**
+ * Posición del logo de entidad a la derecha (altura 1.8 cm, ancho proporcional).
+ * @param {{ logo?: object|null, colStart: number, slotCols?: number, colChars?: number, rowHeightPt?: number }} opts
+ */
+export function posicionLogoEntidadFlotante({
+  logo = null,
   colStart,
   slotCols = 2,
-  maxW,
-  maxH,
-  natW = null,
-  natH = null,
+  colChars = 12,
   rowHeightPt = 54,
-}) {
-  const fit = fitLogoContain(natW || maxW, natH || maxH, maxW, maxH)
+} = {}) {
+  if (logoImageId(logo) == null) return null
+  const { natW, natH } = logoNatSize(logo)
+  const size = sizeLogoFixedHeight(natW, natH)
+  const colPx = excelColWidthToPx(colChars)
   const slots = Math.max(1, slotCols)
-  // Desplazamiento horizontal como fracción del bloque de columnas del hueco.
-  const col = (colStart - 1) + (fit.offsetX / maxW) * slots
-  // Altura de fila ~ pt→px (96dpi): pt * 96/72
-  const rowPx = Math.max(1, rowHeightPt * (96 / 72))
-  const row = Math.max(0, fit.offsetY / rowPx)
+  const slotWidthPx = slots * colPx
+  const padX = Math.max(0, (slotWidthPx - size.width) / 2)
+  const absolutePx = (Math.max(1, colStart) - 1) * colPx + padX
+  const colWidthsPx = Array.from({ length: Math.max(1, colStart) + slots }, () => colPx)
   return {
-    tl: { col, row },
-    ext: { width: fit.width, height: fit.height },
-    fit,
+    tl: makeFloatingTl(absolutePx, colWidthsPx, rowHeightPt, size.height),
+    ext: { width: size.width, height: size.height },
   }
 }
 
 /**
  * Une meta del GET /contratos, fila en usuario._contratos y logos de sesión.
- * @param {object|null|undefined} metaContrato
- * @param {object|null|undefined} usuario
- * @param {number|string|null|undefined} contratoId
  */
 export function resolverMetaLogosPresupuesto(metaContrato, usuario, contratoId) {
   const list = Array.isArray(usuario?._contratos) ? usuario._contratos : []
@@ -143,35 +243,22 @@ export function resolverMetaLogosPresupuesto(metaContrato, usuario, contratoId) 
 }
 
 /**
- * Calcula spans del encabezado: [C|I|título|E].
- * Cada logo izquierdo ocupa 2 columnas propias (no se comparten en un solo merge).
- * @param {{ contratista?: number|null, interventoria?: number|null, entidad?: number|null }|null} logos
- * @param {number} cols
+ * Calcula spans del encabezado: bloque izquierdo (C+I juntos) | título | entidad.
  */
-export function planLayoutLogosEncabezado(logos, cols) {
+export function planLayoutLogosEncabezado(logos, cols, { leftSpanOverride = null } = {}) {
   const n = Math.max(Number(cols) || 7, 7)
-  // imageId 0 es válido → no usar truthiness.
   const hasC = logoImageId(logos?.contratista) != null
   const hasI = logoImageId(logos?.interventoria) != null
   const hasE = logoImageId(logos?.entidad) != null
   const leftSlots = (hasC ? 1 : 0) + (hasI ? 1 : 0)
-  const leftSpan = leftSlots * 2
+  // Bloque único a la izquierda (ambos logos flotan dentro); no 2 cols por logo.
+  const leftSpan = leftSlots > 0
+    ? Math.max(2, leftSpanOverride != null ? leftSpanOverride : (leftSlots >= 2 ? 4 : 2))
+    : 0
   const rightSpan = hasE ? Math.min(2, Math.max(1, n - leftSpan - 2)) : 0
   const titleStart = leftSpan + 1
   const titleEnd = Math.max(titleStart, n - rightSpan)
   const entidadStart = hasE ? titleEnd + 1 : null
-
-  /** @type {{ role: 'contratista'|'interventoria', colStart: number, logo: any }[]} */
-  const leftLogos = []
-  let cursor = 1
-  if (hasC) {
-    leftLogos.push({ role: 'contratista', colStart: cursor, logo: logos.contratista })
-    cursor += 2
-  }
-  if (hasI) {
-    leftLogos.push({ role: 'interventoria', colStart: cursor, logo: logos.interventoria })
-    cursor += 2
-  }
 
   return {
     cols: n,
@@ -180,9 +267,12 @@ export function planLayoutLogosEncabezado(logos, cols) {
     titleStart,
     titleEnd,
     entidadStart,
-    leftLogos,
+    hasContratista: hasC,
+    hasInterventoria: hasI,
     hasEntidad: hasE,
     entidadLogo: hasE ? logos.entidad : null,
+    logoContratista: hasC ? logos.contratista : null,
+    logoInterventoria: hasI ? logos.interventoria : null,
     tieneLogo: leftSlots > 0 || hasE,
   }
 }

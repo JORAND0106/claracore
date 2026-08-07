@@ -1,15 +1,14 @@
 import ExcelJS from 'exceljs'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
 import {
-  LOGO_ENTIDAD_MAX_H,
-  LOGO_ENTIDAD_MAX_W,
-  LOGO_PAR_MAX_H,
-  LOGO_PAR_MAX_W,
+  LOGO_HEIGHT_PX,
+  LOGO_LEFT_COL_CHARS,
+  LOGO_PAIR_GAP_PX,
   dimensionesImagenBuffer,
   logoImageId,
-  logoNatSize,
   planLayoutLogosEncabezado,
-  posicionLogoFlotante,
+  posicionLogoEntidadFlotante,
+  posicionParLogosFlotante,
   resolverMetaLogosPresupuesto,
 } from './presupuestoExportLogos.js'
 
@@ -173,29 +172,12 @@ async function prepararLogoWorkbook(wb, logoUrl) {
   }
 }
 
-/**
- * Inserta logo como imagen flotante (ext en px → EMUs fijos en ExcelJS).
- * Conserva proporción (contain) y centra dentro de la caja máxima del hueco.
- */
-function insertarLogoFlotante(ws, logo, { colStart, maxW, maxH, slotCols = 2, rowHeightPt = TITLE_ROW_HEIGHT }) {
+/** Inserta imagen flotante ya dimensionada (altura 1.8 cm, ancho proporcional). */
+function insertarImagenFlotante(ws, logo, pos) {
   const id = logoImageId(logo)
-  if (id == null) return
-  const { natW, natH } = logoNatSize(logo)
-  const pos = posicionLogoFlotante({
-    colStart,
-    slotCols,
-    maxW,
-    maxH,
-    natW,
-    natH,
-    rowHeightPt,
-  })
-  // `ext` → oneCellAnchor con cx/cy fijos (no se estiran al cambiar anchos de columna).
-  // No usamos `br` (twoCellAnchor) porque ExcelJS estira la imagen al rango de celdas.
-  ws.addImage(id, {
-    tl: pos.tl,
-    ext: pos.ext,
-  })
+  if (id == null || !pos) return
+  // tl con nativeCol/nativeColOff en EMUs reales; ext → oneCellAnchor (cx/cy fijos).
+  ws.addImage(id, { tl: pos.tl, ext: pos.ext })
 }
 
 function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
@@ -263,45 +245,61 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
       : (logoLegacy != null
         ? { contratista: typeof logoLegacy === 'object' ? logoLegacy : { imageId: logoLegacy }, interventoria: null, entidad: null }
         : null)
-  const layout = planLayoutLogosEncabezado(logosEff, cols)
-  const { titleStart, titleEnd, entidadStart, leftLogos, hasEntidad, entidadLogo, tieneLogo } = layout
+
+  // Par C+I: altura 1.8 cm; I pegada a C con LOGO_PAIR_GAP_PX (8 px ≈ 0.21 cm).
+  // 68 px @ 96 dpi ≈ 51 pt; + margen → fila de título.
+  const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
+  const par = posicionParLogosFlotante({
+    logoC: logosEff?.contratista,
+    logoI: logosEff?.interventoria,
+    colChars: LOGO_LEFT_COL_CHARS,
+    gapPx: LOGO_PAIR_GAP_PX,
+    rowHeightPt: logoRowHeightPt,
+  })
+  const layout = planLayoutLogosEncabezado(logosEff, cols, { leftSpanOverride: par.leftSpanCols })
+  const {
+    titleStart,
+    titleEnd,
+    entidadStart,
+    hasEntidad,
+    entidadLogo,
+    tieneLogo,
+    leftSpan,
+    rightSpan,
+  } = layout
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
 
   ws.addRow(new Array(cols).fill(''))
-  ws.getRow(1).height = tieneLogo ? TITLE_ROW_HEIGHT : TITLE_ROW_HEIGHT_NO_LOGO
+  ws.getRow(1).height = tieneLogo ? logoRowHeightPt : TITLE_ROW_HEIGHT_NO_LOGO
 
   for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
 
-  // Huecos de encabezado (solo fondo); las imágenes flotan encima con tamaño propio.
-  for (const slot of leftLogos) {
-    const c0 = slot.colStart
-    ws.mergeCells(1, c0, 1, c0 + 1)
-    ws.getColumn(c0).width = Math.max(ws.getColumn(c0).width || 0, 14)
-    ws.getColumn(c0 + 1).width = Math.max(ws.getColumn(c0 + 1).width || 0, 14)
-    insertarLogoFlotante(ws, slot.logo, {
-      colStart: c0,
-      maxW: LOGO_PAR_MAX_W,
-      maxH: LOGO_PAR_MAX_H,
-      slotCols: 2,
-      rowHeightPt: TITLE_ROW_HEIGHT,
-    })
+  // Bloque izquierdo: fondo continuo; logos flotan por coordenadas absolutas (px→col).
+  if (leftSpan > 0) {
+    ws.mergeCells(1, 1, 1, leftSpan)
+    for (let c = 1; c <= leftSpan; c += 1) {
+      ws.getColumn(c).width = LOGO_LEFT_COL_CHARS
+    }
+    if (par.contratista) insertarImagenFlotante(ws, logosEff.contratista, par.contratista)
+    if (par.interventoria) insertarImagenFlotante(ws, logosEff.interventoria, par.interventoria)
   }
 
   if (hasEntidad && entidadStart != null && entidadStart <= cols) {
     const entSpan = cols - entidadStart + 1
     ws.mergeCells(1, entidadStart, 1, cols)
     for (let c = entidadStart; c <= cols; c += 1) {
-      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
+      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, LOGO_LEFT_COL_CHARS)
     }
-    insertarLogoFlotante(ws, entidadLogo, {
+    const posE = posicionLogoEntidadFlotante({
+      logo: entidadLogo,
       colStart: entidadStart,
-      maxW: LOGO_ENTIDAD_MAX_W,
-      maxH: LOGO_ENTIDAD_MAX_H,
       slotCols: Math.max(1, entSpan),
-      rowHeightPt: TITLE_ROW_HEIGHT,
+      colChars: LOGO_LEFT_COL_CHARS,
+      rowHeightPt: logoRowHeightPt,
     })
+    insertarImagenFlotante(ws, entidadLogo, posE)
   }
 
   if (tieneLogo) {
@@ -358,7 +356,13 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   ws.addRow([])
 
-  return { tableHeaderRow: 7, totalsSummaryRow: 5, totalsTier }
+  return {
+    tableHeaderRow: 7,
+    totalsSummaryRow: 5,
+    totalsTier,
+    logoLeftSpan: leftSpan,
+    logoRightSpan: rightSpan,
+  }
 }
 
 function completarFormulasTotales(
@@ -774,7 +778,6 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     logoLegacy,
     { soloCantidad: true, totalsTier: 'titulo_2', logos },
   )
-  const layoutItem = planLayoutLogosEncabezado(logos, TOTAL_COLS_DET)
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
   ws.addRow(DET_HEADERS)
@@ -840,9 +843,13 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, colectarFirmantes(regs))
 
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
-    logoLeftSpan: layoutItem.leftSpan,
-    logoRightSpan: layoutItem.rightSpan,
+    logoLeftSpan: enc.logoLeftSpan || 0,
+    logoRightSpan: enc.logoRightSpan || 0,
   })
+  // Restaurar anchos del bloque de logos (evitar que ajustarAnchos aplaste la conversión px→col).
+  for (let c = 1; c <= (enc.logoLeftSpan || 0); c += 1) {
+    ws.getColumn(c).width = LOGO_LEFT_COL_CHARS
+  }
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
@@ -873,7 +880,13 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   aplicarPaginaHorizontal(wsRes)
   aplicarPiePaginaClaraCore(wsRes, claraLogoImageId, meta.numero || meta.contrato, 'Resumen')
 
-  const { tableHeaderRow, totalsSummaryRow, totalsTier } = escribirEncabezadoCompacto(
+  const {
+    tableHeaderRow,
+    totalsSummaryRow,
+    totalsTier,
+    logoLeftSpan,
+    logoRightSpan,
+  } = escribirEncabezadoCompacto(
     wsRes,
     totalColsResumen,
     'PRESUPUESTO - RESUMEN DE EXPORTACIÓN',
@@ -884,7 +897,6 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     logoLegacy,
     { totalsTier: 'titulo_1', logos },
   )
-  const layoutResumen = planLayoutLogosEncabezado(logos, totalColsResumen)
 
   wsRes.addRow(resumenHeaders)
   estiloFilaHeader(wsRes.getRow(tableHeaderRow), totalColsResumen)
@@ -945,9 +957,12 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
   ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen, {
-    logoLeftSpan: layoutResumen.leftSpan,
-    logoRightSpan: layoutResumen.rightSpan,
+    logoLeftSpan: logoLeftSpan || 0,
+    logoRightSpan: logoRightSpan || 0,
   })
+  for (let c = 1; c <= (logoLeftSpan || 0); c += 1) {
+    wsRes.getColumn(c).width = LOGO_LEFT_COL_CHARS
+  }
   return wsRes
 }
 
