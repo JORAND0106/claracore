@@ -4,6 +4,7 @@ import {
   pickLogoUrl,
   planLayoutLogosEncabezado,
   planLayoutResumenEncabezado,
+  planLayoutItemEncabezado,
   resolverMetaLogosPresupuesto,
   dimensionesImagenBuffer,
   sizeLogoFixedHeight,
@@ -26,6 +27,10 @@ import {
   RESUMEN_HEADER_TITLE_END,
   RESUMEN_HEADER_ENTIDAD_START,
   RESUMEN_HEADER_ENTIDAD_END,
+  ITEM_HEADER_LEFT_END,
+  ITEM_HEADER_TITLE_START,
+  ITEM_HEADER_TITLE_END,
+  ITEM_HEADER_ENTIDAD_COL,
 } from './presupuestoExportLogos.js'
 
 describe('pickLogoUrl', () => {
@@ -113,6 +118,43 @@ describe('planLayoutResumenEncabezado', () => {
     assert.equal(layout.entidadStart, RESUMEN_HEADER_ENTIDAD_START)
     assert.equal(layout.entidadEnd, RESUMEN_HEADER_ENTIDAD_END)
     assert.equal(RESUMEN_COL_B_MAX_CHARS, 15)
+  })
+})
+
+describe('planLayoutItemEncabezado', () => {
+  it('fija A1:D1 | E1:L1 | M1', () => {
+    const layout = planLayoutItemEncabezado({
+      contratista: { imageId: 0 },
+      interventoria: { imageId: 1 },
+      entidad: { imageId: 2 },
+    })
+    assert.equal(layout.leftSpan, 4)
+    assert.equal(layout.rightSpan, 1)
+    assert.equal(layout.titleStart, ITEM_HEADER_TITLE_START)
+    assert.equal(layout.titleEnd, ITEM_HEADER_TITLE_END)
+    assert.equal(layout.entidadStart, ITEM_HEADER_ENTIDAD_COL)
+    assert.equal(ITEM_HEADER_LEFT_END, 4)
+  })
+})
+
+describe('posicionParLogosExtremosBloque con 4 columnas', () => {
+  it('ancla interventoría al borde derecho de A:D', () => {
+    const widths = [80, 80, 80, 80]
+    const par = posicionParLogosExtremosBloque({
+      logoC: { imageId: 0, natW: 100, natH: 100 },
+      logoI: { imageId: 1, natW: 100, natH: 100 },
+      colWidthsPx: widths,
+    })
+    const blockW = 320
+    const startI = blockW - 68
+    assert.deepEqual(
+      { nativeCol: par.interventoria.tl.nativeCol, nativeColOff: par.interventoria.tl.nativeColOff },
+      pxOffsetToNativeCol(startI, widths),
+    )
+    assert.deepEqual(
+      { nativeCol: par.contratista.tl.nativeCol, nativeColOff: par.contratista.tl.nativeColOff },
+      pxOffsetToNativeCol(0, widths),
+    )
   })
 })
 

@@ -37,6 +37,17 @@ export const RESUMEN_HEADER_ENTIDAD_END = 7
 /** Máximo de ancho (chars Excel) para la columna B en Resumen. */
 export const RESUMEN_COL_B_MAX_CHARS = 15
 
+/**
+ * Encabezado fijo memorias de ítem (14 cols A–N):
+ * A1:D1 logos C+I · E1:L1 título · M1 entidad · N libre.
+ */
+export const ITEM_HEADER_LEFT_START = 1
+export const ITEM_HEADER_LEFT_END = 4
+export const ITEM_HEADER_TITLE_START = 5
+export const ITEM_HEADER_TITLE_END = 12
+export const ITEM_HEADER_ENTIDAD_COL = 13
+export const ITEM_HEADER_COLS = 14
+
 /** @param {...(string|null|undefined)} candidates */
 export function pickLogoUrl(...candidates) {
   for (const c of candidates) {
@@ -222,8 +233,8 @@ export function posicionParLogosFlotante({
 }
 
 /**
- * Par C+I en extremos del bloque A:B (Resumen):
- * contratista pegado al borde izquierdo; interventoría al borde derecho de B.
+ * Par C+I en extremos de un bloque de columnas (p. ej. A:B o A:D):
+ * contratista al borde izquierdo; interventoría al borde derecho del bloque.
  *
  * @param {{
  *   logoC?: object|null,
@@ -243,10 +254,10 @@ export function posicionParLogosExtremosBloque({
   padRightPx = 0,
 } = {}) {
   const fallback = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
-  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length >= 2
-    ? colWidthsPx.slice(0, 2).map((w) => Math.max(1, Number(w) || fallback))
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length
+    ? colWidthsPx.map((w) => Math.max(1, Number(w) || fallback))
     : [fallback, fallback]
-  const blockW = widths[0] + widths[1]
+  const blockW = widths.reduce((a, b) => a + b, 0)
   const padL = Math.max(0, Number(padLeftPx) || 0)
   const padR = Math.max(0, Number(padRightPx) || 0)
 
@@ -275,6 +286,29 @@ export function posicionParLogosExtremosBloque({
   }
 
   return { contratista, interventoria, blockWidthPx: blockW, colWidthsPx: widths }
+}
+
+/** Layout fijo fila 1 de memorias de ítem: A1:D1 | E1:L1 | M1. */
+export function planLayoutItemEncabezado(logos = null) {
+  const hasC = logoImageId(logos?.contratista) != null
+  const hasI = logoImageId(logos?.interventoria) != null
+  const hasE = logoImageId(logos?.entidad) != null
+  return {
+    cols: ITEM_HEADER_COLS,
+    leftSpan: ITEM_HEADER_LEFT_END - ITEM_HEADER_LEFT_START + 1,
+    rightSpan: hasE ? 1 : 0,
+    titleStart: ITEM_HEADER_TITLE_START,
+    titleEnd: ITEM_HEADER_TITLE_END,
+    entidadStart: ITEM_HEADER_ENTIDAD_COL,
+    entidadEnd: ITEM_HEADER_ENTIDAD_COL,
+    hasContratista: hasC,
+    hasInterventoria: hasI,
+    hasEntidad: hasE,
+    entidadLogo: hasE ? logos.entidad : null,
+    logoContratista: hasC ? logos.contratista : null,
+    logoInterventoria: hasI ? logos.interventoria : null,
+    tieneLogo: hasC || hasI || hasE,
+  }
 }
 
 /**
