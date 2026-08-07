@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from azure_blob_storage import path_presupuesto_grafico, upload_blob
+from azure_blob_storage import download_blob_bytes, path_presupuesto_grafico, upload_blob
 
 _log = logging.getLogger("claracore.presupuesto.graficos")
 
@@ -31,6 +33,90 @@ def _require_pie_foto(raw: Any) -> str:
             status_code=422, detail="El pie de foto no puede superar 280 caracteres"
         )
     return pie
+
+
+def _guess_media_type(path_or_url: str, fallback: str = "image/jpeg") -> str:
+    s = (path_or_url or "").lower()
+    if s.endswith(".png"):
+        return "image/png"
+    if s.endswith(".gif"):
+        return "image/gif"
+    if s.endswith(".webp"):
+        return "image/webp"
+    if s.endswith(".jpg") or s.endswith(".jpeg"):
+        return "image/jpeg"
+    return fallback
+
+
+def _blob_path_from_public_url(url: str) -> Optional[str]:
+    """Si la URL es del contenedor público Azure, extrae el blob_path relativo."""
+    u = (url or "").strip()
+    if not u:
+        return None
+    try:
+        parsed = urlparse(u)
+        path = (parsed.path or "").lstrip("/")
+        # …/container/contrato_id/...
+        parts = path.split("/", 1)
+        if len(parts) == 2 and parts[1]:
+            return parts[1]
+    except Exception:
+        return None
+    return None
+
+
+def _fetch_grafico_bytes(
+    contrato_id: int,
+    *,
+    url: Optional[str] = None,
+    blob_path: Optional[str] = None,
+) -> Tuple[bytes, str]:
+    """
+    Lee bytes de un gráfico del contrato (Azure Blob vía path o descarga HTTP).
+    Evita CORS del navegador al exportar Excel.
+    """
+    path = (blob_path or "").strip().lstrip("/")
+    if not path and url:
+        path = (_blob_path_from_public_url(url) or "").lstrip("/")
+    if path:
+        prefix = f"{int(contrato_id)}/"
+        if not path.startswith(prefix):
+            raise HTTPException(
+                status_code=403,
+                detail="La imagen no pertenece a este contrato",
+            )
+        try:
+            data = download_blob_bytes(path)
+        except Exception as exc:
+            _log.warning("download_blob_bytes %s: %s", path, exc)
+            raise HTTPException(
+                status_code=404, detail="No se pudo leer la imagen en almacenamiento"
+            ) from exc
+        if not data:
+            raise HTTPException(status_code=404, detail="Imagen vacía")
+        return data, _guess_media_type(path)
+
+    u = (url or "").strip()
+    if not u:
+        raise HTTPException(status_code=422, detail="url o blob_path requerido")
+    # Descarga server-side (sin CORS) solo de URLs http(s).
+    if not (u.startswith("http://") or u.startswith("https://")):
+        raise HTTPException(status_code=422, detail="URL de imagen inválida")
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(u, headers={"User-Agent": "ClaraCore/1.0"})
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = resp.read()
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+    except Exception as exc:
+        _log.warning("fetch url grafico: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="No se pudo descargar la imagen remota"
+        ) from exc
+    if not data:
+        raise HTTPException(status_code=404, detail="Imagen vacía")
+    return data, ctype if ctype.startswith("image/") else _guess_media_type(u)
 
 
 class ImagenGrupoIn(BaseModel):
@@ -294,31 +380,60 @@ def register_deps(supabase, get_current_user, require_contract_access):
             raise HTTPException(status_code=500, detail="No se pudo crear el grupo")
         grupo_id = g_ins[0]["id"]
 
-        supabase.table("presupuesto_grafico_grupo_regs").insert(
-            [{"grupo_id": grupo_id, "presupuesto_id": pid} for pid in ids]
-        ).execute()
+        try:
+            supabase.table("presupuesto_grafico_grupo_regs").insert(
+                [{"grupo_id": grupo_id, "presupuesto_id": pid} for pid in ids]
+            ).execute()
 
-        rows_img = []
-        for i, im in enumerate(imgs):
-            url = (im.url or "").strip()
-            if not url:
-                continue
-            rows_img.append(
-                {
-                    "grupo_id": grupo_id,
-                    "url": url,
-                    "blob_path": (im.blob_path or "").strip() or None,
-                    "descripcion": (im.descripcion or "").strip() or None,
-                    "origen": (im.origen or "upload").strip() or "upload",
-                    "orden": int(im.orden if im.orden is not None else i),
-                    "created_by": uid,
-                }
+            rows_img = []
+            for i, im in enumerate(imgs):
+                url = (im.url or "").strip()
+                if not url:
+                    continue
+                rows_img.append(
+                    {
+                        "grupo_id": grupo_id,
+                        "url": url,
+                        "blob_path": (im.blob_path or "").strip() or None,
+                        "descripcion": (im.descripcion or "").strip() or None,
+                        "origen": (im.origen or "upload").strip() or "upload",
+                        "orden": int(im.orden if im.orden is not None else i),
+                        "created_by": uid,
+                    }
+                )
+            if not rows_img:
+                raise HTTPException(status_code=422, detail="Ninguna imagen válida")
+            img_ins = (
+                supabase.table("presupuesto_grafico_imagenes")
+                .insert(rows_img)
+                .execute()
+                .data
             )
-        if not rows_img:
-            raise HTTPException(status_code=422, detail="Ninguna imagen válida")
-        supabase.table("presupuesto_grafico_imagenes").insert(rows_img).execute()
+            if not img_ins:
+                raise HTTPException(status_code=500, detail="No se pudieron guardar las imágenes")
+        except Exception:
+            # Evitar grupo huérfano sin asociación completa.
+            try:
+                supabase.table("presupuesto_grafico_grupos").delete().eq(
+                    "id", grupo_id
+                ).eq("contrato_id", contrato_id).execute()
+            except Exception as cleanup_exc:
+                _log.warning("cleanup grupo fallido %s: %s", grupo_id, cleanup_exc)
+            raise
 
-        return {"ok": True, "grupo_id": grupo_id, "registros": len(ids), "imagenes": len(rows_img)}
+        items_labels = _items_keys_from_regs(
+            list(_fetch_regs_info_by_ids(supabase, contrato_id, ids).values())
+        )
+        return {
+            "ok": True,
+            "grupo_id": grupo_id,
+            "registros": len(ids),
+            "imagenes": len(rows_img),
+            "pie_foto": pie_foto,
+            "items": items_labels,
+            "presupuesto_ids": ids,
+            "thumb_url": rows_img[0]["url"] if rows_img else None,
+        }
 
     @router.get("/presupuesto/{contrato_id}/graficos/grupos")
     def listar_grupos_graficos(
@@ -584,6 +699,65 @@ def register_deps(supabase, get_current_user, require_contract_access):
         require_contract_access(current_user, contrato_id)
         return {"items": _graficos_por_item_mapa(supabase, contrato_id)}
 
+    @router.get("/presupuesto/{contrato_id}/graficos/presupuesto-ids")
+    def presupuesto_ids_con_grafico(
+        contrato_id: int,
+        current_user=Depends(get_current_user),
+    ):
+        """IDs de presupuesto que pertenecen a algún grupo con al menos una imagen."""
+        require_contract_access(current_user, contrato_id)
+        grupos = (
+            supabase.table("presupuesto_grafico_grupos")
+            .select("id")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
+        if not grupos:
+            return {"presupuesto_ids": []}
+        gids = [g["id"] for g in grupos]
+        imgs = (
+            supabase.table("presupuesto_grafico_imagenes")
+            .select("grupo_id")
+            .in_("grupo_id", gids)
+            .execute()
+            .data
+            or []
+        )
+        gids_con_img = {im["grupo_id"] for im in imgs}
+        if not gids_con_img:
+            return {"presupuesto_ids": []}
+        regs_j = (
+            supabase.table("presupuesto_grafico_grupo_regs")
+            .select("presupuesto_id, grupo_id")
+            .in_("grupo_id", list(gids_con_img))
+            .execute()
+            .data
+            or []
+        )
+        pids = sorted({int(r["presupuesto_id"]) for r in regs_j if r.get("presupuesto_id") is not None})
+        return {"presupuesto_ids": pids}
+
+    @router.get("/presupuesto/{contrato_id}/graficos/fetch-imagen")
+    def fetch_imagen_grafico(
+        contrato_id: int,
+        url: Optional[str] = Query(None),
+        blob_path: Optional[str] = Query(None),
+        current_user=Depends(get_current_user),
+    ):
+        """
+        Proxy autenticado de imagen de gráfico (mismo origen → sin CORS).
+        Usado por la exportación Excel del navegador.
+        """
+        require_contract_access(current_user, contrato_id)
+        data, media = _fetch_grafico_bytes(contrato_id, url=url, blob_path=blob_path)
+        return Response(
+            content=data,
+            media_type=media,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+
     return router
 
 
@@ -615,7 +789,7 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
     )
     imgs = (
         supabase.table("presupuesto_grafico_imagenes")
-        .select("id, grupo_id, url, orden, descripcion")
+        .select("id, grupo_id, url, blob_path, orden, descripcion")
         .in_("grupo_id", gids)
         .order("orden")
         .execute()
@@ -655,6 +829,7 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
         for im in imgs_by_grupo.get(gid, []):
             base = {
                 "url": im["url"],
+                "blob_path": im.get("blob_path"),
                 "caption": caption,
                 "grupo_id": gid,
                 "orden": im.get("orden") or 0,

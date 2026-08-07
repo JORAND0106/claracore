@@ -155,45 +155,93 @@ async function cargarLogoClaraCore(wb) {
 }
 
 /**
- * Carga logo al workbook y devuelve descriptor con dimensiones naturales.
+ * Lee bytes de una URL (directo o vía proxy autenticado del API).
+ * @returns {Promise<{ buffer: Uint8Array, ext: string }|null>}
+ */
+async function leerImagenBytes(logoUrl, { API, token, contratoId, blobPath } = {}) {
+  const raw = String(logoUrl || '').trim()
+  if (!raw && !blobPath) return null
+
+  const fromBlob = async (blob) => {
+    if (!blob || !blob.size) return null
+    const buffer = new Uint8Array(await blob.arrayBuffer())
+    let ext = 'png'
+    if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
+    else if (blob.type.includes('gif')) ext = 'gif'
+    else if (blob.type.includes('png')) ext = 'png'
+    return { buffer, ext }
+  }
+
+  // 1) data URI
+  if (raw.startsWith('data:image')) {
+    const comma = raw.indexOf(',')
+    if (comma < 0) return null
+    const header = raw.slice(0, comma).toLowerCase()
+    let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
+    if (!b64 || !header.includes('base64')) return null
+    let ext = 'png'
+    const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
+    if (m) {
+      ext = m[1].toLowerCase()
+      if (ext === 'jpg') ext = 'jpeg'
+      if (ext === 'svg+xml') return null
+      if (!['png', 'jpeg', 'gif', 'webp'].includes(ext)) ext = 'png'
+      if (ext === 'webp') ext = 'png'
+    }
+    const binary = atob(b64)
+    const buffer = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
+    return { buffer, ext }
+  }
+
+  // 2) fetch directo (puede fallar por CORS en Azure Blob)
+  if (raw) {
+    try {
+      const res = await fetch(raw, { mode: 'cors', credentials: 'omit' })
+      if (res.ok) {
+        const got = await fromBlob(await res.blob())
+        if (got) return got
+      }
+    } catch {
+      /* proxy */
+    }
+  }
+
+  // 3) Proxy autenticado mismo origen (sin CORS)
+  if (API && token && contratoId != null && (raw || blobPath)) {
+    try {
+      const params = new URLSearchParams()
+      if (raw) params.set('url', raw)
+      if (blobPath) params.set('blob_path', String(blobPath))
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/graficos/fetch-imagen?${params}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      if (res.ok) {
+        const got = await fromBlob(await res.blob())
+        if (got) return got
+      }
+    } catch {
+      /* null */
+    }
+  }
+  return null
+}
+
+/**
+ * Carga logo/gráfico al workbook y devuelve descriptor con dimensiones naturales.
  * @returns {Promise<{ imageId: number, natW: number|null, natH: number|null }|null>}
  */
-async function prepararLogoWorkbook(wb, logoUrl) {
-  if (!logoUrl || typeof logoUrl !== 'string') return null
-  const raw = logoUrl.trim()
-  if (!raw) return null
+async function prepararLogoWorkbook(wb, logoUrl, opts = {}) {
+  if (!logoUrl || typeof logoUrl !== 'string') {
+    if (!opts?.blobPath) return null
+  }
   try {
-    let buffer
-    let ext = 'png'
-    if (raw.startsWith('data:image')) {
-      const comma = raw.indexOf(',')
-      if (comma < 0) return null
-      const header = raw.slice(0, comma).toLowerCase()
-      let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
-      if (!b64 || !header.includes('base64')) return null
-      const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
-      if (m) {
-        ext = m[1].toLowerCase()
-        if (ext === 'jpg') ext = 'jpeg'
-        if (ext === 'svg+xml') return null
-        if (!['png', 'jpeg', 'gif', 'webp'].includes(ext)) ext = 'png'
-        if (ext === 'webp') ext = 'png'
-      }
-      const binary = atob(b64)
-      buffer = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
-    } else {
-      const res = await fetch(raw)
-      if (!res.ok) return null
-      const blob = await res.blob()
-      buffer = new Uint8Array(await blob.arrayBuffer())
-      if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
-      else if (blob.type.includes('gif')) ext = 'gif'
-      else ext = 'png'
-    }
-    const dims = dimensionesImagenBuffer(buffer)
-    const safeExt = ext === 'png' || ext === 'jpeg' || ext === 'gif' ? ext : 'png'
-    const imageId = wb.addImage({ buffer, extension: safeExt })
+    const got = await leerImagenBytes(logoUrl, opts)
+    if (!got?.buffer?.length) return null
+    const dims = dimensionesImagenBuffer(got.buffer)
+    const safeExt = got.ext === 'png' || got.ext === 'jpeg' || got.ext === 'gif' ? got.ext : 'png'
+    const imageId = wb.addImage({ buffer: got.buffer, extension: safeExt })
     return {
       imageId,
       natW: dims?.width ?? null,
@@ -1226,6 +1274,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   let lastTableRow = afterItemMeta - 1
   /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
   const filasEncabezadoGrupo = []
+  /** Gráficos ya insertados tras una subtabla (para fallback de residuales). */
+  const graficosYaInsertados = new Set()
 
   grupos.forEach((grupo, gIdx) => {
     // Separación visual entre subtablas (fila en blanco).
@@ -1268,8 +1318,17 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
       escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafsGrupo)
       lastTableRow = ws.rowCount
+      for (const g of grafsGrupo) graficosYaInsertados.add(g)
     }
   })
+
+  // Fallback: gráficos del ítem que no coincidieron con ninguna subtabla presente.
+  const grafsResidual = (graficosPrep || []).filter((g) => g?.image && !graficosYaInsertados.has(g))
+  if (grafsResidual.length) {
+    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafsResidual)
+    lastTableRow = ws.rowCount
+  }
 
   if (firstHeaderRow != null) {
     ws.pageSetup.printTitlesRow = `${firstHeaderRow}:${firstHeaderRow}`
@@ -1557,21 +1616,34 @@ export async function downloadPresupuestoCrudoExcel(payload, metaContrato, contr
  * @param {object|null} metaContrato GET /contratos/{id}
  * @param {number|string} contratoId
  */
-export async function downloadPresupuestoInformeExcel(payload, metaContrato, contratoId, filename) {
+/**
+ * @param {object} payload
+ * @param {object|null} metaContrato
+ * @param {number|string} contratoId
+ * @param {string} [filename]
+ * @param {{ API?: string, token?: string }} [opts] auth para proxy de imágenes (evita CORS)
+ * @returns {Promise<{ graficosEnPayload: number, graficosEmbebidos: number }>}
+ */
+export async function downloadPresupuestoInformeExcel(payload, metaContrato, contratoId, filename, opts = {}) {
   const resumen = Array.isArray(payload?.resumen) ? payload.resumen : []
   const items = Array.isArray(payload?.items) ? payload.items : []
   const modoLabel = payload?.modo_label || 'Presupuesto'
   const generatedAt = new Date()
   const meta = metaContrato || {}
   aplicarTemaExportInforme(meta.export_palette)
+  const imgOpts = {
+    API: opts.API,
+    token: opts.token,
+    contratoId,
+  }
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore · Presupuesto'
 
   // Secuencial: ExcelJS muta el workbook al registrar cada imagen.
-  const logoContratista = await prepararLogoWorkbook(wb, meta.logo_contratista)
-  const logoInterventoria = await prepararLogoWorkbook(wb, meta.logo_interventoria)
-  const logoEntidad = await prepararLogoWorkbook(wb, meta.logo_entidad)
+  const logoContratista = await prepararLogoWorkbook(wb, meta.logo_contratista, imgOpts)
+  const logoInterventoria = await prepararLogoWorkbook(wb, meta.logo_interventoria, imgOpts)
+  const logoEntidad = await prepararLogoWorkbook(wb, meta.logo_entidad, imgOpts)
   const logos = {
     contratista: logoContratista,
     interventoria: logoInterventoria,
@@ -1590,25 +1662,39 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
 
   // Precargar gráficos (URLs únicas) para reutilizar el mismo imageId entre ítems del grupo.
   const grafUrlCache = new Map()
+  let graficosEnPayload = 0
+  let graficosEmbebidos = 0
   for (const itemInfo of items) {
     for (const g of itemInfo.graficos || []) {
       const url = (g?.url || '').trim()
-      if (!url || grafUrlCache.has(url)) continue
+      const cacheKey = url || String(g?.blob_path || '')
+      if (!cacheKey) continue
+      graficosEnPayload += 1
+      if (grafUrlCache.has(cacheKey)) continue
       // Secuencial: ExcelJS muta el workbook al registrar cada imagen.
       // eslint-disable-next-line no-await-in-loop
-      grafUrlCache.set(url, await prepararLogoWorkbook(wb, url))
+      const prepared = await prepararLogoWorkbook(wb, url, {
+        ...imgOpts,
+        blobPath: g?.blob_path || null,
+      })
+      grafUrlCache.set(cacheKey, prepared)
+      if (prepared) graficosEmbebidos += 1
     }
   }
 
   for (let idx = 0; idx < items.length; idx += 1) {
     const itemInfo = items[idx]
     const graficosPrep = (itemInfo.graficos || [])
-      .map((g) => ({
-        caption: g.caption,
-        orden: g.orden,
-        tipos_entidad: Array.isArray(g.tipos_entidad) ? g.tipos_entidad : [],
-        image: grafUrlCache.get((g?.url || '').trim()) || null,
-      }))
+      .map((g) => {
+        const url = (g?.url || '').trim()
+        const cacheKey = url || String(g?.blob_path || '')
+        return {
+          caption: g.caption,
+          orden: g.orden,
+          tipos_entidad: Array.isArray(g.tipos_entidad) ? g.tipos_entidad : [],
+          image: grafUrlCache.get(cacheKey) || null,
+        }
+      })
       .filter((g) => g.image)
     const ref = crearHojaItem(
       wb,
@@ -1657,4 +1743,5 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+  return { graficosEnPayload, graficosEmbebidos }
 }
