@@ -178,6 +178,7 @@ def _enrich_ppto_rows(supabase, contrato_id: int, ppto_rows: List[dict]) -> List
                 "pk_id": r.get("pk_id") or "",
                 "abs_inicio": r.get("abs_inicio"),
                 "abs_final": r.get("abs_final"),
+                "tipo_entidad": (r.get("tipo_entidad") or "").strip(),
                 "infraestructura": pk_infra.get(pk, ""),
             }
         )
@@ -191,7 +192,7 @@ def _fetch_regs_info_by_ids(
         return {}
     ppto_rows = (
         supabase.table("presupuesto")
-        .select("id, capitulo, item, tramo, id_pol, abs_inicio, abs_final, pk_id")
+        .select("id, capitulo, item, tramo, id_pol, abs_inicio, abs_final, pk_id, tipo_entidad")
         .eq("contrato_id", contrato_id)
         .in_("id", pids)
         .execute()
@@ -596,21 +597,33 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
     out: Dict[str, List[Dict[str, Any]]] = {}
     for gid, regs in regs_by_grupo.items():
         caption = build_caption_pie_foto(regs)
-        items_keys = {
-            f"{(r.get('capitulo') or '').strip()}\x1e{(r.get('item') or '').strip()}"
-            for r in regs
-            if (r.get("capitulo") or "").strip() and (r.get("item") or "").strip()
-        }
+        regs_by_item: Dict[str, List[Dict[str, Any]]] = {}
+        for r in regs:
+            cap = (r.get("capitulo") or "").strip()
+            it = (r.get("item") or "").strip()
+            if not cap or not it:
+                continue
+            regs_by_item.setdefault(f"{cap}\x1e{it}", []).append(r)
+
         for im in imgs_by_grupo.get(gid, []):
-            entry = {
+            base = {
                 "url": im["url"],
                 "caption": caption,
                 "grupo_id": gid,
                 "orden": im.get("orden") or 0,
                 "descripcion": im.get("descripcion"),
             }
-            for key in items_keys:
-                out.setdefault(key, []).append(entry)
+            for key, item_regs in regs_by_item.items():
+                # Tipos de entidad del grupo presentes en ESTE ítem (para ubicar
+                # el gráfico tras cada subtabla Área/Longitud/Unidad correspondiente).
+                tipos: List[str] = []
+                seen_te: Set[str] = set()
+                for r in item_regs:
+                    te = (r.get("tipo_entidad") or "").strip()
+                    if te and te not in seen_te:
+                        seen_te.add(te)
+                        tipos.append(te)
+                out.setdefault(key, []).append({**base, "tipos_entidad": tipos})
 
     for key in out:
         out[key].sort(key=lambda x: (int(x.get("orden") or 0), str(x.get("url") or "")))

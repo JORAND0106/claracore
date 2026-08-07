@@ -36,6 +36,8 @@ export const RESUMEN_HEADER_ENTIDAD_START = 6
 export const RESUMEN_HEADER_ENTIDAD_END = 7
 /** Máximo de ancho (chars Excel) para la columna B en Resumen. */
 export const RESUMEN_COL_B_MAX_CHARS = 15
+/** Ancho fijo de la columna D (Unidad) en la pestaña Resumen. */
+export const RESUMEN_COL_D_CHARS = 15
 
 /**
  * Encabezado fijo memorias de ítem (13 cols A–M tras eliminar ex-columna M):
