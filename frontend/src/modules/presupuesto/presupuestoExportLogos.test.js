@@ -172,16 +172,39 @@ describe('posicionParLogosFlotante', () => {
 })
 
 describe('posicionLogoEntidadFlotante', () => {
-  it('altura 1.8 cm y se ancla al bloque derecho con EMUs nativos', () => {
+  it('altura 1.8 cm y alinea el borde derecho al extremo del área usada', () => {
+    const colPx = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
+    const colCount = 7
+    const colWidthsPx = Array.from({ length: colCount }, () => colPx)
     const pos = posicionLogoEntidadFlotante({
       logo: { imageId: 2, natW: 120, natH: 60 },
-      colStart: 13,
-      slotCols: 2,
-      colChars: LOGO_LEFT_COL_CHARS,
+      colCount,
+      colWidthsPx,
+      padRightPx: LOGO_PAIR_PAD_LEFT_PX,
     })
     assert.equal(pos.ext.height, LOGO_HEIGHT_PX)
     assert.equal(pos.ext.width, Math.round(68 * 2))
-    assert.equal(pos.tl.nativeCol, 12)
-    assert.ok(pos.tl.nativeColOff >= 0)
+    const totalPx = colPx * colCount
+    const expectedStart = totalPx - pos.ext.width - LOGO_PAIR_PAD_LEFT_PX
+    assert.deepEqual(
+      { nativeCol: pos.tl.nativeCol, nativeColOff: pos.tl.nativeColOff },
+      pxOffsetToNativeCol(expectedStart, colWidthsPx),
+    )
+  })
+
+  it('con anchos reales distintos sigue pegado al borde derecho', () => {
+    const widths = [100, 80, 200, 60, 90, 70, 150]
+    const pos = posicionLogoEntidadFlotante({
+      logo: { imageId: 2, natW: 100, natH: 100 },
+      colCount: 7,
+      colWidthsPx: widths,
+      padRightPx: 6,
+    })
+    const total = widths.reduce((a, b) => a + b, 0)
+    const start = total - 68 - 6
+    assert.deepEqual(
+      { nativeCol: pos.tl.nativeCol, nativeColOff: pos.tl.nativeColOff },
+      pxOffsetToNativeCol(start, widths),
+    )
   })
 })

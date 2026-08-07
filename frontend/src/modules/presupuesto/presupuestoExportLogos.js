@@ -183,27 +183,53 @@ export function posicionParLogosFlotante({
 }
 
 /**
- * Posición del logo de entidad a la derecha (altura 1.8 cm, ancho proporcional).
- * @param {{ logo?: object|null, colStart: number, slotCols?: number, colChars?: number, rowHeightPt?: number }} opts
+ * Posición del logo de entidad al extremo derecho del área usada.
+ * Preferir `colWidthsPx` + `colCount` (anchos reales de la hoja) para alinear al borde.
+ *
+ * @param {{
+ *   logo?: object|null,
+ *   colCount?: number,
+ *   colWidthsPx?: number[],
+ *   colStart?: number,
+ *   slotCols?: number,
+ *   colChars?: number,
+ *   rowHeightPt?: number,
+ *   padRightPx?: number,
+ * }} opts
  */
 export function posicionLogoEntidadFlotante({
   logo = null,
-  colStart,
+  colCount = null,
+  colWidthsPx = null,
+  colStart = null,
   slotCols = 2,
   colChars = 12,
   rowHeightPt = 54,
+  padRightPx = LOGO_PAIR_PAD_LEFT_PX,
 } = {}) {
   if (logoImageId(logo) == null) return null
   const { natW, natH } = logoNatSize(logo)
   const size = sizeLogoFixedHeight(natW, natH)
-  const colPx = excelColWidthToPx(colChars)
-  const slots = Math.max(1, slotCols)
-  const slotWidthPx = slots * colPx
-  const padX = Math.max(0, (slotWidthPx - size.width) / 2)
-  const absolutePx = (Math.max(1, colStart) - 1) * colPx + padX
-  const colWidthsPx = Array.from({ length: Math.max(1, colStart) + slots }, () => colPx)
+  const padR = Math.max(0, Number(padRightPx) || 0)
+
+  let widths
+  let usedCols
+  if (Array.isArray(colWidthsPx) && colWidthsPx.length && colCount != null) {
+    usedCols = Math.max(1, Number(colCount) || colWidthsPx.length)
+    widths = colWidthsPx.slice(0, usedCols)
+    while (widths.length < usedCols) widths.push(excelColWidthToPx(colChars))
+  } else {
+    const colPx = excelColWidthToPx(colChars)
+    const slots = Math.max(1, slotCols)
+    const start0 = Math.max(0, (Number(colStart) || 1) - 1)
+    usedCols = start0 + slots
+    widths = Array.from({ length: usedCols }, () => colPx)
+  }
+
+  const totalPx = widths.reduce((a, b) => a + b, 0)
+  const absolutePx = Math.max(0, totalPx - size.width - padR)
   return {
-    tl: makeFloatingTl(absolutePx, colWidthsPx, rowHeightPt, size.height),
+    tl: makeFloatingTl(absolutePx, widths, rowHeightPt, size.height),
     ext: { width: size.width, height: size.height },
   }
 }
@@ -252,10 +278,14 @@ export function planLayoutLogosEncabezado(logos, cols, { leftSpanOverride = null
   const hasE = logoImageId(logos?.entidad) != null
   const leftSlots = (hasC ? 1 : 0) + (hasI ? 1 : 0)
   // Bloque único a la izquierda (ambos logos flotan dentro); no 2 cols por logo.
-  const leftSpan = leftSlots > 0
+  let leftSpan = leftSlots > 0
     ? Math.max(2, leftSpanOverride != null ? leftSpanOverride : (leftSlots >= 2 ? 4 : 2))
     : 0
-  const rightSpan = hasE ? Math.min(2, Math.max(1, n - leftSpan - 2)) : 0
+  // Reservar al menos 1 col de título y 1 de entidad si aplica (no empujar entidad fuera).
+  const minRight = hasE ? 1 : 0
+  const minTitle = 1
+  leftSpan = Math.min(leftSpan, Math.max(0, n - minTitle - minRight))
+  const rightSpan = hasE ? Math.min(2, Math.max(1, n - leftSpan - minTitle)) : 0
   const titleStart = leftSpan + 1
   const titleEnd = Math.max(titleStart, n - rightSpan)
   const entidadStart = hasE ? titleEnd + 1 : null
