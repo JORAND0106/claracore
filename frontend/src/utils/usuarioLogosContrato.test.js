@@ -16,23 +16,26 @@ describe('logosDesdeContratosActivo', () => {
     assert.deepEqual(logosDesdeContratosActivo(prev, list), {
       logo_contratista: 'data:new-c',
       logo_interventoria: 'data:new-i',
+      logo_entidad: null,
     })
   })
 
   it('si no hay contrato activo usa el primero de la lista', () => {
     const prev = { logo_contratista: 'old', logo_interventoria: 'old' }
-    const list = [{ id: 1, logo_contratista: 'c1', logo_interventoria: 'i1' }]
+    const list = [{ id: 1, logo_contratista: 'c1', logo_interventoria: 'i1', logo_entidad: 'e1' }]
     assert.deepEqual(logosDesdeContratosActivo(prev, list), {
       logo_contratista: 'c1',
       logo_interventoria: 'i1',
+      logo_entidad: 'e1',
     })
   })
 
   it('si la lista está vacía conserva los logos previos', () => {
-    const prev = { contrato_id: 1, logo_contratista: 'c', logo_interventoria: 'i' }
+    const prev = { contrato_id: 1, logo_contratista: 'c', logo_interventoria: 'i', logo_entidad: 'e' }
     assert.deepEqual(logosDesdeContratosActivo(prev, []), {
       logo_contratista: 'c',
       logo_interventoria: 'i',
+      logo_entidad: 'e',
     })
   })
 
@@ -41,11 +44,13 @@ describe('logosDesdeContratosActivo', () => {
       contrato_id: 2,
       logo_contratista: 'old-c',
       logo_interventoria: 'old-i',
+      logo_entidad: 'old-e',
     }
-    const list = [{ id: 2, logo_contratista: null, logo_interventoria: null }]
+    const list = [{ id: 2, logo_contratista: null, logo_interventoria: null, logo_entidad: null }]
     assert.deepEqual(logosDesdeContratosActivo(prev, list), {
       logo_contratista: null,
       logo_interventoria: null,
+      logo_entidad: null,
     })
   })
 })

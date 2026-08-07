@@ -1,5 +1,8 @@
 import ExcelJS from 'exceljs'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
+import { planLayoutLogosEncabezado, resolverMetaLogosPresupuesto } from './presupuestoExportLogos.js'
+
+export { resolverMetaLogosPresupuesto }
 
 /** Tema activo del export (paleta del contrato). */
 let CC = buildCompareExcelColors()
@@ -110,19 +113,31 @@ async function cargarLogoClaraCore(wb) {
 
 async function prepararLogoWorkbook(wb, logoUrl) {
   if (!logoUrl || typeof logoUrl !== 'string') return null
+  const raw = logoUrl.trim()
+  if (!raw) return null
   try {
-    if (logoUrl.startsWith('data:image')) {
-      const m = logoUrl.match(/^data:image\/(\w+);base64,(.+)$/i)
-      if (!m) return null
-      let ext = m[1].toLowerCase()
-      if (ext === 'jpg') ext = 'jpeg'
-      if (!['png', 'jpeg', 'gif'].includes(ext)) ext = 'png'
-      const binary = atob(m[2])
+    if (raw.startsWith('data:image')) {
+      const comma = raw.indexOf(',')
+      if (comma < 0) return null
+      const header = raw.slice(0, comma).toLowerCase()
+      let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
+      if (!b64 || !header.includes('base64')) return null
+      let ext = 'png'
+      const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
+      if (m) {
+        ext = m[1].toLowerCase()
+        if (ext === 'jpg') ext = 'jpeg'
+        if (ext === 'svg+xml') return null
+        if (!['png', 'jpeg', 'gif', 'webp'].includes(ext)) ext = 'png'
+        // ExcelJS no soporta webp en todos los entornos → forzar png si hace falta al fallar
+        if (ext === 'webp') ext = 'png'
+      }
+      const binary = atob(b64)
       const buffer = new Uint8Array(binary.length)
       for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
-      return wb.addImage({ buffer, extension: ext })
+      return wb.addImage({ buffer, extension: ext === 'png' || ext === 'jpeg' || ext === 'gif' ? ext : 'png' })
     }
-    const res = await fetch(logoUrl)
+    const res = await fetch(raw)
     if (!res.ok) return null
     const blob = await res.blob()
     const buffer = await blob.arrayBuffer()
@@ -148,10 +163,6 @@ function insertarLogoEnCelda(ws, logoImageId, { col, row = 0.12, width, height }
     tl: { col, row },
     ext: { width, height },
   })
-}
-
-function insertarLogoEncabezado(ws, logoImageId) {
-  insertarLogoEnCelda(ws, logoImageId, { col: 0.1, width: LOGO_PAR_W, height: LOGO_PAR_H })
 }
 
 function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
@@ -212,18 +223,13 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
-  const logoContratistaId = logos?.contratista ?? null
-  const logoInterventoriaId = logos?.interventoria ?? null
-  const logoEntidadId = logos?.entidad ?? null
-  const legacySoloContratista = logoImageId != null && logos == null
-  const tieneParIzq = logoContratistaId != null || logoInterventoriaId != null
-  const tieneEntidad = logoEntidadId != null
-  const tieneLogoIzq = tieneParIzq || legacySoloContratista
-  const tieneLogo = tieneLogoIzq || tieneEntidad
-  const leftSpan = tieneLogoIzq ? 2 : 0
-  const rightSpan = tieneEntidad ? Math.min(2, Math.max(1, cols - leftSpan - 3)) : 0
-  const titleStart = leftSpan + 1
-  const titleEnd = Math.max(titleStart, cols - rightSpan)
+  // Compat: si solo llega logoImageId (legacy), tratarlo como contratista.
+  const logosEff =
+    logos != null
+      ? logos
+      : (logoImageId != null ? { contratista: logoImageId, interventoria: null, entidad: null } : null)
+  const layout = planLayoutLogosEncabezado(logosEff, cols)
+  const { titleStart, titleEnd, entidadStart, leftLogos, hasEntidad, entidadImageId, tieneLogo } = layout
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
@@ -233,30 +239,30 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
 
-  if (tieneParIzq) {
-    ws.mergeCells(1, 1, 1, leftSpan)
-    // Contratista e interventoría: mismo tamaño (LOGO_PAR_*), lado a lado.
-    if (logoContratistaId != null) {
-      insertarLogoEnCelda(ws, logoContratistaId, { col: 0.08, width: LOGO_PAR_W, height: LOGO_PAR_H })
-    }
-    if (logoInterventoriaId != null) {
-      insertarLogoEnCelda(ws, logoInterventoriaId, { col: 1.05, width: LOGO_PAR_W, height: LOGO_PAR_H })
-    }
-  } else if (legacySoloContratista) {
-    ws.mergeCells(1, 1, 1, leftSpan)
-    insertarLogoEncabezado(ws, logoImageId)
+  // Cada logo izquierdo en su propio merge de 2 columnas (mismo tamaño C/I).
+  for (const slot of leftLogos) {
+    const c0 = slot.colStart
+    ws.mergeCells(1, c0, 1, c0 + 1)
+    // Ancho mínimo para que la caja 96×40 quepa sin tapar al vecino.
+    ws.getColumn(c0).width = Math.max(ws.getColumn(c0).width || 0, 14)
+    ws.getColumn(c0 + 1).width = Math.max(ws.getColumn(c0 + 1).width || 0, 14)
+    insertarLogoEnCelda(ws, slot.imageId, {
+      col: c0 - 1 + 0.08,
+      width: LOGO_PAR_W,
+      height: LOGO_PAR_H,
+    })
   }
 
-  if (tieneEntidad) {
-    const entStart = titleEnd + 1
-    if (entStart <= cols) {
-      ws.mergeCells(1, entStart, 1, cols)
-      insertarLogoEnCelda(ws, logoEntidadId, {
-        col: entStart - 1 + 0.15,
-        width: LOGO_ENTIDAD_W,
-        height: LOGO_ENTIDAD_H,
-      })
+  if (hasEntidad && entidadStart != null && entidadStart <= cols) {
+    ws.mergeCells(1, entidadStart, 1, cols)
+    for (let c = entidadStart; c <= cols; c += 1) {
+      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
     }
+    insertarLogoEnCelda(ws, entidadImageId, {
+      col: entidadStart - 1 + 0.15,
+      width: LOGO_ENTIDAD_W,
+      height: LOGO_ENTIDAD_H,
+    })
   }
 
   if (tieneLogo) {
@@ -434,10 +440,16 @@ function ajustarAnchos(ws, desdeFila, colCount) {
   }
 }
 
-/** Memorias de ítem: A–M = 11, N = 45. */
-function ajustarAnchosMemoriaItem(ws, colCount = 14) {
+/** Memorias de ítem: A–M = 11, N = 45. Preserva anchos mínimos de logos. */
+function ajustarAnchosMemoriaItem(ws, colCount = 14, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
   for (let c = 1; c <= colCount; c += 1) {
     ws.getColumn(c).width = c < colCount ? 11 : 45
+  }
+  for (let c = 1; c <= logoLeftSpan; c += 1) {
+    ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 14)
+  }
+  for (let c = colCount - logoRightSpan + 1; c <= colCount; c += 1) {
+    if (c >= 1) ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
   }
 }
 
@@ -453,12 +465,26 @@ function aplicarWrapTextRango(ws, fromRow, toRow, colCount) {
   }
 }
 
-/** Resumen: A=30, B=10, C=50; resto auto-ajustado. */
-function ajustarAnchosResumen(ws, desdeFila, colCount) {
+/** Resumen: anchos base; con logos C+I reserva 4 cols izq. y entidad a la derecha. */
+function ajustarAnchosResumen(ws, desdeFila, colCount, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
   ajustarAnchos(ws, desdeFila, colCount)
-  ws.getColumn(1).width = 30
-  if (colCount >= 2) ws.getColumn(2).width = 10
-  if (colCount >= 3) ws.getColumn(3).width = 50
+  if (logoLeftSpan >= 4) {
+    for (let c = 1; c <= 4; c += 1) {
+      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 14)
+    }
+    if (colCount >= 5) ws.getColumn(5).width = Math.max(ws.getColumn(5).width || 0, 28)
+  } else if (logoLeftSpan >= 2) {
+    ws.getColumn(1).width = Math.max(ws.getColumn(1).width || 0, 16)
+    if (colCount >= 2) ws.getColumn(2).width = Math.max(ws.getColumn(2).width || 0, 14)
+    if (colCount >= 3) ws.getColumn(3).width = Math.max(ws.getColumn(3).width || 0, 40)
+  } else {
+    ws.getColumn(1).width = 30
+    if (colCount >= 2) ws.getColumn(2).width = 10
+    if (colCount >= 3) ws.getColumn(3).width = 50
+  }
+  for (let c = colCount - logoRightSpan + 1; c <= colCount; c += 1) {
+    if (c >= 1) ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
+  }
 }
 
 function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
@@ -709,6 +735,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     logoImageId,
     { soloCantidad: true, totalsTier: 'titulo_2', logos },
   )
+  const layoutItem = planLayoutLogosEncabezado(logos, TOTAL_COLS_DET)
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
   ws.addRow(DET_HEADERS)
@@ -773,7 +800,10 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const firmRowStart = (cantTotalRow || (regs.length > 0 ? lastDetRow : tableRow)) + 2
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, colectarFirmantes(regs))
 
-  ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET)
+  ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
+    logoLeftSpan: layoutItem.leftSpan,
+    logoRightSpan: layoutItem.rightSpan,
+  })
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
@@ -815,6 +845,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     logoImageId,
     { totalsTier: 'titulo_1', logos },
   )
+  const layoutResumen = planLayoutLogosEncabezado(logos, totalColsResumen)
 
   wsRes.addRow(resumenHeaders)
   estiloFilaHeader(wsRes.getRow(tableHeaderRow), totalColsResumen)
@@ -874,7 +905,10 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
-  ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen)
+  ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen, {
+    logoLeftSpan: layoutResumen.leftSpan,
+    logoRightSpan: layoutResumen.rightSpan,
+  })
   return wsRes
 }
 
@@ -954,11 +988,15 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore · Presupuesto'
 
-  const logoImageId = await prepararLogoWorkbook(wb, meta.logo_contratista)
+  // Secuencial: ExcelJS muta el workbook al registrar cada imagen.
+  const logoContratistaId = await prepararLogoWorkbook(wb, meta.logo_contratista)
+  const logoInterventoriaId = await prepararLogoWorkbook(wb, meta.logo_interventoria)
+  const logoEntidadId = await prepararLogoWorkbook(wb, meta.logo_entidad)
+  const logoImageId = logoContratistaId
   const logos = {
-    contratista: logoImageId,
-    interventoria: await prepararLogoWorkbook(wb, meta.logo_interventoria),
-    entidad: await prepararLogoWorkbook(wb, meta.logo_entidad),
+    contratista: logoContratistaId,
+    interventoria: logoInterventoriaId,
+    entidad: logoEntidadId,
   }
   const claraLogoImageId = await cargarLogoClaraCore(wb)
   const contratoLabel = meta.numero || meta.contrato || String(contratoId ?? '')

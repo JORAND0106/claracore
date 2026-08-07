@@ -22807,6 +22807,7 @@ export default function App() {
       contrato_numero: contrato.numero,
       logo_contratista: contrato.logo_contratista ?? null,
       logo_interventoria: contrato.logo_interventoria ?? null,
+      logo_entidad: contrato.logo_entidad ?? null,
       contrato_fase: contrato.fase ?? 'PRESUPUESTO',
     }
     try {
