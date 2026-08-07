@@ -318,6 +318,52 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
   }
 }
 
+/**
+ * Filas 2–4 del encabezado Resumen (7 cols):
+ * 2: A2 Contrato | B2:G2 objeto (altura 22)
+ * 3: A3 Contratista | B3:C3 nombre | D3 NIT | E3:F3 nit contratista
+ * 4: A4 Interventoría | B4:C4 nombre | D4 NIT | E4:F4 (sin nit_interventoria en BD → "—")
+ */
+function escribirFilasMetaResumen(ws, meta, cols = 7) {
+  const n = Math.max(cols, 7)
+  const objetoTxt = meta?.objeto ? String(meta.objeto).slice(0, 320) : '—'
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(2, 1).value = `Contrato: ${meta?.numero ?? '—'}`
+  ws.getCell(2, 2).value = objetoTxt
+  ws.mergeCells(2, 2, 2, 7)
+  ws.getRow(2).height = 22
+  estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, 2), { rowNum: 2 })
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(3, 1).value = 'Contratista'
+  ws.getCell(3, 2).value = safeStr(meta?.contratista).trim() || '—'
+  ws.mergeCells(3, 2, 3, 3)
+  ws.getCell(3, 4).value = 'NIT'
+  ws.getCell(3, 5).value = safeStr(meta?.nit).trim() || '—'
+  ws.mergeCells(3, 5, 3, 6)
+  ws.getRow(3).height = 22
+  estiloMetaCell(ws.getCell(3, 1), { bold: true, rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 2), { rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 4), { bold: true, rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 5), { rowNum: 3 })
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(4, 1).value = 'Interventoría'
+  ws.getCell(4, 2).value = safeStr(meta?.interventoria).trim() || '—'
+  ws.mergeCells(4, 2, 4, 3)
+  ws.getCell(4, 4).value = 'NIT'
+  // No hay campo nit_interventoria en contratos; numero_interventoria no es un NIT.
+  ws.getCell(4, 5).value = '—'
+  ws.mergeCells(4, 5, 4, 6)
+  ws.getRow(4).height = 22
+  estiloMetaCell(ws.getCell(4, 1), { bold: true, rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 2), { rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 4), { bold: true, rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 5), { rowNum: 4 })
+}
+
 function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoLegacy = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null, headerLayout = 'auto' } = {}) {
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
@@ -434,33 +480,38 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     }
   }
 
-  ws.addRow(new Array(cols).fill(''))
-  ws.getCell(2, 1).value = `Contrato: ${meta.numero ?? '—'}`
-  ws.getCell(2, splitContrato + 1).value = `Contratista: ${meta.contratista ?? '—'}`
-  ws.getCell(2, splitContratista + 1).value = `Generado: ${fechaTxt} ${horaTxt}`
-  ws.mergeCells(2, 1, 2, splitContrato)
-  ws.mergeCells(2, splitContrato + 1, 2, splitContratista)
-  ws.mergeCells(2, splitContratista + 1, 2, cols)
-  ws.getRow(2).height = 22
-  estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
-  estiloMetaCell(ws.getCell(2, splitContrato + 1), { bold: true, rowNum: 2 })
-  estiloMetaCell(ws.getCell(2, splitContratista + 1), { bold: true, align: 'right', rowNum: 2 })
+  if (isResumen7) {
+    escribirFilasMetaResumen(ws, meta, cols)
+  } else {
+    // Pestañas de ítem: layout meta previo (contrato / interventoría / objeto).
+    ws.addRow(new Array(cols).fill(''))
+    ws.getCell(2, 1).value = `Contrato: ${meta.numero ?? '—'}`
+    ws.getCell(2, splitContrato + 1).value = `Contratista: ${meta.contratista ?? '—'}`
+    ws.getCell(2, splitContratista + 1).value = `Generado: ${fechaTxt} ${horaTxt}`
+    ws.mergeCells(2, 1, 2, splitContrato)
+    ws.mergeCells(2, splitContrato + 1, 2, splitContratista)
+    ws.mergeCells(2, splitContratista + 1, 2, cols)
+    ws.getRow(2).height = 22
+    estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
+    estiloMetaCell(ws.getCell(2, splitContrato + 1), { bold: true, rowNum: 2 })
+    estiloMetaCell(ws.getCell(2, splitContratista + 1), { bold: true, align: 'right', rowNum: 2 })
 
-  ws.addRow(new Array(cols).fill(''))
-  const interventoriaTxt = safeStr(meta.interventoria).trim() || '—'
-  ws.getCell(3, 1).value = `Interventoría: ${interventoriaTxt}`
-  ws.getCell(3, splitContratista + 1).value = `Registros: ${totalRegistros ?? 0}`
-  ws.mergeCells(3, 1, 3, splitContratista)
-  ws.mergeCells(3, splitContratista + 1, 3, cols)
-  ws.getRow(3).height = Math.min(22 + Math.floor(interventoriaTxt.length / 72) * 10, 44)
-  estiloMetaCell(ws.getCell(3, 1), { rowNum: 3 })
-  estiloMetaCell(ws.getCell(3, splitContratista + 1), { align: 'right', rowNum: 3 })
+    ws.addRow(new Array(cols).fill(''))
+    const interventoriaTxt = safeStr(meta.interventoria).trim() || '—'
+    ws.getCell(3, 1).value = `Interventoría: ${interventoriaTxt}`
+    ws.getCell(3, splitContratista + 1).value = `Registros: ${totalRegistros ?? 0}`
+    ws.mergeCells(3, 1, 3, splitContratista)
+    ws.mergeCells(3, splitContratista + 1, 3, cols)
+    ws.getRow(3).height = Math.min(22 + Math.floor(interventoriaTxt.length / 72) * 10, 44)
+    estiloMetaCell(ws.getCell(3, 1), { rowNum: 3 })
+    estiloMetaCell(ws.getCell(3, splitContratista + 1), { align: 'right', rowNum: 3 })
 
-  const objeto = meta.objeto ? String(meta.objeto).slice(0, 320) : '—'
-  ws.addRow([`Objeto: ${objeto}`])
-  ws.mergeCells(4, 1, 4, cols)
-  ws.getRow(4).height = Math.min(22 + Math.floor(objeto.length / 80) * 10, 56)
-  estiloMetaCell(ws.getCell(4, 1), { rowNum: 4 })
+    const objeto = meta.objeto ? String(meta.objeto).slice(0, 320) : '—'
+    ws.addRow([`Objeto: ${objeto}`])
+    ws.mergeCells(4, 1, 4, cols)
+    ws.getRow(4).height = Math.min(22 + Math.floor(objeto.length / 80) * 10, 56)
+    estiloMetaCell(ws.getCell(4, 1), { rowNum: 4 })
+  }
 
   ws.addRow(['TOTALES DEL INFORME', '', '', soloCantidad ? 'Cant. total ítem:' : 'Cantidad total:', '', soloCantidad ? '' : 'Costo directo total:', ''])
   ws.mergeCells(5, 1, 5, 3)
