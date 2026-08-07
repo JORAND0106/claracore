@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
 import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
+import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import PptoVersionCompareModal from './PptoVersionCompareModal'
 import {
   esDesarrolladorPresupuesto,
@@ -298,18 +299,12 @@ export default function PptoVersionador({
       const slug = String(version.etiqueta || version.numero_version || 'version').replace(/[^\w.-]+/g, '_')
       await downloadPresupuestoInformeExcel(
         payload,
-        {
-          ...(metaContrato || {}),
-          logo_contratista: metaContrato?.logo_contratista || usuario?.logo_contratista || null,
-          logo_interventoria:
-            metaContrato?.logo_interventoria || usuario?.logo_interventoria || null,
-          logo_entidad: metaContrato?.logo_entidad || null,
-        },
+        resolverMetaLogosPresupuesto(metaContrato, usuario, contratoId),
         contratoId,
         `presupuesto_version_${slug}_${contratoId}.xlsx`,
       )
     },
-    [API, contratoId, authToken, usuario?.logo_contratista, usuario?.logo_interventoria],
+    [API, contratoId, authToken, usuario],
   )
 
   const iniciarEliminar = useCallback(

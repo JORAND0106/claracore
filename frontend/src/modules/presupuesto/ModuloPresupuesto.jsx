@@ -45,6 +45,7 @@ import {
   pptoMaterializarBiblioteca,
 } from './pptoVersionActiva'
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
+import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
@@ -1658,14 +1659,26 @@ useEffect(() => {
         throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
       }
       const payload = await res.json()
-      const metaExport = {
-        ...(exportMetaContrato || {}),
-        logo_contratista:
-          exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
-        logo_interventoria:
-          exportMetaContrato?.logo_interventoria || usuario?.logo_interventoria || null,
-        logo_entidad: exportMetaContrato?.logo_entidad || null,
+      let metaFuente = exportMetaContrato
+      const logosIncompletos =
+        !metaFuente?.logo_interventoria || !metaFuente?.logo_entidad || !metaFuente?.logo_contratista
+      if (logosIncompletos) {
+        try {
+          const rc = await fetch(`${API}/contratos/${contratoId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (rc.ok) {
+            const fresh = await rc.json()
+            if (fresh && typeof fresh === 'object') {
+              metaFuente = fresh
+              setExportMetaContrato(fresh)
+            }
+          }
+        } catch {
+          /* usa meta previa / sesión */
+        }
       }
+      const metaExport = resolverMetaLogosPresupuesto(metaFuente, usuario, contratoId)
       if (esCrudo || payload?.formato === 'crudo') {
         if (!payload?.filas?.length) {
           throw new Error('No hay registros para exportar con los filtros actuales.')
@@ -1694,8 +1707,7 @@ useEffect(() => {
     token,
     drill,
     capExpandido,
-    usuario?.logo_contratista,
-    usuario?.logo_interventoria,
+    usuario,
   ])
 
   const detalleConItem = !!drill.find(d => d.campo === 'item' || d.campo === 'items')

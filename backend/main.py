@@ -29731,12 +29731,18 @@ def _xlsx_load_contrato_export_meta(contrato_id: int) -> Dict[str, str]:
         "numero": "",
         "objeto": "",
         "contratista": "",
+        "interventoria": "",
         "logo_contratista": "",
+        "logo_interventoria": "",
+        "logo_entidad": "",
     }
     try:
         cr = (
             supabase.table("contratos")
-            .select("numero, objeto, contratista, logo_contratista")
+            .select(
+                "numero, objeto, contratista, interventoria, "
+                "logo_contratista, logo_interventoria, logo_entidad"
+            )
             .eq("id", contrato_id)
             .limit(1)
             .execute()
@@ -29746,7 +29752,10 @@ def _xlsx_load_contrato_export_meta(contrato_id: int) -> Dict[str, str]:
             meta["numero"] = (cr[0].get("numero") or "").strip()
             meta["objeto"] = (cr[0].get("objeto") or "").strip()
             meta["contratista"] = (cr[0].get("contratista") or "").strip()
+            meta["interventoria"] = (cr[0].get("interventoria") or "").strip()
             meta["logo_contratista"] = (cr[0].get("logo_contratista") or "").strip()
+            meta["logo_interventoria"] = (cr[0].get("logo_interventoria") or "").strip()
+            meta["logo_entidad"] = (cr[0].get("logo_entidad") or "").strip()
     except Exception:
         pass
     return meta
@@ -29795,6 +29804,8 @@ def _xlsx_apply_informe_header(
     contrato_objeto = contrato_meta.get("objeto") or ""
     contrato_contratista = contrato_meta.get("contratista") or ""
     logo_url = contrato_meta.get("logo_contratista") or ""
+    logo_int_url = contrato_meta.get("logo_interventoria") or ""
+    logo_ent_url = contrato_meta.get("logo_entidad") or ""
 
     ws.page_setup.orientation = "portrait"
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
@@ -29804,44 +29815,85 @@ def _xlsx_apply_informe_header(
     ws.print_options.horizontalCentered = True
     ws.sheet_view.showGridLines = False
 
+    # Par izquierdo: contratista + interventoría (mismo tamaño) si hay espacio;
+    # entidad a la derecha. Si no hay logos extra, se conserva el layout histórico.
+    has_int = bool((logo_int_url or "").strip())
+    has_ent = bool((logo_ent_url or "").strip())
+    pair_layout = has_int and label_merge_end >= 4
+
+    def _add_logo_at(col: int, span: int, data: Optional[bytes], fallback: str) -> None:
+        cell = ws.cell(row=1, column=col, value="")
+        cell.fill = fill_meta
+        cell.alignment = al_center
+        col_w = sum(
+            float(ws.column_dimensions[get_column_letter(c)].width or 12)
+            for c in range(col, col + max(span, 1))
+        )
+        if data:
+            try:
+                img = XLImage(io.BytesIO(data))
+                _xlsx_fit_image_to_cell(img, _ROW_H_LOGO, max(col_w * 0.9, 8))
+                ws.add_image(img, f"{get_column_letter(col)}1")
+                return
+            except Exception:
+                pass
+        cell.value = fallback
+        cell.font = Font(size=9, color=_CC_XLSX_DARK, italic=True)
+
+    if logo_bytes is None:
+        logo_bytes = _xlsx_fetch_image_bytes(logo_url)
+    logo_int_bytes = _xlsx_fetch_image_bytes(logo_int_url) if has_int else None
+    logo_ent_bytes = _xlsx_fetch_image_bytes(logo_ent_url) if has_ent else None
+
     logo_col_w = sum(
         float(ws.column_dimensions[get_column_letter(c)].width or 12)
         for c in range(1, label_merge_end + 1)
     )
 
-    if label_merge_end > 1:
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=label_merge_end)
-    ws.merge_cells(start_row=1, start_column=body_start, end_row=1, end_column=mid_end)
-
-    logo_cell = ws.cell(row=1, column=1, value="")
-    logo_cell.fill = fill_meta
-    logo_cell.alignment = al_center
-    if logo_bytes is None:
-        logo_bytes = _xlsx_fetch_image_bytes(logo_url)
-    if logo_bytes:
-        try:
-            img = XLImage(io.BytesIO(logo_bytes))
-            _xlsx_fit_image_to_cell(img, _ROW_H_LOGO, logo_col_w)
-            ws.add_image(img, "A1")
-        except Exception:
+    if pair_layout:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
+        ws.merge_cells(start_row=1, start_column=3, end_row=1, end_column=4)
+        title_start = 5
+        title_end = mid_end if not (has_ent and logo_ent_bytes) else max(title_start, ncols - 1)
+        if title_start <= title_end:
+            ws.merge_cells(start_row=1, start_column=title_start, end_row=1, end_column=title_end)
+        _add_logo_at(1, 2, logo_bytes, contrato_contratista or "Logo contratista")
+        _add_logo_at(3, 2, logo_int_bytes, "Logo interventoría")
+    else:
+        if label_merge_end > 1:
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=label_merge_end)
+        ws.merge_cells(start_row=1, start_column=body_start, end_row=1, end_column=mid_end)
+        title_start = body_start
+        logo_cell = ws.cell(row=1, column=1, value="")
+        logo_cell.fill = fill_meta
+        logo_cell.alignment = al_center
+        if logo_bytes:
+            try:
+                img = XLImage(io.BytesIO(logo_bytes))
+                _xlsx_fit_image_to_cell(img, _ROW_H_LOGO, logo_col_w)
+                ws.add_image(img, "A1")
+            except Exception:
+                logo_cell.value = contrato_contratista or "Logo contratista"
+                logo_cell.font = Font(size=9, color=_CC_XLSX_DARK, italic=True)
+        else:
             logo_cell.value = contrato_contratista or "Logo contratista"
             logo_cell.font = Font(size=9, color=_CC_XLSX_DARK, italic=True)
-    else:
-        logo_cell.value = contrato_contratista or "Logo contratista"
-        logo_cell.font = Font(size=9, color=_CC_XLSX_DARK, italic=True)
 
     for cc in range(1, ncols + 1):
         ws.cell(row=1, column=cc).fill = fill_meta
 
-    t1 = ws.cell(row=1, column=body_start, value=titulo)
+    t1 = ws.cell(row=1, column=title_start, value=titulo)
     t1.font = Font(bold=True, color=_CC_XLSX_DARK, size=14)
     t1.alignment = al_center
     t1.fill = fill_meta
 
-    v1 = ws.cell(row=1, column=ncols, value=f"Versión\n{version_lbl}")
-    v1.font = Font(bold=True, color=_CC_XLSX_DARK, size=10)
-    v1.alignment = al_center
-    v1.fill = fill_meta
+    if has_ent and logo_ent_bytes:
+        _add_logo_at(ncols, 1, logo_ent_bytes, "Logo entidad")
+    else:
+        v1 = ws.cell(row=1, column=ncols, value=f"Versión\n{version_lbl}")
+        v1.font = Font(bold=True, color=_CC_XLSX_DARK, size=10)
+        v1.alignment = al_center
+        v1.fill = fill_meta
 
     if label_merge_end > 1:
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=label_merge_end)
