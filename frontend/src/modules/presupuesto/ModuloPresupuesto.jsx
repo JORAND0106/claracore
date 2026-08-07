@@ -47,6 +47,7 @@ import {
 } from './pptoVersionActiva'
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
+import { idsRangoSeleccion } from './pptoSeleccionRango'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
@@ -289,6 +290,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [registros, setRegistros] = useState([])
   const [loading, setLoading] = useState(false)
   const [seleccionados, setSeleccionados] = useState(new Set())
+  /** Ancla para Shift+clic en checkboxes de la grilla (último marcado individualmente). */
+  const lastSelAnchorIdRef = useRef(null)
   const [filaZoom, setFilaZoom] = useState(null) // id de la fila con zoom activo
   const [editando, setEditando] = useState(null)
   const [editValues, setEditValues] = useState({})
@@ -4055,19 +4058,66 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
+  /** Estilo táctil del checkbox de fila (tabla y cards). */
+  const pptoCheckStyle = {
+    width: 22,
+    height: 22,
+    minWidth: 22,
+    minHeight: 22,
+    margin: 0,
+    accentColor: t.primary,
+    flexShrink: 0,
+  }
+
   function toggleSel(id) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
     setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    lastSelAnchorIdRef.current = id
   }
+
+  /**
+   * Clic en checkbox de fila: Shift+clic selecciona el rango desde el ancla
+   * (mismo patrón que el panel de ítems / gestores de archivos).
+   */
+  function onSelCheckboxClick(id, e) {
+    e.stopPropagation()
+    const row = registrosPagina.find((rr) => rr.id === id) || registros.find((rr) => rr.id === id)
+    if (esSellado(row)) {
+      e.preventDefault()
+      return
+    }
+    if (e.shiftKey && lastSelAnchorIdRef.current != null) {
+      e.preventDefault()
+      const ids = idsRangoSeleccion(registrosPagina, lastSelAnchorIdRef.current, id, esSellado)
+      if (ids.length) {
+        setSeleccionados((prev) => {
+          const n = new Set(prev)
+          ids.forEach((i) => n.add(i))
+          return n
+        })
+      }
+      lastSelAnchorIdRef.current = id
+    }
+  }
+
+  function onSelCheckboxChange(id, e) {
+    // Sin Shift: toggle individual y actualiza ancla.
+    // Con Shift, onClick ya aplicó el rango (preventDefault); no volver a togglear.
+    if (e?.shiftKey) return
+    toggleSel(id)
+  }
+
   function toggleTodos() {
     const idsPagina = registrosPagina.map(r => r.id)
     const idsNoSellados = registrosPagina.filter(r => !esSellado(r)).map(r => r.id)
     const todosNoSelladosSeleccionados = idsNoSellados.length > 0 && idsNoSellados.every(id => seleccionados.has(id))
     if (todosNoSelladosSeleccionados) {
       setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(i => n.delete(i)); return n })
+      lastSelAnchorIdRef.current = null
     } else {
       setSeleccionados(prev => { const n = new Set(prev); idsNoSellados.forEach(i => n.add(i)); return n })
+      if (idsNoSellados.length) lastSelAnchorIdRef.current = idsNoSellados[idsNoSellados.length - 1]
     }
   }
   useEffect(() => {
@@ -6689,10 +6739,17 @@ async function restaurar(id) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
+                      className="cc-ppto-row-check"
                       checked={seleccionados.has(r.id)}
                       disabled={esSellado(r)}
-                      onChange={() => toggleSel(r.id)}
-                      style={{ width: 18, height: 18, cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1, flexShrink: 0 }}
+                      title={esSellado(r) ? 'Registro sellado' : 'Shift+clic para seleccionar rango'}
+                      onClick={(e) => onSelCheckboxClick(r.id, e)}
+                      onChange={(e) => onSelCheckboxChange(r.id, e)}
+                      style={{
+                        ...pptoCheckStyle,
+                        cursor: esSellado(r) ? 'not-allowed' : 'pointer',
+                        opacity: esSellado(r) ? 0.45 : 1,
+                      }}
                     />
                     <span style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-body)', flex: 1, minWidth: 0 }}>
                       {r.id_pol || r.pk_id || `#${r.id}`}
@@ -6886,7 +6943,16 @@ async function restaurar(id) {
           <table className="cc-ppto-data-table" style={{ width:'max-content', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
+                <th className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={thStyle}>
+                  <input
+                    type="checkbox"
+                    className="cc-ppto-row-check"
+                    checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))}
+                    onChange={toggleTodos}
+                    title="Seleccionar / deseleccionar todos los visibles"
+                    style={{ ...pptoCheckStyle, cursor: 'pointer' }}
+                  />
+                </th>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={thStyle}>ID_POL</th>
                 <th className="cc-ppto-col-cap" style={{ ...thStyle, maxWidth: 95, width: 95 }}>Capítulo</th>
                 <th className="cc-ppto-col-comp" style={thStyle}>Competencia</th>
@@ -6924,8 +6990,20 @@ async function restaurar(id) {
                     onClick={() => { navegarRegistroEnPlano(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
                     <td className="cc-ppto-sticky-col cc-ppto-sticky-col--check cc-ppto-col-check" style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                        <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
-                          style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
+                        <input
+                          type="checkbox"
+                          className="cc-ppto-row-check"
+                          checked={seleccionados.has(r.id)}
+                          disabled={esSellado(r)}
+                          title={esSellado(r) ? 'Registro sellado' : 'Shift+clic para seleccionar rango'}
+                          onClick={(e) => onSelCheckboxClick(r.id, e)}
+                          onChange={(e) => onSelCheckboxChange(r.id, e)}
+                          style={{
+                            ...pptoCheckStyle,
+                            cursor: esSellado(r) ? 'not-allowed' : 'pointer',
+                            opacity: esSellado(r) ? 0.45 : 1,
+                          }}
+                        />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'var(--cc-caption)', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
                         <button onClick={() => abrirDetallePptoDesdeFila(r)}
                           title="Ver detalle"
