@@ -18,50 +18,19 @@ _log = logging.getLogger("claracore.presupuesto.graficos")
 router = APIRouter(tags=["presupuesto-graficos"])
 
 
-def _abs_rango(abs_ini: Any, abs_fin: Any) -> str:
-    a = (str(abs_ini).strip() if abs_ini is not None else "") or ""
-    b = (str(abs_fin).strip() if abs_fin is not None else "") or ""
-    if a and b:
-        return f"{a}-{b}"
-    return a or b
+def _norm_pie_foto(raw: Any) -> str:
+    return " ".join(str(raw or "").split()).strip()
 
 
-def build_caption_pie_foto(regs: List[Dict[str, Any]]) -> str:
-    """Pie de foto: Tramo, Infraestructura, Abs, Id_Pol (valores distintos, coma)."""
-    tramos: List[str] = []
-    infras: List[str] = []
-    abs_list: List[str] = []
-    pols: List[str] = []
-    seen_t, seen_i, seen_a, seen_p = set(), set(), set(), set()
-
-    for r in regs or []:
-        t = str(r.get("tramo") or "").strip()
-        if t and t not in seen_t:
-            seen_t.add(t)
-            tramos.append(t)
-        inf = str(r.get("infraestructura") or "").strip()
-        if inf and inf not in seen_i:
-            seen_i.add(inf)
-            infras.append(inf)
-        ar = _abs_rango(r.get("abs_inicio"), r.get("abs_final"))
-        if ar and ar not in seen_a:
-            seen_a.add(ar)
-            abs_list.append(ar)
-        pol = str(r.get("id_pol") or "").strip()
-        if pol and pol not in seen_p:
-            seen_p.add(pol)
-            pols.append(pol)
-
-    parts = []
-    if tramos:
-        parts.append(f"Tramo: {', '.join(tramos)}")
-    if infras:
-        parts.append(f"Infraestructura: {', '.join(infras)}")
-    if abs_list:
-        parts.append(f"Abs: {', '.join(abs_list)}")
-    if pols:
-        parts.append(f"Id_Pol: {', '.join(pols)}")
-    return " · ".join(parts) if parts else "—"
+def _require_pie_foto(raw: Any) -> str:
+    pie = _norm_pie_foto(raw)
+    if not pie:
+        raise HTTPException(status_code=422, detail="El pie de foto es obligatorio")
+    if len(pie) > 280:
+        raise HTTPException(
+            status_code=422, detail="El pie de foto no puede superar 280 caracteres"
+        )
+    return pie
 
 
 class ImagenGrupoIn(BaseModel):
@@ -76,10 +45,16 @@ class CrearGrupoGraficosBody(BaseModel):
     presupuesto_ids: List[int] = Field(default_factory=list)
     imagenes: List[ImagenGrupoIn] = Field(default_factory=list)
     titulo: Optional[str] = None
+    pie_foto: str = ""
 
 
 class AgregarRegsBody(BaseModel):
     presupuesto_ids: List[int] = Field(default_factory=list)
+
+
+class ActualizarGrupoGraficosBody(BaseModel):
+    pie_foto: str = ""
+    titulo: Optional[str] = None
 
 
 class ReemplazarImagenBody(BaseModel):
@@ -87,6 +62,13 @@ class ReemplazarImagenBody(BaseModel):
     blob_path: Optional[str] = None
     origen: Optional[str] = "upload"
     descripcion: Optional[str] = None
+    pie_foto: Optional[str] = None
+
+
+class RedaccionClaraPieBody(BaseModel):
+    texto: str = ""
+    instruccion: Optional[str] = None
+    historial: Optional[List[Dict[str, str]]] = None
 
 
 def _ext_desde_content_type(content_type: Optional[str]) -> str:
@@ -103,7 +85,7 @@ def _ext_desde_content_type(content_type: Optional[str]) -> str:
 def _assert_grupo_del_contrato(supabase, contrato_id: int, grupo_id: str) -> dict:
     rows = (
         supabase.table("presupuesto_grafico_grupos")
-        .select("id, contrato_id, titulo, created_at, created_by")
+        .select("id, contrato_id, titulo, pie_foto, created_at, created_by")
         .eq("id", grupo_id)
         .eq("contrato_id", contrato_id)
         .limit(1)
@@ -224,7 +206,7 @@ def _serialize_grupo_detalle(
     pids = [int(r["presupuesto_id"]) for r in regs_j]
     by_id = _fetch_regs_info_by_ids(supabase, contrato_id, pids)
     regs = [by_id[pid] for pid in pids if pid in by_id]
-    caption = build_caption_pie_foto(regs)
+    pie = _norm_pie_foto(grupo.get("pie_foto"))
     imagenes = sorted(imgs or [], key=lambda x: (int(x.get("orden") or 0), int(x.get("id") or 0)))
     thumb = imagenes[0]["url"] if imagenes else None
     return {
@@ -232,7 +214,8 @@ def _serialize_grupo_detalle(
         "titulo": grupo.get("titulo"),
         "created_at": grupo.get("created_at"),
         "created_by": grupo.get("created_by"),
-        "caption": caption,
+        "pie_foto": pie,
+        "caption": pie or "—",
         "registros_count": len(regs),
         "imagenes_count": len(imagenes),
         "thumb_url": thumb,
@@ -291,6 +274,7 @@ def register_deps(supabase, get_current_user, require_contract_access):
         imgs = body.imagenes or []
         if not imgs:
             raise HTTPException(status_code=422, detail="Cargue al menos una imagen")
+        pie_foto = _require_pie_foto(body.pie_foto)
 
         uid = current_user.get("id") if isinstance(current_user, dict) else None
         g_ins = (
@@ -299,6 +283,7 @@ def register_deps(supabase, get_current_user, require_contract_access):
                 {
                     "contrato_id": contrato_id,
                     "titulo": (body.titulo or "").strip() or None,
+                    "pie_foto": pie_foto,
                     "created_by": uid,
                 }
             )
@@ -340,11 +325,11 @@ def register_deps(supabase, get_current_user, require_contract_access):
         contrato_id: int,
         current_user=Depends(get_current_user),
     ):
-        """Listado de grupos del contrato (miniatura, conteos, ítems, caption)."""
+        """Listado de grupos del contrato (miniatura, conteos, ítems, pie de foto)."""
         require_contract_access(current_user, contrato_id)
         grupos = (
             supabase.table("presupuesto_grafico_grupos")
-            .select("id, contrato_id, titulo, created_at, created_by")
+            .select("id, contrato_id, titulo, pie_foto, created_at, created_by")
             .eq("contrato_id", contrato_id)
             .order("created_at", desc=True)
             .execute()
@@ -478,6 +463,8 @@ def register_deps(supabase, get_current_user, require_contract_access):
         url = (body.url or "").strip()
         if not url:
             raise HTTPException(status_code=422, detail="URL de imagen requerida")
+        # Pie obligatorio en el flujo de carga/reemplazo.
+        pie_foto = _require_pie_foto(body.pie_foto)
         existing = (
             supabase.table("presupuesto_grafico_imagenes")
             .select("id")
@@ -500,7 +487,66 @@ def register_deps(supabase, get_current_user, require_contract_access):
         supabase.table("presupuesto_grafico_imagenes").update(patch).eq(
             "id", imagen_id
         ).eq("grupo_id", grupo_id).execute()
-        return {"ok": True, "imagen_id": imagen_id, "url": url}
+        supabase.table("presupuesto_grafico_grupos").update({"pie_foto": pie_foto}).eq(
+            "id", grupo_id
+        ).eq("contrato_id", contrato_id).execute()
+        return {"ok": True, "imagen_id": imagen_id, "url": url, "pie_foto": pie_foto}
+
+    @router.patch("/presupuesto/{contrato_id}/graficos/grupos/{grupo_id}")
+    def actualizar_grupo_graficos(
+        contrato_id: int,
+        grupo_id: str,
+        body: ActualizarGrupoGraficosBody,
+        current_user=Depends(get_current_user),
+    ):
+        """Actualiza pie de foto (y título opcional) del grupo."""
+        require_contract_access(current_user, contrato_id)
+        _assert_grupo_del_contrato(supabase, contrato_id, grupo_id)
+        pie_foto = _require_pie_foto(body.pie_foto)
+        patch: Dict[str, Any] = {"pie_foto": pie_foto}
+        if body.titulo is not None:
+            patch["titulo"] = (body.titulo or "").strip() or None
+        supabase.table("presupuesto_grafico_grupos").update(patch).eq(
+            "id", grupo_id
+        ).eq("contrato_id", contrato_id).execute()
+        return {"ok": True, "grupo_id": grupo_id, "pie_foto": pie_foto}
+
+    @router.post("/presupuesto/{contrato_id}/graficos/redaccion-clara")
+    async def redaccion_clara_pie_foto(
+        contrato_id: int,
+        body: RedaccionClaraPieBody,
+        current_user=Depends(get_current_user),
+    ):
+        """Mejora la redacción del pie de foto con Clara (sin inventar datos)."""
+        require_contract_access(current_user, contrato_id)
+        texto = _norm_pie_foto(body.texto)
+        if not texto:
+            raise HTTPException(
+                status_code=422,
+                detail="Escriba un pie de foto antes de pedir a Clara",
+            )
+        uid = current_user.get("id") if isinstance(current_user, dict) else None
+        if not uid:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        try:
+            from seguimiento_service import redaccion_asistida_clara
+
+            return await redaccion_asistida_clara(
+                supabase,
+                str(uid),
+                texto,
+                body.instruccion or "",
+                body.historial,
+                modo="pie_foto",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.exception("redaccion-clara pie_foto: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Clara no está disponible en este momento.",
+            ) from exc
 
     @router.get("/presupuesto/{contrato_id}/graficos/buscar-registros")
     def buscar_registros_para_grupo(
@@ -544,11 +590,11 @@ def register_deps(supabase, get_current_user, require_contract_access):
 def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[str, Any]]]:
     """
     key = f"{capitulo}\\x1e{item}" → lista de { url, caption, grupo_id, orden }
-    Caption usa TODOS los registros del grupo (recalculado al exportar).
+    Caption = pie_foto manual del grupo (sin generación automática).
     """
     grupos = (
         supabase.table("presupuesto_grafico_grupos")
-        .select("id")
+        .select("id, pie_foto")
         .eq("contrato_id", contrato_id)
         .execute()
         .data
@@ -556,6 +602,7 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
     )
     if not grupos:
         return {}
+    pie_by_gid = {g["id"]: _norm_pie_foto(g.get("pie_foto")) for g in grupos}
     gids = [g["id"] for g in grupos]
 
     regs_j = (
@@ -596,7 +643,7 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
 
     out: Dict[str, List[Dict[str, Any]]] = {}
     for gid, regs in regs_by_grupo.items():
-        caption = build_caption_pie_foto(regs)
+        caption = pie_by_gid.get(gid) or "—"
         regs_by_item: Dict[str, List[Dict[str, Any]]] = {}
         for r in regs:
             cap = (r.get("capitulo") or "").strip()

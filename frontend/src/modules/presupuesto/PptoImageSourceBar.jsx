@@ -1,13 +1,16 @@
 import { useRef } from 'react'
 
 /**
- * Barra de fuentes de imagen: archivo | galería | Ctrl+V (el paste lo maneja el padre).
+ * Barra de fuentes de imagen: archivo | galería | Ctrl+V.
+ * El paste real lo maneja el padre (listener window / zona enfocable);
+ * el botón Ctrl+V enfoca esa zona para facilitar el pegado.
  */
 export default function PptoImageSourceBar({
   t,
   disabled,
   onPickFiles,
   onOpenGaleria,
+  onFocusPasteZone,
   hint = 'Archivo, galería del contrato o Ctrl+V',
 }) {
   const fileRef = useRef(null)
@@ -50,6 +53,25 @@ export default function PptoImageSourceBar({
         }}
       >
         🖼 Galería
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onFocusPasteZone?.()}
+        title="Pegar captura del portapapeles (Ctrl+V). Haga clic aquí y luego Ctrl+V"
+        style={{
+          background: t.bg,
+          color: t.text,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          padding: '8px 12px',
+          fontWeight: 700,
+          fontSize: 'var(--cc-sm)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        ⌘ Ctrl+V
       </button>
       <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{hint}</span>
       <input

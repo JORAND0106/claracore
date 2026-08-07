@@ -4296,6 +4296,25 @@ async def redaccion_asistida_clara(
         titulo = _limpiar_titulo_tema(respuesta or "") or titulo_tema_desde_texto(texto)
         return {"titulo": titulo, "texto": titulo, "mensajes_restantes_hoy": restantes}
 
+    if modo_n == "pie_foto":
+        prompt = (
+            "Estoy redactando el pie de foto corto de un gráfico para una memoria de presupuesto "
+            "de obra pública en ClaraCore. Mejora ÚNICAMENTE la redacción del texto que te doy: "
+            "una frase breve, clara y formal. Conserva el sentido y los hechos escritos por el "
+            "usuario; no inventes tramos, abscisas, cantidades, ítems ni datos técnicos nuevos. "
+            "Devuelve solo el pie de foto final, sin comillas ni explicaciones.\n\n"
+            f"Texto actual:\n{texto or '(vacío)'}\n\n"
+            f"Instrucción:\n{instruccion or 'Mejora claridad y brevedad sin añadir información nueva.'}"
+        )
+        hist = list(historial or [])
+        respuesta, _, _, _ = await llamar_avi(
+            mensaje=prompt,
+            modulo_actual="presupuesto",
+            historial=hist,
+            imagen_base64=None,
+        )
+        return {"texto": (respuesta or "").strip(), "mensajes_restantes_hoy": restantes}
+
     if modo_n == "compromiso":
         prompt = (
             "Estoy redactando un compromiso de un acta de reunión de obra pública en ClaraCore. "

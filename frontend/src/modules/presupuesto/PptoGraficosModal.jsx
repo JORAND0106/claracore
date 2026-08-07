@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
-import { buildCaptionPieFoto } from './pptoGraficosCaption'
 import PptoImageSourceBar from './PptoImageSourceBar'
+import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
+import { imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -18,7 +19,7 @@ function origenLabel(origen) {
 }
 
 /**
- * Crear grupo de gráfico desde selección: archivo / galería / Ctrl+V.
+ * Crear grupo de gráfico desde selección: archivo / galería / Ctrl+V + pie manual.
  */
 export default function PptoGraficosModal({
   open,
@@ -32,18 +33,18 @@ export default function PptoGraficosModal({
   onSaved,
 }) {
   const [imagenes, setImagenes] = useState([])
+  const [pieFoto, setPieFoto] = useState('')
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
   const [galeriaOpen, setGaleriaOpen] = useState(false)
+  const dropRef = useRef(null)
 
   const regsSel = useMemo(() => {
     const ids = seleccionados instanceof Set ? [...seleccionados] : []
     const byId = new Map((registros || []).map((r) => [r.id, r]))
     return ids.map((id) => byId.get(id)).filter(Boolean)
   }, [seleccionados, registros])
-
-  const captionPreview = useMemo(() => buildCaptionPieFoto(regsSel), [regsSel])
 
   const itemsInvolucrados = useMemo(() => {
     const keys = new Map()
@@ -60,11 +61,16 @@ export default function PptoGraficosModal({
   useEffect(() => {
     if (!open) {
       setImagenes([])
+      setPieFoto('')
       setError('')
       setOkMsg('')
       setGuardando(false)
       setGaleriaOpen(false)
+      return
     }
+    // Enfocar zona de pegado para que Ctrl+V funcione de inmediato.
+    const tmr = setTimeout(() => dropRef.current?.focus?.(), 80)
+    return () => clearTimeout(tmr)
   }, [open])
 
   const addFiles = useCallback(async (fileList, origen = 'upload') => {
@@ -111,25 +117,10 @@ export default function PptoGraficosModal({
   }, [])
 
   const onPaste = useCallback((e) => {
-    const items = e.clipboardData?.items
-    if (!items?.length) return
-    let imageItem = null
-    for (const item of items) {
-      if (item.type?.startsWith('image/')) {
-        imageItem = item
-        break
-      }
-    }
-    if (!imageItem) return
+    const named = imagenDesdePasteEvent(e)
+    if (!named) return
     e.preventDefault()
     e.stopPropagation()
-    const file = imageItem.getAsFile()
-    if (!file) return
-    const named = new File(
-      [file],
-      file.name || `captura-${Date.now()}.png`,
-      { type: file.type || 'image/png' },
-    )
     void addFiles([named], 'paste')
   }, [addFiles])
 
@@ -154,6 +145,8 @@ export default function PptoGraficosModal({
     })
   }
 
+  const pieOk = !!String(pieFoto || '').trim()
+
   const guardar = async () => {
     if (!contratoId || !token) return
     if (!regsSel.length) {
@@ -162,6 +155,10 @@ export default function PptoGraficosModal({
     }
     if (!imagenes.length) {
       setError('Aporte al menos una imagen (archivo, galería o Ctrl+V)')
+      return
+    }
+    if (!pieOk) {
+      setError('El pie de foto es obligatorio')
       return
     }
     setGuardando(true)
@@ -207,6 +204,7 @@ export default function PptoGraficosModal({
         body: JSON.stringify({
           presupuesto_ids: regsSel.map((r) => r.id),
           imagenes: uploaded,
+          pie_foto: String(pieFoto).trim(),
         }),
       })
       if (!res.ok) {
@@ -227,6 +225,8 @@ export default function PptoGraficosModal({
   }
 
   if (!open) return null
+
+  const canSave = imagenes.length && regsSel.length && pieOk && !guardando
 
   return (
     <>
@@ -361,23 +361,18 @@ export default function PptoGraficosModal({
             </div>
           </div>
 
-          <div
-            style={{
-              fontSize: cc.caption,
-              color: t.textMuted,
-              fontStyle: 'italic',
-              marginBottom: 12,
-              lineHeight: 1.45,
-              padding: '8px 10px',
-              background: t.bg,
-              borderRadius: 8,
-              border: `1px dashed ${t.border}`,
-            }}
-          >
-            Pie de foto (automático): {captionPreview}
-          </div>
+          <PptoPieFotoField
+            t={t}
+            value={pieFoto}
+            onChange={setPieFoto}
+            disabled={guardando}
+            contratoId={contratoId}
+            token={token}
+            API={API}
+          />
 
           <div
+            ref={dropRef}
             tabIndex={0}
             onPaste={onPaste}
             style={{
@@ -395,6 +390,7 @@ export default function PptoGraficosModal({
                 disabled={guardando}
                 onPickFiles={(files) => void addFiles(files, 'upload')}
                 onOpenGaleria={() => setGaleriaOpen(true)}
+                onFocusPasteZone={() => dropRef.current?.focus?.()}
               />
             </div>
             {imagenes.length > 0 && (
@@ -483,17 +479,17 @@ export default function PptoGraficosModal({
             </button>
             <button
               type="button"
-              disabled={guardando || !imagenes.length || !regsSel.length}
+              disabled={!canSave}
               onClick={() => void guardar()}
               style={{
-                background: imagenes.length && regsSel.length ? t.primary : t.border,
-                color: imagenes.length && regsSel.length ? '#fff' : t.textMuted,
+                background: canSave ? t.primary : t.border,
+                color: canSave ? '#fff' : t.textMuted,
                 border: 'none',
                 borderRadius: 8,
                 padding: '8px 18px',
                 fontWeight: 700,
                 fontSize: cc.sm,
-                cursor: imagenes.length && regsSel.length && !guardando ? 'pointer' : 'not-allowed',
+                cursor: canSave ? 'pointer' : 'not-allowed',
               }}
             >
               {guardando ? '⏳ Guardando…' : 'Crear grupo'}

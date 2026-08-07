@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import PptoImageSourceBar from './PptoImageSourceBar'
+import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
+import { imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -34,6 +36,8 @@ export default function PptoGruposGraficosModal({
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [reemplazarImagenId, setReemplazarImagenId] = useState(null)
   const [okMsg, setOkMsg] = useState('')
+  const [pieFoto, setPieFoto] = useState('')
+  const replaceDropRef = useRef(null)
 
   const authHdrs = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -71,6 +75,7 @@ export default function PptoGruposGraficosModal({
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
       const data = await res.json()
       setDetalle(data)
+      setPieFoto(String(data?.pie_foto || data?.caption || '').replace(/^—$/, ''))
       setGrupoId(id)
     } catch (err) {
       setError(err?.message || 'No se pudo abrir el grupo')
@@ -88,6 +93,7 @@ export default function PptoGruposGraficosModal({
       setResultados([])
       setGaleriaOpen(false)
       setReemplazarImagenId(null)
+      setPieFoto('')
       setOkMsg('')
       setError('')
       return
@@ -168,8 +174,41 @@ export default function PptoGruposGraficosModal({
     }
   }
 
+  const guardarPieFoto = async () => {
+    if (!grupoId || busy) return
+    const pie = String(pieFoto || '').trim()
+    if (!pie) {
+      setError('El pie de foto es obligatorio')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/graficos/grupos/${grupoId}`,
+        {
+          method: 'PATCH',
+          headers: { ...authHdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pie_foto: pie }),
+        },
+      )
+      if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
+      await cargarDetalle(grupoId)
+      setOkMsg('Pie de foto actualizado')
+    } catch (err) {
+      setError(err?.message || 'No se pudo guardar el pie de foto')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const aplicarReemplazo = async ({ url, blob_path = null, origen = 'upload' }) => {
     if (!grupoId || !reemplazarImagenId) return
+    const pie = String(pieFoto || '').trim()
+    if (!pie) {
+      setError('El pie de foto es obligatorio para reemplazar la imagen')
+      return
+    }
     setBusy(true)
     setError('')
     try {
@@ -178,7 +217,7 @@ export default function PptoGruposGraficosModal({
         {
           method: 'PUT',
           headers: { ...authHdrs, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, blob_path, origen }),
+          body: JSON.stringify({ url, blob_path, origen, pie_foto: pie }),
         },
       )
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
@@ -228,28 +267,17 @@ export default function PptoGruposGraficosModal({
   useEffect(() => {
     if (!open || !reemplazarImagenId || galeriaOpen) return undefined
     const onPaste = (e) => {
-      const items = e.clipboardData?.items
-      if (!items?.length) return
-      let imageItem = null
-      for (const item of items) {
-        if (item.type?.startsWith('image/')) {
-          imageItem = item
-          break
-        }
-      }
-      if (!imageItem) return
+      const named = imagenDesdePasteEvent(e)
+      if (!named) return
       e.preventDefault()
-      const file = imageItem.getAsFile()
-      if (!file) return
-      const named = new File(
-        [file],
-        file.name || `captura-${Date.now()}.png`,
-        { type: file.type || 'image/png' },
-      )
       void onPickReplaceFiles([named], 'paste')
     }
     window.addEventListener('paste', onPaste)
-    return () => window.removeEventListener('paste', onPaste)
+    const tmr = setTimeout(() => replaceDropRef.current?.focus?.(), 60)
+    return () => {
+      window.removeEventListener('paste', onPaste)
+      clearTimeout(tmr)
+    }
   }, [open, reemplazarImagenId, galeriaOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null
@@ -411,9 +439,9 @@ export default function PptoGruposGraficosModal({
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }}
-                          title={g.caption}
+                          title={g.pie_foto || g.caption}
                         >
-                          {g.caption || '—'}
+                          {g.pie_foto || g.caption || '—'}
                         </div>
                       </div>
                       <div style={{ alignSelf: 'center', color: t.primary, fontWeight: 800 }}>›</div>
@@ -431,19 +459,36 @@ export default function PptoGruposGraficosModal({
               )}
               {!loadingDetalle && detalle && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div
-                    style={{
-                      fontSize: cc.caption,
-                      color: t.textMuted,
-                      fontStyle: 'italic',
-                      padding: '8px 10px',
-                      background: t.bg,
-                      borderRadius: 8,
-                      border: `1px dashed ${t.border}`,
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    Pie de foto: {detalle.caption || '—'}
+                  <div>
+                    <PptoPieFotoField
+                      t={t}
+                      value={pieFoto}
+                      onChange={setPieFoto}
+                      disabled={busy}
+                      contratoId={contratoId}
+                      token={token}
+                      API={API}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        disabled={busy || !String(pieFoto || '').trim()}
+                        onClick={() => void guardarPieFoto()}
+                        style={{
+                          background: t.primary,
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '6px 12px',
+                          fontWeight: 700,
+                          fontSize: cc.caption,
+                          cursor: busy || !String(pieFoto || '').trim() ? 'not-allowed' : 'pointer',
+                          opacity: busy || !String(pieFoto || '').trim() ? 0.6 : 1,
+                        }}
+                      >
+                        Guardar pie de foto
+                      </button>
+                    </div>
                   </div>
 
                   <div>
@@ -488,12 +533,21 @@ export default function PptoGruposGraficosModal({
                     </div>
                     {reemplazarImagenId && (
                       <div
+                        ref={replaceDropRef}
+                        tabIndex={0}
+                        onPaste={(e) => {
+                          const named = imagenDesdePasteEvent(e)
+                          if (!named) return
+                          e.preventDefault()
+                          void onPickReplaceFiles([named], 'paste')
+                        }}
                         style={{
                           marginTop: 10,
                           border: `2px dashed ${t.border}`,
                           borderRadius: 10,
                           padding: 12,
                           background: t.bg,
+                          outline: 'none',
                         }}
                       >
                         <div style={{ fontSize: cc.sm, fontWeight: 700, marginBottom: 8, color: t.primary }}>
@@ -504,7 +558,8 @@ export default function PptoGruposGraficosModal({
                           disabled={busy}
                           onPickFiles={(files) => void onPickReplaceFiles(files)}
                           onOpenGaleria={() => setGaleriaOpen(true)}
-                          hint="Archivo, galería o Ctrl+V · no altera registros"
+                          onFocusPasteZone={() => replaceDropRef.current?.focus?.()}
+                          hint="Archivo, galería o Ctrl+V · no altera registros · pie obligatorio arriba"
                         />
                         <button
                           type="button"
