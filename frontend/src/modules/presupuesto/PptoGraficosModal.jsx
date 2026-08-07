@@ -1,17 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import { buildCaptionPieFoto } from './pptoGraficosCaption'
+import PptoImageSourceBar from './PptoImageSourceBar'
+import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
 
 const cc = {
   caption: 'var(--cc-caption)',
   sm: 'var(--cc-sm)',
-  body: 'var(--cc-body)',
   pad: 'var(--cc-space-3)',
   padSm: 'var(--cc-space-2)',
 }
 
+function origenLabel(origen) {
+  if (origen === 'paste') return 'Ctrl+V'
+  if (origen === 'galeria') return 'Galería'
+  return 'Archivo'
+}
+
 /**
- * Popup: resumen de selección + carga de gráficos (archivo o Ctrl+V).
+ * Crear grupo de gráfico desde selección: archivo / galería / Ctrl+V.
  */
 export default function PptoGraficosModal({
   open,
@@ -28,8 +35,7 @@ export default function PptoGraficosModal({
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
-  const fileRef = useRef(null)
-  const pasteZoneRef = useRef(null)
+  const [galeriaOpen, setGaleriaOpen] = useState(false)
 
   const regsSel = useMemo(() => {
     const ids = seleccionados instanceof Set ? [...seleccionados] : []
@@ -57,6 +63,7 @@ export default function PptoGraficosModal({
       setError('')
       setOkMsg('')
       setGuardando(false)
+      setGaleriaOpen(false)
     }
   }, [open])
 
@@ -78,6 +85,7 @@ export default function PptoGraficosModal({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           file: named,
           previewUrl,
+          url: null,
           origen,
         })
       } catch (err) {
@@ -85,6 +93,21 @@ export default function PptoGraficosModal({
       }
     }
     if (next.length) setImagenes((prev) => [...prev, ...next])
+  }, [])
+
+  const addGaleriaUrl = useCallback((item) => {
+    if (!item?.url) return
+    setImagenes((prev) => [
+      ...prev,
+      {
+        id: `gal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        file: null,
+        previewUrl: item.url,
+        url: item.url,
+        origen: 'galeria',
+      },
+    ])
+    setGaleriaOpen(false)
   }, [])
 
   const onPaste = useCallback((e) => {
@@ -111,23 +134,22 @@ export default function PptoGraficosModal({
   }, [addFiles])
 
   useEffect(() => {
-    if (!open) return undefined
+    if (!open || galeriaOpen) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape' && !guardando) onClose?.()
     }
     window.addEventListener('keydown', onKey)
-    // Escucha paste global mientras el modal está abierto (capturas Ctrl+V).
     window.addEventListener('paste', onPaste)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('paste', onPaste)
     }
-  }, [open, guardando, onClose, onPaste])
+  }, [open, galeriaOpen, guardando, onClose, onPaste])
 
   const removeImg = (id) => {
     setImagenes((prev) => {
       const row = prev.find((x) => x.id === id)
-      if (row?.previewUrl) URL.revokeObjectURL(row.previewUrl)
+      if (row?.previewUrl && row.file) URL.revokeObjectURL(row.previewUrl)
       return prev.filter((x) => x.id !== id)
     })
   }
@@ -139,7 +161,7 @@ export default function PptoGraficosModal({
       return
     }
     if (!imagenes.length) {
-      setError('Cargue al menos una imagen (archivo o Ctrl+V)')
+      setError('Aporte al menos una imagen (archivo, galería o Ctrl+V)')
       return
     }
     setGuardando(true)
@@ -148,6 +170,15 @@ export default function PptoGraficosModal({
     try {
       const uploaded = []
       for (const img of imagenes) {
+        if (img.url && !img.file) {
+          uploaded.push({
+            url: img.url,
+            blob_path: null,
+            origen: img.origen || 'galeria',
+            orden: uploaded.length,
+          })
+          continue
+        }
         const fd = new FormData()
         fd.append('file', img.file, img.file.name || 'grafico.jpg')
         const up = await fetch(`${API}/presupuesto/${contratoId}/graficos/upload`, {
@@ -198,312 +229,288 @@ export default function PptoGraficosModal({
   if (!open) return null
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        zIndex: 2100,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-      }}
-      onClick={() => !guardando && onClose?.()}
-    >
+    <>
       <div
-        ref={pasteZoneRef}
-        role="dialog"
-        aria-label="Agregar gráficos"
-        onClick={(e) => e.stopPropagation()}
         style={{
-          background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 16,
-          width: 720,
-          maxWidth: '96vw',
-          maxHeight: '92vh',
-          overflow: 'auto',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          padding: 22,
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 2100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
         }}
+        onClick={() => !guardando && onClose?.()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>Agregar gráficos</div>
-            <div style={{ fontSize: cc.sm, color: t.textMuted, marginTop: 4 }}>
-              {regsSel.length} registro{regsSel.length !== 1 ? 's' : ''} · se asociarán a todos los ítems del grupo.
-              {' '}Pegue capturas con Ctrl+V o seleccione archivos.
+        <div
+          role="dialog"
+          aria-label="Agregar gráficos"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 16,
+            width: 720,
+            maxWidth: '96vw',
+            maxHeight: '92vh',
+            overflow: 'auto',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+            padding: 22,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>Nuevo grupo de gráfico</div>
+              <div style={{ fontSize: cc.sm, color: t.textMuted, marginTop: 4 }}>
+                {regsSel.length} registro{regsSel.length !== 1 ? 's' : ''} · archivo, galería o Ctrl+V.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => !guardando && onClose?.()}
+              style={{
+                background: 'transparent',
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                padding: '6px 10px',
+                cursor: guardando ? 'not-allowed' : 'pointer',
+                color: t.textMuted,
+                fontWeight: 700,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: cc.sm, fontWeight: 700, color: t.primary, marginBottom: 6 }}>
+              Ítems involucrados ({itemsInvolucrados.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {itemsInvolucrados.map((it) => (
+                <span
+                  key={it.label}
+                  style={{
+                    fontSize: cc.caption,
+                    background: t.primary + '18',
+                    color: t.primary,
+                    borderRadius: 20,
+                    padding: '3px 10px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {it.label} ({it.n})
+                </span>
+              ))}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => !guardando && onClose?.()}
-            style={{
-              background: 'transparent',
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              padding: '6px 10px',
-              cursor: guardando ? 'not-allowed' : 'pointer',
-              color: t.textMuted,
-              fontWeight: 700,
-            }}
-          >
-            ✕
-          </button>
-        </div>
 
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: cc.sm, fontWeight: 700, color: t.primary, marginBottom: 6 }}>
-            Ítems involucrados ({itemsInvolucrados.length})
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {itemsInvolucrados.map((it) => (
-              <span
-                key={it.label}
-                style={{
-                  fontSize: cc.caption,
-                  background: t.primary + '18',
-                  color: t.primary,
-                  borderRadius: 20,
-                  padding: '3px 10px',
-                  fontWeight: 700,
-                }}
-              >
-                {it.label} ({it.n})
-              </span>
-            ))}
-            {!itemsInvolucrados.length && (
-              <span style={{ fontSize: cc.sm, color: t.textMuted }}>Sin ítems válidos en la selección</span>
-            )}
-          </div>
-        </div>
-
-        <div
-          style={{
-            border: `1px solid ${t.border}`,
-            borderRadius: 10,
-            overflow: 'hidden',
-            marginBottom: 12,
-            maxHeight: 180,
-          }}
-        >
           <div
             style={{
-              padding: `${cc.padSm} ${cc.pad}`,
-              background: t.bg,
-              borderBottom: `1px solid ${t.border}`,
-              fontSize: cc.sm,
-              fontWeight: 700,
-              color: t.textMuted,
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              overflow: 'hidden',
+              marginBottom: 12,
+              maxHeight: 160,
             }}
           >
-            Registros seleccionados
+            <div
+              style={{
+                padding: `${cc.padSm} ${cc.pad}`,
+                background: t.bg,
+                borderBottom: `1px solid ${t.border}`,
+                fontSize: cc.sm,
+                fontWeight: 700,
+                color: t.textMuted,
+              }}
+            >
+              Registros seleccionados
+            </div>
+            <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
+                <thead>
+                  <tr style={{ background: t.bg, position: 'sticky', top: 0 }}>
+                    {['Ítem', 'Tramo', 'Id_Pol'].map((h) => (
+                      <th
+                        key={h}
+                        style={{
+                          padding: '6px 8px',
+                          textAlign: 'left',
+                          color: t.textMuted,
+                          fontWeight: 700,
+                          fontSize: cc.caption,
+                          borderBottom: `1px solid ${t.border}`,
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {regsSel.map((r) => (
+                    <tr key={r.id}>
+                      <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.item}</td>
+                      <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.tramo || '—'}</td>
+                      <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.id_pol || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div style={{ maxHeight: 140, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
-              <thead>
-                <tr style={{ background: t.bg, position: 'sticky', top: 0 }}>
-                  {['Cap.', 'Ítem', 'Tramo', 'Infra.', 'Abs', 'Id_Pol'].map((h) => (
-                    <th
-                      key={h}
+
+          <div
+            style={{
+              fontSize: cc.caption,
+              color: t.textMuted,
+              fontStyle: 'italic',
+              marginBottom: 12,
+              lineHeight: 1.45,
+              padding: '8px 10px',
+              background: t.bg,
+              borderRadius: 8,
+              border: `1px dashed ${t.border}`,
+            }}
+          >
+            Pie de foto (automático): {captionPreview}
+          </div>
+
+          <div
+            tabIndex={0}
+            onPaste={onPaste}
+            style={{
+              border: `2px dashed ${t.border}`,
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 12,
+              background: t.bg,
+              outline: 'none',
+            }}
+          >
+            <div style={{ marginBottom: imagenes.length ? 10 : 0 }}>
+              <PptoImageSourceBar
+                t={t}
+                disabled={guardando}
+                onPickFiles={(files) => void addFiles(files, 'upload')}
+                onOpenGaleria={() => setGaleriaOpen(true)}
+              />
+            </div>
+            {imagenes.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                {imagenes.map((img) => (
+                  <div
+                    key={img.id}
+                    style={{
+                      position: 'relative',
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      border: `1px solid ${t.border}`,
+                      background: '#fff',
+                      aspectRatio: '4/3',
+                    }}
+                  >
+                    <img
+                      src={img.previewUrl}
+                      alt=""
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImg(img.id)}
+                      disabled={guardando}
                       style={{
-                        padding: '6px 8px',
-                        textAlign: 'left',
-                        color: t.textMuted,
+                        position: 'absolute',
+                        top: 4,
+                        right: 4,
+                        border: 'none',
+                        borderRadius: 6,
+                        background: 'rgba(0,0,0,0.55)',
+                        color: '#fff',
+                        fontSize: 11,
                         fontWeight: 700,
-                        fontSize: cc.caption,
-                        borderBottom: `1px solid ${t.border}`,
-                        whiteSpace: 'nowrap',
+                        padding: '2px 6px',
+                        cursor: 'pointer',
                       }}
                     >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {regsSel.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.capitulo}</td>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.item}</td>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.tramo || '—'}</td>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.infraestructura || '—'}</td>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>
-                      {[r.abs_inicio, r.abs_final].filter(Boolean).join('–') || '—'}
-                    </td>
-                    <td style={{ padding: '5px 8px', borderBottom: `1px solid ${t.border}` }}>{r.id_pol || '—'}</td>
-                  </tr>
+                      ✕
+                    </button>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: 4,
+                        bottom: 4,
+                        fontSize: 10,
+                        background: 'rgba(0,0,0,0.5)',
+                        color: '#fff',
+                        borderRadius: 4,
+                        padding: '1px 5px',
+                      }}
+                    >
+                      {origenLabel(img.origen)}
+                    </span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
-        </div>
 
-        <div
-          style={{
-            fontSize: cc.caption,
-            color: t.textMuted,
-            fontStyle: 'italic',
-            marginBottom: 12,
-            lineHeight: 1.45,
-            padding: '8px 10px',
-            background: t.bg,
-            borderRadius: 8,
-            border: `1px dashed ${t.border}`,
-          }}
-        >
-          Pie de foto (automático): {captionPreview}
-        </div>
+          {error && (
+            <div style={{ color: '#B91C1C', fontSize: cc.sm, marginBottom: 8, fontWeight: 600 }}>{error}</div>
+          )}
+          {okMsg && (
+            <div style={{ color: '#15803D', fontSize: cc.sm, marginBottom: 8, fontWeight: 600 }}>{okMsg}</div>
+          )}
 
-        <div
-          tabIndex={0}
-          onPaste={onPaste}
-          style={{
-            border: `2px dashed ${t.border}`,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 12,
-            background: t.bg,
-            outline: 'none',
-          }}
-        >
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: imagenes.length ? 10 : 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <button
               type="button"
               disabled={guardando}
-              onClick={() => fileRef.current?.click()}
+              onClick={() => onClose?.()}
               style={{
-                background: t.primary,
-                color: '#fff',
-                border: 'none',
+                background: t.bg,
+                border: `1px solid ${t.border}`,
                 borderRadius: 8,
-                padding: '8px 14px',
+                padding: '8px 16px',
                 fontWeight: 700,
                 fontSize: cc.sm,
+                color: t.text,
                 cursor: guardando ? 'not-allowed' : 'pointer',
               }}
             >
-              📁 Seleccionar archivo
+              Cancelar
             </button>
-            <span style={{ fontSize: cc.sm, color: t.textMuted }}>
-              o pegue aquí una captura (Ctrl+V)
-            </span>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(e) => {
-                void addFiles(e.target.files, 'upload')
-                e.target.value = ''
+            <button
+              type="button"
+              disabled={guardando || !imagenes.length || !regsSel.length}
+              onClick={() => void guardar()}
+              style={{
+                background: imagenes.length && regsSel.length ? t.primary : t.border,
+                color: imagenes.length && regsSel.length ? '#fff' : t.textMuted,
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 18px',
+                fontWeight: 700,
+                fontSize: cc.sm,
+                cursor: imagenes.length && regsSel.length && !guardando ? 'pointer' : 'not-allowed',
               }}
-            />
+            >
+              {guardando ? '⏳ Guardando…' : 'Crear grupo'}
+            </button>
           </div>
-          {imagenes.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              {imagenes.map((img) => (
-                <div
-                  key={img.id}
-                  style={{
-                    position: 'relative',
-                    borderRadius: 8,
-                    overflow: 'hidden',
-                    border: `1px solid ${t.border}`,
-                    background: '#fff',
-                    aspectRatio: '4/3',
-                  }}
-                >
-                  <img
-                    src={img.previewUrl}
-                    alt=""
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeImg(img.id)}
-                    disabled={guardando}
-                    style={{
-                      position: 'absolute',
-                      top: 4,
-                      right: 4,
-                      border: 'none',
-                      borderRadius: 6,
-                      background: 'rgba(0,0,0,0.55)',
-                      color: '#fff',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '2px 6px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    ✕
-                  </button>
-                  <span
-                    style={{
-                      position: 'absolute',
-                      left: 4,
-                      bottom: 4,
-                      fontSize: 10,
-                      background: 'rgba(0,0,0,0.5)',
-                      color: '#fff',
-                      borderRadius: 4,
-                      padding: '1px 5px',
-                    }}
-                  >
-                    {img.origen === 'paste' ? 'Ctrl+V' : 'Archivo'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {error && (
-          <div style={{ color: '#B91C1C', fontSize: cc.sm, marginBottom: 8, fontWeight: 600 }}>{error}</div>
-        )}
-        {okMsg && (
-          <div style={{ color: '#15803D', fontSize: cc.sm, marginBottom: 8, fontWeight: 600 }}>{okMsg}</div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button
-            type="button"
-            disabled={guardando}
-            onClick={() => onClose?.()}
-            style={{
-              background: t.bg,
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              padding: '8px 16px',
-              fontWeight: 700,
-              fontSize: cc.sm,
-              color: t.text,
-              cursor: guardando ? 'not-allowed' : 'pointer',
-            }}
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={guardando || !imagenes.length || !regsSel.length}
-            onClick={() => void guardar()}
-            style={{
-              background: imagenes.length && regsSel.length ? t.primary : t.border,
-              color: imagenes.length && regsSel.length ? '#fff' : t.textMuted,
-              border: 'none',
-              borderRadius: 8,
-              padding: '8px 18px',
-              fontWeight: 700,
-              fontSize: cc.sm,
-              cursor: imagenes.length && regsSel.length && !guardando ? 'pointer' : 'not-allowed',
-            }}
-          >
-            {guardando ? '⏳ Guardando…' : `Guardar ${imagenes.length || ''} gráfico(s)`}
-          </button>
         </div>
       </div>
-    </div>
+
+      <PptoSicoeGaleriaPicker
+        open={galeriaOpen}
+        onClose={() => setGaleriaOpen(false)}
+        t={t}
+        contratoId={contratoId}
+        token={token}
+        API={API}
+        onSelect={addGaleriaUrl}
+      />
+    </>
   )
 }

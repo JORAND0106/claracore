@@ -84,6 +84,8 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
       filtros: `${base}/filtros`,
       graficosUpload: `${base}/graficos/upload`,
       graficosGrupos: `${base}/graficos/grupos`,
+      graficosGrupo: (gid) => `${base}/graficos/grupos/${gid}`,
+      graficosBuscarRegs: `${base}/graficos/buscar-registros`,
       materializar: null,
       appendBibliotecaQuery: (p) => p,
     }

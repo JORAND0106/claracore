@@ -1,5 +1,9 @@
 """Tests unitarios — pie de foto y repetición de gráficos por ítem."""
-from presupuesto_graficos_routes import attach_graficos_a_items_export, build_caption_pie_foto
+from presupuesto_graficos_routes import (
+    _items_keys_from_regs,
+    attach_graficos_a_items_export,
+    build_caption_pie_foto,
+)
 
 
 def test_build_caption_valores_distintos():
@@ -67,3 +71,15 @@ def test_attach_graficos_repite_en_varios_items(monkeypatch):
     assert len(items[1]["graficos"]) == 1
     assert items[0]["graficos"][0]["url"] == items[1]["graficos"][0]["url"]
     assert "graficos" not in items[2]
+
+
+def test_items_keys_from_regs_unicos():
+    keys = _items_keys_from_regs(
+        [
+            {"capitulo": "A", "item": "1.1"},
+            {"capitulo": "A", "item": "1.1"},
+            {"capitulo": "A", "item": "1.2"},
+            {"capitulo": "", "item": "x"},
+        ]
+    )
+    assert keys == ["A · 1.1", "A · 1.2"]
