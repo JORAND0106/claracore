@@ -77,6 +77,7 @@ _dwg_sessions: dict = {}
 # Grupos colaborativos CAD activos por contrato: contrato_id → { usuario_ids, creado_por, updated_at }
 _cad_colab_grupos: dict = {}
 # Auditoría: última carga de cantidades desde SicoeCAD (cliente) → /presupuesto/.../bulk?source=sicoe_cad
+# Incluye presupuesto_ids del lote para asociar gráfico desde el popup de recepción (alternativa B).
 # Notificación consumida vía GET .../sincro-sicoe-cad-auditoria; en un solo proceso de API (no multi-réplica).
 _sicoe_cad_sincro_audit: dict = {}
 # ── Jobs de exportación Excel en background ────────────────────────────────────
@@ -11723,15 +11724,38 @@ def bulk_presupuesto(
             tramos_corregidos += 1
         rows.append(d)
     insertados = 0
+    # IDs del lote: necesarios para asociar un gráfico desde el popup de recepción (alternativa B).
+    presupuesto_ids: List[int] = []
+    want_lote_ids = (source or "").strip().lower() == "sicoe_cad"
+
+    def _collect_ids(res_data) -> None:
+        if not want_lote_ids or not res_data:
+            return
+        rows_data = res_data if isinstance(res_data, list) else [res_data]
+        for r in rows_data:
+            if not isinstance(r, dict):
+                continue
+            rid = r.get("id")
+            if rid is None:
+                continue
+            try:
+                presupuesto_ids.append(int(rid))
+            except (TypeError, ValueError):
+                pass
+
     for i in range(0, len(rows), BATCH):
+        batch = rows[i : i + BATCH]
         try:
-            supabase.table("presupuesto").insert(rows[i:i+BATCH]).execute()
-            insertados += len(rows[i:i+BATCH])
-        except Exception as e:
-            for row in rows[i:i+BATCH]:
+            # supabase-py 2.x: insert() no encadena .select(); returning=representation por defecto.
+            res = supabase.table("presupuesto").insert(batch).execute()
+            insertados += len(batch)
+            _collect_ids(getattr(res, "data", None))
+        except Exception:
+            for row in batch:
                 try:
-                    supabase.table("presupuesto").insert(row).execute()
+                    res = supabase.table("presupuesto").insert(row).execute()
                     insertados += 1
+                    _collect_ids(getattr(res, "data", None))
                 except Exception:
                     pass
     try:
@@ -11742,7 +11766,7 @@ def bulk_presupuesto(
         {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados,
          "tramos_corregidos_desde_pk_ids": tramos_corregidos,
          "source": (source or "").lower() or None})
-    if (source or "").strip().lower() == "sicoe_cad":
+    if want_lote_ids:
         enviados = None
         h = (x_sicoe_cad_enviados or "").strip()
         if h.isdigit():
@@ -11753,6 +11777,13 @@ def bulk_presupuesto(
             "ts": time.time(),
             # Solo el usuario que ejecutó el POST /bulk ve el aviso en la web (JWT sub).
             "user_sub": str(current_user.get("sub") or ""),
+            # IDs del lote recién insertado → asociar gráfico a todo el lote desde el popup.
+            "presupuesto_ids": presupuesto_ids,
+        }
+        return {
+            "insertados": insertados,
+            "tramos_corregidos_desde_pk_ids": tramos_corregidos,
+            "presupuesto_ids": presupuesto_ids,
         }
     return {"insertados": insertados, "tramos_corregidos_desde_pk_ids": tramos_corregidos}
 

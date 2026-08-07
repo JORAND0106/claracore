@@ -17,6 +17,7 @@ import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoGraficosModal from './PptoGraficosModal'
 import PptoGruposGraficosModal from './PptoGruposGraficosModal'
+import PptoSincroSicoeLoteModal from './PptoSincroSicoeLoteModal'
 import PptoBuscarObjetivoModal from './PptoBuscarObjetivoModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
 import PptoValidacionIcon from './PptoValidacionIcon'
@@ -554,7 +555,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const EXPORT_LENTO_REGISTROS = 1200
   const EXPORT_LENTO_SIN_FILTRO = 400
   /** SicoeCAD → API → ClaraCore (source=sicoe_cad), no el import CSV del navegador */
-  const [sincroSicoeModal, setSincroSicoeModal] = useState(null) // { insertados, enviados?, ts }
+  const [sincroSicoeModal, setSincroSicoeModal] = useState(null) // { insertados, enviados?, ts, presupuesto_ids? }
   /** Discrepancias listado_precios antes de POST /bulk (mismo payload que SicoeCAD). */
   const [sicoeCadListadoModal, setSicoeCadListadoModal] = useState(null) // { discrepancias, itemsSnapshot, mode, sicoeEnviados }
   const [sicoeCadImportBusy, setSicoeCadImportBusy] = useState(false)
@@ -6160,73 +6161,36 @@ async function restaurar(id) {
         </div>
       )}
 
-      {/* ── Auditoría: cantidades migradas desde SicoeCAD (cliente) → cola / sincro con el DWG (cad_queue) ── */}
-      {sincroSicoeModal && (() => {
-        const a = sincroSicoeModal
-        const nRec = a.insertados
-        const nDwg = a.enviados
-        const coinciden = nDwg == null || nDwg === nRec
-        const cerrar = async () => {
+      {/* ── Recepción lote SicoeCAD: confirmación concreta + cargar gráfico del lote (alternativa B) ── */}
+      <PptoSincroSicoeLoteModal
+        open={!!sincroSicoeModal}
+        data={sincroSicoeModal}
+        t={t}
+        contratoId={contratoId}
+        token={token}
+        API={API}
+        onDismiss={async () => {
           setSincroSicoeModal(null)
           try {
             await fetch(`${API}/presupuesto/${contratoId}/sincro-sicoe-cad-auditoria/ack`, {
               method: 'POST',
-              headers: { Authorization: `Bearer ${getToken()}` }
+              headers: { Authorization: `Bearer ${getToken()}` },
             })
           } catch { /* ignore */ }
-        }
-        return (
-          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.68)', zIndex:4100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="sincro-sicoe-titulo"
-          >
-            <div
-              style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:16, padding:26, width:500, maxWidth:'96vw', boxShadow:'0 24px 64px rgba(0,0,0,0.45)' }}
-              onClick={e => e.stopPropagation()}
-            >
-              <div id="sincro-sicoe-titulo" style={{ fontSize:'var(--cc-label)', fontWeight:800, letterSpacing:0.6, color:t.primary, marginBottom:6 }}>AUDITORÍA SICOECAD — COLA CAD</div>
-              <div style={{ fontSize:'var(--cc-lg)', fontWeight:800, color:t.text, marginBottom:10, lineHeight:1.35 }}>
-                <strong>ClaraCore</strong> está recibiendo{' '}
-                <strong style={{ color:t.primary }}>{nRec.toLocaleString('es-CO')}</strong> registro{nRec !== 1 ? 's' : ''} de presupuesto
-                procedente de <strong>SicoeCAD</strong> (migración de cantidades desde el DWG hacia el servidor, en línea con la cola de operaciones hacia / desde AutoCAD, <em>cad_queue</em>).
-              </div>
-              <div style={{ background:t.bg, borderRadius:10, padding:14, marginBottom:14, border:`1px solid ${t.border}`, fontSize:'var(--cc-body)', color:t.text }}>
-                {nDwg != null && (
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:0 }}>
-                  <div style={{ padding:10, borderRadius:8, background:t.primary+'12', border:`1px solid ${t.primary}44` }}>
-                    <div style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Indicado desde el DWG (SicoeCAD)</div>
-                    <div style={{ fontSize:'var(--cc-h2)', fontWeight:800, color:t.primary }}>{nDwg.toLocaleString('es-CO')}</div>
-                  </div>
-                  <div style={{ padding:10, borderRadius:8, background: coinciden ? '#16A34A18' : '#F59E0B22', border:`1px solid ${coinciden ? '#16A34A55' : '#F59E0B55'}` }}>
-                    <div style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Almacenados en ClaraCore</div>
-                    <div style={{ fontSize:'var(--cc-h2)', fontWeight:800, color: coinciden ? '#16A34A' : '#D97706' }}>{nRec.toLocaleString('es-CO')}</div>
-                  </div>
-                </div>
-                )}
-                {nDwg == null && (
-                  <div style={{ padding:10, borderRadius:8, background:'#0EA5E918', border:'1px solid #0EA5E944' }}>
-                    <div style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Registros almacenados en esta sincronización</div>
-                    <div style={{ fontSize:'var(--cc-h1)', fontWeight:800, color:'#0284C7' }}>{nRec.toLocaleString('es-CO')}</div>
-                    <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:6 }}>Para cruzar cifra a cifra con el DWG, el conector puede enviar la cabecera <code style={{ fontSize:'var(--cc-caption)' }}>X-SicoeCAD-Enviados</code> con el conteo leído en el pliego.</div>
-                  </div>
-                )}
-                {nDwg != null && !coinciden && (
-                  <div style={{ marginTop:12, padding:10, background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:8, fontSize:'var(--cc-sm)', color:'#92400E' }}>
-                    <strong>Atención:</strong> el conteo reportado por el DWG y el almacenado en ClaraCore no coinciden. Revise trazas de red, claves duplicadas o entidades excluidas al migrar.
-                  </div>
-                )}
-              </div>
-              <p style={{ fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.5, marginBottom:16 }}>
-                Sirve para auditar qué salió del DWG y qué quedó persistido en la base, en el mismo flujo en que <strong>cad_queue</strong> conecta SicoeCAD con ClaraCore.
-              </p>
-              <div style={{ display:'flex', justifyContent:'flex-end' }}>
-                <button type="button" onClick={cerrar} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:8, padding:'10px 24px', fontSize:'var(--cc-label)', fontWeight:700, cursor:'pointer' }}>Entendido</button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+        }}
+        onSaved={(data) => {
+          const ids = Array.isArray(data?.presupuesto_ids) ? data.presupuesto_ids : []
+          if (ids.length) {
+            setIdsConGrafico((prev) => {
+              const next = new Set(prev)
+              for (const id of ids) next.add(Number(id))
+              return next
+            })
+          } else {
+            void cargarIdsConGrafico()
+          }
+        }}
+      />
 
       {/* ── SicoeCAD: discrepancias con listado_precios antes de POST /bulk ── */}
       {sicoeCadListadoModal && (() => {
