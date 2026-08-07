@@ -1,6 +1,17 @@
 import ExcelJS from 'exceljs'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
-import { planLayoutLogosEncabezado, resolverMetaLogosPresupuesto } from './presupuestoExportLogos.js'
+import {
+  LOGO_ENTIDAD_MAX_H,
+  LOGO_ENTIDAD_MAX_W,
+  LOGO_PAR_MAX_H,
+  LOGO_PAR_MAX_W,
+  dimensionesImagenBuffer,
+  logoImageId,
+  logoNatSize,
+  planLayoutLogosEncabezado,
+  posicionLogoFlotante,
+  resolverMetaLogosPresupuesto,
+} from './presupuestoExportLogos.js'
 
 export { resolverMetaLogosPresupuesto }
 
@@ -108,60 +119,82 @@ async function cargarLogoClaraCore(wb) {
   const url = typeof window !== 'undefined'
     ? `${window.location.origin}/CLARA.CORE.png`
     : '/CLARA.CORE.png'
-  return prepararLogoWorkbook(wb, url)
+  const logo = await prepararLogoWorkbook(wb, url)
+  return logoImageId(logo)
 }
 
+/**
+ * Carga logo al workbook y devuelve descriptor con dimensiones naturales.
+ * @returns {Promise<{ imageId: number, natW: number|null, natH: number|null }|null>}
+ */
 async function prepararLogoWorkbook(wb, logoUrl) {
   if (!logoUrl || typeof logoUrl !== 'string') return null
   const raw = logoUrl.trim()
   if (!raw) return null
   try {
+    let buffer
+    let ext = 'png'
     if (raw.startsWith('data:image')) {
       const comma = raw.indexOf(',')
       if (comma < 0) return null
       const header = raw.slice(0, comma).toLowerCase()
       let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
       if (!b64 || !header.includes('base64')) return null
-      let ext = 'png'
       const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
       if (m) {
         ext = m[1].toLowerCase()
         if (ext === 'jpg') ext = 'jpeg'
         if (ext === 'svg+xml') return null
         if (!['png', 'jpeg', 'gif', 'webp'].includes(ext)) ext = 'png'
-        // ExcelJS no soporta webp en todos los entornos → forzar png si hace falta al fallar
         if (ext === 'webp') ext = 'png'
       }
       const binary = atob(b64)
-      const buffer = new Uint8Array(binary.length)
+      buffer = new Uint8Array(binary.length)
       for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
-      return wb.addImage({ buffer, extension: ext === 'png' || ext === 'jpeg' || ext === 'gif' ? ext : 'png' })
+    } else {
+      const res = await fetch(raw)
+      if (!res.ok) return null
+      const blob = await res.blob()
+      buffer = new Uint8Array(await blob.arrayBuffer())
+      if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
+      else if (blob.type.includes('gif')) ext = 'gif'
+      else ext = 'png'
     }
-    const res = await fetch(raw)
-    if (!res.ok) return null
-    const blob = await res.blob()
-    const buffer = await blob.arrayBuffer()
-    let ext = 'png'
-    if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
-    else if (blob.type.includes('gif')) ext = 'gif'
-    return wb.addImage({ buffer, extension: ext })
+    const dims = dimensionesImagenBuffer(buffer)
+    const safeExt = ext === 'png' || ext === 'jpeg' || ext === 'gif' ? ext : 'png'
+    const imageId = wb.addImage({ buffer, extension: safeExt })
+    return {
+      imageId,
+      natW: dims?.width ?? null,
+      natH: dims?.height ?? null,
+    }
   } catch {
     return null
   }
 }
 
-/** Tamaño estándar compartido: contratista e interventoría (iguales entre sí). */
-const LOGO_PAR_W = 96
-const LOGO_PAR_H = 40
-/** Entidad a la derecha: caja comparable, ligeramente más ancha. */
-const LOGO_ENTIDAD_W = 104
-const LOGO_ENTIDAD_H = 40
-
-function insertarLogoEnCelda(ws, logoImageId, { col, row = 0.12, width, height }) {
-  if (logoImageId == null) return
-  ws.addImage(logoImageId, {
-    tl: { col, row },
-    ext: { width, height },
+/**
+ * Inserta logo como imagen flotante (ext en px → EMUs fijos en ExcelJS).
+ * Conserva proporción (contain) y centra dentro de la caja máxima del hueco.
+ */
+function insertarLogoFlotante(ws, logo, { colStart, maxW, maxH, slotCols = 2, rowHeightPt = TITLE_ROW_HEIGHT }) {
+  const id = logoImageId(logo)
+  if (id == null) return
+  const { natW, natH } = logoNatSize(logo)
+  const pos = posicionLogoFlotante({
+    colStart,
+    slotCols,
+    maxW,
+    maxH,
+    natW,
+    natH,
+    rowHeightPt,
+  })
+  // `ext` → oneCellAnchor con cx/cy fijos (no se estiran al cambiar anchos de columna).
+  // No usamos `br` (twoCellAnchor) porque ExcelJS estira la imagen al rango de celdas.
+  ws.addImage(id, {
+    tl: pos.tl,
+    ext: pos.ext,
   })
 }
 
@@ -219,17 +252,19 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
   }
 }
 
-function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoImageId = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null } = {}) {
+function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoLegacy = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null } = {}) {
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
-  // Compat: si solo llega logoImageId (legacy), tratarlo como contratista.
+  // Compat: si solo llega logoLegacy (id o descriptor), tratarlo como contratista.
   const logosEff =
     logos != null
       ? logos
-      : (logoImageId != null ? { contratista: logoImageId, interventoria: null, entidad: null } : null)
+      : (logoLegacy != null
+        ? { contratista: typeof logoLegacy === 'object' ? logoLegacy : { imageId: logoLegacy }, interventoria: null, entidad: null }
+        : null)
   const layout = planLayoutLogosEncabezado(logosEff, cols)
-  const { titleStart, titleEnd, entidadStart, leftLogos, hasEntidad, entidadImageId, tieneLogo } = layout
+  const { titleStart, titleEnd, entidadStart, leftLogos, hasEntidad, entidadLogo, tieneLogo } = layout
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
@@ -239,29 +274,33 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
 
-  // Cada logo izquierdo en su propio merge de 2 columnas (mismo tamaño C/I).
+  // Huecos de encabezado (solo fondo); las imágenes flotan encima con tamaño propio.
   for (const slot of leftLogos) {
     const c0 = slot.colStart
     ws.mergeCells(1, c0, 1, c0 + 1)
-    // Ancho mínimo para que la caja 96×40 quepa sin tapar al vecino.
     ws.getColumn(c0).width = Math.max(ws.getColumn(c0).width || 0, 14)
     ws.getColumn(c0 + 1).width = Math.max(ws.getColumn(c0 + 1).width || 0, 14)
-    insertarLogoEnCelda(ws, slot.imageId, {
-      col: c0 - 1 + 0.08,
-      width: LOGO_PAR_W,
-      height: LOGO_PAR_H,
+    insertarLogoFlotante(ws, slot.logo, {
+      colStart: c0,
+      maxW: LOGO_PAR_MAX_W,
+      maxH: LOGO_PAR_MAX_H,
+      slotCols: 2,
+      rowHeightPt: TITLE_ROW_HEIGHT,
     })
   }
 
   if (hasEntidad && entidadStart != null && entidadStart <= cols) {
+    const entSpan = cols - entidadStart + 1
     ws.mergeCells(1, entidadStart, 1, cols)
     for (let c = entidadStart; c <= cols; c += 1) {
       ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
     }
-    insertarLogoEnCelda(ws, entidadImageId, {
-      col: entidadStart - 1 + 0.15,
-      width: LOGO_ENTIDAD_W,
-      height: LOGO_ENTIDAD_H,
+    insertarLogoFlotante(ws, entidadLogo, {
+      colStart: entidadStart,
+      maxW: LOGO_ENTIDAD_MAX_W,
+      maxH: LOGO_ENTIDAD_MAX_H,
+      slotCols: Math.max(1, entSpan),
+      rowHeightPt: TITLE_ROW_HEIGHT,
     })
   }
 
@@ -709,7 +748,7 @@ const COL_ANCHO = DET_HEADERS.indexOf('Ancho') + 1
 const COL_ESPESOR = DET_HEADERS.indexOf('Espesor') + 1
 const COL_CANT_TOTAL = DET_HEADERS.indexOf('Cant. Total') + 1
 
-function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoImageId, claraLogoImageId, logos = null) {
+function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoLegacy, claraLogoImageId, logos = null) {
   const baseName = safeSheetName(`${itemInfo.item || 'Item'}_${idx + 1}`, `Item_${idx + 1}`)
   let sheetName = baseName
   let n = 1
@@ -732,7 +771,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     modoLabel,
     (itemInfo.registros || []).length,
     generatedAt,
-    logoImageId,
+    logoLegacy,
     { soloCantidad: true, totalsTier: 'titulo_2', logos },
   )
   const layoutItem = planLayoutLogosEncabezado(logos, TOTAL_COLS_DET)
@@ -819,7 +858,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 }
 
-function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = [], wsExistente = null, logos = null) {
+function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoLegacy, claraLogoImageId, todosRegistros = [], wsExistente = null, logos = null) {
   const resumenHeaders = [
     'Capítulo',
     'Ítem',
@@ -842,7 +881,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     modoLabel,
     totalRegistros,
     generatedAt,
-    logoImageId,
+    logoLegacy,
     { totalsTier: 'titulo_1', logos },
   )
   const layoutResumen = planLayoutLogosEncabezado(logos, totalColsResumen)
@@ -989,14 +1028,13 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   wb.creator = 'ClaraCore · Presupuesto'
 
   // Secuencial: ExcelJS muta el workbook al registrar cada imagen.
-  const logoContratistaId = await prepararLogoWorkbook(wb, meta.logo_contratista)
-  const logoInterventoriaId = await prepararLogoWorkbook(wb, meta.logo_interventoria)
-  const logoEntidadId = await prepararLogoWorkbook(wb, meta.logo_entidad)
-  const logoImageId = logoContratistaId
+  const logoContratista = await prepararLogoWorkbook(wb, meta.logo_contratista)
+  const logoInterventoria = await prepararLogoWorkbook(wb, meta.logo_interventoria)
+  const logoEntidad = await prepararLogoWorkbook(wb, meta.logo_entidad)
   const logos = {
-    contratista: logoContratistaId,
-    interventoria: logoInterventoriaId,
-    entidad: logoEntidadId,
+    contratista: logoContratista,
+    interventoria: logoInterventoria,
+    entidad: logoEntidad,
   }
   const claraLogoImageId = await cargarLogoClaraCore(wb)
   const contratoLabel = meta.numero || meta.contrato || String(contratoId ?? '')
@@ -1010,7 +1048,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   const wsResumen = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
 
   items.forEach((itemInfo, idx) => {
-    const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoImageId, claraLogoImageId, logos)
+    const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoContratista, claraLogoImageId, logos)
     if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
     for (const reg of itemInfo.registros || []) todosRegistros.push(reg)
   })
@@ -1023,7 +1061,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
     modoLabel,
     payload?.total_registros ?? 0,
     generatedAt,
-    logoImageId,
+    logoContratista,
     claraLogoImageId,
     todosRegistros,
     wsResumen,
