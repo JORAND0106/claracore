@@ -3,12 +3,16 @@ import assert from 'node:assert/strict'
 import {
   pickLogoUrl,
   planLayoutLogosEncabezado,
+  planLayoutResumenEncabezado,
   resolverMetaLogosPresupuesto,
   dimensionesImagenBuffer,
   sizeLogoFixedHeight,
   posicionParLogosFlotante,
   posicionLogoEntidadFlotante,
+  posicionLogoCentradoEnRango,
+  anchoNecesarioParLogosPx,
   excelColWidthToPx,
+  excelPxToColWidth,
   pxOffsetToNativeCol,
   pxToEmu,
   LOGO_HEIGHT_CM,
@@ -16,6 +20,11 @@ import {
   LOGO_PAIR_GAP_PX,
   LOGO_PAIR_PAD_LEFT_PX,
   LOGO_LEFT_COL_CHARS,
+  RESUMEN_COL_B_MAX_CHARS,
+  RESUMEN_HEADER_TITLE_START,
+  RESUMEN_HEADER_TITLE_END,
+  RESUMEN_HEADER_ENTIDAD_START,
+  RESUMEN_HEADER_ENTIDAD_END,
 } from './presupuestoExportLogos.js'
 
 describe('pickLogoUrl', () => {
@@ -86,6 +95,23 @@ describe('planLayoutLogosEncabezado', () => {
       { leftSpanOverride: 5 },
     )
     assert.equal(layout.leftSpan, 5)
+  })
+})
+
+describe('planLayoutResumenEncabezado', () => {
+  it('fija A1:B1 | C1:E1 | F1:G1', () => {
+    const layout = planLayoutResumenEncabezado({
+      contratista: { imageId: 0 },
+      interventoria: { imageId: 1 },
+      entidad: { imageId: 2 },
+    })
+    assert.equal(layout.leftSpan, 2)
+    assert.equal(layout.rightSpan, 2)
+    assert.equal(layout.titleStart, RESUMEN_HEADER_TITLE_START)
+    assert.equal(layout.titleEnd, RESUMEN_HEADER_TITLE_END)
+    assert.equal(layout.entidadStart, RESUMEN_HEADER_ENTIDAD_START)
+    assert.equal(layout.entidadEnd, RESUMEN_HEADER_ENTIDAD_END)
+    assert.equal(RESUMEN_COL_B_MAX_CHARS, 15)
   })
 })
 
@@ -168,6 +194,42 @@ describe('posicionParLogosFlotante', () => {
       { nativeCol: par.interventoria.tl.nativeCol, nativeColOff: par.interventoria.tl.nativeColOff },
       pxOffsetToNativeCol(LOGO_PAIR_PAD_LEFT_PX, [colPx]),
     )
+  })
+})
+
+describe('posicionLogoCentradoEnRango', () => {
+  it('centra el logo de entidad en F:G (cols 6-7)', () => {
+    const colPx = excelColWidthToPx(12)
+    const widths = Array.from({ length: 7 }, () => colPx)
+    const pos = posicionLogoCentradoEnRango({
+      logo: { imageId: 2, natW: 120, natH: 60 },
+      colStart: 6,
+      colEnd: 7,
+      colWidthsPx: widths,
+      padPx: LOGO_PAIR_PAD_LEFT_PX,
+    })
+    assert.equal(pos.ext.height, LOGO_HEIGHT_PX)
+    const blockStart = colPx * 5
+    const blockW = colPx * 2
+    const expected = blockStart + LOGO_PAIR_PAD_LEFT_PX
+      + Math.max(0, (blockW - LOGO_PAIR_PAD_LEFT_PX * 2 - pos.ext.width) / 2)
+    assert.deepEqual(
+      { nativeCol: pos.tl.nativeCol, nativeColOff: pos.tl.nativeColOff },
+      pxOffsetToNativeCol(expected, widths),
+    )
+  })
+})
+
+describe('anchoNecesarioParLogosPx / excelPxToColWidth', () => {
+  it('calcula espacio del par y convierte px→chars', () => {
+    const need = anchoNecesarioParLogosPx({
+      logoC: { imageId: 0, natW: 100, natH: 100 },
+      logoI: { imageId: 1, natW: 100, natH: 100 },
+    })
+    // 6 + 68 + 8 + 68 + 6
+    assert.equal(need, LOGO_PAIR_PAD_LEFT_PX * 2 + 68 + LOGO_PAIR_GAP_PX + 68)
+    const chars = excelPxToColWidth(need)
+    assert.ok(excelColWidthToPx(chars) >= need)
   })
 })
 

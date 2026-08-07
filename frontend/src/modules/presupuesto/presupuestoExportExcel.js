@@ -4,10 +4,21 @@ import {
   LOGO_HEIGHT_PX,
   LOGO_LEFT_COL_CHARS,
   LOGO_PAIR_GAP_PX,
+  RESUMEN_COL_B_MAX_CHARS,
+  RESUMEN_HEADER_ENTIDAD_END,
+  RESUMEN_HEADER_ENTIDAD_START,
+  RESUMEN_HEADER_LEFT_END,
+  RESUMEN_HEADER_LEFT_START,
+  RESUMEN_HEADER_TITLE_END,
+  RESUMEN_HEADER_TITLE_START,
+  anchoNecesarioParLogosPx,
   dimensionesImagenBuffer,
   excelColWidthToPx,
+  excelPxToColWidth,
   logoImageId,
   planLayoutLogosEncabezado,
+  planLayoutResumenEncabezado,
+  posicionLogoCentradoEnRango,
   posicionLogoEntidadFlotante,
   posicionParLogosFlotante,
   resolverMetaLogosPresupuesto,
@@ -191,7 +202,7 @@ function leerAnchosColumnasPx(ws, colCount) {
 }
 
 /**
- * Logo de entidad al extremo derecho del área usada.
+ * Logo de entidad al extremo derecho del área usada (pestañas de ítem).
  * Se llama DESPUÉS de ajustar anchos de columna (no modifica anchos).
  */
 function insertarLogoEntidadAlDerecho(ws, logo, colCount, rowHeightPt) {
@@ -203,6 +214,46 @@ function insertarLogoEntidadAlDerecho(ws, logo, colCount, rowHeightPt) {
     rowHeightPt,
   })
   insertarImagenFlotante(ws, logo, pos)
+}
+
+/**
+ * Resumen: B ≤ 15; A lo bastante ancha para que C+I (1.8 cm) quepan en A:B.
+ */
+function aplicarAnchosBloqueLogosResumen(ws, logoC, logoI) {
+  const bMax = RESUMEN_COL_B_MAX_CHARS
+  const curB = Number(ws.getColumn(2).width) || bMax
+  ws.getColumn(2).width = Math.min(curB, bMax)
+
+  const needPx = anchoNecesarioParLogosPx({ logoC, logoI })
+  if (needPx <= 0) return
+  const bPx = excelColWidthToPx(ws.getColumn(2).width)
+  const aNeedPx = Math.max(1, needPx - bPx)
+  const aNeedChars = excelPxToColWidth(aNeedPx)
+  const curA = Number(ws.getColumn(1).width) || 12
+  if (curA < aNeedChars) ws.getColumn(1).width = aNeedChars
+}
+
+/** Inserta C+I en A:B y entidad centrada en F:G (tras anchos definitivos). */
+function insertarLogosEncabezadoResumen(ws, { logoC, logoI, logoE, rowHeightPt }) {
+  const widths = leerAnchosColumnasPx(ws, 7)
+  const par = posicionParLogosFlotante({
+    logoC,
+    logoI,
+    colWidthsPx: [widths[0], widths[1]],
+    gapPx: LOGO_PAIR_GAP_PX,
+    rowHeightPt,
+  })
+  if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
+  if (par.interventoria) insertarImagenFlotante(ws, logoI, par.interventoria)
+
+  const posE = posicionLogoCentradoEnRango({
+    logo: logoE,
+    colStart: RESUMEN_HEADER_ENTIDAD_START,
+    colEnd: RESUMEN_HEADER_ENTIDAD_END,
+    colWidthsPx: widths,
+    rowHeightPt,
+  })
+  insertarImagenFlotante(ws, logoE, posE)
 }
 
 function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
@@ -259,7 +310,7 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
   }
 }
 
-function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoLegacy = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null } = {}) {
+function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoLegacy = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null, headerLayout = 'auto' } = {}) {
   const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
   const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
@@ -274,24 +325,55 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   // Par C+I: altura 1.8 cm; I pegada a C con LOGO_PAIR_GAP_PX (8 px ≈ 0.21 cm).
   // 68 px @ 96 dpi ≈ 51 pt; + margen → fila de título.
   const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
-  const par = posicionParLogosFlotante({
-    logoC: logosEff?.contratista,
-    logoI: logosEff?.interventoria,
-    colChars: LOGO_LEFT_COL_CHARS,
-    gapPx: LOGO_PAIR_GAP_PX,
-    rowHeightPt: logoRowHeightPt,
-  })
-  const layout = planLayoutLogosEncabezado(logosEff, cols, { leftSpanOverride: par.leftSpanCols })
-  const {
-    titleStart,
-    titleEnd,
-    entidadStart,
-    hasEntidad,
-    entidadLogo,
-    tieneLogo,
-    leftSpan,
-    rightSpan,
-  } = layout
+  const isResumen7 = headerLayout === 'resumen7'
+
+  let titleStart
+  let titleEnd
+  let entidadStart
+  let hasEntidad
+  let entidadLogo
+  let tieneLogo
+  let leftSpan
+  let rightSpan
+  let logoContratista = null
+  let logoInterventoria = null
+
+  if (isResumen7) {
+    const layout = planLayoutResumenEncabezado(logosEff)
+    ;({
+      titleStart,
+      titleEnd,
+      entidadStart,
+      hasEntidad,
+      entidadLogo,
+      tieneLogo,
+      leftSpan,
+      rightSpan,
+      logoContratista,
+      logoInterventoria,
+    } = layout)
+  } else {
+    const par = posicionParLogosFlotante({
+      logoC: logosEff?.contratista,
+      logoI: logosEff?.interventoria,
+      colChars: LOGO_LEFT_COL_CHARS,
+      gapPx: LOGO_PAIR_GAP_PX,
+      rowHeightPt: logoRowHeightPt,
+    })
+    const layout = planLayoutLogosEncabezado(logosEff, cols, { leftSpanOverride: par.leftSpanCols })
+    ;({
+      titleStart,
+      titleEnd,
+      entidadStart,
+      hasEntidad,
+      entidadLogo,
+      tieneLogo,
+      leftSpan,
+      rightSpan,
+    } = layout)
+    logoContratista = layout.logoContratista
+    logoInterventoria = layout.logoInterventoria
+  }
 
   const splitContrato = Math.max(2, Math.floor(cols * 0.18))
   const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
@@ -301,30 +383,47 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
 
-  // Bloque izquierdo: solo merge/fondo. Logos flotantes; NO tocar anchos de columna.
-  if (leftSpan > 0) {
-    ws.mergeCells(1, 1, 1, leftSpan)
-    if (par.contratista) insertarImagenFlotante(ws, logosEff.contratista, par.contratista)
-    if (par.interventoria) insertarImagenFlotante(ws, logosEff.interventoria, par.interventoria)
-  }
-
-  // Hueco derecho para entidad (fondo). La imagen se inserta tras ajustar anchos.
-  if (hasEntidad && entidadStart != null && entidadStart <= cols) {
-    ws.mergeCells(1, entidadStart, 1, cols)
-  }
-
-  if (tieneLogo) {
-    ws.mergeCells(1, titleStart, 1, titleEnd)
-    ws.getCell(1, titleStart).value = titulo
-    ws.getCell(1, titleStart).fill = FILL_TITLE
-    ws.getCell(1, titleStart).font = { bold: true, size: 14, color: { argb: CC.titleText } }
-    ws.getCell(1, titleStart).alignment = { horizontal: 'center', vertical: 'middle' }
+  if (isResumen7) {
+    // Exactamente A1:B1 | C1:E1 | F1:G1. Logos se insertan tras ajustar anchos.
+    ws.mergeCells(1, RESUMEN_HEADER_LEFT_START, 1, RESUMEN_HEADER_LEFT_END)
+    ws.mergeCells(1, RESUMEN_HEADER_TITLE_START, 1, RESUMEN_HEADER_TITLE_END)
+    ws.mergeCells(1, RESUMEN_HEADER_ENTIDAD_START, 1, RESUMEN_HEADER_ENTIDAD_END)
+    ws.getCell(1, RESUMEN_HEADER_TITLE_START).value = titulo
+    ws.getCell(1, RESUMEN_HEADER_TITLE_START).fill = FILL_TITLE
+    ws.getCell(1, RESUMEN_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
+    ws.getCell(1, RESUMEN_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
   } else {
-    ws.mergeCells(1, 1, 1, cols)
-    ws.getCell(1, 1).value = titulo
-    ws.getCell(1, 1).fill = FILL_TITLE
-    ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: CC.titleText } }
-    ws.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' }
+    // Pestañas de ítem: layout dinámico previo.
+    if (leftSpan > 0) {
+      ws.mergeCells(1, 1, 1, leftSpan)
+      const par = posicionParLogosFlotante({
+        logoC: logosEff?.contratista,
+        logoI: logosEff?.interventoria,
+        colChars: LOGO_LEFT_COL_CHARS,
+        gapPx: LOGO_PAIR_GAP_PX,
+        rowHeightPt: logoRowHeightPt,
+      })
+      if (par.contratista) insertarImagenFlotante(ws, logosEff.contratista, par.contratista)
+      if (par.interventoria) insertarImagenFlotante(ws, logosEff.interventoria, par.interventoria)
+    }
+
+    if (hasEntidad && entidadStart != null && entidadStart <= cols) {
+      ws.mergeCells(1, entidadStart, 1, cols)
+    }
+
+    if (tieneLogo) {
+      ws.mergeCells(1, titleStart, 1, titleEnd)
+      ws.getCell(1, titleStart).value = titulo
+      ws.getCell(1, titleStart).fill = FILL_TITLE
+      ws.getCell(1, titleStart).font = { bold: true, size: 14, color: { argb: CC.titleText } }
+      ws.getCell(1, titleStart).alignment = { horizontal: 'center', vertical: 'middle' }
+    } else {
+      ws.mergeCells(1, 1, 1, cols)
+      ws.getCell(1, 1).value = titulo
+      ws.getCell(1, 1).fill = FILL_TITLE
+      ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: CC.titleText } }
+      ws.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' }
+    }
   }
 
   ws.addRow(new Array(cols).fill(''))
@@ -374,8 +473,11 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     logoLeftSpan: leftSpan,
     logoRightSpan: rightSpan,
     entidadLogo: hasEntidad ? entidadLogo : null,
+    logoContratista,
+    logoInterventoria,
     logoRowHeightPt,
     headerCols: cols,
+    headerLayout: isResumen7 ? 'resumen7' : 'auto',
   }
 }
 
@@ -899,6 +1001,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     logoLeftSpan,
     logoRightSpan,
     entidadLogo,
+    logoContratista,
+    logoInterventoria,
     logoRowHeightPt,
   } = escribirEncabezadoCompacto(
     wsRes,
@@ -909,7 +1013,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     totalRegistros,
     generatedAt,
     logoLegacy,
-    { totalsTier: 'titulo_1', logos },
+    { totalsTier: 'titulo_1', logos, headerLayout: 'resumen7' },
   )
 
   wsRes.addRow(resumenHeaders)
@@ -970,13 +1074,18 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
-  // Anchos de Resumen como antes del ajuste de altura de logos (sin forzar 12).
+  // Anchos de datos; luego B≤15 y A suficiente para el par C+I en A1:B1.
   ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen, {
     logoLeftSpan: logoLeftSpan || 0,
     logoRightSpan: logoRightSpan || 0,
   })
-  // Entidad al extremo derecho; solo tamaño de imagen, no anchos de columna.
-  insertarLogoEntidadAlDerecho(wsRes, entidadLogo, totalColsResumen, logoRowHeightPt)
+  aplicarAnchosBloqueLogosResumen(wsRes, logoContratista, logoInterventoria)
+  insertarLogosEncabezadoResumen(wsRes, {
+    logoC: logoContratista,
+    logoI: logoInterventoria,
+    logoE: entidadLogo,
+    rowHeightPt: logoRowHeightPt,
+  })
   return wsRes
 }
 
