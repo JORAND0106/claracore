@@ -24,6 +24,19 @@ export const EMU_PER_PX = 9525
 /** DrawingML: EMUs por punto tipográfico. */
 export const EMU_PER_POINT = 12700
 
+/**
+ * Encabezado fijo de la pestaña Resumen (7 columnas de datos):
+ * A1:B1 logos C+I · C1:E1 título · F1:G1 entidad.
+ */
+export const RESUMEN_HEADER_LEFT_START = 1
+export const RESUMEN_HEADER_LEFT_END = 2
+export const RESUMEN_HEADER_TITLE_START = 3
+export const RESUMEN_HEADER_TITLE_END = 5
+export const RESUMEN_HEADER_ENTIDAD_START = 6
+export const RESUMEN_HEADER_ENTIDAD_END = 7
+/** Máximo de ancho (chars Excel) para la columna B en Resumen. */
+export const RESUMEN_COL_B_MAX_CHARS = 15
+
 /** @param {...(string|null|undefined)} candidates */
 export function pickLogoUrl(...candidates) {
   for (const c of candidates) {
@@ -88,6 +101,19 @@ export function excelColWidthToPx(widthChars) {
   return Math.max(1, Math.floor(((256 * w + Math.floor(128 / 7)) / 256) * 7))
 }
 
+/** Inversa aproximada de excelColWidthToPx (chars mínimos para alcanzar `px`). */
+export function excelPxToColWidth(px) {
+  const target = Math.max(1, Math.round(Number(px) || 1))
+  let lo = 1
+  let hi = 120
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (excelColWidthToPx(mid) < target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
 export function pxToEmu(px) {
   return Math.round(Math.max(0, Number(px) || 0) * EMU_PER_PX)
 }
@@ -136,18 +162,31 @@ function makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, logoHeightPx) {
 /**
  * Posiciones flotantes del par C+I: interventoría justo a la derecha del contratista.
  *
- * @param {{ logoC?: object|null, logoI?: object|null, colChars?: number, gapPx?: number, padLeftPx?: number, rowHeightPt?: number }} opts
+ * @param {{
+ *   logoC?: object|null,
+ *   logoI?: object|null,
+ *   colChars?: number,
+ *   colWidthsPx?: number[]|null,
+ *   gapPx?: number,
+ *   padLeftPx?: number,
+ *   padRightPx?: number,
+ *   rowHeightPt?: number,
+ * }} opts
  */
 export function posicionParLogosFlotante({
   logoC = null,
   logoI = null,
   colChars = LOGO_LEFT_COL_CHARS,
+  colWidthsPx = null,
   gapPx = LOGO_PAIR_GAP_PX,
   padLeftPx = LOGO_PAIR_PAD_LEFT_PX,
+  padRightPx = LOGO_PAIR_PAD_LEFT_PX,
   rowHeightPt = 54,
 } = {}) {
   const colPx = excelColWidthToPx(colChars)
-  const colWidthsPx = [colPx]
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length
+    ? colWidthsPx.map((w) => Math.max(1, Number(w) || colPx))
+    : [colPx]
 
   const sizeC = logoImageId(logoC) != null
     ? sizeLogoFixedHeight(logoNatSize(logoC).natW, logoNatSize(logoC).natH)
@@ -162,7 +201,7 @@ export function posicionParLogosFlotante({
 
   if (sizeC) {
     contratista = {
-      tl: makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, sizeC.height),
+      tl: makeFloatingTl(cursorPx, widths, rowHeightPt, sizeC.height),
       ext: { width: sizeC.width, height: sizeC.height },
     }
     cursorPx += sizeC.width
@@ -170,16 +209,99 @@ export function posicionParLogosFlotante({
   if (sizeI) {
     if (sizeC) cursorPx += gapPx
     interventoria = {
-      tl: makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, sizeI.height),
+      tl: makeFloatingTl(cursorPx, widths, rowHeightPt, sizeI.height),
       ext: { width: sizeI.width, height: sizeI.height },
     }
     cursorPx += sizeI.width
   }
 
-  const pairWidthPx = cursorPx + padLeftPx
-  const leftSpanCols = Math.max(2, Math.ceil(pairWidthPx / colPx))
+  const pairWidthPx = cursorPx + Math.max(0, Number(padRightPx) || 0)
+  const leftSpanCols = Math.max(2, Math.ceil(pairWidthPx / (widths[0] || colPx)))
 
-  return { contratista, interventoria, pairWidthPx, leftSpanCols, colChars, colPx }
+  return { contratista, interventoria, pairWidthPx, leftSpanCols, colChars, colPx: widths[0] || colPx }
+}
+
+/**
+ * Ancho en px necesario para el par C+I (pads + logos + gap), altura 1.8 cm.
+ */
+export function anchoNecesarioParLogosPx({
+  logoC = null,
+  logoI = null,
+  gapPx = LOGO_PAIR_GAP_PX,
+  padLeftPx = LOGO_PAIR_PAD_LEFT_PX,
+  padRightPx = LOGO_PAIR_PAD_LEFT_PX,
+} = {}) {
+  let w = padLeftPx + padRightPx
+  const hasC = logoImageId(logoC) != null
+  const hasI = logoImageId(logoI) != null
+  if (hasC) {
+    const s = sizeLogoFixedHeight(logoNatSize(logoC).natW, logoNatSize(logoC).natH)
+    w += s.width
+  }
+  if (hasI) {
+    const s = sizeLogoFixedHeight(logoNatSize(logoI).natW, logoNatSize(logoI).natH)
+    if (hasC) w += gapPx
+    w += s.width
+  }
+  return w
+}
+
+/**
+ * Logo centrado horizontalmente dentro de un rango de columnas (p. ej. F:G).
+ */
+export function posicionLogoCentradoEnRango({
+  logo = null,
+  colStart = 1,
+  colEnd = 1,
+  colWidthsPx = null,
+  rowHeightPt = 54,
+  padPx = LOGO_PAIR_PAD_LEFT_PX,
+} = {}) {
+  if (logoImageId(logo) == null) return null
+  const { natW, natH } = logoNatSize(logo)
+  const size = sizeLogoFixedHeight(natW, natH)
+  const start0 = Math.max(0, (Number(colStart) || 1) - 1)
+  const end0 = Math.max(start0, (Number(colEnd) || colStart) - 1)
+  const fallback = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length
+    ? colWidthsPx.map((w) => Math.max(1, Number(w) || fallback))
+    : Array.from({ length: end0 + 1 }, () => fallback)
+
+  let blockStartPx = 0
+  for (let i = 0; i < start0; i += 1) blockStartPx += widths[i] ?? fallback
+  let blockW = 0
+  for (let i = start0; i <= end0; i += 1) blockW += widths[i] ?? fallback
+
+  const pad = Math.max(0, Number(padPx) || 0)
+  const inner = Math.max(0, blockW - pad * 2)
+  const offsetInBlock = pad + Math.max(0, (inner - size.width) / 2)
+  return {
+    tl: makeFloatingTl(blockStartPx + offsetInBlock, widths, rowHeightPt, size.height),
+    ext: { width: size.width, height: size.height },
+  }
+}
+
+/** Layout fijo fila 1 de Resumen: A1:B1 | C1:E1 | F1:G1. */
+export function planLayoutResumenEncabezado(logos = null) {
+  const hasC = logoImageId(logos?.contratista) != null
+  const hasI = logoImageId(logos?.interventoria) != null
+  const hasE = logoImageId(logos?.entidad) != null
+  return {
+    cols: 7,
+    leftSpan: 2,
+    rightSpan: 2,
+    titleStart: RESUMEN_HEADER_TITLE_START,
+    titleEnd: RESUMEN_HEADER_TITLE_END,
+    entidadStart: RESUMEN_HEADER_ENTIDAD_START,
+    entidadEnd: RESUMEN_HEADER_ENTIDAD_END,
+    hasContratista: hasC,
+    hasInterventoria: hasI,
+    hasEntidad: hasE,
+    entidadLogo: hasE ? logos.entidad : null,
+    logoContratista: hasC ? logos.contratista : null,
+    logoInterventoria: hasI ? logos.interventoria : null,
+    tieneLogo: hasC || hasI || hasE,
+  }
 }
 
 /**
