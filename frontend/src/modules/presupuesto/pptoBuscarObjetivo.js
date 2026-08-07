@@ -1,12 +1,13 @@
 /**
  * Buscar objetivo (goal seek) de presupuesto.
  *
- * Fórmula canónica (igual que backend update_presupuesto_item / bulk_recalcular):
- *   cant_total = round(area × ancho × espesor, 2)  si ancho≠0 ó espesor≠0
- *   cant_total = round(area, 2)                    si no
- *   costo_directo = round(cant_total × vlr_unitario, 0)
+ * Registro comodín (esta herramienta): precisión completa — sin round a 2 dp
+ * en cantidad. cant_nueva = CD_objetivo / vlr; costo_directo del registro =
+ * entero exacto para que el total cierre en el objetivo.
  *
- * tipo_entidad solo etiqueta la dimensión Área/Long/Nodo; no cambia la matemática.
+ * Resto del presupuesto (edición normal) sigue con:
+ *   cant_total = round(area × ancho × espesor, 2)  si ancho≠0 ó espesor≠0
+ *   costo_directo = round(cant_total × vlr_unitario, 0)
  */
 
 /** @typedef {'area_long_nod' | 'ancho' | 'espesor'} PptoDimKey */
@@ -21,6 +22,7 @@ export function numDim(v) {
 }
 
 /**
+ * Cantidad con redondeo a 2 dp (edición normal / display de filas estándar).
  * @param {number|string|null|undefined} area
  * @param {number|string|null|undefined} ancho
  * @param {number|string|null|undefined} espesor
@@ -32,6 +34,21 @@ export function cantTotalFromDims(area, ancho, espesor) {
   const e = numDim(espesor)
   if (w || e) return Math.round(a * w * e * 100) / 100
   return Math.round(a * 100) / 100
+}
+
+/**
+ * Cantidad sin redondeo (registro comodín de Buscar objetivo).
+ * @param {number|string|null|undefined} area
+ * @param {number|string|null|undefined} ancho
+ * @param {number|string|null|undefined} espesor
+ * @returns {number}
+ */
+export function cantTotalExacta(area, ancho, espesor) {
+  const a = numDim(area)
+  const w = numDim(ancho)
+  const e = numDim(espesor)
+  if (w || e) return a * w * e
+  return a
 }
 
 /**
@@ -83,7 +100,7 @@ export function labelAreaLongNodo(tipoEntidad) {
 }
 
 /**
- * ¿Se puede despejar `dim` manteniendo fijas las otras bajo la fórmula canónica?
+ * ¿Se puede despejar `dim` manteniendo fijas las otras?
  * @param {PptoDimKey} dim
  * @param {number} area
  * @param {number} ancho
@@ -128,7 +145,7 @@ export function puedeDespejarDimension(dim, area, ancho, espesor) {
 }
 
 /**
- * Encuentra cant (2 decimales) tal que round(cant × vlr) ≈ cdTarget.
+ * Cantidad exacta (sin round a 2 dp) para alcanzar cdTarget: CD / vlr.
  * @param {number} cdTarget
  * @param {number} vlr
  * @returns {number|null}
@@ -137,31 +154,7 @@ export function cantParaCostoObjetivo(cdTarget, vlr) {
   const target = Math.round(Number(cdTarget))
   const vu = numDim(vlr)
   if (!(vu > 0) || !Number.isFinite(target)) return null
-  let cant = Math.round((target / vu) * 100) / 100
-  for (let i = 0; i < 80; i += 1) {
-    const cd = costoDirectoFromCant(cant, vu)
-    if (cd === target) return cant
-    const step = (target - cd) / vu
-    const next = Math.round((cant + step) * 100) / 100
-    if (next === cant) {
-      // Empate por redondeo a 2 decimales: probar vecinos.
-      const candidates = [cant - 0.01, cant, cant + 0.01]
-      let best = cant
-      let bestErr = Math.abs(cd - target)
-      for (const c of candidates) {
-        if (c < 0) continue
-        const err = Math.abs(costoDirectoFromCant(c, vu) - target)
-        if (err < bestErr) {
-          bestErr = err
-          best = Math.round(c * 100) / 100
-        }
-      }
-      return best
-    }
-    cant = next
-    if (cant < 0) cant = 0
-  }
-  return cant
+  return target / vu
 }
 
 /**
@@ -191,30 +184,17 @@ export function despejarDimension(dim, cantTarget, area, ancho, espesor) {
 }
 
 /**
- * Cálculo completo de Buscar objetivo.
+ * Cálculo completo de Buscar objetivo (precisión completa, cierre exacto).
  *
  * @param {object} opts
- * @param {number} opts.presupuestoActual  costo directo total actual
+ * @param {number} opts.presupuestoActual
  * @param {number} opts.presupuestoObjetivo
- * @param {number} opts.costoDirectoRegistro  CD actual del registro
+ * @param {number} opts.costoDirectoRegistro
  * @param {number} opts.vlrUnitario
  * @param {number} opts.area
  * @param {number} opts.ancho
  * @param {number} opts.espesor
  * @param {PptoDimKey} opts.dimension
- * @returns {{
- *   ok: boolean,
- *   error?: string,
- *   dimActual?: number,
- *   dimNueva?: number,
- *   cantActual?: number,
- *   cantNueva?: number,
- *   cdRegistroActual?: number,
- *   cdRegistroNuevo?: number,
- *   totalActual?: number,
- *   totalNuevo?: number,
- *   deltaTotal?: number,
- * }}
  */
 export function calcularBuscarObjetivo({
   presupuestoActual,
@@ -271,14 +251,12 @@ export function calcularBuscarObjetivo({
     espesor: e,
     [dimension]: dimNueva,
   }
-  const cantActual = cantTotalFromDims(a, w, e)
-  const cantVerif = cantTotalFromDims(
+  const cantActual = cantTotalExacta(a, w, e)
+  const cantVerif = cantTotalExacta(
     dimsAfter.area_long_nod,
     dimsAfter.ancho,
     dimsAfter.espesor,
   )
-  const cdVerif = costoDirectoFromCant(cantVerif, vlr)
-  const totalNuevo = actual - cdOld + cdVerif
 
   const dimActual = dimension === 'area_long_nod' ? a : dimension === 'ancho' ? w : e
 
@@ -289,9 +267,10 @@ export function calcularBuscarObjetivo({
     cantActual,
     cantNueva: cantVerif,
     cdRegistroActual: cdOld,
-    cdRegistroNuevo: cdVerif,
+    // CD y total exactos (no derivados de round(cant×vlr) con cant a 2 dp).
+    cdRegistroNuevo: cdNew,
     totalActual: actual,
-    totalNuevo,
-    deltaTotal: totalNuevo - actual,
+    totalNuevo: objetivo,
+    deltaTotal: objetivo - actual,
   }
 }

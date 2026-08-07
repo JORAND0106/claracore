@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   calcularBuscarObjetivo,
   cantParaCostoObjetivo,
+  cantTotalExacta,
   cantTotalFromDims,
   costoDirectoFromCant,
   despejarDimension,
@@ -11,7 +12,7 @@ import {
 } from './pptoBuscarObjetivo.js'
 
 describe('cantTotalFromDims / costoDirectoFromCant', () => {
-  it('modo producto: área × ancho × espesor', () => {
+  it('modo producto: área × ancho × espesor (2 dp, edición normal)', () => {
     assert.equal(cantTotalFromDims(10, 2, 0.5), 10)
     assert.equal(costoDirectoFromCant(10, 1500.4), 15004)
   })
@@ -19,6 +20,14 @@ describe('cantTotalFromDims / costoDirectoFromCant', () => {
   it('modo simple: solo área cuando ancho y espesor son 0', () => {
     assert.equal(cantTotalFromDims(7.555, 0, 0), 7.56)
     assert.equal(cantTotalFromDims(3, 0, 0), 3)
+  })
+})
+
+describe('cantTotalExacta', () => {
+  it('no redondea a 2 dp', () => {
+    const c = cantTotalExacta(125.5, 2.4, 0.21387749004)
+    assert.ok(Math.abs(c - 125.5 * 2.4 * 0.21387749004) < 1e-9)
+    assert.notEqual(Math.round(c * 100) / 100, c)
   })
 })
 
@@ -47,7 +56,6 @@ describe('puedeDespejarDimension', () => {
 
 describe('despejarDimension', () => {
   it('despeja cada dimensión manteniendo las otras', () => {
-    // cant = 10*2*0.5 = 10 → objetivo 20
     assert.equal(despejarDimension('area_long_nod', 20, 10, 2, 0.5), 20 / (2 * 0.5))
     assert.equal(despejarDimension('ancho', 20, 10, 2, 0.5), 20 / (10 * 0.5))
     assert.equal(despejarDimension('espesor', 20, 10, 2, 0.5), 20 / (10 * 2))
@@ -59,10 +67,7 @@ describe('despejarDimension', () => {
 })
 
 describe('calcularBuscarObjetivo', () => {
-  it('ajusta espesor para cerrar el total objetivo', () => {
-    // Registro: a=10, w=2, e=0.5 → cant=10, vlr=1000 → CD=10000
-    // Total actual 1_000_000, objetivo 1_005_000 → delta +5000 → CD reg=15000
-    // cant_new = 15 → espesor = 15/(10*2) = 0.75
+  it('ajusta espesor y cierra exactamente en el objetivo', () => {
     const r = calcularBuscarObjetivo({
       presupuestoActual: 1_000_000,
       presupuestoObjetivo: 1_005_000,
@@ -81,6 +86,33 @@ describe('calcularBuscarObjetivo', () => {
     assert.equal(r.totalNuevo, 1_005_000)
   })
 
+  it('cierra exacto aunque el VU no divida limpio a 2 dp', () => {
+    // Con round(cant, 2) el CD no alcanzaría el objetivo; con precisión completa sí.
+    const actual = 18_450_320_000
+    const objetivo = 20_000_000_000
+    const cdOld = 3_840_300
+    const vlr = 85_123
+    const r = calcularBuscarObjetivo({
+      presupuestoActual: actual,
+      presupuestoObjetivo: objetivo,
+      costoDirectoRegistro: cdOld,
+      vlrUnitario: vlr,
+      area: 125.5,
+      ancho: 2.4,
+      espesor: 0.15,
+      dimension: 'espesor',
+    })
+    assert.equal(r.ok, true)
+    assert.equal(r.totalNuevo, objetivo)
+    assert.equal(r.cdRegistroNuevo, cdOld + (objetivo - actual))
+    // cant exacta = CD / vlr (no truncada a 2 dp)
+    const cantEsperada = r.cdRegistroNuevo / vlr
+    assert.ok(Math.abs(r.cantNueva - cantEsperada) < 1e-9)
+    // Con 2 dp habría desfase en round(cant×vlr)
+    const cant2 = Math.round(cantEsperada * 100) / 100
+    assert.notEqual(Math.round(cant2 * vlr), r.cdRegistroNuevo)
+  })
+
   it('ajusta área en modo nodo (ancho=espesor=0)', () => {
     const r = calcularBuscarObjetivo({
       presupuestoActual: 500_000,
@@ -93,7 +125,6 @@ describe('calcularBuscarObjetivo', () => {
       dimension: 'area_long_nod',
     })
     assert.equal(r.ok, true)
-    // delta -10000 → CD=10000 → cant=1 → área=1
     assert.equal(r.dimNueva, 1)
     assert.equal(r.totalNuevo, 490_000)
   })
@@ -115,8 +146,8 @@ describe('calcularBuscarObjetivo', () => {
 })
 
 describe('cantParaCostoObjetivo', () => {
-  it('encuentra cant con CD exacto', () => {
-    const cant = cantParaCostoObjetivo(12345, 100)
-    assert.equal(costoDirectoFromCant(cant, 100), 12345)
+  it('devuelve CD/vlr sin truncar a 2 dp', () => {
+    const cant = cantParaCostoObjetivo(10, 3)
+    assert.equal(cant, 10 / 3)
   })
 })
