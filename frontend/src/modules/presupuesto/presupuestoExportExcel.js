@@ -32,7 +32,11 @@ import {
   resolverMetaLogosPresupuesto,
   sizeContainInBox,
 } from './presupuestoExportLogos.js'
-import { agruparRegistrosPorTipoEntidad } from './pptoTipoEntidad.js'
+import {
+  agruparRegistrosPorTipoEntidad,
+  PPTO_ENCABEZADO_GRUPO_ENTIDAD,
+  PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT,
+} from './pptoTipoEntidad.js'
 import { filtrarGraficosPorGrupoEntidad } from './pptoGraficosExport.js'
 import {
   costoDirectoResumenFila,
@@ -303,10 +307,37 @@ function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
   cell.alignment = { vertical: 'middle', horizontal: align, wrapText: true }
 }
 
-function estiloTitulo1Cell(cell, { bold = true, align = 'left', size = 11 } = {}) {
+function estiloTitulo1Cell(cell, { bold = true, align = 'left', size = 11, wrapText = true } = {}) {
   cell.fill = FILL_META
   cell.font = { bold, size, color: { argb: CC.metaText } }
-  cell.alignment = { vertical: 'middle', horizontal: align, indent: align === 'left' ? 1 : 0, wrapText: true }
+  cell.alignment = {
+    vertical: 'middle',
+    horizontal: align,
+    indent: align === 'left' ? 1 : 0,
+    wrapText,
+  }
+}
+
+/**
+ * Fila de encabezado breve (Título 1 de la paleta) antes de una subtabla Área/Longitud/Unidad.
+ * @returns {number|null} número de fila insertada, o null si no aplica
+ */
+function escribirEncabezadoGrupoEntidad(ws, grupoKey, totalCols) {
+  const texto = PPTO_ENCABEZADO_GRUPO_ENTIDAD[grupoKey]
+  if (!texto) return null
+  ws.addRow(new Array(totalCols).fill(''))
+  const rowNum = ws.rowCount
+  try {
+    ws.mergeCells(rowNum, 1, rowNum, totalCols)
+  } catch {
+    /* merge opcional */
+  }
+  for (let c = 1; c <= totalCols; c += 1) {
+    estiloTitulo1Cell(ws.getCell(rowNum, c), { bold: true, align: 'left', size: 11, wrapText: false })
+  }
+  ws.getCell(rowNum, 1).value = texto
+  ws.getRow(rowNum).height = PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT
+  return rowNum
 }
 
 function estiloTitulo2Cell(cell, { bold = true, align = 'left', size = 11 } = {}) {
@@ -1193,6 +1224,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   let lastDataRowGlobal = null
   let firstHeaderRow = null
   let lastTableRow = afterItemMeta - 1
+  /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
+  const filasEncabezadoGrupo = []
 
   grupos.forEach((grupo, gIdx) => {
     // Separación visual entre subtablas (fila en blanco).
@@ -1205,6 +1238,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
         cell.border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
       }
     }
+
+    const filaGrupo = escribirEncabezadoGrupoEntidad(ws, grupo.key, TOTAL_COLS_DET)
+    if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
 
     const headers = headersDetallePorGrupo(grupo.colLabel)
     ws.addRow(headers)
@@ -1284,6 +1320,15 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   })
   const wrapHasta = lastTableRow || afterItemMeta
   aplicarWrapTextRango(ws, afterItemMeta, wrapHasta, TOTAL_COLS_DET)
+  // Encabezados de grupo: una sola línea, altura 22, Título 1 (paleta).
+  for (const rn of filasEncabezadoGrupo) {
+    const texto = ws.getCell(rn, 1).value
+    ws.getRow(rn).height = PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT
+    for (let c = 1; c <= TOTAL_COLS_DET; c += 1) {
+      estiloTitulo1Cell(ws.getCell(rn, c), { bold: true, align: 'left', size: 11, wrapText: false })
+    }
+    ws.getCell(rn, 1).value = texto
+  }
 
   // Fila 2 ya fijada en 25 por escribirFilasMetaItem; bloque ítem / encabezado tabla.
   ws.getRow(7).height = 30
