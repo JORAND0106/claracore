@@ -8,6 +8,7 @@ import {
   dimensionesImagenBuffer,
   sizeLogoFixedHeight,
   posicionParLogosFlotante,
+  posicionParLogosExtremosBloque,
   posicionLogoEntidadFlotante,
   posicionLogoCentradoEnRango,
   anchoNecesarioParLogosPx,
@@ -145,6 +146,35 @@ describe('dimensionesImagenBuffer', () => {
       8, 2, 0, 0, 0, 0, 0, 0, 0,
     ])
     assert.deepEqual(dimensionesImagenBuffer(buf), { width: 2, height: 3 })
+  })
+})
+
+describe('posicionParLogosExtremosBloque', () => {
+  it('alinea contratista a la izquierda e interventoría a la derecha de A:B', () => {
+    const widths = [120, 105]
+    const logoC = { imageId: 0, natW: 100, natH: 100 }
+    const logoI = { imageId: 1, natW: 200, natH: 100 }
+    const par = posicionParLogosExtremosBloque({
+      logoC,
+      logoI,
+      colWidthsPx: widths,
+    })
+    assert.equal(par.contratista.ext.height, LOGO_HEIGHT_PX)
+    assert.equal(par.interventoria.ext.height, LOGO_HEIGHT_PX)
+    assert.equal(par.contratista.ext.width, 68)
+    assert.equal(par.interventoria.ext.width, 136)
+    // C en x=0 (extremo izquierdo)
+    assert.deepEqual(
+      { nativeCol: par.contratista.tl.nativeCol, nativeColOff: par.contratista.tl.nativeColOff },
+      pxOffsetToNativeCol(0, widths),
+    )
+    // I con borde derecho en blockW
+    const startI = widths[0] + widths[1] - 136
+    assert.deepEqual(
+      { nativeCol: par.interventoria.tl.nativeCol, nativeColOff: par.interventoria.tl.nativeColOff },
+      pxOffsetToNativeCol(startI, widths),
+    )
+    assert.ok(startI >= 68) // no solape con C (68 px)
   })
 })
 

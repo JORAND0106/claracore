@@ -222,6 +222,62 @@ export function posicionParLogosFlotante({
 }
 
 /**
+ * Par C+I en extremos del bloque A:B (Resumen):
+ * contratista pegado al borde izquierdo; interventoría al borde derecho de B.
+ *
+ * @param {{
+ *   logoC?: object|null,
+ *   logoI?: object|null,
+ *   colWidthsPx: number[],
+ *   rowHeightPt?: number,
+ *   padLeftPx?: number,
+ *   padRightPx?: number,
+ * }} opts
+ */
+export function posicionParLogosExtremosBloque({
+  logoC = null,
+  logoI = null,
+  colWidthsPx = null,
+  rowHeightPt = 54,
+  padLeftPx = 0,
+  padRightPx = 0,
+} = {}) {
+  const fallback = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length >= 2
+    ? colWidthsPx.slice(0, 2).map((w) => Math.max(1, Number(w) || fallback))
+    : [fallback, fallback]
+  const blockW = widths[0] + widths[1]
+  const padL = Math.max(0, Number(padLeftPx) || 0)
+  const padR = Math.max(0, Number(padRightPx) || 0)
+
+  const sizeC = logoImageId(logoC) != null
+    ? sizeLogoFixedHeight(logoNatSize(logoC).natW, logoNatSize(logoC).natH)
+    : null
+  const sizeI = logoImageId(logoI) != null
+    ? sizeLogoFixedHeight(logoNatSize(logoI).natW, logoNatSize(logoI).natH)
+    : null
+
+  let contratista = null
+  let interventoria = null
+
+  if (sizeC) {
+    contratista = {
+      tl: makeFloatingTl(padL, widths, rowHeightPt, sizeC.height),
+      ext: { width: sizeC.width, height: sizeC.height },
+    }
+  }
+  if (sizeI) {
+    const startI = Math.max(padL, blockW - padR - sizeI.width)
+    interventoria = {
+      tl: makeFloatingTl(startI, widths, rowHeightPt, sizeI.height),
+      ext: { width: sizeI.width, height: sizeI.height },
+    }
+  }
+
+  return { contratista, interventoria, blockWidthPx: blockW, colWidthsPx: widths }
+}
+
+/**
  * Ancho en px necesario para el par C+I (pads + logos + gap), altura 1.8 cm.
  */
 export function anchoNecesarioParLogosPx({

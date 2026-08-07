@@ -20,6 +20,7 @@ import {
   planLayoutResumenEncabezado,
   posicionLogoCentradoEnRango,
   posicionLogoEntidadFlotante,
+  posicionParLogosExtremosBloque,
   posicionParLogosFlotante,
   resolverMetaLogosPresupuesto,
 } from './presupuestoExportLogos.js'
@@ -217,14 +218,22 @@ function insertarLogoEntidadAlDerecho(ws, logo, colCount, rowHeightPt) {
 }
 
 /**
- * Resumen: B ≤ 15; A lo bastante ancha para que C+I (1.8 cm) quepan en A:B.
+ * Resumen: B ≤ 15; A lo bastante ancha para que C+I (1.8 cm) quepan en A:B
+ * sin solaparse al anclarse a extremos.
  */
 function aplicarAnchosBloqueLogosResumen(ws, logoC, logoI) {
   const bMax = RESUMEN_COL_B_MAX_CHARS
   const curB = Number(ws.getColumn(2).width) || bMax
   ws.getColumn(2).width = Math.min(curB, bMax)
 
-  const needPx = anchoNecesarioParLogosPx({ logoC, logoI })
+  // Extremos (pad 0): basta con que quepan ambos anchos a 1.8 cm.
+  const needPx = anchoNecesarioParLogosPx({
+    logoC,
+    logoI,
+    gapPx: 0,
+    padLeftPx: 0,
+    padRightPx: 0,
+  })
   if (needPx <= 0) return
   const bPx = excelColWidthToPx(ws.getColumn(2).width)
   const aNeedPx = Math.max(1, needPx - bPx)
@@ -233,14 +242,13 @@ function aplicarAnchosBloqueLogosResumen(ws, logoC, logoI) {
   if (curA < aNeedChars) ws.getColumn(1).width = aNeedChars
 }
 
-/** Inserta C+I en A:B y entidad centrada en F:G (tras anchos definitivos). */
+/** Inserta C+I en extremos de A:B y entidad centrada en F:G (tras anchos definitivos). */
 function insertarLogosEncabezadoResumen(ws, { logoC, logoI, logoE, rowHeightPt }) {
   const widths = leerAnchosColumnasPx(ws, 7)
-  const par = posicionParLogosFlotante({
+  const par = posicionParLogosExtremosBloque({
     logoC,
     logoI,
     colWidthsPx: [widths[0], widths[1]],
-    gapPx: LOGO_PAIR_GAP_PX,
     rowHeightPt,
   })
   if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
