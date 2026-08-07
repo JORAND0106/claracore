@@ -1,6 +1,12 @@
 import ExcelJS from 'exceljs'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
 import {
+  ITEM_HEADER_COLS,
+  ITEM_HEADER_ENTIDAD_COL,
+  ITEM_HEADER_LEFT_END,
+  ITEM_HEADER_LEFT_START,
+  ITEM_HEADER_TITLE_END,
+  ITEM_HEADER_TITLE_START,
   LOGO_HEIGHT_PX,
   LOGO_LEFT_COL_CHARS,
   LOGO_PAIR_GAP_PX,
@@ -16,10 +22,10 @@ import {
   excelColWidthToPx,
   excelPxToColWidth,
   logoImageId,
+  planLayoutItemEncabezado,
   planLayoutLogosEncabezado,
   planLayoutResumenEncabezado,
   posicionLogoCentradoEnRango,
-  posicionLogoEntidadFlotante,
   posicionParLogosExtremosBloque,
   posicionParLogosFlotante,
   resolverMetaLogosPresupuesto,
@@ -203,18 +209,28 @@ function leerAnchosColumnasPx(ws, colCount) {
 }
 
 /**
- * Logo de entidad al extremo derecho del área usada (pestañas de ítem).
- * Se llama DESPUÉS de ajustar anchos de columna (no modifica anchos).
+ * Logos de memoria de ítem tras anchos definitivos:
+ * C+I en extremos de A:D; entidad centrada en M.
  */
-function insertarLogoEntidadAlDerecho(ws, logo, colCount, rowHeightPt) {
-  if (logoImageId(logo) == null || !colCount) return
-  const pos = posicionLogoEntidadFlotante({
-    logo,
-    colCount,
-    colWidthsPx: leerAnchosColumnasPx(ws, colCount),
+function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt }) {
+  const widths = leerAnchosColumnasPx(ws, ITEM_HEADER_COLS)
+  const par = posicionParLogosExtremosBloque({
+    logoC,
+    logoI,
+    colWidthsPx: widths.slice(ITEM_HEADER_LEFT_START - 1, ITEM_HEADER_LEFT_END),
     rowHeightPt,
   })
-  insertarImagenFlotante(ws, logo, pos)
+  if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
+  if (par.interventoria) insertarImagenFlotante(ws, logoI, par.interventoria)
+
+  const posE = posicionLogoCentradoEnRango({
+    logo: logoE,
+    colStart: ITEM_HEADER_ENTIDAD_COL,
+    colEnd: ITEM_HEADER_ENTIDAD_COL,
+    colWidthsPx: widths,
+    rowHeightPt,
+  })
+  insertarImagenFlotante(ws, logoE, posE)
 }
 
 /**
@@ -319,6 +335,64 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
 }
 
 /**
+ * Filas 2–4 del encabezado memorias de ítem (14 cols):
+ * 2: A2 Contrato | B2:C2 número de contrato | D2 Objeto: | E2:M2 objeto (altura 25)
+ * 3: A3:B3 Contratista | C3:F3 nombre | G3:H3 NIT | I3:K3 nit
+ * 4: A4:B4 Interventoría | C4:F4 nombre | G4:H4 NIT | I4:K4 (sin nit_interventoria → "—")
+ *
+ * Nota: el prompt decía «nombre del contratista» en B2:C2, pero la etiqueta A2 es
+ * «Contrato» y el nombre ya va en C3:F3; B2:C2 usa el número de contrato.
+ */
+function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS) {
+  const n = Math.max(cols, ITEM_HEADER_COLS)
+  const objetoTxt = meta?.objeto ? String(meta.objeto).slice(0, 320) : '—'
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(2, 1).value = 'Contrato'
+  ws.getCell(2, 2).value = safeStr(meta?.numero).trim() || '—'
+  ws.mergeCells(2, 2, 2, 3)
+  ws.getCell(2, 4).value = 'Objeto:'
+  ws.getCell(2, 5).value = objetoTxt
+  ws.mergeCells(2, 5, 2, 13)
+  ws.getRow(2).height = 25
+  estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, 2), { rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, 4), { bold: true, rowNum: 2 })
+  estiloMetaCell(ws.getCell(2, 5), { rowNum: 2 })
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(3, 1).value = 'Contratista'
+  ws.mergeCells(3, 1, 3, 2)
+  ws.getCell(3, 3).value = safeStr(meta?.contratista).trim() || '—'
+  ws.mergeCells(3, 3, 3, 6)
+  ws.getCell(3, 7).value = 'NIT'
+  ws.mergeCells(3, 7, 3, 8)
+  ws.getCell(3, 9).value = safeStr(meta?.nit).trim() || '—'
+  ws.mergeCells(3, 9, 3, 11)
+  ws.getRow(3).height = 22
+  estiloMetaCell(ws.getCell(3, 1), { bold: true, rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 3), { rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 7), { bold: true, rowNum: 3 })
+  estiloMetaCell(ws.getCell(3, 9), { rowNum: 3 })
+
+  ws.addRow(new Array(n).fill(''))
+  ws.getCell(4, 1).value = 'Interventoría'
+  ws.mergeCells(4, 1, 4, 2)
+  ws.getCell(4, 3).value = safeStr(meta?.interventoria).trim() || '—'
+  ws.mergeCells(4, 3, 4, 6)
+  ws.getCell(4, 7).value = 'NIT'
+  ws.mergeCells(4, 7, 4, 8)
+  // No hay nit_interventoria en contratos.
+  ws.getCell(4, 9).value = '—'
+  ws.mergeCells(4, 9, 4, 11)
+  ws.getRow(4).height = 22
+  estiloMetaCell(ws.getCell(4, 1), { bold: true, rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 3), { rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 7), { bold: true, rowNum: 4 })
+  estiloMetaCell(ws.getCell(4, 9), { rowNum: 4 })
+}
+
+/**
  * Filas 2–4 del encabezado Resumen (7 cols):
  * 2: A2 Contrato | B2:G2 objeto (altura 22)
  * 3: A3 Contratista | B3:C3 nombre | D3 NIT | E3:F3 nit contratista
@@ -365,8 +439,6 @@ function escribirFilasMetaResumen(ws, meta, cols = 7) {
 }
 
 function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, totalRegistros, generatedAt, logoLegacy = null, { soloCantidad = false, totalsTier = 'titulo_2', logos = null, headerLayout = 'auto' } = {}) {
-  const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
-  const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
   const cols = Math.max(totalCols, 7)
   // Compat: si solo llega logoLegacy (id o descriptor), tratarlo como contratista.
   const logosEff =
@@ -376,14 +448,11 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
         ? { contratista: typeof logoLegacy === 'object' ? logoLegacy : { imageId: logoLegacy }, interventoria: null, entidad: null }
         : null)
 
-  // Par C+I: altura 1.8 cm; I pegada a C con LOGO_PAIR_GAP_PX (8 px ≈ 0.21 cm).
-  // 68 px @ 96 dpi ≈ 51 pt; + margen → fila de título.
+  // Par C+I: altura 1.8 cm; I al extremo derecho del bloque (Resumen A:B / Ítem A:D).
   const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
   const isResumen7 = headerLayout === 'resumen7'
+  const isItem14 = headerLayout === 'item14'
 
-  let titleStart
-  let titleEnd
-  let entidadStart
   let hasEntidad
   let entidadLogo
   let tieneLogo
@@ -395,9 +464,17 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
   if (isResumen7) {
     const layout = planLayoutResumenEncabezado(logosEff)
     ;({
-      titleStart,
-      titleEnd,
-      entidadStart,
+      hasEntidad,
+      entidadLogo,
+      tieneLogo,
+      leftSpan,
+      rightSpan,
+      logoContratista,
+      logoInterventoria,
+    } = layout)
+  } else if (isItem14) {
+    const layout = planLayoutItemEncabezado(logosEff)
+    ;({
       hasEntidad,
       entidadLogo,
       tieneLogo,
@@ -416,9 +493,6 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     })
     const layout = planLayoutLogosEncabezado(logosEff, cols, { leftSpanOverride: par.leftSpanCols })
     ;({
-      titleStart,
-      titleEnd,
-      entidadStart,
       hasEntidad,
       entidadLogo,
       tieneLogo,
@@ -428,9 +502,6 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     logoContratista = layout.logoContratista
     logoInterventoria = layout.logoInterventoria
   }
-
-  const splitContrato = Math.max(2, Math.floor(cols * 0.18))
-  const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
 
   ws.addRow(new Array(cols).fill(''))
   ws.getRow(1).height = tieneLogo ? logoRowHeightPt : TITLE_ROW_HEIGHT_NO_LOGO
@@ -446,8 +517,19 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).fill = FILL_TITLE
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
+  } else if (isItem14) {
+    // A1:D1 logos | E1:L1 título | M1 entidad (sin merge). Logos tras anchos.
+    ws.mergeCells(1, ITEM_HEADER_LEFT_START, 1, ITEM_HEADER_LEFT_END)
+    ws.mergeCells(1, ITEM_HEADER_TITLE_START, 1, ITEM_HEADER_TITLE_END)
+    ws.getCell(1, ITEM_HEADER_TITLE_START).value = titulo
+    ws.getCell(1, ITEM_HEADER_TITLE_START).fill = FILL_TITLE
+    ws.getCell(1, ITEM_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
+    ws.getCell(1, ITEM_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
+    // M1 y N1 solo fondo título (entidad flota en M).
   } else {
-    // Pestañas de ítem: layout dinámico previo.
+    const titleStart = leftSpan + 1
+    const titleEnd = Math.max(titleStart, cols - rightSpan)
+    const entidadStart = hasEntidad ? titleEnd + 1 : null
     if (leftSpan > 0) {
       ws.mergeCells(1, 1, 1, leftSpan)
       const par = posicionParLogosFlotante({
@@ -482,8 +564,13 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   if (isResumen7) {
     escribirFilasMetaResumen(ws, meta, cols)
+  } else if (isItem14) {
+    escribirFilasMetaItem(ws, meta, cols)
   } else {
-    // Pestañas de ítem: layout meta previo (contrato / interventoría / objeto).
+    const fechaTxt = generatedAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+    const horaTxt = generatedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
+    const splitContrato = Math.max(2, Math.floor(cols * 0.18))
+    const splitContratista = Math.max(splitContrato + 3, Math.floor(cols * 0.58))
     ws.addRow(new Array(cols).fill(''))
     ws.getCell(2, 1).value = `Contrato: ${meta.numero ?? '—'}`
     ws.getCell(2, splitContrato + 1).value = `Contratista: ${meta.contratista ?? '—'}`
@@ -536,7 +623,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     logoInterventoria,
     logoRowHeightPt,
     headerCols: cols,
-    headerLayout: isResumen7 ? 'resumen7' : 'auto',
+    headerLayout: isResumen7 ? 'resumen7' : isItem14 ? 'item14' : 'auto',
   }
 }
 
@@ -658,17 +745,16 @@ function ajustarAnchos(ws, desdeFila, colCount) {
   }
 }
 
-/** Memorias de ítem: A–M = 11, N = 45. Preserva anchos mínimos de logos. */
-function ajustarAnchosMemoriaItem(ws, colCount = 14, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
+/** Memorias de ítem: A–M = 11, N = 45. A–D mín. 14 para logos; M hereda 11 (entidad). */
+function ajustarAnchosMemoriaItem(ws, colCount = 14, { logoLeftSpan = 0 } = {}) {
   for (let c = 1; c <= colCount; c += 1) {
     ws.getColumn(c).width = c < colCount ? 11 : 45
   }
-  for (let c = 1; c <= logoLeftSpan; c += 1) {
+  const left = Math.min(logoLeftSpan || 0, ITEM_HEADER_LEFT_END)
+  for (let c = 1; c <= left; c += 1) {
     ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 14)
   }
-  for (let c = colCount - logoRightSpan + 1; c <= colCount; c += 1) {
-    if (c >= 1) ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
-  }
+  // Columna M (entidad): conservar ancho heredado (11); no ampliar por logoRightSpan.
 }
 
 function aplicarWrapTextRango(ws, fromRow, toRow, colCount) {
@@ -951,7 +1037,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     (itemInfo.registros || []).length,
     generatedAt,
     logoLegacy,
-    { soloCantidad: true, totalsTier: 'titulo_2', logos },
+    { soloCantidad: true, totalsTier: 'titulo_2', logos, headerLayout: 'item14' },
   )
 
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
@@ -1019,15 +1105,17 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
 
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
     logoLeftSpan: enc.logoLeftSpan || 0,
-    logoRightSpan: enc.logoRightSpan || 0,
   })
-  // Entidad al extremo derecho con anchos ya definitivos (sin alterar columnas).
-  insertarLogoEntidadAlDerecho(ws, enc.entidadLogo, TOTAL_COLS_DET, enc.logoRowHeightPt)
+  insertarLogosEncabezadoItem(ws, {
+    logoC: enc.logoContratista,
+    logoI: enc.logoInterventoria,
+    logoE: enc.entidadLogo,
+    rowHeightPt: enc.logoRowHeightPt,
+  })
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
-  // Alturas fijas de cabecera / bloque ítem / encabezado de tabla
-  ws.getRow(2).height = 30
+  // Fila 2 ya fijada en 25 por escribirFilasMetaItem; bloque ítem / encabezado tabla.
   ws.getRow(7).height = 30
   ws.getRow(9).height = 30
 
