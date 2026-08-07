@@ -1556,7 +1556,7 @@ export default function ActaEditor({
                     t={t}
                     value={idea.texto || ''}
                     editable={!soloLectura}
-                    placeholder="Redacción del tema… (viñetas, 1./1.1./1.1.1., negrita Ctrl+N, cursiva Ctrl+K, subrayado Ctrl+S; Ctrl+V con imagen adjunta esquema)"
+                    placeholder=""
                     onChange={(html) => {
                       patchList('ideas', (list) => list.map((row, i) => (
                         i === idx ? { ...row, texto: html } : row

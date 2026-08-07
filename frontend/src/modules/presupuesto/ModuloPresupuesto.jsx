@@ -560,9 +560,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [nuevoComentTexto,    setNuevoComentTexto]    = useState('')
   
   // ── Enlace DWG (SicoeCAD heartbeat → cola cad_queue, no ClaraLink) ───────
+  // Solo se muestra el indicador verde cuando hay DWG activo; el panel
+  // «Ejes CAD» y el aviso rojo «Sin DWG» quedan ocultos (flujo Agent/SICOECAD).
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
-  const [cadEjes, setCadEjes] = useState([])
-  const [cadEjesLoading, setCadEjesLoading] = useState(false)
   const dwgEnlazadoRef = useRef(false)
   const navPlanoTimerRef = useRef(null)
 
@@ -585,45 +585,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     }
   }, [contratoId])
 
-  const cargarCadEjes = useCallback(async () => {
-    if (!contratoId) return
-    try {
-      const tok = getToken()
-      if (!tok) return
-      setCadEjesLoading(true)
-      const r = await fetch(`${API}/cad/ejes/${contratoId}`, {
-        headers: { Authorization: `Bearer ${tok}` },
-      })
-      if (r.ok) setCadEjes(await r.json())
-      else setCadEjes([])
-    } catch {
-      setCadEjes([])
-    } finally {
-      setCadEjesLoading(false)
-    }
-  }, [contratoId])
-
-  const eliminarCadEje = useCallback(async (eje) => {
-    if (!contratoId || !eje?.id) return
-    if (!window.confirm(`¿Eliminar el eje «${eje.nombre}»?\n\nEsta acción no se puede deshacer.`)) return
-    try {
-      const tok = getToken()
-      if (!tok) return
-      const r = await fetch(`${API}/cad/ejes/${contratoId}/${eje.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${tok}` },
-      })
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}))
-        alert(d.detail || `Error ${r.status} al eliminar eje`)
-        return
-      }
-      setCadEjes(prev => prev.filter(x => x.id !== eje.id))
-    } catch (err) {
-      alert(err?.message || 'Error de red al eliminar eje')
-    }
-  }, [contratoId])
-
   useEffect(() => {
     if (!contratoId || oculto) return
     void refrescarDwgEnlazado()
@@ -639,15 +600,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       window.removeEventListener('focus', onActivo)
     }
   }, [contratoId, oculto, refrescarDwgEnlazado])
-
-  useEffect(() => {
-    if (!contratoId || oculto) return
-    void cargarCadEjes()
-    const iv = setInterval(() => {
-      if (document.visibilityState === 'visible') void cargarCadEjes()
-    }, 15000)
-    return () => clearInterval(iv)
-  }, [contratoId, oculto, cargarCadEjes])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -6550,20 +6502,18 @@ async function restaurar(id) {
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
           {puedeAbrirEdicionMasiva && (
             <>
-              {seleccionados.size > 0 ? (
+              {seleccionados.size > 0 && (
                 <span style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
                   {seleccionados.size} sel.
-                </span>
-              ) : (
-                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>
-                  Marque filas (Shift+clic = rango)
                 </span>
               )}
               <button
                 type="button"
                 disabled={seleccionados.size === 0}
                 aria-label="Edición masiva"
-                title={seleccionados.size === 0 ? 'Seleccione uno o más registros (checkbox)' : 'Edición masiva: capítulo, dimensiones, validación…'}
+                title={seleccionados.size === 0
+                  ? 'Edición masiva: seleccione uno o más registros'
+                  : 'Edición masiva: capítulo, dimensiones, validación…'}
                 onClick={() => seleccionados.size > 0 && setModalEdicionMasiva(true)}
                 style={{
                   width: 40,
@@ -6588,8 +6538,8 @@ async function restaurar(id) {
                   disabled={seleccionados.size === 0}
                   aria-label="Agregar gráficos a la selección"
                   title={seleccionados.size === 0
-                    ? 'Seleccione uno o más registros (checkbox)'
-                    : 'Nuevo grupo de gráfico para la selección (archivo, galería o Ctrl+V)'}
+                    ? 'Agregar gráficos: seleccione uno o más registros'
+                    : 'Agregar gráficos: nuevo grupo (archivo, galería o Ctrl+V)'}
                   onClick={() => seleccionados.size > 0 && setModalGraficos(true)}
                   style={{
                     width: 40,
@@ -6717,49 +6667,40 @@ async function restaurar(id) {
         <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando lista de capítulos…' : '📂 Importa un CSV para comenzar'}</div>
       ) : null}
 
-      {/* ── Barra Editar / Validar ── */}
-      {/* ── Indicador DWG ─────────────────────────────────────────── */}
-<div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
+      {/* ── Papelera + indicador DWG (solo verde cuando hay enlace activo) ── */}
+      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
           <button onClick={async () => { const v = !verPapelera; setVerPapelera(v); if (v) { _pptoCacheRef.current = null; cargarRegistros(true) } else { setRegistros([]); setDrill([]); await cargarCapitulos() } }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
         )}
-        <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
-          background: dwgEnlazado ? '#16A34A18' : '#EF444418',
-          border: `1px solid ${dwgEnlazado ? '#16A34A44' : '#EF444444'}`,
-          borderRadius:'8px', fontSize:'var(--cc-sm)', color: dwgEnlazado ? '#16A34A' : '#EF4444',
-          fontWeight:'600' }}>
-          <div style={{ width:'8px', height:'8px', borderRadius:'50%',
-            background: dwgEnlazado ? '#16A34A' : '#EF4444',
-            boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
-          {dwgEnlazado
-            ? '🔗 DWG Enlazado — Clic en grilla navega el plano vía Agent ClaraCAD (cola).'
-            : '⛓️ Sin DWG — Abra el Agent ClaraCAD e inicie sesión con el mismo usuario de la web para navegar el plano.'}
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
-          background: t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px',
-          fontSize:'var(--cc-sm)', color: t.textMuted, flexWrap:'wrap' }}>
-          <span style={{ fontWeight:'700', color: t.text }}>📐 Ejes CAD</span>
-          {cadEjesLoading ? (
-            <span>⏳ Cargando…</span>
-          ) : cadEjes.length === 0 ? (
-            <span>Sin ejes — en AutoCAD abra <code style={{ fontSize:'var(--cc-caption)' }}>SICOECAD</code> → Cargar Eje</span>
-          ) : (
-            cadEjes.map(e => (
-              <span key={e.id} title={e.created_at ? `Creado: ${e.created_at}` : e.nombre}
-                style={{ display:'inline-flex', alignItems:'center', gap:'4px', padding:'2px 4px 2px 8px', borderRadius:'6px', background: t.bg, border:`1px solid ${t.border}`, color: t.text, fontWeight:'600' }}>
-                {e.nombre}
-                <button type="button" title="Eliminar eje"
-                  onClick={() => void eliminarCadEje(e)}
-                  style={{ background:'transparent', border:'none', cursor:'pointer', color:'#EF4444', fontSize:'var(--cc-label)', lineHeight:1, padding:'0 4px' }}>
-                  ✕
-                </button>
-              </span>
-            ))
-          )}
-        </div>
+        {dwgEnlazado && (
+          <div
+            title="DWG enlazado — clic en grilla navega el plano vía Agent ClaraCAD"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              background: '#16A34A18',
+              border: '1px solid #16A34A44',
+              borderRadius: '8px',
+              fontSize: 'var(--cc-sm)',
+              color: '#16A34A',
+              fontWeight: '600',
+            }}
+          >
+            <div style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: '#16A34A',
+              boxShadow: '0 0 6px #16A34A',
+            }} />
+            🔗 DWG Enlazado
+          </div>
+        )}
       </div>
       {/* ── Tabla ── */}
       {(busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
@@ -6796,7 +6737,7 @@ async function restaurar(id) {
                       className="cc-ppto-row-check"
                       checked={seleccionados.has(r.id)}
                       disabled={esSellado(r)}
-                      title={esSellado(r) ? 'Registro sellado' : 'Shift+clic para seleccionar rango'}
+                      title={esSellado(r) ? 'Registro sellado' : 'Marque filas (Shift+clic = rango)'}
                       onClick={(e) => onSelCheckboxClick(r.id, e)}
                       onChange={(e) => onSelCheckboxChange(r.id, e)}
                       style={{
@@ -7003,7 +6944,7 @@ async function restaurar(id) {
                     className="cc-ppto-row-check"
                     checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))}
                     onChange={toggleTodos}
-                    title="Seleccionar / deseleccionar todos los visibles"
+                    title="Marque filas (Shift+clic = rango). Clic aquí: seleccionar / deseleccionar todos los visibles"
                     style={{ ...pptoCheckStyle, cursor: 'pointer' }}
                   />
                 </th>
@@ -7049,7 +6990,7 @@ async function restaurar(id) {
                           className="cc-ppto-row-check"
                           checked={seleccionados.has(r.id)}
                           disabled={esSellado(r)}
-                          title={esSellado(r) ? 'Registro sellado' : 'Shift+clic para seleccionar rango'}
+                          title={esSellado(r) ? 'Registro sellado' : 'Marque filas (Shift+clic = rango)'}
                           onClick={(e) => onSelCheckboxClick(r.id, e)}
                           onChange={(e) => onSelCheckboxChange(r.id, e)}
                           style={{
