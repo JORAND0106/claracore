@@ -840,12 +840,21 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
                 # el gráfico tras cada subtabla Área/Longitud/Unidad correspondiente).
                 tipos: List[str] = []
                 seen_te: Set[str] = set()
+                pids_item: List[int] = []
                 for r in item_regs:
                     te = (r.get("tipo_entidad") or "").strip()
                     if te and te not in seen_te:
                         seen_te.add(te)
                         tipos.append(te)
-                out.setdefault(key, []).append({**base, "tipos_entidad": tipos})
+                    try:
+                        pids_item.append(int(r["id"]))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                out.setdefault(key, []).append({
+                    **base,
+                    "tipos_entidad": tipos,
+                    "presupuesto_ids": pids_item,
+                })
 
     for key in out:
         out[key].sort(key=lambda x: (int(x.get("orden") or 0), str(x.get("url") or "")))

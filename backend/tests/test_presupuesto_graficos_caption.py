@@ -32,6 +32,7 @@ def test_attach_graficos_repite_en_varios_items(monkeypatch):
                 "grupo_id": "g-1",
                 "orden": 0,
                 "tipos_entidad": ["Área", "Longitud"],
+                "presupuesto_ids": [10, 11],
             }
         ],
         "CAP1\x1e1.2": [
@@ -41,6 +42,7 @@ def test_attach_graficos_repite_en_varios_items(monkeypatch):
                 "grupo_id": "g-1",
                 "orden": 0,
                 "tipos_entidad": ["Nodo"],
+                "presupuesto_ids": [20],
             }
         ],
     }
@@ -63,7 +65,9 @@ def test_attach_graficos_repite_en_varios_items(monkeypatch):
     assert items[0]["graficos"][0]["url"] == items[1]["graficos"][0]["url"]
     assert items[0]["graficos"][0]["caption"] == "Cuneta lateral tramo 3"
     assert items[0]["graficos"][0]["tipos_entidad"] == ["Área", "Longitud"]
+    assert items[0]["graficos"][0]["presupuesto_ids"] == [10, 11]
     assert items[1]["graficos"][0]["tipos_entidad"] == ["Nodo"]
+    assert items[1]["graficos"][0]["presupuesto_ids"] == [20]
     assert "graficos" not in items[2]
 
 
