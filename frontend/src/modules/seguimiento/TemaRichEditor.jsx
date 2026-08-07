@@ -8,8 +8,8 @@ import { plainTextToHtml } from './richTextUtils'
 /**
  * Editor TipTap para temas/ideas centrales.
  * - Viñetas, numeración y listas multinivel (1. / 1.1. / 1.1.1. vía CSS counters)
+ * - Nivel de lista: Tab / Shift+Tab (sin botones en la barra)
  * - Negrita / cursiva / subrayado por barra y Ctrl+N / Ctrl+K / Ctrl+S
- *   (preventDefault solo con el foco en el editor, para no disparar guardar del navegador)
  */
 export default function TemaRichEditor({
   t,
@@ -17,7 +17,7 @@ export default function TemaRichEditor({
   onChange,
   editable = true,
   minHeight = 120,
-  placeholder = 'Redacte el tema…',
+  placeholder = '',
   /** Si se pega una imagen, el padre puede adjuntarla como esquema (no insertarla en el HTML). */
   onPasteImage = null,
 }) {
@@ -216,45 +216,9 @@ export default function TemaRichEditor({
           >
             1. Lista
           </button>
-          <button
-            type="button"
-            title="Aumentar nivel (Tab)"
-            disabled={!editor.can().sinkListItem('listItem')}
-            style={{
-              ...btn(false),
-              opacity: editor.can().sinkListItem('listItem') ? 1 : 0.4,
-            }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().sinkListItem('listItem').run()}
-          >
-            → Nivel
-          </button>
-          <button
-            type="button"
-            title="Reducir nivel (Shift+Tab)"
-            disabled={!editor.can().liftListItem('listItem')}
-            style={{
-              ...btn(false),
-              opacity: editor.can().liftListItem('listItem') ? 1 : 0.4,
-            }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().liftListItem('listItem').run()}
-          >
-            ← Nivel
-          </button>
         </div>
       )}
       <EditorContent editor={editor} />
-      {editable && (
-        <div style={{
-          fontSize: 'var(--cc-xs)',
-          color: t.textMuted,
-          padding: '4px 10px 8px',
-          lineHeight: 1.35,
-        }}>
-          Atajos: Ctrl+N negrita · Ctrl+K cursiva · Ctrl+S subrayado · Tab / botones de nivel para 1. → 1.1. → 1.1.1.
-        </div>
-      )}
     </div>
   )
 }
@@ -298,21 +262,32 @@ function editorCss(t, minHeight) {
 .tema-rich-prose ol {
   list-style: none;
   margin: 0.35em 0 0.55em;
-  padding-left: 1.35em;
+  padding-left: 0;
   counter-reset: item;
 }
+/* Número y texto en la misma línea (el <p> de TipTap es block; ::before absoluto evita el salto). */
 .tema-rich-prose ol > li {
   display: block;
   position: relative;
   counter-increment: item;
   margin: 0.15em 0;
+  padding-left: 2.1em;
 }
 .tema-rich-prose ol > li::before {
-  content: counters(item, ".") ". ";
+  content: counters(item, ".") ".";
+  position: absolute;
+  left: 0;
+  top: 0;
   font-weight: 700;
   color: ${t.primary || '#0f766e'};
+  white-space: nowrap;
 }
-.tema-rich-prose li p { margin: 0; }
+.tema-rich-prose ol ol {
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+}
+.tema-rich-prose li p { margin: 0; display: inline; }
+.tema-rich-prose li > p { display: block; }
 .tema-rich-prose strong { font-weight: 700; }
 .tema-rich-prose em { font-style: italic; }
 .tema-rich-prose u { text-decoration: underline; }
