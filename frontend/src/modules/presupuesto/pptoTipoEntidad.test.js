@@ -5,6 +5,9 @@ import {
   clasificarTipoEntidad,
   ordenarRegistrosSubtabla,
   parseAbsInicioOrden,
+  PPTO_ENCABEZADO_GRUPO_ENTIDAD,
+  PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT,
+  PPTO_GRUPOS_ENTIDAD,
 } from './pptoTipoEntidad.js'
 
 describe('clasificarTipoEntidad', () => {
@@ -68,6 +71,22 @@ describe('agruparRegistrosPorTipoEntidad', () => {
       [6, 5],
       'Longitud: tramo A antes que Z; agrupación Área→Longitud intacta',
     )
+  })
+})
+
+describe('PPTO_ENCABEZADO_GRUPO_ENTIDAD', () => {
+  it('define texto de una línea para Área / Longitud / Unidad y altura 22', () => {
+    assert.equal(PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT, 22)
+    for (const g of PPTO_GRUPOS_ENTIDAD) {
+      const t = PPTO_ENCABEZADO_GRUPO_ENTIDAD[g.key]
+      assert.ok(t, `falta encabezado para ${g.key}`)
+      assert.equal(t.includes('\n'), false, 'sin salto de línea')
+      assert.match(t, /Cálculo de cantidades por/)
+    }
+    assert.match(PPTO_ENCABEZADO_GRUPO_ENTIDAD.area, /Áreas/)
+    assert.match(PPTO_ENCABEZADO_GRUPO_ENTIDAD.longitud, /Longitud/)
+    assert.match(PPTO_ENCABEZADO_GRUPO_ENTIDAD.unidad, /Unidad/)
+    assert.equal(PPTO_ENCABEZADO_GRUPO_ENTIDAD.otros, undefined)
   })
 })
 

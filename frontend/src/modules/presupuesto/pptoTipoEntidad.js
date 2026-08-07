@@ -13,6 +13,22 @@ export const PPTO_GRUPOS_ENTIDAD = Object.freeze([
   { key: 'unidad', colLabel: 'Unidad' },
 ])
 
+/**
+ * Encabezado breve (una línea) antes de cada subtabla de memorias Excel.
+ * Solo aplica a Área / Longitud / Unidad (no al residual).
+ */
+export const PPTO_ENCABEZADO_GRUPO_ENTIDAD = Object.freeze({
+  area:
+    'Cálculo de cantidades por Áreas — corresponde a la superficie (m²) medida sobre el plano de soporte para cada polígono registrado.',
+  longitud:
+    'Cálculo de cantidades por Longitud — corresponde a la distancia (m) medida sobre el eje o tramo registrado en el plano de soporte.',
+  unidad:
+    'Cálculo de cantidades por Unidad — corresponde al conteo de elementos puntuales (nodos) registrados en el plano de soporte.',
+})
+
+/** Altura de fila del encabezado breve de grupo (pt). */
+export const PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT = 22
+
 function norm(v) {
   return String(v || '')
     .normalize('NFD')
