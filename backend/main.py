@@ -10549,7 +10549,7 @@ def get_items_presupuesto(
 _PRESUPUESTO_EXPORT_SELECT = (
     "capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
     "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
-    "area_long_nod, ancho, espesor, "
+    "area_long_nod, ancho, espesor, tipo_entidad, "
     "revisado, pre_interv_estado, pre_interv_por, validado_por, "
     "observacion, observacion_externa, tipo_ejecucion"
 )
@@ -10870,6 +10870,7 @@ def exportar_presupuesto_informe(
             "ancho": r.get("ancho"),
             "espesor": r.get("espesor"),
             "cant_total": r.get("cant_total"),
+            "tipo_entidad": (r.get("tipo_entidad") or "").strip(),
             "pre_interv_por": (r.get("pre_interv_por") or "").strip(),
             "validado_por": (r.get("validado_por") or "").strip(),
             "observacion": " · ".join(obs_parts),
