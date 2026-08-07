@@ -10313,6 +10313,123 @@ def buscar_registros_buscar_objetivo(
     return {"registros": rows}
 
 
+class BuscarObjetivoAplicarBody(BaseModel):
+    presupuesto_id: int
+    dimension: str  # area_long_nod | ancho | espesor
+    presupuesto_objetivo: float
+    tipo_ejecucion: Optional[str] = "Presupuesto de Obra"
+
+
+@app.post("/presupuesto/{contrato_id}/buscar-objetivo/aplicar")
+def buscar_objetivo_aplicar(
+    contrato_id: int,
+    body: BuscarObjetivoAplicarBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Aplica el ajuste de «Buscar objetivo» en un solo registro comodín.
+
+    Guarda la dimensión y la cantidad con precisión completa (sin round a 2 dp)
+    y fija costo_directo al entero exacto para que Σ cierre en el objetivo.
+    No usa el recálculo estándar de update_presupuesto_item.
+    """
+    from presupuesto_buscar_objetivo import calcular_ajuste_buscar_objetivo
+
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_editar_dimensiones_presupuesto(current_user, contrato_id):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para modificar dimensiones en presupuesto.",
+        )
+
+    dim = (body.dimension or "").strip()
+    if dim not in ("area_long_nod", "ancho", "espesor"):
+        raise HTTPException(status_code=422, detail="dimension debe ser area_long_nod, ancho o espesor")
+
+    te = (body.tipo_ejecucion or "Presupuesto de Obra").strip() or "Presupuesto de Obra"
+    pid = int(body.presupuesto_id)
+
+    rows = (
+        supabase.table("presupuesto")
+        .select("*")
+        .eq("id", pid)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    prev = rows[0]
+    if prev.get("dado_de_baja"):
+        raise HTTPException(status_code=400, detail="El registro está dado de baja")
+    if prev.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
+
+    total_actual = _presupuesto_costo_directo_total_modulo(contrato_id, te, current_user)
+    calc = calcular_ajuste_buscar_objetivo(
+        presupuesto_actual=total_actual,
+        presupuesto_objetivo=body.presupuesto_objetivo,
+        costo_directo_registro=prev.get("costo_directo") or 0,
+        vlr_unitario=prev.get("vlr_unitario") or 0,
+        area=prev.get("area_long_nod") or 0,
+        ancho=prev.get("ancho") or 0,
+        espesor=prev.get("espesor") or 0,
+        dimension=dim,
+    )
+    if not calc.get("ok"):
+        raise HTTPException(status_code=422, detail=calc.get("error") or "No se pudo calcular el ajuste")
+
+    # Bloqueo CAD de Área/Long/Nodo (igual que edición normal).
+    _ppto_validar_edicion_dimensiones(contrato_id, prev, {dim: calc["dim_nueva"]})
+
+    patch = {
+        dim: calc["dim_nueva"],
+        "cant_total": calc["cant_nueva"],
+        "costo_directo": float(calc["cd_registro_nuevo"]),
+        "calculo_por": _calculo_usuario_label(current_user),
+        "calculo_en": datetime.now(timezone.utc).isoformat(),
+        "updated_at": "now()",
+    }
+    supabase.table("presupuesto").update(patch).eq("id", pid).eq("contrato_id", contrato_id).execute()
+
+    updated = (
+        supabase.table("presupuesto")
+        .select("*")
+        .eq("id", pid)
+        .limit(1)
+        .execute()
+        .data
+        or [None]
+    )[0]
+    total_nuevo = _presupuesto_costo_directo_total_modulo(contrato_id, te, current_user)
+
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "registro": updated,
+        "ajuste": {
+            "dimension": dim,
+            "dim_actual": calc["dim_actual"],
+            "dim_nueva": calc["dim_nueva"],
+            "cant_nueva": calc["cant_nueva"],
+            "cd_registro_nuevo": calc["cd_registro_nuevo"],
+            "total_actual": calc["total_actual"],
+            "total_nuevo": total_nuevo,
+            "presupuesto_objetivo": calc["presupuesto_objetivo"],
+            "cierre_exacto": int(round(total_nuevo)) == int(calc["presupuesto_objetivo"]),
+        },
+    }
+
+
 _ENDPOINT_CACHE_TTL_SEC = 120  # alias documental; TTL real = _DASHBOARD_RESPONSE_STALE_SEC
 
 

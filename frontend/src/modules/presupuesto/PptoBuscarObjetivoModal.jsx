@@ -21,17 +21,18 @@ const MODAL_WIDTH = 780
 
 function fmtDim(n) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
+  // Hasta 12 decimales: el comodín de Buscar objetivo guarda precisión completa.
   return new Intl.NumberFormat('es-CO', {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 6,
+    maximumFractionDigits: 12,
   }).format(Number(n))
 }
 
 function fmtCant(n) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
   return new Intl.NumberFormat('es-CO', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 12,
   }).format(Number(n))
 }
 
@@ -286,16 +287,25 @@ export default function PptoBuscarObjetivoModal({
   }
 
   const onConfirmar = async () => {
-    if (!preview || !registro || !pptoEp?.item) return
+    if (!preview || !registro || !contratoId) return
     setAplicando(true)
     setError('')
     try {
-      const body = { [preview.dimension]: preview.dimNueva }
-      const res = await fetch(pptoEp.item(registro.id), {
-        method: 'PUT',
-        headers: { ...authHdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      // Endpoint dedicado: guarda dimensión/cant con precisión completa y CD exacto
+      // (no pasa por PUT item, que redondea cant a 2 dp).
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/buscar-objetivo/aplicar`,
+        {
+          method: 'POST',
+          headers: { ...authHdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presupuesto_id: registro.id,
+            dimension: preview.dimension,
+            presupuesto_objetivo: preview.objetivo,
+            tipo_ejecucion: 'Presupuesto de Obra',
+          }),
+        },
+      )
       if (!res.ok) {
         const txt = await res.text().catch(() => '')
         let detail = txt
@@ -305,12 +315,21 @@ export default function PptoBuscarObjetivoModal({
         } catch { /* ignore */ }
         throw new Error(typeof detail === 'string' ? detail : 'No se pudo aplicar el ajuste')
       }
-      const updated = await res.json().catch(() => null)
+      const data = await res.json().catch(() => null)
+      const updated = data?.registro || null
+      const cierre = data?.ajuste
       await cargarCostoActual()
       setResultadoOk({
-        preview,
+        preview: {
+          ...preview,
+          dimNueva: cierre?.dim_nueva ?? preview.dimNueva,
+          cantNueva: cierre?.cant_nueva ?? preview.cantNueva,
+          cdRegistroNuevo: cierre?.cd_registro_nuevo ?? preview.cdRegistroNuevo,
+          totalNuevo: cierre?.total_nuevo ?? preview.totalNuevo,
+        },
         updated,
         idPol: registro.id_pol || registro.pk_id,
+        cierreExacto: cierre?.cierre_exacto,
       })
       setFase('done')
       onApplied?.(updated || registro)
@@ -796,6 +815,9 @@ export default function PptoBuscarObjetivoModal({
             >
               <div style={{ padding: '10px 12px', fontWeight: 700, color: '#065F46', fontSize: 'var(--cc-label)' }}>
                 ✓ Ajuste aplicado · {resultadoOk.idPol}
+                {resultadoOk.cierreExacto === false
+                  ? ' (revisar total)'
+                  : ' · cierre exacto'}
               </div>
               <div style={{ background: t.bgCard }}>
                 <CompareTable
