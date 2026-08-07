@@ -17,6 +17,7 @@ import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoGraficosModal from './PptoGraficosModal'
 import PptoGruposGraficosModal from './PptoGruposGraficosModal'
+import PptoBuscarObjetivoModal from './PptoBuscarObjetivoModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
 import PptoValidacionIcon from './PptoValidacionIcon'
 import {
@@ -307,6 +308,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [modalGraficos, setModalGraficos] = useState(false)
   const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
+  const [modalBuscarObjetivo, setModalBuscarObjetivo] = useState(false)
   /** IDs de presupuesto con al menos un gráfico asociado (indicador en grilla). */
   const [idsConGrafico, setIdsConGrafico] = useState(() => new Set())
   const [bulkEstado, setBulkEstado] = useState('')
@@ -6108,6 +6110,24 @@ async function restaurar(id) {
         API={API}
       />
 
+      <PptoBuscarObjetivoModal
+        open={modalBuscarObjetivo}
+        onClose={() => setModalBuscarObjetivo(false)}
+        t={t}
+        contratoId={contratoId}
+        token={token}
+        API={API}
+        pptoEp={pptoEndpointsRef.current || buildPptoEndpoints({ API, contratoId, versionActiva })}
+        onApplied={(updated) => {
+          if (updated?.id != null) {
+            setRegistros((prev) =>
+              prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)),
+            )
+          }
+          void cargarCapitulos({ force: true, silent: true })
+        }}
+      />
+
       {/* ── Modal confirmar recálculo ── */}
       {modalConfirm && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
@@ -6630,6 +6650,29 @@ async function restaurar(id) {
               }}
             >
               🗂️
+            </button>
+          )}
+          {!versionActiva?.id && !verPapelera && puedeEditarDimensiones && (
+            <button
+              type="button"
+              aria-label="Buscar objetivo"
+              title="Buscar objetivo: ajustar una dimensión de un registro para cerrar el presupuesto total"
+              onClick={() => setModalBuscarObjetivo(true)}
+              style={{
+                width: 40,
+                height: 40,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: t.bg,
+                color: t.text,
+                border: `1.5px solid ${t.border}`,
+                borderRadius: 8,
+                fontSize: 18,
+                cursor: 'pointer',
+              }}
+            >
+              🎯
             </button>
           )}
           {seleccionados.size > 0 && (

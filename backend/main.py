@@ -10235,6 +10235,46 @@ def get_resumen_presupuesto(
         "vista": parse_dash_vista(vista),
     }
 
+
+@app.get("/presupuesto/{contrato_id}/buscar-objetivo/registros")
+def buscar_registros_buscar_objetivo(
+    contrato_id: int,
+    q: str = Query("", max_length=80),
+    limit: int = Query(30, ge=1, le=80),
+    tipo_ejecucion: str = Query("Presupuesto de Obra"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Busca registros vivos (Presupuesto de Obra por defecto) para la herramienta
+    «Buscar objetivo»: incluye dimensiones, vlr y costo directo.
+    """
+    _require_contract_access(current_user, contrato_id)
+    term = (q or "").strip()
+    te = (tipo_ejecucion or "Presupuesto de Obra").strip() or "Presupuesto de Obra"
+    query = (
+        supabase.table("presupuesto")
+        .select(
+            "id, capitulo, item, tramo, id_pol, pk_id, tipo_entidad, "
+            "area_long_nod, ancho, espesor, cant_total, vlr_unitario, costo_directo, "
+            "tipo_ejecucion, sellado, abs_inicio, abs_final"
+        )
+        .eq("contrato_id", contrato_id)
+        .eq("dado_de_baja", False)
+        .eq("sellado", False)
+        .limit(limit)
+    )
+    query = _presupuesto_q_tipo_ejecucion(query, te)
+    if term:
+        safe = term.replace("%", "").replace(",", " ")
+        pattern = f"%{safe}%"
+        query = query.or_(
+            f"id_pol.ilike.{pattern},pk_id.ilike.{pattern},"
+            f"item.ilike.{pattern},tramo.ilike.{pattern},capitulo.ilike.{pattern}"
+        )
+    rows = query.order("id_pol").execute().data or []
+    return {"registros": rows}
+
+
 _ENDPOINT_CACHE_TTL_SEC = 120  # alias documental; TTL real = _DASHBOARD_RESPONSE_STALE_SEC
 
 
