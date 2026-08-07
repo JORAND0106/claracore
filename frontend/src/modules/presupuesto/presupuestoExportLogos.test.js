@@ -4,11 +4,18 @@ import {
   pickLogoUrl,
   planLayoutLogosEncabezado,
   resolverMetaLogosPresupuesto,
-  fitLogoContain,
   dimensionesImagenBuffer,
-  posicionLogoFlotante,
-  LOGO_PAR_MAX_W,
-  LOGO_PAR_MAX_H,
+  sizeLogoFixedHeight,
+  posicionParLogosFlotante,
+  posicionLogoEntidadFlotante,
+  excelColWidthToPx,
+  pxOffsetToNativeCol,
+  pxToEmu,
+  LOGO_HEIGHT_CM,
+  LOGO_HEIGHT_PX,
+  LOGO_PAIR_GAP_PX,
+  LOGO_PAIR_PAD_LEFT_PX,
+  LOGO_LEFT_COL_CHARS,
 } from './presupuestoExportLogos.js'
 
 describe('pickLogoUrl', () => {
@@ -51,7 +58,7 @@ describe('resolverMetaLogosPresupuesto', () => {
 })
 
 describe('planLayoutLogosEncabezado', () => {
-  it('reserva columnas propias para C e I (no un solo merge) y entidad a la derecha', () => {
+  it('bloque izquierdo unificado para C+I y entidad a la derecha', () => {
     const layout = planLayoutLogosEncabezado(
       { contratista: { imageId: 0 }, interventoria: { imageId: 1 }, entidad: { imageId: 2 } },
       14,
@@ -60,50 +67,51 @@ describe('planLayoutLogosEncabezado', () => {
     assert.equal(layout.rightSpan, 2)
     assert.equal(layout.titleStart, 5)
     assert.equal(layout.entidadStart, 13)
-    assert.deepEqual(
-      layout.leftLogos.map((x) => [x.role, x.colStart]),
-      [
-        ['contratista', 1],
-        ['interventoria', 3],
-      ],
-    )
     assert.ok(layout.entidadStart > layout.titleStart)
   })
 
   it('con solo contratista usa 2 columnas a la izquierda', () => {
-    const layout = planLayoutLogosEncabezado({ contratista: { imageId: 0 }, interventoria: null, entidad: null }, 7)
+    const layout = planLayoutLogosEncabezado(
+      { contratista: { imageId: 0 }, interventoria: null, entidad: null },
+      7,
+    )
     assert.equal(layout.leftSpan, 2)
     assert.equal(layout.rightSpan, 0)
-    assert.equal(layout.leftLogos.length, 1)
+  })
+
+  it('respeta leftSpanOverride del par flotante', () => {
+    const layout = planLayoutLogosEncabezado(
+      { contratista: { imageId: 0 }, interventoria: { imageId: 1 }, entidad: null },
+      14,
+      { leftSpanOverride: 5 },
+    )
+    assert.equal(layout.leftSpan, 5)
   })
 })
 
-describe('fitLogoContain', () => {
-  it('no deforma: logo cuadrado en caja ancha queda cuadrado y centrado', () => {
-    const fit = fitLogoContain(100, 100, LOGO_PAR_MAX_W, LOGO_PAR_MAX_H)
-    assert.equal(fit.width, fit.height)
-    assert.equal(fit.height, LOGO_PAR_MAX_H)
-    assert.ok(fit.offsetX > 0)
-    assert.equal(fit.offsetY, 0)
+describe('sizeLogoFixedHeight', () => {
+  it('fija altura a 1.8 cm (68 px) y ancho proporcional', () => {
+    assert.equal(LOGO_HEIGHT_CM, 1.8)
+    assert.equal(LOGO_HEIGHT_PX, 68)
+    const sq = sizeLogoFixedHeight(100, 100)
+    assert.equal(sq.height, 68)
+    assert.equal(sq.width, 68)
+    const wide = sizeLogoFixedHeight(400, 100)
+    assert.equal(wide.height, 68)
+    assert.equal(wide.width, Math.round(68 * 4))
+    const tall = sizeLogoFixedHeight(50, 100)
+    assert.equal(tall.height, 68)
+    assert.equal(tall.width, Math.round(68 * 0.5))
   })
 
-  it('logo muy ancho se limita por el ancho máximo', () => {
-    const fit = fitLogoContain(400, 40, LOGO_PAR_MAX_W, LOGO_PAR_MAX_H)
-    assert.equal(fit.width, LOGO_PAR_MAX_W)
-    assert.ok(fit.height <= LOGO_PAR_MAX_H)
-    assert.ok(fit.offsetY >= 0)
-  })
-
-  it('no agranda logos más pequeños que la caja', () => {
-    const fit = fitLogoContain(20, 10, 96, 40)
-    assert.equal(fit.width, 20)
-    assert.equal(fit.height, 10)
+  it('no deforma: relación ancho/alto = natW/natH', () => {
+    const fit = sizeLogoFixedHeight(320, 80)
+    assert.ok(Math.abs(fit.width / fit.height - 320 / 80) < 0.02)
   })
 })
 
 describe('dimensionesImagenBuffer', () => {
   it('lee PNG IHDR', () => {
-    // PNG mínimo con IHDR 2×3
     const buf = new Uint8Array([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
       0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
@@ -114,21 +122,66 @@ describe('dimensionesImagenBuffer', () => {
   })
 })
 
-describe('posicionLogoFlotante', () => {
-  it('usa ext proporcional y tl con offset de centrado', () => {
-    const pos = posicionLogoFlotante({
-      colStart: 3,
-      slotCols: 2,
-      maxW: 96,
-      maxH: 40,
-      natW: 100,
-      natH: 100,
-      rowHeightPt: 54,
+describe('posicionParLogosFlotante', () => {
+  it('coloca interventoría justo a la derecha de contratista con gap 8 px (EMUs nativos)', () => {
+    assert.equal(LOGO_PAIR_GAP_PX, 8)
+    const logoC = { imageId: 0, natW: 100, natH: 100 }
+    const logoI = { imageId: 1, natW: 200, natH: 100 }
+    const par = posicionParLogosFlotante({ logoC, logoI })
+    assert.ok(par.contratista)
+    assert.ok(par.interventoria)
+    assert.equal(par.contratista.ext.height, LOGO_HEIGHT_PX)
+    assert.equal(par.interventoria.ext.height, LOGO_HEIGHT_PX)
+    assert.equal(par.contratista.ext.width, 68)
+    assert.equal(par.interventoria.ext.width, 136)
+
+    const colPx = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
+    const startC = LOGO_PAIR_PAD_LEFT_PX
+    const startI = startC + par.contratista.ext.width + LOGO_PAIR_GAP_PX
+    assert.deepEqual(
+      { nativeCol: par.contratista.tl.nativeCol, nativeColOff: par.contratista.tl.nativeColOff },
+      pxOffsetToNativeCol(startC, [colPx]),
+    )
+    assert.deepEqual(
+      { nativeCol: par.interventoria.tl.nativeCol, nativeColOff: par.interventoria.tl.nativeColOff },
+      pxOffsetToNativeCol(startI, [colPx]),
+    )
+    // Separación en px entre bordes = gap (independiente de columnas).
+    assert.equal(startI - (startC + par.contratista.ext.width), LOGO_PAIR_GAP_PX)
+    // Offsets en EMUs reales (no widthChars*10000 de ExcelJS).
+    assert.equal(par.contratista.tl.nativeColOff, pxToEmu(startC))
+    assert.equal(
+      par.interventoria.tl.nativeColOff - par.contratista.tl.nativeColOff,
+      pxToEmu(par.contratista.ext.width + LOGO_PAIR_GAP_PX),
+    )
+  })
+
+  it('con solo interventoría arranca en el padding izquierdo', () => {
+    const par = posicionParLogosFlotante({
+      logoC: null,
+      logoI: { imageId: 1, natW: 100, natH: 100 },
     })
-    assert.equal(pos.ext.width, pos.ext.height)
-    assert.equal(pos.ext.height, 40)
-    // colStart 3 → índice 2; offsetX = (96-40)/2 = 28 → +28/96*2 ≈ 0.583
-    assert.ok(pos.tl.col > 2 && pos.tl.col < 3)
-    assert.ok(pos.tl.row >= 0)
+    assert.equal(par.contratista, null)
+    assert.ok(par.interventoria)
+    const colPx = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
+    assert.deepEqual(
+      { nativeCol: par.interventoria.tl.nativeCol, nativeColOff: par.interventoria.tl.nativeColOff },
+      pxOffsetToNativeCol(LOGO_PAIR_PAD_LEFT_PX, [colPx]),
+    )
+  })
+})
+
+describe('posicionLogoEntidadFlotante', () => {
+  it('altura 1.8 cm y se ancla al bloque derecho con EMUs nativos', () => {
+    const pos = posicionLogoEntidadFlotante({
+      logo: { imageId: 2, natW: 120, natH: 60 },
+      colStart: 13,
+      slotCols: 2,
+      colChars: LOGO_LEFT_COL_CHARS,
+    })
+    assert.equal(pos.ext.height, LOGO_HEIGHT_PX)
+    assert.equal(pos.ext.width, Math.round(68 * 2))
+    assert.equal(pos.tl.nativeCol, 12)
+    assert.ok(pos.tl.nativeColOff >= 0)
   })
 })
