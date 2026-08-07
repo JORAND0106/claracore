@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   agruparRegistrosPorTipoEntidad,
   clasificarTipoEntidad,
+  ordenarRegistrosSubtabla,
+  parseAbsInicioOrden,
 } from './pptoTipoEntidad.js'
 
 describe('clasificarTipoEntidad', () => {
@@ -44,5 +46,48 @@ describe('agruparRegistrosPorTipoEntidad', () => {
     ])
     assert.deepEqual(groups.map((g) => g.key), ['longitud', 'otros'])
     assert.equal(groups[1].colLabel, 'Área/Long/Nodo')
+  })
+
+  it('dentro de cada subtabla ordena por Tramo → Infraestructura → Abs Inicio', () => {
+    const groups = agruparRegistrosPorTipoEntidad([
+      { id: 1, tipo_entidad: 'Área', tramo: 'T2', infraestructura: 'B', abs_inicio: '1+100' },
+      { id: 2, tipo_entidad: 'Área', tramo: 'T1', infraestructura: 'C', abs_inicio: '2+000' },
+      { id: 3, tipo_entidad: 'Área', tramo: 'T1', infraestructura: 'A', abs_inicio: '3+000' },
+      { id: 4, tipo_entidad: 'Área', tramo: 'T1', infraestructura: 'A', abs_inicio: '1+500' },
+      { id: 5, tipo_entidad: 'Longitud', tramo: 'Z', infraestructura: 'X', abs_inicio: '0+100' },
+      { id: 6, tipo_entidad: 'Longitud', tramo: 'A', infraestructura: 'Y', abs_inicio: '9+000' },
+    ])
+    assert.deepEqual(groups.map((g) => g.key), ['area', 'longitud'])
+    assert.deepEqual(
+      groups[0].registros.map((r) => r.id),
+      [4, 3, 2, 1],
+      'Área: T1/A/1+500 → T1/A/3+000 → T1/C/2+000 → T2/B/1+100',
+    )
+    assert.deepEqual(
+      groups[1].registros.map((r) => r.id),
+      [6, 5],
+      'Longitud: tramo A antes que Z; agrupación Área→Longitud intacta',
+    )
+  })
+})
+
+describe('ordenarRegistrosSubtabla / parseAbsInicioOrden', () => {
+  it('parsea Abs Inicio con formato km+m', () => {
+    assert.equal(parseAbsInicioOrden('2+900'), 2900)
+    assert.equal(parseAbsInicioOrden('0+050'), 50)
+    assert.equal(parseAbsInicioOrden(''), null)
+  })
+
+  it('ordena cascada con múltiples tramos e infraestructuras', () => {
+    const ordenados = ordenarRegistrosSubtabla([
+      { id: 'd', tramo: 'TRAMO 10', infraestructura: 'INF-A', abs_inicio: '5+000' },
+      { id: 'a', tramo: 'TRAMO 2', infraestructura: 'INF-B', abs_inicio: '1+000' },
+      { id: 'c', tramo: 'TRAMO 2', infraestructura: 'INF-A', abs_inicio: '3+200' },
+      { id: 'b', tramo: 'TRAMO 2', infraestructura: 'INF-A', abs_inicio: '1+100' },
+    ])
+    assert.deepEqual(
+      ordenados.map((r) => r.id),
+      ['b', 'c', 'a', 'd'],
+    )
   })
 })
