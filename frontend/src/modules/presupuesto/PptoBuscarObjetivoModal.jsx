@@ -80,8 +80,11 @@ export default function PptoBuscarObjetivoModal({
     if (!contratoId || !token) return
     setCargandoActual(true)
     try {
+      // Misma fuente que pestaña Resumen / capitulos-lista: Σ costo_directo.
+      // NO usar GET /presupuesto/.../resumen (KPI dashboard con VU listado_precios).
       const res = await fetch(
-        `${API}/presupuesto/${contratoId}/resumen?vista=presupuesto_obra`,
+        `${API}/presupuesto/${contratoId}/buscar-objetivo/presupuesto-actual`
+          + '?tipo_ejecucion=Presupuesto%20de%20Obra',
         { headers: authHdrs },
       )
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
@@ -343,7 +346,7 @@ export default function PptoBuscarObjetivoModal({
                 {cargandoActual ? 'Cargando…' : costoActual != null ? formatCOP(costoActual) : '—'}
               </div>
               <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
-                Costo directo total · Presupuesto de Obra (mismo total del resumen)
+                Σ costo_directo · Presupuesto de Obra (mismo total de la pestaña Resumen)
               </div>
             </section>
 

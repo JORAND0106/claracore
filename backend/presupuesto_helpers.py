@@ -2,9 +2,22 @@
 from __future__ import annotations
 
 import unicodedata
-from typing import List, Optional
+from typing import Any, List, Optional, Sequence
 
 from fastapi import HTTPException
+
+
+def sum_costo_directo_capitulos(caps: Optional[Sequence[Any]]) -> float:
+    """
+    Total de módulo Presupuesto / pestaña Resumen: Σ costo_total por capítulo
+    (= Σ costo_directo almacenado). Redondeo final único a pesos enteros.
+    """
+    total = 0.0
+    for c in caps or []:
+        if not isinstance(c, dict):
+            continue
+        total += float(c.get("costo_total") or 0)
+    return float(round(total, 0))
 
 
 def _presupuesto_coerce_multi_list(val) -> List:
