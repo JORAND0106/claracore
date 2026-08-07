@@ -2498,6 +2498,13 @@ app.include_router(avi_router)
 from presupuesto_versiones_routes import router as presupuesto_versiones_router
 app.include_router(presupuesto_versiones_router)
 
+from presupuesto_graficos_routes import (
+    router as presupuesto_graficos_router,
+    register_deps as register_presupuesto_graficos_deps,
+)
+register_presupuesto_graficos_deps(supabase, get_current_user, _require_contract_access)
+app.include_router(presupuesto_graficos_router)
+
 from filtros_plantillas_routes import router as filtros_plantillas_router
 app.include_router(filtros_plantillas_router)
 
@@ -10887,6 +10894,15 @@ def exportar_presupuesto_informe(
     items_out = []
     for k in sorted(items_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
         items_out.append(items_map[k])
+
+    # Gráficos por grupo de registros → se repiten en cada ítem involucrado.
+    try:
+        from presupuesto_graficos_routes import attach_graficos_a_items_export
+        attach_graficos_a_items_export(supabase, contrato_id, items_out)
+    except Exception as _exc_graf:
+        logging.getLogger("claracore.api").warning(
+            "exportar_presupuesto_informe graficos: %s", _exc_graf
+        )
 
     te = (body.tipo_ejecucion or "").strip()
     if modo.startswith("obra_ejecutada") or te == "Obra Ejecutada":

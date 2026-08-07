@@ -82,6 +82,8 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
       bulkObservacion: `${base}/bulk-observacion`,
       agregarCantidad: `${base}/agregar-cantidad`,
       filtros: `${base}/filtros`,
+      graficosUpload: `${base}/graficos/upload`,
+      graficosGrupos: `${base}/graficos/grupos`,
       materializar: null,
       appendBibliotecaQuery: (p) => p,
     }
@@ -109,6 +111,9 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
     bulkObservacion: `${vb}/bulk-observacion`,
     agregarCantidad: `${vb}/bulk`,
     filtros: `${API}/presupuesto/${cid}/filtros`,
+    // Gráficos de memoria solo se asocian al presupuesto vivo.
+    graficosUpload: `${API}/presupuesto/${cid}/graficos/upload`,
+    graficosGrupos: `${API}/presupuesto/${cid}/graficos/grupos`,
     materializar: `${vb}/biblioteca/materializar`,
     appendBibliotecaQuery: (p) => {
       if (!p) {
