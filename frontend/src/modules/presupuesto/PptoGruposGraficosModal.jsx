@@ -222,7 +222,9 @@ export default function PptoGruposGraficosModal({
       )
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
       await cargarDetalle(grupoId)
-      setOkMsg('Imagen reemplazada (membresía intacta)')
+      setOkMsg(
+        `✓ Imagen reemplazada y asociada al grupo (${detalle?.registros_count || (detalle?.registros || []).length || '—'} registros · pie: ${pie || '—'})`,
+      )
       setReemplazarImagenId(null)
       setGaleriaOpen(false)
     } catch (err) {

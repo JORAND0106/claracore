@@ -307,6 +307,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [modalGraficos, setModalGraficos] = useState(false)
   const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
+  /** IDs de presupuesto con al menos un gráfico asociado (indicador en grilla). */
+  const [idsConGrafico, setIdsConGrafico] = useState(() => new Set())
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
   const [bulkTipoEjecucion, setBulkTipoEjecucion] = useState('')
@@ -635,6 +637,29 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       document.removeEventListener('visibilitychange', onVis)
     }
   }, [contratoId, token, oculto])
+
+  const cargarIdsConGrafico = useCallback(async () => {
+    if (!contratoId || !token) {
+      setIdsConGrafico(new Set())
+      return
+    }
+    try {
+      const res = await fetch(`${API}/presupuesto/${contratoId}/graficos/presupuesto-ids`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      const ids = Array.isArray(data?.presupuesto_ids) ? data.presupuesto_ids : []
+      setIdsConGrafico(new Set(ids.map((id) => Number(id))))
+    } catch {
+      /* ignore */
+    }
+  }, [API, contratoId, token])
+
+  useEffect(() => {
+    if (!contratoId || !token || oculto) return
+    void cargarIdsConGrafico()
+  }, [contratoId, token, oculto, cargarIdsConGrafico])
 
     // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id']
@@ -1647,7 +1672,18 @@ useEffect(() => {
         if (!payload?.resumen?.length) {
           throw new Error('No hay registros para exportar con los filtros actuales.')
         }
-        await downloadPresupuestoInformeExcel(payload, metaExport, contratoId)
+        const stats = await downloadPresupuestoInformeExcel(
+          payload,
+          metaExport,
+          contratoId,
+          undefined,
+          { API, token },
+        )
+        if (stats?.graficosEnPayload > 0 && stats?.graficosEmbebidos === 0) {
+          setExportPresupuestoError(
+            'El Excel se generó, pero no se pudieron incrustar los gráficos. Revise la conexión o vuelva a intentar.',
+          )
+        }
       }
       setExportPresupuestoOpen(false)
     } catch (e) {
@@ -6047,13 +6083,25 @@ async function restaurar(id) {
         contratoId={contratoId}
         token={token}
         API={API}
-        onSaved={() => {
-          /* Los gráficos se leen al exportar memorias; no hace falta recargar la grilla. */
+        onSaved={(data) => {
+          const ids = Array.isArray(data?.presupuesto_ids) ? data.presupuesto_ids : []
+          if (ids.length) {
+            setIdsConGrafico((prev) => {
+              const next = new Set(prev)
+              for (const id of ids) next.add(Number(id))
+              return next
+            })
+          } else {
+            void cargarIdsConGrafico()
+          }
         }}
       />
       <PptoGruposGraficosModal
         open={modalGruposGraficos}
-        onClose={() => setModalGruposGraficos(false)}
+        onClose={() => {
+          setModalGruposGraficos(false)
+          void cargarIdsConGrafico()
+        }}
         t={t}
         contratoId={contratoId}
         token={token}
@@ -7000,6 +7048,15 @@ async function restaurar(id) {
                           }}
                         />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'var(--cc-caption)', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
+                        {idsConGrafico.has(Number(r.id)) && (
+                          <span
+                            title="Este registro pertenece a un grupo con gráfico"
+                            aria-label="Tiene gráfico"
+                            style={{ fontSize: 'var(--cc-label)', lineHeight: 1 }}
+                          >
+                            🖼
+                          </span>
+                        )}
                         <button onClick={() => abrirDetallePptoDesdeFila(r)}
                           title="Ver detalle"
                           style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'var(--cc-label)', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}

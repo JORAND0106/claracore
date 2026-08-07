@@ -37,6 +37,7 @@ export default function PptoGraficosModal({
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
+  const [exito, setExito] = useState(null)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const dropRef = useRef(null)
 
@@ -64,6 +65,7 @@ export default function PptoGraficosModal({
       setPieFoto('')
       setError('')
       setOkMsg('')
+      setExito(null)
       setGuardando(false)
       setGaleriaOpen(false)
       return
@@ -212,11 +214,22 @@ export default function PptoGraficosModal({
         throw new Error(msg || `Error al guardar grupo (${res.status})`)
       }
       const data = await res.json()
-      setOkMsg(
-        `Grupo guardado: ${data.imagenes || uploaded.length} gráfico(s) → ${itemsInvolucrados.length} ítem(s).`,
-      )
+      const resumenExito = {
+        grupoId: data.grupo_id,
+        imagenes: data.imagenes || uploaded.length,
+        registros: data.registros || regsSel.length,
+        pieFoto: data.pie_foto || String(pieFoto).trim(),
+        items: Array.isArray(data.items) && data.items.length
+          ? data.items
+          : itemsInvolucrados.map((it) => it.label),
+        thumbUrl: data.thumb_url || uploaded[0]?.url || imagenes[0]?.previewUrl || null,
+        presupuestoIds: Array.isArray(data.presupuesto_ids)
+          ? data.presupuesto_ids
+          : regsSel.map((r) => r.id),
+      }
+      setExito(resumenExito)
+      setOkMsg('')
       onSaved?.(data)
-      setTimeout(() => onClose?.(), 700)
     } catch (err) {
       setError(err?.message || 'No se pudo guardar')
     } finally {
@@ -227,6 +240,95 @@ export default function PptoGraficosModal({
   if (!open) return null
 
   const canSave = imagenes.length && regsSel.length && pieOk && !guardando
+
+  if (exito) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 2100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+        }}
+      >
+        <div
+          role="dialog"
+          aria-label="Gráfico asociado"
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 16,
+            width: 520,
+            maxWidth: '96vw',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+            padding: 22,
+          }}
+        >
+          <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: '#15803D', marginBottom: 8 }}>
+            ✓ Gráfico asociado correctamente
+          </div>
+          <div style={{ fontSize: cc.sm, color: t.textMuted, marginBottom: 14, lineHeight: 1.45 }}>
+            El grupo quedó guardado y vinculado a los registros seleccionados.
+            Al exportar la memoria del ítem, el gráfico aparecerá tras la subtabla correspondiente.
+          </div>
+          {exito.thumbUrl && (
+            <div
+              style={{
+                borderRadius: 10,
+                overflow: 'hidden',
+                border: `1px solid ${t.border}`,
+                marginBottom: 12,
+                background: '#fff',
+                height: 140,
+              }}
+            >
+              <img src={exito.thumbUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            </div>
+          )}
+          <div
+            style={{
+              background: t.bg,
+              borderRadius: 10,
+              border: `1px solid ${t.border}`,
+              padding: 12,
+              fontSize: cc.sm,
+              color: t.text,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              marginBottom: 16,
+            }}
+          >
+            <div><strong>{exito.imagenes}</strong> gráfico(s) · <strong>{exito.registros}</strong> registro(s)</div>
+            <div><strong>Ítems:</strong> {(exito.items || []).join(', ') || '—'}</div>
+            <div><strong>Pie de foto:</strong> {exito.pieFoto || '—'}</div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => onClose?.()}
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 18px',
+                fontWeight: 700,
+                fontSize: cc.sm,
+                cursor: 'pointer',
+              }}
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
