@@ -123,6 +123,14 @@ def path_sicoe_grafico(contrato_id: int, numero: int, ext: str = ".jpg") -> str:
     return f"{int(contrato_id)}/graficos/grafico_{int(numero)}{ext}"
 
 
+def path_presupuesto_grafico(contrato_id: int, nombre: str, ext: str = ".jpg") -> str:
+    """Gráficos de memorias de ítem (Presupuesto), path único por nombre/uuid."""
+    safe = (nombre or "grafico").strip().replace("/", "_")
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    return f"{int(contrato_id)}/presupuesto-graficos/{safe}{ext}"
+
+
 def path_perfil(uid: int, ext: str = ".jpg") -> str:
     return f"perfiles/{int(uid)}{ext}"
 

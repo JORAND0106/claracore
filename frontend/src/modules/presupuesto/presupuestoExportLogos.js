@@ -155,19 +155,19 @@ export function pxOffsetToNativeCol(px, colWidthsPx) {
   return { nativeCol: col, nativeColOff: pxToEmu(remaining) }
 }
 
-function rowNativeOffCentered(rowHeightPt, logoHeightPx) {
+function rowNativeOffCentered(rowHeightPt, logoHeightPx, nativeRow = 0) {
   const rowEmu = pointsToEmu(rowHeightPt)
   const logoEmu = pxToEmu(logoHeightPx)
   return {
-    nativeRow: 0,
+    nativeRow: Math.max(0, Math.floor(Number(nativeRow) || 0)),
     nativeRowOff: Math.max(0, Math.floor((rowEmu - logoEmu) / 2)),
   }
 }
 
-function makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, logoHeightPx) {
+function makeFloatingTl(cursorPx, colWidthsPx, rowHeightPt, logoHeightPx, nativeRow = 0) {
   return {
     ...pxOffsetToNativeCol(cursorPx, colWidthsPx),
-    ...rowNativeOffCentered(rowHeightPt, logoHeightPx),
+    ...rowNativeOffCentered(rowHeightPt, logoHeightPx, nativeRow),
   }
 }
 
@@ -253,6 +253,7 @@ export function posicionParLogosExtremosBloque({
   rowHeightPt = 54,
   padLeftPx = 0,
   padRightPx = 0,
+  nativeRow = 0,
 } = {}) {
   const fallback = excelColWidthToPx(LOGO_LEFT_COL_CHARS)
   const widths = Array.isArray(colWidthsPx) && colWidthsPx.length
@@ -274,14 +275,14 @@ export function posicionParLogosExtremosBloque({
 
   if (sizeC) {
     contratista = {
-      tl: makeFloatingTl(padL, widths, rowHeightPt, sizeC.height),
+      tl: makeFloatingTl(padL, widths, rowHeightPt, sizeC.height, nativeRow),
       ext: { width: sizeC.width, height: sizeC.height },
     }
   }
   if (sizeI) {
     const startI = Math.max(padL, blockW - padR - sizeI.width)
     interventoria = {
-      tl: makeFloatingTl(startI, widths, rowHeightPt, sizeI.height),
+      tl: makeFloatingTl(startI, widths, rowHeightPt, sizeI.height, nativeRow),
       ext: { width: sizeI.width, height: sizeI.height },
     }
   }
@@ -347,6 +348,7 @@ export function posicionLogoCentradoEnRango({
   colWidthsPx = null,
   rowHeightPt = 54,
   padPx = LOGO_PAIR_PAD_LEFT_PX,
+  nativeRow = 0,
 } = {}) {
   if (logoImageId(logo) == null) return null
   const { natW, natH } = logoNatSize(logo)
@@ -367,9 +369,23 @@ export function posicionLogoCentradoEnRango({
   const inner = Math.max(0, blockW - pad * 2)
   const offsetInBlock = pad + Math.max(0, (inner - size.width) / 2)
   return {
-    tl: makeFloatingTl(blockStartPx + offsetInBlock, widths, rowHeightPt, size.height),
+    tl: makeFloatingTl(blockStartPx + offsetInBlock, widths, rowHeightPt, size.height, nativeRow),
     ext: { width: size.width, height: size.height },
   }
+}
+
+/**
+ * Ajuste "contain" en caja fija: escala proporcional sin deformar (sin stretch).
+ * @returns {{ width: number, height: number }}
+ */
+export function sizeContainInBox(natW, natH, boxW, boxH) {
+  const bw = Math.max(1, Number(boxW) || 1)
+  const bh = Math.max(1, Number(boxH) || 1)
+  const w = Number(natW)
+  const h = Number(natH)
+  if (!(w > 0) || !(h > 0)) return { width: bw, height: bh }
+  const scale = Math.min(bw / w, bh / h)
+  return { width: Math.max(1, w * scale), height: Math.max(1, h * scale) }
 }
 
 /** Layout fijo fila 1 de Resumen: A1:B1 | C1:E1 | F1:G1. */

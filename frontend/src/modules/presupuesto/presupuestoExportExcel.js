@@ -29,6 +29,7 @@ import {
   posicionParLogosExtremosBloque,
   posicionParLogosFlotante,
   resolverMetaLogosPresupuesto,
+  sizeContainInBox,
 } from './presupuestoExportLogos.js'
 
 export { resolverMetaLogosPresupuesto }
@@ -211,14 +212,16 @@ function leerAnchosColumnasPx(ws, colCount) {
 /**
  * Logos de memoria de ítem tras anchos definitivos:
  * C+I en extremos de A:D; entidad centrada en M1 (col 13, ex-N tras borrar M).
+ * @param {number} [nativeRow=0] fila 0-based (0 = fila 1; para 2.º encabezado usar startRow-1)
  */
-function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt }) {
+function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt, nativeRow = 0 }) {
   const widths = leerAnchosColumnasPx(ws, ITEM_HEADER_COLS)
   const par = posicionParLogosExtremosBloque({
     logoC,
     logoI,
     colWidthsPx: widths.slice(ITEM_HEADER_LEFT_START - 1, ITEM_HEADER_LEFT_END),
     rowHeightPt,
+    nativeRow,
   })
   if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
   if (par.interventoria) insertarImagenFlotante(ws, logoI, par.interventoria)
@@ -230,6 +233,7 @@ function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt }) {
     colEnd: ITEM_HEADER_ENTIDAD_COL,
     colWidthsPx: widths,
     rowHeightPt,
+    nativeRow,
   })
   insertarImagenFlotante(ws, logoE, posE)
 }
@@ -336,62 +340,194 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
 }
 
 /**
- * Filas 2–4 del encabezado memorias de ítem (14 cols):
- * 2: A2 Contrato | B2:C2 número de contrato | D2 Objeto: | E2:M2 objeto (altura 25)
- * 3: A3:B3 Contratista | C3:F3 nombre | G3:H3 NIT | I3:K3 nit
- * 4: A4:B4 Interventoría | C4:F4 nombre | G4:H4 NIT | I4:K4 (sin nit_interventoria → "—")
+ * Filas meta del encabezado memorias de ítem (13 cols), relativas a baseRow (=2 en encabezado inicial):
+ * base: Contrato | número | Objeto: | objeto
+ * base+1: Contratista / nombre / NIT / nit
+ * base+2: Interventoría / nombre / NIT / —
  *
- * Nota: el prompt decía «nombre del contratista» en B2:C2, pero la etiqueta A2 es
- * «Contrato» y el nombre ya va en C3:F3; B2:C2 usa el número de contrato.
+ * Nota: B2:C2 usa el número de contrato (etiqueta A2 = «Contrato»).
  */
-function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS) {
+function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
   const n = Math.max(cols, ITEM_HEADER_COLS)
   const objetoTxt = meta?.objeto ? String(meta.objeto).slice(0, 320) : '—'
+  const r2 = baseRow
+  const r3 = baseRow + 1
+  const r4 = baseRow + 2
 
   ws.addRow(new Array(n).fill(''))
-  ws.getCell(2, 1).value = 'Contrato'
-  ws.getCell(2, 2).value = safeStr(meta?.numero).trim() || '—'
-  ws.mergeCells(2, 2, 2, 3)
-  ws.getCell(2, 4).value = 'Objeto:'
-  ws.getCell(2, 5).value = objetoTxt
-  // E2:M2 (hasta columna de entidad / última col tras eliminar ex-M).
-  ws.mergeCells(2, 5, 2, ITEM_HEADER_ENTIDAD_COL)
-  ws.getRow(2).height = 25
-  estiloMetaCell(ws.getCell(2, 1), { bold: true, rowNum: 2 })
-  estiloMetaCell(ws.getCell(2, 2), { rowNum: 2 })
-  estiloMetaCell(ws.getCell(2, 4), { bold: true, rowNum: 2 })
-  estiloMetaCell(ws.getCell(2, 5), { rowNum: 2 })
+  ws.getCell(r2, 1).value = 'Contrato'
+  ws.getCell(r2, 2).value = safeStr(meta?.numero).trim() || '—'
+  ws.mergeCells(r2, 2, r2, 3)
+  ws.getCell(r2, 4).value = 'Objeto:'
+  ws.getCell(r2, 5).value = objetoTxt
+  ws.mergeCells(r2, 5, r2, ITEM_HEADER_ENTIDAD_COL)
+  ws.getRow(r2).height = 25
+  estiloMetaCell(ws.getCell(r2, 1), { bold: true, rowNum: r2 })
+  estiloMetaCell(ws.getCell(r2, 2), { rowNum: r2 })
+  estiloMetaCell(ws.getCell(r2, 4), { bold: true, rowNum: r2 })
+  estiloMetaCell(ws.getCell(r2, 5), { rowNum: r2 })
 
   ws.addRow(new Array(n).fill(''))
-  ws.getCell(3, 1).value = 'Contratista'
-  ws.mergeCells(3, 1, 3, 2)
-  ws.getCell(3, 3).value = safeStr(meta?.contratista).trim() || '—'
-  ws.mergeCells(3, 3, 3, 6)
-  ws.getCell(3, 7).value = 'NIT'
-  ws.mergeCells(3, 7, 3, 8)
-  ws.getCell(3, 9).value = safeStr(meta?.nit).trim() || '—'
-  ws.mergeCells(3, 9, 3, 11)
-  ws.getRow(3).height = 22
-  estiloMetaCell(ws.getCell(3, 1), { bold: true, rowNum: 3 })
-  estiloMetaCell(ws.getCell(3, 3), { rowNum: 3 })
-  estiloMetaCell(ws.getCell(3, 7), { bold: true, rowNum: 3 })
-  estiloMetaCell(ws.getCell(3, 9), { rowNum: 3 })
+  ws.getCell(r3, 1).value = 'Contratista'
+  ws.mergeCells(r3, 1, r3, 2)
+  ws.getCell(r3, 3).value = safeStr(meta?.contratista).trim() || '—'
+  ws.mergeCells(r3, 3, r3, 6)
+  ws.getCell(r3, 7).value = 'NIT'
+  ws.mergeCells(r3, 7, r3, 8)
+  ws.getCell(r3, 9).value = safeStr(meta?.nit).trim() || '—'
+  ws.mergeCells(r3, 9, r3, 11)
+  ws.getRow(r3).height = 22
+  estiloMetaCell(ws.getCell(r3, 1), { bold: true, rowNum: r3 })
+  estiloMetaCell(ws.getCell(r3, 3), { rowNum: r3 })
+  estiloMetaCell(ws.getCell(r3, 7), { bold: true, rowNum: r3 })
+  estiloMetaCell(ws.getCell(r3, 9), { rowNum: r3 })
 
   ws.addRow(new Array(n).fill(''))
-  ws.getCell(4, 1).value = 'Interventoría'
-  ws.mergeCells(4, 1, 4, 2)
-  ws.getCell(4, 3).value = safeStr(meta?.interventoria).trim() || '—'
-  ws.mergeCells(4, 3, 4, 6)
-  ws.getCell(4, 7).value = 'NIT'
-  ws.mergeCells(4, 7, 4, 8)
-  // No hay nit_interventoria en contratos.
-  ws.getCell(4, 9).value = '—'
-  ws.mergeCells(4, 9, 4, 11)
-  ws.getRow(4).height = 22
-  estiloMetaCell(ws.getCell(4, 1), { bold: true, rowNum: 4 })
-  estiloMetaCell(ws.getCell(4, 3), { rowNum: 4 })
-  estiloMetaCell(ws.getCell(4, 7), { bold: true, rowNum: 4 })
-  estiloMetaCell(ws.getCell(4, 9), { rowNum: 4 })
+  ws.getCell(r4, 1).value = 'Interventoría'
+  ws.mergeCells(r4, 1, r4, 2)
+  ws.getCell(r4, 3).value = safeStr(meta?.interventoria).trim() || '—'
+  ws.mergeCells(r4, 3, r4, 6)
+  ws.getCell(r4, 7).value = 'NIT'
+  ws.mergeCells(r4, 7, r4, 8)
+  ws.getCell(r4, 9).value = '—'
+  ws.mergeCells(r4, 9, r4, 11)
+  ws.getRow(r4).height = 22
+  estiloMetaCell(ws.getCell(r4, 1), { bold: true, rowNum: r4 })
+  estiloMetaCell(ws.getCell(r4, 3), { rowNum: r4 })
+  estiloMetaCell(ws.getCell(r4, 7), { bold: true, rowNum: r4 })
+  estiloMetaCell(ws.getCell(r4, 9), { rowNum: r4 })
+}
+
+/**
+ * Segundo bloque de encabezado (filas 1–4) al final de la memoria, antes de gráficos.
+ * @returns {{ titleRow: number, endRow: number, logoRowHeightPt: number }}
+ */
+function escribirBloqueEncabezadoItemOffset(ws, startRow, meta, titulo, logosEff) {
+  const cols = ITEM_HEADER_COLS
+  const logoRowHeightPt = Math.max(TITLE_ROW_HEIGHT, LOGO_HEIGHT_PX * (72 / 96) + 8)
+  const layout = planLayoutItemEncabezado(logosEff)
+  const tieneLogo = layout.tieneLogo
+
+  ws.addRow(new Array(cols).fill(''))
+  const titleRow = startRow
+  ws.getRow(titleRow).height = tieneLogo ? logoRowHeightPt : TITLE_ROW_HEIGHT_NO_LOGO
+  for (let c = 1; c <= cols; c += 1) ws.getCell(titleRow, c).fill = FILL_TITLE
+  ws.mergeCells(titleRow, ITEM_HEADER_LEFT_START, titleRow, ITEM_HEADER_LEFT_END)
+  ws.mergeCells(titleRow, ITEM_HEADER_TITLE_START, titleRow, ITEM_HEADER_TITLE_END)
+  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).value = titulo
+  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).fill = FILL_TITLE
+  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
+  ws.getCell(titleRow, ITEM_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
+
+  escribirFilasMetaItem(ws, meta, cols, titleRow + 1)
+  return {
+    titleRow,
+    endRow: titleRow + 3,
+    logoRowHeightPt,
+    logoContratista: layout.logoContratista,
+    logoInterventoria: layout.logoInterventoria,
+    entidadLogo: layout.entidadLogo,
+  }
+}
+
+/** Contenedor fijo por gráfico (px) — 3 columnas uniformes en hoja de 13 cols. */
+const GRAFICO_BOX_W_PX = 220
+const GRAFICO_BOX_H_PX = 150
+const GRAFICO_ROW_HEIGHT_PT = GRAFICO_BOX_H_PX * (72 / 96) + 8
+const GRAFICO_COLS_POR_CELDA = [
+  { start: 1, end: 4 },
+  { start: 5, end: 8 },
+  { start: 9, end: 13 },
+]
+
+/**
+ * Inserta gráficos en 3 columnas, contain sin stretch, con pie de foto.
+ * @returns {number} última fila escrita (caption)
+ */
+function escribirBloqueGraficosItem(ws, startRow, graficosPrep, firmantes) {
+  const cols = ITEM_HEADER_COLS
+  let row = startRow
+  const list = Array.isArray(graficosPrep) ? graficosPrep.filter((g) => g?.image) : []
+  if (!list.length) return row
+
+  const widths = leerAnchosColumnasPx(ws, cols)
+
+  for (let i = 0; i < list.length; i += 3) {
+    const chunk = list.slice(i, i + 3)
+    // Asegurar que startRow coincide con la siguiente fila añadida
+    while (ws.rowCount < row - 1) {
+      ws.addRow(new Array(cols).fill(''))
+    }
+    ws.addRow(new Array(cols).fill(''))
+    const imgRow = ws.rowCount
+    ws.getRow(imgRow).height = GRAFICO_ROW_HEIGHT_PT
+    for (let c = 1; c <= cols; c += 1) {
+      ws.getCell(imgRow, c).fill = fillGrillaFila(imgRow)
+    }
+
+    chunk.forEach((g, idx) => {
+      const slot = GRAFICO_COLS_POR_CELDA[idx]
+      ws.mergeCells(imgRow, slot.start, imgRow, slot.end)
+      const natW = g.image.natW
+      const natH = g.image.natH
+      const size = sizeContainInBox(natW, natH, GRAFICO_BOX_W_PX, GRAFICO_BOX_H_PX)
+      let blockStartPx = 0
+      for (let c = 1; c < slot.start; c += 1) blockStartPx += widths[c - 1] || 64
+      let blockW = 0
+      for (let c = slot.start; c <= slot.end; c += 1) blockW += widths[c - 1] || 64
+      const offsetX = blockStartPx + Math.max(0, (blockW - size.width) / 2)
+      const tl = {
+        ...pxOffsetToNativeColLocal(offsetX, widths),
+        nativeRow: imgRow - 1,
+        nativeRowOff: Math.max(0, Math.floor((pointsToEmuLocal(GRAFICO_ROW_HEIGHT_PT) - pxToEmuLocal(size.height)) / 2)),
+      }
+      insertarImagenFlotante(ws, g.image, { tl, ext: { width: size.width, height: size.height } })
+    })
+
+    ws.addRow(new Array(cols).fill(''))
+    const capRow = ws.rowCount
+    chunk.forEach((g, idx) => {
+      const slot = GRAFICO_COLS_POR_CELDA[idx]
+      ws.mergeCells(capRow, slot.start, capRow, slot.end)
+      const cell = ws.getCell(capRow, slot.start)
+      cell.value = safeStr(g.caption || '—')
+      cell.font = { size: 8, italic: true, color: { argb: CC.rowTextAlt } }
+      cell.alignment = { horizontal: 'center', vertical: 'top', wrapText: true }
+      cell.fill = fillGrillaFila(capRow)
+    })
+    const longest = Math.max(...chunk.map((g) => safeStr(g.caption).length), 40)
+    ws.getRow(capRow).height = Math.min(56, 22 + Math.ceil(longest / 48) * 10)
+    row = capRow + 1
+    if (i + 3 < list.length) {
+      ws.addRow(new Array(cols).fill(''))
+      row = ws.rowCount + 1
+    }
+  }
+
+  const firmStart = ws.rowCount + 2
+  return escribirBloqueFirmas(ws, firmStart, cols, firmantes)
+}
+
+/** Helpers locales EMU (evitan exportar internos de logos). */
+function pxToEmuLocal(px) {
+  return Math.round(Math.max(0, Number(px) || 0) * 9525)
+}
+function pointsToEmuLocal(pt) {
+  return Math.round(Math.max(0, Number(pt) || 0) * 12700)
+}
+function pxOffsetToNativeColLocal(px, colWidthsPx) {
+  let remaining = Math.max(0, Number(px) || 0)
+  const widths = Array.isArray(colWidthsPx) && colWidthsPx.length ? colWidthsPx : [64]
+  let col = 0
+  for (let i = 0; i < 64; i += 1) {
+    const cw = widths[i] ?? widths[widths.length - 1] ?? 64
+    if (remaining < cw) {
+      return { nativeCol: col, nativeColOff: pxToEmuLocal(remaining) }
+    }
+    remaining -= cw
+    col += 1
+  }
+  return { nativeCol: col, nativeColOff: pxToEmuLocal(remaining) }
 }
 
 /**
@@ -992,7 +1128,7 @@ const COL_ANCHO = DET_HEADERS.indexOf('Ancho') + 1
 const COL_ESPESOR = DET_HEADERS.indexOf('Espesor') + 1
 const COL_CANT_TOTAL = DET_HEADERS.indexOf('Cant. Total') + 1
 
-function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoLegacy, claraLogoImageId, logos = null) {
+function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedAt, logoLegacy, claraLogoImageId, logos = null, graficosPrep = []) {
   const baseName = safeSheetName(`${itemInfo.item || 'Item'}_${idx + 1}`, `Item_${idx + 1}`)
   let sheetName = baseName
   let n = 1
@@ -1078,8 +1214,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     aplicarBordesTabla(ws, tableRow, cantTotalRow, TOTAL_COLS_DET)
   }
 
+  const firmantes = colectarFirmantes(regs)
   const firmRowStart = (cantTotalRow || (regs.length > 0 ? lastDetRow : tableRow)) + 2
-  escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, colectarFirmantes(regs))
+  escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, firmantes)
 
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
     logoLeftSpan: enc.logoLeftSpan || 0,
@@ -1089,6 +1226,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     logoI: enc.logoInterventoria,
     logoE: enc.entidadLogo,
     rowHeightPt: enc.logoRowHeightPt,
+    nativeRow: 0,
   })
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
@@ -1096,6 +1234,28 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   // Fila 2 ya fijada en 25 por escribirFilasMetaItem; bloque ítem / encabezado tabla.
   ws.getRow(7).height = 30
   ws.getRow(9).height = 30
+
+  const grafs = Array.isArray(graficosPrep) ? graficosPrep.filter((g) => g?.image) : []
+  if (grafs.length > 0) {
+    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    const headerStart = ws.rowCount + 1
+    const enc2 = escribirBloqueEncabezadoItemOffset(
+      ws,
+      headerStart,
+      meta,
+      'PRESUPUESTO - SOPORTE DE CANTIDADES',
+      logos,
+    )
+    insertarLogosEncabezadoItem(ws, {
+      logoC: enc2.logoContratista,
+      logoI: enc2.logoInterventoria,
+      logoE: enc2.entidadLogo,
+      rowHeightPt: enc2.logoRowHeightPt,
+      nativeRow: enc2.titleRow - 1,
+    })
+    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafs, firmantes)
+  }
 
   return {
     sheetName,
@@ -1310,11 +1470,43 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
   // (las fórmulas de cantidad dependen de los totales por ítem).
   const wsResumen = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
 
-  items.forEach((itemInfo, idx) => {
-    const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoContratista, claraLogoImageId, logos)
+  // Precargar gráficos (URLs únicas) para reutilizar el mismo imageId entre ítems del grupo.
+  const grafUrlCache = new Map()
+  for (const itemInfo of items) {
+    for (const g of itemInfo.graficos || []) {
+      const url = (g?.url || '').trim()
+      if (!url || grafUrlCache.has(url)) continue
+      // Secuencial: ExcelJS muta el workbook al registrar cada imagen.
+      // eslint-disable-next-line no-await-in-loop
+      grafUrlCache.set(url, await prepararLogoWorkbook(wb, url))
+    }
+  }
+
+  for (let idx = 0; idx < items.length; idx += 1) {
+    const itemInfo = items[idx]
+    const graficosPrep = (itemInfo.graficos || [])
+      .map((g) => ({
+        caption: g.caption,
+        orden: g.orden,
+        image: grafUrlCache.get((g?.url || '').trim()) || null,
+      }))
+      .filter((g) => g.image)
+    const ref = crearHojaItem(
+      wb,
+      itemInfo,
+      idx,
+      usedNames,
+      { ...meta, contrato: contratoLabel },
+      modoLabel,
+      generatedAt,
+      logoContratista,
+      claraLogoImageId,
+      logos,
+      graficosPrep,
+    )
     if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
     for (const reg of itemInfo.registros || []) todosRegistros.push(reg)
-  })
+  }
 
   crearHojaResumen(
     wb,

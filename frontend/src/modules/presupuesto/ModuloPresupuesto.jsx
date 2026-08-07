@@ -15,6 +15,7 @@ import { useClaraViewport } from '../../useClaraViewport'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
+import PptoGraficosModal from './PptoGraficosModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
 import PptoValidacionIcon from './PptoValidacionIcon'
 import {
@@ -300,6 +301,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [editDims, setEditDims] = useState({})      // {[id]: { area_long_nod?, ancho, espesor }}
   const [modalConfirm, setModalConfirm] = useState(false)
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
+  const [modalGraficos, setModalGraficos] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
   const [bulkTipoEjecucion, setBulkTipoEjecucion] = useState('')
@@ -6032,6 +6034,19 @@ async function restaurar(id) {
         onApplyDepuracion={aplicarMasivoDepuracion}
         onApplyInterventoria={aplicarMasivoInterventoria}
       />
+      <PptoGraficosModal
+        open={modalGraficos}
+        onClose={() => setModalGraficos(false)}
+        t={t}
+        seleccionados={seleccionados}
+        registros={registros}
+        contratoId={contratoId}
+        token={token}
+        API={API}
+        onSaved={() => {
+          /* Los gráficos se leen al exportar memorias; no hace falta recargar la grilla. */
+        }}
+      />
 
       {/* ── Modal confirmar recálculo ── */}
       {modalConfirm && (
@@ -6504,6 +6519,30 @@ async function restaurar(id) {
               >
                 ✏️ Edición masiva
               </button>
+              {!versionActiva?.id && !verPapelera && (
+                <button
+                  type="button"
+                  disabled={seleccionados.size === 0}
+                  title={seleccionados.size === 0
+                    ? 'Seleccione uno o más registros (checkbox)'
+                    : 'Asociar gráficos a la selección (archivo o Ctrl+V) para las memorias de ítem'}
+                  onClick={() => seleccionados.size > 0 && setModalGraficos(true)}
+                  style={{
+                    background: seleccionados.size > 0 ? '#0F766E' : t.border,
+                    color: seleccionados.size > 0 ? '#fff' : t.textMuted,
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 18px',
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    cursor: seleccionados.size > 0 ? 'pointer' : 'not-allowed',
+                    whiteSpace: 'nowrap',
+                    opacity: seleccionados.size > 0 ? 1 : 0.85,
+                  }}
+                >
+                  🖼 Agregar gráficos
+                </button>
+              )}
             </>
           )}
           {seleccionados.size > 0 && (
