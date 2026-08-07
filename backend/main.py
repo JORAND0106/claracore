@@ -10547,7 +10547,7 @@ def get_items_presupuesto(
 
 
 _PRESUPUESTO_EXPORT_SELECT = (
-    "capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
+    "id, capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
     "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
     "area_long_nod, ancho, espesor, tipo_entidad, "
     "revisado, pre_interv_estado, pre_interv_por, validado_por, "
@@ -10724,9 +10724,10 @@ def _presupuesto_version_fetch_export_rows(
             )
             q = _presupuesto_q_tipo_ejecucion(q, "Presupuesto de Obra")
         else:
+            # Incluye presupuesto_item_id_origen para asociar gráficos (grupo_regs → presupuesto.id).
             q = (
                 supabase.table("presupuesto_version_items")
-                .select(_PRESUPUESTO_EXPORT_SELECT)
+                .select(_PRESUPUESTO_EXPORT_SELECT + ", presupuesto_item_id_origen")
                 .eq("contrato_id", contrato_id)
                 .eq("version_id", version_id)
                 .eq("dado_de_baja", False)
@@ -10857,7 +10858,13 @@ def exportar_presupuesto_informe(
             obs_parts.append(str(r.get("observacion")).strip())
         if r.get("observacion_externa"):
             obs_parts.append(str(r.get("observacion_externa")).strip())
+        # id = PK vivo (o origen si el export viene de presupuesto_version_items).
+        # Necesario para subagrupar registros por grupo de gráfico en memorias Excel.
+        _pid = r.get("presupuesto_item_id_origen")
+        if _pid is None:
+            _pid = r.get("id")
         im["registros"].append({
+            "id": _pid,
             "id_pol": r.get("id_pol") or "",
             "pk_id": r.get("pk_id") or "",
             "tramo": r.get("tramo") or "",

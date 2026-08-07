@@ -37,7 +37,7 @@ import {
   PPTO_ENCABEZADO_GRUPO_ENTIDAD,
   PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT,
 } from './pptoTipoEntidad.js'
-import { filtrarGraficosPorGrupoEntidad } from './pptoGraficosExport.js'
+import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
 import {
   costoDirectoResumenFila,
   formulaSumaFilas,
@@ -485,19 +485,28 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
   estiloMetaCell(ws.getCell(r4, 9), { rowNum: r4 })
 }
 
-/** Contenedor fijo por gráfico (px) — 3 columnas uniformes en hoja de 13 cols. */
-const GRAFICO_BOX_W_PX = 220
-const GRAFICO_BOX_H_PX = 150
-const GRAFICO_ROW_HEIGHT_PT = GRAFICO_BOX_H_PX * (72 / 96) + 8
+/**
+ * Slots de 4 columnas (aprox. iguales) en hoja de 13 cols.
+ * La imagen se escala con contain al ancho real del merge (no a una caja fija pequeña).
+ */
 const GRAFICO_COLS_POR_CELDA = [
   { start: 1, end: 4 },
   { start: 5, end: 8 },
   { start: 9, end: 13 },
 ]
+/** Padding interior del área combinada (px). */
+const GRAFICO_PAD_PX = 6
+/**
+ * Alto máximo del área de imagen como fracción del ancho del slot.
+ * ~0.72 ≈ paisaje 4:3; contain no deforma (sin stretch).
+ */
+const GRAFICO_BOX_H_RATIO = 0.72
+/** Pie de foto: fuente más legible, fila más baja. */
+const GRAFICO_CAPTION_FONT_SIZE = 10
 
 /**
- * Inserta gráficos en 3 columnas, contain sin stretch, con pie de foto.
- * No escribe firmas (el panel de firmas de gráficos va una sola vez al cierre del ítem).
+ * Inserta gráficos en hasta 3 columnas, contain al área merge real, con pie de foto.
+ * No escribe firmas (el panel de firmas va una sola vez al cierre del ítem).
  * @returns {number} siguiente fila disponible tras el bloque
  */
 function escribirBloqueGraficosItem(ws, startRow, graficosPrep) {
@@ -510,32 +519,44 @@ function escribirBloqueGraficosItem(ws, startRow, graficosPrep) {
 
   for (let i = 0; i < list.length; i += 3) {
     const chunk = list.slice(i, i + 3)
-    // Asegurar que startRow coincide con la siguiente fila añadida
     while (ws.rowCount < row - 1) {
       ws.addRow(new Array(cols).fill(''))
     }
     ws.addRow(new Array(cols).fill(''))
     const imgRow = ws.rowCount
-    ws.getRow(imgRow).height = GRAFICO_ROW_HEIGHT_PT
     for (let c = 1; c <= cols; c += 1) {
       ws.getCell(imgRow, c).fill = fillGrillaFila(imgRow)
     }
 
+    /** @type {Array<{ size: { width: number, height: number }, blockStartPx: number, blockW: number }>} */
+    const placed = []
     chunk.forEach((g, idx) => {
       const slot = GRAFICO_COLS_POR_CELDA[idx]
       ws.mergeCells(imgRow, slot.start, imgRow, slot.end)
-      const natW = g.image.natW
-      const natH = g.image.natH
-      const size = sizeContainInBox(natW, natH, GRAFICO_BOX_W_PX, GRAFICO_BOX_H_PX)
       let blockStartPx = 0
       for (let c = 1; c < slot.start; c += 1) blockStartPx += widths[c - 1] || 64
       let blockW = 0
       for (let c = slot.start; c <= slot.end; c += 1) blockW += widths[c - 1] || 64
+      const boxW = Math.max(40, blockW - 2 * GRAFICO_PAD_PX)
+      const boxH = Math.max(40, Math.round(boxW * GRAFICO_BOX_H_RATIO))
+      const size = sizeContainInBox(g.image.natW, g.image.natH, boxW, boxH)
+      placed.push({ size, blockStartPx, blockW })
+    })
+
+    const maxImgH = Math.max(...placed.map((p) => p.size.height), 40)
+    const rowHPt = maxImgH * (72 / 96) + 2 * GRAFICO_PAD_PX * (72 / 96)
+    ws.getRow(imgRow).height = rowHPt
+
+    chunk.forEach((g, idx) => {
+      const { size, blockStartPx, blockW } = placed[idx]
       const offsetX = blockStartPx + Math.max(0, (blockW - size.width) / 2)
       const tl = {
         ...pxOffsetToNativeColLocal(offsetX, widths),
         nativeRow: imgRow - 1,
-        nativeRowOff: Math.max(0, Math.floor((pointsToEmuLocal(GRAFICO_ROW_HEIGHT_PT) - pxToEmuLocal(size.height)) / 2)),
+        nativeRowOff: Math.max(
+          0,
+          Math.floor((pointsToEmuLocal(rowHPt) - pxToEmuLocal(size.height)) / 2),
+        ),
       }
       insertarImagenFlotante(ws, g.image, { tl, ext: { width: size.width, height: size.height } })
     })
@@ -547,12 +568,13 @@ function escribirBloqueGraficosItem(ws, startRow, graficosPrep) {
       ws.mergeCells(capRow, slot.start, capRow, slot.end)
       const cell = ws.getCell(capRow, slot.start)
       cell.value = safeStr(g.caption || '—')
-      cell.font = { size: 8, italic: true, color: { argb: CC.rowTextAlt } }
-      cell.alignment = { horizontal: 'center', vertical: 'top', wrapText: true }
+      cell.font = { size: GRAFICO_CAPTION_FONT_SIZE, italic: true, color: { argb: CC.rowTextAlt } }
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
       cell.fill = fillGrillaFila(capRow)
     })
-    const longest = Math.max(...chunk.map((g) => safeStr(g.caption).length), 40)
-    ws.getRow(capRow).height = Math.min(56, 22 + Math.ceil(longest / 48) * 10)
+    const longest = Math.max(...chunk.map((g) => safeStr(g.caption).length), 1)
+    // Fila más baja que antes (máx. 28 pt); fuente 10 para legibilidad.
+    ws.getRow(capRow).height = Math.min(28, 14 + Math.ceil(longest / 52) * 7)
     row = capRow + 1
     if (i + 3 < list.length) {
       ws.addRow(new Array(cols).fill(''))
@@ -1266,6 +1288,10 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   )
 
   const afterItemMeta = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
+  // Anchos definitivos antes de embutir gráficos (contain usa el ancho real del merge).
+  ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
+    logoLeftSpan: enc.logoLeftSpan || 0,
+  })
   const grupos = agruparRegistrosPorTipoEntidad(regs)
 
   let firstDataRowGlobal = null
@@ -1274,11 +1300,11 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   let lastTableRow = afterItemMeta - 1
   /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
   const filasEncabezadoGrupo = []
-  /** Gráficos ya insertados tras una subtabla (para fallback de residuales). */
+  /** Gráficos ya insertados en algún subgrupo (para fallback de residuales). */
   const graficosYaInsertados = new Set()
 
   grupos.forEach((grupo, gIdx) => {
-    // Separación visual entre subtablas (fila en blanco).
+    // Separación visual entre subtablas de tipo de entidad (fila en blanco).
     if (gIdx > 0) {
       ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
       const sepRow = ws.rowCount
@@ -1293,36 +1319,44 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
 
     const headers = headersDetallePorGrupo(grupo.colLabel)
-    ws.addRow(headers)
-    const headerRow = ws.rowCount
-    if (firstHeaderRow == null) firstHeaderRow = headerRow
-    estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
+    const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosPrep, grupo.key)
 
-    const firstDet = headerRow + 1
-    for (const reg of grupo.registros) {
-      escribirFilaRegistroDetalle(ws, reg)
-    }
-    const lastDet = grupo.registros.length > 0 ? firstDet + grupo.registros.length - 1 : null
-    if (lastDet != null) {
-      if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
-      lastDataRowGlobal = lastDet
-      aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
-      lastTableRow = lastDet
-    } else {
-      lastTableRow = headerRow
-    }
+    subgrupos.forEach((sub, sIdx) => {
+      if (sIdx > 0) {
+        ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+        ws.getRow(ws.rowCount).height = 6
+      }
 
-    // Gráficos del tipo de entidad, justo después de la subtabla (sin encabezado repetido).
-    const grafsGrupo = filtrarGraficosPorGrupoEntidad(graficosPrep, grupo.key)
-    if (grafsGrupo.length) {
-      ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-      escribirBloqueGraficosItem(ws, ws.rowCount + 1, grafsGrupo)
-      lastTableRow = ws.rowCount
-      for (const g of grafsGrupo) graficosYaInsertados.add(g)
-    }
+      ws.addRow(headers)
+      const headerRow = ws.rowCount
+      if (firstHeaderRow == null) firstHeaderRow = headerRow
+      estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
+
+      const firstDet = headerRow + 1
+      for (const reg of sub.registros) {
+        escribirFilaRegistroDetalle(ws, reg)
+      }
+      const lastDet = sub.registros.length > 0 ? firstDet + sub.registros.length - 1 : null
+      if (lastDet != null) {
+        if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
+        lastDataRowGlobal = lastDet
+        aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
+        lastTableRow = lastDet
+      } else {
+        lastTableRow = headerRow
+      }
+
+      // Gráfico(s) del subgrupo, justo después de sus registros.
+      if (sub.graficos?.length) {
+        ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+        escribirBloqueGraficosItem(ws, ws.rowCount + 1, sub.graficos)
+        lastTableRow = ws.rowCount
+        for (const g of sub.graficos) graficosYaInsertados.add(g)
+      }
+    })
   })
 
-  // Fallback: gráficos del ítem que no coincidieron con ninguna subtabla presente.
+  // Fallback: gráficos del ítem que no coincidieron con ningún subgrupo (p. ej. sin ids).
   const grafsResidual = (graficosPrep || []).filter((g) => g?.image && !graficosYaInsertados.has(g))
   if (grafsResidual.length) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
@@ -1367,6 +1401,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const firmRowStart = lastTableRow + 2
   escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, firmantes)
 
+  // Anchos ya aplicados antes de los gráficos; reaplicar por si firmas/totales alteran.
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
     logoLeftSpan: enc.logoLeftSpan || 0,
   })
@@ -1691,7 +1726,9 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
         return {
           caption: g.caption,
           orden: g.orden,
+          grupo_id: g.grupo_id ?? null,
           tipos_entidad: Array.isArray(g.tipos_entidad) ? g.tipos_entidad : [],
+          presupuesto_ids: Array.isArray(g.presupuesto_ids) ? g.presupuesto_ids : [],
           image: grafUrlCache.get(cacheKey) || null,
         }
       })
