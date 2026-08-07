@@ -6,12 +6,18 @@ import {
   numDim,
   puedeDespejarDimension,
 } from './pptoBuscarObjetivo.js'
+import {
+  formatObjetivoCopDisplay,
+  parseObjetivoCopNumber,
+} from './pptoBuscarObjetivoFormat.js'
 
 const DIM_OPTIONS = [
   { key: 'area_long_nod', labelFromTipo: true },
   { key: 'ancho', label: 'Ancho' },
   { key: 'espesor', label: 'Espesor' },
 ]
+
+const MODAL_WIDTH = 780
 
 function fmtDim(n) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -27,6 +33,69 @@ function fmtCant(n) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(n))
+}
+
+function thStyle(t, align = 'left') {
+  return {
+    textAlign: align,
+    padding: '7px 10px',
+    fontSize: 'var(--cc-sm)',
+    fontWeight: 700,
+    color: t.textMuted,
+    borderBottom: `1px solid ${t.border}`,
+    background: t.bg,
+    whiteSpace: 'nowrap',
+  }
+}
+
+function tdStyle(t, align = 'left', opts = {}) {
+  return {
+    textAlign: align,
+    padding: '7px 10px',
+    fontSize: 'var(--cc-label)',
+    color: opts.muted ? t.textMuted : t.text,
+    borderBottom: `1px solid ${t.border}`,
+    fontWeight: opts.bold ? 700 : 400,
+    whiteSpace: opts.nowrap ? 'nowrap' : undefined,
+  }
+}
+
+function InfoTable({ t, rows }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.label}>
+            <td style={{ ...tdStyle(t, 'left', { muted: true }), width: '38%' }}>{row.label}</td>
+            <td style={tdStyle(t, 'right', { bold: true, nowrap: true })}>{row.value}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function CompareTable({ t, rows }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr>
+          <th style={thStyle(t, 'left')}>Concepto</th>
+          <th style={thStyle(t, 'right')}>Antes</th>
+          <th style={thStyle(t, 'right')}>Después</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.label}>
+            <td style={tdStyle(t, 'left', { muted: true })}>{row.label}</td>
+            <td style={tdStyle(t, 'right', { nowrap: true })}>{row.before}</td>
+            <td style={tdStyle(t, 'right', { bold: true, nowrap: true })}>{row.after}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 /**
@@ -80,8 +149,6 @@ export default function PptoBuscarObjetivoModal({
     if (!contratoId || !token) return
     setCargandoActual(true)
     try {
-      // Misma fuente que pestaña Resumen / capitulos-lista: Σ costo_directo.
-      // NO usar GET /presupuesto/.../resumen (KPI dashboard con VU listado_precios).
       const res = await fetch(
         `${API}/presupuesto/${contratoId}/buscar-objetivo/presupuesto-actual`
           + '?tipo_ejecucion=Presupuesto%20de%20Obra',
@@ -176,26 +243,6 @@ export default function PptoBuscarObjetivoModal({
     if (first) setDimension(first.key)
   }, [registro, dimOptions, dimension])
 
-  const parseObjetivo = () => {
-    // Acepta "1250000000", "1.250.000.000" (miles es-CO) o "1250000000,5"
-    const cleaned = String(objetivo || '')
-      .trim()
-      .replace(/\s/g, '')
-      .replace(/[^\d,.\-]/g, '')
-    if (!cleaned) return NaN
-    let n
-    if (cleaned.includes(',') && cleaned.includes('.')) {
-      n = parseFloat(cleaned.replace(/\./g, '').replace(',', '.'))
-    } else if (cleaned.includes(',')) {
-      n = parseFloat(cleaned.replace(',', '.'))
-    } else if (/^\d{1,3}(\.\d{3})+$/.test(cleaned)) {
-      n = parseFloat(cleaned.replace(/\./g, ''))
-    } else {
-      n = parseFloat(cleaned)
-    }
-    return Number.isFinite(n) ? Math.round(n) : NaN
-  }
-
   const onCalcular = () => {
     setError('')
     if (costoActual == null) {
@@ -206,7 +253,7 @@ export default function PptoBuscarObjetivoModal({
       setError('Seleccione un registro por Id_Pol.')
       return
     }
-    const obj = parseObjetivo()
+    const obj = parseObjetivoCopNumber(objetivo)
     if (!Number.isFinite(obj)) {
       setError('Indique un presupuesto objetivo válido (entero en COP).')
       return
@@ -277,6 +324,26 @@ export default function PptoBuscarObjetivoModal({
 
   if (!open) return null
 
+  const btnGhost = {
+    background: 'transparent',
+    border: `1px solid ${t.border}`,
+    borderRadius: 8,
+    padding: '8px 16px',
+    fontSize: 'var(--cc-label)',
+    color: t.textMuted,
+    cursor: 'pointer',
+  }
+  const btnPrimary = {
+    background: t.primary,
+    color: '#fff',
+    border: 'none',
+    borderRadius: 8,
+    padding: '8px 20px',
+    fontSize: 'var(--cc-label)',
+    fontWeight: 700,
+    cursor: 'pointer',
+  }
+
   return (
     <div
       style={{
@@ -297,16 +364,16 @@ export default function PptoBuscarObjetivoModal({
         style={{
           background: t.bgCard,
           border: `1px solid ${t.border}`,
-          borderRadius: 16,
-          padding: 24,
-          width: 520,
+          borderRadius: 14,
+          padding: '18px 22px',
+          width: MODAL_WIDTH,
           maxWidth: '96vw',
-          maxHeight: '92vh',
+          maxHeight: '88vh',
           overflow: 'auto',
           boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div style={{ fontSize: 'var(--cc-md)', fontWeight: 700, color: t.primary }}>
             🎯 Buscar objetivo
           </div>
@@ -316,10 +383,11 @@ export default function PptoBuscarObjetivoModal({
             style={{
               background: 'transparent',
               border: 'none',
-              fontSize: 20,
+              fontSize: 22,
               cursor: 'pointer',
               color: t.textMuted,
               lineHeight: 1,
+              padding: '0 4px',
             }}
             aria-label="Cerrar"
           >
@@ -329,131 +397,170 @@ export default function PptoBuscarObjetivoModal({
 
         {fase === 'form' && (
           <>
-            <section style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                1. Presupuesto actual
-              </div>
-              <div
-                style={{
-                  background: t.bg,
-                  borderRadius: 8,
-                  padding: '12px 14px',
-                  fontSize: 'var(--cc-md)',
-                  fontWeight: 700,
-                  color: t.text,
-                }}
-              >
-                {cargandoActual ? 'Cargando…' : costoActual != null ? formatCOP(costoActual) : '—'}
-              </div>
-              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
-                Σ costo_directo · Presupuesto de Obra (mismo total de la pestaña Resumen)
-              </div>
-            </section>
+            {/* Actual + Objetivo lado a lado → menos altura */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              <section>
+                <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
+                  Presupuesto actual
+                </div>
+                <div
+                  style={{
+                    background: t.bg,
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    padding: '10px 12px',
+                    fontSize: 'var(--cc-md)',
+                    fontWeight: 700,
+                    color: t.text,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  title={costoActual != null ? formatCOP(costoActual) : undefined}
+                >
+                  {cargandoActual ? 'Cargando…' : costoActual != null ? formatCOP(costoActual) : '—'}
+                </div>
+              </section>
+              <section>
+                <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
+                  Presupuesto objetivo
+                </div>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={objetivo}
+                  onChange={(e) => setObjetivo(formatObjetivoCopDisplay(e.target.value))}
+                  placeholder="$ 0"
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg,
+                    color: t.text,
+                    fontSize: 'var(--cc-md)',
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                />
+              </section>
+            </div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 12, marginTop: -6 }}>
+              Σ costo_directo · Presupuesto de Obra (mismo total de la pestaña Resumen)
+            </div>
 
-            <section style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                2. Presupuesto objetivo
+            <section style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
+                Registro (Id_Pol)
               </div>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={objetivo}
-                onChange={(e) => setObjetivo(e.target.value)}
-                placeholder="Ej. 1250000000"
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: t.bg,
-                  color: t.text,
-                  fontSize: 'var(--cc-label)',
-                }}
-              />
-            </section>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  type="search"
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value)
+                    if (registro) setRegistro(null)
+                  }}
+                  placeholder="Buscar por Id_Pol, PK, ítem o tramo…"
+                  style={{
+                    flex: 1,
+                    boxSizing: 'border-box',
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg,
+                    color: t.text,
+                    fontSize: 'var(--cc-label)',
+                  }}
+                />
+                {buscando && (
+                  <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Buscando…</span>
+                )}
+              </div>
 
-            <section style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                3. Registro (Id_Pol)
-              </div>
-              <input
-                type="search"
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value)
-                  if (registro) setRegistro(null)
-                }}
-                placeholder="Buscar por Id_Pol, PK, ítem o tramo…"
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: t.bg,
-                  color: t.text,
-                  fontSize: 'var(--cc-label)',
-                  marginBottom: 8,
-                }}
-              />
-              {buscando && (
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Buscando…</div>
-              )}
               {!registro && resultados.length > 0 && (
                 <div
                   style={{
-                    maxHeight: 160,
+                    maxHeight: 120,
                     overflow: 'auto',
                     border: `1px solid ${t.border}`,
                     borderRadius: 8,
+                    marginBottom: 8,
                   }}
                 >
-                  {resultados.map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => {
-                        setRegistro(r)
-                        setQ(String(r.id_pol || r.pk_id || ''))
-                        setResultados([])
-                      }}
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '8px 10px',
-                        border: 'none',
-                        borderBottom: `1px solid ${t.border}`,
-                        background: t.bgCard,
-                        color: t.text,
-                        cursor: 'pointer',
-                        fontSize: 'var(--cc-sm)',
-                      }}
-                    >
-                      <strong>{r.id_pol || r.pk_id || r.id}</strong>
-                      {' · '}
-                      {r.capitulo} / {r.item}
-                      {r.tramo ? ` · ${r.tramo}` : ''}
-                      {' · '}
-                      {formatCOP(r.costo_directo)}
-                    </button>
-                  ))}
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle(t)}>Id_Pol</th>
+                        <th style={thStyle(t)}>Capítulo / Ítem</th>
+                        <th style={thStyle(t)}>Tramo</th>
+                        <th style={thStyle(t, 'right')}>Costo dir.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {resultados.map((r) => (
+                        <tr
+                          key={r.id}
+                          onClick={() => {
+                            setRegistro(r)
+                            setQ(String(r.id_pol || r.pk_id || ''))
+                            setResultados([])
+                          }}
+                          style={{ cursor: 'pointer' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = t.bg }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                        >
+                          <td style={tdStyle(t, 'left', { bold: true, nowrap: true })}>
+                            {r.id_pol || r.pk_id || r.id}
+                          </td>
+                          <td style={tdStyle(t)}>
+                            {r.capitulo} / {r.item}
+                          </td>
+                          <td style={tdStyle(t)}>{r.tramo || '—'}</td>
+                          <td style={tdStyle(t, 'right', { nowrap: true })}>
+                            {formatCOP(r.costo_directo)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
 
               {registro && (
                 <div
                   style={{
-                    background: t.bg,
+                    border: `1px solid ${t.border}`,
                     borderRadius: 8,
-                    padding: 12,
-                    marginTop: 4,
-                    fontSize: 'var(--cc-sm)',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div style={{ fontWeight: 700, marginBottom: 8, color: t.text }}>
-                    {registro.id_pol || registro.pk_id} · {registro.capitulo} / {registro.item}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      background: t.bg,
+                      borderBottom: `1px solid ${t.border}`,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-label)' }}>
+                      {registro.id_pol || registro.pk_id}
+                      <span style={{ fontWeight: 500, color: t.textMuted, marginLeft: 8 }}>
+                        {registro.capitulo} / {registro.item}
+                        {registro.tramo ? ` · ${registro.tramo}` : ''}
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
@@ -461,60 +568,71 @@ export default function PptoBuscarObjetivoModal({
                         setQ('')
                       }}
                       style={{
-                        float: 'right',
                         background: 'transparent',
                         border: 'none',
                         color: t.primary,
                         cursor: 'pointer',
                         fontSize: 'var(--cc-sm)',
+                        fontWeight: 600,
                       }}
                     >
                       Cambiar
                     </button>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, color: t.text }}>
-                    <span>{labelALN}: <strong>{fmtDim(registro.area_long_nod)}</strong></span>
-                    <span>Ancho: <strong>{fmtDim(registro.ancho)}</strong></span>
-                    <span>Espesor: <strong>{fmtDim(registro.espesor)}</strong></span>
-                    <span>Cant.: <strong>{fmtCant(registro.cant_total)}</strong></span>
-                    <span>Vlr. unit.: <strong>{formatCOP(registro.vlr_unitario)}</strong></span>
-                    <span>Costo dir.: <strong>{formatCOP(registro.costo_directo)}</strong></span>
-                  </div>
 
-                  <div style={{ marginTop: 12, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                    ¿Con cuál dimensión se hace el ajuste?
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {dimOptions.map((opt) => (
-                      <label
-                        key={opt.key}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: 8,
-                          opacity: opt.disabled ? 0.55 : 1,
-                          cursor: opt.disabled ? 'not-allowed' : 'pointer',
-                          color: t.text,
-                        }}
-                        title={opt.reason || ''}
-                      >
-                        <input
-                          type="radio"
-                          name="dim-objetivo"
-                          disabled={opt.disabled}
-                          checked={dimension === opt.key}
-                          onChange={() => setDimension(opt.key)}
-                        />
-                        <span>
-                          {opt.label}
-                          {opt.disabled && opt.reason ? (
-                            <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                              {opt.reason}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: 0 }}>
+                    <div style={{ borderRight: `1px solid ${t.border}` }}>
+                      <InfoTable
+                        t={t}
+                        rows={[
+                          { label: labelALN, value: fmtDim(registro.area_long_nod) },
+                          { label: 'Ancho', value: fmtDim(registro.ancho) },
+                          { label: 'Espesor', value: fmtDim(registro.espesor) },
+                          { label: 'Cantidad', value: fmtCant(registro.cant_total) },
+                          { label: 'Vlr. unitario', value: formatCOP(registro.vlr_unitario) },
+                          { label: 'Costo directo', value: formatCOP(registro.costo_directo) },
+                        ]}
+                      />
+                    </div>
+                    <div style={{ padding: '10px 12px' }}>
+                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 8 }}>
+                        Dimensión a ajustar
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {dimOptions.map((opt) => (
+                          <label
+                            key={opt.key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 8,
+                              opacity: opt.disabled ? 0.5 : 1,
+                              cursor: opt.disabled ? 'not-allowed' : 'pointer',
+                              color: t.text,
+                              fontSize: 'var(--cc-label)',
+                            }}
+                            title={opt.reason || ''}
+                          >
+                            <input
+                              type="radio"
+                              name="dim-objetivo"
+                              disabled={opt.disabled}
+                              checked={dimension === opt.key}
+                              onChange={() => setDimension(opt.key)}
+                              style={{ marginTop: 3 }}
+                            />
+                            <span>
+                              {opt.label}
+                              {opt.disabled && opt.reason ? (
+                                <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.3 }}>
+                                  {opt.reason}
+                                </span>
+                              ) : null}
                             </span>
-                          ) : null}
-                        </span>
-                      </label>
-                    ))}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -526,10 +644,10 @@ export default function PptoBuscarObjetivoModal({
                   background: '#FEF2F2',
                   border: '1px solid #FECACA',
                   borderRadius: 8,
-                  padding: '10px 12px',
+                  padding: '8px 12px',
                   color: '#991B1B',
                   fontSize: 'var(--cc-sm)',
-                  marginBottom: 12,
+                  marginBottom: 10,
                 }}
               >
                 {error}
@@ -537,35 +655,10 @@ export default function PptoBuscarObjetivoModal({
             )}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => onClose?.()}
-                style={{
-                  background: 'transparent',
-                  border: `1px solid ${t.border}`,
-                  borderRadius: 8,
-                  padding: '9px 18px',
-                  fontSize: 'var(--cc-label)',
-                  color: t.textMuted,
-                  cursor: 'pointer',
-                }}
-              >
+              <button type="button" onClick={() => onClose?.()} style={btnGhost}>
                 Cancelar
               </button>
-              <button
-                type="button"
-                onClick={onCalcular}
-                style={{
-                  background: t.primary,
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 8,
-                  padding: '9px 22px',
-                  fontSize: 'var(--cc-label)',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
+              <button type="button" onClick={onCalcular} style={btnPrimary}>
                 Calcular ajuste
               </button>
             </div>
@@ -574,71 +667,94 @@ export default function PptoBuscarObjetivoModal({
 
         {fase === 'confirm' && preview && (
           <>
-            <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginBottom: 14 }}>
-              Se actualizará <strong style={{ color: t.text }}>1 registro</strong> (
-              {registro?.id_pol || registro?.pk_id}) ajustando <strong style={{ color: t.text }}>{preview.dimLabel}</strong>.
+            <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginBottom: 10 }}>
+              Se actualizará el registro{' '}
+              <strong style={{ color: t.text }}>{registro?.id_pol || registro?.pk_id}</strong>
+              {' '}ajustando <strong style={{ color: t.text }}>{preview.dimLabel}</strong>.
             </div>
+
             <div
               style={{
-                background: t.bg,
+                border: `1px solid ${t.border}`,
                 borderRadius: 8,
-                padding: 12,
-                marginBottom: 16,
-                fontSize: 'var(--cc-label)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                color: t.text,
+                overflow: 'hidden',
+                marginBottom: 12,
               }}
             >
-              <span>
-                📐 <strong>{preview.dimLabel}:</strong> {fmtDim(preview.dimActual)} →{' '}
-                <strong>{fmtDim(preview.dimNueva)}</strong>
-              </span>
-              <span>
-                📏 <strong>Cant. total:</strong> {fmtCant(preview.cantActual)} → {fmtCant(preview.cantNueva)}
-              </span>
-              <span>
-                💲 <strong>Costo del registro:</strong> {formatCOP(preview.cdRegistroActual)} →{' '}
-                {formatCOP(preview.cdRegistroNuevo)}
-              </span>
-              <span>
-                📊 <strong>Presupuesto total:</strong> {formatCOP(preview.totalActual)} →{' '}
-                <strong>{formatCOP(preview.totalNuevo)}</strong>
-                {' '}(objetivo {formatCOP(preview.objetivo)})
-              </span>
-              <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', marginTop: 4 }}>
-                Cant.Total = Área × Ancho × Espesor → Costo Directo = Cant.Total × Vlr.Unit
-              </span>
+              <CompareTable
+                t={t}
+                rows={[
+                  {
+                    label: preview.dimLabel,
+                    before: fmtDim(preview.dimActual),
+                    after: fmtDim(preview.dimNueva),
+                  },
+                  {
+                    label: 'Cant. total',
+                    before: fmtCant(preview.cantActual),
+                    after: fmtCant(preview.cantNueva),
+                  },
+                  {
+                    label: 'Costo del registro',
+                    before: formatCOP(preview.cdRegistroActual),
+                    after: formatCOP(preview.cdRegistroNuevo),
+                  },
+                  {
+                    label: 'Presupuesto total',
+                    before: formatCOP(preview.totalActual),
+                    after: formatCOP(preview.totalNuevo),
+                  },
+                ]}
+              />
             </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+                marginBottom: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                Objetivo: <strong style={{ color: t.text }}>{formatCOP(preview.objetivo)}</strong>
+                {' · '}
+                Cant. = Área × Ancho × Espesor · CD = Cant. × Vlr.Unit
+              </div>
+            </div>
+
             <div
               style={{
                 background: '#FEF3C7',
                 border: '1px solid #FCD34D',
                 borderRadius: 8,
-                padding: '10px 14px',
+                padding: '8px 12px',
                 fontSize: 'var(--cc-sm)',
                 color: '#92400E',
-                marginBottom: 20,
+                marginBottom: 14,
               }}
             >
               ⚠️ Esta acción modifica los datos en la base de datos y <strong>no se puede deshacer</strong> desde esta herramienta.
             </div>
+
             {error && (
               <div
                 style={{
                   background: '#FEF2F2',
                   border: '1px solid #FECACA',
                   borderRadius: 8,
-                  padding: '10px 12px',
+                  padding: '8px 12px',
                   color: '#991B1B',
                   fontSize: 'var(--cc-sm)',
-                  marginBottom: 12,
+                  marginBottom: 10,
                 }}
               >
                 {error}
               </div>
             )}
+
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button
                 type="button"
@@ -647,15 +763,7 @@ export default function PptoBuscarObjetivoModal({
                   setFase('form')
                   setPreview(null)
                 }}
-                style={{
-                  background: 'transparent',
-                  border: `1px solid ${t.border}`,
-                  borderRadius: 8,
-                  padding: '9px 18px',
-                  fontSize: 'var(--cc-label)',
-                  color: t.textMuted,
-                  cursor: 'pointer',
-                }}
+                style={btnGhost}
               >
                 Volver
               </button>
@@ -664,13 +772,7 @@ export default function PptoBuscarObjetivoModal({
                 disabled={aplicando}
                 onClick={() => void onConfirmar()}
                 style={{
-                  background: t.primary,
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 8,
-                  padding: '9px 22px',
-                  fontSize: 'var(--cc-label)',
-                  fontWeight: 700,
+                  ...btnPrimary,
                   cursor: aplicando ? 'wait' : 'pointer',
                   opacity: aplicando ? 0.7 : 1,
                 }}
@@ -685,42 +787,38 @@ export default function PptoBuscarObjetivoModal({
           <>
             <div
               style={{
-                background: '#ECFDF5',
                 border: '1px solid #A7F3D0',
                 borderRadius: 8,
-                padding: 14,
-                marginBottom: 16,
-                color: '#065F46',
-                fontSize: 'var(--cc-label)',
+                overflow: 'hidden',
+                marginBottom: 14,
+                background: '#ECFDF5',
               }}
             >
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>✓ Ajuste aplicado</div>
-              <div>
-                Registro <strong>{resultadoOk.idPol}</strong>: {resultadoOk.preview.dimLabel}{' '}
-                {fmtDim(resultadoOk.preview.dimActual)} → {fmtDim(resultadoOk.preview.dimNueva)}
+              <div style={{ padding: '10px 12px', fontWeight: 700, color: '#065F46', fontSize: 'var(--cc-label)' }}>
+                ✓ Ajuste aplicado · {resultadoOk.idPol}
               </div>
-              <div style={{ marginTop: 6 }}>
-                Presupuesto total: {formatCOP(resultadoOk.preview.totalActual)} →{' '}
-                <strong>
-                  {costoActual != null ? formatCOP(costoActual) : formatCOP(resultadoOk.preview.totalNuevo)}
-                </strong>
+              <div style={{ background: t.bgCard }}>
+                <CompareTable
+                  t={t}
+                  rows={[
+                    {
+                      label: resultadoOk.preview.dimLabel,
+                      before: fmtDim(resultadoOk.preview.dimActual),
+                      after: fmtDim(resultadoOk.preview.dimNueva),
+                    },
+                    {
+                      label: 'Presupuesto total',
+                      before: formatCOP(resultadoOk.preview.totalActual),
+                      after: costoActual != null
+                        ? formatCOP(costoActual)
+                        : formatCOP(resultadoOk.preview.totalNuevo),
+                    },
+                  ]}
+                />
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => onClose?.()}
-                style={{
-                  background: t.primary,
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 8,
-                  padding: '9px 22px',
-                  fontSize: 'var(--cc-label)',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
+              <button type="button" onClick={() => onClose?.()} style={btnPrimary}>
                 Cerrar
               </button>
             </div>
