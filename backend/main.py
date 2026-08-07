@@ -10236,6 +10236,44 @@ def get_resumen_presupuesto(
     }
 
 
+def _presupuesto_costo_directo_total_modulo(
+    contrato_id: int,
+    tipo_ejecucion: Optional[str],
+    current_user,
+) -> float:
+    """
+    Costo directo total del módulo Presupuesto / pestaña Resumen Excel.
+
+    Fuente única: Σ costo_directo almacenado por registro (vía capitulos-lista /
+    RPC presupuesto_capitulos_lista_agg). NO usa scan_presupuesto_vista
+    (que recalcula round(Σcant × VU listado_precios) y diverge del Resumen).
+    """
+    from presupuesto_helpers import sum_costo_directo_capitulos
+
+    caps = _presupuesto_agregar_por_capitulo(contrato_id, tipo_ejecucion, current_user)
+    return sum_costo_directo_capitulos(caps)
+
+
+@app.get("/presupuesto/{contrato_id}/buscar-objetivo/presupuesto-actual")
+def buscar_objetivo_presupuesto_actual(
+    contrato_id: int,
+    tipo_ejecucion: str = Query("Presupuesto de Obra"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Presupuesto actual para «Buscar objetivo»: mismo total que la pestaña Resumen
+    (Σ costo_directo), no el KPI de dashboard GET /presupuesto/.../resumen.
+    """
+    _require_contract_access(current_user, contrato_id)
+    te = (tipo_ejecucion or "Presupuesto de Obra").strip() or "Presupuesto de Obra"
+    total = _presupuesto_costo_directo_total_modulo(contrato_id, te, current_user)
+    return {
+        "costo_total": total,
+        "tipo_ejecucion": te,
+        "fuente": "sum_costo_directo",
+    }
+
+
 @app.get("/presupuesto/{contrato_id}/buscar-objetivo/registros")
 def buscar_registros_buscar_objetivo(
     contrato_id: int,
