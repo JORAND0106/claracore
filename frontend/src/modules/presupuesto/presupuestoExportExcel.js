@@ -32,6 +32,11 @@ import {
   sizeContainInBox,
 } from './presupuestoExportLogos.js'
 import { agruparRegistrosPorTipoEntidad } from './pptoTipoEntidad.js'
+import {
+  costoDirectoResumenFila,
+  formulaSumaFilas,
+  planFilasResumenConSubtotales,
+} from './pptoResumenExport.js'
 
 export { resolverMetaLogosPresupuesto }
 
@@ -776,10 +781,21 @@ function completarFormulasTotales(
   colSumaCant = null,
   colSumaCosto = null,
   totalsTier = 'titulo_1',
+  /** @type {number[]|null} Si se indica, el total general suma solo estas filas (p. ej. subtotales de capítulo). */
+  filasSuma = null,
 ) {
-  if (lastDataRow < firstDataRow) return
   const srcCant = colSumaCant || colDisplayCant
-  const sumCant = `SUM(${colToLetter(srcCant)}${firstDataRow}:${colToLetter(srcCant)}${lastDataRow})`
+  const srcCosto = colSumaCosto || colDisplayCosto
+  let sumCant
+  let sumCosto
+  if (Array.isArray(filasSuma) && filasSuma.length) {
+    sumCant = formulaSumaFilas(colToLetter(srcCant), filasSuma)
+    sumCosto = formulaSumaFilas(colToLetter(srcCosto), filasSuma)
+  } else {
+    if (lastDataRow < firstDataRow) return
+    sumCant = `SUM(${colToLetter(srcCant)}${firstDataRow}:${colToLetter(srcCant)}${lastDataRow})`
+    sumCosto = `SUM(${colToLetter(srcCosto)}${firstDataRow}:${colToLetter(srcCosto)}${lastDataRow})`
+  }
   const fillTot = fillTotalesTier(totalsTier)
   const textTot = textoTotalesTier(totalsTier)
 
@@ -789,8 +805,6 @@ function completarFormulasTotales(
   ws.getCell(totalsSummaryRow, colDisplayCant).fill = fillTot
 
   if (colDisplayCosto != null) {
-    const srcCosto = colSumaCosto || colDisplayCosto
-    const sumCosto = `SUM(${colToLetter(srcCosto)}${firstDataRow}:${colToLetter(srcCosto)}${lastDataRow})`
     ws.getCell(totalsSummaryRow, colDisplayCosto).value = { formula: sumCosto }
     estiloMoneda(ws.getCell(totalsSummaryRow, colDisplayCosto))
     ws.getCell(totalsSummaryRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
@@ -806,10 +820,7 @@ function completarFormulasTotales(
     ws.getCell(totalsFooterRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
     ws.getCell(totalsFooterRow, colDisplayCant).fill = fillTot
     if (colDisplayCosto != null) {
-      const srcCosto = colSumaCosto || colDisplayCosto
-      ws.getCell(totalsFooterRow, colDisplayCosto).value = {
-        formula: `SUM(${colToLetter(srcCosto)}${firstDataRow}:${colToLetter(srcCosto)}${lastDataRow})`,
-      }
+      ws.getCell(totalsFooterRow, colDisplayCosto).value = { formula: sumCosto }
       estiloMoneda(ws.getCell(totalsFooterRow, colDisplayCosto))
       ws.getCell(totalsFooterRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
       ws.getCell(totalsFooterRow, colDisplayCosto).fill = fillTot
@@ -819,6 +830,21 @@ function completarFormulasTotales(
       bordeCeldaTabla(ws.getCell(totalsFooterRow, c), { esTotal: true })
     }
   }
+}
+
+function estiloFilaSubtotalCapitulo(row, colCount) {
+  row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    if (colNumber > colCount) return
+    cell.fill = FILL_HEADER
+    cell.font = { bold: true, size: 10, color: { argb: CC.headerText } }
+    cell.alignment = {
+      horizontal: colNumber >= 5 ? 'right' : 'left',
+      vertical: 'middle',
+      wrapText: colNumber <= 3,
+    }
+    bordeCeldaTabla(cell, { esTotal: true })
+  })
+  row.height = 20
 }
 
 function colToLetter(col) {
@@ -1354,38 +1380,76 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
 
   const firstDataRow = tableHeaderRow + 1
   let rowNum = firstDataRow
+  /** Filas de subtotal por capítulo: el total general (fila 5) suma solo estas. */
+  const filasSubtotalCap = []
+  let chapterItemStart = null
 
-  for (const row of resumen) {
-    const r = wsRes.addRow([
-      row.capitulo,
-      row.item,
-      row.descripcion,
-      row.und,
-      Math.round(Number(row.vlr_unitario) || 0),
-      null,
-      null,
-    ])
-    estiloMoneda(r.getCell(5))
+  const plan = planFilasResumenConSubtotales(resumen)
+  for (const entry of plan) {
+    if (entry.tipo === 'item') {
+      const row = entry.row
+      if (chapterItemStart == null) chapterItemStart = rowNum
+      const r = wsRes.addRow([
+        row.capitulo,
+        row.item,
+        row.descripcion,
+        row.und,
+        Math.round(Number(row.vlr_unitario) || 0),
+        null,
+        null,
+      ])
+      estiloMoneda(r.getCell(5))
 
-    const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
-    if (ref?.cantTotalRow) {
-      r.getCell(6).value = {
-        formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
+      const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
+      if (ref?.cantTotalRow) {
+        r.getCell(6).value = {
+          formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
+        }
+      } else {
+        r.getCell(6).value = Number(row.cantidad) || 0
+      }
+      estiloCantidad(r.getCell(6))
+
+      // Congruente con la plataforma: Σ costo_directo (no ROUND(vlr × Σcant)).
+      r.getCell(7).value = costoDirectoResumenFila(row)
+      estiloMoneda(r.getCell(7))
+      estiloFilaDatos(r, totalColsResumen, rowNum)
+      rowNum += 1
+      continue
+    }
+
+    // Subtotal de capítulo: suma Cantidad y Costo directo de las filas del grupo.
+    const itemEnd = rowNum - 1
+    const itemStart = chapterItemStart
+    const label = `SUBTOTAL ${entry.capitulo || '—'}`.trim()
+    const rSub = wsRes.addRow([label, '', '', '', '', null, null])
+    if (itemStart != null && itemEnd >= itemStart) {
+      rSub.getCell(6).value = {
+        formula: `SUM(${colToLetter(6)}${itemStart}:${colToLetter(6)}${itemEnd})`,
+      }
+      rSub.getCell(7).value = {
+        formula: `SUM(${colToLetter(7)}${itemStart}:${colToLetter(7)}${itemEnd})`,
       }
     } else {
-      r.getCell(6).value = 0
+      rSub.getCell(6).value = 0
+      rSub.getCell(7).value = entry.costoDirecto || 0
     }
-    estiloCantidad(r.getCell(6))
-
-    r.getCell(7).value = { formula: `ROUND(E${rowNum}*F${rowNum},0)` }
-    estiloMoneda(r.getCell(7))
-    estiloFilaDatos(r, totalColsResumen, rowNum)
+    estiloCantidad(rSub.getCell(6))
+    estiloMoneda(rSub.getCell(7))
+    estiloFilaSubtotalCapitulo(rSub, totalColsResumen)
+    try {
+      wsRes.mergeCells(rowNum, 1, rowNum, 4)
+    } catch {
+      /* merge opcional */
+    }
+    filasSubtotalCap.push(rowNum)
+    chapterItemStart = null
     rowNum += 1
   }
 
-  const lastDataRow = resumen.length > 0 ? firstDataRow + resumen.length - 1 : firstDataRow - 1
+  const lastDataRow = plan.length > 0 ? rowNum - 1 : firstDataRow - 1
   let totalsFooterRow = null
-  if (resumen.length > 0) {
+  if (plan.length > 0) {
     totalsFooterRow = lastDataRow + 1
     wsRes.addRow(new Array(totalColsResumen).fill(''))
     completarFormulasTotales(
@@ -1399,6 +1463,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       null,
       null,
       totalsTier,
+      filasSubtotalCap.length ? filasSubtotalCap : null,
     )
     aplicarBordesTabla(wsRes, tableHeaderRow, totalsFooterRow, totalColsResumen)
   }
