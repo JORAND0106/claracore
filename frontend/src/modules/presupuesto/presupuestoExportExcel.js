@@ -5,6 +5,7 @@ import {
   LOGO_LEFT_COL_CHARS,
   LOGO_PAIR_GAP_PX,
   dimensionesImagenBuffer,
+  excelColWidthToPx,
   logoImageId,
   planLayoutLogosEncabezado,
   posicionLogoEntidadFlotante,
@@ -180,6 +181,30 @@ function insertarImagenFlotante(ws, logo, pos) {
   ws.addImage(id, { tl: pos.tl, ext: pos.ext })
 }
 
+/** Anchos reales de columnas 1..colCount en px (tras ajustarAnchos*). */
+function leerAnchosColumnasPx(ws, colCount) {
+  const widths = []
+  for (let c = 1; c <= colCount; c += 1) {
+    widths.push(excelColWidthToPx(ws.getColumn(c).width || 12))
+  }
+  return widths
+}
+
+/**
+ * Logo de entidad al extremo derecho del área usada.
+ * Se llama DESPUÉS de ajustar anchos de columna (no modifica anchos).
+ */
+function insertarLogoEntidadAlDerecho(ws, logo, colCount, rowHeightPt) {
+  if (logoImageId(logo) == null || !colCount) return
+  const pos = posicionLogoEntidadFlotante({
+    logo,
+    colCount,
+    colWidthsPx: leerAnchosColumnasPx(ws, colCount),
+    rowHeightPt,
+  })
+  insertarImagenFlotante(ws, logo, pos)
+}
+
 function estiloMetaCell(cell, { bold = false, align = 'left', rowNum } = {}) {
   cell.fill = rowNum != null ? fillGrillaFila(rowNum) : FILL_ROW_PRIMARY
   cell.font = {
@@ -276,30 +301,16 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
 
   for (let c = 1; c <= cols; c += 1) ws.getCell(1, c).fill = FILL_TITLE
 
-  // Bloque izquierdo: fondo continuo; logos flotan por coordenadas absolutas (px→col).
+  // Bloque izquierdo: solo merge/fondo. Logos flotantes; NO tocar anchos de columna.
   if (leftSpan > 0) {
     ws.mergeCells(1, 1, 1, leftSpan)
-    for (let c = 1; c <= leftSpan; c += 1) {
-      ws.getColumn(c).width = LOGO_LEFT_COL_CHARS
-    }
     if (par.contratista) insertarImagenFlotante(ws, logosEff.contratista, par.contratista)
     if (par.interventoria) insertarImagenFlotante(ws, logosEff.interventoria, par.interventoria)
   }
 
+  // Hueco derecho para entidad (fondo). La imagen se inserta tras ajustar anchos.
   if (hasEntidad && entidadStart != null && entidadStart <= cols) {
-    const entSpan = cols - entidadStart + 1
     ws.mergeCells(1, entidadStart, 1, cols)
-    for (let c = entidadStart; c <= cols; c += 1) {
-      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, LOGO_LEFT_COL_CHARS)
-    }
-    const posE = posicionLogoEntidadFlotante({
-      logo: entidadLogo,
-      colStart: entidadStart,
-      slotCols: Math.max(1, entSpan),
-      colChars: LOGO_LEFT_COL_CHARS,
-      rowHeightPt: logoRowHeightPt,
-    })
-    insertarImagenFlotante(ws, entidadLogo, posE)
   }
 
   if (tieneLogo) {
@@ -362,6 +373,9 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     totalsTier,
     logoLeftSpan: leftSpan,
     logoRightSpan: rightSpan,
+    entidadLogo: hasEntidad ? entidadLogo : null,
+    logoRowHeightPt,
+    headerCols: cols,
   }
 }
 
@@ -846,10 +860,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     logoLeftSpan: enc.logoLeftSpan || 0,
     logoRightSpan: enc.logoRightSpan || 0,
   })
-  // Restaurar anchos del bloque de logos (evitar que ajustarAnchos aplaste la conversión px→col).
-  for (let c = 1; c <= (enc.logoLeftSpan || 0); c += 1) {
-    ws.getColumn(c).width = LOGO_LEFT_COL_CHARS
-  }
+  // Entidad al extremo derecho con anchos ya definitivos (sin alterar columnas).
+  insertarLogoEntidadAlDerecho(ws, enc.entidadLogo, TOTAL_COLS_DET, enc.logoRowHeightPt)
   const wrapHasta = cantTotalRow || lastDetRow || tableRow
   aplicarWrapTextRango(ws, tableRow, wrapHasta, TOTAL_COLS_DET)
 
@@ -886,6 +898,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     totalsTier,
     logoLeftSpan,
     logoRightSpan,
+    entidadLogo,
+    logoRowHeightPt,
   } = escribirEncabezadoCompacto(
     wsRes,
     totalColsResumen,
@@ -956,13 +970,13 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
+  // Anchos de Resumen como antes del ajuste de altura de logos (sin forzar 12).
   ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen, {
     logoLeftSpan: logoLeftSpan || 0,
     logoRightSpan: logoRightSpan || 0,
   })
-  for (let c = 1; c <= (logoLeftSpan || 0); c += 1) {
-    wsRes.getColumn(c).width = LOGO_LEFT_COL_CHARS
-  }
+  // Entidad al extremo derecho; solo tamaño de imagen, no anchos de columna.
+  insertarLogoEntidadAlDerecho(wsRes, entidadLogo, totalColsResumen, logoRowHeightPt)
   return wsRes
 }
 
