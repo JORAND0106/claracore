@@ -16,6 +16,7 @@ import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoGraficosModal from './PptoGraficosModal'
+import PptoGruposGraficosModal from './PptoGruposGraficosModal'
 import PptoExportExcelModal from './PptoExportExcelModal'
 import PptoValidacionIcon from './PptoValidacionIcon'
 import {
@@ -305,6 +306,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalConfirm, setModalConfirm] = useState(false)
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [modalGraficos, setModalGraficos] = useState(false)
+  const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
   const [bulkTipoEjecucion, setBulkTipoEjecucion] = useState('')
@@ -6097,6 +6099,14 @@ async function restaurar(id) {
           /* Los gráficos se leen al exportar memorias; no hace falta recargar la grilla. */
         }}
       />
+      <PptoGruposGraficosModal
+        open={modalGruposGraficos}
+        onClose={() => setModalGruposGraficos(false)}
+        t={t}
+        contratoId={contratoId}
+        token={token}
+        API={API}
+      />
 
       {/* ── Modal confirmar recálculo ── */}
       {modalConfirm && (
@@ -6536,7 +6546,7 @@ async function restaurar(id) {
         </div>
       )}
 
-      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeAbrirEdicionMasiva || puedeEliminar) && (
+      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeAbrirEdicionMasiva || puedeEliminar || (!versionActiva?.id && !verPapelera)) && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
           {puedeAbrirEdicionMasiva && (
             <>
@@ -6546,77 +6556,109 @@ async function restaurar(id) {
                 </span>
               ) : (
                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>
-                  Marque filas en la grilla para editar en lote
+                  Marque filas (Shift+clic = rango)
                 </span>
               )}
               <button
                 type="button"
                 disabled={seleccionados.size === 0}
-                title={seleccionados.size === 0 ? 'Seleccione uno o más registros (checkbox)' : 'Capítulo, dimensiones, validación…'}
+                aria-label="Edición masiva"
+                title={seleccionados.size === 0 ? 'Seleccione uno o más registros (checkbox)' : 'Edición masiva: capítulo, dimensiones, validación…'}
                 onClick={() => seleccionados.size > 0 && setModalEdicionMasiva(true)}
                 style={{
+                  width: 40,
+                  height: 40,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   background: seleccionados.size > 0 ? t.primary : t.border,
                   color: seleccionados.size > 0 ? '#fff' : t.textMuted,
                   border: 'none',
                   borderRadius: 8,
-                  padding: '8px 18px',
-                  fontSize: 'var(--cc-sm)',
-                  fontWeight: 700,
+                  fontSize: 18,
                   cursor: seleccionados.size > 0 ? 'pointer' : 'not-allowed',
-                  whiteSpace: 'nowrap',
                   opacity: seleccionados.size > 0 ? 1 : 0.85,
                 }}
               >
-                ✏️ Edición masiva
+                ✏️
               </button>
               {!versionActiva?.id && !verPapelera && (
                 <button
                   type="button"
                   disabled={seleccionados.size === 0}
+                  aria-label="Agregar gráficos a la selección"
                   title={seleccionados.size === 0
                     ? 'Seleccione uno o más registros (checkbox)'
-                    : 'Asociar gráficos a la selección (archivo o Ctrl+V) para las memorias de ítem'}
+                    : 'Nuevo grupo de gráfico para la selección (archivo, galería o Ctrl+V)'}
                   onClick={() => seleccionados.size > 0 && setModalGraficos(true)}
                   style={{
+                    width: 40,
+                    height: 40,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     background: seleccionados.size > 0 ? '#0F766E' : t.border,
                     color: seleccionados.size > 0 ? '#fff' : t.textMuted,
                     border: 'none',
                     borderRadius: 8,
-                    padding: '8px 18px',
-                    fontSize: 'var(--cc-sm)',
-                    fontWeight: 700,
+                    fontSize: 18,
                     cursor: seleccionados.size > 0 ? 'pointer' : 'not-allowed',
-                    whiteSpace: 'nowrap',
                     opacity: seleccionados.size > 0 ? 1 : 0.85,
                   }}
                 >
-                  🖼 Agregar gráficos
+                  🖼
                 </button>
               )}
             </>
+          )}
+          {!versionActiva?.id && !verPapelera && (
+            <button
+              type="button"
+              aria-label="Gráficos del contrato"
+              title="Gráficos del contrato: ver y editar grupos existentes"
+              onClick={() => setModalGruposGraficos(true)}
+              style={{
+                width: 40,
+                height: 40,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: t.bg,
+                color: t.text,
+                border: `1.5px solid ${t.border}`,
+                borderRadius: 8,
+                fontSize: 18,
+                cursor: 'pointer',
+              }}
+            >
+              🗂️
+            </button>
           )}
           {seleccionados.size > 0 && (
             <>
               {undoUltima && (
                 <button
                   type="button"
+                  aria-label={`Deshacer: ${undoUltima.label}`}
                   title={`Deshacer: ${undoUltima.label}`}
                   onClick={() => void deshacerUltimaAccionPresupuesto()}
                   disabled={deshaciendo || guardandoBulk || dandoDeBaja}
                   style={{
+                    width: 40,
+                    height: 40,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     background: t.bgCard,
                     color: '#B45309',
                     border: '1.5px solid #F59E0B',
                     borderRadius: 8,
-                    padding: '8px 14px',
-                    fontSize: 'var(--cc-sm)',
-                    fontWeight: 700,
+                    fontSize: 18,
                     cursor: deshaciendo || guardandoBulk ? 'not-allowed' : 'pointer',
-                    whiteSpace: 'nowrap',
                     opacity: deshaciendo || guardandoBulk ? 0.6 : 1,
                   }}
                 >
-                  {deshaciendo ? '⏳ Deshaciendo…' : `↩ Deshacer: ${undoUltima.label}`}
+                  {deshaciendo ? '⏳' : '↩'}
                 </button>
               )}
 
@@ -6624,6 +6666,8 @@ async function restaurar(id) {
                 <button
                   type="button"
                   disabled={dandoDeBaja}
+                  aria-label={`Dar de baja (${seleccionados.size})`}
+                  title={`Dar de baja (${seleccionados.size} seleccionados)`}
                   onClick={async () => {
                     if (dandoDeBaja) return
                     const idsBaja = [...seleccionados].filter(id => !esSellado(registros.find(rr => rr.id === id)))
@@ -6643,11 +6687,21 @@ async function restaurar(id) {
                     })
                   }}
                   style={{
-                    background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444',
-                    fontSize:'var(--cc-sm)', fontWeight:'700', cursor: dandoDeBaja ? 'not-allowed' : 'pointer', whiteSpace:'nowrap',
+                    width: 40,
+                    height: 40,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#EF444415',
+                    border: '1px solid #EF444466',
+                    borderRadius: 8,
+                    color: '#EF4444',
+                    fontSize: 18,
+                    cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
                     opacity: dandoDeBaja ? 0.55 : 1,
-                  }}>
-                  {dandoDeBaja ? '⏳ Baja en curso…' : `🗑️ Dar de baja (${seleccionados.size})`}
+                  }}
+                >
+                  {dandoDeBaja ? '⏳' : '🗑️'}
                 </button>
               )}
 

@@ -1,14 +1,14 @@
 """
-Rutas HTTP — gráficos de memorias de Presupuesto.
+Rutas HTTP — gráficos de memorias de Presupuesto (grupos persistentes).
 Prefijo: /presupuesto/{contrato_id}/graficos
 """
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from azure_blob_storage import path_presupuesto_grafico, upload_blob
@@ -78,6 +78,17 @@ class CrearGrupoGraficosBody(BaseModel):
     titulo: Optional[str] = None
 
 
+class AgregarRegsBody(BaseModel):
+    presupuesto_ids: List[int] = Field(default_factory=list)
+
+
+class ReemplazarImagenBody(BaseModel):
+    url: str
+    blob_path: Optional[str] = None
+    origen: Optional[str] = "upload"
+    descripcion: Optional[str] = None
+
+
 def _ext_desde_content_type(content_type: Optional[str]) -> str:
     c = (content_type or "image/jpeg").split(";")[0].strip().lower()
     return {
@@ -87,6 +98,157 @@ def _ext_desde_content_type(content_type: Optional[str]) -> str:
         "image/webp": ".webp",
         "image/gif": ".gif",
     }.get(c, ".jpg")
+
+
+def _assert_grupo_del_contrato(supabase, contrato_id: int, grupo_id: str) -> dict:
+    rows = (
+        supabase.table("presupuesto_grafico_grupos")
+        .select("id, contrato_id, titulo, created_at, created_by")
+        .eq("id", grupo_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Grupo no encontrado")
+    return rows[0]
+
+
+def _validar_presupuesto_ids(supabase, contrato_id: int, ids: List[int]) -> List[int]:
+    ids = sorted({int(x) for x in ids if x is not None})
+    if not ids:
+        return []
+    check = (
+        supabase.table("presupuesto")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    found = {int(r["id"]) for r in check}
+    missing = [i for i in ids if i not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Registros no encontrados en el contrato: {missing[:10]}",
+        )
+    return ids
+
+
+def _pk_infra_mapa(supabase, contrato_id: int, ppto_rows: List[dict]) -> Dict[str, str]:
+    pk_codes = list({str(r.get("pk_id") or "").strip() for r in ppto_rows if r.get("pk_id")})
+    pk_infra: Dict[str, str] = {}
+    if not pk_codes:
+        return pk_infra
+    try:
+        pk_data = (
+            supabase.table("pk_ids")
+            .select("codigo, infraestructura")
+            .eq("contrato_id", contrato_id)
+            .in_("codigo", pk_codes)
+            .execute()
+            .data
+            or []
+        )
+        for p in pk_data:
+            c = str(p.get("codigo") or "").strip()
+            if c:
+                pk_infra[c] = (p.get("infraestructura") or "").strip()
+    except Exception as exc:
+        _log.warning("pk_ids infra para graficos: %s", exc)
+    return pk_infra
+
+
+def _enrich_ppto_rows(supabase, contrato_id: int, ppto_rows: List[dict]) -> List[Dict[str, Any]]:
+    pk_infra = _pk_infra_mapa(supabase, contrato_id, ppto_rows)
+    out = []
+    for r in ppto_rows:
+        pk = str(r.get("pk_id") or "").strip()
+        out.append(
+            {
+                "id": int(r["id"]),
+                "capitulo": (r.get("capitulo") or "").strip(),
+                "item": (r.get("item") or "").strip(),
+                "tramo": (r.get("tramo") or "").strip(),
+                "id_pol": r.get("id_pol") or "",
+                "pk_id": r.get("pk_id") or "",
+                "abs_inicio": r.get("abs_inicio"),
+                "abs_final": r.get("abs_final"),
+                "infraestructura": pk_infra.get(pk, ""),
+            }
+        )
+    return out
+
+
+def _fetch_regs_info_by_ids(
+    supabase, contrato_id: int, pids: List[int]
+) -> Dict[int, Dict[str, Any]]:
+    if not pids:
+        return {}
+    ppto_rows = (
+        supabase.table("presupuesto")
+        .select("id, capitulo, item, tramo, id_pol, abs_inicio, abs_final, pk_id")
+        .eq("contrato_id", contrato_id)
+        .in_("id", pids)
+        .execute()
+        .data
+        or []
+    )
+    enriched = _enrich_ppto_rows(supabase, contrato_id, ppto_rows)
+    return {r["id"]: r for r in enriched}
+
+
+def _items_keys_from_regs(regs: List[Dict[str, Any]]) -> List[str]:
+    keys: List[str] = []
+    seen: Set[str] = set()
+    for r in regs:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not cap or not it:
+            continue
+        label = f"{cap} · {it}"
+        if label not in seen:
+            seen.add(label)
+            keys.append(label)
+    return keys
+
+
+def _serialize_grupo_detalle(
+    supabase, contrato_id: int, grupo: dict, regs_j: List[dict], imgs: List[dict]
+) -> dict:
+    pids = [int(r["presupuesto_id"]) for r in regs_j]
+    by_id = _fetch_regs_info_by_ids(supabase, contrato_id, pids)
+    regs = [by_id[pid] for pid in pids if pid in by_id]
+    caption = build_caption_pie_foto(regs)
+    imagenes = sorted(imgs or [], key=lambda x: (int(x.get("orden") or 0), int(x.get("id") or 0)))
+    thumb = imagenes[0]["url"] if imagenes else None
+    return {
+        "id": grupo["id"],
+        "titulo": grupo.get("titulo"),
+        "created_at": grupo.get("created_at"),
+        "created_by": grupo.get("created_by"),
+        "caption": caption,
+        "registros_count": len(regs),
+        "imagenes_count": len(imagenes),
+        "thumb_url": thumb,
+        "items": _items_keys_from_regs(regs),
+        "registros": regs,
+        "imagenes": [
+            {
+                "id": im.get("id"),
+                "url": im.get("url"),
+                "blob_path": im.get("blob_path"),
+                "origen": im.get("origen"),
+                "orden": im.get("orden") or 0,
+                "descripcion": im.get("descripcion"),
+            }
+            for im in imagenes
+        ],
+    }
 
 
 def register_deps(supabase, get_current_user, require_contract_access):
@@ -122,30 +284,12 @@ def register_deps(supabase, get_current_user, require_contract_access):
         current_user=Depends(get_current_user),
     ):
         require_contract_access(current_user, contrato_id)
-        ids = sorted({int(x) for x in (body.presupuesto_ids or []) if x is not None})
+        ids = _validar_presupuesto_ids(supabase, contrato_id, body.presupuesto_ids or [])
         if not ids:
             raise HTTPException(status_code=422, detail="Seleccione al menos un registro")
         imgs = body.imagenes or []
         if not imgs:
             raise HTTPException(status_code=422, detail="Cargue al menos una imagen")
-
-        # Validar que los IDs pertenecen al contrato
-        check = (
-            supabase.table("presupuesto")
-            .select("id")
-            .eq("contrato_id", contrato_id)
-            .in_("id", ids)
-            .execute()
-            .data
-            or []
-        )
-        found = {int(r["id"]) for r in check}
-        missing = [i for i in ids if i not in found]
-        if missing:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Registros no encontrados en el contrato: {missing[:10]}",
-            )
 
         uid = current_user.get("id") if isinstance(current_user, dict) else None
         g_ins = (
@@ -190,6 +334,200 @@ def register_deps(supabase, get_current_user, require_contract_access):
 
         return {"ok": True, "grupo_id": grupo_id, "registros": len(ids), "imagenes": len(rows_img)}
 
+    @router.get("/presupuesto/{contrato_id}/graficos/grupos")
+    def listar_grupos_graficos(
+        contrato_id: int,
+        current_user=Depends(get_current_user),
+    ):
+        """Listado de grupos del contrato (miniatura, conteos, ítems, caption)."""
+        require_contract_access(current_user, contrato_id)
+        grupos = (
+            supabase.table("presupuesto_grafico_grupos")
+            .select("id, contrato_id, titulo, created_at, created_by")
+            .eq("contrato_id", contrato_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+        if not grupos:
+            return {"grupos": []}
+        gids = [g["id"] for g in grupos]
+        regs_j = (
+            supabase.table("presupuesto_grafico_grupo_regs")
+            .select("grupo_id, presupuesto_id")
+            .in_("grupo_id", gids)
+            .execute()
+            .data
+            or []
+        )
+        imgs = (
+            supabase.table("presupuesto_grafico_imagenes")
+            .select("id, grupo_id, url, blob_path, origen, orden, descripcion")
+            .in_("grupo_id", gids)
+            .order("orden")
+            .execute()
+            .data
+            or []
+        )
+        regs_by: Dict[str, List[dict]] = {}
+        for j in regs_j:
+            regs_by.setdefault(j["grupo_id"], []).append(j)
+        imgs_by: Dict[str, List[dict]] = {}
+        for im in imgs:
+            imgs_by.setdefault(im["grupo_id"], []).append(im)
+
+        out = []
+        for g in grupos:
+            gid = g["id"]
+            out.append(
+                _serialize_grupo_detalle(
+                    supabase, contrato_id, g, regs_by.get(gid, []), imgs_by.get(gid, [])
+                )
+            )
+        return {"grupos": out}
+
+    @router.get("/presupuesto/{contrato_id}/graficos/grupos/{grupo_id}")
+    def detalle_grupo_graficos(
+        contrato_id: int,
+        grupo_id: str,
+        current_user=Depends(get_current_user),
+    ):
+        require_contract_access(current_user, contrato_id)
+        g = _assert_grupo_del_contrato(supabase, contrato_id, grupo_id)
+        regs_j = (
+            supabase.table("presupuesto_grafico_grupo_regs")
+            .select("grupo_id, presupuesto_id")
+            .eq("grupo_id", grupo_id)
+            .execute()
+            .data
+            or []
+        )
+        imgs = (
+            supabase.table("presupuesto_grafico_imagenes")
+            .select("id, grupo_id, url, blob_path, origen, orden, descripcion")
+            .eq("grupo_id", grupo_id)
+            .order("orden")
+            .execute()
+            .data
+            or []
+        )
+        return _serialize_grupo_detalle(supabase, contrato_id, g, regs_j, imgs)
+
+    @router.post("/presupuesto/{contrato_id}/graficos/grupos/{grupo_id}/registros")
+    def agregar_regs_grupo(
+        contrato_id: int,
+        grupo_id: str,
+        body: AgregarRegsBody,
+        current_user=Depends(get_current_user),
+    ):
+        """Agrega registros al grupo sin afectar imagen ni el resto de la membresía."""
+        require_contract_access(current_user, contrato_id)
+        _assert_grupo_del_contrato(supabase, contrato_id, grupo_id)
+        ids = _validar_presupuesto_ids(supabase, contrato_id, body.presupuesto_ids or [])
+        if not ids:
+            raise HTTPException(status_code=422, detail="Seleccione al menos un registro")
+
+        existentes = (
+            supabase.table("presupuesto_grafico_grupo_regs")
+            .select("presupuesto_id")
+            .eq("grupo_id", grupo_id)
+            .in_("presupuesto_id", ids)
+            .execute()
+            .data
+            or []
+        )
+        ya = {int(r["presupuesto_id"]) for r in existentes}
+        nuevos = [i for i in ids if i not in ya]
+        if nuevos:
+            supabase.table("presupuesto_grafico_grupo_regs").insert(
+                [{"grupo_id": grupo_id, "presupuesto_id": pid} for pid in nuevos]
+            ).execute()
+        return {"ok": True, "agregados": len(nuevos), "ya_existian": len(ya)}
+
+    @router.delete(
+        "/presupuesto/{contrato_id}/graficos/grupos/{grupo_id}/registros/{presupuesto_id}"
+    )
+    def quitar_reg_grupo(
+        contrato_id: int,
+        grupo_id: str,
+        presupuesto_id: int,
+        current_user=Depends(get_current_user),
+    ):
+        require_contract_access(current_user, contrato_id)
+        _assert_grupo_del_contrato(supabase, contrato_id, grupo_id)
+        supabase.table("presupuesto_grafico_grupo_regs").delete().eq(
+            "grupo_id", grupo_id
+        ).eq("presupuesto_id", presupuesto_id).execute()
+        return {"ok": True}
+
+    @router.put(
+        "/presupuesto/{contrato_id}/graficos/grupos/{grupo_id}/imagenes/{imagen_id}"
+    )
+    def reemplazar_imagen_grupo(
+        contrato_id: int,
+        grupo_id: str,
+        imagen_id: int,
+        body: ReemplazarImagenBody,
+        current_user=Depends(get_current_user),
+    ):
+        """Reemplaza URL de una imagen sin tocar la membresía de registros."""
+        require_contract_access(current_user, contrato_id)
+        _assert_grupo_del_contrato(supabase, contrato_id, grupo_id)
+        url = (body.url or "").strip()
+        if not url:
+            raise HTTPException(status_code=422, detail="URL de imagen requerida")
+        existing = (
+            supabase.table("presupuesto_grafico_imagenes")
+            .select("id")
+            .eq("id", imagen_id)
+            .eq("grupo_id", grupo_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Imagen no encontrada en el grupo")
+        patch = {
+            "url": url,
+            "blob_path": (body.blob_path or "").strip() or None,
+            "origen": (body.origen or "upload").strip() or "upload",
+        }
+        if body.descripcion is not None:
+            patch["descripcion"] = (body.descripcion or "").strip() or None
+        supabase.table("presupuesto_grafico_imagenes").update(patch).eq(
+            "id", imagen_id
+        ).eq("grupo_id", grupo_id).execute()
+        return {"ok": True, "imagen_id": imagen_id, "url": url}
+
+    @router.get("/presupuesto/{contrato_id}/graficos/buscar-registros")
+    def buscar_registros_para_grupo(
+        contrato_id: int,
+        q: str = Query("", max_length=80),
+        limit: int = Query(40, ge=1, le=100),
+        current_user=Depends(get_current_user),
+    ):
+        """Busca registros vivos por Id_Pol / PK / ítem / tramo para agregar a un grupo."""
+        require_contract_access(current_user, contrato_id)
+        term = (q or "").strip()
+        query = (
+            supabase.table("presupuesto")
+            .select("id, capitulo, item, tramo, id_pol, abs_inicio, abs_final, pk_id")
+            .eq("contrato_id", contrato_id)
+            .eq("dado_de_baja", False)
+            .limit(limit)
+        )
+        if term:
+            safe = term.replace("%", "").replace(",", " ")
+            pattern = f"%{safe}%"
+            query = query.or_(
+                f"id_pol.ilike.{pattern},pk_id.ilike.{pattern},"
+                f"item.ilike.{pattern},tramo.ilike.{pattern},capitulo.ilike.{pattern}"
+            )
+        rows = query.execute().data or []
+        return {"registros": _enrich_ppto_rows(supabase, contrato_id, rows)}
+
     @router.get("/presupuesto/{contrato_id}/graficos/por-items")
     def graficos_por_items(
         contrato_id: int,
@@ -205,7 +543,7 @@ def register_deps(supabase, get_current_user, require_contract_access):
 def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[str, Any]]]:
     """
     key = f"{capitulo}\\x1e{item}" → lista de { url, caption, grupo_id, orden }
-    Caption usa TODOS los registros del grupo.
+    Caption usa TODOS los registros del grupo (recalculado al exportar).
     """
     grupos = (
         supabase.table("presupuesto_grafico_grupos")
@@ -240,50 +578,7 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
         return {}
 
     pids = sorted({int(r["presupuesto_id"]) for r in regs_j})
-    ppto_rows = (
-        supabase.table("presupuesto")
-        .select("id, capitulo, item, tramo, id_pol, abs_inicio, abs_final, pk_id")
-        .eq("contrato_id", contrato_id)
-        .in_("id", pids)
-        .execute()
-        .data
-        or []
-    )
-    # Infraestructura desde pk_ids si hace falta
-    pk_codes = list({str(r.get("pk_id") or "").strip() for r in ppto_rows if r.get("pk_id")})
-    pk_infra: Dict[str, str] = {}
-    if pk_codes:
-        try:
-            pk_data = (
-                supabase.table("pk_ids")
-                .select("codigo, infraestructura")
-                .eq("contrato_id", contrato_id)
-                .in_("codigo", pk_codes)
-                .execute()
-                .data
-                or []
-            )
-            for p in pk_data:
-                c = str(p.get("codigo") or "").strip()
-                if c:
-                    pk_infra[c] = (p.get("infraestructura") or "").strip()
-        except Exception as exc:
-            _log.warning("pk_ids infra para graficos: %s", exc)
-
-    by_id: Dict[int, Dict[str, Any]] = {}
-    for r in ppto_rows:
-        rid = int(r["id"])
-        pk = str(r.get("pk_id") or "").strip()
-        by_id[rid] = {
-            "id": rid,
-            "capitulo": (r.get("capitulo") or "").strip(),
-            "item": (r.get("item") or "").strip(),
-            "tramo": (r.get("tramo") or "").strip(),
-            "id_pol": r.get("id_pol") or "",
-            "abs_inicio": r.get("abs_inicio"),
-            "abs_final": r.get("abs_final"),
-            "infraestructura": pk_infra.get(pk, ""),
-        }
+    by_id = _fetch_regs_info_by_ids(supabase, contrato_id, pids)
 
     regs_by_grupo: Dict[str, List[Dict[str, Any]]] = {}
     for j in regs_j:
@@ -317,7 +612,6 @@ def _graficos_por_item_mapa(supabase, contrato_id: int) -> Dict[str, List[Dict[s
             for key in items_keys:
                 out.setdefault(key, []).append(entry)
 
-    # Orden estable por orden dentro de cada ítem
     for key in out:
         out[key].sort(key=lambda x: (int(x.get("orden") or 0), str(x.get("url") or "")))
     return out
