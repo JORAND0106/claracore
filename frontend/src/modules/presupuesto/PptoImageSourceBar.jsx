@@ -1,24 +1,55 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 
 /**
- * Barra de fuentes de imagen: archivo | galería | Ctrl+V.
- * El paste real lo maneja el padre (listener window / zona enfocable);
- * el botón Ctrl+V enfoca esa zona para facilitar el pegado.
+ * Barra de fuentes de imagen: archivo | galería | Ctrl+V | dibujar esquema.
+ * - Ctrl+V: lee el portapapeles (Clipboard API) vía onPasteClipboard; si falla, enfoca la zona de pegado.
+ * - El paste por teclado lo maneja el padre (listener window).
  */
 export default function PptoImageSourceBar({
   t,
   disabled,
   onPickFiles,
   onOpenGaleria,
+  onPasteClipboard,
   onFocusPasteZone,
-  hint = 'Archivo, galería del contrato o Ctrl+V',
+  onOpenEsquema,
+  hint = 'Archivo, galería, Ctrl+V o dibujar esquema',
 }) {
   const fileRef = useRef(null)
+  const [pegando, setPegando] = useState(false)
+
+  const clickCtrlV = async () => {
+    if (disabled || pegando) return
+    if (onPasteClipboard) {
+      setPegando(true)
+      try {
+        await onPasteClipboard()
+      } finally {
+        setPegando(false)
+      }
+      return
+    }
+    onFocusPasteZone?.()
+  }
+
+  const busy = disabled || pegando
+  const btnSecondary = {
+    background: t.bg,
+    color: t.text,
+    border: `1px solid ${t.border}`,
+    borderRadius: 8,
+    padding: '8px 12px',
+    fontWeight: 700,
+    fontSize: 'var(--cc-sm)',
+    cursor: busy ? 'not-allowed' : 'pointer',
+    opacity: busy ? 0.6 : 1,
+  }
+
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
       <button
         type="button"
-        disabled={disabled}
+        disabled={busy}
         onClick={() => fileRef.current?.click()}
         title="Cargar archivo nuevo"
         style={{
@@ -29,50 +60,41 @@ export default function PptoImageSourceBar({
           padding: '8px 12px',
           fontWeight: 700,
           fontSize: 'var(--cc-sm)',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
+          cursor: busy ? 'not-allowed' : 'pointer',
+          opacity: busy ? 0.6 : 1,
         }}
       >
         📁 Archivo
       </button>
       <button
         type="button"
-        disabled={disabled}
+        disabled={busy}
         onClick={() => onOpenGaleria?.()}
         title="Buscar en la galería de fotos/gráficos del contrato"
-        style={{
-          background: t.bg,
-          color: t.text,
-          border: `1px solid ${t.border}`,
-          borderRadius: 8,
-          padding: '8px 12px',
-          fontWeight: 700,
-          fontSize: 'var(--cc-sm)',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
-        }}
+        style={btnSecondary}
       >
         🖼 Galería
       </button>
       <button
         type="button"
-        disabled={disabled}
-        onClick={() => onFocusPasteZone?.()}
-        title="Pegar captura del portapapeles (Ctrl+V). Haga clic aquí y luego Ctrl+V"
-        style={{
-          background: t.bg,
-          color: t.text,
-          border: `1px solid ${t.border}`,
-          borderRadius: 8,
-          padding: '8px 12px',
-          fontWeight: 700,
-          fontSize: 'var(--cc-sm)',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
-        }}
+        disabled={busy}
+        onClick={() => void clickCtrlV()}
+        title="Pegar captura del portapapeles (lee la imagen al hacer clic; también puede usar Ctrl+V)"
+        style={btnSecondary}
       >
-        ⌘ Ctrl+V
+        {pegando ? '…' : '⌘ Ctrl+V'}
       </button>
+      {onOpenEsquema && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onOpenEsquema?.()}
+          title="Dibujar esquema (lápiz, figuras, hatch, texto, tabla…)"
+          style={btnSecondary}
+        >
+          ✎ Dibujar esquema
+        </button>
+      )}
       <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>{hint}</span>
       <input
         ref={fileRef}

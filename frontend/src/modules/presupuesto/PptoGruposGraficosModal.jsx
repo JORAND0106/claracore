@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
-import { imagenDesdePasteEvent } from './pptoPasteImage'
+import { imagenDesdeClipboard, imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -34,6 +36,7 @@ export default function PptoGruposGraficosModal({
   const [resultados, setResultados] = useState([])
   const [buscando, setBuscando] = useState(false)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [reemplazarImagenId, setReemplazarImagenId] = useState(null)
   const [okMsg, setOkMsg] = useState('')
   const [pieFoto, setPieFoto] = useState('')
@@ -266,8 +269,34 @@ export default function PptoGruposGraficosModal({
     }
   }
 
+  const pegarReemplazoDesdeClipboard = async () => {
+    try {
+      const file = await imagenDesdeClipboard()
+      if (!file) {
+        setError('El portapapeles no tiene una imagen. Copie una captura e intente de nuevo.')
+        replaceDropRef.current?.focus?.()
+        return
+      }
+      await onPickReplaceFiles([file], 'paste')
+    } catch {
+      setError('No se pudo leer el portapapeles. Use Ctrl+V con el popup activo, o elija archivo.')
+      replaceDropRef.current?.focus?.()
+    }
+  }
+
+  const guardarEsquemaReemplazo = async (dataUrl) => {
+    try {
+      const file = await dataUriEsquemaAFile(dataUrl, 'esquema-grupo')
+      if (!file) throw new Error('No se pudo convertir el esquema')
+      setEsquemaOpen(false)
+      await onPickReplaceFiles([file], 'esquema')
+    } catch (err) {
+      setError(err?.message || 'No se pudo guardar el esquema')
+    }
+  }
+
   useEffect(() => {
-    if (!open || !reemplazarImagenId || galeriaOpen) return undefined
+    if (!open || !reemplazarImagenId || galeriaOpen || esquemaOpen) return undefined
     const onPaste = (e) => {
       const named = imagenDesdePasteEvent(e)
       if (!named) return
@@ -280,7 +309,7 @@ export default function PptoGruposGraficosModal({
       window.removeEventListener('paste', onPaste)
       clearTimeout(tmr)
     }
-  }, [open, reemplazarImagenId, galeriaOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, reemplazarImagenId, galeriaOpen, esquemaOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null
 
@@ -560,8 +589,10 @@ export default function PptoGruposGraficosModal({
                           disabled={busy}
                           onPickFiles={(files) => void onPickReplaceFiles(files)}
                           onOpenGaleria={() => setGaleriaOpen(true)}
+                          onPasteClipboard={pegarReemplazoDesdeClipboard}
                           onFocusPasteZone={() => replaceDropRef.current?.focus?.()}
-                          hint="Archivo, galería o Ctrl+V · no altera registros · pie obligatorio arriba"
+                          onOpenEsquema={() => setEsquemaOpen(true)}
+                          hint="Archivo, galería, Ctrl+V o esquema · no altera registros · pie obligatorio arriba"
                         />
                         <button
                           type="button"
@@ -753,6 +784,15 @@ export default function PptoGruposGraficosModal({
           void aplicarReemplazo({ url: item.url, origen: 'galeria' })
         }}
       />
+
+      {esquemaOpen && (
+        <EsquemaEditorModal
+          t={t}
+          title="Dibujar esquema · reemplazar imagen del grupo"
+          onClose={() => setEsquemaOpen(false)}
+          onSave={guardarEsquemaReemplazo}
+        />
+      )}
     </>
   )
 }

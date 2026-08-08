@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
-import { imagenDesdePasteEvent } from './pptoPasteImage'
+import { imagenDesdeClipboard, imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -19,6 +21,7 @@ export const PPTO_SINCRO_CERRAR_SIN_GRAFICO_MSG =
 function origenLabel(origen) {
   if (origen === 'paste') return 'Ctrl+V'
   if (origen === 'galeria') return 'Galería'
+  if (origen === 'esquema') return 'Esquema'
   return 'Archivo'
 }
 
@@ -42,6 +45,7 @@ export default function PptoSincroSicoeLoteModal({
   const [error, setError] = useState('')
   const [exito, setExito] = useState(null)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
   const dropRef = useRef(null)
   const graficoCreadoRef = useRef(false)
 
@@ -63,6 +67,7 @@ export default function PptoSincroSicoeLoteModal({
       setExito(null)
       setGuardando(false)
       setGaleriaOpen(false)
+      setEsquemaOpen(false)
       graficoCreadoRef.current = false
       return
     }
@@ -113,6 +118,32 @@ export default function PptoSincroSicoeLoteModal({
     setGaleriaOpen(false)
   }, [])
 
+  const pegarDesdeClipboard = useCallback(async () => {
+    try {
+      const file = await imagenDesdeClipboard()
+      if (!file) {
+        setError('El portapapeles no tiene una imagen. Copie una captura e intente de nuevo.')
+        dropRef.current?.focus?.()
+        return
+      }
+      await addFiles([file], 'paste')
+    } catch {
+      setError('No se pudo leer el portapapeles. Use Ctrl+V con el popup activo, o elija archivo.')
+      dropRef.current?.focus?.()
+    }
+  }, [addFiles])
+
+  const guardarEsquema = useCallback(async (dataUrl) => {
+    try {
+      const file = await dataUriEsquemaAFile(dataUrl, 'esquema-lote')
+      if (!file) throw new Error('No se pudo convertir el esquema')
+      setEsquemaOpen(false)
+      await addFiles([file], 'esquema')
+    } catch (err) {
+      setError(err?.message || 'No se pudo guardar el esquema')
+    }
+  }, [addFiles])
+
   const onPaste = useCallback((e) => {
     const named = imagenDesdePasteEvent(e)
     if (!named) return
@@ -122,17 +153,17 @@ export default function PptoSincroSicoeLoteModal({
   }, [addFiles])
 
   const intentarCerrar = useCallback(() => {
-    if (guardando) return
+    if (guardando || esquemaOpen) return
     if (exito || graficoCreadoRef.current) {
       onDismiss?.()
       return
     }
     if (!window.confirm(PPTO_SINCRO_CERRAR_SIN_GRAFICO_MSG)) return
     onDismiss?.()
-  }, [guardando, exito, onDismiss])
+  }, [guardando, esquemaOpen, exito, onDismiss])
 
   useEffect(() => {
-    if (!open || galeriaOpen) return undefined
+    if (!open || galeriaOpen || esquemaOpen) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape' && !guardando) intentarCerrar()
     }
@@ -142,7 +173,7 @@ export default function PptoSincroSicoeLoteModal({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('paste', onPaste)
     }
-  }, [open, galeriaOpen, guardando, intentarCerrar, onPaste, exito])
+  }, [open, galeriaOpen, esquemaOpen, guardando, intentarCerrar, onPaste, exito])
 
   const removeImg = (id) => {
     setImagenes((prev) => {
@@ -441,8 +472,10 @@ export default function PptoSincroSicoeLoteModal({
                     disabled={guardando}
                     onPickFiles={(files) => void addFiles(files, 'upload')}
                     onOpenGaleria={() => setGaleriaOpen(true)}
+                    onPasteClipboard={pegarDesdeClipboard}
                     onFocusPasteZone={() => dropRef.current?.focus?.()}
-                    hint="Archivo, galería o Ctrl+V"
+                    onOpenEsquema={() => setEsquemaOpen(true)}
+                    hint="Archivo, galería, Ctrl+V o esquema"
                   />
                 </div>
                 {imagenes.length > 0 && (
@@ -564,6 +597,15 @@ export default function PptoSincroSicoeLoteModal({
         API={API}
         onSelect={addGaleriaUrl}
       />
+
+      {esquemaOpen && (
+        <EsquemaEditorModal
+          t={t}
+          title="Dibujar esquema · lote SicoeCAD"
+          onClose={() => setEsquemaOpen(false)}
+          onSave={guardarEsquema}
+        />
+      )}
     </>
   )
 }
