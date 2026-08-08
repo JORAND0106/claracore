@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
-import { imagenDesdePasteEvent } from './pptoPasteImage'
+import { imagenDesdeClipboard, imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -15,11 +17,12 @@ const cc = {
 function origenLabel(origen) {
   if (origen === 'paste') return 'Ctrl+V'
   if (origen === 'galeria') return 'Galería'
+  if (origen === 'esquema') return 'Esquema'
   return 'Archivo'
 }
 
 /**
- * Crear grupo de gráfico desde selección: archivo / galería / Ctrl+V + pie manual.
+ * Crear grupo de gráfico desde selección: archivo / galería / Ctrl+V / esquema + pie manual.
  */
 export default function PptoGraficosModal({
   open,
@@ -39,6 +42,7 @@ export default function PptoGraficosModal({
   const [okMsg, setOkMsg] = useState('')
   const [exito, setExito] = useState(null)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
   const dropRef = useRef(null)
 
   const regsSel = useMemo(() => {
@@ -68,9 +72,10 @@ export default function PptoGraficosModal({
       setExito(null)
       setGuardando(false)
       setGaleriaOpen(false)
+      setEsquemaOpen(false)
       return
     }
-    // Enfocar zona de pegado para que Ctrl+V funcione de inmediato.
+    // Enfocar zona de pegado para que Ctrl+V por teclado funcione de inmediato.
     const tmr = setTimeout(() => dropRef.current?.focus?.(), 80)
     return () => clearTimeout(tmr)
   }, [open])
@@ -118,6 +123,32 @@ export default function PptoGraficosModal({
     setGaleriaOpen(false)
   }, [])
 
+  const pegarDesdeClipboard = useCallback(async () => {
+    try {
+      const file = await imagenDesdeClipboard()
+      if (!file) {
+        setError('El portapapeles no tiene una imagen. Copie una captura e intente de nuevo.')
+        dropRef.current?.focus?.()
+        return
+      }
+      await addFiles([file], 'paste')
+    } catch {
+      setError('No se pudo leer el portapapeles. Use Ctrl+V con el popup activo, o elija archivo.')
+      dropRef.current?.focus?.()
+    }
+  }, [addFiles])
+
+  const guardarEsquema = useCallback(async (dataUrl) => {
+    try {
+      const file = await dataUriEsquemaAFile(dataUrl, 'esquema-ppto')
+      if (!file) throw new Error('No se pudo convertir el esquema')
+      setEsquemaOpen(false)
+      await addFiles([file], 'esquema')
+    } catch (err) {
+      setError(err?.message || 'No se pudo guardar el esquema')
+    }
+  }, [addFiles])
+
   const onPaste = useCallback((e) => {
     const named = imagenDesdePasteEvent(e)
     if (!named) return
@@ -127,7 +158,7 @@ export default function PptoGraficosModal({
   }, [addFiles])
 
   useEffect(() => {
-    if (!open || galeriaOpen) return undefined
+    if (!open || galeriaOpen || esquemaOpen) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape' && !guardando) onClose?.()
     }
@@ -137,7 +168,7 @@ export default function PptoGraficosModal({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('paste', onPaste)
     }
-  }, [open, galeriaOpen, guardando, onClose, onPaste])
+  }, [open, galeriaOpen, esquemaOpen, guardando, onClose, onPaste])
 
   const removeImg = (id) => {
     setImagenes((prev) => {
@@ -492,7 +523,9 @@ export default function PptoGraficosModal({
                 disabled={guardando}
                 onPickFiles={(files) => void addFiles(files, 'upload')}
                 onOpenGaleria={() => setGaleriaOpen(true)}
+                onPasteClipboard={pegarDesdeClipboard}
                 onFocusPasteZone={() => dropRef.current?.focus?.()}
+                onOpenEsquema={() => setEsquemaOpen(true)}
               />
             </div>
             {imagenes.length > 0 && (
@@ -609,6 +642,15 @@ export default function PptoGraficosModal({
         API={API}
         onSelect={addGaleriaUrl}
       />
+
+      {esquemaOpen && (
+        <EsquemaEditorModal
+          t={t}
+          title="Dibujar esquema · grupo de gráfico"
+          onClose={() => setEsquemaOpen(false)}
+          onSave={guardarEsquema}
+        />
+      )}
     </>
   )
 }
