@@ -945,6 +945,8 @@ class UsuarioContratoCreate(BaseModel):
 
 class NivelesValidacionContratoPutBody(BaseModel):
     niveles_activos: List[int]
+    # nivel (1–6) → rol_id. Claves pueden venir como str o int desde JSON.
+    roles_por_nivel: Optional[Dict[str, Any]] = None
 
 
 class InformePeriodicoCopiaBody(BaseModel):
@@ -2605,6 +2607,8 @@ CARGO_ID_NIVEL_MAP = {
 }
 
 # Nivel SICOE obra por rol_id (tabla roles). Prioridad sobre cargo_id; ver `_sicoe_db_nivel_validacion_usuario`.
+# Defaults de plataforma; un contrato puede reasignar roles vía `contrato_niveles_validacion.roles_por_nivel`
+# (p. ej. Operativo Interventoría en N1). Sin override, rol 6 (Operativo Interventoría) no valida.
 ROL_ID_NIVEL_MAP = {
     5: 1,  # Operativo Contratista
     3: 2,  # Contratista
@@ -2612,8 +2616,18 @@ ROL_ID_NIVEL_MAP = {
     2: 4,  # Interventoría
     8: 5,  # Interventoría Gerencial
     4: 6,  # Supervisor Externo
-    6: None,  # Operativo Interventoría — solo comenta
+    6: None,  # Operativo Interventoría — solo comenta (salvo override por contrato)
     1: 0,  # Desarrollador — acceso total (cualquier nivel de validación / llaves)
+}
+
+# Invertido de ROL_ID_NIVEL_MAP (solo roles con nivel 1–6). Usado cuando el contrato no define roles_por_nivel.
+DEFAULT_ROLES_POR_NIVEL: Dict[int, int] = {
+    1: 5,  # Operativo Contratista
+    2: 3,  # Contratista
+    3: 7,  # Contratista Gerencial
+    4: 2,  # Interventoría
+    5: 8,  # Interventoría Gerencial
+    6: 4,  # Supervisor Externo
 }
 
 CARGO_NIVEL_PRERREQUISITO = {
@@ -2827,7 +2841,8 @@ def _fetch_dashboard_resumen_from_vm(contrato_id: int, campo_max: str, niveles_a
 # Caché de config de niveles por contrato: es config de admin que cambia muy rara vez,
 # pero se consulta decenas de veces por request (por capa, por armado de query, por KPI).
 # Sin caché, cada llamada es un round-trip a Supabase (remoto) y multiplica la latencia.
-_NIVELES_ACTIVOS_CACHE: Dict[int, Tuple[float, List[int]]] = {}
+# cid → (monotonic_ts, niveles_activos, roles_por_nivel_raw)
+_NIVELES_ACTIVOS_CACHE: Dict[int, Tuple[float, List[int], Dict[int, int]]] = {}
 _NIVELES_ACTIVOS_TTL_S = 60.0
 
 
@@ -2842,32 +2857,59 @@ def _invalidar_cache_niveles_contrato(contrato_id: Optional[int] = None) -> None
         _NIVELES_ACTIVOS_CACHE.clear()
 
 
-def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
-    """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3].
+def _parse_roles_por_nivel_raw(raw: Any) -> Dict[int, int]:
+    """Normaliza JSON/dict de roles_por_nivel → {nivel: rol_id} (solo 1–6)."""
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[int, int] = {}
+    for k, v in raw.items():
+        try:
+            nivel = int(k)
+            rid = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= nivel <= 6 and rid > 0:
+            out[nivel] = rid
+    return out
 
-    Cachea por contrato con TTL corto: evita repetir el round-trip a Supabase en la
-    misma búsqueda (se invoca muchas veces). Usar _invalidar_cache_niveles_contrato
-    cuando se modifique la config de validación del contrato.
-    """
+
+def _roles_por_nivel_efectivo(raw: Optional[Dict[int, int]] = None) -> Dict[int, int]:
+    """Defaults de plataforma + overrides del contrato (raw puede ser vacío)."""
+    out = dict(DEFAULT_ROLES_POR_NIVEL)
+    if raw:
+        out.update(raw)
+    return out
+
+
+def _get_contrato_niveles_cfg(contrato_id: int) -> Tuple[List[int], Dict[int, int]]:
+    """Lee niveles_activos y roles_por_nivel crudos; sin fila → ([1,2,3], {})."""
     try:
         cid = int(contrato_id)
     except (TypeError, ValueError):
-        return [1, 2, 3]
+        return [1, 2, 3], {}
     _now = time.monotonic()
     _hit = _NIVELES_ACTIVOS_CACHE.get(cid)
     if _hit is not None and (_now - _hit[0]) < _NIVELES_ACTIVOS_TTL_S:
-        return list(_hit[1])
+        return list(_hit[1]), dict(_hit[2])
+    na_default = [1, 2, 3]
+    roles_raw: Dict[int, int] = {}
     try:
         res = (
             supabase.table("contrato_niveles_validacion")
-            .select("niveles_activos")
+            .select("niveles_activos, roles_por_nivel")
             .eq("contrato_id", cid)
             .limit(1)
             .execute()
             .data
         )
         if res and res[0] is not None:
-            raw = res[0].get("niveles_activos")
+            row = res[0]
+            raw = row.get("niveles_activos")
             if isinstance(raw, str) and raw.strip():
                 try:
                     raw = json.loads(raw)
@@ -2884,12 +2926,85 @@ def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
                         continue
                 out = sorted(set(out))
                 if out:
-                    _NIVELES_ACTIVOS_CACHE[cid] = (_now, list(out))
-                    return out
+                    na_default = out
+            try:
+                roles_raw = _parse_roles_por_nivel_raw(row.get("roles_por_nivel"))
+            except Exception:
+                roles_raw = {}
     except Exception:
-        pass
-    _NIVELES_ACTIVOS_CACHE[cid] = (_now, [1, 2, 3])
-    return [1, 2, 3]
+        # Columna roles_por_nivel aún no migrada u otro error: intentar solo niveles_activos.
+        try:
+            res2 = (
+                supabase.table("contrato_niveles_validacion")
+                .select("niveles_activos")
+                .eq("contrato_id", cid)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if res2 and res2[0] is not None:
+                raw = res2[0].get("niveles_activos")
+                if isinstance(raw, str) and raw.strip():
+                    try:
+                        raw = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        raw = None
+                if isinstance(raw, list) and raw:
+                    out2: List[int] = []
+                    for x in raw:
+                        try:
+                            n = int(x)
+                            if 1 <= n <= 6:
+                                out2.append(n)
+                        except (TypeError, ValueError):
+                            continue
+                    out2 = sorted(set(out2))
+                    if out2:
+                        na_default = out2
+        except Exception:
+            pass
+    _NIVELES_ACTIVOS_CACHE[cid] = (_now, list(na_default), dict(roles_raw))
+    return list(na_default), dict(roles_raw)
+
+
+def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
+    """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3].
+
+    Cachea por contrato con TTL corto: evita repetir el round-trip a Supabase en la
+    misma búsqueda (se invoca muchas veces). Usar _invalidar_cache_niveles_contrato
+    cuando se modifique la config de validación del contrato.
+    """
+    na, _ = _get_contrato_niveles_cfg(contrato_id)
+    return na
+
+
+def _get_roles_por_nivel_contrato(contrato_id: int) -> Dict[int, int]:
+    """Mapa efectivo nivel → rol_id (defaults + overrides del contrato)."""
+    _, raw = _get_contrato_niveles_cfg(contrato_id)
+    return _roles_por_nivel_efectivo(raw)
+
+
+def _rol_id_para_nivel_contrato(contrato_id: int, nivel: int) -> Optional[int]:
+    try:
+        n = int(nivel)
+    except (TypeError, ValueError):
+        return None
+    if n < 1 or n > 6:
+        return None
+    return _get_roles_por_nivel_contrato(contrato_id).get(n)
+
+
+def _nivel_para_rol_id_en_contrato(contrato_id: int, rol_id: int) -> Optional[int]:
+    """Nivel 1–6 asignado a este rol_id en el contrato (mapa efectivo). None si no figura."""
+    try:
+        rid = int(rol_id)
+    except (TypeError, ValueError):
+        return None
+    rpm = _get_roles_por_nivel_contrato(contrato_id)
+    for nivel in sorted(rpm.keys()):
+        if rpm[nivel] == rid:
+            return nivel
+    return None
 
 
 def _get_nivel_numero_maximo_contrato(contrato_id: int) -> int:
@@ -3150,10 +3265,15 @@ def _sicoe_nivel_num_desde_campo(campo: Optional[str]) -> Optional[int]:
     return None
 
 
-def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
+def _sicoe_db_nivel_validacion_usuario(
+    user_id: int, contrato_id: Optional[int] = None
+) -> Optional[int]:
     """
     Nivel de validación SICOE obra: 1–6, 0 = acceso total (rol Desarrollador en mapa), None = sin validar.
-    Prioriza rol_id (ROL_ID_NIVEL_MAP); si no aplica, nombre de rol; último recurso CARGO_ID_NIVEL_MAP.
+
+    Con `contrato_id`, prioriza el mapa `roles_por_nivel` del contrato (defaults + overrides),
+    de modo que p. ej. Operativo Interventoría pueda ser N1 si así se configuró.
+    Sin contrato: ROL_ID_NIVEL_MAP global; si no aplica, nombre de rol; último recurso cargo_id.
     """
     try:
         uid = int(user_id)
@@ -3173,6 +3293,20 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
             rid_int = int(u["rol_id"])
         except (TypeError, ValueError):
             rid_int = None
+
+    # Desarrollador: acceso total siempre (independiente del contrato).
+    if rid_int is not None and ROL_ID_NIVEL_MAP.get(rid_int) == 0:
+        return 0
+
+    if contrato_id is not None and rid_int is not None:
+        nivel_cfg = _nivel_para_rol_id_en_contrato(contrato_id, rid_int)
+        if nivel_cfg is not None:
+            return nivel_cfg
+        # Rol conocido en el mapa global pero no asignado a ningún nivel de este contrato
+        # (p. ej. Operativo Contratista cuando N1 quedó en Interventoría) → sin nivel aquí.
+        if rid_int in ROL_ID_NIVEL_MAP:
+            return ROL_ID_NIVEL_MAP[rid_int] if ROL_ID_NIVEL_MAP[rid_int] is None else None
+
     if rid_int is not None and rid_int in ROL_ID_NIVEL_MAP:
         return ROL_ID_NIVEL_MAP[rid_int]
 
@@ -3192,6 +3326,7 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
 
     # Fallback por nombre de rol (legado o rol_id no listado en ROL_ID_NIVEL_MAP)
     if rn == "operativo interventoria" or ("operativo" in rn and "intervent" in rn):
+        # Con contrato: si el nombre corresponde a un rol configurado, ya se resolvió arriba.
         return None
     if rn == "operativo contratista" or ("operativo" in rn and "contrat" in rn and "intervent" not in rn):
         return 1
@@ -3262,7 +3397,7 @@ def _require_sicoe_puede_validar_nivel(
             status_code=403,
             detail="No tiene permiso de validación en «Reporte de cantidades» (matriz de accesos).",
         )
-    got = _sicoe_db_nivel_validacion_usuario(user_id)
+    got = _sicoe_db_nivel_validacion_usuario(user_id, contrato_id)
     if got == 0:
         return
     if got != nivel:
@@ -16587,26 +16722,12 @@ def offline_pack(
     except Exception as e:
         errores["precios"] = str(e)
 
-    # 7. Inspectores (misma regla que GET …/inspectores)
+    # 7. Inspectores (misma regla que GET …/inspectores: rol del N1 del contrato)
     inspectores = []
     try:
-        usuarios = (
-            supabase.table("usuarios")
-            .select("id, nombre, apellidos")
-            .eq("contrato_id", contrato_id)
-            .eq("estado", "aprobado")
-            .eq("cargo_id", 54)
-            .order("nombre")
-            .execute()
-            .data
-            or []
-        )
         inspectores = [
-            {
-                "id": u["id"],
-                "nombre": f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip(),
-            }
-            for u in usuarios
+            {"id": u["id"], "nombre": u["nombre"]}
+            for u in _listar_inspectores_payload(contrato_id)
         ]
     except Exception as e:
         errores["inspectores"] = str(e)
@@ -16705,17 +16826,142 @@ def obtener_usuario(usuario_id: int, current_user=Depends(get_current_user)):
     rows = supabase_execute(_q)
     return rows[0] if rows else {}
 
+def _nivel_inspector_reporte_contrato(contrato_id: int) -> int:
+    """Nivel cuya lista alimenta el selector Inspector al reportar: N1 si está activo, si no el mínimo activo."""
+    na = _get_niveles_activos_contrato(contrato_id)
+    if 1 in na:
+        return 1
+    return min(na) if na else 1
+
+
+def _listar_usuarios_aprobados_contrato_por_roles(
+    contrato_id: int, rol_ids: List[int]
+) -> List[dict]:
+    """
+    Usuarios aprobados vinculados al contrato (principal o usuario_contratos)
+    cuyo rol_id está en rol_ids. Sin filtro fijo de cargo.
+    """
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return []
+    ids_rol: List[int] = []
+    for x in rol_ids or []:
+        try:
+            ri = int(x)
+        except (TypeError, ValueError):
+            continue
+        if ri > 0 and ri not in ids_rol:
+            ids_rol.append(ri)
+    if not ids_rol:
+        return []
+
+    by_id: Dict[int, dict] = {}
+
+    def _merge(rows):
+        for u in rows or []:
+            try:
+                uid = int(u["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            by_id[uid] = u
+
+    def _q_principal():
+        return (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos, rol_id")
+            .eq("contrato_id", cid)
+            .eq("estado", "aprobado")
+            .in_("rol_id", ids_rol)
+            .order("nombre")
+            .execute()
+            .data
+        )
+
+    try:
+        _merge(supabase_execute(_q_principal))
+    except Exception:
+        try:
+            _merge(_q_principal())
+        except Exception:
+            pass
+
+    try:
+        uc = (
+            supabase.table("usuario_contratos")
+            .select("usuario_id")
+            .eq("contrato_id", cid)
+            .execute()
+            .data
+            or []
+        )
+        ids_uc = []
+        for r in uc:
+            try:
+                ids_uc.append(int(r["usuario_id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        if ids_uc:
+            def _q_uc():
+                return (
+                    supabase.table("usuarios")
+                    .select("id, nombre, apellidos, rol_id")
+                    .in_("id", ids_uc)
+                    .eq("estado", "aprobado")
+                    .in_("rol_id", ids_rol)
+                    .order("nombre")
+                    .execute()
+                    .data
+                )
+
+            try:
+                _merge(supabase_execute(_q_uc))
+            except Exception:
+                try:
+                    _merge(_q_uc())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    out = list(by_id.values())
+    out.sort(
+        key=lambda u: (
+            (u.get("nombre") or "").lower(),
+            (u.get("apellidos") or "").lower(),
+            int(u.get("id") or 0),
+        )
+    )
+    return out
+
+
+def _listar_inspectores_payload(contrato_id: int) -> List[dict]:
+    """Candidatos del selector Inspector = usuarios con el rol del nivel N1 (o mín. activo) del contrato."""
+    nivel = _nivel_inspector_reporte_contrato(contrato_id)
+    rol_id = _rol_id_para_nivel_contrato(contrato_id, nivel)
+    if rol_id is None:
+        return []
+    usuarios = _listar_usuarios_aprobados_contrato_por_roles(contrato_id, [rol_id])
+    return [
+        {
+            "id": u["id"],
+            "nombre": f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip(),
+            "rol_id": u.get("rol_id"),
+            "nivel": nivel,
+        }
+        for u in usuarios
+    ]
+
+
 @app.get("/sicoe-obra/{contrato_id}/inspectores")
 def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user)):
-    def _u():
-        return supabase.table("usuarios")\
-            .select("id, nombre, apellidos")\
-            .eq("contrato_id", contrato_id)\
-            .eq("estado", "aprobado")\
-            .eq("cargo_id", 54)\
-            .order("nombre").execute().data
-    usuarios = supabase_execute(_u)
-    return [{"id": u["id"], "nombre": f"{u.get('nombre','')} {u.get('apellidos','')}".strip()} for u in usuarios]
+    """
+    Usuarios del contrato cuyo rol coincide con el configurado para el Nivel 1
+    (o el nivel activo mínimo) en «Niveles de validación» — sin asumir cargo Inspector (54)
+    ni rol Contratista fijo.
+    """
+    _require_contract_access(current_user, contrato_id)
+    return _listar_inspectores_payload(contrato_id)
 
 @app.get("/sicoe-obra/{contrato_id}/capitulos")
 def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_user)):
@@ -18149,7 +18395,7 @@ def _sicoe_filtrar_filas_elegibles_reversion(
 ) -> Tuple[List[dict], int]:
     """Aplica reglas de elegibilidad de reversión sobre filas ya cargadas."""
     autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
+    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id, contrato_id)
     if not (
         _es_desarrollador(current_user)
         or nivel_db == 0
@@ -24302,26 +24548,71 @@ def _put_validar_nivel_sicoe_alto(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _roles_nombres_por_ids(rol_ids: Iterable[int]) -> Dict[int, str]:
+    ids = sorted({int(x) for x in rol_ids if x is not None})
+    if not ids:
+        return {}
+    try:
+        rows = (
+            supabase.table("roles")
+            .select("id, nombre")
+            .in_("id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return {}
+    out: Dict[int, str] = {}
+    for r in rows:
+        try:
+            out[int(r["id"])] = (r.get("nombre") or "").strip()
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _encabezado_nivel_con_rol(nivel: int, rol_id: Optional[int], rol_nombre: Optional[str]) -> str:
+    base = NIVEL_VALIDACION_ENCABEZADO.get(nivel) or f"Nivel {nivel}"
+    nom = (rol_nombre or "").strip()
+    if nom:
+        return f"Nivel {nivel} · {nom}"
+    if rol_id is not None and rol_id != DEFAULT_ROLES_POR_NIVEL.get(nivel):
+        return f"Nivel {nivel} · rol #{rol_id}"
+    return base
+
+
 @app.get("/sicoe-obra/{contrato_id}/niveles-validacion")
 def sicoe_obra_niveles_validacion(contrato_id: int, current_user=Depends(get_current_user)):
-    """Niveles de validación activos del contrato (tabla `contrato_niveles_validacion`; defecto [1,2,3])."""
+    """Niveles activos + mapa rol→nivel del contrato (`contrato_niveles_validacion`)."""
     _ = current_user
-    ma = _get_niveles_activos_contrato(contrato_id)
-    mx = _get_nivel_numero_maximo_contrato(contrato_id)
-    campo_mx = _get_nivel_maximo_contrato(contrato_id)
-    niveles = [
-        {
-            "nivel": n,
-            "campo": NIVEL_VALIDACION_NUM_A_CAMPO[n],
-            "encabezado": NIVEL_VALIDACION_ENCABEZADO.get(n) or f"Nivel {n}",
-        }
-        for n in ma
-    ]
+    ma, roles_raw = _get_contrato_niveles_cfg(contrato_id)
+    rpm = _roles_por_nivel_efectivo(roles_raw)
+    mx = max(ma) if ma else 3
+    campo_mx = f"nivel{min(6, max(1, mx))}_estado"
+    nombres = _roles_nombres_por_ids(rpm.values())
+    niveles = []
+    for n in ma:
+        rid = rpm.get(n)
+        rnom = nombres.get(rid) if rid is not None else None
+        niveles.append(
+            {
+                "nivel": n,
+                "campo": NIVEL_VALIDACION_NUM_A_CAMPO[n],
+                "encabezado": _encabezado_nivel_con_rol(n, rid, rnom),
+                "rol_id": rid,
+                "rol_nombre": rnom,
+            }
+        )
+    roles_por_nivel_out = {str(k): v for k, v in sorted(rpm.items())}
+    roles_raw_out = {str(k): v for k, v in sorted(roles_raw.items())}
     return {
         "contrato_id": contrato_id,
         "niveles_activos": ma,
         "nivel_maximo": mx,
         "campo_nivel_maximo": campo_mx,
+        "roles_por_nivel": roles_por_nivel_out,
+        "roles_por_nivel_configurados": roles_raw_out,
         "niveles": niveles,
     }
 
@@ -24353,15 +24644,64 @@ def sicoe_obra_put_niveles_validacion(
         if xi not in norm:
             norm.append(xi)
     norm.sort()
+
+    roles_parsed = _parse_roles_por_nivel_raw(body.roles_por_nivel) if body.roles_por_nivel is not None else None
+    if roles_parsed is not None:
+        # Completar activos sin rol con default; exigir unicidad entre niveles activos.
+        for n in norm:
+            if n not in roles_parsed:
+                roles_parsed[n] = DEFAULT_ROLES_POR_NIVEL[n]
+        seen_rol: Dict[int, int] = {}
+        for n in norm:
+            rid = roles_parsed[n]
+            if rid in seen_rol:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"El mismo rol_id={rid} no puede ocupar dos niveles activos "
+                        f"(N{seen_rol[rid]} y N{n})."
+                    ),
+                )
+            seen_rol[rid] = n
+        # Persistir solo niveles 1–6 presentes en el payload efectivo (activos + opcionales extra).
+        roles_store = {str(k): int(v) for k, v in sorted(roles_parsed.items()) if 1 <= k <= 6}
+    else:
+        roles_store = None
+
     ex = supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute()
     if not ex.data:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
-    supabase.table("contrato_niveles_validacion").upsert(
-        {"contrato_id": contrato_id, "niveles_activos": norm},
-        on_conflict="contrato_id",
-    ).execute()
+    row_up: Dict[str, Any] = {"contrato_id": contrato_id, "niveles_activos": norm}
+    if roles_store is not None:
+        row_up["roles_por_nivel"] = roles_store
+    try:
+        supabase.table("contrato_niveles_validacion").upsert(
+            row_up,
+            on_conflict="contrato_id",
+        ).execute()
+    except Exception as e:
+        # Si la columna aún no existe, guardar al menos niveles_activos.
+        if roles_store is not None and "roles_por_nivel" in str(e).lower():
+            supabase.table("contrato_niveles_validacion").upsert(
+                {"contrato_id": contrato_id, "niveles_activos": norm},
+                on_conflict="contrato_id",
+            ).execute()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Falta migrar la columna roles_por_nivel "
+                    "(backend/sql/contrato_niveles_validacion_roles_por_nivel.sql)."
+                ),
+            )
+        raise
     _invalidar_cache_niveles_contrato(contrato_id)
-    return {"ok": True, "contrato_id": contrato_id, "niveles_activos": norm}
+    rpm_eff = _get_roles_por_nivel_contrato(contrato_id)
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "niveles_activos": norm,
+        "roles_por_nivel": {str(k): v for k, v in sorted(rpm_eff.items())},
+    }
 
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
