@@ -2698,12 +2698,22 @@ function SeccionResets({ call, theme }) {
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
 /** Etiquetas de niveles SICOE (panel admin → configuración por contrato). */
 const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
-  1: "Nivel 1 — Inspector de Obra (Operativo Contratista)",
-  2: "Nivel 2 — Residente de Obra (Contratista)",
-  3: "Nivel 3 — Director de Obra (Contratista Gerencial)",
-  4: "Nivel 4 — Residente de Interventoría (Interventoría)",
-  5: "Nivel 5 — Director de Interventoría (Interventoría Gerencial)",
-  6: "Nivel 6 — Supervisor Entidad (Supervisor Externo)",
+  1: "Nivel 1",
+  2: "Nivel 2",
+  3: "Nivel 3",
+  4: "Nivel 4",
+  5: "Nivel 5",
+  6: "Nivel 6",
+};
+
+/** Defaults de plataforma: nivel → rol_id (alineado con backend DEFAULT_ROLES_POR_NIVEL). */
+const SICOE_DEFAULT_ROLES_POR_NIVEL = {
+  1: 5, // Operativo Contratista
+  2: 3, // Contratista
+  3: 7, // Contratista Gerencial
+  4: 2, // Interventoría
+  5: 8, // Interventoría Gerencial
+  6: 4, // Supervisor Externo
 };
 
 /** GET/PUT/POST de contrato con `plano_geojson` grande (decenas de MB): el timeout por defecto del panel (~48 s) corta con "signal timed out" antes de terminar. */
@@ -2749,6 +2759,8 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
   const mapRef = useRef(null);
   const planoFileInputRef = useRef(null);
   const [nivelesActivosEdit, setNivelesActivosEdit] = useState([1, 2, 3]);
+  const [rolesPorNivelEdit, setRolesPorNivelEdit] = useState({ ...SICOE_DEFAULT_ROLES_POR_NIVEL });
+  const [rolesCatalogo, setRolesCatalogo] = useState([]);
   const [vistaContratosDev, setVistaContratosDev] = useState("gestion"); // gestion | matriz-documentos
 
   /** Límites y centro en una pasada (sin arrays enormes). Math.min(...array) falla con muchos vértices (>~65k args). */
@@ -3231,8 +3243,19 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
             .sort((a, b) => a - b)
         : [1, 2, 3];
       setNivelesActivosEdit(na);
+      const rpm = { ...SICOE_DEFAULT_ROLES_POR_NIVEL };
+      const src = nv?.roles_por_nivel && typeof nv.roles_por_nivel === "object" ? nv.roles_por_nivel : {};
+      Object.entries(src).forEach(([k, v]) => {
+        const nivel = parseInt(k, 10);
+        const rid = parseInt(v, 10);
+        if (Number.isFinite(nivel) && nivel >= 1 && nivel <= 6 && Number.isFinite(rid) && rid > 0) {
+          rpm[nivel] = rid;
+        }
+      });
+      setRolesPorNivelEdit(rpm);
     } catch {
       setNivelesActivosEdit([1, 2, 3]);
+      setRolesPorNivelEdit({ ...SICOE_DEFAULT_ROLES_POR_NIVEL });
     }
     if (!d || typeof d !== "object") d = c;
     llenarFormDesdeContrato(d);
@@ -3253,10 +3276,23 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
     onOpenContratoHandled?.();
   }, [openContratoRequest]);
 
+  useEffect(() => {
+    let cancelled = false;
+    call("GET", "/roles")
+      .then((rows) => {
+        if (!cancelled) setRolesCatalogo(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRolesCatalogo([]);
+      });
+    return () => { cancelled = true; };
+  }, [call]);
+
   function iniciarCreacion() {
     setEditandoId(null);
     setForm(FORM_VACIO);
     setNivelesActivosEdit([1, 2, 3]);
+    setRolesPorNivelEdit({ ...SICOE_DEFAULT_ROLES_POR_NIVEL });
     setPlanoArchivoLabel(null);
     if (planoFileInputRef.current) planoFileInputRef.current.value = "";
     setModalMode("create");
@@ -3276,6 +3312,7 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
     setModalMode(null);
     setForm(FORM_VACIO);
     setNivelesActivosEdit([1, 2, 3]);
+    setRolesPorNivelEdit({ ...SICOE_DEFAULT_ROLES_POR_NIVEL });
     setPlanoArchivoLabel(null);
     if (planoFileInputRef.current) planoFileInputRef.current.value = "";
     setMsg(null);
@@ -3367,7 +3404,22 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
             .map((x) => parseInt(x, 10))
             .filter((x) => Number.isFinite(x) && x >= 1 && x <= 6),
         )].sort((a, b) => a - b);
-        await call("PUT", `/sicoe-obra/${editandoId}/niveles-validacion`, { niveles_activos: naPut });
+        const rolesPut = {};
+        const rpmSrc = rolesPorNivelEdit || {};
+        naPut.forEach((n) => {
+          const rid = parseInt(rpmSrc[n] ?? SICOE_DEFAULT_ROLES_POR_NIVEL[n], 10);
+          rolesPut[String(n)] = Number.isFinite(rid) && rid > 0 ? rid : SICOE_DEFAULT_ROLES_POR_NIVEL[n];
+        });
+        const rolesUniq = Object.values(rolesPut);
+        if (new Set(rolesUniq).size !== rolesUniq.length) {
+          setMsg({ type: "error", text: "Cada nivel activo debe tener un rol distinto." });
+          setSaving(false);
+          return;
+        }
+        await call("PUT", `/sicoe-obra/${editandoId}/niveles-validacion`, {
+          niveles_activos: naPut,
+          roles_por_nivel: rolesPut,
+        });
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
         try {
           const fresh = await call("GET", `/contratos/${editandoId}?include_plano=1`, null, CONTRATO_API_PLANO_TIMEOUT);
@@ -3726,6 +3778,9 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
         setForm={setForm}
         nivelesActivosEdit={nivelesActivosEdit}
         setNivelesActivosEdit={setNivelesActivosEdit}
+        rolesPorNivelEdit={rolesPorNivelEdit}
+        setRolesPorNivelEdit={setRolesPorNivelEdit}
+        rolesCatalogo={rolesCatalogo}
         planoArchivoLabel={planoArchivoLabel}
         planoFileInputRef={planoFileInputRef}
         mapContainerRef={mapContainerRef}

@@ -18,4 +18,5 @@ CREATE TABLE IF NOT EXISTS public.contrato_niveles_validacion (
 );
 
 COMMENT ON TABLE public.contrato_niveles_validacion IS
-  'Niveles de validación SICOE activos por contrato (valores 1–6). Por defecto [1,2,3] si no hay fila.';
+  'Niveles de validación SICOE activos por contrato (valores 1–6). Por defecto [1,2,3] si no hay fila. '
+  'Ver también roles_por_nivel en contrato_niveles_validacion_roles_por_nivel.sql.';

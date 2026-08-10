@@ -39,6 +39,9 @@ export default function ContratoEditModal({
   setForm,
   nivelesActivosEdit,
   setNivelesActivosEdit,
+  rolesPorNivelEdit = {},
+  setRolesPorNivelEdit = null,
+  rolesCatalogo = [],
   planoArchivoLabel,
   planoFileInputRef,
   mapContainerRef,
@@ -944,41 +947,81 @@ export default function ContratoEditModal({
             <div>
               <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>Niveles de Validación SICOE</div>
               <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 12 }}>
-                Selecciona los niveles que estarán activos para este contrato. El registro se sella al aprobar el nivel más alto seleccionado.
+                Activa los niveles de este contrato y asigna el rol responsable de cada uno (Contratista o Interventoría).
+                El selector Inspector al reportar cantidades lista usuarios del rol configurado en el Nivel 1.
+                El registro se sella al aprobar el nivel más alto activo.
               </div>
-              {[1, 2, 3, 4, 5, 6].map((n) => (
-                <label
-                  key={n}
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 10,
-                    cursor: "pointer",
-                    background: ui.inputBg,
-                    border: `1.5px solid ${ui.border}`,
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    marginBottom: 10,
-                    color: ui.text,
-                    fontSize: font.body,
-                    lineHeight: 1.35,
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={nivelesActivosEdit.includes(n)}
-                    onChange={() => {
-                      setNivelesActivosEdit((prev) => {
-                        const p = Array.isArray(prev) ? prev : [];
-                        if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
-                        return [...p, n].sort((a, b) => a - b);
-                      });
+              {[1, 2, 3, 4, 5, 6].map((n) => {
+                const activo = nivelesActivosEdit.includes(n);
+                const rolVal = rolesPorNivelEdit?.[n] ?? rolesPorNivelEdit?.[String(n)] ?? "";
+                return (
+                  <div
+                    key={n}
+                    style={{
+                      background: ui.inputBg,
+                      border: `1.5px solid ${ui.border}`,
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      marginBottom: 10,
+                      color: ui.text,
+                      fontSize: font.body,
+                      lineHeight: 1.35,
                     }}
-                    style={{ width: 16, height: 16, marginTop: 2, accentColor: ui.primary, flexShrink: 0, cursor: "pointer" }}
-                  />
-                  <span>{nivelesLabels[n]}</span>
-                </label>
-              ))}
+                  >
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={activo}
+                        onChange={() => {
+                          setNivelesActivosEdit((prev) => {
+                            const p = Array.isArray(prev) ? prev : [];
+                            if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
+                            return [...p, n].sort((a, b) => a - b);
+                          });
+                        }}
+                        style={{ width: 16, height: 16, marginTop: 2, accentColor: ui.primary, flexShrink: 0, cursor: "pointer" }}
+                      />
+                      <span style={{ fontWeight: 600 }}>{nivelesLabels[n] || `Nivel ${n}`}</span>
+                    </label>
+                    {activo && typeof setRolesPorNivelEdit === "function" && (
+                      <div style={{ marginTop: 8, marginLeft: 26 }}>
+                        <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 4 }}>
+                          Rol responsable de validar este nivel
+                        </div>
+                        <select
+                          value={rolVal === "" || rolVal == null ? "" : String(rolVal)}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            setRolesPorNivelEdit((prev) => ({
+                              ...(prev && typeof prev === "object" ? prev : {}),
+                              [n]: Number.isFinite(v) && v > 0 ? v : "",
+                            }));
+                          }}
+                          style={{
+                            ...inp,
+                            width: "100%",
+                            maxWidth: 420,
+                          }}
+                        >
+                          <option value="">Seleccionar rol…</option>
+                          {(Array.isArray(rolesCatalogo) ? rolesCatalogo : []).map((r) => (
+                            <option key={r.id} value={String(r.id)}>
+                              {r.nombre || `Rol #${r.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

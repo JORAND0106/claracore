@@ -1761,8 +1761,32 @@ const ROL_ID_NIVEL_MAP = {
   2: 4, // Interventoría
   8: 5, // Interventoría Gerencial
   4: 6, // Supervisor Externo
-  6: null, // Operativo Interventoría — solo comenta
+  6: null, // Operativo Interventoría — solo comenta (salvo override por contrato)
   1: 0, // Desarrollador — acceso total
+}
+
+/** Defaults plataforma nivel → rol_id (alineado con backend). */
+const SICOE_DEFAULT_ROLES_POR_NIVEL = {
+  1: 5,
+  2: 3,
+  3: 7,
+  4: 2,
+  5: 8,
+  6: 4,
+}
+
+/** Invierte roles_por_nivel del contrato → rol_id → nivel. */
+function sicoeRolIdANivelDesdeContrato(rolId, nivelesContrato) {
+  const rid = typeof rolId === 'number' ? rolId : parseInt(String(rolId ?? ''), 10)
+  if (!Number.isFinite(rid) || rid <= 0) return undefined
+  const rpmRaw = nivelesContrato?.roles_por_nivel
+  const rpm = rpmRaw && typeof rpmRaw === 'object' ? rpmRaw : SICOE_DEFAULT_ROLES_POR_NIVEL
+  for (const [nivelStr, v] of Object.entries(rpm)) {
+    const n = parseInt(nivelStr, 10)
+    const mappedRid = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10)
+    if (Number.isFinite(n) && n >= 1 && n <= 6 && mappedRid === rid) return n
+  }
+  return undefined
 }
 
 function sicoeCampoEstadoNivel(n) {
@@ -1830,10 +1854,12 @@ const SICOE_NIVELES_CONTRATO_DEFAULT = () => ({
   niveles_activos: [1, 2, 3],
   nivel_maximo: 3,
   campo_nivel_maximo: 'nivel3_estado',
+  roles_por_nivel: { ...SICOE_DEFAULT_ROLES_POR_NIVEL },
   niveles: [1, 2, 3].map((nivel) => ({
     nivel,
     campo: sicoeCampoEstadoNivel(nivel),
     encabezado: SICOE_NIVEL_ENCABEZADO_FALLBACK[nivel] || `Nivel ${nivel}`,
+    rol_id: SICOE_DEFAULT_ROLES_POR_NIVEL[nivel],
   })),
 })
 
@@ -1894,7 +1920,7 @@ function inferirNivelValidacionPorNombreRol(rolNorm) {
 }
 
 /** Nivel 1–6 para filtro automático (rol_id / cargo_id / nombre). null = no aplica. */
-function sicoeNivelParaFiltroAutomatico(usuario) {
+function sicoeNivelParaFiltroAutomatico(usuario, nivelesContrato = null) {
   if (!usuario || esUsuarioDesarrollador(usuario)) return null
   const norm = (txt) =>
     String(txt || '')
@@ -1906,10 +1932,16 @@ function sicoeNivelParaFiltroAutomatico(usuario) {
   const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
   const ridRaw = usuario?.rol_id
   const rid = ridRaw != null && String(ridRaw).trim() !== '' ? parseInt(String(ridRaw), 10) : NaN
-  if (Number.isFinite(rid) && Object.prototype.hasOwnProperty.call(ROL_ID_NIVEL_MAP, rid)) {
-    const mapped = ROL_ID_NIVEL_MAP[rid]
-    if (mapped === null) return null // solo comentarista
-    if (mapped != null && mapped !== 0) return mapped
+  if (Number.isFinite(rid)) {
+    const desdeContrato = sicoeRolIdANivelDesdeContrato(rid, nivelesContrato)
+    if (desdeContrato != null) return desdeContrato
+    if (Object.prototype.hasOwnProperty.call(ROL_ID_NIVEL_MAP, rid)) {
+      // Rol del mapa global no asignado en este contrato (p. ej. Operativo Contratista cuando N1 es Interventoría)
+      if (nivelesContrato?.roles_por_nivel) return null
+      const mapped = ROL_ID_NIVEL_MAP[rid]
+      if (mapped === null) return null // solo comentarista
+      if (mapped != null && mapped !== 0) return mapped
+    }
   }
   const cargoIdNum =
     usuario?.cargo_id != null && String(usuario.cargo_id).trim() !== ''
@@ -1937,7 +1969,7 @@ function sicoeUsuarioPuedeValidarParaFiltro(usuario, sicoeContratoId = null) {
 /** Validador: su nivel + «No Revisado». Desarrollador / sin validar → sin capa automática. */
 function capasInicialesValidacionFromUser(usuario, nivelesContrato, sicoeContratoId = null) {
   if (esUsuarioDesarrollador(usuario)) return []
-  const n = sicoeNivelParaFiltroAutomatico(usuario)
+  const n = sicoeNivelParaFiltroAutomatico(usuario, nivelesContrato)
   if (n == null || n < 1 || n > 6) return []
   if (!sicoeUsuarioPuedeValidarParaFiltro(usuario, sicoeContratoId)) return []
   const activos = sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos)
@@ -1959,7 +1991,7 @@ function esUsuarioAdministrador(usuario) {
 }
 
 // nivelValidacion 0 = acceso total (rol desarrollador por id). nivelLlaveReversion: reversión doble llave N2/N3. ─
-function determinarNivelValidacion(usuario, sicoeContratoId = null) {
+function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContrato = null) {
   const norm = (txt) =>
     String(txt || '')
       .normalize('NFD')
@@ -2013,17 +2045,29 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
 
   let soloComentaristaRolMap = false
   let nivelDesdeRolId = undefined
-  if (Number.isFinite(rid) && Object.prototype.hasOwnProperty.call(ROL_ID_NIVEL_MAP, rid)) {
+  const nivelDesdeContrato =
+    Number.isFinite(rid) ? sicoeRolIdANivelDesdeContrato(rid, nivelesContrato) : undefined
+  if (nivelDesdeContrato != null) {
+    nivelDesdeRolId = nivelDesdeContrato
+  } else if (Number.isFinite(rid) && Object.prototype.hasOwnProperty.call(ROL_ID_NIVEL_MAP, rid)) {
     const mapped = ROL_ID_NIVEL_MAP[rid]
     if (mapped === null) soloComentaristaRolMap = true
-    else nivelDesdeRolId = mapped
+    else if (nivelesContrato?.roles_por_nivel && mapped != null && mapped !== 0) {
+      // Rol del mapa global no asignado en este contrato → no valida aquí
+      nivelDesdeRolId = undefined
+      soloComentaristaRolMap = false
+    } else {
+      nivelDesdeRolId = mapped
+    }
   }
 
   const nivelDesdeCargoId = Number.isFinite(cargoIdNum) ? CARGO_ID_NIVEL_MAP[cargoIdNum] : undefined
   const nivelDesdeNombreRol = inferirNivelValidacionPorNombreRol(rol)
 
   let nivelValidacion = null
-  const esSoloComentarista = esOperativoInterventoria || soloComentaristaRolMap
+  // Si el contrato asigna nivel al rol (p. ej. Operativo Interventoría → N1), deja de ser «solo comentarista».
+  const esSoloComentarista =
+    nivelDesdeContrato == null && (esOperativoInterventoria || soloComentaristaRolMap)
   const puedeValidar = puedeValidarBase && !esSoloComentarista
 
   if (puedeValidar) {
@@ -2587,7 +2631,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [nodosHoja, setNodosHoja] = useState([])
   const [erroresLocHoja, setErroresLocHoja] = useState({})
   const API = API_URL
-  const nivelInfo = determinarNivelValidacion(usuario, contrato_id)
+  const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const encPorNivelHojaReg = useMemo(
     () => ({
       ...SICOE_NIVEL_ENCABEZADO_FALLBACK,
@@ -5001,7 +5045,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
-  const nivelInfo   = determinarNivelValidacion(usuario, contrato_id)
+  const nivelInfo   = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const elevCapCarpeta = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0 || nivelInfo.adminValidarEnContrato
   const elevCapLimiteN3Carpeta = elevCapCarpeta && !nivelInfo.adminValidarEnContrato
 
@@ -6151,7 +6195,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const renderMenuAccionesReg = (reg) => {
     const abierto = menuAccionesRegId != null && String(menuAccionesRegId) === String(reg.id)
     const abrirComentarios = () => {
-      const rolOrigen = determinarNivelValidacion(usuario, contrato_id).rolOrigen
+      const rolOrigen = determinarNivelValidacion(usuario, contrato_id, nivelesContrato).rolOrigen
       setMenuAccionesRegId(null)
       setModalComentarios({ reg, rolOrigen })
       cargarComentariosRegistro(reg.id, rolOrigen)
@@ -7605,11 +7649,21 @@ function ModuloSicoeObra({
                 campo: sicoeCampoEstadoNivel(nivel),
                 encabezado: SICOE_NIVEL_ENCABEZADO_FALLBACK[nivel] || `Nivel ${nivel}`,
               }))
+        const rpm = { ...SICOE_DEFAULT_ROLES_POR_NIVEL }
+        const src = j.roles_por_nivel && typeof j.roles_por_nivel === 'object' ? j.roles_por_nivel : {}
+        Object.entries(src).forEach(([k, v]) => {
+          const nivel = parseInt(k, 10)
+          const rid = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10)
+          if (Number.isFinite(nivel) && nivel >= 1 && nivel <= 6 && Number.isFinite(rid) && rid > 0) {
+            rpm[nivel] = rid
+          }
+        })
         setNivelesContrato({
           contrato_id: j.contrato_id ?? contrato_id,
           niveles_activos: na,
           nivel_maximo: j.nivel_maximo ?? Math.max(...na),
           campo_nivel_maximo: j.campo_nivel_maximo || sicoeCampoEstadoNivel(Math.max(...na)) || 'nivel3_estado',
+          roles_por_nivel: rpm,
           niveles: nivList,
         })
       })
@@ -7824,7 +7878,7 @@ function ModuloSicoeObra({
   }
 
   const perm = permisoReporteCantidades(usuario)
-  const nivelInfo = determinarNivelValidacion(usuario, contrato_id)
+  const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const estadosReporteFiltro = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
     [usuario, nivelInfo.esInterventoria, usuario?.rol_nombre],
@@ -13817,7 +13871,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
                   onChange={e => { setInspBusqueda(e.target.value); setInspSeleccionado(null); setInspDropOpen(true) }}
                   onFocus={() => setInspDropOpen(true)}
-                  placeholder="Buscar inspector de obra..." style={inpStyle(errores.insp)} />
+                  placeholder="Buscar validador nivel 1..." style={inpStyle(errores.insp)} />
                 {inspDropOpen && inspFiltrados.length > 0 && (
                   <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
                     border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
@@ -17080,11 +17134,21 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 campo: sicoeCampoEstadoNivel(nivel),
                 encabezado: SICOE_NIVEL_ENCABEZADO_FALLBACK[nivel] || `Nivel ${nivel}`,
               }))
+        const rpm = { ...SICOE_DEFAULT_ROLES_POR_NIVEL }
+        const src = j.roles_por_nivel && typeof j.roles_por_nivel === 'object' ? j.roles_por_nivel : {}
+        Object.entries(src).forEach(([k, v]) => {
+          const nivel = parseInt(k, 10)
+          const rid = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10)
+          if (Number.isFinite(nivel) && nivel >= 1 && nivel <= 6 && Number.isFinite(rid) && rid > 0) {
+            rpm[nivel] = rid
+          }
+        })
         setNivelesDashContrato({
           contrato_id: j.contrato_id ?? contratoIdDash,
           niveles_activos: na,
           nivel_maximo: j.nivel_maximo ?? Math.max(...na),
           campo_nivel_maximo: j.campo_nivel_maximo || sicoeCampoEstadoNivel(Math.max(...na)) || 'nivel3_estado',
+          roles_por_nivel: rpm,
           niveles: nivList,
         })
       })
@@ -18026,7 +18090,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }
 
   const puedeCrearReporteDash = !!(permisoReporteCantidades(usuario)?.crear)
-  const _nvMigracionDelta = determinarNivelValidacion(usuario, contratoIdDash)
+  const _nvMigracionDelta = determinarNivelValidacion(usuario, contratoIdDash, nivelesDashContrato)
   const _cargoDevNorm = String(usuario?.cargo_nombre || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
