@@ -1,4 +1,20 @@
 /**
+ * Logos disponibles del contrato para miniatura en el selector (omite los no configurados).
+ * @param {{ logo_contratista?: string|null, logo_interventoria?: string|null, logo_entidad?: string|null }|null|undefined} c
+ * @returns {{ key: string, src: string, label: string }[]}
+ */
+export function logosContratoParaTarjeta(c) {
+  const out = []
+  const contratista = String(c?.logo_contratista || '').trim()
+  const interventoria = String(c?.logo_interventoria || '').trim()
+  const entidad = String(c?.logo_entidad || '').trim()
+  if (contratista) out.push({ key: 'contratista', src: contratista, label: 'Contratista' })
+  if (interventoria) out.push({ key: 'interventoria', src: interventoria, label: 'Interventoría' })
+  if (entidad) out.push({ key: 'entidad', src: entidad, label: 'Entidad' })
+  return out
+}
+
+/**
  * Sincroniza logos del contrato activo desde la lista fresca de contratos.
  * Evita que la sesión conserve logos obsoletos tras reemplazarlos en Admin.
  *

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { logosDesdeContratosActivo } from './usuarioLogosContrato.js'
+import { logosContratoParaTarjeta, logosDesdeContratosActivo } from './usuarioLogosContrato.js'
 
 describe('logosDesdeContratosActivo', () => {
   it('toma logos del contrato activo aunque la sesión tenga valores viejos', () => {
@@ -52,5 +52,30 @@ describe('logosDesdeContratosActivo', () => {
       logo_interventoria: null,
       logo_entidad: null,
     })
+  })
+})
+
+describe('logosContratoParaTarjeta', () => {
+  it('incluye solo logos configurados, en orden contratista → interventoría → entidad', () => {
+    const out = logosContratoParaTarjeta({
+      logo_contratista: 'data:c',
+      logo_interventoria: '',
+      logo_entidad: 'data:e',
+    })
+    assert.deepEqual(out.map((x) => x.key), ['contratista', 'entidad'])
+    assert.equal(out[0].src, 'data:c')
+    assert.equal(out[1].src, 'data:e')
+  })
+
+  it('omite espacios y valores vacíos sin dejar huecos', () => {
+    assert.deepEqual(logosContratoParaTarjeta({
+      logo_contratista: '  ',
+      logo_interventoria: null,
+      logo_entidad: undefined,
+    }), [])
+    assert.deepEqual(
+      logosContratoParaTarjeta({ logo_interventoria: 'data:i' }).map((x) => x.key),
+      ['interventoria'],
+    )
   })
 })
