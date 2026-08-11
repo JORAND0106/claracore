@@ -1,4 +1,9 @@
 """Permiso para POST /presupuesto/{id}/sincronizar-vlr-unitario."""
+import os
+
+os.environ.setdefault("SUPABASE_URL", "https://xxxx.supabase.co")
+os.environ.setdefault("SUPABASE_KEY", "test-key")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-key")
 
 
 def test_puede_sincronizar_vlr_desarrollador(monkeypatch):
