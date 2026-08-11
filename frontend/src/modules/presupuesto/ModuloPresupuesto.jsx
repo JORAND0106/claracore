@@ -59,6 +59,7 @@ import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from '
 import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { idsRangoSeleccion } from './pptoSeleccionRango'
 import { pptoFormatoNodos } from './pptoFormatoNodos'
+import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
@@ -2046,6 +2047,25 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         await recargarVistaVersionActivaRef.current()
         return
       }
+      // Con búsqueda/filtro activo: re-ejecutar la consulta (antes solo limpiaba la grilla
+      // y recargaba la lista de capítulos → el botón «Actualizar» parecía no hacer nada).
+      const fAct = fObraRef.current || fObra
+      const ctxAct = pptoCtxFiltro(drill, capExpandido)
+      if (
+        busquedaServidorActivaRef.current ||
+        criterioVistaActivo(fAct, ctxAct)
+      ) {
+        invalidarCachePresupuestoContrato()
+        if (aplicarFiltroObraConFRef.current) {
+          await aplicarFiltroObraConFRef.current(fAct, {
+            cargarGrilla: true,
+            skipCacheGrilla: true,
+            pushNavegacionAntes: false,
+            limpiarNavegacion: false,
+          })
+          return
+        }
+      }
       invalidarCachePresupuestoContrato()
       setRegistros([])
       setDrill([])
@@ -2612,116 +2632,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     [contratoId],
   )
 
-  const drillCapituloDesdePanel = useCallback(async (capitulo) => {
-    const cap = String(capitulo || '').trim()
-    if (!cap) return
-    pptoPushVistaNavegacion()
-    const base = fObraRef.current || fObra
-    if (!panelDrillRestoreRef.current) {
-      panelDrillRestoreRef.current = {
-        cap: base.cap || '',
-        caps: Array.isArray(base.caps) ? [...base.caps] : [],
-        item: base.item || '',
-        items: Array.isArray(base.items) ? [...base.items] : [],
-        drill: [...(drill || [])],
-        registros: Array.isArray(registrosRef.current) ? registrosRef.current : [],
-        conteoFiltro: conteoFiltroRef.current,
-        busquedaServidorActiva: busquedaServidorActivaRef.current,
-        capActivo,
-        cacheKey: pptoGridCacheKey(base, drill),
-      }
-    }
-    const next = { ...base, cap, caps: [], item: '', items: [] }
-    setFObra(next)
-    fObraRef.current = next
-    syncFObraALegacy(next)
-    setDrill([{ campo: 'capitulo', valor: cap }])
-    setCapActivo(cap)
-    setVisibleRegistrosCount(80)
-    try {
-      const ctx = pptoCtxFiltro(drill, capExpandido)
-      await cargarPanelValidacionServidor(fObraRef.current || fObra, { ...ctx, drill: [{ campo: 'capitulo', valor: cap }] }, {
-        nivel: 'item',
-        capituloDrill: cap,
-      })
-      setPanelBusquedaSeq((n) => n + 1)
-    } catch (err) {
-      setAvisoSistema({
-        titulo: 'Panel de validación',
-        mensaje: err?.message || 'No se pudo cargar ítems del capítulo.',
-        tipo: 'warn',
-      })
-    }
-    const dCap = [{ campo: 'capitulo', valor: cap }]
-    const hit = pptoBuscarCacheGrilla(next, dCap)
-    if (hit) {
-      pptoAplicarHitCacheGrilla(hit, next, dCap)
-    } else if (registrosRef.current.length > 0) {
-      const filtered = pptoFiltrarFilasCliente(registrosRef.current, next, dCap)
-      if (filtered.length) {
-        const cacheKey = pptoGridCacheKey(next, dCap)
-        setConteoFiltro(filtered.length)
-        setRegistros(filtered)
-        pptoCargaRef.current = {
-          key: cacheKey,
-          nextOffset: filtered.length,
-          hasMore: false,
-          total: filtered.length,
-        }
-        pptoGuardarEnCacheGrid(cacheKey, filtered, filtered.length)
-        busquedaServidorActivaRef.current = true
-        setBusquedaServidorActiva(true)
-      }
-    }
-    window.setTimeout(() => {
-      pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 120)
-  }, [fObra, drill, capExpandido, contratoId, token])
-
-  const volverPanelCapitulos = useCallback(async () => {
-    let prev = null
-    if (pptoDrillStackRef.current.length > 1) {
-      pptoDrillStackRef.current.pop()
-      prev = pptoDrillStackRef.current[pptoDrillStackRef.current.length - 1]
-    } else if (panelDrillRestoreRef.current) {
-      prev = panelDrillRestoreRef.current
-      panelDrillRestoreRef.current = null
-    }
-    if (prev && pptoRestaurarVistaSnap(prev)) {
-      if (!Array.isArray(prev.panelFilasServidor)) {
-        try {
-          const ctx = pptoCtxFiltro(prev.drill || [], capExpandido)
-          await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
-        } catch { /* panel opcional al volver */ }
-      }
-      setPanelBusquedaSeq((n) => n + 1)
-      return
-    }
-
-    setDrill((d) => (d || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'))
-    const nf = { ...(fObraRef.current || fObra), item: '', items: [] }
-    setFObra(nf)
-    fObraRef.current = nf
-    syncFObraALegacy(nf)
-    const cacheKey = pptoGridCacheKey(nf, drill.filter((x) => x.campo !== 'item' && x.campo !== 'items'))
-    const cached = pptoLeerCacheGrid(cacheKey)
-    if (cached) {
-      setRegistros(cached.data)
-      if (typeof cached.total === 'number') setConteoFiltro(cached.total)
-      pptoCargaRef.current = {
-        key: cacheKey,
-        nextOffset: Array.isArray(cached.data) ? cached.data.length : 0,
-        hasMore: false,
-        total: typeof cached.total === 'number' ? cached.total : 0,
-      }
-    }
-    try {
-      const ctx = pptoCtxFiltro(drill, capExpandido)
-      await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
-      setPanelBusquedaSeq((n) => n + 1)
-    } catch { /* panel opcional al volver */ }
-  }, [fObra, drill, capExpandido])
-
   const aplicarPanelItems = useCallback(
     async (capitulo, items) => {
       const list = Array.isArray(items) ? items.filter(Boolean) : []
@@ -2738,6 +2648,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     [contratoId],
   )
 
+  /** Carga grilla por capítulo/ítem; `estado` vacío = todos los estados (resumen consolidado). */
   const filtrarEstadoDesdePanel = useCallback(
     async ({ capitulo, item, estado }) => {
       const base = { ...(fObraRef.current || fObra) }
@@ -2766,6 +2677,59 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     },
     [contratoId],
   )
+
+  /** Clic en nombre de capítulo del panel: resumen consolidado (todos los estados). */
+  const drillCapituloDesdePanel = useCallback(async (capitulo) => {
+    const cap = String(capitulo || '').trim()
+    if (!cap) return
+    await filtrarEstadoDesdePanel({ capitulo: cap, item: '', estado: '' })
+  }, [filtrarEstadoDesdePanel])
+
+  const volverPanelCapitulos = useCallback(async () => {
+    let prev = pptoPopVistaAnterior(pptoDrillStackRef.current)
+    if (!prev && panelDrillRestoreRef.current) {
+      prev = panelDrillRestoreRef.current
+      panelDrillRestoreRef.current = null
+    }
+    // Snapshots incompletos (sin fObra) no deben «restaurarse»: vaciarían los filtros.
+    if (prev && prev.fObra && pptoRestaurarVistaSnap(prev)) {
+      try {
+        const fRest = { ...(fObraRef.current || fObra), item: '', items: [] }
+        const ctx = pptoCtxFiltro(
+          (prev.drill || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'),
+          capExpandido,
+        )
+        // Siempre pedir agregación de capítulos: el snap pudo quedar en nivel ítem.
+        await cargarPanelValidacionServidor(fRest, ctx, { nivel: 'capitulo' })
+      } catch { /* panel opcional al volver */ }
+      setPanelBusquedaSeq((n) => n + 1)
+      return
+    }
+
+    setDrill((d) => (d || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'))
+    const nfBack = { ...(fObraRef.current || fObra), item: '', items: [] }
+    setFObra(nfBack)
+    fObraRef.current = nfBack
+    syncFObraALegacy(nfBack)
+    const dBack = (drill || []).filter((x) => x.campo !== 'item' && x.campo !== 'items')
+    const cacheKey = pptoGridCacheKey(nfBack, dBack)
+    const cached = pptoLeerCacheGrid(cacheKey)
+    if (cached) {
+      setRegistros(cached.data)
+      if (typeof cached.total === 'number') setConteoFiltro(cached.total)
+      pptoCargaRef.current = {
+        key: cacheKey,
+        nextOffset: Array.isArray(cached.data) ? cached.data.length : 0,
+        hasMore: false,
+        total: typeof cached.total === 'number' ? cached.total : 0,
+      }
+    }
+    try {
+      const ctx = pptoCtxFiltro(dBack, capExpandido)
+      await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
+      setPanelBusquedaSeq((n) => n + 1)
+    } catch { /* panel opcional al volver */ }
+  }, [fObra, drill, capExpandido])
 
   const fObraInicialVacio = () => ({
     cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], infraestructura: '', infraestructuras: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT,
@@ -3300,6 +3264,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return capitulosResumen.reduce((s, c) => s + (c.costo_total ?? 0), 0)
     return registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
   }, [registrosFiltrados, drill, primerNivel, capitulosResumen])
+
+  /** Totales dinámicos de la selección actual en grilla (cant_total + costo_directo). */
+  const totalesSeleccion = useMemo(
+    () => pptoTotalesSeleccion(registros, seleccionados),
+    [registros, seleccionados],
+  )
 
   const registrosOrdenados = useMemo(() =>
     [...registrosFiltrados].sort((a, b) => {
@@ -6638,11 +6608,18 @@ async function darDeBaja(id) {
               <span style={{ whiteSpace: 'nowrap' }}>
                 {drill.length === 0 && !verPapelera
                   ? `${capitulosResumen.length} capítulos`
-                  : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`} · {seleccionados.size} seleccionados
+                  : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`}
+                {' · '}
+                {seleccionados.size} seleccionados
+                {seleccionados.size > 0 && (
+                  <span style={{ marginLeft: 6, fontWeight: 700, color: 'var(--cc-primary, #2563eb)' }}>
+                    · Cant. {fmtN(totalesSeleccion.cant)} · CD {fmt(totalesSeleccion.costo)}
+                  </span>
+                )}
               </span>
             </>
           )}
-          onActualizar={() => recargarCapActual(drill.length === 0)}
+          onActualizar={() => { void recargarCapActual(drill.length === 0) }}
           actualizarDisabled={loading || buscandoFiltroObra}
           onExportarExcel={abrirPopupExportPresupuesto}
           exportandoExcel={exportPresupuestoBusy}
@@ -6757,7 +6734,7 @@ async function darDeBaja(id) {
       )}
       {busquedaServidorActiva && registrosFiltrados.length === 0 && (panelFilasServidor?.length > 0) && !cargandoGrillaPresupuesto && (
         <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:8, padding:'10px 14px', marginBottom:10, fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
-          Resumen cargado en el panel. Pulse una <strong style={{ color:t.text }}>celda de estado</strong> o <strong style={{ color:t.text }}>Aplicar filtros</strong> para traer registros a la grilla.
+          Resumen cargado en el panel. Pulse el <strong style={{ color:t.text }}>nombre del capítulo/ítem</strong>, una <strong style={{ color:t.text }}>celda de estado</strong> o <strong style={{ color:t.text }}>Aplicar filtros</strong> para traer registros a la grilla.
         </div>
       )}
 
@@ -6766,8 +6743,11 @@ async function darDeBaja(id) {
           {puedeAbrirEdicionMasiva && (
             <>
               {seleccionados.size > 0 && (
-                <span style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
-                  {seleccionados.size} sel.
+                <span
+                  style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}
+                  title="Suma de Cantidad y Costo directo de los registros seleccionados"
+                >
+                  {seleccionados.size} sel. · Cant. {fmtN(totalesSeleccion.cant)} · CD {fmt(totalesSeleccion.costo)}
                 </span>
               )}
               <button
