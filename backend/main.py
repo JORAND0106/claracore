@@ -1863,6 +1863,24 @@ def _cargo_permiso_editar_registros_presupuesto(
     )
 
 
+def _cargo_permiso_crear_registros_presupuesto(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
+    """Matriz: función «editar registros presupuesto» con acción crear."""
+    return _cargo_tiene_permiso_funcion(
+        current_user, "editar registros presupuesto", "crear", contrato_id
+    )
+
+
+def _puede_sincronizar_vlr_unitario(current_user, contrato_id: Optional[int] = None) -> bool:
+    """Desarrollador o matriz «editar registros presupuesto» con crear o editar."""
+    if _es_desarrollador(current_user):
+        return True
+    return _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ) or _cargo_permiso_crear_registros_presupuesto(current_user, contrato_id)
+
+
 def _cargo_permiso_validar_presupuesto(
     current_user, contrato_id: Optional[int] = None
 ) -> bool:
@@ -12690,11 +12708,18 @@ def post_presupuesto_sincronizar_vlr_unitario(
     papelera: bool = False,
     current_user=Depends(get_current_user),
 ):
-    """Desarrollador: alinea vlr_unitario y costo_directo con listado_precios (vivo + version_items)."""
-    if not _es_desarrollador(current_user):
+    """Alinea vlr_unitario y costo_directo con listado_precios (vivo + version_items).
+
+    Requiere Desarrollador o permiso matriz «editar registros presupuesto»
+    con acción crear o editar en el contrato.
+    """
+    if not _puede_sincronizar_vlr_unitario(current_user, contrato_id):
         raise HTTPException(
             status_code=403,
-            detail="Solo el cargo Desarrollador puede sincronizar valores unitarios.",
+            detail=(
+                "No tiene permiso para sincronizar valores unitarios "
+                "(requiere Desarrollador o «editar registros presupuesto» con crear/editar)."
+            ),
         )
     _require_contract_access(current_user, contrato_id)
     from presupuesto_sincronizar_vlr import sincronizar_vlr_unitario_contrato

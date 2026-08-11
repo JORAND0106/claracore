@@ -42,6 +42,8 @@ export default function PptoFiltroObraVista({
   versionVistaTemporal = false,
   onVolverPresupuestoVivo,
   esDeveloper = false,
+  /** Desarrollador o matriz «editar registros presupuesto» (crear/editar). */
+  puedeSincronizarVlr = false,
   onSincronizarVlrUnitario,
   sincronizarVlrBusy = false,
   tramoOptions: _tramoOptions,
@@ -225,12 +227,12 @@ export default function PptoFiltroObraVista({
           🔄 Actualizar
         </button>
       )}
-      {esDeveloper && typeof onSincronizarVlrUnitario === 'function' && (
+      {(puedeSincronizarVlr || esDeveloper) && typeof onSincronizarVlrUnitario === 'function' && (
         <button
           type="button"
           onClick={onSincronizarVlrUnitario}
           disabled={sincronizarVlrBusy || buscando}
-          title="Desarrollador: sincronizar V.U. con listado de precios (todo el contrato, incluye sellados)"
+          title="Sincronizar V.U. con listado de precios (alcance actual / filtros, incluye sellados)"
           style={{
             ...btnSec,
             padding: compact ? '10px 10px' : '4px 8px',
