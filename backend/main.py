@@ -1148,6 +1148,8 @@ class PresupuestoBulkTipoEjecucion(BaseModel):
 class PresupuestoBulkObservacion(BaseModel):
     ids: List[int]
     observacion_externa: str
+    # append: concatena al texto previo por registro; replace (default): sobrescribe.
+    modo: Optional[str] = "replace"
 
 class ComentariosValidacionIds(BaseModel):
     """Lista de filas `presupuesto` para comentarios de validación; POST evita query strings gigantes (5xx en proxy)."""
@@ -12564,6 +12566,9 @@ def bulk_observacion_externa(
     texto = str(body.observacion_externa or "").strip()
     if not texto:
         raise HTTPException(status_code=422, detail="observacion_externa no puede estar vacía.")
+    modo = str(body.modo or "replace").strip().lower()
+    if modo not in ("append", "replace"):
+        raise HTTPException(status_code=422, detail="modo debe ser 'append' o 'replace'.")
     if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
         current_user, contrato_id
     ):
@@ -12581,11 +12586,21 @@ def bulk_observacion_externa(
     if not ids_ok:
         raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
     rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
-    supabase.table("presupuesto").update(
-        {"observacion_externa": texto, "updated_at": "now()"}
-    ).in_("id", ids_ok).execute()
-    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok)}
-    audit_filas = [(dict(r), {**dict(r), "observacion_externa": texto}) for r in rows_ok]
+    audit_filas = []
+    if modo == "append":
+        for r in rows_ok:
+            prev = str(r.get("observacion_externa") or "").strip()
+            nuevo = f"{prev}\n{texto}" if prev else texto
+            supabase.table("presupuesto").update(
+                {"observacion_externa": nuevo, "updated_at": "now()"}
+            ).eq("id", int(r["id"])).execute()
+            audit_filas.append((dict(r), {**dict(r), "observacion_externa": nuevo}))
+    else:
+        supabase.table("presupuesto").update(
+            {"observacion_externa": texto, "updated_at": "now()"}
+        ).in_("id", ids_ok).execute()
+        audit_filas = [(dict(r), {**dict(r), "observacion_externa": texto}) for r in rows_ok]
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "modo": modo}
     _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
     registrar_log(
         current_user,
@@ -12595,7 +12610,7 @@ def bulk_observacion_externa(
         str(contrato_id),
         det_bulk,
     )
-    return {"actualizados": len(ids_ok)}
+    return {"actualizados": len(ids_ok), "modo": modo}
 
 
 @app.post("/presupuesto/{contrato_id}/sincronizar-vlr-unitario")
@@ -13252,22 +13267,105 @@ def claracad_activaciones_revocar(
 
 class ComentarioBulk(BaseModel):
     presupuesto_ids: List[int]
-    tipo: str        # dims | item_capitulo | validacion
+    tipo: str        # dims | item_capitulo | validacion | …
     mensaje: str
     usuario_nombre: str
+    # append (default): inserta al historial; replace: borra historial del mismo tipo y deja solo el nuevo.
+    modo: Optional[str] = "append"
 
 class RespuestaCreate(BaseModel):
     mensaje: str
     usuario_nombre: str
 
+
+def _comentarios_borrar_historial_tipo(presupuesto_ids: List[int], tipo: str) -> int:
+    """Elimina comentarios (raíces y respuestas) del tipo dado para los presupuesto_id indicados."""
+    if not presupuesto_ids or not tipo:
+        return 0
+    borrados = 0
+    chunk = 200
+    for i in range(0, len(presupuesto_ids), chunk):
+        ids_chunk = presupuesto_ids[i : i + chunk]
+        # Respuestas primero por si parent_id referencia la raíz.
+        try:
+            res_r = (
+                supabase.table("comentarios")
+                .delete()
+                .in_("presupuesto_id", ids_chunk)
+                .eq("tipo", tipo)
+                .not_.is_("parent_id", "null")
+                .execute()
+            )
+            borrados += len(res_r.data or [])
+        except Exception:
+            pass
+        res = (
+            supabase.table("comentarios")
+            .delete()
+            .in_("presupuesto_id", ids_chunk)
+            .eq("tipo", tipo)
+            .execute()
+        )
+        borrados += len(res.data or [])
+    return borrados
+
+
+@app.get("/presupuesto/{contrato_id}/comentarios-historial-count")
+def comentarios_historial_count(
+    contrato_id: int,
+    ids: str,
+    tipo: str,
+    current_user=Depends(get_current_user),
+):
+    """Cuántos de los ids tienen al menos un comentario raíz del tipo indicado."""
+    _require_contract_access(current_user, contrato_id)
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
+    tipo_n = str(tipo or "").strip()
+    if not id_list or not tipo_n:
+        return {"con_historial": 0, "total": len(id_list), "por_id": {}}
+    por_id: Dict[int, int] = {i: 0 for i in id_list}
+    chunk = 200
+    for i in range(0, len(id_list), chunk):
+        chunk_ids = id_list[i : i + chunk]
+        rows = (
+            supabase.table("comentarios")
+            .select("presupuesto_id")
+            .in_("presupuesto_id", chunk_ids)
+            .eq("tipo", tipo_n)
+            .is_("parent_id", "null")
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            pid = int(r["presupuesto_id"])
+            if pid in por_id:
+                por_id[pid] += 1
+    con = sum(1 for v in por_id.values() if v > 0)
+    return {"con_historial": con, "total": len(id_list), "por_id": {str(k): v for k, v in por_id.items()}}
+
+
 @app.post("/presupuesto/{contrato_id}/comentarios/bulk")
 def crear_comentarios_bulk(contrato_id: int, body: ComentarioBulk, current_user=Depends(get_current_user)):
-    rows = [{"presupuesto_id": pid, "tipo": body.tipo, "mensaje": body.mensaje,
-             "usuario_nombre": body.usuario_nombre} for pid in body.presupuesto_ids]
+    _require_contract_access(current_user, contrato_id)
+    modo = str(body.modo or "append").strip().lower()
+    if modo not in ("append", "replace"):
+        raise HTTPException(status_code=422, detail="modo debe ser 'append' o 'replace'.")
+    ids = [int(x) for x in (body.presupuesto_ids or []) if x is not None]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    mensaje = str(body.mensaje or "").strip()
+    if not mensaje:
+        raise HTTPException(status_code=422, detail="mensaje no puede estar vacío.")
+    borrados = 0
+    if modo == "replace":
+        borrados = _comentarios_borrar_historial_tipo(ids, body.tipo)
+    rows = [{"presupuesto_id": pid, "tipo": body.tipo, "mensaje": mensaje,
+             "usuario_nombre": body.usuario_nombre} for pid in ids]
     supabase.table("comentarios").insert(rows).execute()
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
-        n = len(body.presupuesto_ids or [])
+        n = len(ids)
         registrar_log(
             u_log,
             "COMENTAR",
@@ -13278,12 +13376,14 @@ def crear_comentarios_bulk(contrato_id: int, body: ComentarioBulk, current_user=
                 "contrato_id": contrato_id,
                 "tipo": body.tipo,
                 "registros": n,
-                "presupuesto_ids_muestra": [str(x) for x in (body.presupuesto_ids or [])[:20]],
+                "modo": modo,
+                "borrados": borrados,
+                "presupuesto_ids_muestra": [str(x) for x in ids[:20]],
             },
         )
     except Exception:
         pass
-    return {"creados": len(rows)}
+    return {"creados": len(rows), "modo": modo, "borrados": borrados}
 
 @app.get("/presupuesto/{contrato_id}/comentarios-resumen")
 def comentarios_resumen(contrato_id: int, ids: str, current_user=Depends(get_current_user)):
