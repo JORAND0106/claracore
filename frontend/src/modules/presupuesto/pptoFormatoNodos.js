@@ -1,7 +1,7 @@
 /**
  * Concatena Nodo Inicio y Nodo Fin para la grilla de Presupuesto.
  * Formato: "N1 → N2". Si falta un lado, se usa "—" en ese lado.
- * Si ambos estáníos: "—".
+ * Si ambos están vacíos: "—".
  *
  * @param {{ no_inicio?: string|null, no_final?: string|null }|null|undefined} row
  * @returns {string}

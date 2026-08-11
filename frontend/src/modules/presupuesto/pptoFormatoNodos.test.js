@@ -12,7 +12,7 @@ describe('pptoFormatoNodos', () => {
     assert.equal(pptoFormatoNodos({ no_inicio: null, no_final: 'N2' }), '— → N2')
   })
 
-  it('devuelve — si ambos estáníos', () => {
+  it('devuelve — si ambos están vacíos', () => {
     assert.equal(pptoFormatoNodos({}), '—')
     assert.equal(pptoFormatoNodos({ no_inicio: '  ', no_final: null }), '—')
     assert.equal(pptoFormatoNodos(null), '—')
