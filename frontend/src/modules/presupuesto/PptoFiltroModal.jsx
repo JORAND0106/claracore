@@ -149,6 +149,7 @@ export default function PptoFiltroModal({
 
     const tramosGrilla = ubicacionFromGrilla('tramo')
     const calzadasGrilla = ubicacionFromGrilla('calzada')
+    const infrasGrilla = ubicacionFromGrilla('infraestructura')
 
     const capitulosLp = [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
       .sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
@@ -160,6 +161,7 @@ export default function PptoFiltroModal({
       items: [],
       tramos: tramosGrilla.length ? tramosGrilla : (base.tramos || []),
       calzadas: calzadasGrilla.length ? calzadasGrilla : (base.calzadas || []),
+      infraestructuras: infrasGrilla.length ? infrasGrilla : (base.infraestructuras || []),
     }
   }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias])
 
@@ -168,6 +170,7 @@ export default function PptoFiltroModal({
       ...opcionesConItems,
       tramos: opcionesConItems.tramos || tramoOptions || [],
       calzadas: opcionesConItems.calzadas || calzadaOptions || [],
+      infraestructuras: opcionesConItems.infraestructuras || [],
       /** Catálogo fijo: la API solo devuelve valores distintos en BD (NULL no figura como «No Revisado»). */
       revisados: [...PPTO_ESTADOS_VALIDACION],
       pre_interv_estados: [...PPTO_ESTADOS_VALIDACION],
@@ -251,7 +254,8 @@ export default function PptoFiltroModal({
     const te = draftF.tipoEjecucion
     const vacio = {
       cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '',
-      tramo: '', tramos: [], calzada: '', calzadas: [], nodoI: '', nodoF: '', absA: '', absB: '',
+      tramo: '', tramos: [], calzada: '', calzadas: [], infraestructura: '', infraestructuras: [],
+      nodoI: '', nodoF: '', absA: '', absB: '',
       eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [],
       sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '',
       costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: te,

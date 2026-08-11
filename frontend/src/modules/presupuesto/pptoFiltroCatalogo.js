@@ -39,7 +39,8 @@ export const PPTO_FILTRO_CATALOGO = [
   { key: 'id_pol', label: 'ID-POL', tipo: 'text', categoria: 'ubicacion', campoFObra: 'idPol' },
   { key: 'no_inicio', label: 'Nodo inicio', tipo: 'text', categoria: 'ubicacion', campoFObra: 'nodoI' },
   { key: 'no_final', label: 'Nodo fin', tipo: 'text', categoria: 'ubicacion', campoFObra: 'nodoF' },
-  { key: 'abs_inicio', label: 'Abscisa desde', tipo: 'rango_abscisa', categoria: 'ubicacion', campoFObra: 'absA', campoFObraHasta: 'absB' },
+  { key: 'abs_inicio', label: 'Abscisado', tipo: 'rango_abscisa', categoria: 'ubicacion', campoFObra: 'absA', campoFObraHasta: 'absB' },
+  { key: 'infraestructura', label: 'Infraestructura', tipo: 'select_multi', categoria: 'ubicacion', campoFObra: 'infraestructura', campoFObraLista: 'infraestructuras', opcionesKey: 'infraestructuras' },
   { key: 'vlr_unitario', label: 'Vlr. unitario', tipo: 'rango_numerico', categoria: 'valores', campoFObra: 'vlrUnitarioMin', campoFObraHasta: 'vlrUnitarioMax' },
   { key: 'cant_total', label: 'Cant. total', tipo: 'rango_numerico', categoria: 'valores', campoFObra: 'cantTotalMin', campoFObraHasta: 'cantTotalMax' },
   { key: 'costo_directo', label: 'Costo directo', tipo: 'rango_numerico', categoria: 'valores', campoFObra: 'costoDirectoMin', campoFObraHasta: 'costoDirectoMax' },
@@ -79,6 +80,8 @@ export function pptoFObraCamposVacios() {
     tramos: [],
     calzada: '',
     calzadas: [],
+    infraestructura: '',
+    infraestructuras: [],
     nodoI: '',
     nodoF: '',
     absA: '',
@@ -116,13 +119,15 @@ function hasRange(min, max) {
   return hasStr(min) || hasStr(max)
 }
 
-/** Clave estable para tramo/calzada en caché (singular + listas multi). */
+/** Clave estable para tramo/calzada/infraestructura en caché (singular + listas multi). */
 export function pptoFiltroUbicacionCacheKey(f) {
   const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
   const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+  const infras = pptoFiltroValoresLista(pptoFiltroDef('infraestructura'), f)
   return {
     tramos: tramos.slice().sort().join('\x1f'),
     calzadas: calzadas.slice().sort().join('\x1f'),
+    infraestructuras: infras.slice().sort().join('\x1f'),
   }
 }
 
@@ -265,7 +270,7 @@ export function pptoFiltroPatchActivar(def) {
 /** Normaliza fObra con drill / panel / toggle antes de validar o buscar. */
 export function pptoFiltroNormalizar(f, ctx = {}) {
   const base = { ...pptoFObraCamposVacios(), ...(f || {}) }
-  for (const k of ['caps', 'items', 'tramos', 'calzadas', 'competencias', 'unds']) {
+  for (const k of ['caps', 'items', 'tramos', 'calzadas', 'infraestructuras', 'competencias', 'unds']) {
     if (Array.isArray(base[k])) base[k] = [...base[k]]
   }
   const drill = ctx.drill || []
@@ -366,6 +371,7 @@ export function pptoRequiereConsultaServidor(f, ctx = {}) {
   if (strVal(n.idPol) || strVal(n.pkCriterio) || strVal(n.texto)) return true
   if (strVal(n.tramo) || (Array.isArray(n.tramos) && n.tramos.length)) return true
   if (strVal(n.calzada) || (Array.isArray(n.calzadas) && n.calzadas.length)) return true
+  if (strVal(n.infraestructura) || (Array.isArray(n.infraestructuras) && n.infraestructuras.length)) return true
   if (strVal(n.nodoI) || strVal(n.nodoF) || strVal(n.absA) || strVal(n.absB)) return true
   if (strVal(n.und) || (Array.isArray(n.unds) && n.unds.length)) return true
   if (n.dadoDeBaja === true || n.dadoDeBaja === 'true' || n.dadoDeBaja === false || n.dadoDeBaja === 'false') return true
@@ -395,10 +401,13 @@ export function pptoFilaCoincideFObra(row, f, drillArr = []) {
   if (comps.length && !comps.includes(comp)) return false
   const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
   const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
+  const infras = pptoFiltroValoresLista(pptoFiltroDef('infraestructura'), f)
   const tr = String(row.tramo ?? '').trim()
   const cal = String(row.calzada ?? '').trim()
+  const infra = String(row.infraestructura ?? '').trim()
   if (tramos.length && !tramos.includes(tr)) return false
   if (calzadas.length && !calzadas.includes(cal)) return false
+  if (infras.length && !infras.includes(infra)) return false
   const te = strVal(f?.tipoEjecucion)
   if (te && String(row.tipo_ejecucion ?? '').trim() !== te) return false
   if (!pptoFilaCoincideRevisado(row, f?.revisado)) return false
@@ -428,6 +437,7 @@ export function pptoAppendFObraToSearchParams(p, f) {
   appendListaParam(p, 'item', 'items', f.item, f.items)
   appendListaParam(p, 'tramo', 'tramos', f.tramo, f.tramos)
   appendListaParam(p, 'calzada', 'calzadas', f.calzada, f.calzadas)
+  appendListaParam(p, 'infraestructura', 'infraestructuras', f.infraestructura, f.infraestructuras)
   appendListaParam(p, 'competencia', 'competencias', f.competencia, f.competencias)
   appendListaParam(p, 'und', 'unds', f.und, f.unds)
 
@@ -517,6 +527,7 @@ export function pptoFObraToExportBody(f, ctx = {}) {
 
   const tramoLista = pptoFiltroValoresLista(pptoFiltroDef('tramo'), n)
   const calzadaLista = pptoFiltroValoresLista(pptoFiltroDef('calzada'), n)
+  const infraLista = pptoFiltroValoresLista(pptoFiltroDef('infraestructura'), n)
   const competenciaLista = pptoFiltroValoresLista(pptoFiltroDef('competencia'), n)
   const undLista = pptoFiltroValoresLista(pptoFiltroDef('und'), n)
 
@@ -534,6 +545,7 @@ export function pptoFObraToExportBody(f, ctx = {}) {
   const it = splitLista(itemsLista)
   const tr = splitLista(tramoLista)
   const cal = splitLista(calzadaLista)
+  const infra = splitLista(infraLista)
   const comp = splitLista(competenciaLista)
   const und = splitLista(undLista)
 
@@ -550,6 +562,8 @@ export function pptoFObraToExportBody(f, ctx = {}) {
     tramos: tr.multi,
     calzada: cal.single,
     calzadas: cal.multi,
+    infraestructura: infra.single,
+    infraestructuras: infra.multi,
     competencia: comp.single,
     competencias: comp.multi,
     und: und.single,
@@ -583,6 +597,7 @@ export function pptoExportBodyToSearchParams(body) {
   appendListaParam(p, 'item', 'items', body.item, body.items)
   appendListaParam(p, 'tramo', 'tramos', body.tramo, body.tramos)
   appendListaParam(p, 'calzada', 'calzadas', body.calzada, body.calzadas)
+  appendListaParam(p, 'infraestructura', 'infraestructuras', body.infraestructura, body.infraestructuras)
   appendListaParam(p, 'competencia', 'competencias', body.competencia, body.competencias)
   appendListaParam(p, 'und', 'unds', body.und, body.unds)
   if (body.nodo_inicio) p.set('nodo_inicio', body.nodo_inicio)
@@ -609,7 +624,7 @@ export function pptoExportBodyToSearchParams(body) {
 /** Snapshot para plantilla: fObra + claves activas. */
 export function pptoFiltroSnapshot(f, activeKeys) {
   const snap = { ...f }
-  for (const k of ['caps', 'items', 'tramos', 'calzadas', 'competencias', 'unds']) {
+  for (const k of ['caps', 'items', 'tramos', 'calzadas', 'infraestructuras', 'competencias', 'unds']) {
     if (Array.isArray(snap[k])) snap[k] = [...snap[k]]
   }
   return { fObra: snap, activeKeys: (activeKeys || []).filter((k) => k !== 'tipo_ejecucion') }
@@ -621,7 +636,7 @@ export function pptoFiltroFromSnapshot(snap) {
   if (snap.fObra) {
     const base = pptoFObraCamposVacios()
     const fObra = { ...base, ...snap.fObra }
-    for (const k of ['caps', 'items', 'tramos', 'calzadas', 'competencias', 'unds']) {
+    for (const k of ['caps', 'items', 'tramos', 'calzadas', 'infraestructuras', 'competencias', 'unds']) {
       fObra[k] = Array.isArray(snap.fObra[k]) ? [...snap.fObra[k]] : base[k]
     }
     return {

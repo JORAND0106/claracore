@@ -58,6 +58,8 @@ def _aplicar_filtros_listado(
         tramos=f.get("tramos"),
         calzada=f.get("calzada"),
         calzadas=f.get("calzadas"),
+        infraestructura=f.get("infraestructura"),
+        infraestructuras=f.get("infraestructuras"),
         competencia=f.get("competencia"),
         competencias=f.get("competencias"),
         und=f.get("und"),

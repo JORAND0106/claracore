@@ -54,6 +54,6 @@ export async function fetchPresupuestoFiltrosOpciones(contratoId, token, params 
   const r = await fetch(`${API}/presupuesto/${contratoId}/filtros${qs ? `?${qs}` : ''}`, {
     headers: authHeaders(token),
   })
-  if (!r.ok) return { capitulos: [], items: [], tramos: [], calzadas: [], competencias: [], unds: [], revisados: [], pre_interv_estados: [], sellados: [], dados_de_baja: [], tipos_ejecucion: [] }
+  if (!r.ok) return { capitulos: [], items: [], tramos: [], calzadas: [], infraestructuras: [], competencias: [], unds: [], revisados: [], pre_interv_estados: [], sellados: [], dados_de_baja: [], tipos_ejecucion: [] }
   return r.json()
 }

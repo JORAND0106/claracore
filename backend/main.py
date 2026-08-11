@@ -1057,6 +1057,8 @@ class ExportarPresupuestoInformeBody(BaseModel):
     tramos: Optional[List[str]] = None
     calzada: Optional[str] = None
     calzadas: Optional[List[str]] = None
+    infraestructura: Optional[str] = None
+    infraestructuras: Optional[List[str]] = None
     competencia: Optional[str] = None
     competencias: Optional[List[str]] = None
     und: Optional[str] = None
@@ -9841,6 +9843,8 @@ def get_presupuesto(
     tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = Query(None),
+    infraestructura: Optional[str] = None,
+    infraestructuras: Optional[List[str]] = Query(None),
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = Query(None),
     und: Optional[str] = None,
@@ -9897,6 +9901,8 @@ def get_presupuesto(
             tramos=tramos,
             calzada=calzada,
             calzadas=calzadas,
+            infraestructura=infraestructura,
+            infraestructuras=infraestructuras,
             competencia=competencia,
             competencias=competencias,
             und=und,
@@ -9957,6 +9963,8 @@ def get_presupuesto_conteo(
     tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = Query(None),
+    infraestructura: Optional[str] = None,
+    infraestructuras: Optional[List[str]] = Query(None),
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = Query(None),
     und: Optional[str] = None,
@@ -10005,6 +10013,8 @@ def get_presupuesto_conteo(
         tramos=tramos,
         calzada=calzada,
         calzadas=calzadas,
+        infraestructura=infraestructura,
+        infraestructuras=infraestructuras,
         competencia=competencia,
         competencias=competencias,
         und=und,
@@ -10128,6 +10138,7 @@ def _presupuesto_filtros_respuesta_formateada(data: dict) -> dict:
         "items": [],
         "tramos": sorted({str(x).strip() for x in (data.get("tramos") or []) if str(x).strip()}),
         "calzadas": sorted({str(x).strip() for x in (data.get("calzadas") or []) if str(x).strip()}),
+        "infraestructuras": sorted({str(x).strip() for x in (data.get("infraestructuras") or []) if str(x).strip()}),
         "competencias": sorted({str(x).strip() for x in (data.get("competencias") or []) if str(x).strip()}),
         "unds": sorted({str(x).strip() for x in (data.get("unds") or []) if str(x).strip()}),
         "revisados": presupuesto_estados_validacion_opciones(data.get("revisados")),
@@ -10168,6 +10179,7 @@ def _presupuesto_filtros_opciones_legacy(
     )
     tramos = sorted(set(r["tramo"] for r in rows if r.get("tramo")))
     calzadas = sorted(set(r["calzada"] for r in rows if r.get("calzada")))
+    infraestructuras = sorted(set(r["infraestructura"] for r in rows if r.get("infraestructura")))
     competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
     unds = sorted(set(r["und"] for r in rows if r.get("und")))
     revisados = presupuesto_estados_validacion_opciones(
@@ -10202,6 +10214,7 @@ def _presupuesto_filtros_opciones_legacy(
         "items": [],
         "tramos": tramos,
         "calzadas": calzadas,
+        "infraestructuras": infraestructuras,
         "competencias": competencias,
         "unds": unds,
         "revisados": revisados,
@@ -10231,7 +10244,7 @@ def _presupuesto_fetch_filtros_source_rows(
         q = (
             supabase.table("presupuesto")
             .select(
-                "capitulo, item, tramo, calzada, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
+                "capitulo, item, tramo, calzada, infraestructura, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
             )
             .eq("contrato_id", contrato_id)
             .eq("dado_de_baja", False)
@@ -10739,6 +10752,8 @@ def get_presupuesto_panel_validacion_interv(
     tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = Query(None),
+    infraestructura: Optional[str] = None,
+    infraestructuras: Optional[List[str]] = Query(None),
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = Query(None),
     und: Optional[str] = None,
@@ -10784,6 +10799,8 @@ def get_presupuesto_panel_validacion_interv(
         tramos=tramos,
         calzada=calzada,
         calzadas=calzadas,
+        infraestructura=infraestructura,
+        infraestructuras=infraestructuras,
         competencia=competencia,
         competencias=competencias,
         und=und,
@@ -10824,14 +10841,15 @@ def get_presupuesto_panel_validacion_interv(
 def get_maestro_ubicacion_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
     """Tramos y calzadas distintas desde el maestro pk_ids del contrato (SICOE)."""
     def _q():
-        return supabase.table("pk_ids").select("tramo, calzada").eq("contrato_id", contrato_id).execute().data
+        return supabase.table("pk_ids").select("tramo, calzada, infraestructura").eq("contrato_id", contrato_id).execute().data
     try:
         rows = supabase_execute(_q) or []
     except Exception:
         rows = []
     tramos = sorted({str(r["tramo"]).strip() for r in rows if r.get("tramo") and str(r.get("tramo", "")).strip()})
     calzadas = sorted({str(r["calzada"]).strip() for r in rows if r.get("calzada") and str(r.get("calzada", "")).strip()})
-    return {"tramos": tramos, "calzadas": calzadas}
+    infraestructuras = sorted({str(r["infraestructura"]).strip() for r in rows if r.get("infraestructura") and str(r.get("infraestructura", "")).strip()})
+    return {"tramos": tramos, "calzadas": calzadas, "infraestructuras": infraestructuras}
 
 @app.get("/presupuesto/{contrato_id}/items-lista")
 def get_items_presupuesto(
@@ -10929,6 +10947,8 @@ def _presupuesto_fetch_export_rows_crudo(
             tramos=body.tramos,
             calzada=body.calzada,
             calzadas=body.calzadas,
+            infraestructura=body.infraestructura,
+            infraestructuras=body.infraestructuras,
             competencia=body.competencia,
             competencias=body.competencias,
             und=body.und,
@@ -10988,6 +11008,8 @@ def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoIn
             tramos=body.tramos,
             calzada=body.calzada,
             calzadas=body.calzadas,
+            infraestructura=body.infraestructura,
+            infraestructuras=body.infraestructuras,
             competencia=body.competencia,
             competencias=body.competencias,
             und=body.und,
@@ -12563,6 +12585,8 @@ def post_presupuesto_sincronizar_vlr_unitario(
     tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = Query(None),
+    infraestructura: Optional[str] = None,
+    infraestructuras: Optional[List[str]] = Query(None),
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = Query(None),
     und: Optional[str] = None,
@@ -12607,6 +12631,8 @@ def post_presupuesto_sincronizar_vlr_unitario(
         "tramos": tramos,
         "calzada": calzada,
         "calzadas": calzadas,
+        "infraestructura": infraestructura,
+        "infraestructuras": infraestructuras,
         "competencia": competencia,
         "competencias": competencias,
         "und": und,
