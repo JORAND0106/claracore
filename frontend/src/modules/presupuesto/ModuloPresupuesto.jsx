@@ -329,6 +329,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [filtroEstado, setFiltroEstado] = useState('')   // filtro permanente de estado de revisión
   const [guardandoBulk, setGuardandoBulk] = useState(false)
   const [dandoDeBaja, setDandoDeBaja] = useState(false)
+  const [restaurandoPapelera, setRestaurandoPapelera] = useState(false)
+  const restaurarLockRef = useRef(false)
   const [undoUltima, setUndoUltima] = useState(null)
   const [deshaciendo, setDeshaciendo] = useState(false)
   const undoSnapRef = useRef(null)
@@ -4413,16 +4415,99 @@ async function darDeBaja(id) {
     })
   }
 
-async function restaurar(id) {
-    const row = registros.find(rr => rr.id === id)
-    if (esSellado(row)) return
-    if (!window.confirm('¿Restaurar este registro? Volverá a aparecer en la grilla y se reactivará en el DWG.')) return
-    const res = await fetch(`${pptoEp().itemRestaurar(id)}`, {
-      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.ok) {
-      await recargarCapActual()
-    } else alert('Error al restaurar el registro')
+  async function refrescarTrasRestaurarPapelera() {
+    _lastWriteAtRef.current = Date.now()
+    _pptoCacheRef.current = null
+    invalidarCachePresupuestoContrato()
+    if (verPapelera) {
+      setSeleccionados(new Set())
+      await cargarRegistros(true, true)
+      return
+    }
+    await recargarCapActual(true)
+  }
+
+  /**
+   * Restaura uno o varios registros desde Papelera (quita dado_de_baja).
+   * Sellados: omitidos / bloqueados. Tras éxito recarga la vista Papelera.
+   */
+  async function ejecutarRestaurarLote(ids, { confirmar = true } = {}) {
+    if (restaurarLockRef.current || restaurandoPapelera) return { cancelado: true }
+    const idsUnicos = [...new Set((ids || []).filter(Boolean))]
+    if (!idsUnicos.length) return { cancelado: true, motivo: 'vacio' }
+
+    const sellados = idsUnicos.filter((id) => esSellado(registros.find((rr) => rr.id === id)))
+    const idsOk = idsUnicos.filter((id) => !esSellado(registros.find((rr) => rr.id === id)))
+    if (!idsOk.length) {
+      window.alert(
+        'Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden restaurarse.',
+      )
+      return { cancelado: true, motivo: 'sellados' }
+    }
+    if (confirmar) {
+      const extraSellados = sellados.length
+        ? `\n\nSe omitirán ${sellados.length} sellado(s).`
+        : ''
+      const msg =
+        idsOk.length === 1
+          ? '¿Restaurar este registro? Volverá al listado activo del presupuesto con los mismos datos.'
+          : `¿Restaurar ${idsOk.length} registro(s)? Volverán al listado activo del presupuesto con los mismos datos.`
+      if (!window.confirm(msg + extraSellados)) {
+        return { cancelado: true, motivo: 'confirm' }
+      }
+    }
+
+    restaurarLockRef.current = true
+    setRestaurandoPapelera(true)
+    const resultados = { ok: 0, errores: [] }
+    try {
+      const tok = getToken()
+      for (const id of idsOk) {
+        const res = await fetch(`${pptoEp().itemRestaurar(id)}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+        if (res.ok) {
+          resultados.ok += 1
+        } else {
+          let detail = `HTTP ${res.status}`
+          try {
+            const d = await res.json()
+            detail = d?.detail || detail
+          } catch { /* ignore */ }
+          resultados.errores.push({ id, detail })
+        }
+      }
+      await refrescarTrasRestaurarPapelera()
+      if (resultados.errores.length) {
+        const muestra = resultados.errores
+          .slice(0, 3)
+          .map((e) => `#${e.id}: ${e.detail}`)
+          .join('\n')
+        window.alert(
+          `Restaurados: ${resultados.ok}. Fallidos: ${resultados.errores.length}.\n${muestra}`,
+        )
+      } else if (resultados.ok > 1) {
+        setAvisoSistema({
+          titulo: 'Papelera',
+          mensaje: `${resultados.ok} registro(s) restaurados al presupuesto activo.`,
+          tipo: 'ok',
+        })
+      }
+    } finally {
+      restaurarLockRef.current = false
+      setRestaurandoPapelera(false)
+    }
+    return resultados
+  }
+
+  async function restaurar(id) {
+    const row = registros.find((rr) => rr.id === id)
+    if (esSellado(row)) {
+      window.alert('Registro sellado (aprobado por Interventoría): no puede restaurarse.')
+      return
+    }
+    await ejecutarRestaurarLote([id])
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'var(--cc-sm)', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -6852,6 +6937,44 @@ async function restaurar(id) {
                 </button>
               )}
 
+              {puedeEliminar && verPapelera && seleccionados.size >= 1 && (
+                <button
+                  type="button"
+                  disabled={restaurandoPapelera}
+                  aria-label={`Restaurar (${seleccionados.size})`}
+                  title={`Restaurar ${seleccionados.size} seleccionado(s) al presupuesto activo`}
+                  onClick={async () => {
+                    if (restaurandoPapelera) return
+                    const idsRest = [...seleccionados].filter(
+                      (id) => !esSellado(registros.find((rr) => rr.id === id)),
+                    )
+                    if (idsRest.length === 0) {
+                      window.alert(
+                        'Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden restaurarse.',
+                      )
+                      return
+                    }
+                    await ejecutarRestaurarLote(idsRest)
+                  }}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#10B98115',
+                    border: '1px solid #10B98166',
+                    borderRadius: 8,
+                    color: '#10B981',
+                    fontSize: 18,
+                    cursor: restaurandoPapelera ? 'not-allowed' : 'pointer',
+                    opacity: restaurandoPapelera ? 0.55 : 1,
+                  }}
+                >
+                  {restaurandoPapelera ? '⏳' : '🔄'}
+                </button>
+              )}
+
             </>
           )}
         </div>
@@ -7085,12 +7208,17 @@ async function restaurar(id) {
                         }}
                       >🗑️</button>
                     )}
-                    {puedeEliminar && verPapelera && seleccionados.has(r.id) && (
+                    {puedeEliminar && verPapelera && (
                       <button
                         type="button"
-                        aria-label="Restaurar"
-                        title="Restaurar"
-                        onClick={() => restaurar(r.id)}
+                        aria-label={esSellado(r) ? 'No se puede restaurar (sellado)' : 'Restaurar'}
+                        title={
+                          esSellado(r)
+                            ? 'Sellado por Interventoría: no se puede restaurar'
+                            : (restaurandoPapelera ? 'Restauración en curso…' : 'Restaurar al presupuesto activo')
+                        }
+                        disabled={esSellado(r) || restaurandoPapelera}
+                        onClick={() => { if (!esSellado(r) && !restaurandoPapelera) void restaurar(r.id) }}
                         style={{
                           width: 40,
                           minWidth: 40,
@@ -7102,12 +7230,13 @@ async function restaurar(id) {
                           borderRadius: 8,
                           color: '#10B981',
                           fontWeight: 700,
-                          cursor: 'pointer',
+                          cursor: (esSellado(r) || restaurandoPapelera) ? 'not-allowed' : 'pointer',
                           fontSize: 'var(--cc-md)',
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           padding: 0,
+                          opacity: (esSellado(r) || restaurandoPapelera) ? 0.4 : 1,
                         }}
                       >🔄</button>
                     )}
@@ -7414,13 +7543,28 @@ async function restaurar(id) {
                     )}
                     {puedeEliminar && verPapelera && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
-                        {seleccionados.has(r.id) && (
-                          <button onClick={() => restaurar(r.id)}
-                            title="Restaurar registro"
-                            style={{ background:'#10B98115', border:'1px solid #10B98144', borderRadius:'6px', padding:'3px 8px', color:'#10B981', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
-                            🔄 Restaurar
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => { if (!esSellado(r) && !restaurandoPapelera) void restaurar(r.id) }}
+                          title={
+                            esSellado(r)
+                              ? 'Sellado por Interventoría: no se puede restaurar'
+                              : (restaurandoPapelera ? 'Restauración en curso…' : 'Restaurar al presupuesto activo')
+                          }
+                          disabled={esSellado(r) || restaurandoPapelera}
+                          style={{
+                            background: '#10B98115',
+                            border: '1px solid #10B98144',
+                            borderRadius: '6px',
+                            padding: '3px 8px',
+                            color: '#10B981',
+                            fontSize: 'var(--cc-sm)',
+                            cursor: (esSellado(r) || restaurandoPapelera) ? 'not-allowed' : 'pointer',
+                            opacity: (esSellado(r) || restaurandoPapelera) ? 0.4 : 1,
+                          }}
+                        >
+                          🔄 Restaurar
+                        </button>
                       </td>
                     )}
 

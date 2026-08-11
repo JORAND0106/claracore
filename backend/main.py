@@ -267,6 +267,59 @@ def _encolar_layoff_presupuesto_item(item_id: int, r: dict) -> None:
         except Exception:
             pass
 
+
+def _encolar_restaurar_presupuesto_item(item_id: int, r: dict) -> None:
+    """
+    Quita prefijo del_ de layers y encola reactivación en CAD.
+    Simétrico a `_encolar_layoff_presupuesto_item`: no depende de heartbeat DWG.
+    """
+    old_lent = (r.get("layer_ent") or "").strip()
+    old_ltxt = (r.get("layer_txt") or "").strip()
+    ent_handle = (r.get("ent_handle") or "").strip()
+
+    if not old_lent:
+        return
+
+    new_lent = old_lent[4:] if old_lent.startswith("del_") else old_lent
+    new_ltxt = old_ltxt[4:] if old_ltxt.startswith("del_") else old_ltxt
+
+    # Si no había prefijo del_, no hay nada que restaurar en capas.
+    if new_lent == old_lent and new_ltxt == old_ltxt:
+        return
+
+    if ent_handle:
+        try:
+            supabase.table("cad_queue").insert({
+                "contrato_id": r["contrato_id"],
+                "tipo": "cambiar_layer",
+                "estado": "pendiente",
+                "payload": {
+                    "ent_handle": ent_handle,
+                    "txt_handle": (r.get("txt_handle") or "").strip(),
+                    "layer_ent": new_lent,
+                    "layer_txt": new_ltxt,
+                    "color_hex": r.get("color_hex") or "",
+                    "rev_block_handle": r.get("rev_block_handle") or "",
+                    "layoff": False,
+                },
+            }).execute()
+        except Exception:
+            try:
+                _log_api.warning("restaurar: falló insert cad_queue item_id=%s", item_id, exc_info=True)
+            except Exception:
+                pass
+
+    try:
+        supabase.table("presupuesto").update({
+            "layer_ent": new_lent,
+            "layer_txt": new_ltxt,
+        }).eq("id", item_id).execute()
+    except Exception:
+        try:
+            _log_api.warning("restaurar: falló update layers item_id=%s", item_id, exc_info=True)
+        except Exception:
+            pass
+
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 _MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", _MAINTENANCE_SECRET)
 _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", str(_MAINTENANCE_DEFAULT_SECONDS)))
@@ -11706,7 +11759,8 @@ def dar_baja_presupuesto(
 def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
     """Restaura un registro dado de baja: quita del_ de layers y reactiva en CAD."""
     row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, color_hex, sellado"
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, "
+        "rev_block_handle, color_hex, sellado, dado_de_baja"
     ).eq("id", item_id).execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -11714,36 +11768,15 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
     if r.get("sellado"):
         raise HTTPException(
             status_code=403,
-            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+            detail="Registro sellado (aprobado por Interventoría): no puede restaurarse ni modificarse.",
         )
+    if not r.get("dado_de_baja"):
+        return {"ok": True, "ya_activo": True}
     supabase.table("presupuesto").update({
         "dado_de_baja": False,
         "updated_at": "now()"
     }).eq("id", item_id).execute()
-    # Cola CAD: restaurar layers quitando prefijo del_
-    if _dwg_activo(r.get("contrato_id")):
-        old_lent = r.get("layer_ent") or ""
-        old_ltxt = r.get("layer_txt") or ""
-        new_lent = old_lent[4:] if old_lent.startswith("del_") else old_lent
-        new_ltxt = old_ltxt[4:] if old_ltxt.startswith("del_") else old_ltxt
-        if new_lent:
-            supabase.table("cad_queue").insert({
-                "contrato_id": r["contrato_id"],
-                "tipo": "cambiar_layer",
-                "estado": "pendiente",
-                "payload": {
-                    "ent_handle": r.get("ent_handle") or "",
-                    "txt_handle": r.get("txt_handle") or "",
-                    "layer_ent":  new_lent,
-                    "layer_txt":  new_ltxt,
-                    "color_hex":  r.get("color_hex") or "",
-                    "layoff": False
-                }
-            }).execute()
-        supabase.table("presupuesto").update({
-            "layer_ent": new_lent,
-            "layer_txt": new_ltxt,
-        }).eq("id", item_id).execute()
+    _encolar_restaurar_presupuesto_item(item_id, r)
     try:
         cid = r.get("contrato_id")
         cinfo = None
@@ -11768,6 +11801,11 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             {"accion": "restaurar"},
             severidad="AUDIT",
         )
+    except Exception:
+        pass
+    try:
+        if r.get("contrato_id"):
+            _invalidate_dashboard_financial_caches(int(r["contrato_id"]))
     except Exception:
         pass
     return {"ok": True}

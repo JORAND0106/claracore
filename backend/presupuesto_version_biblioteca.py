@@ -560,10 +560,24 @@ def update_biblioteca_item(
 
 
 def dar_baja_biblioteca_item(sb, contrato_id: int, version_id: str, item_id: int) -> dict:
+    prev = _assert_biblioteca_item(sb, contrato_id, version_id, item_id)
+    if prev.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
     return update_biblioteca_item(sb, contrato_id, version_id, item_id, {"dado_de_baja": True})
 
 
 def restaurar_biblioteca_item(sb, contrato_id: int, version_id: str, item_id: int) -> dict:
+    prev = _assert_biblioteca_item(sb, contrato_id, version_id, item_id)
+    if prev.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede restaurarse ni modificarse.",
+        )
+    if not prev.get("dado_de_baja"):
+        return prev
     return update_biblioteca_item(sb, contrato_id, version_id, item_id, {"dado_de_baja": False})
 
 
