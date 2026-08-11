@@ -2019,7 +2019,7 @@ select.cc-dashboard-acta-select--light option {
   .cc-ppto-data-table .cc-ppto-col-check { min-width: 56px !important; width: 56px; }
   .cc-ppto-data-table .cc-ppto-col-id { min-width: 76px !important; }
   .cc-ppto-data-table .cc-ppto-col-cap { min-width: 74px !important; max-width: 95px !important; width: 95px; }
-  .cc-ppto-data-table .cc-ppto-col-comp { min-width: 96px !important; max-width: 120px; }
+  .cc-ppto-data-table .cc-ppto-col-nodos { min-width: 110px !important; max-width: 150px; }
   .cc-ppto-data-table .cc-ppto-col-item { min-width: 56px !important; }
   .cc-ppto-data-table .cc-ppto-col-desc { min-width: 122px !important; max-width: 162px !important; width: 162px; }
   .cc-ppto-data-table .cc-ppto-col-und { min-width: 40px !important; width: 40px; }

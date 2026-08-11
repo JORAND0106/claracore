@@ -51,6 +51,7 @@ import {
 import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { idsRangoSeleccion } from './pptoSeleccionRango'
+import { pptoFormatoNodos } from './pptoFormatoNodos'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
@@ -7005,7 +7006,7 @@ async function restaurar(id) {
                 </th>
                 <th className="cc-ppto-sticky-col cc-ppto-sticky-col--id cc-ppto-col-id" style={thStyle}>ID_POL</th>
                 <th className="cc-ppto-col-cap" style={{ ...thStyle, maxWidth: 95, width: 95 }}>Capítulo</th>
-                <th className="cc-ppto-col-comp" style={thStyle}>Competencia</th>
+                <th className="cc-ppto-col-nodos" style={thStyle} title="Nodo Inicio → Nodo Fin">Nodos</th>
                 <th className="cc-ppto-col-item" style={thStyle}>Ítem</th>
                 <th className="cc-ppto-col-desc" style={{ ...thStyle, maxWidth: 162, width: 162 }}>Descripción</th>
                 <th className="cc-ppto-col-und" style={thStyle}>Und</th>
@@ -7082,7 +7083,13 @@ async function restaurar(id) {
                       </span>
                     </td>
                     <td className="cc-ppto-col-cap cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 95, width: 95, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
-                    <td className="cc-ppto-col-comp cc-ppto-col-ellipsis" style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.competencia || ''}>{r.competencia||'—'}</td>
+                    <td
+                      className="cc-ppto-col-nodos cc-ppto-col-ellipsis"
+                      style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={pptoFormatoNodos(r)}
+                    >
+                      {pptoFormatoNodos(r)}
+                    </td>
                     <td className="cc-ppto-col-item cc-ppto-col-ellipsis" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.item}</td>
                     <td className="cc-ppto-col-desc cc-ppto-col-ellipsis" style={{ ...tdStyle, maxWidth: 162, width: 162, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descripcion || ''}>{r.descripcion}</td>
                     <td className="cc-ppto-col-und" style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{r.und}</td>
