@@ -1,5 +1,6 @@
 /**
- * Modal confirmación + resultado: sincronizar V.U. con listado de precios (solo Desarrollador).
+ * Modal confirmación + resultado: sincronizar V.U. con listado de precios
+ * (Desarrollador o permiso «editar registros presupuesto» crear/editar).
  */
 export default function PptoSincronizarVlrModal({
   open,

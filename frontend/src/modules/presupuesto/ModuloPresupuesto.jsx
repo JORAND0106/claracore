@@ -774,6 +774,10 @@ useEffect(() => {
   /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
   const puedeEditarDimensiones = (esDeveloper || (_permPpto?.editar ?? false)) && !versionVistaTemporal
   const puedeEditar  = (esDeveloper || (_permPpto?.editar   ?? false)) && !versionVistaTemporal
+  /** Botón 💲↻: Desarrollador o matriz «editar registros presupuesto» con crear o editar. */
+  const puedeSincronizarVlrUnitario = (
+    esDeveloper || !!(_permPpto?.editar) || !!(_permPpto?.crear)
+  ) && !versionVistaTemporal
   /** Solo contratista (no Desarrollador) con permiso editar: puede reabrir registro sellado con motivo obligatorio. */
   const esRolContratistaPpto = (() => {
     const r = (usuario?.rol_nombre || '').toLowerCase().trim()
@@ -6654,7 +6658,8 @@ async function darDeBaja(id) {
           versionVistaTemporal={versionVistaTemporal}
           onVolverPresupuestoVivo={puedeEditarVersionBiblioteca ? () => void volverPresupuestoVivo() : undefined}
           esDeveloper={esDeveloper}
-          onSincronizarVlrUnitario={abrirSincronizarVlrUnitario}
+          puedeSincronizarVlr={puedeSincronizarVlrUnitario}
+          onSincronizarVlrUnitario={puedeSincronizarVlrUnitario ? abrirSincronizarVlrUnitario : undefined}
           sincronizarVlrBusy={syncVlrBusy}
         />
       )}
