@@ -475,6 +475,7 @@ export default function PptoPanelValidacion({
         checksAplicados={checksAplicados}
         onDrillCapitulo={onDrillCapitulo}
         onFiltrarEstadoCelda={onFiltrarEstadoCelda}
+        cargarResumenConsolidado={cargarResumenConsolidado}
         itemDescMap={itemDescMap}
       />
     </PanelCalculadoraProvider>
@@ -513,6 +514,7 @@ function PptoPanelValidacionInner({
   checksAplicados,
   onDrillCapitulo,
   onFiltrarEstadoCelda,
+  cargarResumenConsolidado,
   itemDescMap,
 }) {
   const calc = usePanelCalculadora()
@@ -920,7 +922,11 @@ function PptoPanelValidacionInner({
                       {nivel === 'capitulo' ? (
                         <button
                           type="button"
-                          onClick={() => cargarResumenConsolidado(g)}
+                          data-ppto-panel-cap-nombre
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            cargarResumenConsolidado?.(g)
+                          }}
                           title="Ver en la grilla el resumen consolidado (todos los estados) de este capítulo"
                           style={{
                             background: 'transparent',
@@ -941,7 +947,11 @@ function PptoPanelValidacionInner({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => cargarResumenConsolidado(g)}
+                          data-ppto-panel-item-nombre
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            cargarResumenConsolidado?.(g)
+                          }}
                           title="Ver en la grilla el resumen consolidado (todos los estados) de este ítem"
                           style={{
                             display: 'grid',
@@ -1063,7 +1073,7 @@ function PptoPanelValidacionInner({
                           type="button"
                           onClick={(ev) => {
                             ev.stopPropagation()
-                            cargarResumenConsolidado(g)
+                            cargarResumenConsolidado?.(g)
                           }}
                           disabled={!g.totalRegs}
                           title={
