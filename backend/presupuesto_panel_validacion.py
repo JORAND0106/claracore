@@ -169,7 +169,11 @@ def _fetch_panel_validacion_rows(
     filtros: dict,
 ) -> List[dict]:
     """Filas mínimas para agregar cantidades (mismos filtros que el panel)."""
-    from presupuesto_helpers import _presupuesto_q_estructura, _presupuesto_q_filtros_ubicacion
+    from presupuesto_helpers import (
+        _presupuesto_q_estructura,
+        _presupuesto_q_filtro_infraestructura_via_pk_ids,
+        _presupuesto_q_filtros_ubicacion,
+    )
 
     caps = filtros.get("capitulos") or []
     items = filtros.get("items") or []
@@ -192,12 +196,17 @@ def _fetch_panel_validacion_rows(
             tramos=filtros.get("tramos") if len(filtros.get("tramos") or []) > 1 else None,
             calzada=filtros.get("calzadas", [None])[0] if len(filtros.get("calzadas") or []) == 1 else None,
             calzadas=filtros.get("calzadas") if len(filtros.get("calzadas") or []) > 1 else None,
-            infraestructura=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
-            infraestructuras=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
             competencia=filtros.get("competencias", [None])[0] if len(filtros.get("competencias") or []) == 1 else None,
             competencias=filtros.get("competencias") if len(filtros.get("competencias") or []) > 1 else None,
             und=filtros.get("unds", [None])[0] if len(filtros.get("unds") or []) == 1 else None,
             unds=filtros.get("unds") if len(filtros.get("unds") or []) > 1 else None,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q,
+            supabase,
+            int(contrato_id),
+            single=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
+            multi=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,
@@ -418,7 +427,11 @@ def _fetch_panel_validacion_legacy(
 ) -> dict:
     """Fallback paginado (lento) si la RPC no está desplegada."""
     from collections import defaultdict
-    from presupuesto_helpers import _presupuesto_q_estructura, _presupuesto_q_filtros_ubicacion
+    from presupuesto_helpers import (
+        _presupuesto_q_estructura,
+        _presupuesto_q_filtro_infraestructura_via_pk_ids,
+        _presupuesto_q_filtros_ubicacion,
+    )
 
     caps = filtros.get("capitulos") or []
     items = filtros.get("items") or []
@@ -441,12 +454,17 @@ def _fetch_panel_validacion_legacy(
             tramos=filtros.get("tramos") if len(filtros.get("tramos") or []) > 1 else None,
             calzada=filtros.get("calzadas", [None])[0] if len(filtros.get("calzadas") or []) == 1 else None,
             calzadas=filtros.get("calzadas") if len(filtros.get("calzadas") or []) > 1 else None,
-            infraestructura=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
-            infraestructuras=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
             competencia=filtros.get("competencias", [None])[0] if len(filtros.get("competencias") or []) == 1 else None,
             competencias=filtros.get("competencias") if len(filtros.get("competencias") or []) > 1 else None,
             und=filtros.get("unds", [None])[0] if len(filtros.get("unds") or []) == 1 else None,
             unds=filtros.get("unds") if len(filtros.get("unds") or []) > 1 else None,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q,
+            supabase,
+            int(contrato_id),
+            single=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
+            multi=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,

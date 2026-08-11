@@ -27,7 +27,6 @@ AS $$
       p.item,
       p.tramo,
       p.calzada,
-      p.infraestructura,
       p.competencia,
       p.und,
       p.revisado,
@@ -78,8 +77,11 @@ AS $$
       '[]'::jsonb
     ),
     'infraestructuras', coalesce(
-      (SELECT jsonb_agg(DISTINCT infraestructura ORDER BY infraestructura)
-       FROM base WHERE infraestructura IS NOT NULL AND trim(infraestructura::text) <> ''),
+      (SELECT jsonb_agg(DISTINCT trim(pk.infraestructura) ORDER BY trim(pk.infraestructura))
+       FROM public.pk_ids pk
+       WHERE pk.contrato_id = p_contrato_id
+         AND pk.infraestructura IS NOT NULL
+         AND trim(pk.infraestructura::text) <> ''),
       '[]'::jsonb
     ),
     'competencias', coalesce(

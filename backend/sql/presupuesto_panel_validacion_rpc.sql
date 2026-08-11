@@ -103,7 +103,15 @@ AS $$
       AND (
         NOT (f.j ? 'infraestructuras')
         OR jsonb_array_length(f.j->'infraestructuras') = 0
-        OR p.infraestructura::text IN (SELECT jsonb_array_elements_text(f.j->'infraestructuras'))
+        OR EXISTS (
+          SELECT 1
+          FROM public.pk_ids pk
+          WHERE pk.contrato_id = p.contrato_id
+            AND pk.pk_id = p.pk_id
+            AND pk.infraestructura::text IN (
+              SELECT jsonb_array_elements_text(f.j->'infraestructuras')
+            )
+        )
       )
       AND (
         NOT (f.j ? 'competencias')
