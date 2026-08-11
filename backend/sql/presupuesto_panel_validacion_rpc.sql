@@ -101,6 +101,11 @@ AS $$
         OR p.calzada::text IN (SELECT jsonb_array_elements_text(f.j->'calzadas'))
       )
       AND (
+        NOT (f.j ? 'infraestructuras')
+        OR jsonb_array_length(f.j->'infraestructuras') = 0
+        OR p.infraestructura::text IN (SELECT jsonb_array_elements_text(f.j->'infraestructuras'))
+      )
+      AND (
         NOT (f.j ? 'competencias')
         OR jsonb_array_length(f.j->'competencias') = 0
         OR p.competencia IN (SELECT jsonb_array_elements_text(f.j->'competencias'))

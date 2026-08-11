@@ -404,7 +404,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
   const [fObra, setFObra] = useState({
-    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: PPTO_TIPO_EJECUCION_DEFAULT,
+    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], infraestructura: '', infraestructuras: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: PPTO_TIPO_EJECUCION_DEFAULT,
   })
   const fObraRef = useRef(fObra)
   useEffect(() => { fObraRef.current = fObra }, [fObra])
@@ -1301,6 +1301,7 @@ useEffect(() => {
     const obraKey = [
       ubKey.tramos,
       ubKey.calzadas,
+      ubKey.infraestructuras,
       ff.eje, ff.revisado, ff.preInterv, ff.idPol, ff.pkCriterio, ff.texto,
       ff.nodoI, ff.nodoF, ff.absA, ff.absB, ff.tipoEjecucion,
     ].join('\x1e')
@@ -2747,7 +2748,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   )
 
   const fObraInicialVacio = () => ({
-    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT,
+    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], infraestructura: '', infraestructuras: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT,
   })
 
   async function onCambioTipoEjecucion(nuevoTipo) {
@@ -3133,6 +3134,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const preFiltro = fObra.preInterv || ''
     const tramoFiltro = pptoFiltroValoresLista(pptoFiltroDef('tramo'), fObra)
     const calzadaFiltro = pptoFiltroValoresLista(pptoFiltroDef('calzada'), fObra)
+    const infraFiltro = pptoFiltroValoresLista(pptoFiltroDef('infraestructura'), fObra)
     return registros.filter(r => {
       if (!drillMatch(r)) return false
       if (pkidsSeleccionados.length > 0) {
@@ -3142,6 +3144,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (!pptoFilaCoincidePreInterv(r, preFiltro)) return false
       if (tramoFiltro.length && !tramoFiltro.includes(String(r.tramo ?? '').trim())) return false
       if (calzadaFiltro.length && !calzadaFiltro.includes(String(r.calzada ?? '').trim())) return false
+      if (infraFiltro.length && !infraFiltro.includes(String(r.infraestructura ?? '').trim())) return false
       if (detalleConItem) return true
       if (busquedaTipo === 'tramo') {
         const v1 = busquedaV1.trim().toLowerCase()
@@ -3172,7 +3175,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
 
   const chartData = useMemo(() => {
     if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {

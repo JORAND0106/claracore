@@ -132,6 +132,8 @@ def _presupuesto_q_estructura(
     tramos: Optional[List[str]] = None,
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = None,
+    infraestructura: Optional[str] = None,
+    infraestructuras: Optional[List[str]] = None,
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = None,
     und: Optional[str] = None,
@@ -141,6 +143,7 @@ def _presupuesto_q_estructura(
     q = _presupuesto_q_in_str_field(q, "item", item, items)
     q = _presupuesto_q_in_str_field(q, "tramo", tramo, tramos)
     q = _presupuesto_q_in_str_field(q, "calzada", calzada, calzadas)
+    q = _presupuesto_q_in_str_field(q, "infraestructura", infraestructura, infraestructuras)
     q = _presupuesto_q_in_str_field(q, "competencia", competencia, competencias)
     q = _presupuesto_q_in_str_field(q, "und", und, unds)
     return q

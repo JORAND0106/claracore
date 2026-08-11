@@ -27,6 +27,7 @@ AS $$
       p.item,
       p.tramo,
       p.calzada,
+      p.infraestructura,
       p.competencia,
       p.und,
       p.revisado,
@@ -74,6 +75,11 @@ AS $$
     'calzadas', coalesce(
       (SELECT jsonb_agg(DISTINCT calzada ORDER BY calzada)
        FROM base WHERE calzada IS NOT NULL AND trim(calzada::text) <> ''),
+      '[]'::jsonb
+    ),
+    'infraestructuras', coalesce(
+      (SELECT jsonb_agg(DISTINCT infraestructura ORDER BY infraestructura)
+       FROM base WHERE infraestructura IS NOT NULL AND trim(infraestructura::text) <> ''),
       '[]'::jsonb
     ),
     'competencias', coalesce(
