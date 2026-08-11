@@ -286,10 +286,6 @@ export default function PptoPanelValidacion({
   }, [busquedaActiva, cargando, nivel, capSel, labels.join('\x1f')])
 
   useEffect(() => {
-    navegacionManualRef.current = null
-  }, [busquedaSeq])
-
-  useEffect(() => {
     if (!busquedaActiva) {
       navegacionManualRef.current = null
       setNivel('capitulo')
@@ -297,6 +293,8 @@ export default function PptoPanelValidacion({
       return
     }
     if (cargando) return
+    // Mantener «Atrás» / drill manual: no limpiar el flag en cada busquedaSeq
+    // (antes se anulaba y autoCapitulo volvía a forzar la vista de ítems).
     if (navegacionManualRef.current === 'capitulo') {
       setCapSel(null)
       setNivel('capitulo')
@@ -313,7 +311,7 @@ export default function PptoPanelValidacion({
       setCapSel(null)
       setNivel('capitulo')
     }
-  }, [busquedaActiva, cargando, autoCapitulo])
+  }, [busquedaActiva, cargando, autoCapitulo, busquedaSeq])
 
   const checksPendientes = useMemo(() => {
     if (labels.length === 0) return false
@@ -338,11 +336,19 @@ export default function PptoPanelValidacion({
     checksRef.current = n
   }
 
-  const irCapituloItems = (g) => {
+  /** Nombre de capítulo/ítem (o Total): grilla consolidada de todos los estados. */
+  const cargarResumenConsolidado = (g) => {
     navegacionManualRef.current = 'item'
-    setCapSel(g.capitulo)
-    setNivel('item')
-    onDrillCapitulo?.(g.capitulo)
+    if (nivel === 'capitulo') {
+      setCapSel(g.capitulo)
+      setNivel('item')
+    }
+    onFiltrarEstadoCelda?.({
+      nivel,
+      capitulo: g.capitulo,
+      item: nivel === 'item' ? g.item : undefined,
+      estado: '',
+    })
   }
 
   const volverCapitulos = () => {
@@ -418,6 +424,8 @@ export default function PptoPanelValidacion({
   const handleBuscar = async (e) => {
     e.stopPropagation()
     if (!puedeBuscar || cargando) return
+    // Nueva búsqueda: liberar navegación manual (Atrás / drill) para que autoCapitulo aplique.
+    navegacionManualRef.current = null
     if (busquedaActiva && checksPendientes) {
       await aplicarDesdeChecks()
       return
@@ -912,8 +920,8 @@ function PptoPanelValidacionInner({
                       {nivel === 'capitulo' ? (
                         <button
                           type="button"
-                          onClick={() => irCapituloItems(g)}
-                          title="Ver ítems de este capítulo"
+                          onClick={() => cargarResumenConsolidado(g)}
+                          title="Ver en la grilla el resumen consolidado (todos los estados) de este capítulo"
                           style={{
                             background: 'transparent',
                             border: 'none',
@@ -931,17 +939,26 @@ function PptoPanelValidacionInner({
                           {g.label}
                         </button>
                       ) : (
-                        <div
+                        <button
+                          type="button"
+                          onClick={() => cargarResumenConsolidado(g)}
+                          title="Ver en la grilla el resumen consolidado (todos los estados) de este ítem"
                           style={{
                             display: 'grid',
                             gridTemplateColumns: 'minmax(0, 1fr) auto',
                             gap: '2px 12px',
                             alignItems: 'center',
                             lineHeight: 1.3,
+                            background: 'transparent',
+                            border: 'none',
+                            padding: 0,
+                            width: '100%',
+                            textAlign: 'left',
+                            cursor: 'pointer',
                           }}
                         >
                           <div style={{ minWidth: 0 }}>
-                            <span style={{ fontWeight: 800, color: 'var(--ppto-panel-accent)' }}>{g.item}</span>
+                            <span style={{ fontWeight: 800, color: 'var(--ppto-panel-accent)', textDecoration: 'underline' }}>{g.item}</span>
                             {(g.descripcion || itemDescMap[g.item]) && (
                               <span style={{ color: 'var(--ppto-panel-muted)', fontWeight: 500 }}>
                                 {' '}
@@ -962,7 +979,7 @@ function PptoPanelValidacionInner({
                               ? `${g.cantTotal.toLocaleString('es-CO', { maximumFractionDigits: 4 })}${g.und ? ` ${g.und}` : ''}`
                               : '—'}
                           </div>
-                        </div>
+                        </button>
                       )}
                     </td>
                     {PPTO_PANEL_ESTADOS.map((e) => {
@@ -1029,17 +1046,59 @@ function PptoPanelValidacionInner({
                       )
                     })}
                     <td style={{ padding: '4px 8px', textAlign: 'right', verticalAlign: 'middle' }}>
-                      <CeldaEstado
-                        celda={{ count: g.totalRegs, costo: g.totalCosto, cant: g.cantTotal }}
-                        verCostos={verValoresEconomicos}
-                        fmt={fmt}
-                        color="var(--ppto-panel-accent)"
-                        mutedColor="var(--ppto-panel-muted)"
-                        textColor="var(--ppto-panel-text)"
-                        categoryKey="Total"
-                        categoryLabel="Total"
-                        rowLabel={nivel === 'item' ? g.item : g.label}
-                      />
+                      {calcOn ? (
+                        <CeldaEstado
+                          celda={{ count: g.totalRegs, costo: g.totalCosto, cant: g.cantTotal }}
+                          verCostos={verValoresEconomicos}
+                          fmt={fmt}
+                          color="var(--ppto-panel-accent)"
+                          mutedColor="var(--ppto-panel-muted)"
+                          textColor="var(--ppto-panel-text)"
+                          categoryKey="Total"
+                          categoryLabel="Total"
+                          rowLabel={nivel === 'item' ? g.item : g.label}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            cargarResumenConsolidado(g)
+                          }}
+                          disabled={!g.totalRegs}
+                          title={
+                            g.totalRegs
+                              ? `Ver ${g.totalRegs.toLocaleString('es-CO')} registros (todos los estados) en la grilla`
+                              : undefined
+                          }
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            padding: '2px 4px',
+                            cursor: g.totalRegs ? 'pointer' : 'default',
+                            width: '100%',
+                            borderRadius: 4,
+                          }}
+                          onMouseEnter={(ev) => {
+                            if (g.totalRegs) ev.currentTarget.style.background = 'color-mix(in srgb, var(--ppto-panel-accent) 12%, transparent)'
+                          }}
+                          onMouseLeave={(ev) => {
+                            ev.currentTarget.style.background = 'transparent'
+                          }}
+                        >
+                          <CeldaEstado
+                            celda={{ count: g.totalRegs, costo: g.totalCosto, cant: g.cantTotal }}
+                            verCostos={verValoresEconomicos}
+                            fmt={fmt}
+                            color="var(--ppto-panel-accent)"
+                            mutedColor="var(--ppto-panel-muted)"
+                            textColor="var(--ppto-panel-text)"
+                            categoryKey="Total"
+                            categoryLabel="Total"
+                            rowLabel={nivel === 'item' ? g.item : g.label}
+                          />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )})}
