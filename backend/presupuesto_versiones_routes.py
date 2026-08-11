@@ -732,9 +732,29 @@ def post_presupuesto_version_biblioteca_bulk_obs(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    return bulk_patch_biblioteca_ids(
-        supabase, contrato_id, version_id, body.ids, {"observacion_externa": body.observacion_externa}
-    )
+    texto = str(body.observacion_externa or "").strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="observacion_externa no puede estar vacía.")
+    modo = str(getattr(body, "modo", None) or "replace").strip().lower()
+    if modo not in ("append", "replace"):
+        raise HTTPException(status_code=422, detail="modo debe ser 'append' o 'replace'.")
+    if modo == "append":
+        actualizados = 0
+        for item_id in body.ids or []:
+            prev = get_biblioteca_item(supabase, contrato_id, version_id, int(item_id))
+            prev_txt = str((prev or {}).get("observacion_externa") or "").strip()
+            nuevo = f"{prev_txt}\n{texto}" if prev_txt else texto
+            update_biblioteca_item(
+                supabase, contrato_id, version_id, int(item_id), {"observacion_externa": nuevo}
+            )
+            actualizados += 1
+        return {"actualizados": actualizados, "modo": modo}
+    return {
+        **bulk_patch_biblioteca_ids(
+            supabase, contrato_id, version_id, body.ids, {"observacion_externa": texto}
+        ),
+        "modo": modo,
+    }
 
 
 @router.post("/presupuesto/{contrato_id}/versiones/{version_id}/bulk-recalcular")

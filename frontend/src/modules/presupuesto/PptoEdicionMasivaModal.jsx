@@ -6,7 +6,7 @@ const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_OBRA = 'Obra Ejecutada'
 
 const HINT_EXCEL_OBS =
-  'Opcional. El texto se verá en la exportación Excel de presupuesto, columna «Observación» del detalle por ítem.'
+  'Opcional. El texto se verá en la exportación Excel de presupuesto, columna «Observación» del detalle por ítem. Si algún registro ya tiene observación, se preguntará si se agrega al historial o se reemplaza.'
 
 const SEMAFORO = [
   { valor: 'No Revisado', color: '#3B82F6', label: '🔵 No Revisado' },

@@ -41,6 +41,13 @@ import {
 } from './pptoUndoUltima'
 import PptoVersionador from './PptoVersionador'
 import PptoVersionCadConfirmModal from './PptoVersionCadConfirmModal'
+import PptoComentarioModoModal from './PptoComentarioModoModal'
+import {
+  PPTO_COMENTARIO_MODO_APPEND,
+  PPTO_COMENTARIO_MODO_REPLACE,
+  pptoComentarioTipoLabel,
+  pptoConcatenarObservacion,
+} from './pptoComentarioModo'
 import PptoSincronizarVlrModal from './PptoSincronizarVlrModal'
 import {
   buildPptoEndpoints,
@@ -436,11 +443,12 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [nuevaCant,          setNuevaCant]          = useState({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
   const [guardandoNuevaCant, setGuardandoNuevaCant] = useState(false)
   // ── Comentarios ──────────────────────────────────────────────────────────
-  const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
+  const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve, ids}
   const [textoComentario,  setTextoComentario]  = useState('')
   const [destinatarioComentario, setDestinatarioComentario] = useState('')
   const [usuariosDestinatarios,  setUsuariosDestinatarios]  = useState([])
   const [comentariosPorId, setComentariosPorId] = useState({})
+  const [modalModoHistorial, setModalModoHistorial] = useState(null) // {nConHistorial,nTotal,etiqueta,titulo,resolve}
   const [modalHilo,           setModalHilo]           = useState(null) // {registroId, tipo, data}
   const [exportPresupuestoOpen, setExportPresupuestoOpen] = useState(false)
   const [exportPresupuestoFormato, setExportPresupuestoFormato] = useState('informe')
@@ -859,6 +867,7 @@ useEffect(() => {
   async function ejecutarDarDeBajaLote(ids, {
     comentario = '',
     destinatarioId = null,
+    modoComentario = null,
     etiquetaComentario = '[BAJA]',
     resolverReg = (id) => registros.find((r) => r.id === id),
     alTerminarSeleccion = null,
@@ -911,7 +920,7 @@ useEffect(() => {
         if (cls.estado === 'ok') {
           resultados.ok += 1
           if (comentario.trim()) {
-            await crearComentarios([id], 'validacion', `${etiquetaComentario} ${comentario}`, destinatarioId)
+            await crearComentarios([id], 'validacion', `${etiquetaComentario} ${comentario}`, destinatarioId, modoComentario)
           }
         } else if (cls.estado === 'ya_baja') {
           resultados.yaBaja += 1
@@ -1010,7 +1019,7 @@ useEffect(() => {
 
   async function adjuntarMotivoSiEdicionContratistaConInterv(reg, body) {
     if (!requiereMotivoIntervContratista(reg, body)) return { ok: true }
-    const com = await pedirComentario('contratista_edita_interv', true)
+    const com = await pedirComentario('contratista_edita_interv', true, reg?.id != null ? [reg.id] : [])
     if (com == null) return { ok: false }
     const m = String(com.mensaje || '').trim()
     if (m.length < MIN_JUSTIFICACION_INTERV) {
@@ -1018,7 +1027,7 @@ useEffect(() => {
       return { ok: false }
     }
     body.motivo_edicion_con_estado_interv = m
-    return { ok: true }
+    return { ok: true, modoComentario: com.modo || PPTO_COMENTARIO_MODO_APPEND }
   }
 
   /**
@@ -1036,7 +1045,7 @@ useEffect(() => {
     if (esDeveloper) return { ok: true }
 
     const tipoComent = contexto === 'item_capitulo' ? 'item_capitulo' : 'dims'
-    const com = await pedirComentario(tipoComent, true)
+    const com = await pedirComentario(tipoComent, true, reg?.id != null ? [reg.id] : [])
     if (com == null) return { ok: false }
     const m = String(com.mensaje || '').trim()
     if (m.length < MIN_JUSTIFICACION_EDICION) {
@@ -1045,7 +1054,12 @@ useEffect(() => {
     }
     return {
       ok: true,
-      comentarioTrazabilidad: { tipo: tipoComent, mensaje: m, destinatarioId: com.destinatarioId || null },
+      comentarioTrazabilidad: {
+        tipo: tipoComent,
+        mensaje: m,
+        destinatarioId: com.destinatarioId || null,
+        modo: com.modo || PPTO_COMENTARIO_MODO_APPEND,
+      },
     }
   }
 
@@ -2980,20 +2994,77 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   const nivelActual  = nivelesOrden[drill.length] || null
 
   // ── Comentarios: pedir, crear, cargar resumen ────────────────────────────
-  function pedirComentario(tipo, obligatorio) {
+  function pedirComentario(tipo, obligatorio, ids = []) {
     return new Promise(resolve => {
       setTextoComentario('')
       setDestinatarioComentario('')
-      setModalComentario({ tipo, obligatorio, resolve })
+      setModalComentario({ tipo, obligatorio, resolve, ids: Array.isArray(ids) ? ids : [] })
     })
   }
 
-  async function crearComentarios(ids, tipo, mensaje, destinatarioId = null) {
-    if (!mensaje.trim()) return
+  function pedirModoHistorial({ nConHistorial, nTotal, etiqueta, titulo }) {
+    return new Promise((resolve) => {
+      setModalModoHistorial({
+        nConHistorial,
+        nTotal,
+        etiqueta,
+        titulo,
+        resolve,
+      })
+    })
+  }
+
+  async function contarHistorialComentarios(ids, tipo) {
+    const idList = (ids || []).map((x) => Number(x)).filter((n) => Number.isFinite(n))
+    const tipoN = String(tipo || '').trim()
+    if (!idList.length || !tipoN || !contratoId) return 0
+    const tok = getToken()
+    let con = 0
+    const CHUNK = 80
+    for (let i = 0; i < idList.length; i += CHUNK) {
+      const chunk = idList.slice(i, i + CHUNK)
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/comentarios-historial-count?ids=${chunk.join(',')}&tipo=${encodeURIComponent(tipoN)}`,
+        { headers: { Authorization: `Bearer ${tok}` } },
+      )
+      if (!res.ok) continue
+      const data = await res.json().catch(() => ({}))
+      con += Number(data?.con_historial || 0)
+    }
+    return con
+  }
+
+  /** @returns {'append'|'replace'|null} null = canceló */
+  async function resolverModoSiHayHistorial(ids, tipo, { etiqueta } = {}) {
+    const idList = (ids || []).map((x) => Number(x)).filter((n) => Number.isFinite(n))
+    if (!idList.length) return PPTO_COMENTARIO_MODO_APPEND
+    const n = await contarHistorialComentarios(idList, tipo)
+    if (n <= 0) return PPTO_COMENTARIO_MODO_APPEND
+    return pedirModoHistorial({
+      nConHistorial: n,
+      nTotal: idList.length,
+      etiqueta: etiqueta || `comentarios de ${pptoComentarioTipoLabel(tipo)}`,
+      titulo: 'Ya hay comentarios previos',
+    })
+  }
+
+  async function crearComentarios(ids, tipo, mensaje, destinatarioId = null, modo = null) {
+    if (!mensaje.trim()) return false
+    let modoFinal = modo
+    if (!modoFinal) {
+      modoFinal = await resolverModoSiHayHistorial(ids, tipo)
+      if (modoFinal == null) return false
+    }
     await fetch(`${API}/presupuesto/${contratoId}/comentarios/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ presupuesto_ids: ids, tipo, mensaje: mensaje.trim(), usuario_nombre: usuario?.nombre || 'Usuario' })
+      body: JSON.stringify({
+        presupuesto_ids: ids,
+        tipo,
+        mensaje: mensaje.trim(),
+        usuario_nombre: usuario?.nombre || 'Usuario',
+        modo: modoFinal,
+      }),
     })
     // Enviar notificación si hay destinatario
     if (destinatarioId) {
@@ -3013,6 +3084,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         })
       }).catch(() => {})
     }
+    return true
   }
 
   async function cargarComentariosResumen(ids) {
@@ -3411,10 +3483,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
     // Pedir comentario (obligatorio)
-    const comentarioData = await pedirComentario(tipoComent, true)
+    const comentarioData = await pedirComentario(tipoComent, true, ids)
     if (comentarioData === null) return  // canceló
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const modoComentario = comentarioData?.modo || null
     if (!skipUndo) registrarUndoPresupuesto(undoLabel, ids)
 
     let nodosMergeEnBulk = {}
@@ -3455,7 +3528,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return
       }
       if (!tieneItem && !tieneCambioMedidas) {
-        if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
+        if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId, modoComentario)
         setRegistros(prev => prev.map(r => (updatesById[r.id] ? { ...r, ...updatesById[r.id] } : r)))
         setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
         cargarCapitulos({ silent: true }).catch(() => {})
@@ -3516,7 +3589,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
+      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId, modoComentario)
     } else {
       // Revertir si falló
       setRegistros(prev => prev.map(r => {
@@ -3581,10 +3654,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return
     }
     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
-    const comentarioData = await pedirComentario('validacion', obligatorio)
+    const comentarioData = await pedirComentario('validacion', obligatorio, selIds)
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const modoComentario = comentarioData?.modo || null
     registrarUndoPresupuesto('Validación Interventoría (selección)', selIds)
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
     pptoIniciarValidacionOptimista((r) => aplicarCambioEstadoLocal(r, selIds, estado))
@@ -3597,7 +3671,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       })
       if (res.ok) {
         pptoPostValidacionServidorOk()
-        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId, modoComentario)
         lanzarClaraLinkEstado(selIds, estado)
       } else {
         pptoParchearRegistrosOptimista((r) => {
@@ -3622,11 +3696,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const obligatorio = estadoAplicado === 'Pendiente' || estadoAplicado === 'Rechazado'
     let comentario = comentarioPreset
     let destinatarioId = null
+    let modoComentario = null
     if (!skipPedirComentario) {
-      const comentarioData = await pedirComentario('validacion', obligatorio)
+      const comentarioData = await pedirComentario('validacion', obligatorio, selIds)
       if (comentarioData === null) return false
       comentario = comentarioData?.mensaje || ''
       destinatarioId = comentarioData?.destinatarioId || null
+      modoComentario = comentarioData?.modo || null
+    } else if (String(comentario || '').trim()) {
+      modoComentario = await resolverModoSiHayHistorial(selIds, 'validacion')
+      if (modoComentario == null) return false
     }
     registrarUndoPresupuesto('Validación Interventoría (selección)', selIds)
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
@@ -3640,7 +3719,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       })
       if (res.ok) {
         pptoPostValidacionServidorOk()
-        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId, modoComentario)
         lanzarClaraLinkEstado(selIds, estadoAplicado)
         return true
       }
@@ -3672,11 +3751,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const obligatorio = estadoPre === 'Pendiente' || estadoPre === 'Rechazado'
     let comentario = comentarioPreset
     let destinatarioId = null
+    let modoComentario = null
     if (!skipPedirComentario) {
-      const comentarioData = await pedirComentario('validacion', obligatorio)
+      const comentarioData = await pedirComentario('validacion', obligatorio, selIds)
       if (comentarioData === null) return false
       comentario = comentarioData?.mensaje || ''
       destinatarioId = comentarioData?.destinatarioId || null
+      modoComentario = comentarioData?.modo || null
+    } else if (String(comentario || '').trim()) {
+      modoComentario = await resolverModoSiHayHistorial(selIds, 'validacion')
+      if (modoComentario == null) return false
     }
     registrarUndoPresupuesto('Depuración (selección)', selIds)
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
@@ -3690,7 +3774,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       })
       if (res.ok) {
         pptoPostValidacionServidorOk()
-        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+        if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId, modoComentario)
         return true
       }
       pptoParchearRegistrosOptimista((r) => {
@@ -3729,16 +3813,39 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   async function aplicarObservacionMasiva(ids, texto) {
     const t0 = String(texto || '').trim()
     if (!t0 || !ids.length) return
+    const conPrev = ids.filter((id) => {
+      const r = registros.find((x) => x.id === id)
+      return String(r?.observacion_externa || '').trim().length > 0
+    })
+    let modo = PPTO_COMENTARIO_MODO_REPLACE
+    if (conPrev.length > 0) {
+      const elegido = await pedirModoHistorial({
+        nConHistorial: conPrev.length,
+        nTotal: ids.length,
+        etiqueta: 'observaciones',
+        titulo: 'Ya hay observaciones previas',
+      })
+      if (elegido == null) {
+        throw new Error('Actualización de observación cancelada.')
+      }
+      modo = elegido
+    }
     const res = await fetch(`${pptoEp().bulkObservacion}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids, observacion_externa: t0 }),
+      body: JSON.stringify({ ids, observacion_externa: t0, modo }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err?.detail || 'No se pudo actualizar la observación.')
     }
-    setRegistros((prev) => prev.map((r) => (ids.includes(r.id) ? { ...r, observacion_externa: t0 } : r)))
+    setRegistros((prev) => prev.map((r) => {
+      if (!ids.includes(r.id)) return r
+      const nextObs = modo === PPTO_COMENTARIO_MODO_APPEND
+        ? pptoConcatenarObservacion(r.observacion_externa, t0)
+        : t0
+      return { ...r, observacion_externa: nextObs }
+    }))
   }
 
   async function aplicarMasivoCapItem({ capitulo, item, precioSeleccionado, observacion }) {
@@ -3848,7 +3955,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }).filter(Boolean)
 
     if (anNum != null || espNum != null) {
-      const comentarioData = await pedirComentario('dims', true)
+      const comentarioData = await pedirComentario('dims', true, ids)
       if (comentarioData === null) throw new Error('Operación cancelada.')
 
       registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
@@ -3892,7 +3999,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         throw new Error(typeof detail === 'string' ? detail : 'No se pudieron aplicar las dimensiones.')
       }
       const comentario = comentarioData?.mensaje || ''
-      if (comentario.trim()) await crearComentarios(ids, 'dims', comentario, comentarioData?.destinatarioId || null)
+      if (comentario.trim()) await crearComentarios(ids, 'dims', comentario, comentarioData?.destinatarioId || null, comentarioData?.modo || null)
       cargarCapitulos({ silent: true }).catch(() => {})
     }
     if (obs) await aplicarObservacionMasiva(ids, obs)
@@ -3983,7 +4090,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (esSellado(reg) && !puedeReabrirTrasAprob) return
     let motivoReap = null
     if (esSellado(reg) && puedeReabrirTrasAprob) {
-      const com = await pedirComentario('reapertura', true)
+      const com = await pedirComentario('reapertura', true, [id])
       if (com == null) return
       motivoReap = String(com.mensaje || '').trim()
       if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
@@ -4041,7 +4148,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       if (just.comentarioTrazabilidad) {
         const c = just.comentarioTrazabilidad
-        await crearComentarios([id], c.tipo, c.mensaje, c.destinatarioId)
+        await crearComentarios([id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
       }
       cargarCapitulos({ silent: true }).catch(() => {})
     } else {
@@ -4213,10 +4320,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return
     }
     const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
-    const comentarioData = await pedirComentario('validacion', obligatorio)
+    const comentarioData = await pedirComentario('validacion', obligatorio, [id])
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const modoComentario = comentarioData?.modo || null
     registrarUndoPresupuesto('Validación Interventoría', [id])
     pptoIniciarValidacionOptimista((r) => aplicarCambioEstadoLocal(r, [id], nuevoEstado))
     try {
@@ -4232,7 +4340,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return
       }
       pptoPostValidacionServidorOk()
-      if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
+      if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId, modoComentario)
       lanzarClaraLinkEstado([id], nuevoEstado)
     } finally {
       pptoFinValidacionOptimista()
@@ -4243,10 +4351,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
     const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
-    const comentarioData = await pedirComentario('validacion', obligatorio)
+    const comentarioData = await pedirComentario('validacion', obligatorio, [id])
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const modoComentario = comentarioData?.modo || null
     registrarUndoPresupuesto('Depuración', [id])
     pptoIniciarValidacionOptimista((r) => aplicarCambioPreIntervLocal(r, [id], nuevoEstado))
     try {
@@ -4268,7 +4377,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return
       }
       pptoPostValidacionServidorOk()
-      if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
+      if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId, modoComentario)
     } finally {
       pptoFinValidacionOptimista()
     }
@@ -4286,11 +4395,12 @@ async function darDeBaja(id) {
         return
       }
     }
-    const comentarioData = await pedirComentario('validacion', true)
+    const comentarioData = await pedirComentario('validacion', true, [id])
     if (comentarioData === null) return
     await ejecutarDarDeBajaLote([id], {
       comentario: comentarioData?.mensaje || '',
       destinatarioId: comentarioData?.destinatarioId || null,
+      modoComentario: comentarioData?.modo || null,
       etiquetaComentario: '[BAJA]',
       resolverReg: (iid) => registros.find((rr) => rr.id === iid),
       alTerminarSeleccion: () => {
@@ -4851,17 +4961,18 @@ async function restaurar(id) {
                       return
                     }
                     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
-                    const comentarioData = await pedirComentario('validacion', obligatorio)
+                    const comentarioData = await pedirComentario('validacion', obligatorio, ids)
                     if (comentarioData === null) return
                     const comentario = comentarioData?.mensaje || ''
                     const destinatarioId = comentarioData?.destinatarioId || null
+                    const modoComentario = comentarioData?.modo || null
                     registrarUndoPresupuesto('Validación Interventoría (tramo)', ids)
                     const res = await fetch(`${pptoEp().bulkEstado}`, {
                       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify({ ids, revisado: estado })
                     })
                     if (res.ok) {
-                      if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioId)
+                      if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioId, modoComentario)
                       lanzarClaraLinkEstado(ids, estado)
                       setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, ids, estado)))
                       setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
@@ -4896,11 +5007,12 @@ async function restaurar(id) {
                                     })
                                     if (idsBaja.length === 0) return
                                     if (!(await validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id)))) return
-                                    const comentarioData = await pedirComentario('validacion', true)
+                                    const comentarioData = await pedirComentario('validacion', true, idsBaja)
                                     if (comentarioData === null) return
                                     await ejecutarDarDeBajaLote(idsBaja, {
                                       comentario: comentarioData?.mensaje || '',
                                       destinatarioId: comentarioData?.destinatarioId || null,
+                                      modoComentario: comentarioData?.modo || null,
                                       etiquetaComentario: '[BAJA]',
                                       resolverReg: (id) => regs.find((x) => x.id === id),
                                       alTerminarSeleccion: () => setSelTramoTab(prev => ({ ...prev, [key]: new Set() })),
@@ -5556,7 +5668,7 @@ async function restaurar(id) {
                               const d = await res.json()
                               if (justDims.comentarioTrazabilidad) {
                                 const c = justDims.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
                               }
                               if (d && d.id) {
                                 setModalDetallePpto(d)
@@ -5611,7 +5723,7 @@ async function restaurar(id) {
                             if (res.ok) {
                               if (justTipo.comentarioTrazabilidad) {
                                 const c = justTipo.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
                               }
                               const d = await res.json()
                               const nuevoTipo = d?.tipo_ejecucion || popupTipoEjecucion
@@ -5686,7 +5798,7 @@ async function restaurar(id) {
                             setPopupMsg('')
                             let motivoReap = null
                             if (esSellado(r) && puedeReabrirTrasAprob) {
-                              const com = await pedirComentario('reapertura', true)
+                              const com = await pedirComentario('reapertura', true, [r.id])
                               if (com == null) { return }
                               motivoReap = String(com.mensaje || '').trim()
                               if (motivoReap.length < MIN_JUSTIFICACION_INTERV) {
@@ -5720,7 +5832,7 @@ async function restaurar(id) {
                             if (res.ok) {
                               if (justCap.comentarioTrazabilidad) {
                                 const c = justCap.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
                               }
                               const d = await res.json()
                               if (d && d.id) {
@@ -5956,13 +6068,24 @@ async function restaurar(id) {
               <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
                 <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
                   style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'var(--cc-label)',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
-                <button onClick={() => {
+                <button onClick={async () => {
                   if (!valido) {
                     window.alert(mensajeJustificacionCorta(lenTxt, minLen, esIntervMotivo))
                     return
                   }
-                  modalComentario.resolve({ mensaje: textoComentario, destinatarioId: destinatarioComentario || null });
-                  setModalComentario(null);
+                  const idsHist = Array.isArray(modalComentario.ids) ? modalComentario.ids : []
+                  const msg = String(textoComentario || '').trim()
+                  let modo = PPTO_COMENTARIO_MODO_APPEND
+                  if (msg && idsHist.length) {
+                    modo = await resolverModoSiHayHistorial(idsHist, modalComentario.tipo)
+                    if (modo == null) return
+                  }
+                  modalComentario.resolve({
+                    mensaje: textoComentario,
+                    destinatarioId: destinatarioComentario || null,
+                    modo,
+                  })
+                  setModalComentario(null)
                 }}
                   style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'var(--cc-label)',fontWeight:'700',cursor:valido?'pointer':'not-allowed',opacity:valido?1:0.85 }}>
                   {modalComentario.obligatorio ? '✓ Confirmar' : '✓ Continuar'}
@@ -5972,6 +6095,23 @@ async function restaurar(id) {
           </div>
         )
       })()}
+
+      <PptoComentarioModoModal
+        open={modalModoHistorial}
+        t={t}
+        onCancel={() => {
+          modalModoHistorial?.resolve?.(null)
+          setModalModoHistorial(null)
+        }}
+        onAppend={(modo) => {
+          modalModoHistorial?.resolve?.(modo || PPTO_COMENTARIO_MODO_APPEND)
+          setModalModoHistorial(null)
+        }}
+        onReplace={(modo) => {
+          modalModoHistorial?.resolve?.(modo || PPTO_COMENTARIO_MODO_REPLACE)
+          setModalModoHistorial(null)
+        }}
+      />
 
       {/* ── Modal hilo de comentarios ── */}
       {modalHilo && (() => {
@@ -6033,17 +6173,14 @@ async function restaurar(id) {
                 <button id="btn-nuevo-coment" disabled={!nuevoComentTexto.trim()}
                   onClick={async () => {
                     if (!nuevoComentTexto.trim()) return
-                    await fetch(`${API}/presupuesto/${contratoId}/comentarios/bulk`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-                      body: JSON.stringify({
-                        presupuesto_ids: [modalHilo.registroId],
-                        tipo: modalHilo.tipo,
-                        mensaje: nuevoComentTexto.trim(),
-                        usuario_nombre: usuario?.nombre || 'Usuario',
-                      })
-                    })
                     const msg = nuevoComentTexto.trim()
+                    const ok = await crearComentarios(
+                      [modalHilo.registroId],
+                      modalHilo.tipo,
+                      msg,
+                      null,
+                    )
+                    if (!ok) return
                     setNuevoComentTexto('')
                     await abrirHilo(modalHilo.registroId, modalHilo.tipo, { preserveReplyDrafts: true })
                     // Actualizar resumen en popup de tramos
@@ -6685,11 +6822,12 @@ async function restaurar(id) {
                       return
                     }
                     if (!(await validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id)))) return
-                    const comentarioData = await pedirComentario('validacion', true)
+                    const comentarioData = await pedirComentario('validacion', true, idsBaja)
                     if (comentarioData === null) return
                     await ejecutarDarDeBajaLote(idsBaja, {
                       comentario: comentarioData?.mensaje || '',
                       destinatarioId: comentarioData?.destinatarioId || null,
+                      modoComentario: comentarioData?.modo || null,
                       etiquetaComentario: '[BAJA MASIVA]',
                       resolverReg: (id) => registros.find((rr) => rr.id === id),
                       alTerminarSeleccion: () => setSeleccionados(new Set()),
