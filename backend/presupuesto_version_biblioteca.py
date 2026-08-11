@@ -653,6 +653,7 @@ def fetch_panel_validacion_biblioteca(
     from presupuesto_helpers import (
         _presupuesto_aplica_filtro_interventoria,
         _presupuesto_q_estructura,
+        _presupuesto_q_filtro_infraestructura_via_pk_ids,
         _presupuesto_q_filtros_ubicacion,
         _presupuesto_q_visibilidad_interventoria,
     )
@@ -679,12 +680,17 @@ def fetch_panel_validacion_biblioteca(
             tramos=filtros.get("tramos") if len(filtros.get("tramos") or []) > 1 else None,
             calzada=filtros.get("calzadas", [None])[0] if len(filtros.get("calzadas") or []) == 1 else None,
             calzadas=filtros.get("calzadas") if len(filtros.get("calzadas") or []) > 1 else None,
-            infraestructura=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
-            infraestructuras=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
             competencia=filtros.get("competencias", [None])[0] if len(filtros.get("competencias") or []) == 1 else None,
             competencias=filtros.get("competencias") if len(filtros.get("competencias") or []) > 1 else None,
             und=filtros.get("unds", [None])[0] if len(filtros.get("unds") or []) == 1 else None,
             unds=filtros.get("unds") if len(filtros.get("unds") or []) > 1 else None,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q,
+            sb,
+            int(contrato_id),
+            single=filtros.get("infraestructuras", [None])[0] if len(filtros.get("infraestructuras") or []) == 1 else None,
+            multi=filtros.get("infraestructuras") if len(filtros.get("infraestructuras") or []) > 1 else None,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,
