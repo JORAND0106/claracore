@@ -8,7 +8,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from presupuesto_helpers import _presupuesto_q_estructura, _presupuesto_q_filtros_ubicacion
+from presupuesto_helpers import (
+    _presupuesto_q_estructura,
+    _presupuesto_q_filtro_infraestructura_via_pk_ids,
+    _presupuesto_q_filtros_ubicacion,
+)
 
 PAGE = 1000
 _TIPO_EJEC_DEFAULT = "Presupuesto de Obra"
@@ -58,12 +62,17 @@ def _aplicar_filtros_listado(
         tramos=f.get("tramos"),
         calzada=f.get("calzada"),
         calzadas=f.get("calzadas"),
-        infraestructura=f.get("infraestructura"),
-        infraestructuras=f.get("infraestructuras"),
         competencia=f.get("competencia"),
         competencias=f.get("competencias"),
         und=f.get("und"),
         unds=f.get("unds"),
+    )
+    q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+        q,
+        supabase,
+        int(contrato_id),
+        single=f.get("infraestructura"),
+        multi=f.get("infraestructuras"),
     )
     q = _presupuesto_q_filtros_ubicacion(
         q,

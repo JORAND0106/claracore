@@ -132,8 +132,6 @@ def _presupuesto_q_estructura(
     tramos: Optional[List[str]] = None,
     calzada: Optional[str] = None,
     calzadas: Optional[List[str]] = None,
-    infraestructura: Optional[str] = None,
-    infraestructuras: Optional[List[str]] = None,
     competencia: Optional[str] = None,
     competencias: Optional[List[str]] = None,
     und: Optional[str] = None,
@@ -143,10 +141,75 @@ def _presupuesto_q_estructura(
     q = _presupuesto_q_in_str_field(q, "item", item, items)
     q = _presupuesto_q_in_str_field(q, "tramo", tramo, tramos)
     q = _presupuesto_q_in_str_field(q, "calzada", calzada, calzadas)
-    q = _presupuesto_q_in_str_field(q, "infraestructura", infraestructura, infraestructuras)
     q = _presupuesto_q_in_str_field(q, "competencia", competencia, competencias)
     q = _presupuesto_q_in_str_field(q, "und", und, unds)
     return q
+
+
+def _presupuesto_infra_filter_vals(
+    single: Optional[str] = None,
+    multi: Optional[List[str]] = None,
+) -> List[str]:
+    """Normaliza valores de filtro Infraestructura (singular + lista)."""
+    vals = [str(x).strip() for x in _presupuesto_coerce_multi_list(multi) if str(x).strip()]
+    if not vals and single and str(single).strip():
+        vals = [str(single).strip()]
+    return list(dict.fromkeys(vals))
+
+
+def _pk_ids_codigos_por_infraestructura(sb, contrato_id: int, vals: List[str]) -> List[str]:
+    """Códigos CAPA (pk_id) del maestro cuya infraestructura está en `vals`."""
+    if not vals:
+        return []
+    codes: List[str] = []
+    offset = 0
+    while True:
+        qq = sb.table("pk_ids").select("pk_id").eq("contrato_id", int(contrato_id))
+        if len(vals) == 1:
+            qq = qq.eq("infraestructura", vals[0])
+        else:
+            qq = qq.in_("infraestructura", vals)
+        batch = qq.order("id").range(offset, offset + 999).execute().data or []
+        for r in batch:
+            c = str((r or {}).get("pk_id") or "").strip()
+            if c:
+                codes.append(c)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return list(dict.fromkeys(codes))
+
+
+def _presupuesto_q_filtro_infraestructura_via_pk_ids(
+    q,
+    sb,
+    contrato_id: int,
+    *,
+    single: Optional[str] = None,
+    multi: Optional[List[str]] = None,
+    max_pks: int = 5000,
+):
+    """
+    Filtra presupuesto por infraestructura del maestro `pk_ids`.
+
+    La columna no existe en `presupuesto`; la grilla la obtiene por enrich
+    (`pk_ids.infraestructura` vía `pk_id`). Aquí se traduce a `.in_(pk_id, …)`.
+    """
+    vals = _presupuesto_infra_filter_vals(single, multi)
+    if not vals:
+        return q
+    if len(vals) > 200:
+        raise HTTPException(status_code=422, detail="Máximo 200 valores en filtro infraestructura")
+    codes = _pk_ids_codigos_por_infraestructura(sb, contrato_id, vals)
+    if not codes:
+        # Ningún PK del maestro tiene esas infraestructuras → resultado vacío.
+        return q.eq("id", -1)
+    if len(codes) > max_pks:
+        raise HTTPException(
+            status_code=422,
+            detail="Demasiados PK asociados al filtro de infraestructura; acote el criterio.",
+        )
+    return _presupuesto_q_in_str_field(q, "pk_id", None, codes, max_items=max_pks)
 
 
 def _presupuesto_q_rango_numerico(q, col: str, desde: Optional[float], hasta: Optional[float]):

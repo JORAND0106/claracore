@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
     _presupuesto_q_estructura,
+    _presupuesto_q_filtro_infraestructura_via_pk_ids,
     _presupuesto_q_filtros_ubicacion,
     _presupuesto_q_visibilidad_interventoria,
     _so_reg_filtro_abs_solape,
@@ -9901,12 +9902,14 @@ def get_presupuesto(
             tramos=tramos,
             calzada=calzada,
             calzadas=calzadas,
-            infraestructura=infraestructura,
-            infraestructuras=infraestructuras,
             competencia=competencia,
             competencias=competencias,
             und=und,
             unds=unds,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q, supabase, contrato_id,
+            single=infraestructura, multi=infraestructuras,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,
@@ -10013,12 +10016,14 @@ def get_presupuesto_conteo(
         tramos=tramos,
         calzada=calzada,
         calzadas=calzadas,
-        infraestructura=infraestructura,
-        infraestructuras=infraestructuras,
         competencia=competencia,
         competencias=competencias,
         und=und,
         unds=unds,
+    )
+    q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+        q, supabase, contrato_id,
+        single=infraestructura, multi=infraestructuras,
     )
     q = _presupuesto_q_filtros_ubicacion(
         q,
@@ -10179,7 +10184,22 @@ def _presupuesto_filtros_opciones_legacy(
     )
     tramos = sorted(set(r["tramo"] for r in rows if r.get("tramo")))
     calzadas = sorted(set(r["calzada"] for r in rows if r.get("calzada")))
-    infraestructuras = sorted(set(r["infraestructura"] for r in rows if r.get("infraestructura")))
+    try:
+        pk_rows = (
+            supabase.table("pk_ids")
+            .select("infraestructura")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        pk_rows = []
+    infraestructuras = sorted({
+        str(r.get("infraestructura")).strip()
+        for r in pk_rows
+        if r.get("infraestructura") and str(r.get("infraestructura")).strip()
+    })
     competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
     unds = sorted(set(r["und"] for r in rows if r.get("und")))
     revisados = presupuesto_estados_validacion_opciones(
@@ -10244,7 +10264,7 @@ def _presupuesto_fetch_filtros_source_rows(
         q = (
             supabase.table("presupuesto")
             .select(
-                "capitulo, item, tramo, calzada, infraestructura, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
+                "capitulo, item, tramo, calzada, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
             )
             .eq("contrato_id", contrato_id)
             .eq("dado_de_baja", False)
@@ -10947,12 +10967,14 @@ def _presupuesto_fetch_export_rows_crudo(
             tramos=body.tramos,
             calzada=body.calzada,
             calzadas=body.calzadas,
-            infraestructura=body.infraestructura,
-            infraestructuras=body.infraestructuras,
             competencia=body.competencia,
             competencias=body.competencias,
             und=body.und,
             unds=body.unds,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q, supabase, contrato_id,
+            single=body.infraestructura, multi=body.infraestructuras,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,
@@ -11008,12 +11030,14 @@ def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoIn
             tramos=body.tramos,
             calzada=body.calzada,
             calzadas=body.calzadas,
-            infraestructura=body.infraestructura,
-            infraestructuras=body.infraestructuras,
             competencia=body.competencia,
             competencias=body.competencias,
             und=body.und,
             unds=body.unds,
+        )
+        q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
+            q, supabase, contrato_id,
+            single=body.infraestructura, multi=body.infraestructuras,
         )
         q = _presupuesto_q_filtros_ubicacion(
             q,
