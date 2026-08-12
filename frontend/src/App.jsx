@@ -1104,7 +1104,7 @@ function ModalOlvide({ t, onClose, initialEmail = '', initialPaso = 'email' }) {
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔑</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
         <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>
-          El administrador autorizará el acceso y te enviará la contraseña temporal por correo
+          Te avisaremos por correo con la contraseña temporal y el enlace para restablecerla
         </p>
       </div>
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"

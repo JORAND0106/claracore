@@ -1,12 +1,15 @@
-"""Gate de estado Aprobado para notificaciones automáticas."""
+"""Gate de estado Aprobado para notificaciones; visibilidad pendiente/aprobado."""
 from __future__ import annotations
 
 from usuarios_notif_elegibilidad import (
     ESTADO_APROBADO,
     filtrar_usuarios_para_notificaciones_automaticas,
+    filtrar_usuarios_visibles_gestion,
     normalizar_estado_usuario,
     usuario_estado_es_aprobado,
+    usuario_estado_es_rechazado,
     usuario_puede_recibir_notificaciones_automaticas,
+    usuario_visible_en_gestion,
 )
 
 
@@ -43,3 +46,17 @@ def test_filtrar_lista_excluye_pendiente_y_rechazado():
     ]
     out = filtrar_usuarios_para_notificaciones_automaticas(rows)
     assert [r["id"] for r in out] == [1, 4]
+
+
+def test_rechazado_no_visible_en_gestion():
+    assert usuario_visible_en_gestion("pendiente") is True
+    assert usuario_visible_en_gestion("aprobado") is True
+    assert usuario_visible_en_gestion("rechazado") is False
+    assert usuario_estado_es_rechazado("Rechazado") is True
+    rows = [
+        {"id": 1, "estado": "aprobado"},
+        {"id": 2, "estado": "pendiente"},
+        {"id": 3, "estado": "rechazado"},
+        {"id": 4, "estado": None},
+    ]
+    assert [r["id"] for r in filtrar_usuarios_visibles_gestion(rows)] == [1, 2]
