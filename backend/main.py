@@ -1156,8 +1156,10 @@ class PresupuestoUpdate(BaseModel):
     costo_directo: Optional[float] = None
     revisado: Optional[str] = None
     observacion_externa: Optional[str] = None
-    # Solo contratista, registro sellado: explica por qué reabre; interventoría no puede "reversar" desde aquí.
+    # Registro sellado: motivo de reapertura (≥15). Permiso: «editar registros presupuesto» (editar) o Desarrollador.
     motivo_edicion_tras_sellado: Optional[str] = None
+    # Opcional: notificar a este usuario al reabrir (mismo criterio que comentarios/notificaciones).
+    destinatario_id: Optional[int] = None
     # Contratista: al editar datos con revisado Pendiente/Rechazado/Aprobado (sin sellado), motivo ≥15 y reset a No Revisado.
     motivo_edicion_con_estado_interv: Optional[str] = None
     tipo_ejecucion: Optional[str] = None
@@ -1203,6 +1205,13 @@ class PresupuestoBulkObservacion(BaseModel):
     observacion_externa: str
     # append: concatena al texto previo por registro; replace (default): sobrescribe.
     modo: Optional[str] = "replace"
+
+
+class PresupuestoBulkReabrir(BaseModel):
+    """Reapertura masiva de registros sellados (motivo ≥15 + destinatario opcional)."""
+    ids: List[int]
+    motivo: str
+    destinatario_id: Optional[int] = None
 
 class ComentariosValidacionIds(BaseModel):
     """Lista de filas `presupuesto` para comentarios de validación; POST evita query strings gigantes (5xx en proxy)."""
@@ -2260,9 +2269,67 @@ def _siguiente_slug_unico(base: str, exclude_id: Optional[int]) -> str:
 
 
 def _es_rol_contratista_ppto(current_user) -> bool:
-    """Contratista u operativo: único perfil que puede reabrir un registro sellado con motivo (no la Interventoría vía API)."""
+    """Contratista u operativo (p. ej. reset de estado Interventoría al editar sin sellado)."""
     r = (current_user.get("rol_nombre") or "").strip().lower()
     return r in ("contratista", "operativo contratista")
+
+
+def _puede_reabrir_presupuesto_sellado(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
+    """Desarrollador o matriz «editar registros presupuesto» con acción editar."""
+    if _es_desarrollador(current_user):
+        return True
+    return _cargo_permiso_editar_registros_presupuesto(current_user, contrato_id)
+
+
+def _notificar_reapertura_presupuesto(
+    current_user,
+    *,
+    contrato_id: Optional[int],
+    destinatario_id: Optional[int],
+    motivo: str,
+    ids: Optional[List[int]] = None,
+) -> None:
+    """Notificación MENSAJE_DIRECTO al destinatario elegido en reapertura."""
+    if not destinatario_id or not str(motivo or "").strip():
+        return
+    try:
+        uid = int(current_user.get("sub", 0) or 0)
+        if not uid:
+            return
+        dest = int(destinatario_id)
+        id_list = [int(x) for x in (ids or []) if x is not None]
+        n = len(id_list)
+        asunto = (
+            "🔓 Reapertura de registro sellado"
+            if n <= 1
+            else f"🔓 Reapertura de {n} registros sellados"
+        )
+        rcid = _resolver_contrato_notificacion(current_user, dest, contrato_id)
+        supabase.table("notificaciones").insert(
+            {
+                "remitente_id": uid,
+                "remitente_nombre": _remitente_nombre_from_user(current_user),
+                "destinatario_id": dest,
+                "asunto": asunto,
+                "mensaje": str(motivo).strip(),
+                "tipo": "MENSAJE_DIRECTO",
+                "modulo": "PRESUPUESTO",
+                "contrato_id": rcid,
+                "entidad_tipo": "presupuesto",
+                "entidad_id": str(id_list[0]) if id_list else None,
+            }
+        ).execute()
+    except Exception:
+        try:
+            _log_api.warning(
+                "notif reapertura presupuesto falló contrato_id=%s dest=%s",
+                contrato_id,
+                destinatario_id,
+            )
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -11451,6 +11518,11 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     motivo_reap = str(_mr).strip() if _mr is not None else ""
     _mi = data.pop("motivo_edicion_con_estado_interv", None)
     motivo_interv = str(_mi).strip() if _mi is not None else ""
+    _dest_reap = data.pop("destinatario_id", None)
+    try:
+        destinatario_reap = int(_dest_reap) if _dest_reap is not None else None
+    except (TypeError, ValueError):
+        destinatario_reap = None
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
     _cid_row = prev_row.get("contrato_id")
@@ -11461,27 +11533,25 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         )
     reabrir = False
     if prev_row.get("sellado"):
-        if _es_desarrollador(current_user):
+        if not _puede_reabrir_presupuesto_sellado(current_user, _cid_row):
             raise HTTPException(
                 status_code=403,
-                detail="Registro sellado (aprobado por Interventoría): el Desarrollador no lo modifica desde aquí. Contacte soporte si aplica un caso excepcional.",
-            )
-        if not _es_rol_contratista_ppto(current_user):
-            raise HTTPException(
-                status_code=403,
-                detail="Registro sellado (aprobado por Interventoría): no puede modificarse salvo el flujo de reapertura del contratista.",
+                detail=(
+                    "Registro sellado (aprobado por Interventoría): no puede modificarse. "
+                    "Requiere permiso «editar registros presupuesto» (editar) para reabrir con motivo."
+                ),
             )
         if not motivo_reap or len(motivo_reap) < 15:
             raise HTTPException(
                 status_code=400,
                 detail="Debe consignar un motivo de reapertura (mínimo 15 caracteres) para editar un registro aprobado por Interventoría.",
             )
-        toca = [k for k in data if k in _PPTO_REABRIR_CAMPOS]
-        if not toca:
+        if destinatario_reap is None:
             raise HTTPException(
                 status_code=400,
-                detail="Indique al menos un dato a modificar (p. ej. capítulo, ítem o vlr. unitario) además del motivo de reapertura.",
+                detail="Debe indicar un destinatario para notificar la reapertura.",
             )
+        # Motivo basta para reabrir; campos de _PPTO_REABRIR_CAMPOS son opcionales (edición + reapertura).
         for k in ("revisado", "sellado"):
             data.pop(k, None)
         data["sellado"] = False
@@ -11604,7 +11674,7 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                 {
                     "presupuesto_id": item_id,
                     "tipo": "validacion",
-                    "mensaje": f"[Reapertura tras aprobación Interventoría — edición por contratista] {motivo_reap}",
+                    "mensaje": f"[Reapertura tras aprobación Interventoría] {motivo_reap}",
                     "usuario_nombre": nombre_u,
                     "parent_id": None,
                 }
@@ -11614,6 +11684,13 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                 _log_api.warning("comentario reapertura sellado: insert falló item_id=%s", item_id)
             except Exception:
                 pass
+        _notificar_reapertura_presupuesto(
+            current_user,
+            contrato_id=_cid_row,
+            destinatario_id=destinatario_reap,
+            motivo=motivo_reap,
+            ids=[item_id],
+        )
     if reset_interv_comment:
         try:
             nombre_u = current_user.get("nombre") or current_user.get("email") or "Usuario"
@@ -12667,6 +12744,111 @@ def bulk_observacion_externa(
         det_bulk,
     )
     return {"actualizados": len(ids_ok), "modo": modo}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-reabrir")
+def bulk_reabrir_sellados(
+    contrato_id: int, body: PresupuestoBulkReabrir, current_user=Depends(get_current_user)
+):
+    """Reabre registros sellados: sellado=false, revisado=No Revisado, comentario + notificación."""
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _puede_reabrir_presupuesto_sellado(current_user, contrato_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "No tiene permiso para reabrir registros sellados "
+                "(requiere «editar registros presupuesto» con editar)."
+            ),
+        )
+    motivo = str(body.motivo or "").strip()
+    if len(motivo) < 15:
+        raise HTTPException(
+            status_code=400,
+            detail="Debe consignar un motivo de reapertura (mínimo 15 caracteres).",
+        )
+    if body.destinatario_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Debe indicar un destinatario para notificar la reapertura.",
+        )
+    rows = (
+        supabase.table("presupuesto")
+        .select(
+            "id, contrato_id, id_pol, sellado, revisado, validado_por, validado_en"
+        )
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
+    rows_ok = [
+        r
+        for r in rows
+        if int(r.get("contrato_id") or 0) == int(contrato_id) and r.get("sellado")
+    ]
+    if not rows_ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Ningún registro sellado válido para reabrir en este contrato.",
+        )
+    ids_ok = [int(r["id"]) for r in rows_ok]
+    patch = {
+        "sellado": False,
+        "revisado": "No Revisado",
+        "validado_por": None,
+        "validado_en": None,
+        "updated_at": "now()",
+    }
+    supabase.table("presupuesto").update(patch).in_("id", ids_ok).execute()
+    nombre_u = current_user.get("nombre") or current_user.get("email") or "Usuario"
+    msg_com = f"[Reapertura tras aprobación Interventoría] {motivo}"
+    try:
+        supabase.table("comentarios").insert(
+            [
+                {
+                    "presupuesto_id": rid,
+                    "tipo": "validacion",
+                    "mensaje": msg_com,
+                    "usuario_nombre": nombre_u,
+                    "parent_id": None,
+                }
+                for rid in ids_ok
+            ]
+        ).execute()
+    except Exception:
+        try:
+            _log_api.warning("comentarios bulk-reabrir fallaron contrato_id=%s n=%s", contrato_id, len(ids_ok))
+        except Exception:
+            pass
+    _notificar_reapertura_presupuesto(
+        current_user,
+        contrato_id=contrato_id,
+        destinatario_id=body.destinatario_id,
+        motivo=motivo,
+        ids=ids_ok,
+    )
+    audit_filas = [
+        (dict(r), {**dict(r), **{k: v for k, v in patch.items() if k != "updated_at"}})
+        for r in rows_ok
+    ]
+    det_bulk = {
+        "contrato_id": contrato_id,
+        "cantidad_registros": len(ids_ok),
+        "reapertura_tras_sellado": True,
+        "destinatario_id": body.destinatario_id,
+    }
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_reabrir",
+        str(contrato_id),
+        det_bulk,
+    )
+    return {"reabiertos": len(ids_ok), "ids": ids_ok}
 
 
 @app.post("/presupuesto/{contrato_id}/sincronizar-vlr-unitario")

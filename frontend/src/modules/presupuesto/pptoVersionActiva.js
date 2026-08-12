@@ -80,6 +80,7 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
       bulkPreInterv: `${base}/bulk-pre-interv`,
       bulkTipoEjecucion: `${base}/bulk-tipo-ejecucion`,
       bulkObservacion: `${base}/bulk-observacion`,
+      bulkReabrir: `${base}/bulk-reabrir`,
       agregarCantidad: `${base}/agregar-cantidad`,
       filtros: `${base}/filtros`,
       graficosUpload: `${base}/graficos/upload`,
@@ -111,6 +112,7 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
     bulkPreInterv: `${vb}/bulk-pre-interv`,
     bulkTipoEjecucion: `${vb}/bulk-tipo-ejecucion`,
     bulkObservacion: `${vb}/bulk-observacion`,
+    bulkReabrir: null,
     agregarCantidad: `${vb}/bulk`,
     filtros: `${API}/presupuesto/${cid}/filtros`,
     // Gráficos de memoria solo se asocian al presupuesto vivo.

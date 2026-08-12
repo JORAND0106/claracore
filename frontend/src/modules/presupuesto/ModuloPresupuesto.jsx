@@ -779,15 +779,17 @@ useEffect(() => {
   const puedeSincronizarVlrUnitario = (
     esDeveloper || !!(_permPpto?.editar) || !!(_permPpto?.crear)
   ) && !versionVistaTemporal
-  /** Solo contratista (no Desarrollador) con permiso editar: puede reabrir registro sellado con motivo obligatorio. */
+  /** Cualquier usuario con permiso editar (o Desarrollador): puede reabrir sellado con motivo + destinatario. */
   const esRolContratistaPpto = (() => {
     const r = (usuario?.rol_nombre || '').toLowerCase().trim()
     return r === 'contratista' || r === 'operativo contratista'
   })()
-  const puedeReabrirTrasAprob = esRolContratistaPpto && !esDeveloper && (_permPpto?.editar ?? false) && !versionVistaTemporal
+  const puedeReabrirTrasAprob = (esDeveloper || (_permPpto?.editar ?? false)) && !versionVistaTemporal
   const puedeValidar = (esDeveloper || (_permPpto?.validar  ?? false)) && !versionVistaTemporal
   const puedeEliminar = (esDeveloper || (_permPpto?.eliminar ?? false)) && !versionVistaTemporal
   const esSellado = (r) => r?.sellado === true
+  const puedeSeleccionarFilaPpto = (r) => !esSellado(r) || puedeReabrirTrasAprob
+  const filaPptoNoSeleccionable = (r) => !puedeSeleccionarFilaPpto(r)
   const aplicaReglasCadPresupuesto = Number(contratoId) !== PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
   const MSG_BAJA_DESDE_PLANO =
     'Este registro está enlazado al plano (ID-POL). Para darlo de baja desde la web, abra AutoCAD con el DWG del contrato y pulse «Sincronizar» en SicoeCAD con el mismo usuario de ClaraCore (debe verse «DWG Enlazado» arriba). Si no hay enlace activo, gestione la baja desde SicoeCAD en el dibujo.'
@@ -3774,6 +3776,70 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     return [...seleccionados].filter((id) => !esSellado(registros.find((r) => r.id === id)))
   }
 
+  function idsSelladosSeleccionados() {
+    return [...seleccionados].filter((id) => esSellado(registros.find((r) => r.id === id)))
+  }
+
+  /** Reapertura masiva: motivo + destinatario → No Revisado / sellado=false + notificación. */
+  async function reabrirSelladosSeleccionados() {
+    if (!puedeReabrirTrasAprob || versionActiva?.id) return
+    const url = pptoEp().bulkReabrir
+    if (!url) {
+      window.alert('La reapertura masiva solo aplica al presupuesto vigente.')
+      return
+    }
+    const ids = idsSelladosSeleccionados()
+    if (!ids.length) {
+      window.alert('Seleccione uno o más registros sellados para reabrir.')
+      return
+    }
+    const com = await pedirComentario('reapertura', true, ids)
+    if (com == null) return
+    const motivo = String(com.mensaje || '').trim()
+    const destinatarioId = com.destinatarioId ? parseInt(com.destinatarioId, 10) : null
+    if (motivo.length < MIN_JUSTIFICACION_INTERV) {
+      window.alert(mensajeJustificacionCorta(motivo.length, MIN_JUSTIFICACION_INTERV, true))
+      return
+    }
+    if (!destinatarioId) {
+      window.alert('Seleccione un destinatario para notificar la reapertura.')
+      return
+    }
+    registrarUndoPresupuesto('Reapertura de registros sellados', ids)
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids, motivo, destinatario_id: destinatarioId }),
+    })
+    if (!res.ok) {
+      let msg = 'No se pudo reabrir los registros sellados.'
+      try {
+        const j = await res.json()
+        msg = j?.detail || msg
+      } catch { /* ignore */ }
+      window.alert(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      return
+    }
+    const data = await res.json().catch(() => ({}))
+    const idsOk = Array.isArray(data?.ids) ? data.ids : ids
+    setRegistros((prev) => prev.map((r) => (
+      idsOk.includes(r.id)
+        ? { ...r, sellado: false, revisado: 'No Revisado', validado_por: null, validado_en: null }
+        : r
+    )))
+    setSeleccionados((prev) => {
+      const n = new Set(prev)
+      idsOk.forEach((id) => n.delete(id))
+      return n
+    })
+    setAvisoSistema({
+      titulo: 'Reapertura',
+      mensaje: `Se reabri${idsOk.length === 1 ? 'ó 1 registro' : `eron ${idsOk.length} registros`} sellado(s). Quedaron en «No Revisado» y se notificó al destinatario.`,
+      tipo: 'ok',
+    })
+    cargarCapitulos({ silent: true }).catch(() => {})
+  }
+
   function filaResumenMasivo(r, campo, antiguo, nuevo) {
     return {
       id: r.id,
@@ -4065,11 +4131,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const reg = registros.find(rr => rr.id === id)
     if (esSellado(reg) && !puedeReabrirTrasAprob) return
     let motivoReap = null
+    let destinatarioReap = null
     if (esSellado(reg) && puedeReabrirTrasAprob) {
       const com = await pedirComentario('reapertura', true, [id])
       if (com == null) return
       motivoReap = String(com.mensaje || '').trim()
+      destinatarioReap = com.destinatarioId ? parseInt(com.destinatarioId, 10) : null
       if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
+      if (!destinatarioReap) { alert('Seleccione un destinatario para notificar la reapertura.'); return }
     }
     const body = {}
     const allowDim = puedeEditarDimensiones
@@ -4107,7 +4176,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         }
       }
     }
-    if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
+    if (motivoReap) {
+      body.motivo_edicion_tras_sellado = motivoReap
+      if (destinatarioReap) body.destinatario_id = destinatarioReap
+    }
     const just = await pedirJustificacionEdicionDetalle(reg, body, 'dims')
     if (!just.ok) return
     registrarUndoPresupuesto('Edición de registro', [id])
@@ -4151,7 +4223,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   function toggleSel(id) {
     const row = registros.find(rr => rr.id === id)
-    if (esSellado(row)) return
+    if (filaPptoNoSeleccionable(row)) return
     setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
     lastSelAnchorIdRef.current = id
   }
@@ -4163,13 +4235,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   function onSelCheckboxClick(id, e) {
     e.stopPropagation()
     const row = registrosPagina.find((rr) => rr.id === id) || registros.find((rr) => rr.id === id)
-    if (esSellado(row)) {
+    if (filaPptoNoSeleccionable(row)) {
       e.preventDefault()
       return
     }
     if (e.shiftKey && lastSelAnchorIdRef.current != null) {
       e.preventDefault()
-      const ids = idsRangoSeleccion(registrosPagina, lastSelAnchorIdRef.current, id, esSellado)
+      const ids = idsRangoSeleccion(registrosPagina, lastSelAnchorIdRef.current, id, filaPptoNoSeleccionable)
       if (ids.length) {
         setSeleccionados((prev) => {
           const n = new Set(prev)
@@ -4190,14 +4262,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   function toggleTodos() {
     const idsPagina = registrosPagina.map(r => r.id)
-    const idsNoSellados = registrosPagina.filter(r => !esSellado(r)).map(r => r.id)
-    const todosNoSelladosSeleccionados = idsNoSellados.length > 0 && idsNoSellados.every(id => seleccionados.has(id))
-    if (todosNoSelladosSeleccionados) {
+    const idsSeleccionables = registrosPagina.filter(r => puedeSeleccionarFilaPpto(r)).map(r => r.id)
+    const todosSeleccionablesMarcados = idsSeleccionables.length > 0 && idsSeleccionables.every(id => seleccionados.has(id))
+    if (todosSeleccionablesMarcados) {
       setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(i => n.delete(i)); return n })
       lastSelAnchorIdRef.current = null
     } else {
-      setSeleccionados(prev => { const n = new Set(prev); idsNoSellados.forEach(i => n.add(i)); return n })
-      if (idsNoSellados.length) lastSelAnchorIdRef.current = idsNoSellados[idsNoSellados.length - 1]
+      setSeleccionados(prev => { const n = new Set(prev); idsSeleccionables.forEach(i => n.add(i)); return n })
+      if (idsSeleccionables.length) lastSelAnchorIdRef.current = idsSeleccionables[idsSeleccionables.length - 1]
     }
   }
   useEffect(() => {
@@ -4510,8 +4582,8 @@ async function darDeBaja(id) {
             lineHeight: 1.45,
           }}
         >
-          <strong style={{ color: t.text }}>Cargo Desarrollador:</strong> la reapertura de registros sellados, el motivo al editar con estado ya validado por Interventoría y el paso a «No Revisado» en ese flujo solo aplican al perfil{' '}
-          <strong>contratista</strong> (con permiso editar presupuesto). Para probarlos, use un usuario con ese rol. Como desarrollador sí verá el botón ✏️ en el revisor de tramos (abre el detalle del registro) y la edición de dimensiones donde corresponda.
+          <strong style={{ color: t.text }}>Cargo Desarrollador:</strong> la reapertura de registros sellados (motivo + destinatario → «No Revisado») aplica a quien tenga permiso{' '}
+          <strong>editar</strong> en «editar registros presupuesto» (y a Desarrollador). El motivo al editar con estado ya validado por Interventoría <em>sin</em> sellado sigue siendo propio del perfil contratista.
         </div>
       )}
       {/* ── Modal Revisor de Tramos ─────────────────────────────────────────── */}
@@ -5571,7 +5643,7 @@ async function darDeBaja(id) {
                   )}
                   {esSellado(r) && puedeReabrirTrasAprob && (
                     <div style={{ background:'rgba(14,165,233,0.12)', border:`1px solid rgba(14,165,233,0.4)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'12px', fontSize:'var(--cc-sm)', color:'#0369A1', fontWeight:'600' }}>
-                      🔓 Como contratista puede editar capítulo/ítem y datos permitidos: al guardar se pedirá un motivo obligatorio, se anulará el sellado y el estado de Interventoría volverá a «No Revisado» para volver a validar.
+                      🔓 Puede editar este registro sellado: al guardar se pedirá destinatario y motivo (mín. 15 caracteres), se anulará el sellado y el estado de Interventoría volverá a «No Revisado».
                     </div>
                   )}
                   <div className="cc-ppto-detalle-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
@@ -5856,12 +5928,18 @@ async function darDeBaja(id) {
                           <button disabled={popupGuardando || (!popupCap && !popupItem)} onClick={async () => {
                             setPopupMsg('')
                             let motivoReap = null
+                            let destinatarioReap = null
                             if (esSellado(r) && puedeReabrirTrasAprob) {
                               const com = await pedirComentario('reapertura', true, [r.id])
                               if (com == null) { return }
                               motivoReap = String(com.mensaje || '').trim()
+                              destinatarioReap = com.destinatarioId ? parseInt(com.destinatarioId, 10) : null
                               if (motivoReap.length < MIN_JUSTIFICACION_INTERV) {
                                 window.alert(mensajeJustificacionCorta(motivoReap.length, MIN_JUSTIFICACION_INTERV, true))
+                                return
+                              }
+                              if (!destinatarioReap) {
+                                window.alert('Seleccione un destinatario para notificar la reapertura.')
                                 return
                               }
                             }
@@ -5876,6 +5954,7 @@ async function darDeBaja(id) {
                               vlr_unitario:  vlr,
                               costo_directo: Math.round(cant * vlr),
                               ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
+                              ...(destinatarioReap ? { destinatario_id: destinatarioReap } : {}),
                             }
                             if (popupCap && popupCap !== (r.capitulo || '') && !popupItem) {
                               window.alert('Cambió el capítulo: seleccione un ítem del listado de precios para ese capítulo.')
@@ -6077,7 +6156,16 @@ async function darDeBaja(id) {
           ? MIN_JUSTIFICACION_INTERV
           : MIN_JUSTIFICACION_EDICION
         const lenTxt  = textoComentario.trim().length
-        const valido  = !modalComentario.obligatorio || lenTxt >= minLen
+        const requiereDestinatario = modalComentario.tipo === 'reapertura'
+        const nIdsReap = Array.isArray(modalComentario.ids) ? modalComentario.ids.length : 0
+        const destinatariosOrdenados = [...(usuariosDestinatarios || [])].sort((a, b) => {
+          const score = (u) => (/intervent/i.test(`${u?.rol || ''} ${u?.cargo || ''}`) ? 0 : 1)
+          const d = score(a) - score(b)
+          if (d !== 0) return d
+          return String(a?.nombre || '').localeCompare(String(b?.nombre || ''), 'es')
+        })
+        const valido  = (!modalComentario.obligatorio || lenTxt >= minLen)
+          && (!requiereDestinatario || !!destinatarioComentario)
         const esIntervMotivo = modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv'
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex: modalDetallePpto ? 100020 : 6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
@@ -6085,7 +6173,7 @@ async function darDeBaja(id) {
               <div style={{ fontSize:'var(--cc-body)',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo] || TITULOS.validacion}</div>
               <div style={{ fontSize:'var(--cc-sm)',color:t.textMuted,marginBottom:'16px' }}>
                 {modalComentario.tipo === 'reapertura' ? (
-                  <>⚠️ Obligatorio (mín. 15 caracteres). Queda registrado para Interventoría: el registro pasa a «No Revisado» y deja de estar sellado.</>
+                  <>⚠️ Obligatorio: destinatario + motivo (mín. 15 caracteres). {nIdsReap > 1 ? `Se reabrirán ${nIdsReap} registros sellados` : 'El registro pasa a «No Revisado» y deja de estar sellado'}; se notifica al destinatario.</>
                 ) : modalComentario.tipo === 'contratista_edita_interv' ? (
                   <>⚠️ Obligatorio (mín. 15 caracteres). Queda registrado para Interventoría: el estado de validación pasa a «No Revisado».</>
                 ) : modalComentario.obligatorio ? (
@@ -6097,15 +6185,20 @@ async function darDeBaja(id) {
               {/* Selector de destinatario */}
               <div style={{ marginBottom:'12px' }}>
                 <div style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.textMuted,marginBottom:'6px',letterSpacing:'0.5px' }}>
-                  NOTIFICAR A (opcional)
+                  {requiereDestinatario ? 'DESTINATARIO (obligatorio)' : 'NOTIFICAR A (opcional)'}
                 </div>
                 <select value={destinatarioComentario} onChange={e => setDestinatarioComentario(e.target.value)}
-                  style={{ width:'100%',background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'8px 12px',color:destinatarioComentario ? t.text : t.textMuted,fontSize:'var(--cc-label)',cursor:'pointer' }}>
-                  <option value="">— Sin notificación —</option>
-                  {usuariosDestinatarios.map(u => (
-                    <option key={u.id} value={u.id}>{u.nombre} · {u.cargo}</option>
+                  style={{ width:'100%',background:t.inputBg,border:`1.5px solid ${requiereDestinatario && !destinatarioComentario ? '#EF4444' : t.border}`,borderRadius:'8px',padding:'8px 12px',color:destinatarioComentario ? t.text : t.textMuted,fontSize:'var(--cc-label)',cursor:'pointer' }}>
+                  <option value="">{requiereDestinatario ? '— Elija destinatario —' : '— Sin notificación —'}</option>
+                  {destinatariosOrdenados.map(u => (
+                    <option key={u.id} value={u.id}>{u.nombre} · {u.cargo || u.rol || '—'}</option>
                   ))}
                 </select>
+                {requiereDestinatario && !destinatarioComentario && (
+                  <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'6px' }}>
+                    Elija a quién notificar (usuarios del contrato; Interventoría aparece primero).
+                  </div>
+                )}
               </div>
               <div style={{ position:'relative' }}>
                 <textarea id="textarea-comentario" autoFocus value={textoComentario} onChange={e => setTextoComentario(e.target.value)}
@@ -6129,13 +6222,17 @@ async function darDeBaja(id) {
                   style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'var(--cc-label)',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
                 <button onClick={async () => {
                   if (!valido) {
+                    if (requiereDestinatario && !destinatarioComentario) {
+                      window.alert('Seleccione un destinatario para notificar la reapertura.')
+                      return
+                    }
                     window.alert(mensajeJustificacionCorta(lenTxt, minLen, esIntervMotivo))
                     return
                   }
                   const idsHist = Array.isArray(modalComentario.ids) ? modalComentario.ids : []
                   const msg = String(textoComentario || '').trim()
                   let modo = PPTO_COMENTARIO_MODO_APPEND
-                  if (msg && idsHist.length) {
+                  if (msg && idsHist.length && modalComentario.tipo !== 'reapertura') {
                     modo = await resolverModoSiHayHistorial(idsHist, modalComentario.tipo)
                     if (modo == null) return
                   }
@@ -6738,9 +6835,9 @@ async function darDeBaja(id) {
         </div>
       )}
 
-      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeAbrirEdicionMasiva || puedeEliminar || (!versionActiva?.id && !verPapelera)) && (
+      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeAbrirEdicionMasiva || puedeReabrirTrasAprob || puedeEliminar || (!versionActiva?.id && !verPapelera)) && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
-          {puedeAbrirEdicionMasiva && (
+          {(puedeAbrirEdicionMasiva || puedeReabrirTrasAprob) && (
             <>
               {seleccionados.size > 0 && (
                 <span
@@ -6750,6 +6847,7 @@ async function darDeBaja(id) {
                   {seleccionados.size} sel. · Cant. {fmtN(totalesSeleccion.cant)} · CD {fmt(totalesSeleccion.costo)}
                 </span>
               )}
+              {puedeAbrirEdicionMasiva && (
               <button
                 type="button"
                 disabled={seleccionados.size === 0}
@@ -6775,6 +6873,39 @@ async function darDeBaja(id) {
               >
                 ✏️
               </button>
+              )}
+              {puedeReabrirTrasAprob && !versionActiva?.id && !verPapelera && (
+                <button
+                  type="button"
+                  disabled={idsSelladosSeleccionados().length === 0}
+                  aria-label="Reabrir sellados"
+                  title={
+                    idsSelladosSeleccionados().length === 0
+                      ? 'Reabrir sellados: marque uno o más registros 🔒'
+                      : `Reabrir ${idsSelladosSeleccionados().length} sellado(s) con motivo y destinatario`
+                  }
+                  onClick={() => { void reabrirSelladosSeleccionados() }}
+                  style={{
+                    minHeight: 40,
+                    padding: '0 12px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    background: idsSelladosSeleccionados().length > 0 ? '#0EA5E9' : t.border,
+                    color: idsSelladosSeleccionados().length > 0 ? '#fff' : t.textMuted,
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    cursor: idsSelladosSeleccionados().length > 0 ? 'pointer' : 'not-allowed',
+                    opacity: idsSelladosSeleccionados().length > 0 ? 1 : 0.85,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  🔓 Reabrir{idsSelladosSeleccionados().length > 0 ? ` (${idsSelladosSeleccionados().length})` : ''}
+                </button>
+              )}
               {!versionActiva?.id && !verPapelera && (
                 <button
                   type="button"
@@ -7041,14 +7172,20 @@ async function darDeBaja(id) {
                       type="checkbox"
                       className="cc-ppto-row-check"
                       checked={seleccionados.has(r.id)}
-                      disabled={esSellado(r)}
-                      title={esSellado(r) ? 'Registro sellado' : 'Marque filas (Shift+clic = rango)'}
+                      disabled={!puedeSeleccionarFilaPpto(r)}
+                      title={
+                        esSellado(r)
+                          ? (puedeReabrirTrasAprob
+                            ? 'Sellado: selecciónelo para reabrir con motivo'
+                            : 'Registro sellado')
+                          : 'Marque filas (Shift+clic = rango)'
+                      }
                       onClick={(e) => onSelCheckboxClick(r.id, e)}
                       onChange={(e) => onSelCheckboxChange(r.id, e)}
                       style={{
                         ...pptoCheckStyle,
-                        cursor: esSellado(r) ? 'not-allowed' : 'pointer',
-                        opacity: esSellado(r) ? 0.45 : 1,
+                        cursor: puedeSeleccionarFilaPpto(r) ? 'pointer' : 'not-allowed',
+                        opacity: puedeSeleccionarFilaPpto(r) ? 1 : 0.45,
                       }}
                     />
                     <span style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-body)', flex: 1, minWidth: 0 }}>
@@ -7300,14 +7437,20 @@ async function darDeBaja(id) {
                           type="checkbox"
                           className="cc-ppto-row-check"
                           checked={seleccionados.has(r.id)}
-                          disabled={esSellado(r)}
-                          title={esSellado(r) ? 'Registro sellado' : 'Marque filas (Shift+clic = rango)'}
+                          disabled={!puedeSeleccionarFilaPpto(r)}
+                          title={
+                            esSellado(r)
+                              ? (puedeReabrirTrasAprob
+                                ? 'Sellado: selecciónelo para reabrir con motivo'
+                                : 'Registro sellado')
+                              : 'Marque filas (Shift+clic = rango)'
+                          }
                           onClick={(e) => onSelCheckboxClick(r.id, e)}
                           onChange={(e) => onSelCheckboxChange(r.id, e)}
                           style={{
                             ...pptoCheckStyle,
-                            cursor: esSellado(r) ? 'not-allowed' : 'pointer',
-                            opacity: esSellado(r) ? 0.45 : 1,
+                            cursor: puedeSeleccionarFilaPpto(r) ? 'pointer' : 'not-allowed',
+                            opacity: puedeSeleccionarFilaPpto(r) ? 1 : 0.45,
                           }}
                         />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'var(--cc-caption)', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
