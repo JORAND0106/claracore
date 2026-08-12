@@ -2590,6 +2590,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
+  const [galeriaHojaRefreshKey, setGaleriaHojaRefreshKey] = useState(0)
+  const [galeriaHojaSeed, setGaleriaHojaSeed] = useState(null)
   const [fotoImgError, setFotoImgError] = useState(false)
   // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
   const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
@@ -2956,6 +2958,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           checkData.message
           || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
         )
+        if (checkData.url) {
+          setGaleriaHojaSeed([{ url: checkData.url, numero: checkData.numero, descripcion: '' }])
+        }
+        setGaleriaHojaRefreshKey((k) => k + 1)
         setModalGaleriaHoja(true)
         return
       }
@@ -2973,9 +2979,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const dup = await up.json().catch(() => ({}))
         const detail = dup?.detail
         const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
+        const dupUrl = typeof detail === 'object' ? detail?.url : null
+        const dupNum = typeof detail === 'object' ? detail?.numero : null
         limpiarPreviewFotoLocal()
         setFotoLocal(registro.foto_url || null)
         alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
+        if (dupUrl) setGaleriaHojaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
+        setGaleriaHojaRefreshKey((k) => k + 1)
         setModalGaleriaHoja(true)
         return
       }
@@ -2991,6 +3001,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       limpiarPreviewFotoLocal()
       setFotoLocal(res.url)
+      // La foto ya está en so_foto_hashes (+ registro): invalidar galería para reutilizarla en otros.
+      setGaleriaHojaRefreshKey((k) => k + 1)
+      setGaleriaHojaSeed([{ url: res.url, numero: res.numero ?? numero, descripcion: '' }])
       notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
     } catch(e) {
       limpiarPreviewFotoLocal()
@@ -4286,7 +4299,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         Cambiar
                         <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                       </label>
-                      <button onClick={() => setModalGaleriaHoja(true)}
+                      <button onClick={() => {
+                        setGaleriaHojaRefreshKey((k) => k + 1)
+                        setModalGaleriaHoja(true)
+                      }}
                         style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', background:'none', border:'none', padding:0 }}>
                         📷 Galería
                       </button>
@@ -4309,7 +4325,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                 </label>
                 {editableFotoGrafico && (
-                <button onClick={() => setModalGaleriaHoja(true)}
+                <button onClick={() => {
+                  setGaleriaHojaRefreshKey((k) => k + 1)
+                  setModalGaleriaHoja(true)
+                }}
                   style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
                   🖼️ Usar foto de la galería
                 </button>
@@ -4478,6 +4497,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <GaleriaFotos
                 contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
                 tipo="foto" fechaDesde="" fechaHasta=""
+                refreshKey={galeriaHojaRefreshKey}
+                seedFotos={galeriaHojaSeed}
                 onSelect={async (url, numero) => {
                   try {
                     const rid = registro?.id
@@ -12942,20 +12963,56 @@ function ModuloSicoeObra({
   )
 }
 
-function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta, onSelect }) {
-  const [fotos, setFotos] = useState([])
+function GaleriaFotos({
+  contrato_id,
+  API_URL,
+  hdrs,
+  tipo,
+  fechaDesde,
+  fechaHasta,
+  onSelect,
+  /** Incrementar tras subir una foto para forzar re-fetch al reabrir. */
+  refreshKey = 0,
+  /** Fotos a anteponer (p. ej. la del check-hash duplicado) mientras llega el listado. */
+  seedFotos = null,
+}) {
+  const [fotos, setFotos] = useState(() => (Array.isArray(seedFotos) ? seedFotos : []))
   const [loading, setLoading] = useState(true)
+  const seedKey = Array.isArray(seedFotos)
+    ? seedFotos.map((f) => `${f?.url || ''}:${f?.numero ?? ''}`).join('|')
+    : ''
 
   useEffect(() => {
+    let cancelled = false
     setLoading(true)
-    const params = new URLSearchParams({ tipo })
+    const params = new URLSearchParams({ tipo: tipo || 'foto' })
     if (fechaDesde) params.append('desde', fechaDesde)
     if (fechaHasta) params.append('hasta', fechaHasta)
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/galeria?${params}`, { headers: hdrs })
+    // Evita caché del navegador tras una subida reciente
+    params.append('_', String(refreshKey || Date.now()))
+    const seeds = Array.isArray(seedFotos) ? seedFotos.filter((f) => f?.url) : []
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/galeria?${params}`, {
+      headers: hdrs,
+      cache: 'no-store',
+    })
       .then(r => r.json())
-      .then(d => { setFotos(Array.isArray(d) ? d : []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [fechaDesde, fechaHasta])
+      .then(d => {
+        if (cancelled) return
+        const list = Array.isArray(d) ? d : []
+        if (!seeds.length) {
+          setFotos(list)
+        } else {
+          const seen = new Set(list.map(f => f?.url).filter(Boolean))
+          const prepend = seeds.filter(f => f?.url && !seen.has(f.url))
+          setFotos(prepend.length ? [...prepend, ...list] : list)
+        }
+        setLoading(false)
+      })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+    // seedKey estabiliza seedFotos (evitar loop por array inline)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedFotos vía seedKey
+  }, [contrato_id, API_URL, tipo, fechaDesde, fechaHasta, refreshKey, seedKey])
 
   if (loading) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>Cargando galería...</div>
   if (fotos.length === 0) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>No hay imágenes en este rango de fechas.</div>
@@ -12963,14 +13020,14 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
   return (
     <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
       {fotos.map((f, i) => (
-        <div key={i} onClick={() => onSelect(f.url, f.numero)}
+        <div key={f.url || `${f.numero}-${i}`} onClick={() => onSelect(f.url, f.numero)}
           style={{ cursor:'pointer', borderRadius:'8px', overflow:'hidden', border:'2px solid transparent',
             transition:'border 0.15s' }}
           onMouseEnter={e => e.currentTarget.style.borderColor = '#0077B6'}
           onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
-          <img src={f.url} style={{ width:'100%', height:'100px', objectFit:'cover' }} />
+          <img src={f.url} alt="" style={{ width:'100%', height:'100px', objectFit:'cover' }} />
           <div style={{ padding:'4px 6px', fontSize:'var(--cc-label)', color:'#6B7280', background:'#1E293B' }}>
-            #{String(f.numero).padStart(4,'0')} — {f.descripcion || ''}
+            #{String(f.numero ?? '').padStart(4,'0')} — {f.descripcion || ''}
           </div>
         </div>
       ))}
@@ -13041,6 +13098,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   /** Gráficos por lote de localización (clave 0 = única o lote 1). Se copian a cada registro al guardar. */
   const [graficosPorLote, setGraficosPorLote] = useState({ 0: [] })
   const [modalGaleria, setModalGaleria] = useState(false)
+  const [galeriaRefreshKey, setGaleriaRefreshKey] = useState(0)
+  const [galeriaSeed, setGaleriaSeed] = useState(null)
   const [modalGaleriaGrafico, setModalGaleriaGrafico] = useState(false)
   const [galeriaFechaDesde, setGaleriaFechaDesde] = useState('')
   const [galeriaFechaHasta, setGaleriaFechaHasta] = useState('')
@@ -14397,7 +14456,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {registros[modalRegistro].foto_url && (
                   <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'220px', objectFit:'cover' }} />
                 )}
-                <button onClick={() => setModalGaleria(true)} style={{
+                <button onClick={() => {
+                  setGaleriaRefreshKey((k) => k + 1)
+                  setModalGaleria(true)
+                }} style={{
                   background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
                   borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', marginBottom:'6px'
                 }}>🖼️ Usar foto de galería</button>                
@@ -14420,6 +14482,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         checkData.message
                         || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
                       )
+                      if (checkData.url) {
+                        setGaleriaSeed([{ url: checkData.url, numero: checkData.numero, descripcion: '' }])
+                      }
+                      setGaleriaRefreshKey((k) => k + 1)
                       setModalGaleria(true)
                       return
                     }
@@ -14437,8 +14503,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       const dup = await r.json().catch(() => ({}))
                       const detail = dup?.detail
                       const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
+                      const dupUrl = typeof detail === 'object' ? detail?.url : null
+                      const dupNum = typeof detail === 'object' ? detail?.numero : null
                       const aDup=[...registros]; aDup[modalRegistro]={...aDup[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aDup)
                       alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
+                      if (dupUrl) setGaleriaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
+                      setGaleriaRefreshKey((k) => k + 1)
                       setModalGaleria(true)
                       return
                     }
@@ -14446,6 +14516,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     URL.revokeObjectURL(previewUrl)
                     const nFoto = data.numero ?? numero
                     const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: nFoto, _fotoOk: true}; setRegistros(a)
+                    setGaleriaSeed([{ url: data.url, numero: nFoto, descripcion: '' }])
+                    setGaleriaRefreshKey((k) => k + 1)
                   } catch(err) { alert('Error subiendo foto: ' + (err?.message || String(err))) }
                   e.target.value = ''
                 }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
@@ -14563,6 +14635,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
                 tipo="foto"
                 fechaDesde={galeriaFechaDesde} fechaHasta={galeriaFechaHasta}
+                refreshKey={galeriaRefreshKey}
+                seedFotos={galeriaSeed}
                 onSelect={(url, numero) => {
                   const a=[...registros]
                   a[modalRegistro]={...a[modalRegistro], foto_url: url, foto_numero: numero, _fotoOk: true}

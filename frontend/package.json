@@ -12,7 +12,8 @@
     "test:informe": "node --test src/utils/informePeriodicoSchedule.test.js src/utils/informePeriodicoCapture.test.js src/utils/permisosContratoInforme.test.js",
     "test:informes-pdf": "node --test src/informesVistaPreviaPdf.test.js",
     "test:sicoe-mapa-portada": "node --test src/modules/sicoe-obra/sicoeMapaPortadaPk.test.js",
-    "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js"
+    "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js",
+    "test:ppto-roles": "node --test src/modules/presupuesto/pptoRolesValidacion.test.js"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.21",

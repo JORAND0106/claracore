@@ -33,6 +33,7 @@ import {
   esDesarrolladorPresupuesto,
   esCargoDesarrolladorPresupuesto,
   esRolContratistaDepuracion,
+  esRolInterventoriaValidacion,
   preIntervLiberadoParaInterventoria,
 } from './pptoRolesValidacion'
 import {
@@ -1149,11 +1150,14 @@ useEffect(() => {
     return preIntervLiberadoParaInterventoria(r)
   }
   const puedeTabEditarMasiva = esDevPpto || puedeEditar
-  const puedeTabDepuracionMasiva = esDevPpto || puedeValidar
+  // Depuración (pre_interv_estado) es flujo interno del Contratista: oculta a todo rol Interventoría.
+  const esLadoInterventoriaPpto = esRolInterventoriaValidacion(usuario)
+  const puedeTabDepuracionMasiva =
+    !esLadoInterventoriaPpto && (esDevPpto || (puedeValidar && esRolContratistaDepuracion(usuario)))
   const puedeTabInterventoriaMasiva = esDevPpto || puedeValidar
   const puedeAbrirEdicionMasiva =
     puedeTabEditarMasiva || puedeTabDepuracionMasiva || puedeTabInterventoriaMasiva
-  const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
+  const mostrarColumnaDepuracion = !esLadoInterventoriaPpto
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [cacheKey]: { data, ts, total } }
   const _pptoPanelCacheRef = useRef({})   // { [panelKey]: { filas, capitulosResumen, total, ts } }
