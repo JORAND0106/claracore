@@ -23502,9 +23502,67 @@ def sicoe_rotar_grafico(
     return {"ok": True, "url": new_url, "grafico_numero": num, "angle": angle}
 
 
+def _galeria_merge_fotos_unicas(
+    desde_registros: List[dict],
+    desde_hashes: Optional[List[dict]] = None,
+) -> List[dict]:
+    """
+    Une fotos de so_registros y so_foto_hashes, deduplicadas por url (y numero).
+    Las de hash cubren fotos recién subidas aún no asociadas / en borrador local.
+    Orden: hashes primero (recién subidas), luego registros.
+    """
+    seen_urls: Set[str] = set()
+    seen_nums: Set[int] = set()
+    out: List[dict] = []
+
+    def _push(url, numero, descripcion=""):
+        u = (url or "").strip()
+        if not u or u in seen_urls:
+            return
+        num_i = None
+        if numero is not None:
+            try:
+                num_i = int(numero)
+            except (TypeError, ValueError):
+                num_i = None
+        if num_i is not None and num_i in seen_nums:
+            return
+        seen_urls.add(u)
+        if num_i is not None:
+            seen_nums.add(num_i)
+        out.append(
+            {
+                "url": u,
+                "numero": num_i if num_i is not None else numero,
+                "descripcion": descripcion or "",
+            }
+        )
+
+    for r in desde_hashes or []:
+        _push(
+            r.get("foto_url") or r.get("url"),
+            r.get("foto_numero") or r.get("numero"),
+            r.get("descripcion") or "",
+        )
+    for r in desde_registros or []:
+        _push(
+            r.get("foto_url") or r.get("url"),
+            r.get("foto_numero") or r.get("numero"),
+            r.get("descripcion") or r.get("foto_descripcion") or "",
+        )
+    return out
+
+
 @app.get("/sicoe-obra/{contrato_id}/galeria")
 def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, hasta: str = None, current_user=Depends(get_current_user)):
-    def _q():
+    """
+    Galería del contrato. Para fotos: une so_registros + so_foto_hashes para que una
+    foto recién subida (hash ya registrado) aparezca aunque el registro aún no exista
+    o el listado de registros esté paginado/incompleto.
+    """
+    _ = current_user
+
+    def _q_regs():
         q = supabase.table("so_registros")\
             .select("foto_url, foto_numero, foto_descripcion, grafico_url, grafico_numero, grafico_descripcion, created_at")\
             .eq("contrato_id", contrato_id)
@@ -23513,14 +23571,57 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
         if hasta:
             q = q.lte("created_at", hasta + "T23:59:59")
         return q.order("created_at", desc=True).execute().data
-    rows = supabase_execute(_q)
-    result = []
-    for r in rows:
-        if tipo == "foto" and r.get("foto_url"):
-            result.append({"url": r["foto_url"], "numero": r["foto_numero"], "descripcion": r.get("foto_descripcion","")})
-        elif tipo == "grafico" and r.get("grafico_url"):
-            result.append({"url": r["grafico_url"], "numero": r["grafico_numero"], "descripcion": r.get("grafico_descripcion","")})
-    return result
+
+    rows = supabase_execute(_q_regs) or []
+    if tipo == "grafico":
+        result = []
+        for r in rows:
+            if r.get("grafico_url"):
+                result.append({
+                    "url": r["grafico_url"],
+                    "numero": r.get("grafico_numero"),
+                    "descripcion": r.get("grafico_descripcion") or "",
+                })
+        return result
+
+    # tipo == "foto": registros + hashes (fotos subidas al instante)
+    desde_regs = [
+        {
+            "url": r["foto_url"],
+            "numero": r.get("foto_numero"),
+            "descripcion": r.get("foto_descripcion") or "",
+        }
+        for r in rows
+        if r.get("foto_url")
+    ]
+    desde_hashes: List[dict] = []
+    try:
+        def _q_hashes():
+            q = (
+                supabase.table("so_foto_hashes")
+                .select("foto_url, foto_numero, created_at")
+                .eq("contrato_id", contrato_id)
+            )
+            if desde:
+                q = q.gte("created_at", desde)
+            if hasta:
+                q = q.lte("created_at", hasta + "T23:59:59")
+            return q.order("created_at", desc=True).execute().data
+
+        hash_rows = supabase_execute(_q_hashes) or []
+        desde_hashes = [
+            {
+                "url": h["foto_url"],
+                "numero": h.get("foto_numero"),
+                "descripcion": "",
+            }
+            for h in hash_rows
+            if h.get("foto_url")
+        ]
+    except Exception as exc:
+        _log_api.warning("galeria so_foto_hashes contrato=%s: %s", contrato_id, exc)
+
+    return _galeria_merge_fotos_unicas(desde_regs, desde_hashes)
 
 @app.post("/sicoe-obra/{contrato_id}/next-foto")
 def next_numero_foto(contrato_id: int, current_user=Depends(get_current_user)):
