@@ -68,7 +68,9 @@ from azure_blob_storage import (
 )
 from usuarios_notif_elegibilidad import (
     filtrar_usuarios_para_notificaciones_automaticas,
+    filtrar_usuarios_visibles_gestion,
     usuario_estado_es_aprobado,
+    usuario_estado_es_rechazado,
 )
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
@@ -2691,11 +2693,6 @@ from usuario_bienvenida_email import (
     BienvenidaEmailError,
     contacto_smtp_configured,
     send_bienvenida_email,
-)
-from usuario_actividad import (
-    evaluar_actividad_usuario,
-    limpiar_vinculos_no_bloqueantes,
-    mensaje_bloqueo_corto,
 )
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
@@ -7814,6 +7811,7 @@ def rechazar_usuario(usuario_id: int, current_user=Depends(get_current_user)):
     supabase.table("usuarios").update({
         "estado": "rechazado", "activo": False
     }).eq("id", usuario_id).execute()
+    _archivar_usuario_rechazado(usuario_id)
     registrar_log(current_user, "RECHAZAR", "USUARIOS", "usuario", str(usuario_id),
         {"estado": "rechazado"})
     return {"mensaje": "Usuario rechazado"}
@@ -7870,6 +7868,7 @@ def crear_competencia_contrato(
 
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
+    """Lista solo usuarios vivos: pendiente y aprobado. Los rechazados no aparecen."""
     result = supabase.table("usuarios").select(
         "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip"
     ).order("nombre").execute()
@@ -7888,7 +7887,8 @@ def todos_usuarios(current_user=Depends(get_current_user)):
     else:
         filtered = list(result.data)
     filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
-    return filtered
+    # Rechazados = papelera: fuera de la vista de gestión
+    return filtrar_usuarios_visibles_gestion(filtered)
 
 def _admin_usuario_fk_int_o_none(value) -> Optional[int]:
     """Normaliza FK opcionales: None/''/'None' → None; evita .eq(id, None) → 22P02."""
@@ -7969,6 +7969,8 @@ def actualizar_usuario(
         data["politicas_fecha"] = None
         data["politicas_ip"] = None
     supabase.table("usuarios").update(data).eq("id", usuario_id).execute()
+    if body.estado == "rechazado":
+        _archivar_usuario_rechazado(usuario_id)
     # Resetear contador de inactividad: insertar LOGIN sintético al reactivar un usuario
     if body.estado == "aprobado":
         try:
@@ -8037,142 +8039,25 @@ def actualizar_usuario(
     return {"mensaje": "Usuario actualizado"}
 
 
-def _admin_usuario_cargo_es_desarrollador(usuario_id: int) -> bool:
+def _archivar_usuario_rechazado(usuario_id: int) -> None:
+    """
+    Rechazado = papelera: sin push, sin resets pendientes, sin buzón activo.
+    No borra el registro de usuarios ni busca actividad en módulos.
+    """
+    uid = int(usuario_id)
+    for tabla, col in (
+        ("push_subscriptions", "usuario_id"),
+        ("password_reset_requests", "usuario_id"),
+        ("cad_sessions", "usuario_id"),
+    ):
+        try:
+            supabase.table(tabla).delete().eq(col, uid).execute()
+        except Exception:
+            pass
     try:
-        target = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).limit(1).execute()
-        if not target.data or not target.data[0].get("cargo_id"):
-            return False
-        cargo_res = (
-            supabase.table("cargos")
-            .select("nombre")
-            .eq("id", target.data[0]["cargo_id"])
-            .limit(1)
-            .execute()
-        )
-        return bool(
-            cargo_res.data
-            and str(cargo_res.data[0].get("nombre") or "").strip().lower() == "desarrollador"
-        )
+        supabase.table("notificaciones").delete().eq("destinatario_id", uid).execute()
     except Exception:
-        return False
-
-
-def _admin_assert_puede_gestionar_usuario(current_user, usuario_id: int) -> dict:
-    """Misma privacidad que GET /admin/todos-usuarios: contrato del caller + Desarrollador oculto."""
-    rows = (
-        supabase.table("usuarios")
-        .select(
-            "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado"
-        )
-        .eq("id", usuario_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    u = rows[0]
-    caller_id = int(current_user["sub"])
-    if _admin_usuario_cargo_es_desarrollador(usuario_id) and int(u["id"]) != caller_id:
-        raise HTTPException(status_code=403, detail="No se puede gestionar un usuario Desarrollador")
-    caller_contrato, _ = _caller_contract_scope(current_user)
-    if caller_contrato and u.get("contrato_id") != caller_contrato:
-        raise HTTPException(status_code=403, detail="Usuario fuera del alcance de su contrato")
-    return u
-
-
-@app.get("/admin/usuarios/{usuario_id}/actividad")
-def admin_usuario_actividad(usuario_id: int, current_user=Depends(get_current_user)):
-    """Verifica actividad relevante antes de permitir eliminación física."""
-    _admin_assert_puede_gestionar_usuario(current_user, usuario_id)
-    return evaluar_actividad_usuario(supabase, usuario_id)
-
-
-@app.post("/admin/usuarios/actividad-lote")
-def admin_usuarios_actividad_lote(body: dict, current_user=Depends(get_current_user)):
-    """Evalúa actividad de varios usuarios (mapa id → resultado)."""
-    raw_ids = body.get("ids") if isinstance(body, dict) else None
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raise HTTPException(status_code=400, detail="Envíe ids: number[]")
-    ids: List[int] = []
-    for x in raw_ids[:200]:
-        try:
-            ids.append(int(x))
-        except (TypeError, ValueError):
-            continue
-    out: Dict[str, Any] = {}
-    for uid in ids:
-        try:
-            _admin_assert_puede_gestionar_usuario(current_user, uid)
-            out[str(uid)] = evaluar_actividad_usuario(supabase, uid)
-        except HTTPException as he:
-            out[str(uid)] = {
-                "usuario_id": uid,
-                "puede_eliminar": False,
-                "bloqueantes": [],
-                "motivo": he.detail if isinstance(he.detail, str) else "Sin permiso para evaluar",
-            }
-    return out
-
-
-@app.delete("/admin/usuarios/{usuario_id}")
-def admin_eliminar_usuario(usuario_id: int, current_user=Depends(get_current_user)):
-    """Eliminación física irreversible si no hay actividad relevante."""
-    caller_id = int(current_user["sub"])
-    if int(usuario_id) == caller_id:
-        raise HTTPException(status_code=400, detail="No puede eliminarse a sí mismo.")
-    u = _admin_assert_puede_gestionar_usuario(current_user, usuario_id)
-    if _admin_usuario_cargo_es_desarrollador(usuario_id):
-        raise HTTPException(status_code=403, detail="No se puede eliminar un usuario Desarrollador")
-    actividad = evaluar_actividad_usuario(supabase, usuario_id)
-    if not actividad.get("puede_eliminar"):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "USUARIO_CON_ACTIVIDAD",
-                "mensaje": mensaje_bloqueo_corto(actividad),
-                "bloqueantes": actividad.get("bloqueantes") or [],
-            },
-        )
-    limpiadas = limpiar_vinculos_no_bloqueantes(supabase, usuario_id)
-    try:
-        supabase.table("usuarios").delete().eq("id", usuario_id).execute()
-    except Exception as ex:
-        msg = str(ex)
-        if "23503" in msg or "foreign key" in msg.lower() or "violates foreign key" in msg.lower():
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "USUARIO_CON_ACTIVIDAD",
-                    "mensaje": (
-                        "No se puede eliminar: existen vínculos en la base de datos "
-                        "que impiden borrar el usuario (integridad referencial)."
-                    ),
-                    "bloqueantes": actividad.get("bloqueantes") or [],
-                },
-            ) from ex
-        raise HTTPException(status_code=500, detail=f"No se pudo eliminar el usuario: {ex}") from ex
-    nombre = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip() or u.get("email") or str(usuario_id)
-    registrar_log(
-        current_user,
-        "ELIMINAR",
-        "USUARIOS",
-        "usuario",
-        str(usuario_id),
-        {
-            "email": u.get("email"),
-            "nombre": nombre,
-            "cascadas": limpiadas,
-            "eliminacion_fisica": True,
-        },
-        severidad="AUDIT",
-    )
-    return {
-        "mensaje": "Usuario eliminado",
-        "usuario_id": usuario_id,
-        "cascadas": limpiadas,
-    }
+        pass
 
 
 @app.post("/admin/verificar-inactividad")
@@ -8338,6 +8223,12 @@ def refresh_token(current_user=Depends(get_current_user)):
         if not result.data:
             raise HTTPException(status_code=401, detail="Usuario no encontrado")
         usuario = result.data[0]
+        if usuario_estado_es_rechazado(usuario.get("estado")):
+            raise HTTPException(status_code=403, detail="Tu cuenta fue rechazada")
+        if (usuario.get("estado") or "").strip().lower() == "pendiente":
+            raise HTTPException(status_code=403, detail="Tu cuenta está pendiente de aprobación")
+        if usuario.get("activo") is False:
+            raise HTTPException(status_code=403, detail="Usuario inactivo")
         cargo_nombre = None
         if usuario.get("cargo_id"):
             cid = usuario["cargo_id"]
@@ -8489,10 +8380,12 @@ def informe_periodico_copia_completado(
 
 @app.post("/auth/solicitar-reset")
 def solicitar_reset(body: ResetSolicitud):
-    usuario = supabase.table("usuarios").select("id, email, nombre, apellidos").eq("email", body.email).execute()
+    usuario = supabase.table("usuarios").select("id, email, nombre, apellidos, estado, activo").eq("email", body.email).execute()
     if not usuario.data:
         raise HTTPException(status_code=404, detail="Correo no registrado")
     u = usuario.data[0]
+    if usuario_estado_es_rechazado(u.get("estado")):
+        raise HTTPException(status_code=403, detail="Esta cuenta no está habilitada para restablecer contraseña")
     pendiente = supabase.table("password_reset_requests").select("id").eq("usuario_id", u["id"]).eq("estado", "pendiente").execute()
     if pendiente.data:
         return {"mensaje": "Ya tienes una solicitud pendiente"}
@@ -8509,7 +8402,7 @@ def solicitar_reset(body: ResetSolicitud):
 
 
 def _notificar_admins_solicitud_reset(usuario_row: dict) -> None:
-    """Inserta notificaciones en buzón para cargos Administrador / Desarrollador."""
+    """Inserta notificaciones en buzón para cargos Administrador / Desarrollador (solo aprobados)."""
     cargos = supabase.table("cargos").select("id, nombre").execute().data or []
     admin_cargo_ids = [
         int(c["id"])
@@ -8521,13 +8414,15 @@ def _notificar_admins_solicitud_reset(usuario_row: dict) -> None:
         return
     dests = (
         supabase.table("usuarios")
-        .select("id")
+        .select("id, estado")
         .in_("cargo_id", admin_cargo_ids)
         .eq("activo", True)
+        .eq("estado", "aprobado")
         .execute()
         .data
         or []
     )
+    dests = filtrar_usuarios_para_notificaciones_automaticas(dests)
     nombre = f"{usuario_row.get('nombre') or ''} {usuario_row.get('apellidos') or ''}".strip()
     email = usuario_row.get("email") or ""
     asunto = "🔑 Solicitud de restablecimiento de contraseña"
