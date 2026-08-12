@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { flushSync } from "react-dom"
+import { Flame } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
 import TrazabilidadRegistroModal from '../../TrazabilidadRegistroModal'
 import mapboxgl from "mapbox-gl"
@@ -331,7 +332,15 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [guardandoBulk, setGuardandoBulk] = useState(false)
   const [dandoDeBaja, setDandoDeBaja] = useState(false)
   const [restaurandoPapelera, setRestaurandoPapelera] = useState(false)
+  const [purgandoPapelera, setPurgandoPapelera] = useState(false)
+  const [papeleraTotal, setPapeleraTotal] = useState(0)
+  const [papeleraCargados, setPapeleraCargados] = useState(0)
+  const [papeleraCargandoMas, setPapeleraCargandoMas] = useState(false)
+  const papeleraNextOffsetRef = useRef(0)
+  const PAPELERA_PAGE = 100
+  const PAPELERA_DIAS_PURGA = 30
   const restaurarLockRef = useRef(false)
+  const purgarLockRef = useRef(false)
   const [undoUltima, setUndoUltima] = useState(null)
   const [deshaciendo, setDeshaciendo] = useState(false)
   const undoSnapRef = useRef(null)
@@ -1810,28 +1819,114 @@ useEffect(() => {
 async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
-    // Servir desde caché si es válido
+    // Servir desde caché si es válido (solo activos; papelera siempre pagina en servidor)
     const cached = _pptoCacheRef.current
-    if (!forzar && cached && cached.papelera === esPapelera &&
+    if (!esPapelera && !forzar && cached && cached.papelera === false &&
         (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
       setRegistros(cached.data)
       setVisibleRegistrosCount(50)
       return
     }
     setLoading(true)
-    const params = new URLSearchParams()
-    if (esPapelera) params.set('papelera', 'true')
-    const pFinal = pptoQueryBib(params)
-    const qs = pFinal.toString()
     const ep = pptoEp()
-    const res = await fetch(`${ep.list}${qs ? `?${qs}` : ''}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) {
-      const data = await res.json()
-      _pptoCacheRef.current = { data, ts: Date.now(), papelera: esPapelera }
-      setRegistros(data)
+    const h = { Authorization: `Bearer ${token}` }
+    try {
+      if (esPapelera) {
+        const pCount = pptoQueryBib(new URLSearchParams({ papelera: 'true' }))
+        let totalN = 0
+        try {
+          const resC = await fetch(`${ep.conteo}?${pCount.toString()}`, { headers: h })
+          if (resC.ok) {
+            const j = await resC.json()
+            if (j && typeof j.total === 'number') totalN = j.total
+          }
+        } catch { /* ignore */ }
+        setPapeleraTotal(totalN)
+        const p = pptoQueryBib(new URLSearchParams({
+          papelera: 'true',
+          limit: String(PAPELERA_PAGE),
+          offset: '0',
+        }))
+        const res = await fetch(`${ep.list}?${p.toString()}`, { headers: h })
+        if (res.ok) {
+          const data = await res.json()
+          const rows = Array.isArray(data) ? data : []
+          setRegistros(rows)
+          papeleraNextOffsetRef.current = rows.length
+          setPapeleraCargados(rows.length)
+          setVisibleRegistrosCount(Math.max(rows.length, PAPELERA_PAGE))
+        } else {
+          setRegistros([])
+          papeleraNextOffsetRef.current = 0
+          setPapeleraCargados(0)
+        }
+      } else {
+        setPapeleraTotal(0)
+        papeleraNextOffsetRef.current = 0
+        setPapeleraCargados(0)
+        const params = new URLSearchParams()
+        const pFinal = pptoQueryBib(params)
+        const qs = pFinal.toString()
+        const res = await fetch(`${ep.list}${qs ? `?${qs}` : ''}`, { headers: h })
+        if (res.ok) {
+          const data = await res.json()
+          _pptoCacheRef.current = { data, ts: Date.now(), papelera: false }
+          setRegistros(data)
+        }
+        setVisibleRegistrosCount(50)
+      }
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-    setVisibleRegistrosCount(50)
+  }
+
+  async function cargarMasPapeleraServidor(increment) {
+    if (!verPapelera || papeleraCargandoMas || loading) return
+    const off = papeleraNextOffsetRef.current
+    if (papeleraTotal > 0 && off >= papeleraTotal) return
+    const want = increment === 'all'
+      ? Math.min(1000, Math.max(0, (papeleraTotal || off + 1000) - off))
+      : Math.max(1, Number(increment) || PAPELERA_PAGE)
+    if (want <= 0) return
+    setPapeleraCargandoMas(true)
+    try {
+      const ep = pptoEp()
+      const p = pptoQueryBib(new URLSearchParams({
+        papelera: 'true',
+        limit: String(want),
+        offset: String(off),
+      }))
+      const res = await fetch(`${ep.list}?${p.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      const rows = Array.isArray(data) ? data : []
+      if (!rows.length) {
+        if (papeleraTotal > 0) {
+          papeleraNextOffsetRef.current = papeleraTotal
+          setPapeleraCargados(papeleraTotal)
+        }
+        return
+      }
+      setRegistros((prev) => {
+        const seen = new Set(prev.map((r) => r.id))
+        const merged = prev.slice()
+        for (const r of rows) {
+          if (r?.id != null && !seen.has(r.id)) {
+            seen.add(r.id)
+            merged.push(r)
+          }
+        }
+        return merged
+      })
+      const nextOff = off + rows.length
+      papeleraNextOffsetRef.current = nextOff
+      setPapeleraCargados(nextOff)
+      setVisibleRegistrosCount((n) => Math.max(n, nextOff))
+    } finally {
+      setPapeleraCargandoMas(false)
+    }
   }
 
   const capitulosFetchRef = useRef(0)
@@ -3269,13 +3364,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     [registros, seleccionados],
   )
 
-  const registrosOrdenados = useMemo(() =>
-    [...registrosFiltrados].sort((a, b) => {
+  const registrosOrdenados = useMemo(() => {
+    if (verPapelera) {
+      // Backend ya ordena por updated_at desc (recientes primero)
+      return registrosFiltrados
+    }
+    return [...registrosFiltrados].sort((a, b) => {
       const va = String(a.id_pol || a.pk_id || '')
       const vb = String(b.id_pol || b.pk_id || '')
       return vb.localeCompare(va, 'es', { numeric: true })
     })
-  , [registrosFiltrados])
+  }, [registrosFiltrados, verPapelera])
   const registrosPagina = useMemo(() => {
     const n = registrosOrdenados.length
     const take = Math.min(visibleRegistrosCount, n)
@@ -3286,7 +3385,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     [registrosPagina]
   )
 
-  const hayMasRegistrosVista = visibleRegistrosCount < registrosOrdenados.length
+  const hayMasRegistrosVista = verPapelera
+    ? (papeleraTotal > 0
+        ? papeleraCargados < papeleraTotal
+        : visibleRegistrosCount < registrosOrdenados.length)
+    : visibleRegistrosCount < registrosOrdenados.length
+
+  const textoProgresoPapelera = verPapelera
+    ? `${Math.min(registrosPagina.length, papeleraCargados || registrosPagina.length).toLocaleString('es-CO')} cargados`
+      + (papeleraTotal > 0 ? ` / ${papeleraTotal.toLocaleString('es-CO')} en papelera` : '')
+    : `${registrosPagina.length.toLocaleString('es-CO')} / ${registrosOrdenados.length.toLocaleString('es-CO')} en pantalla`
 
   const pptoFilaTecladoIdxRef = useRef(-1)
 
@@ -3339,6 +3447,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [filaZoom, registrosPagina])
 
   const handleCargarMasRegistrosVista = (increment) => {
+    if (verPapelera) {
+      void cargarMasPapeleraServidor(increment)
+      return
+    }
     const el = pptoTablaScrollRef.current
     const prevH = el?.scrollHeight ?? 0
     const prevT = el?.scrollTop ?? 0
@@ -4550,6 +4662,88 @@ async function darDeBaja(id) {
       return
     }
     await ejecutarRestaurarLote([id])
+  }
+
+  /**
+   * Eliminación definitiva (irreversible) de registros en Papelera.
+   * Icono Flame — distinto de 🗑️ (dar de baja) y 🔄 (restaurar).
+   */
+  async function ejecutarPurgarDefinitivoLote(ids, { confirmar = true } = {}) {
+    if (purgarLockRef.current || purgandoPapelera) return { cancelado: true }
+    const ep = pptoEp()
+    if (!ep.itemPurgar && !ep.papeleraPurgarLote) {
+      window.alert('La eliminación definitiva no está disponible en vista de versión.')
+      return { cancelado: true, motivo: 'version' }
+    }
+    const idsUnicos = [...new Set((ids || []).filter(Boolean))]
+    if (!idsUnicos.length) return { cancelado: true, motivo: 'vacio' }
+    if (confirmar) {
+      const msg =
+        idsUnicos.length === 1
+          ? '¿Eliminar DEFINITIVAMENTE este registro?\n\nEsta acción es irreversible: no podrá restaurarse desde la Papelera.'
+          : `¿Eliminar DEFINITIVAMENTE ${idsUnicos.length} registro(s)?\n\nEsta acción es irreversible.`
+      if (!window.confirm(msg)) return { cancelado: true, motivo: 'confirm' }
+    }
+    purgarLockRef.current = true
+    setPurgandoPapelera(true)
+    try {
+      const tok = getToken()
+      let eliminados = []
+      let errores = []
+      if (ep.papeleraPurgarLote && idsUnicos.length > 1) {
+        const res = await fetch(ep.papeleraPurgarLote, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: idsUnicos }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          window.alert(data?.detail || `Error ${res.status}`)
+          return { cancelado: true }
+        }
+        eliminados = data.eliminados || []
+        errores = data.errores || []
+      } else {
+        for (const id of idsUnicos) {
+          const url = typeof ep.itemPurgar === 'function' ? ep.itemPurgar(id) : null
+          if (!url) continue
+          const res = await fetch(url, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${tok}` },
+          })
+          if (res.ok) eliminados.push(id)
+          else {
+            let detail = `HTTP ${res.status}`
+            try {
+              const d = await res.json()
+              detail = d?.detail || detail
+            } catch { /* ignore */ }
+            errores.push({ id, detail })
+          }
+        }
+      }
+      await refrescarTrasRestaurarPapelera()
+      if (errores.length) {
+        window.alert(
+          `Eliminados: ${eliminados.length}. Fallidos: ${errores.length}.\n`
+          + errores.slice(0, 3).map((e) => `#${e.id}: ${e.detail}`).join('\n'),
+        )
+      } else if (eliminados.length > 1) {
+        setAvisoSistema({
+          titulo: 'Papelera',
+          mensaje: `${eliminados.length} registro(s) eliminados definitivamente.`,
+          tipo: 'ok',
+        })
+      }
+      return { eliminados, errores }
+    } finally {
+      purgarLockRef.current = false
+      setPurgandoPapelera(false)
+    }
+  }
+
+  async function purgarDefinitivo(id) {
+    await ejecutarPurgarDefinitivoLote([id])
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'var(--cc-sm)', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -6808,7 +7002,12 @@ async function darDeBaja(id) {
         onCloseResult={() => setSyncVlrOpen(false)}
       />
       {verPapelera && (
-        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar»; el filtrado avanzado aplica al volver a activos.</div>
+        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)', lineHeight:1.45 }}>
+          Papelera: se muestran primero los dados de baja más recientes
+          {papeleraTotal > 0 ? ` (${papeleraTotal.toLocaleString('es-CO')} en total)` : ''}.
+          {' '}Los registros se eliminan automáticamente a los <strong style={{ color: t.text }}>{PAPELERA_DIAS_PURGA} días</strong>.
+          {' '}Use el icono de llama para eliminar definitivamente antes de ese plazo.
+        </div>
       )}
       {cargandoGrillaPresupuesto && conteoFiltro != null && conteoFiltro > PRES_PTO_ALERTA_GRANDE_UMBRAL && !confirmCargaGrande && (
         <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:'var(--cc-sm)', color:'#92400E' }}>
@@ -7052,11 +7251,11 @@ async function darDeBaja(id) {
               {puedeEliminar && verPapelera && seleccionados.size >= 1 && (
                 <button
                   type="button"
-                  disabled={restaurandoPapelera}
+                  disabled={restaurandoPapelera || purgandoPapelera}
                   aria-label={`Restaurar (${seleccionados.size})`}
                   title={`Restaurar ${seleccionados.size} seleccionado(s) al presupuesto activo`}
                   onClick={async () => {
-                    if (restaurandoPapelera) return
+                    if (restaurandoPapelera || purgandoPapelera) return
                     const idsRest = [...seleccionados].filter(
                       (id) => !esSellado(registros.find((rr) => rr.id === id)),
                     )
@@ -7079,11 +7278,39 @@ async function darDeBaja(id) {
                     borderRadius: 8,
                     color: '#10B981',
                     fontSize: 18,
-                    cursor: restaurandoPapelera ? 'not-allowed' : 'pointer',
-                    opacity: restaurandoPapelera ? 0.55 : 1,
+                    cursor: (restaurandoPapelera || purgandoPapelera) ? 'not-allowed' : 'pointer',
+                    opacity: (restaurandoPapelera || purgandoPapelera) ? 0.55 : 1,
                   }}
                 >
                   {restaurandoPapelera ? '⏳' : '🔄'}
+                </button>
+              )}
+
+              {puedeEliminar && verPapelera && seleccionados.size >= 1 && pptoEp().itemPurgar && (
+                <button
+                  type="button"
+                  disabled={purgandoPapelera || restaurandoPapelera}
+                  aria-label={`Eliminar definitivamente (${seleccionados.size})`}
+                  title={`Eliminar definitivamente (${seleccionados.size}) — irreversible`}
+                  onClick={async () => {
+                    if (purgandoPapelera || restaurandoPapelera) return
+                    await ejecutarPurgarDefinitivoLote([...seleccionados])
+                  }}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#7C2D1218',
+                    border: '1px solid #F9731666',
+                    borderRadius: 8,
+                    color: '#EA580C',
+                    cursor: (purgandoPapelera || restaurandoPapelera) ? 'not-allowed' : 'pointer',
+                    opacity: (purgandoPapelera || restaurandoPapelera) ? 0.55 : 1,
+                  }}
+                >
+                  {purgandoPapelera ? '⏳' : <Flame size={18} strokeWidth={2.25} aria-hidden />}
                 </button>
               )}
 
@@ -7327,6 +7554,7 @@ async function darDeBaja(id) {
                       >🗑️</button>
                     )}
                     {puedeEliminar && verPapelera && (
+                      <>
                       <button
                         type="button"
                         aria-label={esSellado(r) ? 'No se puede restaurar (sellado)' : 'Restaurar'}
@@ -7335,8 +7563,8 @@ async function darDeBaja(id) {
                             ? 'Sellado por Interventoría: no se puede restaurar'
                             : (restaurandoPapelera ? 'Restauración en curso…' : 'Restaurar al presupuesto activo')
                         }
-                        disabled={esSellado(r) || restaurandoPapelera}
-                        onClick={() => { if (!esSellado(r) && !restaurandoPapelera) void restaurar(r.id) }}
+                        disabled={esSellado(r) || restaurandoPapelera || purgandoPapelera}
+                        onClick={() => { if (!esSellado(r) && !restaurandoPapelera && !purgandoPapelera) void restaurar(r.id) }}
                         style={{
                           width: 40,
                           minWidth: 40,
@@ -7348,15 +7576,44 @@ async function darDeBaja(id) {
                           borderRadius: 8,
                           color: '#10B981',
                           fontWeight: 700,
-                          cursor: (esSellado(r) || restaurandoPapelera) ? 'not-allowed' : 'pointer',
+                          cursor: (esSellado(r) || restaurandoPapelera || purgandoPapelera) ? 'not-allowed' : 'pointer',
                           fontSize: 'var(--cc-md)',
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           padding: 0,
-                          opacity: (esSellado(r) || restaurandoPapelera) ? 0.4 : 1,
+                          opacity: (esSellado(r) || restaurandoPapelera || purgandoPapelera) ? 0.4 : 1,
                         }}
                       >🔄</button>
+                      {pptoEp().itemPurgar && (
+                        <button
+                          type="button"
+                          aria-label="Eliminar definitivamente"
+                          title={purgandoPapelera ? 'Eliminación en curso…' : 'Eliminar definitivamente'}
+                          disabled={purgandoPapelera || restaurandoPapelera}
+                          onClick={() => { if (!purgandoPapelera && !restaurandoPapelera) void purgarDefinitivo(r.id) }}
+                          style={{
+                            width: 40,
+                            minWidth: 40,
+                            height: 40,
+                            minHeight: 40,
+                            flex: '0 0 auto',
+                            background: '#7C2D1218',
+                            border: '1px solid #F9731644',
+                            borderRadius: 8,
+                            color: '#EA580C',
+                            cursor: (purgandoPapelera || restaurandoPapelera) ? 'not-allowed' : 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
+                            opacity: (purgandoPapelera || restaurandoPapelera) ? 0.45 : 1,
+                          }}
+                        >
+                          {purgandoPapelera ? '⏳' : <Flame size={16} strokeWidth={2.25} aria-hidden />}
+                        </button>
+                      )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -7667,15 +7924,16 @@ async function darDeBaja(id) {
                     )}
                     {puedeEliminar && verPapelera && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <button
                           type="button"
-                          onClick={() => { if (!esSellado(r) && !restaurandoPapelera) void restaurar(r.id) }}
+                          onClick={() => { if (!esSellado(r) && !restaurandoPapelera && !purgandoPapelera) void restaurar(r.id) }}
                           title={
                             esSellado(r)
                               ? 'Sellado por Interventoría: no se puede restaurar'
                               : (restaurandoPapelera ? 'Restauración en curso…' : 'Restaurar al presupuesto activo')
                           }
-                          disabled={esSellado(r) || restaurandoPapelera}
+                          disabled={esSellado(r) || restaurandoPapelera || purgandoPapelera}
                           style={{
                             background: '#10B98115',
                             border: '1px solid #10B98144',
@@ -7683,12 +7941,37 @@ async function darDeBaja(id) {
                             padding: '3px 8px',
                             color: '#10B981',
                             fontSize: 'var(--cc-sm)',
-                            cursor: (esSellado(r) || restaurandoPapelera) ? 'not-allowed' : 'pointer',
-                            opacity: (esSellado(r) || restaurandoPapelera) ? 0.4 : 1,
+                            cursor: (esSellado(r) || restaurandoPapelera || purgandoPapelera) ? 'not-allowed' : 'pointer',
+                            opacity: (esSellado(r) || restaurandoPapelera || purgandoPapelera) ? 0.4 : 1,
                           }}
                         >
-                          🔄 Restaurar
+                          🔄
                         </button>
+                        {pptoEp().itemPurgar && (
+                          <button
+                            type="button"
+                            onClick={() => { if (!purgandoPapelera && !restaurandoPapelera) void purgarDefinitivo(r.id) }}
+                            title={purgandoPapelera ? 'Eliminación en curso…' : 'Eliminar definitivamente'}
+                            aria-label="Eliminar definitivamente"
+                            disabled={purgandoPapelera || restaurandoPapelera}
+                            style={{
+                              background: '#7C2D1218',
+                              border: '1px solid #F9731644',
+                              borderRadius: '6px',
+                              padding: '3px 8px',
+                              color: '#EA580C',
+                              fontSize: 'var(--cc-sm)',
+                              cursor: (purgandoPapelera || restaurandoPapelera) ? 'not-allowed' : 'pointer',
+                              opacity: (purgandoPapelera || restaurandoPapelera) ? 0.45 : 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            {purgandoPapelera ? '⏳' : <Flame size={14} strokeWidth={2.25} aria-hidden />}
+                          </button>
+                        )}
+                        </div>
                       </td>
                     )}
 
@@ -7715,35 +7998,39 @@ async function darDeBaja(id) {
               }}
             >
               <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: 4 }}>
-                {registrosPagina.length.toLocaleString('es-CO')} / {registrosOrdenados.length.toLocaleString('es-CO')} en pantalla
+                {textoProgresoPapelera}
+                {papeleraCargandoMas ? ' · cargando…' : ''}
               </span>
               {[
-                { label: 'Cargar 50 registros', inc: 50 },
-                { label: 'Cargar 100 registros', inc: 100 },
-                { label: 'Cargar todo', inc: 'all' },
+                { label: verPapelera ? 'Cargar 100 más' : 'Cargar 50 registros', inc: verPapelera ? 100 : 50 },
+                { label: verPapelera ? 'Cargar 500 más' : 'Cargar 100 registros', inc: verPapelera ? 500 : 100 },
+                ...(verPapelera && papeleraTotal > 5000
+                  ? []
+                  : [{ label: verPapelera ? 'Cargar 1000 más' : 'Cargar todo', inc: verPapelera ? 1000 : 'all' }]),
               ].map(({ label, inc }) => (
                 <button
                   key={label}
                   type="button"
+                  disabled={papeleraCargandoMas}
                   onClick={() => handleCargarMasRegistrosVista(inc)}
                   style={{
-                    background: inc === 'all' ? t.primary + '18' : 'transparent',
-                    border: `1px solid ${inc === 'all' ? t.primary + '66' : t.border}`,
+                    background: inc === 'all' || inc === 1000 ? t.primary + '18' : 'transparent',
+                    border: `1px solid ${inc === 'all' || inc === 1000 ? t.primary + '66' : t.border}`,
                     borderRadius: 8,
                     padding: pptoCompact ? '10px 14px' : '7px 14px',
                     minHeight: pptoCompact ? 44 : undefined,
+                    color: t.text,
                     fontSize: 'var(--cc-sm)',
-                    fontWeight: 600,
-                    color: inc === 'all' ? t.primary : t.textMuted,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
+                    fontWeight: 700,
+                    cursor: papeleraCargandoMas ? 'wait' : 'pointer',
+                    opacity: papeleraCargandoMas ? 0.6 : 1,
                   }}
                 >
                   {label}
                 </button>
               ))}
             </div>
-          )}
+        )}
         </>
       )}
     </div>

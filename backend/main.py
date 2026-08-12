@@ -1894,6 +1894,23 @@ def _puede_sincronizar_vlr_unitario(current_user, contrato_id: Optional[int] = N
     ) or _cargo_permiso_crear_registros_presupuesto(current_user, contrato_id)
 
 
+def _cargo_permiso_eliminar_registros_presupuesto(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
+    """Matriz: función «editar registros presupuesto» con acción eliminar."""
+    return _cargo_tiene_permiso_funcion(
+        current_user, "editar registros presupuesto", "eliminar", contrato_id
+    )
+
+
+def _puede_purgar_papelera_presupuesto(current_user, contrato_id: Optional[int] = None) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    return _cargo_permiso_eliminar_registros_presupuesto(
+        current_user, contrato_id
+    ) or _cargo_permiso_editar_registros_presupuesto(current_user, contrato_id)
+
+
 def _cargo_permiso_validar_presupuesto(
     current_user, contrato_id: Optional[int] = None
 ) -> bool:
@@ -2693,6 +2710,13 @@ from usuario_bienvenida_email import (
     BienvenidaEmailError,
     contacto_smtp_configured,
     send_bienvenida_email,
+)
+from presupuesto_papelera import (
+    DIAS_PURGA_PAPELERA,
+    aplicar_update_baja,
+    aplicar_update_restaurar,
+    eliminar_definitivo_ids,
+    purgar_papelera_vencida,
 )
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
@@ -10279,11 +10303,17 @@ def get_presupuesto(
             costo_directo_hasta=costo_directo_hasta,
         )
         q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        if papelera or dado_de_baja is True:
+            # Papelera: más recientes primero (updated_at se toca en dar-baja / restaurar)
+            return q.order("updated_at", desc=True).order("id", desc=True)
         return q.order("capitulo").order("item").order("pk_id")
 
     if limit is not None:
         q = _q_base()
-        rows = q.order("id").range(offset, offset + limit - 1).execute().data
+        if papelera or dado_de_baja is True:
+            rows = q.range(offset, offset + limit - 1).execute().data
+        else:
+            rows = q.order("id").range(offset, offset + limit - 1).execute().data
         rows = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, rows or [])
         return _overlay_presupuesto_meta_vivo(contrato_id, rows)
 
@@ -10291,7 +10321,11 @@ def get_presupuesto(
     all_rows = []
     off = 0
     while True:
-        batch = _q_base().order("id").range(off, off + PAGE - 1).execute().data
+        qb = _q_base()
+        if papelera or dado_de_baja is True:
+            batch = qb.range(off, off + PAGE - 1).execute().data
+        else:
+            batch = qb.order("id").range(off, off + PAGE - 1).execute().data
         all_rows.extend(batch)
         if len(batch) < PAGE:
             break
@@ -12016,10 +12050,7 @@ def dar_baja_presupuesto(
         motivo_cad = str((body.motivo_cad if body else None) or "").strip()
         if not motivo_cad and not _cad_sesion_usuario_activa(int(cid), current_user):
             raise HTTPException(status_code=400, detail=_PPTO_MSG_BAJA_PLANO)
-    supabase.table("presupuesto").update({
-        "dado_de_baja": True,
-        "updated_at": "now()"
-    }).eq("id", item_id).execute()
+    aplicar_update_baja(supabase, item_id)
     _encolar_layoff_presupuesto_item(item_id, r)
     try:
         cid = r.get("contrato_id")
@@ -12072,10 +12103,7 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
         )
     if not r.get("dado_de_baja"):
         return {"ok": True, "ya_activo": True}
-    supabase.table("presupuesto").update({
-        "dado_de_baja": False,
-        "updated_at": "now()"
-    }).eq("id", item_id).execute()
+    aplicar_update_restaurar(supabase, item_id)
     _encolar_restaurar_presupuesto_item(item_id, r)
     try:
         cid = r.get("contrato_id")
@@ -12109,6 +12137,181 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
     except Exception:
         pass
     return {"ok": True}
+
+
+class PresupuestoPurgarBody(BaseModel):
+    ids: List[int] = Field(default_factory=list)
+
+
+def _cron_secret_ok_ppto(x_cron_secret: Optional[str]) -> bool:
+    expected = (os.getenv("CLARACORE_CRON_SECRET") or "").strip()
+    if not expected:
+        return False
+    return (x_cron_secret or "").strip() == expected
+
+
+@app.delete("/presupuesto/item/{item_id}/purgar")
+def purgar_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
+    """Eliminación definitiva de un registro en Papelera (irreversible)."""
+    row = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, dado_de_baja, item, capitulo")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    r = row[0]
+    cid = r.get("contrato_id")
+    if cid is not None and not _puede_purgar_papelera_presupuesto(current_user, int(cid)):
+        raise HTTPException(status_code=403, detail="Sin permiso para eliminar definitivamente")
+    if not r.get("dado_de_baja"):
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se pueden purgar registros que estén en Papelera (dados de baja).",
+        )
+    result = eliminar_definitivo_ids(supabase, [item_id])
+    if item_id not in (result.get("eliminados") or []):
+        err = (result.get("errores") or [{}])[0]
+        raise HTTPException(
+            status_code=409,
+            detail=err.get("detail") or "No se pudo eliminar el registro (posibles vínculos en otros módulos).",
+        )
+    try:
+        registrar_log(
+            current_user,
+            "ELIMINAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(item_id),
+            {"accion": "purgar_definitivo", "capitulo": r.get("capitulo"), "item": r.get("item")},
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    try:
+        if cid:
+            _invalidate_dashboard_financial_caches(int(cid))
+    except Exception:
+        pass
+    return {"ok": True, "eliminado": item_id}
+
+
+@app.post("/presupuesto/{contrato_id}/papelera/purgar")
+def purgar_presupuesto_lote(
+    contrato_id: int,
+    body: PresupuestoPurgarBody,
+    current_user=Depends(get_current_user),
+):
+    """Eliminación definitiva masiva de registros en Papelera del contrato."""
+    if not _puede_purgar_papelera_presupuesto(current_user, contrato_id):
+        raise HTTPException(status_code=403, detail="Sin permiso para eliminar definitivamente")
+    ids = [int(x) for x in (body.ids or []) if x is not None][:2000]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Envíe ids: number[]")
+    # Asegurar que pertenecen al contrato y están en papelera
+    validos: List[int] = []
+    for i in range(0, len(ids), 100):
+        chunk = ids[i : i + 100]
+        rows = (
+            supabase.table("presupuesto")
+            .select("id, dado_de_baja")
+            .eq("contrato_id", contrato_id)
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            if r.get("dado_de_baja") and r.get("id") is not None:
+                validos.append(int(r["id"]))
+    result = eliminar_definitivo_ids(supabase, validos)
+    try:
+        registrar_log(
+            current_user,
+            "ELIMINAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(contrato_id),
+            {
+                "accion": "purgar_definitivo_lote",
+                "solicitados": len(ids),
+                "eliminados": len(result.get("eliminados") or []),
+                "omitidos": len(result.get("omitidos") or []),
+                "errores": len(result.get("errores") or []),
+            },
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "eliminados": result.get("eliminados") or [],
+        "omitidos": result.get("omitidos") or [],
+        "errores": result.get("errores") or [],
+        "dias_purga_automatica": DIAS_PURGA_PAPELERA,
+    }
+
+
+@app.post("/internal/cron/presupuesto-papelera-purge")
+def cron_presupuesto_papelera_purge(
+    x_cron_secret: Optional[str] = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Purga automática: elimina registros en Papelera con más de 30 días.
+    Protegido por CLARACORE_CRON_SECRET (pg_cron + pg_net).
+    """
+    if not _cron_secret_ok_ppto(x_cron_secret):
+        raise HTTPException(status_code=403, detail="Cron secret inválido o no configurado")
+    out = purgar_papelera_vencida(supabase, dias=DIAS_PURGA_PAPELERA)
+    try:
+        _log_api.info(
+            "cron papelera purge: eliminados=%s lotes=%s modo=%s errores=%s",
+            out.get("eliminados"),
+            out.get("lotes"),
+            out.get("modo_fecha"),
+            len(out.get("errores") or []),
+        )
+    except Exception:
+        pass
+    return out
+
+
+@app.post("/admin/presupuesto/purgar-papelera")
+def admin_purgar_papelera(
+    current_user=Depends(get_current_user),
+    contrato_id: Optional[int] = None,
+    dias: int = Query(DIAS_PURGA_PAPELERA, ge=1, le=365),
+):
+    """Ejecución manual (Desarrollador) de la purga de Papelera vencida."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador puede ejecutar la purga manual")
+    out = purgar_papelera_vencida(
+        supabase,
+        dias=dias,
+        contrato_id=contrato_id,
+    )
+    try:
+        registrar_log(
+            current_user,
+            "PURGAR",
+            "PRESUPUESTO",
+            "papelera",
+            str(contrato_id or "all"),
+            {"accion": "purga_manual", **{k: out.get(k) for k in ("eliminados", "lotes", "dias", "modo_fecha")}},
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
+    return out
+
 
 @app.post("/presupuesto/{contrato_id}/agregar-cantidad")
 def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=Depends(get_current_user)):
