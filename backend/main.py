@@ -4431,10 +4431,11 @@ def _sicoe_collect_reporte_ids_misma_linea(
     aids_eff: List[int] = list(acta_rpo_ids) if acta_rpo_ids else []
     if not aids_eff and acta_rpo_id is not None:
         aids_eff = [int(acta_rpo_id)]
-    # Acta: universo cabecera ∪ línea (mismo alcance que panel /analisis).
+    # Acta vía cabecera del reporte: evita perder líneas con acta_rpo_id NULL en so_registros.
+    # (No unificar con acta-en-línea: eso ensancha el universo y degrada la cola de Validación.)
     if aids_eff and reporte_ids_restrict is None:
         try:
-            rep_acta_scope = _sicoe_reporte_ids_universo_acta(int(contrato_id), aids_eff)
+            rep_acta_scope = _sicoe_reporte_ids_por_acta_ids(int(contrato_id), aids_eff)
         except (TypeError, ValueError):
             rep_acta_scope = []
         if not rep_acta_scope:
@@ -4882,78 +4883,18 @@ def _sicoe_reporte_ids_por_acta_ids(contrato_id: int, acta_rpo_ids: List[int]) -
     return out
 
 
-def _sicoe_reporte_ids_por_acta_en_lineas(contrato_id: int, acta_rpo_ids: List[int]) -> List[int]:
-    """IDs de reporte que tienen al menos una línea so_registros con acta_rpo_id en el conjunto."""
-    if not acta_rpo_ids:
-        return []
-    try:
-        cid = int(contrato_id)
-    except (TypeError, ValueError):
-        return []
-    aids = sorted({int(x) for x in acta_rpo_ids})
-    out: List[int] = []
-    seen: Set[int] = set()
-    for chunk in _sicoe_chunks_int(aids, 80):
-        ac = list(chunk)
-
-        def _q(c=ac):
-            return (
-                supabase.table("so_registros")
-                .select("reporte_id")
-                .eq("contrato_id", cid)
-                .in_("acta_rpo_id", c)
-                .limit(50000)
-                .execute()
-                .data
-            )
-
-        try:
-            rows = supabase_execute(_q) or []
-        except Exception:
-            rows = []
-        for row in rows:
-            rid = row.get("reporte_id")
-            if rid is None:
-                continue
-            try:
-                ri = int(rid)
-            except (TypeError, ValueError):
-                continue
-            if ri not in seen:
-                seen.add(ri)
-                out.append(ri)
-    return out
-
-
-def _sicoe_reporte_ids_universo_acta(contrato_id: int, acta_rpo_ids: List[int]) -> List[int]:
-    """
-    Universo Acta RPO compartido por panel /analisis y grilla /reportes/buscar:
-    cabeceras con esa acta ∪ reportes con alguna línea con esa acta.
-    Evita desync cuando acta está solo en cabecera o solo en línea.
-    """
-    if not acta_rpo_ids:
-        return []
-    seen: Set[int] = set()
-    out: List[int] = []
-    for rid in _sicoe_reporte_ids_por_acta_ids(contrato_id, acta_rpo_ids):
-        if rid not in seen:
-            seen.add(rid)
-            out.append(rid)
-    for rid in _sicoe_reporte_ids_por_acta_en_lineas(contrato_id, acta_rpo_ids):
-        if rid not in seen:
-            seen.add(rid)
-            out.append(rid)
-    return out
-
-
 def _sicoe_registros_q_filtrar_actas_scope(q, contrato_id: int, acta_rpo_ids: List[int]):
     """
-    Filtra líneas por el universo Acta RPO (cabecera ∪ línea).
-    Mismo alcance que la grilla de reportes bajo filtro de acta.
+    Filtra líneas por acta usando cabecera del reporte (so_reportes.acta_rpo_id).
+    Muchos contratos no replican acta_rpo_id en cada so_registros; filtrar solo la columna
+    de línea deja la cola de validación vacía aunque haya cantidades pendientes.
+
+    Para totales del panel /analisis usar _sicoe_registros_q_filtrar_actas_linea (acta_rpo_id
+    en so_registros), alineado con validación SQL del usuario.
     """
     if not acta_rpo_ids:
         return q
-    rep_ids = _sicoe_reporte_ids_universo_acta(contrato_id, acta_rpo_ids)
+    rep_ids = _sicoe_reporte_ids_por_acta_ids(contrato_id, acta_rpo_ids)
     if not rep_ids:
         return q.eq("id", -1)
     if len(rep_ids) == 1:
@@ -4979,13 +4920,15 @@ def _sicoe_analisis_aplicar_filtro_actas(
     mapa_calor: bool,
 ):
     """
-    Panel /analisis y mapa de calor: mismo universo Acta que la grilla
-    (cabecera ∪ líneas). `mapa_calor` se conserva por compatibilidad de firma.
+    Panel /analisis (KPI): filtra por acta en la *línea* (totales alineados a SQL de validación).
+    Mapa de calor: filtra por acta en la *cabecera* del reporte (mismo alcance que la grilla
+    y que la vista de detalle, donde las coords GPS suelen vivir en so_reportes).
     """
-    _ = mapa_calor
     if not acta_rpo_ids:
         return q
-    return _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), acta_rpo_ids)
+    if mapa_calor:
+        return _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), acta_rpo_ids)
+    return _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids)
 
 
 def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
