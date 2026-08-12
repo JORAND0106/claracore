@@ -19,6 +19,7 @@ import { useClaraViewport } from "./useClaraViewport";
 import SeccionCatalogoInsumos from "./admin/SeccionCatalogoInsumos";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
+import CcConfirmModal from "./components/CcConfirmModal";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -425,7 +426,7 @@ function useApi(token, opts = {}) {
       if (typeof err.detail === "string") msg = err.detail;
       else if (Array.isArray(err.detail)) msg = err.detail.map(e => e.msg).join(", ");
       else if (err.detail && typeof err.detail === "object") {
-        msg = err.detail.message || err.detail.code || "Error del servidor";
+        msg = err.detail.mensaje || err.detail.message || err.detail.code || "Error del servidor";
         const e = new Error(msg);
         e.detail = err.detail;
         e.status = res.status;
@@ -465,11 +466,28 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   const [subcontratistas, setSubcontratistas] = useState({});
   const [verifInactBusy, setVerifInactBusy] = useState(false);
   const [highlightUid, setHighlightUid] = useState(null);
+  const [actividadPorUsuario, setActividadPorUsuario] = useState({});
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const adminCompact = vpMobile || isLandscapeMobile;
 
   const col = C(theme);
   const tokCard = tFrom(theme, null);
+
+  const cargarActividadLote = useCallback(async (lista) => {
+    const ids = (lista || []).map((u) => u.id).filter((id) => id != null);
+    if (!ids.length) {
+      setActividadPorUsuario({});
+      return;
+    }
+    try {
+      const data = await call("POST", "/admin/usuarios/actividad-lote", { ids });
+      setActividadPorUsuario(data && typeof data === "object" ? data : {});
+    } catch {
+      setActividadPorUsuario({});
+    }
+  }, [call]);
 
   const cargar = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -499,10 +517,11 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         Object.keys(prev).forEach(uid => { if (merged[uid]) merged[uid] = { ...merged[uid], ...prev[uid] }; });
         return merged;
       });
+      void cargarActividadLote(udata);
     } catch (e) {
       if (!silent) setMsg({ type: "error", text: e.message });
     } finally { if (!silent) setLoading(false); }
-  }, [call]);
+  }, [call, cargarActividadLote]);
 
   useEffect(() => {
     cargar();
@@ -550,6 +569,58 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     }
   };
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
+
+  const actividadDe = (uid) => actividadPorUsuario[String(uid)] || actividadPorUsuario[uid] || null;
+
+  const puedeEliminarUsuario = (u) => {
+    if (!u) return false;
+    if (userId != null && String(u.id) === String(userId)) return false;
+    if (String(u.cargo_nombre || "").toLowerCase() === "desarrollador") return false;
+    const a = actividadDe(u.id);
+    if (!a) return false; // aún cargando verificación
+    return !!a.puede_eliminar;
+  };
+
+  const tituloEliminarUsuario = (u) => {
+    if (userId != null && String(u.id) === String(userId)) {
+      return "No puede eliminarse a sí mismo";
+    }
+    if (String(u.cargo_nombre || "").toLowerCase() === "desarrollador") {
+      return "No se puede eliminar un usuario Desarrollador";
+    }
+    const a = actividadDe(u.id);
+    if (!a) return "Verificando actividad del usuario…";
+    if (!a.puede_eliminar) return a.motivo || "Tiene actividad asociada y no puede eliminarse";
+    return "Eliminar usuario de forma definitiva (sin actividad registrada)";
+  };
+
+  const pedirEliminarUsuario = (u) => {
+    if (!puedeEliminarUsuario(u)) return;
+    setDeleteConfirm(u);
+  };
+
+  const confirmarEliminarUsuario = async () => {
+    if (!deleteConfirm) return;
+    setDeleteBusy(true);
+    try {
+      await call("DELETE", `/admin/usuarios/${deleteConfirm.id}`);
+      const label = `${deleteConfirm.nombre || ""} ${deleteConfirm.apellidos || ""}`.trim() || deleteConfirm.email;
+      setMsg({
+        type: "success",
+        text: `Usuario «${label}» eliminado de forma definitiva.`,
+      });
+      setDeleteConfirm(null);
+      await cargar(true);
+    } catch (e) {
+      const detalle = e?.detail;
+      const texto = (detalle && (detalle.mensaje || detalle.message)) || e.message || "No se pudo eliminar el usuario.";
+      setMsg({ type: "error", text: texto });
+      setDeleteConfirm(null);
+      await cargarActividadLote(usuarios);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const toOptInt = (v) => {
     if (v === null || v === undefined || v === "") return null;
@@ -840,12 +911,26 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
                         <td key={f.key} style={tdStyle}>{f.node}</td>
                       ))}
                       <td style={tdStyle}>
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button type="button" style={touchBtn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
                             {saving === u.id ? "..." : "💾"}
                           </button>
                           <button type="button" style={touchBtn("ghost", true)} title="Gestionar contratos" onClick={() => toggleExpandir(u.id)}>
                             {expandido === u.id ? "▲" : "📋"}
+                          </button>
+                          <button
+                            type="button"
+                            style={{
+                              ...touchBtn("danger", true),
+                              opacity: puedeEliminarUsuario(u) ? 1 : 0.45,
+                              cursor: puedeEliminarUsuario(u) ? "pointer" : "not-allowed",
+                            }}
+                            disabled={!puedeEliminarUsuario(u) || deleteBusy}
+                            title={tituloEliminarUsuario(u)}
+                            aria-label="Eliminar usuario"
+                            onClick={() => pedirEliminarUsuario(u)}
+                          >
+                            🗑️
                           </button>
                         </div>
                       </td>
@@ -901,6 +986,25 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
                   <button type="button" style={{ ...touchBtn("ghost", false), flex: "1 1 100%" }} onClick={() => toggleExpandir(u.id)}>
                     {expandido === u.id ? "▲ Ocultar contratos" : "📋 Contratos autorizados"}
                   </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...touchBtn("danger", false),
+                      flex: "1 1 100%",
+                      opacity: puedeEliminarUsuario(u) ? 1 : 0.5,
+                      cursor: puedeEliminarUsuario(u) ? "pointer" : "not-allowed",
+                    }}
+                    disabled={!puedeEliminarUsuario(u) || deleteBusy}
+                    title={tituloEliminarUsuario(u)}
+                    onClick={() => pedirEliminarUsuario(u)}
+                  >
+                    🗑️ Eliminar usuario
+                  </button>
+                  {!puedeEliminarUsuario(u) && (
+                    <div style={{ fontSize: "var(--cc-caption)", color: col.textSecondary, lineHeight: 1.35, flex: "1 1 100%" }}>
+                      {tituloEliminarUsuario(u)}
+                    </div>
+                  )}
                 </div>
                 {expandido === u.id && renderExpandido(u)}
               </div>
@@ -908,6 +1012,30 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
             })}
           </div>
         </>
+      )}
+      {deleteConfirm && (
+        <CcConfirmModal
+          theme={tokCard}
+          tipo="danger"
+          titulo="Eliminar usuario"
+          confirmar={deleteBusy ? "Eliminando…" : "Eliminar definitivamente"}
+          cancelar="Cancelar"
+          procesando={deleteBusy}
+          onCancel={() => !deleteBusy && setDeleteConfirm(null)}
+          onConfirm={() => { void confirmarEliminarUsuario(); }}
+        >
+          <span style={{ display: "block", lineHeight: 1.45 }}>
+            ¿Eliminar de forma permanente a{" "}
+            <strong>
+              {`${deleteConfirm.nombre || ""} ${deleteConfirm.apellidos || ""}`.trim() || deleteConfirm.email}
+            </strong>
+            {deleteConfirm.email ? ` (${deleteConfirm.email})` : ""}?
+          </span>
+          <span style={{ display: "block", marginTop: 8, color: "#DC2626", fontWeight: 600 }}>
+            Esta acción es irreversible: el registro del usuario se borrará de la base de datos.
+            Solo está disponible porque no tiene actividad relevante asociada.
+          </span>
+        </CcConfirmModal>
       )}
     </div>
   );
