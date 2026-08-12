@@ -8439,9 +8439,9 @@ function ModuloSicoeObra({
     }
   }
 
-  /** Actualizar: solo recalcula el panel (mismos criterios). No relanza la grilla para evitar carreras. */
+  /** Actualizar: grilla + panel con los mismos filtros (evita desync panel vs detalle). */
   const refrescarVistaSicoeObra = async () => {
-    if (sicoeRefrescoEnCursoRef.current) return
+    if (sicoeRefrescoEnCursoRef.current || sicoeBusquedaEnCursoRef.current) return
     const hayFiltros = Object.values(filtros).some((v) => v !== '') || capasValidacion.length > 0
     if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
     if (!tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
@@ -8452,10 +8452,9 @@ function ModuloSicoeObra({
       return
     }
     sicoeRefrescoEnCursoRef.current = true
-    const opSeq = ++sicoeOperacionSeqRef.current
-    setAnalisis(null)
     try {
-      await cargarAnalisis(filtros, capasValidacion, capasValidacionOp, opSeq)
+      invalidateSicoeVistaCache(contrato_id)
+      await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion, capasValidacionOp)
     } finally {
       sicoeRefrescoEnCursoRef.current = false
     }
@@ -11929,7 +11928,17 @@ function ModuloSicoeObra({
           urlReporteDetalle={(id) => urlDetalleReporteParaAbrir(id, { aplicarFiltros: true })}
           urlReporteDetalleFiltrado={urlReporteDetalleFiltradoSiAplica}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
-          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
+          onActualizar={() => {
+            setModalCarpeta(false)
+            setReporteSeleccionado(null)
+            invalidateSicoeVistaCache(contrato_id)
+            invalidateDashboardVistaCache(contrato_id)
+            if (busquedaRealizada) {
+              try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+            } else {
+              void buscarReportes(filtros, 0, capasValidacion)
+            }
+          }}
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
             invalidateDashboardVistaCache(contrato_id)
@@ -11958,7 +11967,13 @@ function ModuloSicoeObra({
             setModalNuevoReporte(false)
             setReporteEditando(null)
             invalidateSicoeVistaCache(contrato_id)
-            buscarReportes(filtros, 0, capasValidacion)
+            invalidateDashboardVistaCache(contrato_id)
+            // Misma ruta que carpeta: grilla + panel en paralelo bajo los filtros activos.
+            if (busquedaRealizada) {
+              try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+            } else {
+              void buscarReportes(filtros, 0, capasValidacion)
+            }
           }}
         />
       )}
