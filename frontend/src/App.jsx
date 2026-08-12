@@ -721,13 +721,14 @@ function TestModeBadge() {
 }
 
 // ─── MODAL BASE ───────────────────────────────────────────────────────────────
-function Modal({ t, onClose, children, width = '460px' }) {
+/** closeOnBackdrop: false evita perder el formulario al picar fuera (registro / reset). */
+function Modal({ t, onClose, children, width = '460px', closeOnBackdrop = true }) {
   return (
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
       background: t.overlay, zIndex: 1000,
       display: 'flex', alignItems: 'center', justifyContent: 'center'
-    }} onClick={onClose}>
+    }} onClick={closeOnBackdrop ? onClose : undefined}>
       <div style={{
         background: t.bgCard, border: `1px solid ${t.border}`,
         borderRadius: '20px', padding: '40px', width, maxWidth: '95vw',
@@ -806,7 +807,7 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
   }
 
   return (
-    <Modal t={t} onClose={onClose} width="420px">
+    <Modal t={t} onClose={onClose} width="420px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔐</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Iniciar Sesión</h2>
@@ -904,7 +905,7 @@ function ModalCrearCuenta({ t, onClose }) {
   }
 
   if (success) return (
-    <Modal t={t} onClose={onClose} width="420px">
+    <Modal t={t} onClose={onClose} width="420px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
         <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: 'var(--cc-h2)' }}>¡Registro exitoso!</h2>
@@ -919,7 +920,7 @@ function ModalCrearCuenta({ t, onClose }) {
   )
 
   return (
-    <Modal t={t} onClose={onClose} width="480px">
+    <Modal t={t} onClose={onClose} width="480px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>👤</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Crear Cuenta</h2>
@@ -981,14 +982,19 @@ function ModalCrearCuenta({ t, onClose }) {
 }
 
 // ─── MODAL OLVIDÉ CONTRASEÑA ──────────────────────────────────────────────────
-function ModalOlvide({ t, onClose }) {
-  const [email, setEmail] = useState('')
-  const [paso, setPaso] = useState('email') // 'email' | 'enviado' | 'cambiar'
+function ModalOlvide({ t, onClose, initialEmail = '', initialPaso = 'email' }) {
+  const [email, setEmail] = useState(initialEmail || '')
+  const [paso, setPaso] = useState(initialPaso || 'email') // 'email' | 'enviado' | 'cambiar' | 'listo'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [tempPass, setTempPass] = useState('')
   const [nuevaPass, setNuevaPass] = useState('')
   const [confirmarPass, setConfirmarPass] = useState('')
+
+  useEffect(() => {
+    if (initialEmail) setEmail(initialEmail)
+    if (initialPaso) setPaso(initialPaso)
+  }, [initialEmail, initialPaso])
 
   async function handleSolicitar() {
     if (!email) return
@@ -1012,7 +1018,7 @@ function ModalOlvide({ t, onClose }) {
       const res = await fetch(`${API}/auth/reset-autorizado?email=${encodeURIComponent(email)}`)
       const data = await res.json()
       if (data.autorizado) { setPaso('cambiar') }
-      else { setError('Aún no has sido autorizado por el administrador.') }
+      else { setError('Aún no has sido autorizado. Revisa tu correo: cuando el administrador autorice, recibirás la contraseña temporal y un enlace.') }
     } catch { setError('No se pudo conectar') }
     finally { setLoading(false) }
   }
@@ -1035,7 +1041,7 @@ function ModalOlvide({ t, onClose }) {
   }
 
   if (paso === 'listo') return (
-    <Modal t={t} onClose={onClose} width="400px">
+    <Modal t={t} onClose={onClose} width="400px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
         <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: 'var(--cc-title)' }}>¡Contraseña actualizada!</h2>
@@ -1046,12 +1052,13 @@ function ModalOlvide({ t, onClose }) {
   )
 
   if (paso === 'enviado') return (
-    <Modal t={t} onClose={onClose} width="400px">
+    <Modal t={t} onClose={onClose} width="400px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', marginBottom: '20px' }}>
         <div style={{ fontSize: '40px', marginBottom: '8px' }}>⏳</div>
         <h2 style={{ color: t.primary, margin: '0 0 8px', fontSize: 'var(--cc-title)' }}>Solicitud enviada</h2>
         <p style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: '1.6' }}>
-          El administrador recibirá tu solicitud y te asignará una contraseña temporal. Cuando te lo indique, regresa aquí.
+          Un administrador o desarrollador recibió tu solicitud. Cuando la autorice, te llegará un correo con la
+          <strong> contraseña temporal</strong> y un enlace para completar el cambio aquí.
         </p>
       </div>
       {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
@@ -1063,28 +1070,38 @@ function ModalOlvide({ t, onClose }) {
   )
 
   if (paso === 'cambiar') return (
-    <Modal t={t} onClose={onClose} width="400px">
+    <Modal t={t} onClose={onClose} width="400px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', marginBottom: '20px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔐</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-title)', fontWeight: '800' }}>Nueva Contraseña</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>Ingresa la contraseña temporal que te dio el administrador</p>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>
+          Ingresa la contraseña temporal del correo y define tu nueva clave
+          {email ? <> · <strong style={{ color: t.text }}>{email}</strong></> : null}
+        </p>
       </div>
-      <Field label="CONTRASEÑA TEMPORAL" t={t} type="password" placeholder="La que te dio el admin" value={tempPass} onChange={e => setTempPass(e.target.value)} />
+      <Field label="CONTRASEÑA TEMPORAL" t={t} type="password" placeholder="La del correo" value={tempPass} onChange={e => setTempPass(e.target.value)} />
       <Field label="NUEVA CONTRASEÑA" t={t} type="password" placeholder="Mínimo 8 caracteres" value={nuevaPass} onChange={e => setNuevaPass(e.target.value)} />
       <Field label="CONFIRMAR NUEVA CONTRASEÑA" t={t} type="password" placeholder="Repite la contraseña" value={confirmarPass} onChange={e => setConfirmarPass(e.target.value)} />
       {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
-      <button onClick={handleCambiar} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer' }}>
-        {loading ? 'Guardando...' : 'Guardar Nueva Contraseña'}
-      </button>
+      <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
+        <button type="button" onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer' }}>
+          Cancelar
+        </button>
+        <button type="button" onClick={handleCambiar} disabled={loading} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.7 : 1 }}>
+          {loading ? 'Guardando...' : 'Guardar Nueva Contraseña'}
+        </button>
+      </div>
     </Modal>
   )
 
   return (
-    <Modal t={t} onClose={onClose} width="400px">
+    <Modal t={t} onClose={onClose} width="400px" closeOnBackdrop={false}>
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔑</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>El administrador te asignará una contraseña temporal</p>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>
+          El administrador autorizará el acceso y te enviará la contraseña temporal por correo
+        </p>
       </div>
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)}
@@ -22337,6 +22354,24 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   )
 }
 
+/** Deep link del correo de reset: /?reset=1&email=... → popup de 3 contraseñas. */
+function consumeResetDeepLinkFromUrl() {
+  try {
+    if (typeof window === 'undefined') return null
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('reset') !== '1') return null
+    const email = (params.get('email') || '').trim()
+    const url = new URL(window.location.href)
+    url.searchParams.delete('reset')
+    url.searchParams.delete('email')
+    const qs = url.searchParams.toString()
+    window.history.replaceState({}, '', url.pathname + (qs ? `?${qs}` : '') + url.hash)
+    return { email, paso: 'cambiar' }
+  } catch {
+    return null
+  }
+}
+
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [themeMode, setThemeMode] = useState(loadStoredThemeMode)
@@ -22345,9 +22380,14 @@ export default function App() {
     return m === 'auto' ? getAutoTheme() : m
   })
   const [fontSize, setFontSize] = useState(() => localStorage.getItem('claracore_font_size') || 'normal')
-  const [modal, setModal] = useState(null)
+  const [olvideDeepLink, setOlvideDeepLink] = useState(() => {
+    const dl = consumeResetDeepLinkFromUrl()
+    if (dl) clearSessionCredentials()
+    return dl
+  })
+  const [modal, setModal] = useState(() => (olvideDeepLink ? 'olvide' : null))
   const [devPanelView, setDevPanelView] = useState(null) // null | 'gate' | 'open'
-  const [usuario, setUsuario] = useState(() => restoreUsuarioFromStorage())
+  const [usuario, setUsuario] = useState(() => (olvideDeepLink ? null : restoreUsuarioFromStorage()))
 
   // ── Service Worker (offline + Web Push) ───────────────────────────────────
   useEffect(() => {
@@ -23252,9 +23292,9 @@ export default function App() {
         onTheme={handleTheme}
         onLogin={() => setModal('login')}
         onRegistro={() => setModal('registro')}
-        onOlvide={() => setModal('olvide')} />
+        onOlvide={() => { setOlvideDeepLink(null); setModal('olvide') }} />
       </div>
-            {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
+            {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => { setOlvideDeepLink(null); setModal('olvide') }} />}
       {modal === 'selector_contrato' && (
         <ModalSelectorContrato
           t={t}
@@ -23263,7 +23303,14 @@ export default function App() {
         />
       )}
       {modal === 'registro' && <ModalCrearCuenta t={t} onClose={() => setModal(null)} />}
-      {modal === 'olvide' && <ModalOlvide t={t} onClose={() => setModal(null)} />}
+      {modal === 'olvide' && (
+        <ModalOlvide
+          t={t}
+          onClose={() => { setModal(null); setOlvideDeepLink(null) }}
+          initialEmail={olvideDeepLink?.email || ''}
+          initialPaso={olvideDeepLink?.paso || 'email'}
+        />
+      )}
       <DevPanelTrigger onClick={() => setDevPanelView('gate')} />
       {devPanelView === 'gate' && (
         <DevPanelGate

@@ -1293,7 +1293,9 @@ class ResetSolicitud(BaseModel):
     email: str
 
 class ResetAutorizar(BaseModel):
-    contrasena_temporal: str
+    # Opcional: si no viene, el servidor genera una contraseña temporal PRO.
+    contrasena_temporal: Optional[str] = None
+
 
 class CambiarPassword(BaseModel):
     email: str
@@ -8487,7 +8489,7 @@ def informe_periodico_copia_completado(
 
 @app.post("/auth/solicitar-reset")
 def solicitar_reset(body: ResetSolicitud):
-    usuario = supabase.table("usuarios").select("id, email, nombre").eq("email", body.email).execute()
+    usuario = supabase.table("usuarios").select("id, email, nombre, apellidos").eq("email", body.email).execute()
     if not usuario.data:
         raise HTTPException(status_code=404, detail="Correo no registrado")
     u = usuario.data[0]
@@ -8495,7 +8497,70 @@ def solicitar_reset(body: ResetSolicitud):
     if pendiente.data:
         return {"mensaje": "Ya tienes una solicitud pendiente"}
     supabase.table("password_reset_requests").insert({"usuario_id": u["id"], "email": body.email, "estado": "pendiente"}).execute()
+    # Notificar a Administradores y Desarrolladores activos
+    try:
+        _notificar_admins_solicitud_reset(u)
+    except Exception:
+        try:
+            _log_api.warning("No se pudieron notificar admins del reset email=%s", body.email)
+        except Exception:
+            pass
     return {"mensaje": "Solicitud enviada al administrador"}
+
+
+def _notificar_admins_solicitud_reset(usuario_row: dict) -> None:
+    """Inserta notificaciones en buzón para cargos Administrador / Desarrollador."""
+    cargos = supabase.table("cargos").select("id, nombre").execute().data or []
+    admin_cargo_ids = [
+        int(c["id"])
+        for c in cargos
+        if str(c.get("nombre") or "").strip().lower() in ("administrador", "desarrollador")
+        and c.get("id") is not None
+    ]
+    if not admin_cargo_ids:
+        return
+    dests = (
+        supabase.table("usuarios")
+        .select("id")
+        .in_("cargo_id", admin_cargo_ids)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    nombre = f"{usuario_row.get('nombre') or ''} {usuario_row.get('apellidos') or ''}".strip()
+    email = usuario_row.get("email") or ""
+    asunto = "🔑 Solicitud de restablecimiento de contraseña"
+    mensaje = (
+        f"{nombre or 'Un usuario'} ({email}) solicitó restablecer su contraseña. "
+        "Revisa Panel de administración → Reset Claves y pulsa Autorizar para enviarle "
+        "la contraseña temporal por correo."
+    )
+    rows = []
+    for d in dests:
+        try:
+            dest_id = int(d["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if dest_id == int(usuario_row.get("id") or 0):
+            continue
+        rows.append(
+            {
+                "remitente_id": int(usuario_row["id"]),
+                "remitente_nombre": nombre or email or "Usuario",
+                "destinatario_id": dest_id,
+                "asunto": asunto,
+                "mensaje": mensaje,
+                "tipo": "SISTEMA",
+                "modulo": "USUARIOS",
+                "contrato_id": None,
+                "entidad_tipo": "password_reset",
+                "entidad_id": str(usuario_row.get("id") or ""),
+            }
+        )
+    if rows:
+        supabase.table("notificaciones").insert(rows).execute()
+
 
 @app.get("/auth/reset-autorizado")
 def check_reset_autorizado(email: str):
@@ -8520,10 +8585,111 @@ def listar_reset_requests(current_user=Depends(get_current_user)):
     return supabase.table("password_reset_requests").select("*").eq("estado", "pendiente").order("created_at", desc=True).execute().data
 
 @app.put("/admin/reset-requests/{request_id}/autorizar")
-def autorizar_reset(request_id: int, body: ResetAutorizar, current_user=Depends(get_current_user)):
-    hashed_temp = hash_password(body.contrasena_temporal)
-    supabase.table("password_reset_requests").update({"estado": "autorizado", "contrasena_temporal": hashed_temp}).eq("id", request_id).execute()
-    return {"mensaje": "Reset autorizado"}
+def autorizar_reset(
+    request_id: int,
+    body: Optional[ResetAutorizar] = None,
+    current_user=Depends(get_current_user),
+):
+    from password_reset_email import (
+        generar_password_temporal,
+        send_password_reset_email,
+    )
+    from usuario_bienvenida_email import BienvenidaEmailError, contacto_smtp_configured
+
+    body = body or ResetAutorizar()
+    rows = (
+        supabase.table("password_reset_requests")
+        .select("*")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    sol = rows[0]
+    if str(sol.get("estado") or "") != "pendiente":
+        raise HTTPException(status_code=400, detail="La solicitud ya no está pendiente")
+
+    temp = str(body.contrasena_temporal or "").strip()
+    generada = False
+    if len(temp) < 8:
+        temp = generar_password_temporal(14)
+        generada = True
+    hashed_temp = hash_password(temp)
+    supabase.table("password_reset_requests").update(
+        {"estado": "autorizado", "contrasena_temporal": hashed_temp}
+    ).eq("id", request_id).execute()
+
+    email = (sol.get("email") or "").strip().lower()
+    nombre = ""
+    try:
+        urows = (
+            supabase.table("usuarios")
+            .select("nombre, apellidos, email")
+            .eq("id", sol.get("usuario_id"))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if urows:
+            nombre = f"{urows[0].get('nombre') or ''} {urows[0].get('apellidos') or ''}".strip()
+            email = email or (urows[0].get("email") or "").strip().lower()
+    except Exception:
+        pass
+
+    email_enviado = False
+    email_error = None
+    if email and contacto_smtp_configured():
+        try:
+            send_password_reset_email(
+                destinatario=email,
+                nombre_completo=nombre or email,
+                temp_password=temp,
+            )
+            email_enviado = True
+        except BienvenidaEmailError as ex:
+            email_error = str(ex)
+        except Exception as ex:
+            email_error = str(ex)
+    elif not contacto_smtp_configured():
+        email_error = "SMTP de contacto no configurado; copie la contraseña temporal y entréguesela al usuario."
+
+    registrar_log(
+        current_user,
+        "AUTORIZAR",
+        "USUARIOS",
+        "password_reset",
+        str(request_id),
+        {
+            "email": email,
+            "generada": generada,
+            "email_enviado": email_enviado,
+            "email_error": email_error,
+        },
+        severidad="AUDIT",
+    )
+    return {
+        "mensaje": (
+            "Reset autorizado. Se envió la contraseña temporal al correo del usuario."
+            if email_enviado
+            else "Reset autorizado. No se pudo enviar el correo; use la contraseña temporal mostrada."
+        ),
+        "contrasena_temporal": temp,
+        "email_enviado": email_enviado,
+        "email_error": email_error,
+        "generada": generada,
+    }
+
+@app.post("/admin/reset-password/generar")
+def admin_generar_password_temporal(current_user=Depends(get_current_user)):
+    """Genera una contraseña temporal PRO (para previsualizar antes de autorizar)."""
+    from password_reset_email import generar_password_temporal
+
+    return {"contrasena_temporal": generar_password_temporal(14)}
+
 
 @app.post("/admin/permisos")
 def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_current_user)):
