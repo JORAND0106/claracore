@@ -2641,6 +2641,9 @@ function SeccionResets({ call, theme }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tempPasswords, setTempPasswords] = useState({});
+  const [autorizandoId, setAutorizandoId] = useState(null);
+  const [generandoId, setGenerandoId] = useState(null);
+  const [ultimoResultado, setUltimoResultado] = useState(null); // { email, contrasena_temporal, email_enviado, email_error }
   const [msg, setMsg] = useState(null);
   const col = C(theme);
   const tdStyle = S.td(theme);
@@ -2654,37 +2657,119 @@ function SeccionResets({ call, theme }) {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  const autorizar = async (id) => {
-    const temp = tempPasswords[id];
-    if (!temp || temp.length < 6) { setMsg({ type: "error", text: "Ingresa una contraseña temporal de mínimo 6 caracteres" }); return; }
+  const generar = async (id) => {
+    setGenerandoId(id);
+    setMsg(null);
     try {
-      await call("PUT", `/admin/reset-requests/${id}/autorizar`, { contrasena_temporal: temp });
-      setMsg({ type: "success", text: "Reset autorizado. El usuario ya puede cambiar su contraseña." });
+      const data = await call("POST", "/admin/reset-password/generar", {});
+      const pwd = data?.contrasena_temporal || "";
+      if (!pwd) throw new Error("No se generó contraseña");
+      setTempPasswords((p) => ({ ...p, [id]: pwd }));
+      setMsg({ type: "success", text: "Contraseña PRO generada. Pulsa Autorizar para enviarla por correo (o déjala vacía y Autorizar genera una nueva al instante)." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setGenerandoId(null);
+    }
+  };
+
+  const autorizar = async (id) => {
+    const temp = (tempPasswords[id] || "").trim();
+    setAutorizandoId(id);
+    setMsg(null);
+    try {
+      const payload = temp.length >= 8 ? { contrasena_temporal: temp } : {};
+      const data = await call("PUT", `/admin/reset-requests/${id}/autorizar`, payload);
+      const enviada = !!data?.email_enviado;
+      const pwd = data?.contrasena_temporal || temp;
+      setUltimoResultado({
+        email: solicitudes.find((s) => s.id === id)?.email || "",
+        contrasena_temporal: pwd,
+        email_enviado: enviada,
+        email_error: data?.email_error || null,
+      });
+      setMsg({
+        type: enviada ? "success" : "error",
+        text: enviada
+          ? "Autorizado. Se envió al correo del usuario la contraseña temporal y el enlace para completar el cambio."
+          : (data?.mensaje || data?.email_error || "Autorizado, pero el correo no se envió. Copia la contraseña temporal de abajo."),
+      });
+      setTempPasswords((p) => {
+        const n = { ...p };
+        delete n[id];
+        return n;
+      });
       cargar();
-    } catch (e) { setMsg({ type: "error", text: e.message }); }
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setAutorizandoId(null);
+    }
   };
 
   return (
     <div>
+      <p style={{ fontSize: 13, color: col.textMuted, lineHeight: 1.5, marginBottom: 14 }}>
+        Al pulsar <strong>Autorizar</strong>, el sistema genera (si no hay una) una contraseña temporal segura,
+        la envía por correo al usuario con un enlace que abre el popup de cambio (temporal / nueva / confirmar).
+        Opcionalmente puedes previsualizar con <strong>Generar</strong> antes de autorizar.
+      </p>
       {msg && <div style={S.alert(msg.type)}>{msg.text}<span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span></div>}
+      {ultimoResultado && (
+        <div style={{
+          ...S.alert(ultimoResultado.email_enviado ? "success" : "error"),
+          marginBottom: 12,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontSize: 13,
+        }}>
+          <div style={{ fontFamily: "inherit", marginBottom: 6 }}>
+            Última autorización · {ultimoResultado.email || "usuario"}
+            {ultimoResultado.email_enviado ? " · correo enviado" : " · correo no enviado"}
+          </div>
+          <div style={{ wordBreak: "break-all" }}>
+            Temporal: <strong>{ultimoResultado.contrasena_temporal}</strong>
+          </div>
+          {ultimoResultado.email_error && (
+            <div style={{ marginTop: 6, opacity: 0.85 }}>{ultimoResultado.email_error}</div>
+          )}
+          <span onClick={() => setUltimoResultado(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
+        </div>
+      )}
       {loading ? <div style={S.empty}>Cargando...</div>
       : solicitudes.length === 0 ? (
         <div style={S.empty}><div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>No hay solicitudes de reset pendientes.</div>
       ) : (
         <table style={S.table}>
-          <thead><tr>{["Correo", "Fecha solicitud", "Contraseña temporal", "Acción"].map(h => <th key={h} style={S.th(theme)}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Correo", "Fecha solicitud", "Contraseña (opcional)", "Acción"].map(h => <th key={h} style={S.th(theme)}>{h}</th>)}</tr></thead>
           <tbody>
             {solicitudes.map(s => (
               <tr key={s.id}>
                 <td style={tdStyle}><div style={{ color: col.textPrimary, fontWeight: 500 }}>{s.email}</div></td>
                 <td style={tdStyle}><span style={{ color: col.textSecondary }}>{new Date(s.created_at).toLocaleDateString("es-CO")}</span></td>
                 <td style={tdStyle}>
-                  <input style={{ ...S.input, maxWidth: 180 }} type="text" placeholder="Ej: Temp1234"
-                    value={tempPasswords[s.id] || ""}
-                    onChange={e => setTempPasswords(p => ({ ...p, [s.id]: e.target.value }))} />
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <input style={{ ...S.input, maxWidth: 200 }} type="text" placeholder="Vacío = auto al autorizar"
+                      value={tempPasswords[s.id] || ""}
+                      onChange={e => setTempPasswords(p => ({ ...p, [s.id]: e.target.value }))} />
+                    <button
+                      type="button"
+                      style={S.btn("secondary", true)}
+                      disabled={generandoId === s.id || autorizandoId === s.id}
+                      onClick={() => generar(s.id)}
+                    >
+                      {generandoId === s.id ? "…" : "🎲 Generar"}
+                    </button>
+                  </div>
                 </td>
                 <td style={tdStyle}>
-                  <button style={S.btn("success", true)} onClick={() => autorizar(s.id)}>✓ Autorizar</button>
+                  <button
+                    type="button"
+                    style={S.btn("success", true)}
+                    disabled={autorizandoId === s.id || generandoId === s.id}
+                    onClick={() => autorizar(s.id)}
+                  >
+                    {autorizandoId === s.id ? "Enviando…" : "✓ Autorizar y enviar correo"}
+                  </button>
                 </td>
               </tr>
             ))}
@@ -8320,7 +8405,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
-    resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
+    resets:           { title: "Reset Claves",          sub: "Autoriza el reset: genera contraseña PRO y la envía por correo con enlace" },
     actas:       { title: "Actas", sub: "Crear actas RPO y administrativas; cierre anticipado y traslado de residuales (RPO)" },
     inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
