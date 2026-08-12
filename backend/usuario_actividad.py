@@ -27,6 +27,7 @@ CHECKS_BLOQUEANTES: List[Tuple[str, str, str, str]] = [
     ("SICOE", "so_registros", "nivel6_usuario_id", "validaciones nivel 6"),
     ("SICOE", "so_registros", "reversion_arm_n2_usuario_id", "reversiones N2"),
     ("SICOE", "so_registros", "reversion_arm_n3_usuario_id", "reversiones N3"),
+    ("SICOE", "so_registros", "sub_usuario_id", "validaciones subcontratista"),
     ("SICOE", "so_registro_comentarios", "autor_id", "comentarios en registros"),
     # Actas RPO
     ("Actas RPO", "actas", "asignado_a", "actas RPO asignadas"),
@@ -57,6 +58,7 @@ CHECKS_BLOQUEANTES: List[Tuple[str, str, str, str]] = [
 ]
 
 # Preferencias / vínculos sin trazabilidad de negocio: se borran antes del DELETE.
+# Incluye `logs`: casi todos los usuarios tienen LOGIN/políticas y la FK bloquearía el DELETE.
 CLEANUP_BEFORE_DELETE: List[Tuple[str, str]] = [
     ("usuario_contratos", "usuario_id"),
     ("password_reset_requests", "usuario_id"),
@@ -68,9 +70,10 @@ CLEANUP_BEFORE_DELETE: List[Tuple[str, str]] = [
     ("usuario_correo_envio", "usuario_id"),
     ("inicio_novedades_lecturas", "usuario_id"),
     ("notificaciones", "destinatario_id"),
+    ("logs", "usuario_id"),
 ]
 
-# Acciones de log que NO cuentan como actividad relevante.
+# Acciones de log que NO cuentan como actividad relevante de negocio.
 _LOG_ACCIONES_IGNORAR = frozenset(
     {
         "LOGIN",
@@ -82,27 +85,65 @@ _LOG_ACCIONES_IGNORAR = frozenset(
         "LISTAR",
         "EXPORTAR",
         "DESCARGAR",
+        # Cuenta / perfil / auth (no son trabajo en obra ni módulos de negocio)
+        "ACEPTAR",
+        "ACEPTAR_POLITICAS",
+        "POLITICAS",
+        "PERFIL",
+        "ACTUALIZAR_PERFIL",
+        "CAMBIAR_PASSWORD",
+        "CAMBIAR_CONTRASENA",
+        "SOLICITAR",
+        "SOLICITAR_RESET",
+        "BIENVENIDA",
+        "NOTIFICACION",
+        "PUSH",
+    }
+)
+
+# Acciones de auditoría que sí indican trabajo/uso sustantivo.
+_LOG_ACCIONES_BLOQUEANTES = frozenset(
+    {
+        "CREAR",
+        "EDITAR",
+        "ACTUALIZAR",
+        "GUARDAR",
+        "ELIMINAR",
+        "BORRAR",
+        "VALIDAR",
+        "APROBAR",
+        "RECHAZAR",
+        "AUTORIZAR",
+        "SELLAR",
+        "REABRIR",
+        "ASIGNAR",
+        "CERRAR",
+        "ENVIAR",
+        "SUBIR",
+        "IMPORTAR",
+        "MIGRAR",
     }
 )
 
 
 def _fila_existe(sb, tabla: str, columna: str, usuario_id: int) -> bool:
+    """Consulta tolerante: selecciona la columna filtrada (no exige PK llamada id)."""
     try:
-        res = sb.table(tabla).select("id").eq(columna, usuario_id).limit(1).execute()
+        res = sb.table(tabla).select(columna).eq(columna, usuario_id).limit(1).execute()
         return bool(res.data)
     except Exception:
         return False
 
 
 def _logs_actividad_relevante(sb, usuario_id: int) -> Optional[Dict[str, Any]]:
-    """True si hay logs de creación/edición/validación (no solo LOGIN)."""
+    """True si hay logs de creación/edición/validación (no solo LOGIN/perfil)."""
     try:
         res = (
             sb.table("logs")
             .select("id, accion, modulo")
             .eq("usuario_id", usuario_id)
             .order("id", desc=True)
-            .limit(40)
+            .limit(80)
             .execute()
         )
         rows = res.data or []
@@ -110,14 +151,27 @@ def _logs_actividad_relevante(sb, usuario_id: int) -> Optional[Dict[str, Any]]:
             acc = str(r.get("accion") or "").strip().upper()
             if not acc or acc in _LOG_ACCIONES_IGNORAR:
                 continue
-            # Cualquier otra acción sustantiva (CREAR, EDITAR, VALIDAR, APROBAR, ELIMINAR, …)
-            return {
-                "modulo": "Auditoría",
-                "tabla": "logs",
-                "campo": "usuario_id",
-                "etiqueta": f"acciones registradas ({acc})",
-                "count": 1,
-            }
+            # Prefijos / coincidencia exacta de acciones de negocio
+            if acc in _LOG_ACCIONES_BLOQUEANTES or any(
+                acc.startswith(p) for p in ("CREAR", "EDITAR", "ELIMINAR", "VALIDAR", "APROBAR", "AUTORIZAR")
+            ):
+                return {
+                    "modulo": "Auditoría",
+                    "tabla": "logs",
+                    "campo": "usuario_id",
+                    "etiqueta": f"acciones registradas ({acc})",
+                    "count": 1,
+                }
+            # Otras acciones desconocidas en módulos de negocio sí bloquean
+            mod = str(r.get("modulo") or "").strip().upper()
+            if mod and mod not in ("AUTH", "USUARIOS", "SISTEMA", "PERFIL", "SESION", "SESSION"):
+                return {
+                    "modulo": "Auditoría",
+                    "tabla": "logs",
+                    "campo": "usuario_id",
+                    "etiqueta": f"acciones registradas ({acc})",
+                    "count": 1,
+                }
     except Exception:
         return None
     return None

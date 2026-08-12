@@ -484,8 +484,12 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     try {
       const data = await call("POST", "/admin/usuarios/actividad-lote", { ids });
       setActividadPorUsuario(data && typeof data === "object" ? data : {});
-    } catch {
+    } catch (e) {
       setActividadPorUsuario({});
+      setMsg({
+        type: "error",
+        text: `No se pudo verificar actividad para eliminar usuarios: ${e.message || "error de red"}. Recarga la sección.`,
+      });
     }
   }, [call]);
 
@@ -595,7 +599,10 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   };
 
   const pedirEliminarUsuario = (u) => {
-    if (!puedeEliminarUsuario(u)) return;
+    if (!puedeEliminarUsuario(u)) {
+      setMsg({ type: "error", text: tituloEliminarUsuario(u) });
+      return;
+    }
     setDeleteConfirm(u);
   };
 
@@ -925,14 +932,20 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
                               opacity: puedeEliminarUsuario(u) ? 1 : 0.45,
                               cursor: puedeEliminarUsuario(u) ? "pointer" : "not-allowed",
                             }}
-                            disabled={!puedeEliminarUsuario(u) || deleteBusy}
+                            disabled={deleteBusy}
                             title={tituloEliminarUsuario(u)}
                             aria-label="Eliminar usuario"
+                            aria-disabled={!puedeEliminarUsuario(u)}
                             onClick={() => pedirEliminarUsuario(u)}
                           >
                             🗑️
                           </button>
                         </div>
+                        {!puedeEliminarUsuario(u) && (
+                          <div style={{ fontSize: 11, color: col.textSecondary, lineHeight: 1.35, marginTop: 6, maxWidth: 220 }}>
+                            {tituloEliminarUsuario(u)}
+                          </div>
+                        )}
                       </td>
                     </tr>
                     {expandido === u.id && (
@@ -994,8 +1007,9 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
                       opacity: puedeEliminarUsuario(u) ? 1 : 0.5,
                       cursor: puedeEliminarUsuario(u) ? "pointer" : "not-allowed",
                     }}
-                    disabled={!puedeEliminarUsuario(u) || deleteBusy}
+                    disabled={deleteBusy}
                     title={tituloEliminarUsuario(u)}
+                    aria-disabled={!puedeEliminarUsuario(u)}
                     onClick={() => pedirEliminarUsuario(u)}
                   >
                     🗑️ Eliminar usuario
