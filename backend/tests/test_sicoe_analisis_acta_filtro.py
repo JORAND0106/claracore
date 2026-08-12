@@ -1,4 +1,4 @@
-"""Panel /analisis y grilla: mismo universo Acta RPO (cabecera ∪ línea)."""
+"""Panel /analisis: filtro Acta RPO por línea; mapa_calor por cabecera (como la grilla)."""
 from unittest.mock import MagicMock, patch
 
 import main as m
@@ -22,33 +22,25 @@ def test_analisis_acta_filtro_linea_single():
     assert ("eq", "acta_rpo_id", 616) in q.calls
 
 
-def test_universo_acta_une_cabecera_y_lineas():
-    with patch.object(m, "_sicoe_reporte_ids_por_acta_ids", return_value=[10, 20]):
-        with patch.object(m, "_sicoe_reporte_ids_por_acta_en_lineas", return_value=[20, 30]):
-            out = m._sicoe_reporte_ids_universo_acta(2, [616])
-    assert out == [10, 20, 30]
+def test_analisis_acta_scope_distinto_de_linea():
+    """Cabecera de reporte incluye líneas de otras actas en la misma cabecera (regresión 3734 vs 1111)."""
+    # Contrato 2 / acta 616: reporte scope >> línea acta_rpo_id
+    linea = 1111
+    reporte = 3734
+    assert reporte > linea
+    assert reporte / linea > 2.5
 
 
-def test_analisis_aplicar_filtro_actas_panel_usa_universo():
-    """Panel y grilla comparten universo (ya no solo línea)."""
-    with patch.object(m, "_sicoe_reporte_ids_universo_acta", return_value=[101, 202]) as mock_u:
-        q = MagicMock()
-        m._sicoe_analisis_aplicar_filtro_actas(q, 2, [616], mapa_calor=False)
-    mock_u.assert_called_once_with(2, [616])
-    q.in_.assert_called_once_with("reporte_id", [101, 202])
+def test_analisis_aplicar_filtro_actas_panel_usa_linea():
+    q = MagicMock()
+    m._sicoe_analisis_aplicar_filtro_actas(q, 2, [616], mapa_calor=False)
+    q.eq.assert_called_once_with("acta_rpo_id", 616)
 
 
-def test_analisis_aplicar_filtro_actas_mapa_calor_usa_universo():
-    with patch.object(m, "_sicoe_reporte_ids_universo_acta", return_value=[101, 202]) as mock_u:
+def test_analisis_aplicar_filtro_actas_mapa_calor_usa_scope_cabecera():
+    """Mapa de calor debe ver los mismos reportes que la grilla/detalle (coords en so_reportes)."""
+    with patch("main._sicoe_reporte_ids_por_acta_ids", return_value=[101, 202]) as mock_rep:
         q = MagicMock()
         m._sicoe_analisis_aplicar_filtro_actas(q, 2, [616], mapa_calor=True)
-    mock_u.assert_called_once_with(2, [616])
+    mock_rep.assert_called_once_with(2, [616])
     q.in_.assert_called_once_with("reporte_id", [101, 202])
-
-
-def test_registros_q_filtrar_actas_scope_usa_universo():
-    with patch.object(m, "_sicoe_reporte_ids_universo_acta", return_value=[10, 20]) as mock_u:
-        q = MagicMock()
-        m._sicoe_registros_q_filtrar_actas_scope(q, 3, [616])
-    mock_u.assert_called_once_with(3, [616])
-    q.in_.assert_called_once_with("reporte_id", [10, 20])
