@@ -780,10 +780,6 @@ useEffect(() => {
     esDeveloper || !!(_permPpto?.editar) || !!(_permPpto?.crear)
   ) && !versionVistaTemporal
   /** Cualquier usuario con permiso editar (o Desarrollador): puede reabrir sellado con motivo + destinatario. */
-  const esRolContratistaPpto = (() => {
-    const r = (usuario?.rol_nombre || '').toLowerCase().trim()
-    return r === 'contratista' || r === 'operativo contratista'
-  })()
   const puedeReabrirTrasAprob = (esDeveloper || (_permPpto?.editar ?? false)) && !versionVistaTemporal
   const puedeValidar = (esDeveloper || (_permPpto?.validar  ?? false)) && !versionVistaTemporal
   const puedeEliminar = (esDeveloper || (_permPpto?.eliminar ?? false)) && !versionVistaTemporal
