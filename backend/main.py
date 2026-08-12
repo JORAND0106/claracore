@@ -10193,6 +10193,15 @@ def _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion: Optional[str]):
     return q.eq("tipo_ejecucion", _presupuesto_resolve_tipo_ejecucion(tipo_ejecucion))
 
 
+def _presupuesto_q_tipo_ejecucion_opcional(q, tipo_ejecucion: Optional[str], *, papelera: bool = False):
+    """En Papelera, sin tipo_ejecucion explícito → no filtrar (mostrar todos los dados de baja).
+    En vista activa, siempre aplica el default «Presupuesto de Obra»."""
+    t = (tipo_ejecucion or "").strip()
+    if papelera and not t:
+        return q
+    return _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
+
+
 def _orden_capitulo_presupuesto(c: Optional[str]) -> tuple:
     if not c:
         return (2, 0, c or "")
@@ -10260,7 +10269,9 @@ def get_presupuesto(
             q = q.eq("dado_de_baja", True)
         else:
             q = q.eq("dado_de_baja", False)
-        q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
+        q = _presupuesto_q_tipo_ejecucion_opcional(
+            q, tipo_ejecucion, papelera=bool(papelera or dado_de_baja is True)
+        )
         q = _presupuesto_q_estructura(
             q,
             capitulo=capitulo,
@@ -10384,7 +10395,9 @@ def get_presupuesto_conteo(
         q = q.eq("dado_de_baja", True)
     else:
         q = q.eq("dado_de_baja", False)
-    q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
+    q = _presupuesto_q_tipo_ejecucion_opcional(
+        q, tipo_ejecucion, papelera=bool(papelera or dado_de_baja is True)
+    )
     q = _presupuesto_q_estructura(
         q,
         capitulo=capitulo,

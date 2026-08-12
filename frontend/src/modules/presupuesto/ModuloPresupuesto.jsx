@@ -1832,6 +1832,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const h = { Authorization: `Bearer ${token}` }
     try {
       if (esPapelera) {
+        // Evitar que filtros/drill de la vista activa oculten la página del servidor
+        setRegistros([])
+        papeleraNextOffsetRef.current = 0
+        setPapeleraCargados(0)
+        setPapeleraTotal(0)
         const pCount = pptoQueryBib(new URLSearchParams({ papelera: 'true' }))
         let totalN = 0
         try {
@@ -1855,10 +1860,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
           papeleraNextOffsetRef.current = rows.length
           setPapeleraCargados(rows.length)
           setVisibleRegistrosCount(Math.max(rows.length, PAPELERA_PAGE))
+          if (totalN === 0 && rows.length > 0) setPapeleraTotal(rows.length)
         } else {
+          console.warn('[Presupuesto] Papelera: listado falló', res.status)
           setRegistros([])
           papeleraNextOffsetRef.current = 0
           setPapeleraCargados(0)
+          setAvisoSistema({
+            titulo: 'Papelera',
+            mensaje: `No se pudieron cargar los registros dados de baja (HTTP ${res.status}).`,
+            tipo: 'warn',
+          })
         }
       } else {
         setPapeleraTotal(0)
@@ -3261,6 +3273,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [fObra])
 
   const registrosFiltrados = useMemo(() => {
+    // Papelera: el servidor ya pagina/filtra dado_de_baja; no reaplicar drill/filtros
+    // de la vista activa (dejarían la primera página vacía en pantalla).
+    if (verPapelera) return registros
     const parseAbs = s => {
       if (!s) return null
       return parseFloat(String(s).replace('+', ''))
@@ -3310,7 +3325,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
 
   const chartData = useMemo(() => {
     if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {
@@ -7320,16 +7335,42 @@ async function darDeBaja(id) {
       )}
 
       {/* Carga capítulo activo (no bloquear toda la vista por resumen de capítulos) */}
-      {loading && drill.length > 0 ? (
+      {verPapelera && loading ? (
+        <div style={s.emptyState}>⏳ Cargando papelera…</div>
+      ) : loading && drill.length > 0 ? (
         <div style={s.emptyState}>⏳ Cargando capítulo...</div>
-      ) : (verPapelera ? registros.length === 0 : (capitulosResumen.length === 0 && registros.length === 0 && !loadingCapitulos)) ? (
+      ) : verPapelera && registros.length === 0 ? (
+        <div style={s.emptyState}>🗑️ La Papelera está vacía</div>
+      ) : (!verPapelera && capitulosResumen.length === 0 && registros.length === 0 && !loadingCapitulos) ? (
         <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando lista de capítulos…' : '📂 Importa un CSV para comenzar'}</div>
       ) : null}
 
       {/* ── Papelera + indicador DWG (solo verde cuando hay enlace activo) ── */}
       <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={async () => { const v = !verPapelera; setVerPapelera(v); if (v) { _pptoCacheRef.current = null; cargarRegistros(true) } else { setRegistros([]); setDrill([]); await cargarCapitulos() } }}
+          <button onClick={async () => {
+            const v = !verPapelera
+            setVerPapelera(v)
+            if (v) {
+              _pptoCacheRef.current = null
+              // Salir del drill/búsqueda activa: la Papelera pagina en servidor sin esos filtros
+              setDrill([])
+              setCapExpandido(null)
+              setCapActivo(null)
+              setItemsResumen([])
+              busquedaServidorActivaRef.current = false
+              setBusquedaServidorActiva(false)
+              setSeleccionados(new Set())
+              void cargarRegistros(true)
+            } else {
+              setRegistros([])
+              setDrill([])
+              setPapeleraTotal(0)
+              setPapeleraCargados(0)
+              papeleraNextOffsetRef.current = 0
+              await cargarCapitulos()
+            }
+          }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
@@ -7362,7 +7403,7 @@ async function darDeBaja(id) {
         )}
       </div>
       {/* ── Tabla ── */}
-      {(busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
+      {(verPapelera || busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
         <>
         {pptoCompact && (
           <div className="cc-ppto-reg-cards" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
