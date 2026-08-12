@@ -1011,18 +1011,6 @@ function ModalOlvide({ t, onClose, initialEmail = '', initialPaso = 'email' }) {
     finally { setLoading(false) }
   }
 
-  async function handleVerificarAutorizacion() {
-    if (!email) return
-    setLoading(true); setError('')
-    try {
-      const res = await fetch(`${API}/auth/reset-autorizado?email=${encodeURIComponent(email)}`)
-      const data = await res.json()
-      if (data.autorizado) { setPaso('cambiar') }
-      else { setError('Aún no has sido autorizado. Revisa tu correo: cuando el administrador autorice, recibirás la contraseña temporal y un enlace.') }
-    } catch { setError('No se pudo conectar') }
-    finally { setLoading(false) }
-  }
-
   async function handleCambiar() {
     if (!tempPass || !nuevaPass || !confirmarPass) { setError('Completa todos los campos'); return }
     if (nuevaPass !== confirmarPass) { setError('Las contraseñas no coinciden'); return }
@@ -1052,20 +1040,36 @@ function ModalOlvide({ t, onClose, initialEmail = '', initialPaso = 'email' }) {
   )
 
   if (paso === 'enviado') return (
-    <Modal t={t} onClose={onClose} width="400px" closeOnBackdrop={false}>
-      <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-        <div style={{ fontSize: '40px', marginBottom: '8px' }}>⏳</div>
-        <h2 style={{ color: t.primary, margin: '0 0 8px', fontSize: 'var(--cc-title)' }}>Solicitud enviada</h2>
-        <p style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: '1.6' }}>
-          Un administrador o desarrollador recibió tu solicitud. Cuando la autorice, te llegará un correo con la
-          <strong> contraseña temporal</strong> y un enlace para completar el cambio aquí.
+    <Modal t={t} onClose={onClose} width="420px" closeOnBackdrop={false}>
+      <div style={{ textAlign: 'center', padding: '8px 0 4px' }}>
+        <div style={{ fontSize: '44px', marginBottom: '12px' }} aria-hidden>📧</div>
+        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: 'var(--cc-title)' }}>Revisa tu correo</h2>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.65, margin: '0 0 14px', textAlign: 'left' }}>
+          Tu solicitud fue enviada. Un administrador la revisará y, al autorizarla, te llegará un correo a{' '}
+          <strong style={{ color: t.text }}>{email || 'tu cuenta'}</strong> con:
         </p>
+        <ul style={{
+          textAlign: 'left', margin: '0 0 18px', padding: '12px 12px 12px 28px',
+          background: t.inputBg || 'rgba(0,0,0,0.04)', borderRadius: '10px',
+          color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.7,
+        }}>
+          <li>La <strong style={{ color: t.text }}>contraseña temporal</strong></li>
+          <li>Un <strong style={{ color: t.text }}>enlace</strong> para volver a ClaraCore y definir tu nueva contraseña</li>
+        </ul>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.55, margin: '0 0 20px', textAlign: 'left' }}>
+          No es necesario esperar en esta ventana: cierra aquí y sigue los pasos desde el correo cuando llegue.
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            width: '100%', background: t.primary, color: '#fff', border: 'none',
+            borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer',
+          }}
+        >
+          Entendido
+        </button>
       </div>
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
-      <button onClick={handleVerificarAutorizacion} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer', marginBottom: '10px' }}>
-        {loading ? 'Verificando...' : '🔍 Ya me autorizaron, continuar'}
-      </button>
-      <button onClick={onClose} style={{ width: '100%', background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer' }}>Cerrar</button>
     </Modal>
   )
 

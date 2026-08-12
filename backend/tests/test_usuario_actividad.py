@@ -52,8 +52,46 @@ def test_solo_login_no_bloquea():
     assert r["puede_eliminar"] is True
 
 
+def test_aceptar_politicas_no_bloquea():
+    sb = _FakeSb({"logs": [{"id": 1, "accion": "ACEPTAR_POLITICAS", "modulo": "USUARIOS"}]})
+    r = evaluar_actividad_usuario(sb, 7)
+    assert r["puede_eliminar"] is True
+
+
 def test_log_editar_bloquea():
     sb = _FakeSb({"logs": [{"id": 2, "accion": "EDITAR", "modulo": "PRESUPUESTO"}]})
     r = evaluar_actividad_usuario(sb, 7)
     assert r["puede_eliminar"] is False
     assert any(b["tabla"] == "logs" for b in r["bloqueantes"])
+
+
+def test_fila_existe_sin_columna_id():
+    """Tablas sin PK `id` deben poder detectarse por la columna de usuario."""
+    class _Q:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": self._rows})()
+
+    class _Sb:
+        def table(self, name):
+            if name == "so_registro_comentarios":
+                return _Q([{"autor_id": 7}])
+            return _Q([])
+
+    r = evaluar_actividad_usuario(_Sb(), 7)
+    assert r["puede_eliminar"] is False
+    assert any(b["tabla"] == "so_registro_comentarios" for b in r["bloqueantes"])
