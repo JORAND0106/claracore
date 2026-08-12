@@ -4323,16 +4323,16 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = q.eq("pk_id_id", pk_id)
     if semana_id is not None:
         q = q.eq("semana_id", semana_id)
-    # reporte_id_in tiene precedencia: filtra por los reportes del acta (semántica correcta)
+    # reporte_id_in tiene precedencia (p. ej. chunk de IDs ya resueltos).
+    # Acta del modal: misma semántica que panel /analisis → so_registros.acta_rpo_id (línea).
+    # Antes se usaba cabecera so_reportes vía scope y la grilla divergía del panel.
     if reporte_id_in is not None:
         q = q.in_("reporte_id", reporte_id_in)
     else:
         aids_eff = list(acta_rpo_ids) if acta_rpo_ids else []
         if not aids_eff and acta_rpo_id is not None:
             aids_eff = [int(acta_rpo_id)]
-        if aids_eff and contrato_id is not None:
-            q = _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), aids_eff)
-        elif aids_eff:
+        if aids_eff:
             q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_eff)
     if q_observacion and str(q_observacion).strip():
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
@@ -4431,17 +4431,9 @@ def _sicoe_collect_reporte_ids_misma_linea(
     aids_eff: List[int] = list(acta_rpo_ids) if acta_rpo_ids else []
     if not aids_eff and acta_rpo_id is not None:
         aids_eff = [int(acta_rpo_id)]
-    # Acta vía cabecera del reporte: evita perder líneas con acta_rpo_id NULL en so_registros.
-    # (No unificar con acta-en-línea: eso ensancha el universo y degrada la cola de Validación.)
-    if aids_eff and reporte_ids_restrict is None:
-        try:
-            rep_acta_scope = _sicoe_reporte_ids_por_acta_ids(int(contrato_id), aids_eff)
-        except (TypeError, ValueError):
-            rep_acta_scope = []
-        if not rep_acta_scope:
-            return set()
-        reporte_ids_restrict = rep_acta_scope
-        aids_eff = []
+    # Acta del modal = filtro en línea (so_registros.acta_rpo_id), igual que panel /analisis.
+    # No reescribir a cabecera so_reportes: eso dejaba panel con filas y grilla en 0
+    # cuando el acta está en la línea y no en la cabecera del reporte.
     _reg_fu: Dict[str, Any] = {}
     if filtro_fecha_usuario_registro:
         _reg_fu = {
@@ -4683,7 +4675,9 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     q_observacion=q_observacion,
                     semana_id=semana_id,
                     acta_rpo_ids=aids_eff,
-                    require_item=bool(aids_eff) or reversion_modo == "interv_primera_llave",
+                    # Ítem: misma regla que panel /analisis (lo imponen las capas),
+                    # no el solo hecho de filtrar por Acta del modal.
+                    require_item=(reversion_modo == "interv_primera_llave"),
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
                     pendiente_item=pendiente_item,
