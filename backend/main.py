@@ -2690,6 +2690,11 @@ from usuario_bienvenida_email import (
     contacto_smtp_configured,
     send_bienvenida_email,
 )
+from usuario_actividad import (
+    evaluar_actividad_usuario,
+    limpiar_vinculos_no_bloqueantes,
+    mensaje_bloqueo_corto,
+)
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -8028,6 +8033,145 @@ def actualizar_usuario(
         severidad="AUDIT",
     )
     return {"mensaje": "Usuario actualizado"}
+
+
+def _admin_usuario_cargo_es_desarrollador(usuario_id: int) -> bool:
+    try:
+        target = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).limit(1).execute()
+        if not target.data or not target.data[0].get("cargo_id"):
+            return False
+        cargo_res = (
+            supabase.table("cargos")
+            .select("nombre")
+            .eq("id", target.data[0]["cargo_id"])
+            .limit(1)
+            .execute()
+        )
+        return bool(
+            cargo_res.data
+            and str(cargo_res.data[0].get("nombre") or "").strip().lower() == "desarrollador"
+        )
+    except Exception:
+        return False
+
+
+def _admin_assert_puede_gestionar_usuario(current_user, usuario_id: int) -> dict:
+    """Misma privacidad que GET /admin/todos-usuarios: contrato del caller + Desarrollador oculto."""
+    rows = (
+        supabase.table("usuarios")
+        .select(
+            "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado"
+        )
+        .eq("id", usuario_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    u = rows[0]
+    caller_id = int(current_user["sub"])
+    if _admin_usuario_cargo_es_desarrollador(usuario_id) and int(u["id"]) != caller_id:
+        raise HTTPException(status_code=403, detail="No se puede gestionar un usuario Desarrollador")
+    caller_contrato, _ = _caller_contract_scope(current_user)
+    if caller_contrato and u.get("contrato_id") != caller_contrato:
+        raise HTTPException(status_code=403, detail="Usuario fuera del alcance de su contrato")
+    return u
+
+
+@app.get("/admin/usuarios/{usuario_id}/actividad")
+def admin_usuario_actividad(usuario_id: int, current_user=Depends(get_current_user)):
+    """Verifica actividad relevante antes de permitir eliminación física."""
+    _admin_assert_puede_gestionar_usuario(current_user, usuario_id)
+    return evaluar_actividad_usuario(supabase, usuario_id)
+
+
+@app.post("/admin/usuarios/actividad-lote")
+def admin_usuarios_actividad_lote(body: dict, current_user=Depends(get_current_user)):
+    """Evalúa actividad de varios usuarios (mapa id → resultado)."""
+    raw_ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="Envíe ids: number[]")
+    ids: List[int] = []
+    for x in raw_ids[:200]:
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    out: Dict[str, Any] = {}
+    for uid in ids:
+        try:
+            _admin_assert_puede_gestionar_usuario(current_user, uid)
+            out[str(uid)] = evaluar_actividad_usuario(supabase, uid)
+        except HTTPException as he:
+            out[str(uid)] = {
+                "usuario_id": uid,
+                "puede_eliminar": False,
+                "bloqueantes": [],
+                "motivo": he.detail if isinstance(he.detail, str) else "Sin permiso para evaluar",
+            }
+    return out
+
+
+@app.delete("/admin/usuarios/{usuario_id}")
+def admin_eliminar_usuario(usuario_id: int, current_user=Depends(get_current_user)):
+    """Eliminación física irreversible si no hay actividad relevante."""
+    caller_id = int(current_user["sub"])
+    if int(usuario_id) == caller_id:
+        raise HTTPException(status_code=400, detail="No puede eliminarse a sí mismo.")
+    u = _admin_assert_puede_gestionar_usuario(current_user, usuario_id)
+    if _admin_usuario_cargo_es_desarrollador(usuario_id):
+        raise HTTPException(status_code=403, detail="No se puede eliminar un usuario Desarrollador")
+    actividad = evaluar_actividad_usuario(supabase, usuario_id)
+    if not actividad.get("puede_eliminar"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "USUARIO_CON_ACTIVIDAD",
+                "mensaje": mensaje_bloqueo_corto(actividad),
+                "bloqueantes": actividad.get("bloqueantes") or [],
+            },
+        )
+    limpiadas = limpiar_vinculos_no_bloqueantes(supabase, usuario_id)
+    try:
+        supabase.table("usuarios").delete().eq("id", usuario_id).execute()
+    except Exception as ex:
+        msg = str(ex)
+        if "23503" in msg or "foreign key" in msg.lower() or "violates foreign key" in msg.lower():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "USUARIO_CON_ACTIVIDAD",
+                    "mensaje": (
+                        "No se puede eliminar: existen vínculos en la base de datos "
+                        "que impiden borrar el usuario (integridad referencial)."
+                    ),
+                    "bloqueantes": actividad.get("bloqueantes") or [],
+                },
+            ) from ex
+        raise HTTPException(status_code=500, detail=f"No se pudo eliminar el usuario: {ex}") from ex
+    nombre = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip() or u.get("email") or str(usuario_id)
+    registrar_log(
+        current_user,
+        "ELIMINAR",
+        "USUARIOS",
+        "usuario",
+        str(usuario_id),
+        {
+            "email": u.get("email"),
+            "nombre": nombre,
+            "cascadas": limpiadas,
+            "eliminacion_fisica": True,
+        },
+        severidad="AUDIT",
+    )
+    return {
+        "mensaje": "Usuario eliminado",
+        "usuario_id": usuario_id,
+        "cascadas": limpiadas,
+    }
+
 
 @app.post("/admin/verificar-inactividad")
 def verificar_inactividad(current_user=Depends(get_current_user)):
