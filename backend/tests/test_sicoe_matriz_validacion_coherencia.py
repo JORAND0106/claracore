@@ -75,10 +75,10 @@ def test_filtro_validacion_requiere_acta_vigente():
 
 
 def test_registros_q_acta_scope_usa_reporte_ids():
-    with patch("main._sicoe_reporte_ids_universo_acta", return_value=[10, 20]) as mock_u:
+    with patch("main._sicoe_reporte_ids_por_acta_ids", return_value=[10, 20]) as mock_rep:
         q = MagicMock()
         m._sicoe_registros_q_filtrar_actas_scope(q, 3, [616])
-    mock_u.assert_called_once_with(3, [616])
+    mock_rep.assert_called_once_with(3, [616])
     q.in_.assert_called_once_with("reporte_id", [10, 20])
 
 
