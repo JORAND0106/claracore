@@ -38,6 +38,7 @@ import {
   PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT,
 } from './pptoTipoEntidad.js'
 import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
+import { pptoOrdenarFilasPorCapituloItem } from './pptoFiltroCatalogo.js'
 import {
   costoDirectoResumenFila,
   formulaSumaFilas,
@@ -1660,8 +1661,12 @@ export async function downloadPresupuestoCrudoExcel(payload, metaContrato, contr
  * @returns {Promise<{ graficosEnPayload: number, graficosEmbebidos: number }>}
  */
 export async function downloadPresupuestoInformeExcel(payload, metaContrato, contratoId, filename, opts = {}) {
-  const resumen = Array.isArray(payload?.resumen) ? payload.resumen : []
-  const items = Array.isArray(payload?.items) ? payload.items : []
+  const resumen = pptoOrdenarFilasPorCapituloItem(
+    Array.isArray(payload?.resumen) ? payload.resumen : [],
+  )
+  const items = pptoOrdenarFilasPorCapituloItem(
+    Array.isArray(payload?.items) ? payload.items : [],
+  )
   const modoLabel = payload?.modo_label || 'Presupuesto'
   const generatedAt = new Date()
   const meta = metaContrato || {}

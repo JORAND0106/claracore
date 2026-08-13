@@ -665,6 +665,20 @@ export function pptoCmpItemNumero(a, b) {
   return pptoNormItemNumero(a).localeCompare(pptoNormItemNumero(b), 'es', { numeric: true })
 }
 
+/** Orden natural capítulo + ítem para Resumen/memorias Excel y listas. */
+export function pptoOrdenarFilasPorCapituloItem(rows) {
+  const list = Array.isArray(rows) ? [...rows] : []
+  list.sort((a, b) => {
+    const byCap = String(a?.capitulo ?? '').localeCompare(String(b?.capitulo ?? ''), 'es', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+    if (byCap !== 0) return byCap
+    return pptoCmpItemNumero(a?.item, b?.item)
+  })
+  return list
+}
+
 /** Fusiona ítems de API (presupuesto) con listado de precios; conserva clave de presupuesto. */
 export function pptoMergeItemsOpciones(fromApi = [], fromLp = []) {
   const merged = new Map()
