@@ -6615,6 +6615,24 @@ async function darDeBaja(id) {
         contratoId={contratoId}
         token={token}
         API={API}
+        onMembershipChange={({ action, presupuesto_ids } = {}) => {
+          if (action === 'refresh') {
+            void cargarIdsConGrafico()
+            return
+          }
+          const ids = Array.isArray(presupuesto_ids) ? presupuesto_ids : []
+          if (!ids.length) return
+          setIdsConGrafico((prev) => {
+            const next = new Set(prev)
+            for (const id of ids) {
+              const n = Number(id)
+              if (!Number.isFinite(n)) continue
+              if (action === 'remove') next.delete(n)
+              else next.add(n)
+            }
+            return next
+          })
+        }}
       />
 
       <PptoBuscarObjetivoModal

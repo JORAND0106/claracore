@@ -24,6 +24,8 @@ export default function PptoGruposGraficosModal({
   contratoId,
   token,
   API,
+  /** Notifica a la grilla para refrescar el icono 🖼 sin esperar al cierre del modal. */
+  onMembershipChange,
 }) {
   const [grupos, setGrupos] = useState([])
   const [loading, setLoading] = useState(false)
@@ -148,6 +150,14 @@ export default function PptoGruposGraficosModal({
         },
       )
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
+      // Icono en grilla: solo si el grupo ya tiene imagen (misma regla que presupuesto-ids).
+      const tieneImagen = (detalle?.imagenes || []).length > 0
+      if (tieneImagen) {
+        onMembershipChange?.({
+          action: 'add',
+          presupuesto_ids: [Number(presupuestoId)],
+        })
+      }
       await cargarDetalle(grupoId)
       setOkMsg('Registro agregado al grupo')
     } catch (err) {
@@ -168,6 +178,8 @@ export default function PptoGruposGraficosModal({
         { method: 'DELETE', headers: authHdrs },
       )
       if (!res.ok) throw new Error(await res.text().catch(() => `Error ${res.status}`))
+      // Puede seguir en otro grupo con imagen → refresco autoritativo.
+      onMembershipChange?.({ action: 'refresh', presupuesto_ids: [Number(presupuestoId)] })
       await cargarDetalle(grupoId)
       setOkMsg('Registro quitado del grupo')
     } catch (err) {
