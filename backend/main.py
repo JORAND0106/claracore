@@ -10206,6 +10206,13 @@ def _orden_capitulo_presupuesto(c: Optional[str]) -> tuple:
     return (1, 0, c)
 
 
+def _orden_item_presupuesto(item: Optional[str]) -> tuple:
+    """Orden natural de ítem: 3.1 < 3.2 < … < 3.9 < 3.10 (no lexicográfico 3.1, 3.10, 3.2)."""
+    from informes import _natural_sort_key_cadena
+
+    return _natural_sort_key_cadena(item)
+
+
 @app.get("/presupuesto/{contrato_id}")
 def get_presupuesto(
     contrato_id: int,
@@ -11562,6 +11569,11 @@ def exportar_presupuesto_informe(
     else:
         rows = _presupuesto_fetch_export_rows(contrato_id, body, current_user)
 
+    # Misma meta en vivo que GET /presupuesto y la grilla: ítem/descripcion/und
+    # desde listado_precios vigente. Sin esto el Excel conserva la copia fija en
+    # presupuesto.descripcion aunque el listado ya tenga el nombre actualizado.
+    rows = _overlay_presupuesto_meta_vivo(contrato_id, rows)
+
     # Infraestructura no vive en presupuesto: enriquecer desde maestro pk_ids
     pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
     for r in rows:
@@ -11648,7 +11660,10 @@ def exportar_presupuesto_informe(
         })
 
     resumen = []
-    for k in sorted(resumen_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
+    for k in sorted(
+        resumen_map.keys(),
+        key=lambda x: (_orden_capitulo_presupuesto(x[0]), _orden_item_presupuesto(x[1])),
+    ):
         agg = resumen_map[k]
         cant = round(float(agg["cantidad"]), 6)
         vlr = round(float(agg["vlr_unitario"]), 2)
@@ -11664,7 +11679,10 @@ def exportar_presupuesto_informe(
         })
 
     items_out = []
-    for k in sorted(items_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
+    for k in sorted(
+        items_map.keys(),
+        key=lambda x: (_orden_capitulo_presupuesto(x[0]), _orden_item_presupuesto(x[1])),
+    ):
         items_out.append(items_map[k])
 
     # Gráficos por grupo de registros → se repiten en cada ítem involucrado.
