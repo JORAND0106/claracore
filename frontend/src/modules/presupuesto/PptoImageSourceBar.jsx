@@ -14,6 +14,7 @@ export default function PptoImageSourceBar({
   onFocusPasteZone,
   onOpenEsquema,
   hint = 'Archivo, galería, Ctrl+V o dibujar esquema',
+  galeriaTitle = 'Buscar en la galería de gráficos de Presupuesto',
 }) {
   const fileRef = useRef(null)
   const [pegando, setPegando] = useState(false)
@@ -70,7 +71,7 @@ export default function PptoImageSourceBar({
         type="button"
         disabled={busy}
         onClick={() => onOpenGaleria?.()}
-        title="Buscar en la galería de fotos/gráficos del contrato"
+        title={galeriaTitle}
         style={btnSecondary}
       >
         🖼 Galería

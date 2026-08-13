@@ -4,7 +4,7 @@ import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
-import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
+import PptoGraficosGaleriaPicker from './PptoGraficosGaleriaPicker'
 import { imagenDesdeClipboard, imagenDesdePasteEvent } from './pptoPasteImage'
 
 const cc = {
@@ -112,11 +112,14 @@ export default function PptoSincroSicoeLoteModal({
         file: null,
         previewUrl: item.url,
         url: item.url,
+        blob_path: item.blob_path || null,
         origen: 'galeria',
       },
     ])
+    const piePick = String(item.pie_foto || item.descripcion || '').trim()
+    if (piePick && !String(pieFoto || '').trim()) setPieFoto(piePick)
     setGaleriaOpen(false)
-  }, [])
+  }, [pieFoto])
 
   const pegarDesdeClipboard = useCallback(async () => {
     try {
@@ -207,7 +210,7 @@ export default function PptoSincroSicoeLoteModal({
         if (img.url && !img.file) {
           uploaded.push({
             url: img.url,
-            blob_path: null,
+            blob_path: img.blob_path || null,
             origen: img.origen || 'galeria',
             orden: uploaded.length,
           })
@@ -475,7 +478,8 @@ export default function PptoSincroSicoeLoteModal({
                     onPasteClipboard={pegarDesdeClipboard}
                     onFocusPasteZone={() => dropRef.current?.focus?.()}
                     onOpenEsquema={() => setEsquemaOpen(true)}
-                    hint="Archivo, galería, Ctrl+V o esquema"
+                    hint="Archivo, galería de gráficos, Ctrl+V o esquema"
+                    galeriaTitle="Buscar Galería · gráficos de Presupuesto"
                   />
                 </div>
                 {imagenes.length > 0 && (
@@ -588,7 +592,7 @@ export default function PptoSincroSicoeLoteModal({
         </div>
       </div>
 
-      <PptoSicoeGaleriaPicker
+      <PptoGraficosGaleriaPicker
         open={galeriaOpen}
         onClose={() => setGaleriaOpen(false)}
         t={t}
@@ -596,6 +600,7 @@ export default function PptoSincroSicoeLoteModal({
         token={token}
         API={API}
         onSelect={addGaleriaUrl}
+        zIndex={4200}
       />
 
       {esquemaOpen && (
