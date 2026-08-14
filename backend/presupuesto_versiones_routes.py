@@ -55,6 +55,7 @@ from main import (
     registrar_log,
     supabase,
     PresupuestoBulkEstado,
+    PresupuestoBulkCompetencia,
     PresupuestoBulkObservacion,
     PresupuestoBulkPreInterv,
     PresupuestoBulkRecalc,
@@ -721,6 +722,22 @@ def post_presupuesto_version_biblioteca_bulk_tipo(
     _require_contract_access(current_user, contrato_id)
     return bulk_patch_biblioteca_ids(
         supabase, contrato_id, version_id, body.ids, {"tipo_ejecucion": body.tipo_ejecucion}
+    )
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/bulk-competencia")
+def post_presupuesto_version_biblioteca_bulk_competencia(
+    contrato_id: int,
+    version_id: str,
+    body: PresupuestoBulkCompetencia,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    comp = str(body.competencia or "").strip()
+    if not comp:
+        raise HTTPException(status_code=422, detail="competencia no puede estar vacía.")
+    return bulk_patch_biblioteca_ids(
+        supabase, contrato_id, version_id, body.ids, {"competencia": comp}
     )
 
 

@@ -318,6 +318,46 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [editDims, setEditDims] = useState({})      // {[id]: { area_long_nod?, ancho, espesor }}
   const [modalConfirm, setModalConfirm] = useState(false)
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
+  const [competenciasEdicionMasiva, setCompetenciasEdicionMasiva] = useState([])
+
+  useEffect(() => {
+    if (!modalEdicionMasiva || !contratoId) return
+    let cancelled = false
+    const regsSnap = registros
+    ;(async () => {
+      try {
+        const tok = getToken()
+        const res = await fetch(`${pptoEp().filtros}`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+        let fromApi = []
+        if (res.ok) {
+          const data = await res.json()
+          fromApi = Array.isArray(data?.competencias) ? data.competencias : []
+        }
+        const fromRegs = new Set()
+        for (const r of regsSnap || []) {
+          const c = String(r?.competencia || '').trim()
+          if (c) fromRegs.add(c)
+        }
+        const merged = [...new Set([
+          ...fromApi.map((x) => String(x || '').trim()).filter(Boolean),
+          ...fromRegs,
+        ])].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+        if (!cancelled) setCompetenciasEdicionMasiva(merged)
+      } catch {
+        if (!cancelled) {
+          const fromRegs = [...new Set(
+            (regsSnap || []).map((r) => String(r?.competencia || '').trim()).filter(Boolean),
+          )].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+          setCompetenciasEdicionMasiva(fromRegs)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+    // Solo al abrir el modal / cambiar contrato (no en cada refresh de grilla).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalEdicionMasiva, contratoId])
   const [modalGraficos, setModalGraficos] = useState(false)
   const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
   const [modalBuscarObjetivo, setModalBuscarObjetivo] = useState(false)
@@ -4017,17 +4057,35 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }))
   }
 
-  async function aplicarMasivoCapItem({ capitulo, item, precioSeleccionado, observacion }) {
+  async function aplicarCompetenciaMasiva(ids, competencia) {
+    const comp = String(competencia || '').trim()
+    if (!comp || !ids.length) return
+    const ep = pptoEp()
+    const method = ep.mode === 'version' ? 'POST' : 'PUT'
+    const res = await fetch(`${ep.bulkCompetencia}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids, competencia: comp }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || 'No se pudo actualizar la competencia.')
+    }
+    setRegistros((prev) => prev.map((r) => (ids.includes(r.id) ? { ...r, competencia: comp } : r)))
+  }
+
+  async function aplicarMasivoCapItem({ capitulo, item, competencia, precioSeleccionado, observacion }) {
     const cap = capitulo || ''
     const it = item || ''
+    const comp = String(competencia || '').trim()
     const obs = String(observacion || '').trim()
     const ids = idsSeleccionadosEditables()
     if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
     registrarUndoPresupuesto('Edición masiva: Capítulo / Ítem', ids)
 
     const tieneCapItem = !!(cap || it)
-    if (!tieneCapItem && !obs) {
-      throw new Error('Indique capítulo, ítem u observación (opcional).')
+    if (!tieneCapItem && !comp && !obs) {
+      throw new Error('Indique capítulo, ítem, competencia u observación (opcional).')
     }
 
     const resumen = ids.map((id) => {
@@ -4037,6 +4095,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (cap && cap !== (r.capitulo || '')) partes.push(`Cap: ${r.capitulo || '—'} → ${cap}`)
       if (it && it !== (r.item || '')) partes.push(`Ítem: ${r.item || '—'} → ${it}`)
       if (precioSeleccionado && it) partes.push(`V.U: ${fmt(precioSeleccionado.precio_unitario)}`)
+      if (comp && comp !== (r.competencia || '')) partes.push(`Comp: ${r.competencia || '—'} → ${comp}`)
       if (obs) partes.push(`Obs: ${obs}`)
       if (!partes.length) return null
       return filaResumenMasivo(
@@ -4053,7 +4112,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         if (!r) return false
         return (cap && cap !== (r.capitulo || '')) || (it && it !== (r.item || ''))
       })
-      if (!idsCapItemCambio.length && !obs) {
+      if (!idsCapItemCambio.length && !comp && !obs) {
         throw new Error('Ningún registro editable requiere ese cambio de capítulo/ítem.')
       }
       if (idsCapItemCambio.length) {
@@ -4074,7 +4133,38 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         })
       }
     }
+    if (comp) {
+      const idsComp = ids.filter((id) => {
+        const r = registros.find((x) => x.id === id)
+        return r && (r.competencia || '') !== comp
+      })
+      if (idsComp.length) await aplicarCompetenciaMasiva(idsComp, comp)
+    }
     if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
+  }
+
+  async function aplicarMasivoTramosCompetencia({ ids: idsIn, competencia }) {
+    const comp = String(competencia || '').trim()
+    if (!comp) throw new Error('Seleccione la nueva competencia.')
+    const ids = [...new Set((idsIn || []).filter(Boolean))].filter((id) => {
+      const r = registros.find((x) => x.id === id)
+      return r && !esSellado(r)
+    })
+    if (!ids.length) throw new Error('No hay registros editables seleccionados en Tramos.')
+    registrarUndoPresupuesto('Edición masiva: Competencia (Tramos)', ids)
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      if ((r.competencia || '') === comp) return null
+      return filaResumenMasivo(r, 'Competencia', r.competencia || '—', comp)
+    }).filter(Boolean)
+    const idsCambio = ids.filter((id) => {
+      const r = registros.find((x) => x.id === id)
+      return r && (r.competencia || '') !== comp
+    })
+    if (!idsCambio.length) throw new Error('Ningún registro requiere ese cambio de competencia.')
+    await aplicarCompetenciaMasiva(idsCambio, comp)
     return resumen
   }
 
@@ -6576,10 +6666,12 @@ async function darDeBaja(id) {
         requiereDepuracionAprobadaInterv={!esDevPpto}
         capitulosListado={capitulosListado}
         listadoPrecios={listadoPrecios}
+        competenciasOpciones={competenciasEdicionMasiva}
         guardandoBulk={guardandoBulk}
         onApplyCapItem={aplicarMasivoCapItem}
         onApplyDimensiones={aplicarMasivoDimensiones}
         onApplyTipo={aplicarMasivoTipo}
+        onApplyTramosCompetencia={aplicarMasivoTramosCompetencia}
         onApplyDepuracion={aplicarMasivoDepuracion}
         onApplyInterventoria={aplicarMasivoInterventoria}
       />
