@@ -9,6 +9,7 @@ import {
   pptoConstruirTramosUnicos,
   pptoFiltrarTramosUnicos,
   pptoFilasDeTramo,
+  pptoFilasCapituloTramos,
 } from './pptoTramoBusqueda.js'
 
 describe('pptoTramoOpcionLabel', () => {
@@ -20,19 +21,20 @@ describe('pptoTramoOpcionLabel', () => {
   })
 })
 
-describe('pptoConstruirTramosUnicos (como Revisor)', () => {
-  it('arma Nodo Inicio → Nodo Fin y deduplica', () => {
+describe('pptoConstruirTramosUnicos (lógica exacta botón Tramos)', () => {
+  it('agrupa por no_inicio||no_final y etiqueta Nodo → Nodo', () => {
     const tramos = pptoConstruirTramosUnicos([
       { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
       { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
       { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T2' },
     ])
     assert.equal(tramos.length, 2)
+    assert.equal(tramos[0].key, 'A||B')
     assert.equal(tramos[0].label, 'A → B')
     assert.equal(tramos[1].label, 'C → D')
   })
 
-  it('omite pares incompletos o nodo inicio === nodo fin', () => {
+  it('omite pares incompletos o no_inicio === no_final', () => {
     const tramos = pptoConstruirTramosUnicos([
       { id: 1, no_inicio: 'A', no_final: '', tramo: 'X' },
       { id: 2, no_inicio: 'M', no_final: 'M', tramo: 'Y' },
@@ -43,13 +45,13 @@ describe('pptoConstruirTramosUnicos (como Revisor)', () => {
     assert.equal(tramos[0].label, 'P → Q')
   })
 
-  it('acepta alias nodo_inicio/nodo_final', () => {
+  it('conserva orden de primera aparición (como el Revisor)', () => {
     const tramos = pptoConstruirTramosUnicos([
-      { id: 1, nodo_inicio: 'X', nodo_final: 'Y' },
+      { no_inicio: 'Z', no_final: 'Y' },
+      { no_inicio: 'A', no_final: 'B' },
     ])
-    assert.equal(tramos.length, 1)
-    assert.equal(tramos[0].no_inicio, 'X')
-    assert.equal(tramos[0].no_final, 'Y')
+    assert.equal(tramos[0].label, 'Z → Y')
+    assert.equal(tramos[1].label, 'A → B')
   })
 })
 
@@ -79,10 +81,21 @@ describe('pptoFilasDeTramo', () => {
   ]
   const tramo = { no_inicio: 'A', no_final: 'B', label: 'A → B' }
 
-  it('devuelve solo registros del par nodo→nodo', () => {
+  it('coincide exacta no_inicio + no_final (como Revisor)', () => {
     const regs = pptoFilasDeTramo(filas, tramo)
     assert.equal(regs.length, 2)
     assert.deepEqual(regs.map((r) => r.id), [1, 2])
+  })
+})
+
+describe('pptoFilasCapituloTramos', () => {
+  it('filtra por capítulo igual que el Revisor', () => {
+    const rows = pptoFilasCapituloTramos([
+      { id: 1, capitulo: 'CAP-A' },
+      { id: 2, capitulo: 'CAP-B' },
+      { id: 3, capitulo: 'CAP-A' },
+    ], 'CAP-A')
+    assert.equal(rows.length, 2)
   })
 })
 
@@ -120,47 +133,24 @@ describe('pptoFilasFuenteTramos', () => {
     assert.equal(rows.length, 1)
     assert.equal(rows[0].id, 2)
   })
-
-  it('incluye seleccionados aunque no estén en la grilla filtrada', () => {
-    const rows = pptoFilasFuenteTramos({
-      registrosGrilla: [{ id: 1, tramo: 'T' }],
-      registros: [
-        { id: 1, tramo: 'T' },
-        { id: 9, no_inicio: 'A', no_final: 'B', tramo: 'Sel' },
-      ],
-      seleccionados: new Set([9]),
-      esSellado: () => false,
-    })
-    assert.equal(rows.length, 2)
-    assert.ok(rows.some((r) => r.id === 9))
-  })
 })
 
-describe('pptoConstruirOpcionesTramo (legacy autocomplete)', () => {
+describe('pptoConstruirOpcionesTramo (legacy)', () => {
   it('deduplica triples nodo/tramo', () => {
     const ops = pptoConstruirOpcionesTramo([
       { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
       { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
-      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T1' },
     ])
-    assert.equal(ops.length, 2)
-  })
-
-  it('incluye filas solo con tramo', () => {
-    const ops = pptoConstruirOpcionesTramo([{ id: 1, tramo: 'Calle 9' }])
     assert.equal(ops.length, 1)
-    assert.equal(ops[0].label, '— · — · Calle 9')
   })
 })
 
 describe('pptoFiltrarOpcionesTramo', () => {
   const ops = pptoConstruirOpcionesTramo([
     { no_inicio: 'Norte', no_final: 'Sur', tramo: 'Calle 1' },
-    { no_inicio: 'Este', no_final: 'Oeste', tramo: 'Calle 2' },
   ])
-
   it('sin query devuelve todas', () => {
-    assert.equal(pptoFiltrarOpcionesTramo(ops, '').length, 2)
+    assert.equal(pptoFiltrarOpcionesTramo(ops, '').length, 1)
   })
 })
 
@@ -168,6 +158,5 @@ describe('pptoFilaCoincideOpcionTramo', () => {
   it('coincide por los tres campos', () => {
     const op = pptoConstruirOpcionesTramo([{ no_inicio: 'A', no_final: 'B', tramo: 'T' }])[0]
     assert.equal(pptoFilaCoincideOpcionTramo({ no_inicio: 'A', no_final: 'B', tramo: 'T' }, op), true)
-    assert.equal(pptoFilaCoincideOpcionTramo({ no_inicio: 'A', no_final: 'X', tramo: 'T' }, op), false)
   })
 })

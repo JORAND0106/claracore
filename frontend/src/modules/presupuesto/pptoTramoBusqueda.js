@@ -1,9 +1,16 @@
 /**
- * Helpers del buscador / tab Tramos (Revisor y edición masiva).
+ * Helpers del tab / Revisor de Tramos.
  *
- * Unidad lógica del Revisor: par `no_inicio` → `no_final`
- * (ambos presentes y distintos). Fuente: registros de la grilla
- * filtrada / del capítulo — no endpoint de maestro de ubicación.
+ * Lógica del botón «Tramos» (`abrirRevisorTramosObra` + modal):
+ * 1) Carga registros con `cargarCapituloData` →
+ *    `pptoBuildPresupuestoSearchParams(fObra, …, { capituloOverride })` +
+ *    `fetchPresupuestoPaginasCompletas` (`pptoEp().conteo` / `pptoEp().list`).
+ * 2) Filtra por capítulo: `registros.filter(r => r.capitulo === cap)`.
+ * 3) Agrupa pares únicos: `no_inicio` + `no_final`, ambos truthy y distintos;
+ *    key `${no_inicio}||${no_final}`, label `${no_inicio} → ${no_final}`.
+ * 4) Registros del tramo: `r.no_inicio === tr.no_inicio && r.no_final === tr.no_final`.
+ *
+ * No usa maestro-ubicacion-pk para el listado de tramos.
  */
 
 export function pptoNormTramoCampo(v) {
@@ -16,8 +23,8 @@ export function pptoTramoOpcionLabel({ noInicio, noFinal, tramo }) {
 }
 
 /**
- * Une filas de la grilla filtrada con las seleccionadas (por si el filtro
- * client-side dejó fuera alguna fila aún marcada). Omite sellados.
+ * Une filas de la grilla filtrada con las seleccionadas. Omite sellados.
+ * (Fallback cuando no hay capítulo / no se pudo cargar vía API.)
  */
 export function pptoFilasFuenteTramos({ registrosGrilla, registros, seleccionados, esSellado }) {
   const byId = new Map()
@@ -27,7 +34,6 @@ export function pptoFilasFuenteTramos({ registrosGrilla, registros, seleccionado
     byId.set(String(r.id), r)
   }
   for (const r of registrosGrilla || []) push(r)
-  // Fallback: si la grilla filtrada viene vacía, usar el store completo.
   if (byId.size === 0) {
     for (const r of registros || []) push(r)
   }
@@ -41,37 +47,33 @@ export function pptoFilasFuenteTramos({ registrosGrilla, registros, seleccionado
   return [...byId.values()]
 }
 
-function pptoNodosDeFila(r) {
-  const no_inicio = String(r?.no_inicio ?? r?.nodo_inicio ?? '').trim()
-  const no_final = String(r?.no_final ?? r?.nodo_final ?? '').trim()
-  return { no_inicio, no_final }
-}
-
 /**
- * Tramos únicos como el Revisor: `Nodo Inicio → Nodo Fin`
- * (ambos nodos presentes y distintos).
+ * Tramos únicos — misma lógica exacta que el Revisor / botón Tramos.
+ * No ordena (mantiene orden de primera aparición).
+ *
+ * @param {Array<{ no_inicio?: string, no_final?: string }>} filas
+ * @returns {Array<{ key: string, no_inicio: string, no_final: string, label: string }>}
  */
 export function pptoConstruirTramosUnicos(filas) {
+  const tramosUnicos = []
   const vistos = new Set()
-  const out = []
   for (const r of filas || []) {
-    if (!r || typeof r !== 'object') continue
-    const { no_inicio, no_final } = pptoNodosDeFila(r)
-    if (!no_inicio || !no_final || no_inicio === no_final) continue
-    const key = `${no_inicio}||${no_final}`
+    if (!r?.no_inicio || !r?.no_final) continue
+    if (r.no_inicio === r.no_final) continue
+    const key = `${r.no_inicio}||${r.no_final}`
     if (vistos.has(key)) continue
     vistos.add(key)
-    out.push({
+    tramosUnicos.push({
       key,
-      no_inicio,
-      no_final,
-      label: `${no_inicio} → ${no_final}`,
+      no_inicio: r.no_inicio,
+      no_final: r.no_final,
+      label: `${r.no_inicio} → ${r.no_final}`,
     })
   }
-  return out.sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }))
+  return tramosUnicos
 }
 
-/** Filtra tramos por nodo inicio o nodo fin. Sin query → todos. */
+/** Filtra tramos por nodo inicio o nodo fin (buscador del Revisor). */
 export function pptoFiltrarTramosUnicos(tramos, query) {
   const list = Array.isArray(tramos) ? tramos : []
   const busq = String(query || '').trim().toLowerCase()
@@ -79,33 +81,35 @@ export function pptoFiltrarTramosUnicos(tramos, query) {
   return list.filter((tr) => {
     const ni = String(tr.no_inicio || '').toLowerCase()
     const nf = String(tr.no_final || '').toLowerCase()
-    const lb = String(tr.label || '').toLowerCase()
-    return ni.includes(busq) || nf.includes(busq) || lb.includes(busq)
-  })
-}
-
-/** Registros del tramo (mismo criterio que el Revisor). */
-export function pptoFilasDeTramo(filas, tramo) {
-  if (!tramo) return []
-  const niSel = String(tramo.no_inicio || '').trim()
-  const nfSel = String(tramo.no_final || '').trim()
-  if (!niSel || !nfSel) return []
-  return (filas || []).filter((r) => {
-    const { no_inicio, no_final } = pptoNodosDeFila(r)
-    return no_inicio === niSel && no_final === nfSel
+    return ni.includes(busq) || nf.includes(busq)
   })
 }
 
 /**
- * Opciones legacy autocomplete: `Nodo · Nodo · Tramo`.
- * Se mantiene por compatibilidad de tests / usos previos.
+ * Registros del tramo — mismo criterio que el Revisor:
+ * `r.no_inicio === tramo.no_inicio && r.no_final === tramo.no_final`
  */
+export function pptoFilasDeTramo(filas, tramo) {
+  if (!tramo) return []
+  return (filas || []).filter(
+    (r) => r.no_inicio === tramo.no_inicio && r.no_final === tramo.no_final,
+  )
+}
+
+/** Filtra filas de un capítulo (paso previo del Revisor). */
+export function pptoFilasCapituloTramos(filas, capitulo) {
+  const cap = String(capitulo || '').trim()
+  if (!cap) return Array.isArray(filas) ? [...filas] : []
+  return (filas || []).filter((r) => r.capitulo === cap)
+}
+
+/** Opciones legacy autocomplete. */
 export function pptoConstruirOpcionesTramo(filas) {
   const map = new Map()
   for (const r of filas || []) {
     if (!r || typeof r !== 'object') continue
-    const niRaw = String(r.no_inicio ?? r.nodo_inicio ?? '').trim()
-    const nfRaw = String(r.no_final ?? r.nodo_final ?? '').trim()
+    const niRaw = String(r.no_inicio ?? '').trim()
+    const nfRaw = String(r.no_final ?? '').trim()
     const trRaw = String(r.tramo ?? '').trim()
     if (!niRaw && !nfRaw && !trRaw) continue
     const noInicio = niRaw || '—'
@@ -139,8 +143,8 @@ export function pptoFiltrarOpcionesTramo(opciones, query) {
 
 export function pptoFilaCoincideOpcionTramo(r, opcion) {
   if (!r || !opcion) return false
-  const ni = pptoNormTramoCampo(r.no_inicio ?? r.nodo_inicio)
-  const nf = pptoNormTramoCampo(r.no_final ?? r.nodo_final)
+  const ni = pptoNormTramoCampo(r.no_inicio)
+  const nf = pptoNormTramoCampo(r.no_final)
   const tr = pptoNormTramoCampo(r.tramo)
   return ni === opcion.noInicio && nf === opcion.noFinal && tr === opcion.tramo
 }
