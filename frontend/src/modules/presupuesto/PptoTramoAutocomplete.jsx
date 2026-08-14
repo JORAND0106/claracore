@@ -11,6 +11,9 @@ const cc = {
 /**
  * Autocomplete de tramos (mismo patrón visual que el buscador del Revisor de Tramos).
  * Sugerencias: `Nodo Inicio · Nodo Fin · Tramo`
+ *
+ * Muestra el listado completo al enfocar (query vacío). Las opciones deben
+ * venir ya calculadas desde la grilla filtrada al montar el tab.
  */
 export default function PptoTramoAutocomplete({
   t,
@@ -19,11 +22,12 @@ export default function PptoTramoAutocomplete({
   onSelect,
   label = 'TRAMO',
   placeholder = 'Buscar nodo inicio, nodo fin o tramo…',
-  maxSuggestions = 40,
+  maxSuggestions = 80,
 }) {
   const [texto, setTexto] = useState(value?.label || '')
   const [abierto, setAbierto] = useState(false)
   const wrapRef = useRef(null)
+  const nOpciones = Array.isArray(opciones) ? opciones.length : 0
 
   useEffect(() => {
     setTexto(value?.label || '')
@@ -43,10 +47,33 @@ export default function PptoTramoAutocomplete({
     [opciones, texto, maxSuggestions],
   )
 
+  const mensajeVacio = nOpciones === 0
+    ? 'No hay tramos/nodos en la grilla filtrada actual.'
+    : `Sin coincidencias para «${String(texto || '').trim()}».`
+
   return (
     <div style={{ flex: '1 1 280px' }} ref={wrapRef}>
-      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
-        {label}
+      <div style={{
+        fontSize: cc.caption,
+        fontWeight: 700,
+        color: t.textMuted,
+        marginBottom: 6,
+        letterSpacing: 0.3,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}>
+        <span>{label}</span>
+        <span style={{
+          background: t.primary + '22',
+          color: t.primary,
+          borderRadius: 20,
+          padding: '1px 8px',
+          fontSize: cc.caption,
+          fontWeight: 700,
+        }}>
+          {nOpciones}
+        </span>
       </div>
       <div style={{ position: 'relative' }}>
         <span
@@ -120,14 +147,14 @@ export default function PptoTramoAutocomplete({
               background: t.bgCard,
               border: `1px solid ${t.border}`,
               borderRadius: 10,
-              maxHeight: 240,
+              maxHeight: 260,
               overflowY: 'auto',
               boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
             }}
           >
             {filtradas.length === 0 ? (
               <div style={{ padding: '12px 14px', color: t.textMuted, fontSize: cc.sm, fontStyle: 'italic' }}>
-                Sin coincidencias
+                {mensajeVacio}
               </div>
             ) : (
               filtradas.map((op) => {
