@@ -1,30 +1,51 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import {
+  pptoTramoOpcionLabel,
+  pptoConstruirOpcionesTramo,
+  pptoFiltrarOpcionesTramo,
+  pptoFilaCoincideOpcionTramo,
+} from './pptoTramoBusqueda.js'
 
-/** Agrupa filas de un tramo por Nodo inicio | Nodo fin | Tramo (misma lógica del modal). */
-function agruparPorNodosTramo(filas) {
-  const map = new Map()
-  for (const r of filas) {
-    const ni = String(r.no_inicio || '').trim() || '—'
-    const nf = String(r.no_final || '').trim() || '—'
-    const tr = String(r.tramo || '').trim() || '—'
-    const key = `${ni}\u0000${nf}\u0000${tr}`
-    if (!map.has(key)) map.set(key, { key, noInicio: ni, noFinal: nf, tramo: tr, filas: [] })
-    map.get(key).filas.push(r)
-  }
-  return [...map.values()]
-}
+describe('pptoTramoOpcionLabel', () => {
+  it('formatea Nodo Inicio · Nodo Fin · Tramo', () => {
+    assert.equal(
+      pptoTramoOpcionLabel({ noInicio: 'A', noFinal: 'B', tramo: 'T1' }),
+      'A · B · T1',
+    )
+  })
+})
 
-describe('agruparPorNodosTramo', () => {
-  it('agrupa por nodos y tramo', () => {
-    const filas = [
-      { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1', competencia: 'X' },
-      { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1', competencia: 'Y' },
-      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T1', competencia: 'X' },
-    ]
-    const g = agruparPorNodosTramo(filas)
-    assert.equal(g.length, 2)
-    const ab = g.find((x) => x.noInicio === 'A' && x.noFinal === 'B')
-    assert.equal(ab.filas.length, 2)
+describe('pptoConstruirOpcionesTramo', () => {
+  it('deduplica triples nodo/tramo', () => {
+    const ops = pptoConstruirOpcionesTramo([
+      { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
+      { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
+      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T1' },
+    ])
+    assert.equal(ops.length, 2)
+    assert.equal(ops[0].label.includes('·'), true)
+  })
+})
+
+describe('pptoFiltrarOpcionesTramo', () => {
+  const ops = pptoConstruirOpcionesTramo([
+    { no_inicio: 'Norte', no_final: 'Sur', tramo: 'Calle 1' },
+    { no_inicio: 'Este', no_final: 'Oeste', tramo: 'Calle 2' },
+  ])
+
+  it('filtra por nodo inicio, fin o nombre de tramo', () => {
+    assert.equal(pptoFiltrarOpcionesTramo(ops, 'norte').length, 1)
+    assert.equal(pptoFiltrarOpcionesTramo(ops, 'oeste').length, 1)
+    assert.equal(pptoFiltrarOpcionesTramo(ops, 'calle 2').length, 1)
+    assert.equal(pptoFiltrarOpcionesTramo(ops, 'xyz').length, 0)
+  })
+})
+
+describe('pptoFilaCoincideOpcionTramo', () => {
+  it('coincide por los tres campos', () => {
+    const op = pptoConstruirOpcionesTramo([{ no_inicio: 'A', no_final: 'B', tramo: 'T' }])[0]
+    assert.equal(pptoFilaCoincideOpcionTramo({ no_inicio: 'A', no_final: 'B', tramo: 'T' }, op), true)
+    assert.equal(pptoFilaCoincideOpcionTramo({ no_inicio: 'A', no_final: 'X', tramo: 'T' }, op), false)
   })
 })
