@@ -14,6 +14,7 @@ import {
   pptoFilasDetalleTramo,
   pptoOrigenTramoBadgeStyle,
   pptoActualizarCompetenciaFilas,
+  pptoClonarFilasFuenteTramos,
 } from './pptoTramoBusqueda.js'
 
 describe('pptoTramoOpcionLabel', () => {
@@ -213,5 +214,33 @@ describe('pptoActualizarCompetenciaFilas', () => {
     const filas = [{ id: 1, competencia: 'X' }]
     assert.equal(pptoActualizarCompetenciaFilas(filas, [], 'Nueva'), filas)
     assert.equal(pptoActualizarCompetenciaFilas(filas, [1], '  '), filas)
+  })
+
+  it('conserva la misma cantidad de filas (no oculta registros al cambiar competencia)', () => {
+    const filas = [
+      { id: 10, competencia: 'A', no_inicio: 'N1', no_final: 'N2' },
+      { id: 11, competencia: 'A', no_inicio: 'N1', no_final: 'N2' },
+      { id: 12, competencia: 'B', no_inicio: 'N1', no_final: 'N2' },
+    ]
+    const next = pptoActualizarCompetenciaFilas(filas, [10, 11], 'Z')
+    assert.equal(next.length, filas.length)
+    assert.deepEqual(next.map((r) => r.id), [10, 11, 12])
+    assert.equal(next[0].competencia, 'Z')
+    assert.equal(next[1].competencia, 'Z')
+    assert.equal(next[2].competencia, 'B')
+    // El detalle del tramo sigue mostrando las mismas filas
+    const tramo = { no_inicio: 'N1', no_final: 'N2', label: 'N1 → N2' }
+    assert.equal(pptoFilasDetalleTramo(next, tramo).length, 3)
+  })
+})
+
+describe('pptoClonarFilasFuenteTramos', () => {
+  it('clona filas para un snapshot independiente', () => {
+    const filas = [{ id: 1, competencia: 'A' }]
+    const clone = pptoClonarFilasFuenteTramos(filas)
+    assert.notEqual(clone, filas)
+    assert.notEqual(clone[0], filas[0])
+    clone[0].competencia = 'B'
+    assert.equal(filas[0].competencia, 'A')
   })
 })
