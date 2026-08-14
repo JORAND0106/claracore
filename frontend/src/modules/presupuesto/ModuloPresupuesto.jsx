@@ -324,41 +324,29 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => {
     if (!modalEdicionMasiva || !contratoId) return
     let cancelled = false
-    const regsSnap = registros
     ;(async () => {
       try {
         const tok = getToken()
-        const res = await fetch(`${pptoEp().filtros}`, {
+        // Mismo listado que SicoeObra al asignar ítem: competencias habilitadas del contrato
+        // (base + competencias_contrato + listado_precios), no las de la grilla/selección.
+        const res = await fetch(`${API}/contratos/${contratoId}/competencias`, {
           headers: { Authorization: `Bearer ${tok}` },
         })
-        let fromApi = []
+        let lista = []
         if (res.ok) {
           const data = await res.json()
-          fromApi = Array.isArray(data?.competencias) ? data.competencias : []
+          lista = Array.isArray(data?.competencias) ? data.competencias : []
         }
-        const fromRegs = new Set()
-        for (const r of regsSnap || []) {
-          const c = String(r?.competencia || '').trim()
-          if (c) fromRegs.add(c)
-        }
-        const merged = [...new Set([
-          ...fromApi.map((x) => String(x || '').trim()).filter(Boolean),
-          ...fromRegs,
-        ])].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
-        if (!cancelled) setCompetenciasEdicionMasiva(merged)
+        const cleaned = [...new Set(
+          lista.map((x) => String(x || '').trim()).filter(Boolean),
+        )].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+        if (!cancelled) setCompetenciasEdicionMasiva(cleaned)
       } catch {
-        if (!cancelled) {
-          const fromRegs = [...new Set(
-            (regsSnap || []).map((r) => String(r?.competencia || '').trim()).filter(Boolean),
-          )].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
-          setCompetenciasEdicionMasiva(fromRegs)
-        }
+        if (!cancelled) setCompetenciasEdicionMasiva([])
       }
     })()
     return () => { cancelled = true }
-    // Solo al abrir el modal / cambiar contrato (no en cada refresh de grilla).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modalEdicionMasiva, contratoId])
+  }, [modalEdicionMasiva, contratoId, API])
   const [modalGraficos, setModalGraficos] = useState(false)
   const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
   const [modalBuscarObjetivo, setModalBuscarObjetivo] = useState(false)
