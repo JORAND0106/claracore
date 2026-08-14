@@ -1,11 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
 import { preIntervLiberadoParaInterventoria } from './pptoRolesValidacion'
-import PptoTramoAutocomplete from './PptoTramoAutocomplete'
+import PptoEdicionMasivaTramosPanel from './PptoEdicionMasivaTramosPanel'
 import {
-  pptoConstruirOpcionesTramo,
-  pptoFilaCoincideOpcionTramo,
   pptoFilasFuenteTramos,
+  pptoFilasDeTramo,
 } from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
@@ -301,11 +300,9 @@ export default function PptoEdicionMasivaModal({
   const [obsDep, setObsDep] = useState('')
   const [estadoInterv, setEstadoInterv] = useState('')
   const [obsInterv, setObsInterv] = useState('')
-  const [tramoOpcionSel, setTramoOpcionSel] = useState(null)
+  const [tramoSelec, setTramoSelec] = useState(null)
   const [tramosSelIds, setTramosSelIds] = useState(() => new Set())
   const [editCompetenciaTramos, setEditCompetenciaTramos] = useState('')
-  /** Snapshot de opciones al entrar al tab Tramos (evita lista vacía por re-renders). */
-  const [opcionesTramo, setOpcionesTramo] = useState([])
   const [resumenPost, setResumenPost] = useState(null)
   const [errorApply, setErrorApply] = useState('')
   const [mensajeExito, setMensajeExito] = useState('')
@@ -319,10 +316,9 @@ export default function PptoEdicionMasivaModal({
     setMensajeExito('')
     setAplicando(false)
     setEditCompetencia('')
-    setTramoOpcionSel(null)
+    setTramoSelec(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
-    setOpcionesTramo([])
   }, [open])
 
   useEffect(() => {
@@ -330,44 +326,18 @@ export default function PptoEdicionMasivaModal({
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
 
-  // Cargar opciones al activar el tab Tramos (fuente = grilla filtrada).
+  // Al salir del tab Tramos, volver a la vista de lista.
   useEffect(() => {
-    if (!open) return
-    const tabOk = tabs.some((tb) => tb.id === tabActivo) ? tabActivo : tabs[0]?.id
-    if (tabOk !== 'tramos') return
-    setOpcionesTramo(pptoConstruirOpcionesTramo(editablesGrilla))
-  }, [open, tabActivo, tabs, editablesGrilla])
-
-  const filasTramoSeleccionado = useMemo(() => {
-    if (!tramoOpcionSel) return []
-    return editablesGrilla.filter((r) => pptoFilaCoincideOpcionTramo(r, tramoOpcionSel))
-  }, [editablesGrilla, tramoOpcionSel])
-
-  const gruposTramo = useMemo(() => {
-    if (!tramoOpcionSel || !filasTramoSeleccionado.length) return []
-    return [{
-      key: tramoOpcionSel.key,
-      noInicio: tramoOpcionSel.noInicio,
-      noFinal: tramoOpcionSel.noFinal,
-      tramo: tramoOpcionSel.tramo,
-      filas: filasTramoSeleccionado,
-    }]
-  }, [tramoOpcionSel, filasTramoSeleccionado])
-
-  useEffect(() => {
-    if (!tramoOpcionSel) {
+    if (tabActivo !== 'tramos') {
+      setTramoSelec(null)
       setTramosSelIds(new Set())
-      return
     }
-    const valid = new Set(filasTramoSeleccionado.map((r) => r.id))
-    setTramosSelIds((prev) => {
-      const next = new Set()
-      for (const id of prev) {
-        if (valid.has(id)) next.add(id)
-      }
-      return next
-    })
-  }, [tramoOpcionSel, filasTramoSeleccionado])
+  }, [tabActivo])
+
+  const filasTramoSeleccionado = useMemo(
+    () => pptoFilasDeTramo(editablesGrilla, tramoSelec),
+    [editablesGrilla, tramoSelec],
+  )
 
   const itemsListado = useMemo(
     () => listadoPrecios.filter((p) => !editCapitulo || p.capitulo === editCapitulo),
@@ -768,178 +738,19 @@ export default function PptoEdicionMasivaModal({
           )}
 
           {tabSafe === 'tramos' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
-                Trabaja sobre los {editablesGrilla.length} registro{editablesGrilla.length !== 1 ? 's' : ''} editables
-                de la grilla filtrada ({opcionesTramo.length} tramo{opcionesTramo.length !== 1 ? 's' : ''} distintos).
-                Busque por nodo o tramo, marque registros y asigne la nueva competencia.
-              </p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-                <PptoTramoAutocomplete
-                  t={t}
-                  opciones={opcionesTramo}
-                  value={tramoOpcionSel}
-                  onSelect={setTramoOpcionSel}
-                  label="TRAMO"
-                  placeholder="Buscar nodo inicio, nodo fin o tramo…"
-                />
-                <CompetenciaSelect
-                  value={editCompetenciaTramos}
-                  onChange={setEditCompetenciaTramos}
-                  opciones={competenciasOpciones}
-                  t={t}
-                  label="NUEVA COMPETENCIA"
-                  allowEmpty={false}
-                />
-              </div>
-
-              {!tramoOpcionSel ? (
-                <div style={{
-                  padding: cc.pad,
-                  background: t.bg,
-                  borderRadius: 10,
-                  border: `1px dashed ${t.border}`,
-                  color: t.textMuted,
-                  fontSize: cc.sm,
-                }}>
-                  Busque y seleccione una opción «Nodo inicio · Nodo fin · Tramo» para cargar los registros.
-                </div>
-              ) : gruposTramo.length === 0 ? (
-                <div style={{
-                  padding: cc.pad,
-                  background: t.bg,
-                  borderRadius: 10,
-                  border: `1px dashed ${t.border}`,
-                  color: t.textMuted,
-                  fontSize: cc.sm,
-                }}>
-                  No hay registros editables para «{tramoOpcionSel.label}».
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ fontSize: cc.sm, color: t.textMuted }}>
-                    {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''} · {filasTramoSeleccionado.length} en el tramo
-                  </div>
-                  {gruposTramo.map((g) => {
-                    const idsG = g.filas.map((r) => r.id)
-                    const todosSel = idsG.length > 0 && idsG.every((id) => tramosSelIds.has(id))
-                    return (
-                      <div
-                        key={g.key}
-                        style={{
-                          border: `1px solid ${t.border}`,
-                          borderRadius: 10,
-                          overflow: 'hidden',
-                          background: t.bgCard,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 10,
-                            padding: `${cc.padSm} ${cc.pad}`,
-                            background: t.primary + '12',
-                            borderBottom: `1px solid ${t.border}`,
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div style={{ fontSize: cc.sm, fontWeight: 700, color: t.primary }}>
-                            {g.noInicio} → {g.noFinal}
-                            <span style={{ fontWeight: 500, color: t.textMuted }}> · {g.tramo}</span>
-                            <span style={{ fontWeight: 500, color: t.textMuted }}> · {g.filas.length} reg.</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTramosSelIds((prev) => {
-                                const next = new Set(prev)
-                                if (todosSel) idsG.forEach((id) => next.delete(id))
-                                else idsG.forEach((id) => next.add(id))
-                                return next
-                              })
-                            }}
-                            style={{
-                              background: t.bgCard,
-                              border: `1px solid ${t.border}`,
-                              borderRadius: 8,
-                              padding: '5px 10px',
-                              fontSize: cc.caption,
-                              fontWeight: 700,
-                              color: t.primary,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {todosSel ? 'Deseleccionar todos' : 'Seleccionar todos'}
-                          </button>
-                        </div>
-                        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
-                            <thead>
-                              <tr style={{ background: t.bg, position: 'sticky', top: 0 }}>
-                                {['', 'Ref.', 'Cantidad', 'Costo directo', 'Competencia'].map((h) => (
-                                  <th
-                                    key={h || 'chk'}
-                                    style={{
-                                      padding: `${cc.padSm} 10px`,
-                                      textAlign: h === 'Cantidad' || h === 'Costo directo' ? 'right' : 'left',
-                                      color: t.textMuted,
-                                      fontWeight: 700,
-                                      fontSize: cc.caption,
-                                      borderBottom: `1px solid ${t.border}`,
-                                      whiteSpace: 'nowrap',
-                                    }}
-                                  >
-                                    {h}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {g.filas.map((r) => {
-                                const checked = tramosSelIds.has(r.id)
-                                return (
-                                  <tr key={r.id} style={{ borderBottom: `1px solid ${t.border}` }}>
-                                    <td style={{ padding: `${cc.padSm} 10px`, width: 36 }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => {
-                                          setTramosSelIds((prev) => {
-                                            const next = new Set(prev)
-                                            if (next.has(r.id)) next.delete(r.id)
-                                            else next.add(r.id)
-                                            return next
-                                          })
-                                        }}
-                                        style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
-                                      />
-                                    </td>
-                                    <td style={{ padding: `${cc.padSm} 10px`, color: t.textMuted, fontFamily: 'monospace', fontSize: cc.caption }}>
-                                      {r.pk_id || r.id}
-                                    </td>
-                                    <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
-                                      {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO') : '—'}
-                                    </td>
-                                    <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
-                                      {r.costo_directo != null ? formatCOP(r.costo_directo) : '—'}
-                                    </td>
-                                    <td style={{ padding: `${cc.padSm} 10px`, color: t.text }}>
-                                      {r.competencia || '—'}
-                                    </td>
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+            <PptoEdicionMasivaTramosPanel
+              t={t}
+              filasFuente={editablesGrilla}
+              tramoSelec={tramoSelec}
+              onSelectTramo={setTramoSelec}
+              tramosSelIds={tramosSelIds}
+              setTramosSelIds={setTramosSelIds}
+              editCompetenciaTramos={editCompetenciaTramos}
+              setEditCompetenciaTramos={setEditCompetenciaTramos}
+              competenciasOpciones={competenciasOpciones}
+              busy={busy}
+              onAplicar={handleApply}
+            />
           )}
 
           {tabSafe === 'dims' && (
@@ -1035,31 +846,37 @@ export default function PptoEdicionMasivaModal({
           >
             Cancelar
           </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            disabled={
-              busy
-              || (tabSafe === 'interv'
-                ? nEditablesInterv === 0
+          {!(tabSafe === 'tramos' && !tramoSelec) && (
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={
+                busy
+                || (tabSafe === 'interv'
+                  ? nEditablesInterv === 0
+                  : tabSafe === 'tramos'
+                    ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || editablesGrilla.length === 0)
+                    : nEditables === 0)
+              }
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: `10px 24px`,
+                fontWeight: 700,
+                fontSize: cc.label,
+                cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.7 : 1,
+              }}
+            >
+              {busy
+                ? 'Aplicando…'
                 : tabSafe === 'tramos'
-                  ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || editablesGrilla.length === 0)
-                  : nEditables === 0)
-            }
-            style={{
-              background: t.primary,
-              color: '#fff',
-              border: 'none',
-              borderRadius: 8,
-              padding: `10px 24px`,
-              fontWeight: 700,
-              fontSize: cc.label,
-              cursor: busy ? 'not-allowed' : 'pointer',
-              opacity: busy ? 0.7 : 1,
-            }}
-          >
-            {busy ? 'Aplicando…' : 'Editar masivamente'}
-          </button>
+                  ? 'Aplicar a seleccionados'
+                  : 'Editar masivamente'}
+            </button>
+          )}
         </div>
       </div>
     </div>
