@@ -86,7 +86,7 @@ export function pptoFiltrarTramosUnicos(tramos, query) {
 }
 
 /**
- * Registros del tramo — mismo criterio que el Revisor:
+ * Registros del tramo — mismo criterio que el Revisor (pestaña Tramo):
  * `r.no_inicio === tramo.no_inicio && r.no_final === tramo.no_final`
  */
 export function pptoFilasDeTramo(filas, tramo) {
@@ -94,6 +94,54 @@ export function pptoFilasDeTramo(filas, tramo) {
   return (filas || []).filter(
     (r) => r.no_inicio === tramo.no_inicio && r.no_final === tramo.no_final,
   )
+}
+
+/**
+ * Origen del registro respecto a un tramo seleccionado (Revisor):
+ * - TR: tramo completo (`no_inicio`→`no_final` del par)
+ * - NI: nodo inicio (`no_inicio === no_final === tramo.no_inicio`)
+ * - NF: nodo fin (`no_inicio === no_final === tramo.no_final`)
+ * @returns {'TR'|'NI'|'NF'|null}
+ */
+export function pptoOrigenRegistroTramo(r, tramo) {
+  if (!r || !tramo) return null
+  const ni = tramo.no_inicio
+  const nf = tramo.no_final
+  if (ni == null || nf == null) return null
+  if (r.no_inicio === ni && r.no_final === nf) return 'TR'
+  if (r.no_inicio === ni && r.no_final === ni) return 'NI'
+  if (r.no_inicio === nf && r.no_final === nf) return 'NF'
+  return null
+}
+
+/** Estilo badge NI / NF / TR (alineado con pestañas 🔵 / 🔴 / tramo del Revisor). */
+export function pptoOrigenTramoBadgeStyle(origen) {
+  switch (origen) {
+    case 'NI':
+      return { bg: '#DBEAFE', color: '#1D4ED8', label: 'NI', title: 'Nodo inicio' }
+    case 'NF':
+      return { bg: '#FEE2E2', color: '#B91C1C', label: 'NF', title: 'Nodo fin' }
+    case 'TR':
+      return { bg: '#CCFBF1', color: '#0F766E', label: 'TR', title: 'Tramo completo' }
+    default:
+      return { bg: '#F1F5F9', color: '#64748B', label: '—', title: '' }
+  }
+}
+
+/**
+ * NI + NF + TR del tramo seleccionado (misma unión conceptual que el Revisor).
+ * Orden: NI → TR → NF; dentro de cada grupo, orden de aparición.
+ * @returns {Array<{ registro: object, origen: 'NI'|'TR'|'NF' }>}
+ */
+export function pptoFilasDetalleTramo(filas, tramo) {
+  if (!tramo) return []
+  const buckets = { NI: [], TR: [], NF: [] }
+  for (const r of filas || []) {
+    const origen = pptoOrigenRegistroTramo(r, tramo)
+    if (!origen) continue
+    buckets[origen].push({ registro: r, origen })
+  }
+  return [...buckets.NI, ...buckets.TR, ...buckets.NF]
 }
 
 /** Filtra filas de un capítulo (paso previo del Revisor). */

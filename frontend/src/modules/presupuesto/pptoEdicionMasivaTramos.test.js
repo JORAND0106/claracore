@@ -10,6 +10,9 @@ import {
   pptoFiltrarTramosUnicos,
   pptoFilasDeTramo,
   pptoFilasCapituloTramos,
+  pptoOrigenRegistroTramo,
+  pptoFilasDetalleTramo,
+  pptoOrigenTramoBadgeStyle,
 } from './pptoTramoBusqueda.js'
 
 describe('pptoTramoOpcionLabel', () => {
@@ -85,6 +88,35 @@ describe('pptoFilasDeTramo', () => {
     const regs = pptoFilasDeTramo(filas, tramo)
     assert.equal(regs.length, 2)
     assert.deepEqual(regs.map((r) => r.id), [1, 2])
+  })
+})
+
+describe('pptoOrigenRegistroTramo / pptoFilasDetalleTramo', () => {
+  const tramo = { no_inicio: 'A', no_final: 'B', label: 'A → B' }
+  const filas = [
+    { id: 1, no_inicio: 'A', no_final: 'A' }, // NI
+    { id: 2, no_inicio: 'A', no_final: 'B' }, // TR
+    { id: 3, no_inicio: 'B', no_final: 'B' }, // NF
+    { id: 4, no_inicio: 'X', no_final: 'Y' }, // fuera
+  ]
+
+  it('clasifica NI / TR / NF como el Revisor', () => {
+    assert.equal(pptoOrigenRegistroTramo(filas[0], tramo), 'NI')
+    assert.equal(pptoOrigenRegistroTramo(filas[1], tramo), 'TR')
+    assert.equal(pptoOrigenRegistroTramo(filas[2], tramo), 'NF')
+    assert.equal(pptoOrigenRegistroTramo(filas[3], tramo), null)
+  })
+
+  it('detalle une NI+TR+NF en ese orden', () => {
+    const det = pptoFilasDetalleTramo(filas, tramo)
+    assert.deepEqual(det.map((x) => `${x.origen}:${x.registro.id}`), ['NI:1', 'TR:2', 'NF:3'])
+  })
+
+  it('badge styles distingue colores por origen', () => {
+    assert.equal(pptoOrigenTramoBadgeStyle('NI').label, 'NI')
+    assert.equal(pptoOrigenTramoBadgeStyle('NF').label, 'NF')
+    assert.equal(pptoOrigenTramoBadgeStyle('TR').label, 'TR')
+    assert.notEqual(pptoOrigenTramoBadgeStyle('NI').color, pptoOrigenTramoBadgeStyle('NF').color)
   })
 })
 

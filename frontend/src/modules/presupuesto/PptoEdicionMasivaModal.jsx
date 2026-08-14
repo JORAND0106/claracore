@@ -4,7 +4,7 @@ import { preIntervLiberadoParaInterventoria } from './pptoRolesValidacion'
 import PptoEdicionMasivaTramosPanel from './PptoEdicionMasivaTramosPanel'
 import {
   pptoFilasFuenteTramos,
-  pptoFilasDeTramo,
+  pptoFilasDetalleTramo,
 } from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
@@ -385,7 +385,7 @@ export default function PptoEdicionMasivaModal({
   }, [open, tabActivo])
 
   const filasTramoSeleccionado = useMemo(
-    () => pptoFilasDeTramo(filasFuenteTramos, tramoSelec),
+    () => pptoFilasDetalleTramo(filasFuenteTramos, tramoSelec).map((x) => x.registro),
     [filasFuenteTramos, tramoSelec],
   )
 

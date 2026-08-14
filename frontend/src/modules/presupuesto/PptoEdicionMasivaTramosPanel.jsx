@@ -3,7 +3,8 @@ import { formatCOP } from '../../utils/formatCOP'
 import {
   pptoConstruirTramosUnicos,
   pptoFiltrarTramosUnicos,
-  pptoFilasDeTramo,
+  pptoFilasDetalleTramo,
+  pptoOrigenTramoBadgeStyle,
 } from './pptoTramoBusqueda'
 
 const cc = {
@@ -49,12 +50,12 @@ export default function PptoEdicionMasivaTramosPanel({
   )
 
   const filasTramo = useMemo(
-    () => pptoFilasDeTramo(filasFuente, tramoSelec),
+    () => pptoFilasDetalleTramo(filasFuente, tramoSelec),
     [filasFuente, tramoSelec],
   )
 
   const filasTramoEditables = useMemo(
-    () => filasTramo.filter((r) => !(typeof esSellado === 'function' && esSellado(r))),
+    () => filasTramo.filter(({ registro: r }) => !(typeof esSellado === 'function' && esSellado(r))),
     [filasTramo, esSellado],
   )
 
@@ -70,7 +71,7 @@ export default function PptoEdicionMasivaTramosPanel({
       setTramosSelIds(new Set())
       return
     }
-    const valid = new Set(filasTramoEditables.map((r) => r.id))
+    const valid = new Set(filasTramoEditables.map(({ registro: r }) => r.id))
     setTramosSelIds((prev) => {
       const next = new Set()
       for (const id of prev) {
@@ -88,7 +89,7 @@ export default function PptoEdicionMasivaTramosPanel({
     onSelectTramo(dest)
   }
 
-  const idsEditables = filasTramoEditables.map((r) => r.id)
+  const idsEditables = filasTramoEditables.map(({ registro: r }) => r.id)
   const todosSel = idsEditables.length > 0 && idsEditables.every((id) => tramosSelIds.has(id))
 
   const navBtn = (disabled) => ({
@@ -218,7 +219,7 @@ export default function PptoEdicionMasivaTramosPanel({
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 320, overflowY: 'auto' }}>
             {tramosFiltrados.map((tr) => {
-              const nRegs = pptoFilasDeTramo(filasFuente, tr).length
+              const nRegs = pptoFilasDetalleTramo(filasFuente, tr).length
               return (
                 <div
                   key={tr.key}
@@ -461,6 +462,7 @@ export default function PptoEdicionMasivaTramosPanel({
                     { h: 'Cantidad', align: 'right' },
                     { h: 'Costo Directo', align: 'right' },
                     { h: 'Competencia actual', align: 'left' },
+                    { h: 'Origen', align: 'center' },
                   ].map(({ h, align }) => (
                     <th
                       key={h || 'chk'}
@@ -480,12 +482,13 @@ export default function PptoEdicionMasivaTramosPanel({
                 </tr>
               </thead>
               <tbody>
-                {filasTramo.map((r) => {
+                {filasTramo.map(({ registro: r, origen }) => {
                   const sellado = typeof esSellado === 'function' && esSellado(r)
                   const checked = tramosSelIds.has(r.id)
+                  const badge = pptoOrigenTramoBadgeStyle(origen)
                   return (
                     <tr
-                      key={r.id}
+                      key={`${origen}-${r.id}`}
                       style={{
                         borderBottom: `1px solid ${t.border}`,
                         opacity: sellado ? 0.55 : 1,
@@ -551,6 +554,24 @@ export default function PptoEdicionMasivaTramosPanel({
                       </td>
                       <td style={{ padding: `${cc.padSm} 10px`, color: t.text }}>
                         {r.competencia || '—'}
+                      </td>
+                      <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'center' }}>
+                        <span
+                          title={badge.title}
+                          style={{
+                            display: 'inline-block',
+                            background: badge.bg,
+                            color: badge.color,
+                            borderRadius: 6,
+                            padding: '2px 8px',
+                            fontSize: cc.caption,
+                            fontWeight: 800,
+                            letterSpacing: 0.4,
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {badge.label}
+                        </span>
                       </td>
                     </tr>
                   )
