@@ -38,9 +38,15 @@ def _resolve_tipo_ejecucion(tipo_ejecucion: Optional[str]) -> str:
 
 def _aplicar_filtros_listado(
     q,
+    sb,
+    contrato_id: int,
     filtros: Optional[Dict[str, Any]] = None,
 ):
-    """Mismos filtros que GET /presupuesto/{contrato_id} (_q_base)."""
+    """Mismos filtros que GET /presupuesto/{contrato_id} (_q_base).
+
+    ``sb`` y ``contrato_id`` son obligatorios: el filtro de infraestructura
+    resuelve PK vía maestro ``pk_ids`` y necesita el cliente Supabase.
+    """
     f = filtros or {}
     dado_de_baja = f.get("dado_de_baja")
     papelera = bool(f.get("papelera"))
@@ -69,7 +75,7 @@ def _aplicar_filtros_listado(
     )
     q = _presupuesto_q_filtro_infraestructura_via_pk_ids(
         q,
-        supabase,
+        sb,
         int(contrato_id),
         single=f.get("infraestructura"),
         multi=f.get("infraestructuras"),
@@ -145,7 +151,7 @@ def _aplicar_sync_tabla(
     while True:
         q = sb.table(tabla).select("id, item, cant_total, vlr_unitario, costo_directo")
         q = q.eq("contrato_id", contrato_id)
-        q = _aplicar_filtros_listado(q, filtros)
+        q = _aplicar_filtros_listado(q, sb, contrato_id, filtros)
         batch = q.order("id").range(offset, offset + PAGE - 1).execute().data or []
         for row in batch:
             ik = _norm_item_key(row.get("item"))
