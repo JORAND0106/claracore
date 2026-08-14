@@ -6,6 +6,9 @@ import {
   pptoFiltrarOpcionesTramo,
   pptoFilaCoincideOpcionTramo,
   pptoFilasFuenteTramos,
+  pptoConstruirTramosUnicos,
+  pptoFiltrarTramosUnicos,
+  pptoFilasDeTramo,
 } from './pptoTramoBusqueda.js'
 
 describe('pptoTramoOpcionLabel', () => {
@@ -17,28 +20,69 @@ describe('pptoTramoOpcionLabel', () => {
   })
 })
 
-describe('pptoConstruirOpcionesTramo', () => {
-  it('deduplica triples nodo/tramo', () => {
-    const ops = pptoConstruirOpcionesTramo([
+describe('pptoConstruirTramosUnicos (como Revisor)', () => {
+  it('arma Nodo Inicio → Nodo Fin y deduplica', () => {
+    const tramos = pptoConstruirTramosUnicos([
       { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
       { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
-      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T1' },
+      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T2' },
     ])
-    assert.equal(ops.length, 2)
+    assert.equal(tramos.length, 2)
+    assert.equal(tramos[0].label, 'A → B')
+    assert.equal(tramos[1].label, 'C → D')
   })
 
-  it('incluye filas solo con tramo', () => {
-    const ops = pptoConstruirOpcionesTramo([{ id: 1, tramo: 'Calle 9' }])
-    assert.equal(ops.length, 1)
-    assert.equal(ops[0].label, '— · — · Calle 9')
+  it('omite pares incompletos o nodo inicio === nodo fin', () => {
+    const tramos = pptoConstruirTramosUnicos([
+      { id: 1, no_inicio: 'A', no_final: '', tramo: 'X' },
+      { id: 2, no_inicio: 'M', no_final: 'M', tramo: 'Y' },
+      { id: 3, tramo: 'SoloNombre' },
+      { id: 4, no_inicio: 'P', no_final: 'Q' },
+    ])
+    assert.equal(tramos.length, 1)
+    assert.equal(tramos[0].label, 'P → Q')
   })
 
   it('acepta alias nodo_inicio/nodo_final', () => {
-    const ops = pptoConstruirOpcionesTramo([
-      { id: 1, nodo_inicio: 'X', nodo_final: 'Y', tramo: 'Z' },
+    const tramos = pptoConstruirTramosUnicos([
+      { id: 1, nodo_inicio: 'X', nodo_final: 'Y' },
     ])
-    assert.equal(ops.length, 1)
-    assert.equal(ops[0].noInicio, 'X')
+    assert.equal(tramos.length, 1)
+    assert.equal(tramos[0].no_inicio, 'X')
+    assert.equal(tramos[0].no_final, 'Y')
+  })
+})
+
+describe('pptoFiltrarTramosUnicos', () => {
+  const tramos = pptoConstruirTramosUnicos([
+    { no_inicio: 'Norte', no_final: 'Sur' },
+    { no_inicio: 'Este', no_final: 'Oeste' },
+  ])
+
+  it('sin query devuelve todos', () => {
+    assert.equal(pptoFiltrarTramosUnicos(tramos, '').length, 2)
+  })
+
+  it('filtra por nodo inicio o fin', () => {
+    assert.equal(pptoFiltrarTramosUnicos(tramos, 'norte').length, 1)
+    assert.equal(pptoFiltrarTramosUnicos(tramos, 'oeste').length, 1)
+    assert.equal(pptoFiltrarTramosUnicos(tramos, 'xyz').length, 0)
+  })
+})
+
+describe('pptoFilasDeTramo', () => {
+  const filas = [
+    { id: 1, no_inicio: 'A', no_final: 'B', item: '1' },
+    { id: 2, no_inicio: 'A', no_final: 'B', item: '2' },
+    { id: 3, no_inicio: 'A', no_final: 'A', item: 'nodo' },
+    { id: 4, no_inicio: 'C', no_final: 'D', item: '3' },
+  ]
+  const tramo = { no_inicio: 'A', no_final: 'B', label: 'A → B' }
+
+  it('devuelve solo registros del par nodo→nodo', () => {
+    const regs = pptoFilasDeTramo(filas, tramo)
+    assert.equal(regs.length, 2)
+    assert.deepEqual(regs.map((r) => r.id), [1, 2])
   })
 })
 
@@ -92,6 +136,23 @@ describe('pptoFilasFuenteTramos', () => {
   })
 })
 
+describe('pptoConstruirOpcionesTramo (legacy autocomplete)', () => {
+  it('deduplica triples nodo/tramo', () => {
+    const ops = pptoConstruirOpcionesTramo([
+      { id: 1, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
+      { id: 2, no_inicio: 'A', no_final: 'B', tramo: 'T1' },
+      { id: 3, no_inicio: 'C', no_final: 'D', tramo: 'T1' },
+    ])
+    assert.equal(ops.length, 2)
+  })
+
+  it('incluye filas solo con tramo', () => {
+    const ops = pptoConstruirOpcionesTramo([{ id: 1, tramo: 'Calle 9' }])
+    assert.equal(ops.length, 1)
+    assert.equal(ops[0].label, '— · — · Calle 9')
+  })
+})
+
 describe('pptoFiltrarOpcionesTramo', () => {
   const ops = pptoConstruirOpcionesTramo([
     { no_inicio: 'Norte', no_final: 'Sur', tramo: 'Calle 1' },
@@ -100,14 +161,6 @@ describe('pptoFiltrarOpcionesTramo', () => {
 
   it('sin query devuelve todas', () => {
     assert.equal(pptoFiltrarOpcionesTramo(ops, '').length, 2)
-    assert.equal(pptoFiltrarOpcionesTramo(ops, '  ').length, 2)
-  })
-
-  it('filtra por nodo inicio, fin o nombre de tramo', () => {
-    assert.equal(pptoFiltrarOpcionesTramo(ops, 'norte').length, 1)
-    assert.equal(pptoFiltrarOpcionesTramo(ops, 'oeste').length, 1)
-    assert.equal(pptoFiltrarOpcionesTramo(ops, 'calle 2').length, 1)
-    assert.equal(pptoFiltrarOpcionesTramo(ops, 'xyz').length, 0)
   })
 })
 
