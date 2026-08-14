@@ -6,6 +6,7 @@ import {
   pptoFilasFuenteTramos,
   pptoFilasDetalleTramo,
   pptoActualizarCompetenciaFilas,
+  pptoClonarFilasFuenteTramos,
 } from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
@@ -314,9 +315,14 @@ export default function PptoEdicionMasivaModal({
   const [aplicando, setAplicando] = useState(false)
   const itemDropRef = useRef(null)
   const cargaTramosIdRef = useRef(0)
+  /** Snapshot de tramos cargado una vez por apertura del modal; no se recarga al volver al tab. */
+  const tramosSnapshotListoRef = useRef(false)
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      tramosSnapshotListoRef.current = false
+      return
+    }
     setResumenPost(null)
     setErrorApply('')
     setMensajeExito('')
@@ -328,6 +334,7 @@ export default function PptoEdicionMasivaModal({
     setFilasFuenteTramos([])
     setTramosCargando(false)
     setTramosMeta({ cap: null, fuente: null, aviso: '', error: '' })
+    tramosSnapshotListoRef.current = false
   }, [open])
 
   useEffect(() => {
@@ -335,7 +342,7 @@ export default function PptoEdicionMasivaModal({
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
 
-  // Al salir del tab Tramos, volver a la vista de lista.
+  // Al salir del tab Tramos, volver a la vista de lista (conserva filasFuenteTramos).
   useEffect(() => {
     if (tabActivo !== 'tramos') {
       setTramoSelec(null)
@@ -343,9 +350,11 @@ export default function PptoEdicionMasivaModal({
     }
   }, [tabActivo])
 
-  // Carga al montar el tab Tramos — misma fuente que el botón Tramos (fObra + API listado).
+  // Carga una sola vez por apertura del modal — no refetch al reentrar al tab
+  // (así un cambio de competencia no oculta filas al volver o al reaplicar filtros fObra).
   useEffect(() => {
     if (!open || tabActivo !== 'tramos') return undefined
+    if (tramosSnapshotListoRef.current) return undefined
     let cancelled = false
     const cargaId = ++cargaTramosIdRef.current
     setTramosCargando(true)
@@ -357,10 +366,12 @@ export default function PptoEdicionMasivaModal({
           result = await onCargarFuenteTramos()
         }
         if (cancelled || cargaId !== cargaTramosIdRef.current) return
-        const rows = Array.isArray(result?.rows) && (result.rows.length > 0 || result.fuente === 'api')
+        const raw = Array.isArray(result?.rows) && (result.rows.length > 0 || result.fuente === 'api')
           ? result.rows
           : filasFuenteFallback
-        setFilasFuenteTramos(rows)
+        // Clonar: snapshot independiente de la grilla / respuesta API.
+        setFilasFuenteTramos(pptoClonarFilasFuenteTramos(raw))
+        tramosSnapshotListoRef.current = true
         setTramosMeta({
           cap: result?.cap || null,
           fuente: result?.fuente || 'grilla',
@@ -369,7 +380,8 @@ export default function PptoEdicionMasivaModal({
         })
       } catch (e) {
         if (cancelled || cargaId !== cargaTramosIdRef.current) return
-        setFilasFuenteTramos(filasFuenteFallback)
+        setFilasFuenteTramos(pptoClonarFilasFuenteTramos(filasFuenteFallback))
+        tramosSnapshotListoRef.current = true
         setTramosMeta({
           cap: null,
           fuente: 'grilla',
@@ -381,7 +393,7 @@ export default function PptoEdicionMasivaModal({
       }
     })()
     return () => { cancelled = true }
-    // Solo al abrir el tab; la función usa fObra actual al invocarse.
+    // Solo al abrir el tab la primera vez en esta sesión del modal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tabActivo])
 
@@ -583,17 +595,21 @@ export default function PptoEdicionMasivaModal({
           return
         }
         const compTramos = String(editCompetenciaTramos || '').trim()
+        // Ids seleccionados al confirmar — el listado no se filtra ni recarga tras el cambio.
+        const idsSelTramos = [...tramosSelIds]
         resumen = await onApplyTramosCompetencia({
-          ids: [...tramosSelIds],
+          ids: idsSelTramos,
           competencia: compTramos,
         })
-        // Actualizar "Competencia actual" en el tab sin recargar ni cerrar el modal.
-        const idsAplicados = (Array.isArray(resumen) ? resumen : [])
-          .map((row) => row?.id)
-          .filter((id) => id != null && id !== '')
-        if (idsAplicados.length && compTramos) {
-          setFilasFuenteTramos((prev) => pptoActualizarCompetenciaFilas(prev, idsAplicados, compTramos))
-          const remove = new Set(idsAplicados.map((id) => String(id)))
+        // Solo actualiza "Competencia actual" in-place; conserva todas las filas del snapshot.
+        if (idsSelTramos.length && compTramos) {
+          setFilasFuenteTramos((prev) => {
+            const next = pptoActualizarCompetenciaFilas(prev, idsSelTramos, compTramos)
+            // Invariante: nunca achicar el listado al cambiar competencia.
+            return next.length === (prev?.length || 0) ? next : prev
+          })
+          // Desmarcar aplicados para no reaplicar el mismo cambio; las filas siguen visibles.
+          const remove = new Set(idsSelTramos.map((id) => String(id)))
           setTramosSelIds((prev) => {
             const next = new Set()
             for (const id of prev) {

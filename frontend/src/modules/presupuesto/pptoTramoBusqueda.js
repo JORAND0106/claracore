@@ -200,6 +200,7 @@ export function pptoFilaCoincideOpcionTramo(r, opcion) {
 /**
  * Actualiza la competencia local de las filas afectadas (Tab Tramos)
  * tras una respuesta exitosa de bulk-competencia — sin recargar ni cerrar el modal.
+ * Nunca elimina ni filtra filas: solo muta `competencia` en los ids indicados.
  */
 export function pptoActualizarCompetenciaFilas(filas, ids, competencia) {
   const comp = String(competencia || '').trim()
@@ -209,4 +210,13 @@ export function pptoActualizarCompetenciaFilas(filas, ids, competencia) {
   return filas.map((r) => (
     idSet.has(String(r?.id)) ? { ...r, competencia: comp } : r
   ))
+}
+
+/**
+ * Copia superficial del listado de tramos para congelar un snapshot independiente
+ * de la grilla/API (evita que un refetch o filtro de competencia oculte filas).
+ */
+export function pptoClonarFilasFuenteTramos(filas) {
+  if (!Array.isArray(filas) || !filas.length) return []
+  return filas.map((r) => (r && typeof r === 'object' ? { ...r } : r))
 }
