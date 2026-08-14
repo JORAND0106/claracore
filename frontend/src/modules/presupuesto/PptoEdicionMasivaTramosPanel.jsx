@@ -1,5 +1,6 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
+import { idsRangoSeleccion } from './pptoSeleccionRango'
 import {
   pptoConstruirTramosUnicos,
   pptoFiltrarTramosUnicos,
@@ -54,10 +55,13 @@ export default function PptoEdicionMasivaTramosPanel({
     [filasFuente, tramoSelec],
   )
 
-  const filasTramoEditables = useMemo(
-    () => filasTramo.filter(({ registro: r }) => !(typeof esSellado === 'function' && esSellado(r))),
-    [filasTramo, esSellado],
+  /** Orden visual de registros (NI → TR → NF) para Shift+rango y «seleccionar todos». */
+  const registrosLista = useMemo(
+    () => filasTramo.map(({ registro }) => registro),
+    [filasTramo],
   )
+
+  const lastSelAnchorIdRef = useRef(null)
 
   const tramoIdx = useMemo(() => {
     if (!tramoSelec) return -1
@@ -69,9 +73,10 @@ export default function PptoEdicionMasivaTramosPanel({
   useEffect(() => {
     if (!tramoSelec) {
       setTramosSelIds(new Set())
+      lastSelAnchorIdRef.current = null
       return
     }
-    const valid = new Set(filasTramoEditables.map(({ registro: r }) => r.id))
+    const valid = new Set(registrosLista.map((r) => r.id))
     setTramosSelIds((prev) => {
       const next = new Set()
       for (const id of prev) {
@@ -79,7 +84,7 @@ export default function PptoEdicionMasivaTramosPanel({
       }
       return next
     })
-  }, [tramoSelec, filasTramoEditables, setTramosSelIds])
+  }, [tramoSelec, registrosLista, setTramosSelIds])
 
   const irRelativo = (delta) => {
     if (tramoIdx < 0) return
@@ -89,8 +94,49 @@ export default function PptoEdicionMasivaTramosPanel({
     onSelectTramo(dest)
   }
 
-  const idsEditables = filasTramoEditables.map(({ registro: r }) => r.id)
-  const todosSel = idsEditables.length > 0 && idsEditables.every((id) => tramosSelIds.has(id))
+  const idsTodos = registrosLista.map((r) => r.id)
+  const todosSel = idsTodos.length > 0 && idsTodos.every((id) => tramosSelIds.has(id))
+  const algunosSel = !todosSel && idsTodos.some((id) => tramosSelIds.has(id))
+  const nSellados = registrosLista.filter((r) => typeof esSellado === 'function' && esSellado(r)).length
+
+  function toggleTodosTramo() {
+    if (todosSel) {
+      setTramosSelIds(new Set())
+      lastSelAnchorIdRef.current = null
+      return
+    }
+    setTramosSelIds(new Set(idsTodos))
+    if (idsTodos.length) lastSelAnchorIdRef.current = idsTodos[idsTodos.length - 1]
+  }
+
+  /** Misma lógica que la grilla: Shift+clic marca el rango desde el ancla. */
+  function onChkClick(id, e) {
+    e.stopPropagation()
+    if (e.shiftKey && lastSelAnchorIdRef.current != null) {
+      e.preventDefault()
+      // Competencia admite sellados → no omitir filas selladas en el rango.
+      const ids = idsRangoSeleccion(registrosLista, lastSelAnchorIdRef.current, id, () => false)
+      if (ids.length) {
+        setTramosSelIds((prev) => {
+          const next = new Set(prev)
+          ids.forEach((i) => next.add(i))
+          return next
+        })
+      }
+      lastSelAnchorIdRef.current = id
+    }
+  }
+
+  function onChkChange(id, e) {
+    if (e?.shiftKey) return
+    setTramosSelIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+    lastSelAnchorIdRef.current = id
+  }
 
   const navBtn = (disabled) => ({
     background: disabled ? t.bg : t.bgCard,
@@ -336,36 +382,11 @@ export default function PptoEdicionMasivaTramosPanel({
             {filasTramo.length} registro{filasTramo.length !== 1 ? 's' : ''}
             {' · '}
             {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''}
-            {filasTramo.length !== filasTramoEditables.length
-              ? ` · ${filasTramo.length - filasTramoEditables.length} sellado(s)`
-              : ''}
+            {nSellados > 0 ? ` · ${nSellados} sellado(s) (competencia permitida)` : ''}
+            {' · '}
+            <span title="Shift+clic selecciona un rango">Shift+clic = rango</span>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setTramosSelIds((prev) => {
-              const next = new Set(prev)
-              if (todosSel) idsEditables.forEach((id) => next.delete(id))
-              else idsEditables.forEach((id) => next.add(id))
-              return next
-            })
-          }}
-          disabled={!idsEditables.length}
-          style={{
-            background: t.bgCard,
-            border: `1px solid ${t.border}`,
-            borderRadius: 8,
-            padding: '6px 12px',
-            fontSize: cc.caption,
-            fontWeight: 700,
-            color: t.primary,
-            cursor: idsEditables.length ? 'pointer' : 'default',
-            opacity: idsEditables.length ? 1 : 0.5,
-          }}
-        >
-          {todosSel ? 'Deseleccionar todos' : 'Seleccionar todos'}
-        </button>
       </div>
 
       <div style={{
@@ -454,8 +475,32 @@ export default function PptoEdicionMasivaTramosPanel({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
               <thead>
                 <tr style={{ background: t.bg, position: 'sticky', top: 0, zIndex: 1 }}>
+                  <th
+                    style={{
+                      padding: `${cc.padSm} 10px`,
+                      textAlign: 'left',
+                      color: t.textMuted,
+                      fontWeight: 700,
+                      fontSize: cc.caption,
+                      borderBottom: `1px solid ${t.border}`,
+                      whiteSpace: 'nowrap',
+                      width: 36,
+                    }}
+                    title="Seleccionar todos los registros del tramo"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={todosSel}
+                      ref={(el) => {
+                        if (el) el.indeterminate = algunosSel
+                      }}
+                      disabled={!idsTodos.length}
+                      onChange={toggleTodosTramo}
+                      aria-label="Seleccionar todos"
+                      style={{ width: 16, height: 16, accentColor: t.primary, cursor: idsTodos.length ? 'pointer' : 'default' }}
+                    />
+                  </th>
                   {[
-                    { h: '', align: 'left' },
                     { h: 'ID_POL', align: 'left' },
                     { h: 'Ítem', align: 'left' },
                     { h: 'Descripción', align: 'left' },
@@ -465,7 +510,7 @@ export default function PptoEdicionMasivaTramosPanel({
                     { h: 'Origen', align: 'center' },
                   ].map(({ h, align }) => (
                     <th
-                      key={h || 'chk'}
+                      key={h}
                       style={{
                         padding: `${cc.padSm} 10px`,
                         textAlign: align,
@@ -491,25 +536,19 @@ export default function PptoEdicionMasivaTramosPanel({
                       key={`${origen}-${r.id}`}
                       style={{
                         borderBottom: `1px solid ${t.border}`,
-                        opacity: sellado ? 0.55 : 1,
+                        background: sellado ? (t.bg || 'transparent') : undefined,
                       }}
                     >
                       <td style={{ padding: `${cc.padSm} 10px`, width: 36 }}>
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={sellado}
-                          title={sellado ? 'Registro sellado' : undefined}
-                          onChange={() => {
-                            if (sellado) return
-                            setTramosSelIds((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(r.id)) next.delete(r.id)
-                              else next.add(r.id)
-                              return next
-                            })
-                          }}
-                          style={{ width: 16, height: 16, accentColor: t.primary, cursor: sellado ? 'not-allowed' : 'pointer' }}
+                          title={sellado
+                            ? 'Sellado: se puede cambiar competencia (Shift+clic = rango)'
+                            : 'Marque filas (Shift+clic = rango)'}
+                          onClick={(e) => onChkClick(r.id, e)}
+                          onChange={(e) => onChkChange(r.id, e)}
+                          style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
                         />
                       </td>
                       <td
@@ -527,6 +566,9 @@ export default function PptoEdicionMasivaTramosPanel({
                         title={String(r.id_pol || r.pk_id || '')}
                       >
                         {r.id_pol || r.pk_id || '—'}
+                        {sellado ? (
+                          <span style={{ marginLeft: 6, color: t.textMuted, fontWeight: 600 }} title="Sellado">🔒</span>
+                        ) : null}
                       </td>
                       <td style={{ padding: `${cc.padSm} 10px`, color: t.text, fontWeight: 600, whiteSpace: 'nowrap' }}>
                         {r.item || '—'}

@@ -13129,7 +13129,11 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
 
 @app.put("/presupuesto/{contrato_id}/bulk-competencia")
 def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current_user=Depends(get_current_user)):
-    """Actualiza competencia en lote (edición masiva presupuesto)."""
+    """Actualiza solo `competencia` en lote (edición masiva / tab Tramos).
+
+    Cambio administrativo de forma: no modifica `revisado`, `pre_interv_estado`,
+    `sellado` ni otros campos de validación. Por eso se permite en registros sellados.
+    """
     _require_contract_access(current_user, contrato_id)
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
@@ -13140,7 +13144,6 @@ def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current
     comp = str(body.competencia or "").strip()
     if not comp:
         raise HTTPException(status_code=422, detail="competencia no puede estar vacía.")
-    _reject_if_presupuesto_sellado(supabase, body.ids)
     rows = (
         supabase.table("presupuesto")
         .select("id, contrato_id, id_pol, competencia")
@@ -13153,6 +13156,7 @@ def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current
     if not ids_ok:
         raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
     rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+    # Solo competencia (+ updated_at): no tocar validación / sellado.
     supabase.table("presupuesto").update(
         {"competencia": comp, "updated_at": "now()"}
     ).in_("id", ids_ok).execute()

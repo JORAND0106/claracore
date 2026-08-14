@@ -23,4 +23,12 @@ describe('idsRangoSeleccion', () => {
   it('destino sellado sin ancla → vacío', () => {
     assert.deepEqual(idsRangoSeleccion(lista, null, 3, sellado), [])
   })
+
+  it('compara ids como string (ancla numérica / destino string)', () => {
+    assert.deepEqual(idsRangoSeleccion(lista, 2, '4'), [2, 3, 4])
+  })
+
+  it('sin omitirFila incluye todas las filas del rango (tab Tramos / competencia)', () => {
+    assert.deepEqual(idsRangoSeleccion(lista, 1, 5, () => false), [1, 2, 3, 4, 5])
+  })
 })
