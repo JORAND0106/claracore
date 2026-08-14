@@ -5,6 +5,7 @@ import PptoEdicionMasivaTramosPanel from './PptoEdicionMasivaTramosPanel'
 import {
   pptoFilasFuenteTramos,
   pptoFilasDetalleTramo,
+  pptoActualizarCompetenciaFilas,
 } from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
@@ -581,10 +582,26 @@ export default function PptoEdicionMasivaModal({
           setErrorApply('La acción de Tramos no está disponible.')
           return
         }
+        const compTramos = String(editCompetenciaTramos || '').trim()
         resumen = await onApplyTramosCompetencia({
           ids: [...tramosSelIds],
-          competencia: editCompetenciaTramos,
+          competencia: compTramos,
         })
+        // Actualizar "Competencia actual" en el tab sin recargar ni cerrar el modal.
+        const idsAplicados = (Array.isArray(resumen) ? resumen : [])
+          .map((row) => row?.id)
+          .filter((id) => id != null && id !== '')
+        if (idsAplicados.length && compTramos) {
+          setFilasFuenteTramos((prev) => pptoActualizarCompetenciaFilas(prev, idsAplicados, compTramos))
+          const remove = new Set(idsAplicados.map((id) => String(id)))
+          setTramosSelIds((prev) => {
+            const next = new Set()
+            for (const id of prev) {
+              if (!remove.has(String(id))) next.add(id)
+            }
+            return next
+          })
+        }
       } else if (tabSafe === 'depuracion') {
         if (!estadoDep) {
           setErrorApply('Seleccione un estado de depuración.')
@@ -605,7 +622,10 @@ export default function PptoEdicionMasivaModal({
           ? `La edición masiva se aplicó correctamente en ${n} registro${n !== 1 ? 's' : ''}.`
           : 'La edición masiva se ejecutó correctamente.',
       )
-      window.setTimeout(() => onClose(), 900)
+      // Tab Tramos: permanece abierto para seguir editando con la columna ya actualizada.
+      if (tabSafe !== 'tramos') {
+        window.setTimeout(() => onClose(), 900)
+      }
     } catch (e) {
       setErrorApply(e?.message || 'No se pudo aplicar la edición masiva.')
     } finally {

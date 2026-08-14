@@ -4112,7 +4112,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err?.detail || 'No se pudo actualizar la competencia.')
     }
-    setRegistros((prev) => prev.map((r) => (ids.includes(r.id) ? { ...r, competencia: comp } : r)))
+    const idSet = new Set(ids.map((id) => String(id)))
+    setRegistros((prev) => prev.map((r) => (idSet.has(String(r.id)) ? { ...r, competencia: comp } : r)))
   }
 
   async function aplicarMasivoCapItem({ capitulo, item, competencia, precioSeleccionado, observacion }) {

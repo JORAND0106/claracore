@@ -196,3 +196,17 @@ export function pptoFilaCoincideOpcionTramo(r, opcion) {
   const tr = pptoNormTramoCampo(r.tramo)
   return ni === opcion.noInicio && nf === opcion.noFinal && tr === opcion.tramo
 }
+
+/**
+ * Actualiza la competencia local de las filas afectadas (Tab Tramos)
+ * tras una respuesta exitosa de bulk-competencia — sin recargar ni cerrar el modal.
+ */
+export function pptoActualizarCompetenciaFilas(filas, ids, competencia) {
+  const comp = String(competencia || '').trim()
+  if (!Array.isArray(filas) || !filas.length || !comp) return filas || []
+  const idSet = new Set((ids || []).map((id) => String(id)))
+  if (!idSet.size) return filas
+  return filas.map((r) => (
+    idSet.has(String(r?.id)) ? { ...r, competencia: comp } : r
+  ))
+}
