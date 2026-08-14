@@ -182,8 +182,36 @@ function DimInput({ label, value, onChange, disabled, t, title }) {
   )
 }
 
+function CompetenciaSelect({ value, onChange, opciones, t, label = 'NUEVA COMPETENCIA', allowEmpty = true }) {
+  return (
+    <div style={{ flex: '1 1 200px' }}>
+      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
+        {label}
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: '100%',
+          background: t.inputBg,
+          border: `1.5px solid ${value ? t.primary : t.border}`,
+          borderRadius: 8,
+          padding: `${cc.padSm} 12px`,
+          color: t.text,
+          fontSize: cc.sm,
+        }}
+      >
+        {allowEmpty ? <option value="">— Sin cambio —</option> : <option value="">— Seleccione —</option>}
+        {(opciones || []).map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 /**
- * Edición masiva presupuesto: capítulo/ítem, dimensiones, tipo, depuración e interventoría.
+ * Edición masiva presupuesto: capítulo/ítem, dimensiones, tipo, tramos, depuración e interventoría.
  */
 export default function PptoEdicionMasivaModal({
   open,
@@ -199,10 +227,12 @@ export default function PptoEdicionMasivaModal({
   requiereDepuracionAprobadaInterv = true,
   capitulosListado,
   listadoPrecios,
+  competenciasOpciones = [],
   guardandoBulk,
   onApplyCapItem,
   onApplyDimensiones,
   onApplyTipo,
+  onApplyTramosCompetencia,
   onApplyDepuracion,
   onApplyInterventoria,
 }) {
@@ -214,6 +244,16 @@ export default function PptoEdicionMasivaModal({
   const editables = useMemo(() => filasSel.filter((r) => !esSellado(r)), [filasSel, esSellado])
   const nEditables = editables.length
   const nSellados = filasSel.length - editables.length
+
+  /** Registros de la grilla filtrada actual (tab Tramos). */
+  const filasGrilla = useMemo(
+    () => (Array.isArray(registros) ? registros : []).filter(Boolean),
+    [registros],
+  )
+  const editablesGrilla = useMemo(
+    () => filasGrilla.filter((r) => !esSellado?.(r)),
+    [filasGrilla, esSellado],
+  )
 
   const editablesInterv = useMemo(
     () => (requiereDepuracionAprobadaInterv
@@ -228,6 +268,7 @@ export default function PptoEdicionMasivaModal({
       out.push({ id: 'capitem', label: 'Capítulo / Ítem', icon: '📁' })
       if (puedeEditarDimensiones) out.push({ id: 'dims', label: 'Dimensiones', icon: '📐' })
       out.push({ id: 'tipo', label: 'Tipo de ejecución', icon: '↔' })
+      out.push({ id: 'tramos', label: 'Tramos', icon: '🧭' })
     }
     if (puedeTabDepuracion) out.push({ id: 'depuracion', label: 'Validación por depuración', icon: '🔎' })
     if (puedeTabInterventoria) out.push({ id: 'interv', label: 'Validación por Interventoría', icon: '✓' })
@@ -239,6 +280,7 @@ export default function PptoEdicionMasivaModal({
   const [editItem, setEditItem] = useState('')
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
+  const [editCompetencia, setEditCompetencia] = useState('')
   const [obsCapItem, setObsCapItem] = useState('')
   const [dimAncho, setDimAncho] = useState('')
   const [dimEspesor, setDimEspesor] = useState('')
@@ -249,6 +291,9 @@ export default function PptoEdicionMasivaModal({
   const [obsDep, setObsDep] = useState('')
   const [estadoInterv, setEstadoInterv] = useState('')
   const [obsInterv, setObsInterv] = useState('')
+  const [tramoFiltro, setTramoFiltro] = useState('')
+  const [tramosSelIds, setTramosSelIds] = useState(() => new Set())
+  const [editCompetenciaTramos, setEditCompetenciaTramos] = useState('')
   const [resumenPost, setResumenPost] = useState(null)
   const [errorApply, setErrorApply] = useState('')
   const [mensajeExito, setMensajeExito] = useState('')
@@ -261,8 +306,59 @@ export default function PptoEdicionMasivaModal({
     setErrorApply('')
     setMensajeExito('')
     setAplicando(false)
+    setEditCompetencia('')
+    setTramoFiltro('')
+    setTramosSelIds(new Set())
+    setEditCompetenciaTramos('')
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
+
+  const tramosDisponibles = useMemo(() => {
+    const set = new Set()
+    for (const r of editablesGrilla) {
+      const t0 = String(r.tramo || '').trim()
+      if (t0) set.add(t0)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+  }, [editablesGrilla])
+
+  const filasTramoSeleccionado = useMemo(() => {
+    const t0 = String(tramoFiltro || '').trim()
+    if (!t0) return []
+    return editablesGrilla.filter((r) => String(r.tramo || '').trim() === t0)
+  }, [editablesGrilla, tramoFiltro])
+
+  const gruposTramo = useMemo(() => {
+    const map = new Map()
+    for (const r of filasTramoSeleccionado) {
+      const ni = String(r.no_inicio || '').trim() || '—'
+      const nf = String(r.no_final || '').trim() || '—'
+      const tr = String(r.tramo || '').trim() || '—'
+      const key = `${ni}\u0000${nf}\u0000${tr}`
+      if (!map.has(key)) map.set(key, { key, noInicio: ni, noFinal: nf, tramo: tr, filas: [] })
+      map.get(key).filas.push(r)
+    }
+    return [...map.values()].sort((a, b) => {
+      const c1 = a.noInicio.localeCompare(b.noInicio, 'es', { sensitivity: 'base' })
+      if (c1) return c1
+      return a.noFinal.localeCompare(b.noFinal, 'es', { sensitivity: 'base' })
+    })
+  }, [filasTramoSeleccionado])
+
+  useEffect(() => {
+    if (!tramoFiltro) {
+      setTramosSelIds(new Set())
+      return
+    }
+    const valid = new Set(filasTramoSeleccionado.map((r) => r.id))
+    setTramosSelIds((prev) => {
+      const next = new Set()
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id)
+      }
+      return next
+    })
+  }, [tramoFiltro, filasTramoSeleccionado])
 
   const itemsListado = useMemo(
     () => listadoPrecios.filter((p) => !editCapitulo || p.capitulo === editCapitulo),
@@ -278,8 +374,9 @@ export default function PptoEdicionMasivaModal({
   const previewCapItem = useMemo(() => {
     const tieneCap = !!editCapitulo
     const tieneItem = !!editItem
+    const tieneComp = !!editCompetencia
     const tieneObs = !!obsCapItem.trim()
-    if (!tieneCap && !tieneItem && !tieneObs) return []
+    if (!tieneCap && !tieneItem && !tieneComp && !tieneObs) return []
     return editables.map((r) => {
       const antCap = r.capitulo || '—'
       const antItem = r.item || '—'
@@ -287,6 +384,9 @@ export default function PptoEdicionMasivaModal({
       if (tieneCap && editCapitulo !== (r.capitulo || '')) partes.push(`Cap: ${antCap} → ${editCapitulo}`)
       if (tieneItem && editItem !== (r.item || '')) partes.push(`Ítem: ${antItem} → ${editItem}`)
       if (precioSeleccionado && tieneItem) partes.push(`V.U: ${formatCOP(precioSeleccionado.precio_unitario)}`)
+      if (tieneComp && editCompetencia !== (r.competencia || '')) {
+        partes.push(`Comp: ${r.competencia || '—'} → ${editCompetencia}`)
+      }
       if (tieneObs) partes.push(`Obs: ${obsCapItem.trim()}`)
       if (!partes.length) return null
       return {
@@ -299,7 +399,23 @@ export default function PptoEdicionMasivaModal({
         nuevo: partes.join(' · '),
       }
     }).filter(Boolean)
-  }, [editCapitulo, editItem, obsCapItem, editables, precioSeleccionado])
+  }, [editCapitulo, editItem, editCompetencia, obsCapItem, editables, precioSeleccionado])
+
+  const previewTramos = useMemo(() => {
+    const comp = String(editCompetenciaTramos || '').trim()
+    if (!comp || tramosSelIds.size === 0) return []
+    return filasTramoSeleccionado
+      .filter((r) => tramosSelIds.has(r.id) && (r.competencia || '') !== comp)
+      .map((r) => ({
+        id: r.id,
+        ref: r.pk_id || r.id,
+        capitulo: r.capitulo,
+        item: r.item,
+        campo: 'Competencia',
+        antiguo: r.competencia || '—',
+        nuevo: comp,
+      }))
+  }, [editCompetenciaTramos, tramosSelIds, filasTramoSeleccionado])
 
   const previewDims = useMemo(() => {
     const hasAn = dimAncho.trim() !== ''
@@ -396,13 +512,14 @@ export default function PptoEdicionMasivaModal({
     try {
       let resumen = []
       if (tabSafe === 'capitem') {
-        if (!editCapitulo && !editItem && !obsCapItem.trim()) {
-          setErrorApply('Seleccione capítulo, ítem u observación (opcional).')
+        if (!editCapitulo && !editItem && !editCompetencia && !obsCapItem.trim()) {
+          setErrorApply('Seleccione capítulo, ítem, competencia u observación (opcional).')
           return
         }
         resumen = await onApplyCapItem({
           capitulo: editCapitulo,
           item: editItem,
+          competencia: editCompetencia,
           precioSeleccionado,
           observacion: obsCapItem,
         })
@@ -422,6 +539,23 @@ export default function PptoEdicionMasivaModal({
           return
         }
         resumen = await onApplyTipo({ tipo_ejecucion: tipoEjecucion, observacion: obsTipo })
+      } else if (tabSafe === 'tramos') {
+        if (!String(editCompetenciaTramos || '').trim()) {
+          setErrorApply('Seleccione la nueva competencia.')
+          return
+        }
+        if (tramosSelIds.size === 0) {
+          setErrorApply('Seleccione al menos un registro del tramo.')
+          return
+        }
+        if (typeof onApplyTramosCompetencia !== 'function') {
+          setErrorApply('La acción de Tramos no está disponible.')
+          return
+        }
+        resumen = await onApplyTramosCompetencia({
+          ids: [...tramosSelIds],
+          competencia: editCompetenciaTramos,
+        })
       } else if (tabSafe === 'depuracion') {
         if (!estadoDep) {
           setErrorApply('Seleccione un estado de depuración.')
@@ -456,8 +590,9 @@ export default function PptoEdicionMasivaModal({
     tabSafe === 'capitem' ? previewCapItem
       : tabSafe === 'dims' ? previewDims
         : tabSafe === 'tipo' ? previewTipo
-          : tabSafe === 'depuracion' ? previewDep
-            : previewInterv
+          : tabSafe === 'tramos' ? previewTramos
+            : tabSafe === 'depuracion' ? previewDep
+              : previewInterv
 
   const resumenMostrar = resumenPost?.length ? resumenPost : previewActual
 
@@ -610,8 +745,205 @@ export default function PptoEdicionMasivaModal({
                     {formatCOP(precioSeleccionado.precio_unitario)}
                   </span>
                 )}
+                <CompetenciaSelect
+                  value={editCompetencia}
+                  onChange={setEditCompetencia}
+                  opciones={competenciasOpciones}
+                  t={t}
+                  label="NUEVA COMPETENCIA"
+                  allowEmpty
+                />
               </div>
               <ObservacionBox t={t} value={obsCapItem} onChange={setObsCapItem} />
+            </div>
+          )}
+
+          {tabSafe === 'tramos' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
+                Trabaja sobre los {editablesGrilla.length} registro{editablesGrilla.length !== 1 ? 's' : ''} editables
+                actualmente visibles en la grilla (filtros activos aplicados). Elija un tramo, marque registros y asigne la nueva competencia.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+                <div style={{ flex: '1 1 220px' }}>
+                  <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
+                    TRAMO
+                  </div>
+                  <select
+                    value={tramoFiltro}
+                    onChange={(e) => setTramoFiltro(e.target.value)}
+                    style={{
+                      width: '100%',
+                      background: t.inputBg,
+                      border: `1.5px solid ${tramoFiltro ? t.primary : t.border}`,
+                      borderRadius: 8,
+                      padding: `${cc.padSm} 12px`,
+                      color: t.text,
+                      fontSize: cc.sm,
+                    }}
+                  >
+                    <option value="">— Seleccione tramo —</option>
+                    {tramosDisponibles.map((tr) => (
+                      <option key={tr} value={tr}>{tr}</option>
+                    ))}
+                  </select>
+                </div>
+                <CompetenciaSelect
+                  value={editCompetenciaTramos}
+                  onChange={setEditCompetenciaTramos}
+                  opciones={competenciasOpciones}
+                  t={t}
+                  label="NUEVA COMPETENCIA"
+                  allowEmpty={false}
+                />
+              </div>
+
+              {!tramoFiltro ? (
+                <div style={{
+                  padding: cc.pad,
+                  background: t.bg,
+                  borderRadius: 10,
+                  border: `1px dashed ${t.border}`,
+                  color: t.textMuted,
+                  fontSize: cc.sm,
+                }}>
+                  Seleccione un tramo para ver los registros agrupados por Nodo inicio · Nodo fin · Tramo.
+                </div>
+              ) : gruposTramo.length === 0 ? (
+                <div style={{
+                  padding: cc.pad,
+                  background: t.bg,
+                  borderRadius: 10,
+                  border: `1px dashed ${t.border}`,
+                  color: t.textMuted,
+                  fontSize: cc.sm,
+                }}>
+                  No hay registros editables en el tramo «{tramoFiltro}».
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ fontSize: cc.sm, color: t.textMuted }}>
+                    {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''} · {filasTramoSeleccionado.length} en el tramo
+                  </div>
+                  {gruposTramo.map((g) => {
+                    const idsG = g.filas.map((r) => r.id)
+                    const todosSel = idsG.length > 0 && idsG.every((id) => tramosSelIds.has(id))
+                    return (
+                      <div
+                        key={g.key}
+                        style={{
+                          border: `1px solid ${t.border}`,
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          background: t.bgCard,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            padding: `${cc.padSm} ${cc.pad}`,
+                            background: t.primary + '12',
+                            borderBottom: `1px solid ${t.border}`,
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <div style={{ fontSize: cc.sm, fontWeight: 700, color: t.primary }}>
+                            {g.noInicio} → {g.noFinal}
+                            <span style={{ fontWeight: 500, color: t.textMuted }}> · {g.tramo}</span>
+                            <span style={{ fontWeight: 500, color: t.textMuted }}> · {g.filas.length} reg.</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTramosSelIds((prev) => {
+                                const next = new Set(prev)
+                                if (todosSel) idsG.forEach((id) => next.delete(id))
+                                else idsG.forEach((id) => next.add(id))
+                                return next
+                              })
+                            }}
+                            style={{
+                              background: t.bgCard,
+                              border: `1px solid ${t.border}`,
+                              borderRadius: 8,
+                              padding: '5px 10px',
+                              fontSize: cc.caption,
+                              fontWeight: 700,
+                              color: t.primary,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {todosSel ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                          </button>
+                        </div>
+                        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
+                            <thead>
+                              <tr style={{ background: t.bg, position: 'sticky', top: 0 }}>
+                                {['', 'Ref.', 'Cantidad', 'Costo directo', 'Competencia'].map((h) => (
+                                  <th
+                                    key={h || 'chk'}
+                                    style={{
+                                      padding: `${cc.padSm} 10px`,
+                                      textAlign: h === 'Cantidad' || h === 'Costo directo' ? 'right' : 'left',
+                                      color: t.textMuted,
+                                      fontWeight: 700,
+                                      fontSize: cc.caption,
+                                      borderBottom: `1px solid ${t.border}`,
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {h}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {g.filas.map((r) => {
+                                const checked = tramosSelIds.has(r.id)
+                                return (
+                                  <tr key={r.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                                    <td style={{ padding: `${cc.padSm} 10px`, width: 36 }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => {
+                                          setTramosSelIds((prev) => {
+                                            const next = new Set(prev)
+                                            if (next.has(r.id)) next.delete(r.id)
+                                            else next.add(r.id)
+                                            return next
+                                          })
+                                        }}
+                                        style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
+                                      />
+                                    </td>
+                                    <td style={{ padding: `${cc.padSm} 10px`, color: t.textMuted, fontFamily: 'monospace', fontSize: cc.caption }}>
+                                      {r.pk_id || r.id}
+                                    </td>
+                                    <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
+                                      {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO') : '—'}
+                                    </td>
+                                    <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
+                                      {r.costo_directo != null ? formatCOP(r.costo_directo) : '—'}
+                                    </td>
+                                    <td style={{ padding: `${cc.padSm} 10px`, color: t.text }}>
+                                      {r.competencia || '—'}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -711,7 +1043,14 @@ export default function PptoEdicionMasivaModal({
           <button
             type="button"
             onClick={handleApply}
-            disabled={busy || (tabSafe === 'interv' ? nEditablesInterv === 0 : nEditables === 0)}
+            disabled={
+              busy
+              || (tabSafe === 'interv'
+                ? nEditablesInterv === 0
+                : tabSafe === 'tramos'
+                  ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || editablesGrilla.length === 0)
+                  : nEditables === 0)
+            }
             style={{
               background: t.primary,
               color: '#fff',
@@ -720,7 +1059,7 @@ export default function PptoEdicionMasivaModal({
               padding: `10px 24px`,
               fontWeight: 700,
               fontSize: cc.label,
-              cursor: busy || nEditables === 0 ? 'not-allowed' : 'pointer',
+              cursor: busy ? 'not-allowed' : 'pointer',
               opacity: busy ? 0.7 : 1,
             }}
           >

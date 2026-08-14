@@ -92,6 +92,20 @@ export async function restaurarSnapshotPresupuesto({
     }
   }
 
+  for (const [comp, gids] of agruparPorCampo(snap, 'competencia', '')) {
+    const texto = String(comp || '').trim()
+    if (!texto) continue
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-competencia`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ids: gids, competencia: texto }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || 'No se pudo restaurar competencia.')
+    }
+  }
+
   for (const [estado, gids] of agruparPorCampo(snap, 'pre_interv_estado', 'No Revisado')) {
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
       method: 'PUT',

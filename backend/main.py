@@ -1202,6 +1202,11 @@ class PresupuestoBulkTipoEjecucion(BaseModel):
     tipo_ejecucion: str
 
 
+class PresupuestoBulkCompetencia(BaseModel):
+    ids: List[int]
+    competencia: str
+
+
 class PresupuestoBulkObservacion(BaseModel):
     ids: List[int]
     observacion_externa: str
@@ -13120,6 +13125,53 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
         det_bulk,
     )
     return {"actualizados": len(ids_ok), "tipo_ejecucion": te}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-competencia")
+def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current_user=Depends(get_current_user)):
+    """Actualiza competencia en lote (edición masiva presupuesto)."""
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    comp = str(body.competencia or "").strip()
+    if not comp:
+        raise HTTPException(status_code=422, detail="competencia no puede estar vacía.")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+    rows = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, id_pol, competencia")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
+    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+    if not ids_ok:
+        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+    supabase.table("presupuesto").update(
+        {"competencia": comp, "updated_at": "now()"}
+    ).in_("id", ids_ok).execute()
+    try:
+        _invalidate_dashboard_financial_caches(contrato_id)
+    except Exception:
+        pass
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "competencia": comp}
+    audit_filas = [(dict(r), {**dict(r), "competencia": comp}) for r in rows_ok]
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_competencia",
+        str(contrato_id),
+        det_bulk,
+    )
+    return {"actualizados": len(ids_ok), "competencia": comp}
 
 
 @app.put("/presupuesto/{contrato_id}/bulk-observacion")
