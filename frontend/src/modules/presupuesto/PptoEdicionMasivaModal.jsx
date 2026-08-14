@@ -1,6 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { formatCOP } from '../../utils/formatCOP'
 import { preIntervLiberadoParaInterventoria } from './pptoRolesValidacion'
+import PptoTramoAutocomplete from './PptoTramoAutocomplete'
+import {
+  pptoConstruirOpcionesTramo,
+  pptoFilaCoincideOpcionTramo,
+} from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_OBRA = 'Obra Ejecutada'
@@ -291,7 +296,7 @@ export default function PptoEdicionMasivaModal({
   const [obsDep, setObsDep] = useState('')
   const [estadoInterv, setEstadoInterv] = useState('')
   const [obsInterv, setObsInterv] = useState('')
-  const [tramoFiltro, setTramoFiltro] = useState('')
+  const [tramoOpcionSel, setTramoOpcionSel] = useState(null)
   const [tramosSelIds, setTramosSelIds] = useState(() => new Set())
   const [editCompetenciaTramos, setEditCompetenciaTramos] = useState('')
   const [resumenPost, setResumenPost] = useState(null)
@@ -307,46 +312,35 @@ export default function PptoEdicionMasivaModal({
     setMensajeExito('')
     setAplicando(false)
     setEditCompetencia('')
-    setTramoFiltro('')
+    setTramoOpcionSel(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
 
-  const tramosDisponibles = useMemo(() => {
-    const set = new Set()
-    for (const r of editablesGrilla) {
-      const t0 = String(r.tramo || '').trim()
-      if (t0) set.add(t0)
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
-  }, [editablesGrilla])
+  const opcionesTramo = useMemo(
+    () => pptoConstruirOpcionesTramo(editablesGrilla),
+    [editablesGrilla],
+  )
 
   const filasTramoSeleccionado = useMemo(() => {
-    const t0 = String(tramoFiltro || '').trim()
-    if (!t0) return []
-    return editablesGrilla.filter((r) => String(r.tramo || '').trim() === t0)
-  }, [editablesGrilla, tramoFiltro])
+    if (!tramoOpcionSel) return []
+    return editablesGrilla.filter((r) => pptoFilaCoincideOpcionTramo(r, tramoOpcionSel))
+  }, [editablesGrilla, tramoOpcionSel])
 
   const gruposTramo = useMemo(() => {
-    const map = new Map()
-    for (const r of filasTramoSeleccionado) {
-      const ni = String(r.no_inicio || '').trim() || '—'
-      const nf = String(r.no_final || '').trim() || '—'
-      const tr = String(r.tramo || '').trim() || '—'
-      const key = `${ni}\u0000${nf}\u0000${tr}`
-      if (!map.has(key)) map.set(key, { key, noInicio: ni, noFinal: nf, tramo: tr, filas: [] })
-      map.get(key).filas.push(r)
-    }
-    return [...map.values()].sort((a, b) => {
-      const c1 = a.noInicio.localeCompare(b.noInicio, 'es', { sensitivity: 'base' })
-      if (c1) return c1
-      return a.noFinal.localeCompare(b.noFinal, 'es', { sensitivity: 'base' })
-    })
-  }, [filasTramoSeleccionado])
+    if (!tramoOpcionSel || !filasTramoSeleccionado.length) return []
+    return [{
+      key: tramoOpcionSel.key,
+      noInicio: tramoOpcionSel.noInicio,
+      noFinal: tramoOpcionSel.noFinal,
+      tramo: tramoOpcionSel.tramo,
+      filas: filasTramoSeleccionado,
+    }]
+  }, [tramoOpcionSel, filasTramoSeleccionado])
 
   useEffect(() => {
-    if (!tramoFiltro) {
+    if (!tramoOpcionSel) {
       setTramosSelIds(new Set())
       return
     }
@@ -358,7 +352,7 @@ export default function PptoEdicionMasivaModal({
       }
       return next
     })
-  }, [tramoFiltro, filasTramoSeleccionado])
+  }, [tramoOpcionSel, filasTramoSeleccionado])
 
   const itemsListado = useMemo(
     () => listadoPrecios.filter((p) => !editCapitulo || p.capitulo === editCapitulo),
@@ -762,32 +756,18 @@ export default function PptoEdicionMasivaModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
                 Trabaja sobre los {editablesGrilla.length} registro{editablesGrilla.length !== 1 ? 's' : ''} editables
-                actualmente visibles en la grilla (filtros activos aplicados). Elija un tramo, marque registros y asigne la nueva competencia.
+                actualmente visibles en la grilla (filtros activos aplicados). Busque por nodo o tramo,
+                marque registros y asigne la nueva competencia.
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-                <div style={{ flex: '1 1 220px' }}>
-                  <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
-                    TRAMO
-                  </div>
-                  <select
-                    value={tramoFiltro}
-                    onChange={(e) => setTramoFiltro(e.target.value)}
-                    style={{
-                      width: '100%',
-                      background: t.inputBg,
-                      border: `1.5px solid ${tramoFiltro ? t.primary : t.border}`,
-                      borderRadius: 8,
-                      padding: `${cc.padSm} 12px`,
-                      color: t.text,
-                      fontSize: cc.sm,
-                    }}
-                  >
-                    <option value="">— Seleccione tramo —</option>
-                    {tramosDisponibles.map((tr) => (
-                      <option key={tr} value={tr}>{tr}</option>
-                    ))}
-                  </select>
-                </div>
+                <PptoTramoAutocomplete
+                  t={t}
+                  opciones={opcionesTramo}
+                  value={tramoOpcionSel}
+                  onSelect={setTramoOpcionSel}
+                  label="TRAMO"
+                  placeholder="Buscar nodo inicio, nodo fin o tramo…"
+                />
                 <CompetenciaSelect
                   value={editCompetenciaTramos}
                   onChange={setEditCompetenciaTramos}
@@ -798,7 +778,7 @@ export default function PptoEdicionMasivaModal({
                 />
               </div>
 
-              {!tramoFiltro ? (
+              {!tramoOpcionSel ? (
                 <div style={{
                   padding: cc.pad,
                   background: t.bg,
@@ -807,7 +787,7 @@ export default function PptoEdicionMasivaModal({
                   color: t.textMuted,
                   fontSize: cc.sm,
                 }}>
-                  Seleccione un tramo para ver los registros agrupados por Nodo inicio · Nodo fin · Tramo.
+                  Busque y seleccione una opción «Nodo inicio · Nodo fin · Tramo» para cargar los registros.
                 </div>
               ) : gruposTramo.length === 0 ? (
                 <div style={{
@@ -818,7 +798,7 @@ export default function PptoEdicionMasivaModal({
                   color: t.textMuted,
                   fontSize: cc.sm,
                 }}>
-                  No hay registros editables en el tramo «{tramoFiltro}».
+                  No hay registros editables para «{tramoOpcionSel.label}».
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
