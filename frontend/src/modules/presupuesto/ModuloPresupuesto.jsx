@@ -61,6 +61,7 @@ import { downloadPresupuestoCrudoExcel, downloadPresupuestoInformeExcel } from '
 import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { idsRangoSeleccion } from './pptoSeleccionRango'
 import { pptoFormatoNodos } from './pptoFormatoNodos'
+import { pptoConstruirTramosUnicos, pptoFilasDeTramo } from './pptoTramoBusqueda'
 import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { useModulo } from '../../context/ModuloContext'
@@ -3371,6 +3372,58 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
   }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
 
+  /**
+   * Misma fuente de datos que el botón «Tramos» / `cargarCapituloData`:
+   * `pptoBuildPresupuestoSearchParams(fObra actual, …)` + listado paginado
+   * (`pptoEp().conteo` / `pptoEp().list`). Luego filtra por capítulo.
+   * No muta la grilla principal (carga aislada para edición masiva).
+   */
+  async function cargarFuenteTramosEdicionMasiva() {
+    const fAct = fObraRef.current || fObra
+    const cap = String(
+      (fAct.cap && String(fAct.cap).trim())
+      || (capExpandido && String(capExpandido).trim())
+      || drill.find((d) => d.campo === 'capitulo')?.valor
+      || '',
+    ).trim()
+
+    if (!contratoId) {
+      return { cap: null, rows: [], error: 'Sin contrato activo.' }
+    }
+
+    if (!cap) {
+      const rows = Array.isArray(registrosFiltrados) ? registrosFiltrados : []
+      return {
+        cap: null,
+        rows,
+        fuente: 'grilla',
+        aviso: 'Sin capítulo activo: se usan los registros de la grilla filtrada.',
+      }
+    }
+
+    const ctx = pptoCtxFiltro(drill, capExpandido)
+    const p = pptoBuildPresupuestoSearchParams(fAct, ctx, {
+      verPapelera,
+      capituloOverride: cap,
+      itemOverride: null,
+    })
+    try {
+      const { rows } = await fetchPresupuestoPaginasCompletas(p, null, { avisarCargaGrande: false })
+      const capRegs = (rows || []).filter((r) => r.capitulo === cap)
+      return { cap, rows: capRegs, fuente: 'api' }
+    } catch (e) {
+      const rows = Array.isArray(registrosFiltrados)
+        ? registrosFiltrados.filter((r) => r.capitulo === cap)
+        : []
+      return {
+        cap,
+        rows,
+        fuente: 'grilla',
+        error: e?.message || 'No se pudieron cargar los tramos desde el servidor.',
+      }
+    }
+  }
+
   const chartData = useMemo(() => {
     if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {
       return itemsResumen.map(c => ({
@@ -4889,18 +4942,8 @@ async function darDeBaja(id) {
       {modalModoCapitulo && (() => {
         const capRegs = registros.filter(r => r.capitulo === modalModoCapitulo)
 
-        // Tramos únicos: no_inicio !== no_final
-        const tramosUnicos = []
-        const vistos = new Set()
-        capRegs.forEach(r => {
-          if (!r.no_inicio || !r.no_final) return
-          if (r.no_inicio === r.no_final) return
-          const key = `${r.no_inicio}||${r.no_final}`
-          if (!vistos.has(key)) {
-            vistos.add(key)
-            tramosUnicos.push({ no_inicio: r.no_inicio, no_final: r.no_final, label: `${r.no_inicio} → ${r.no_final}` })
-          }
-        })
+        // Tramos únicos: misma lógica que pptoConstruirTramosUnicos / botón Tramos
+        const tramosUnicos = pptoConstruirTramosUnicos(capRegs)
 
         // Calcular estrellas por tramo
         const calcEstrella = (regs) => {
@@ -4917,7 +4960,7 @@ async function darDeBaja(id) {
         // Registros del tramo seleccionado
         const regsNodoIni = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_inicio && r.no_final === tramoSelec.no_inicio) : []
         const regsNodoFin = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_final  && r.no_final === tramoSelec.no_final)  : []
-        const regsTramo   = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_inicio && r.no_final === tramoSelec.no_final)   : []
+        const regsTramo   = tramoSelec ? pptoFilasDeTramo(capRegs, tramoSelec) : []
 
         const estIni   = tramoSelec ? calcEstrella(regsNodoIni) : 'vacia'
         const estFin   = tramoSelec ? calcEstrella(regsNodoFin) : 'vacia'
@@ -6660,6 +6703,7 @@ async function darDeBaja(id) {
         registros={registros}
         registrosGrilla={registrosFiltrados}
         esSellado={esSellado}
+        onCargarFuenteTramos={cargarFuenteTramosEdicionMasiva}
         puedeTabEditar={puedeTabEditarMasiva}
         puedeTabDepuracion={puedeTabDepuracionMasiva}
         puedeTabInterventoria={puedeTabInterventoriaMasiva}

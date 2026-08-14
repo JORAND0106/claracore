@@ -16,14 +16,16 @@ const cc = {
 }
 
 /**
- * Tab Tramos de edición masiva — mismo flujo visual que el Revisor:
- * lista `Nodo → Nodo` → detalle con registros y competencia.
- *
- * Fuente de tramos: filas editables de la grilla filtrada (no endpoint externo).
+ * Tab Tramos de edición masiva — misma lógica que el botón «Tramos»:
+ * pares `no_inicio → no_final` sobre registros cargados con fObra
+ * (`pptoEp().list` / conteo), luego lista → detalle.
  */
 export default function PptoEdicionMasivaTramosPanel({
   t,
   filasFuente = [],
+  cargando = false,
+  meta = null,
+  esSellado,
   tramoSelec,
   onSelectTramo,
   tramosSelIds,
@@ -51,6 +53,11 @@ export default function PptoEdicionMasivaTramosPanel({
     [filasFuente, tramoSelec],
   )
 
+  const filasTramoEditables = useMemo(
+    () => filasTramo.filter((r) => !(typeof esSellado === 'function' && esSellado(r))),
+    [filasTramo, esSellado],
+  )
+
   const tramoIdx = useMemo(() => {
     if (!tramoSelec) return -1
     return tramosUnicos.findIndex(
@@ -63,7 +70,7 @@ export default function PptoEdicionMasivaTramosPanel({
       setTramosSelIds(new Set())
       return
     }
-    const valid = new Set(filasTramo.map((r) => r.id))
+    const valid = new Set(filasTramoEditables.map((r) => r.id))
     setTramosSelIds((prev) => {
       const next = new Set()
       for (const id of prev) {
@@ -71,7 +78,7 @@ export default function PptoEdicionMasivaTramosPanel({
       }
       return next
     })
-  }, [tramoSelec, filasTramo, setTramosSelIds])
+  }, [tramoSelec, filasTramoEditables, setTramosSelIds])
 
   const irRelativo = (delta) => {
     if (tramoIdx < 0) return
@@ -81,8 +88,8 @@ export default function PptoEdicionMasivaTramosPanel({
     onSelectTramo(dest)
   }
 
-  const idsTramo = filasTramo.map((r) => r.id)
-  const todosSel = idsTramo.length > 0 && idsTramo.every((id) => tramosSelIds.has(id))
+  const idsEditables = filasTramoEditables.map((r) => r.id)
+  const todosSel = idsEditables.length > 0 && idsEditables.every((id) => tramosSelIds.has(id))
 
   const navBtn = (disabled) => ({
     background: disabled ? t.bg : t.bgCard,
@@ -97,11 +104,27 @@ export default function PptoEdicionMasivaTramosPanel({
     whiteSpace: 'nowrap',
   })
 
+  if (cargando) {
+    return (
+      <div style={{
+        padding: 28,
+        textAlign: 'center',
+        color: t.textMuted,
+        fontSize: cc.sm,
+        background: t.bg,
+        borderRadius: 10,
+        border: `1px dashed ${t.border}`,
+      }}>
+        Cargando tramos con los filtros activos de la obra…
+      </div>
+    )
+  }
+
   // ── Vista lista ──────────────────────────────────────────────────────────
   if (!tramoSelec) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ fontSize: cc.sm, fontWeight: 800, color: t.text, letterSpacing: 0.3 }}>
             TRAMOS DISPONIBLES
             <span style={{
@@ -116,12 +139,29 @@ export default function PptoEdicionMasivaTramosPanel({
               {tramosUnicos.length}
             </span>
           </div>
+          {meta?.cap && (
+            <div style={{ fontSize: cc.caption, color: t.textMuted }}>
+              Cap: {meta.cap}
+              {meta.fuente === 'api' ? ' · filtros fObra' : ''}
+            </div>
+          )}
         </div>
 
         <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
-          Derivados de los {filasFuente.length} registro{filasFuente.length !== 1 ? 's' : ''} editables
-          de la grilla filtrada (mismo criterio que el Revisor: nodo inicio → nodo fin).
+          Misma lógica que el botón Tramos: pares nodo inicio → nodo fin sobre los registros
+          del capítulo con los filtros activos de la obra.
         </p>
+
+        {meta?.aviso && (
+          <div style={{ fontSize: cc.caption, color: '#D97706', background: '#FEF9C3', borderRadius: 8, padding: '8px 10px' }}>
+            {meta.aviso}
+          </div>
+        )}
+        {meta?.error && (
+          <div style={{ fontSize: cc.caption, color: '#B91C1C', background: '#FEE2E2', borderRadius: 8, padding: '8px 10px' }}>
+            {meta.error}
+          </div>
+        )}
 
         <div style={{ position: 'relative' }}>
           <span style={{
@@ -163,7 +203,7 @@ export default function PptoEdicionMasivaTramosPanel({
             borderRadius: 10,
             border: `1px dashed ${t.border}`,
           }}>
-            No hay tramos (pares nodo inicio → nodo fin) en la grilla filtrada actual.
+            No hay tramos definidos en este capítulo
           </div>
         ) : tramosFiltrados.length === 0 ? (
           <div style={{
@@ -292,7 +332,12 @@ export default function PptoEdicionMasivaTramosPanel({
             {tramoSelec.label}
           </div>
           <div style={{ fontSize: cc.caption, color: t.textMuted, marginTop: 2 }}>
-            {filasTramo.length} registro{filasTramo.length !== 1 ? 's' : ''} · {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''}
+            {filasTramo.length} registro{filasTramo.length !== 1 ? 's' : ''}
+            {' · '}
+            {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''}
+            {filasTramo.length !== filasTramoEditables.length
+              ? ` · ${filasTramo.length - filasTramoEditables.length} sellado(s)`
+              : ''}
           </div>
         </div>
         <button
@@ -300,12 +345,12 @@ export default function PptoEdicionMasivaTramosPanel({
           onClick={() => {
             setTramosSelIds((prev) => {
               const next = new Set(prev)
-              if (todosSel) idsTramo.forEach((id) => next.delete(id))
-              else idsTramo.forEach((id) => next.add(id))
+              if (todosSel) idsEditables.forEach((id) => next.delete(id))
+              else idsEditables.forEach((id) => next.add(id))
               return next
             })
           }}
-          disabled={!idsTramo.length}
+          disabled={!idsEditables.length}
           style={{
             background: t.bgCard,
             border: `1px solid ${t.border}`,
@@ -314,8 +359,8 @@ export default function PptoEdicionMasivaTramosPanel({
             fontSize: cc.caption,
             fontWeight: 700,
             color: t.primary,
-            cursor: idsTramo.length ? 'pointer' : 'default',
-            opacity: idsTramo.length ? 1 : 0.5,
+            cursor: idsEditables.length ? 'pointer' : 'default',
+            opacity: idsEditables.length ? 1 : 0.5,
           }}
         >
           {todosSel ? 'Deseleccionar todos' : 'Seleccionar todos'}
@@ -395,7 +440,7 @@ export default function PptoEdicionMasivaTramosPanel({
           color: t.textMuted,
           fontSize: cc.sm,
         }}>
-          No hay registros editables en este tramo.
+          No hay registros en este tramo.
         </div>
       ) : (
         <div style={{
@@ -436,14 +481,24 @@ export default function PptoEdicionMasivaTramosPanel({
               </thead>
               <tbody>
                 {filasTramo.map((r) => {
+                  const sellado = typeof esSellado === 'function' && esSellado(r)
                   const checked = tramosSelIds.has(r.id)
                   return (
-                    <tr key={r.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <tr
+                      key={r.id}
+                      style={{
+                        borderBottom: `1px solid ${t.border}`,
+                        opacity: sellado ? 0.55 : 1,
+                      }}
+                    >
                       <td style={{ padding: `${cc.padSm} 10px`, width: 36 }}>
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={sellado}
+                          title={sellado ? 'Registro sellado' : undefined}
                           onChange={() => {
+                            if (sellado) return
                             setTramosSelIds((prev) => {
                               const next = new Set(prev)
                               if (next.has(r.id)) next.delete(r.id)
@@ -451,7 +506,7 @@ export default function PptoEdicionMasivaTramosPanel({
                               return next
                             })
                           }}
-                          style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
+                          style={{ width: 16, height: 16, accentColor: t.primary, cursor: sellado ? 'not-allowed' : 'pointer' }}
                         />
                       </td>
                       <td

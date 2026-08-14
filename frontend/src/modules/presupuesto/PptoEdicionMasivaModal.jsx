@@ -224,9 +224,11 @@ export default function PptoEdicionMasivaModal({
   t,
   seleccionados,
   registros,
-  /** Filas actualmente visibles/filtradas en la grilla (fuente del tab Tramos). */
+  /** Filas actualmente visibles/filtradas en la grilla (fallback tab Tramos). */
   registrosGrilla,
   esSellado,
+  /** Misma carga que el botón Tramos: fObra + capítulo → listado presupuesto. */
+  onCargarFuenteTramos,
   puedeTabEditar = false,
   puedeTabDepuracion = false,
   puedeTabInterventoria = false,
@@ -252,17 +254,16 @@ export default function PptoEdicionMasivaModal({
   const nEditables = editables.length
   const nSellados = filasSel.length - editables.length
 
-  /** Registros de la grilla filtrada actual (tab Tramos). */
-  const filasFuenteTramos = useMemo(
+  /** Fallback local (grilla) si la carga tipo botón Tramos no está disponible. */
+  const filasFuenteFallback = useMemo(
     () => pptoFilasFuenteTramos({
       registrosGrilla: Array.isArray(registrosGrilla) ? registrosGrilla : null,
       registros,
       seleccionados,
-      esSellado,
+      esSellado: () => false, // el panel deshabilita sellados; listamos como el Revisor
     }),
-    [registrosGrilla, registros, seleccionados, esSellado],
+    [registrosGrilla, registros, seleccionados],
   )
-  const editablesGrilla = filasFuenteTramos
 
   const editablesInterv = useMemo(
     () => (requiereDepuracionAprobadaInterv
@@ -303,11 +304,15 @@ export default function PptoEdicionMasivaModal({
   const [tramoSelec, setTramoSelec] = useState(null)
   const [tramosSelIds, setTramosSelIds] = useState(() => new Set())
   const [editCompetenciaTramos, setEditCompetenciaTramos] = useState('')
+  const [filasFuenteTramos, setFilasFuenteTramos] = useState([])
+  const [tramosCargando, setTramosCargando] = useState(false)
+  const [tramosMeta, setTramosMeta] = useState({ cap: null, fuente: null, aviso: '', error: '' })
   const [resumenPost, setResumenPost] = useState(null)
   const [errorApply, setErrorApply] = useState('')
   const [mensajeExito, setMensajeExito] = useState('')
   const [aplicando, setAplicando] = useState(false)
   const itemDropRef = useRef(null)
+  const cargaTramosIdRef = useRef(0)
 
   useEffect(() => {
     if (!open) return
@@ -319,6 +324,9 @@ export default function PptoEdicionMasivaModal({
     setTramoSelec(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
+    setFilasFuenteTramos([])
+    setTramosCargando(false)
+    setTramosMeta({ cap: null, fuente: null, aviso: '', error: '' })
   }, [open])
 
   useEffect(() => {
@@ -334,9 +342,51 @@ export default function PptoEdicionMasivaModal({
     }
   }, [tabActivo])
 
+  // Carga al montar el tab Tramos — misma fuente que el botón Tramos (fObra + API listado).
+  useEffect(() => {
+    if (!open || tabActivo !== 'tramos') return undefined
+    let cancelled = false
+    const cargaId = ++cargaTramosIdRef.current
+    setTramosCargando(true)
+    setTramosMeta({ cap: null, fuente: null, aviso: '', error: '' })
+    ;(async () => {
+      try {
+        let result = null
+        if (typeof onCargarFuenteTramos === 'function') {
+          result = await onCargarFuenteTramos()
+        }
+        if (cancelled || cargaId !== cargaTramosIdRef.current) return
+        const rows = Array.isArray(result?.rows) && (result.rows.length > 0 || result.fuente === 'api')
+          ? result.rows
+          : filasFuenteFallback
+        setFilasFuenteTramos(rows)
+        setTramosMeta({
+          cap: result?.cap || null,
+          fuente: result?.fuente || 'grilla',
+          aviso: result?.aviso || '',
+          error: result?.error || '',
+        })
+      } catch (e) {
+        if (cancelled || cargaId !== cargaTramosIdRef.current) return
+        setFilasFuenteTramos(filasFuenteFallback)
+        setTramosMeta({
+          cap: null,
+          fuente: 'grilla',
+          aviso: '',
+          error: e?.message || 'No se pudieron cargar los tramos.',
+        })
+      } finally {
+        if (!cancelled && cargaId === cargaTramosIdRef.current) setTramosCargando(false)
+      }
+    })()
+    return () => { cancelled = true }
+    // Solo al abrir el tab; la función usa fObra actual al invocarse.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, tabActivo])
+
   const filasTramoSeleccionado = useMemo(
-    () => pptoFilasDeTramo(editablesGrilla, tramoSelec),
-    [editablesGrilla, tramoSelec],
+    () => pptoFilasDeTramo(filasFuenteTramos, tramoSelec),
+    [filasFuenteTramos, tramoSelec],
   )
 
   const itemsListado = useMemo(
@@ -384,7 +434,7 @@ export default function PptoEdicionMasivaModal({
     const comp = String(editCompetenciaTramos || '').trim()
     if (!comp || tramosSelIds.size === 0) return []
     return filasTramoSeleccionado
-      .filter((r) => tramosSelIds.has(r.id) && (r.competencia || '') !== comp)
+      .filter((r) => tramosSelIds.has(r.id) && !esSellado?.(r) && (r.competencia || '') !== comp)
       .map((r) => ({
         id: r.id,
         ref: r.pk_id || r.id,
@@ -394,7 +444,7 @@ export default function PptoEdicionMasivaModal({
         antiguo: r.competencia || '—',
         nuevo: comp,
       }))
-  }, [editCompetenciaTramos, tramosSelIds, filasTramoSeleccionado])
+  }, [editCompetenciaTramos, tramosSelIds, filasTramoSeleccionado, esSellado])
 
   const previewDims = useMemo(() => {
     const hasAn = dimAncho.trim() !== ''
@@ -740,7 +790,10 @@ export default function PptoEdicionMasivaModal({
           {tabSafe === 'tramos' && (
             <PptoEdicionMasivaTramosPanel
               t={t}
-              filasFuente={editablesGrilla}
+              filasFuente={filasFuenteTramos}
+              cargando={tramosCargando}
+              meta={tramosMeta}
+              esSellado={esSellado}
               tramoSelec={tramoSelec}
               onSelectTramo={setTramoSelec}
               tramosSelIds={tramosSelIds}
@@ -855,7 +908,7 @@ export default function PptoEdicionMasivaModal({
                 || (tabSafe === 'interv'
                   ? nEditablesInterv === 0
                   : tabSafe === 'tramos'
-                    ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || editablesGrilla.length === 0)
+                    ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || filasFuenteTramos.length === 0)
                     : nEditables === 0)
               }
               style={{
