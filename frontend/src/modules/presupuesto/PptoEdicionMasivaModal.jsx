@@ -5,6 +5,7 @@ import PptoTramoAutocomplete from './PptoTramoAutocomplete'
 import {
   pptoConstruirOpcionesTramo,
   pptoFilaCoincideOpcionTramo,
+  pptoFilasFuenteTramos,
 } from './pptoTramoBusqueda'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
@@ -224,6 +225,8 @@ export default function PptoEdicionMasivaModal({
   t,
   seleccionados,
   registros,
+  /** Filas actualmente visibles/filtradas en la grilla (fuente del tab Tramos). */
+  registrosGrilla,
   esSellado,
   puedeTabEditar = false,
   puedeTabDepuracion = false,
@@ -251,14 +254,16 @@ export default function PptoEdicionMasivaModal({
   const nSellados = filasSel.length - editables.length
 
   /** Registros de la grilla filtrada actual (tab Tramos). */
-  const filasGrilla = useMemo(
-    () => (Array.isArray(registros) ? registros : []).filter(Boolean),
-    [registros],
+  const filasFuenteTramos = useMemo(
+    () => pptoFilasFuenteTramos({
+      registrosGrilla: Array.isArray(registrosGrilla) ? registrosGrilla : null,
+      registros,
+      seleccionados,
+      esSellado,
+    }),
+    [registrosGrilla, registros, seleccionados, esSellado],
   )
-  const editablesGrilla = useMemo(
-    () => filasGrilla.filter((r) => !esSellado?.(r)),
-    [filasGrilla, esSellado],
-  )
+  const editablesGrilla = filasFuenteTramos
 
   const editablesInterv = useMemo(
     () => (requiereDepuracionAprobadaInterv
@@ -299,6 +304,8 @@ export default function PptoEdicionMasivaModal({
   const [tramoOpcionSel, setTramoOpcionSel] = useState(null)
   const [tramosSelIds, setTramosSelIds] = useState(() => new Set())
   const [editCompetenciaTramos, setEditCompetenciaTramos] = useState('')
+  /** Snapshot de opciones al entrar al tab Tramos (evita lista vacía por re-renders). */
+  const [opcionesTramo, setOpcionesTramo] = useState([])
   const [resumenPost, setResumenPost] = useState(null)
   const [errorApply, setErrorApply] = useState('')
   const [mensajeExito, setMensajeExito] = useState('')
@@ -315,13 +322,21 @@ export default function PptoEdicionMasivaModal({
     setTramoOpcionSel(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
+    setOpcionesTramo([])
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
 
-  const opcionesTramo = useMemo(
-    () => pptoConstruirOpcionesTramo(editablesGrilla),
-    [editablesGrilla],
-  )
+  // Cargar opciones al activar el tab Tramos (fuente = grilla filtrada).
+  useEffect(() => {
+    if (!open) return
+    const tabOk = tabs.some((tb) => tb.id === tabActivo) ? tabActivo : tabs[0]?.id
+    if (tabOk !== 'tramos') return
+    setOpcionesTramo(pptoConstruirOpcionesTramo(editablesGrilla))
+  }, [open, tabActivo, tabs, editablesGrilla])
 
   const filasTramoSeleccionado = useMemo(() => {
     if (!tramoOpcionSel) return []
@@ -756,8 +771,8 @@ export default function PptoEdicionMasivaModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
                 Trabaja sobre los {editablesGrilla.length} registro{editablesGrilla.length !== 1 ? 's' : ''} editables
-                actualmente visibles en la grilla (filtros activos aplicados). Busque por nodo o tramo,
-                marque registros y asigne la nueva competencia.
+                de la grilla filtrada ({opcionesTramo.length} tramo{opcionesTramo.length !== 1 ? 's' : ''} distintos).
+                Busque por nodo o tramo, marque registros y asigne la nueva competencia.
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
                 <PptoTramoAutocomplete

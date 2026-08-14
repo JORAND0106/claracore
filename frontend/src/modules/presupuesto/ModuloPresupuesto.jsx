@@ -6658,6 +6658,7 @@ async function darDeBaja(id) {
         t={t}
         seleccionados={seleccionados}
         registros={registros}
+        registrosGrilla={registrosFiltrados}
         esSellado={esSellado}
         puedeTabEditar={puedeTabEditarMasiva}
         puedeTabDepuracion={puedeTabDepuracionMasiva}
