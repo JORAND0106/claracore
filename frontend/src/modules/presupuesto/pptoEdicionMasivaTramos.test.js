@@ -13,6 +13,7 @@ import {
   pptoOrigenRegistroTramo,
   pptoFilasDetalleTramo,
   pptoOrigenTramoBadgeStyle,
+  pptoActualizarCompetenciaFilas,
 } from './pptoTramoBusqueda.js'
 
 describe('pptoTramoOpcionLabel', () => {
@@ -190,5 +191,27 @@ describe('pptoFilaCoincideOpcionTramo', () => {
   it('coincide por los tres campos', () => {
     const op = pptoConstruirOpcionesTramo([{ no_inicio: 'A', no_final: 'B', tramo: 'T' }])[0]
     assert.equal(pptoFilaCoincideOpcionTramo({ no_inicio: 'A', no_final: 'B', tramo: 'T' }, op), true)
+  })
+})
+
+describe('pptoActualizarCompetenciaFilas', () => {
+  it('actualiza competencia solo en los ids afectados (comparación string/number)', () => {
+    const filas = [
+      { id: 1, competencia: 'Vieja A' },
+      { id: 2, competencia: 'Vieja B' },
+      { id: 3, competencia: 'Vieja C' },
+    ]
+    const next = pptoActualizarCompetenciaFilas(filas, ['1', 3], 'Nueva')
+    assert.equal(next[0].competencia, 'Nueva')
+    assert.equal(next[1].competencia, 'Vieja B')
+    assert.equal(next[2].competencia, 'Nueva')
+    // No muta el arreglo original
+    assert.equal(filas[0].competencia, 'Vieja A')
+  })
+
+  it('sin ids o sin competencia deja las filas igual', () => {
+    const filas = [{ id: 1, competencia: 'X' }]
+    assert.equal(pptoActualizarCompetenciaFilas(filas, [], 'Nueva'), filas)
+    assert.equal(pptoActualizarCompetenciaFilas(filas, [1], '  '), filas)
   })
 })
