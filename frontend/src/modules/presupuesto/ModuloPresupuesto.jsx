@@ -4200,21 +4200,25 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   async function aplicarMasivoTramosCompetencia({ ids: idsIn, competencia }) {
     const comp = String(competencia || '').trim()
     if (!comp) throw new Error('Seleccione la nueva competencia.')
-    const ids = [...new Set((idsIn || []).filter(Boolean))].filter((id) => {
-      const r = registros.find((x) => x.id === id)
-      return r && !esSellado(r)
-    })
-    if (!ids.length) throw new Error('No hay registros editables seleccionados en Tramos.')
+    // Competencia es cambio administrativo: incluye sellados (el endpoint solo toca competencia).
+    const ids = [...new Set((idsIn || []).filter((id) => id != null && id !== ''))]
+    if (!ids.length) throw new Error('No hay registros seleccionados en Tramos.')
     registrarUndoPresupuesto('Edición masiva: Competencia (Tramos)', ids)
     const resumen = ids.map((id) => {
-      const r = registros.find((x) => x.id === id)
-      if (!r) return null
-      if ((r.competencia || '') === comp) return null
-      return filaResumenMasivo(r, 'Competencia', r.competencia || '—', comp)
+      const r = registros.find((x) => String(x.id) === String(id))
+      const ant = r ? (r.competencia || '—') : '—'
+      if (r && (r.competencia || '') === comp) return null
+      return filaResumenMasivo(
+        r || { id, pk_id: id, capitulo: '', item: '' },
+        'Competencia',
+        ant,
+        comp,
+      )
     }).filter(Boolean)
     const idsCambio = ids.filter((id) => {
-      const r = registros.find((x) => x.id === id)
-      return r && (r.competencia || '') !== comp
+      const r = registros.find((x) => String(x.id) === String(id))
+      if (!r) return true
+      return (r.competencia || '') !== comp
     })
     if (!idsCambio.length) throw new Error('Ningún registro requiere ese cambio de competencia.')
     await aplicarCompetenciaMasiva(idsCambio, comp)

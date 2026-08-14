@@ -434,7 +434,7 @@ export default function PptoEdicionMasivaModal({
     const comp = String(editCompetenciaTramos || '').trim()
     if (!comp || tramosSelIds.size === 0) return []
     return filasTramoSeleccionado
-      .filter((r) => tramosSelIds.has(r.id) && !esSellado?.(r) && (r.competencia || '') !== comp)
+      .filter((r) => tramosSelIds.has(r.id) && (r.competencia || '') !== comp)
       .map((r) => ({
         id: r.id,
         ref: r.pk_id || r.id,
@@ -444,7 +444,7 @@ export default function PptoEdicionMasivaModal({
         antiguo: r.competencia || '—',
         nuevo: comp,
       }))
-  }, [editCompetenciaTramos, tramosSelIds, filasTramoSeleccionado, esSellado])
+  }, [editCompetenciaTramos, tramosSelIds, filasTramoSeleccionado])
 
   const previewDims = useMemo(() => {
     const hasAn = dimAncho.trim() !== ''
