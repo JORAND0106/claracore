@@ -20,6 +20,7 @@ from almacen_insumos_service import (
     create_proveedor,
     get_contexto_negociado_insumo,
     get_insumo,
+    normalize_tributos,
     search_proveedores,
     sync_proveedor_contacto,
 )
@@ -219,6 +220,7 @@ def _snapshot_historial(
         "tipo_impuesto": row.get("tipo_impuesto"),
         "impuesto_porcentaje": row.get("impuesto_porcentaje"),
         "impuestos": row.get("impuestos") or [],
+        "tributos": normalize_tributos(row.get("tributos")),
         "cotizacion_numero": row.get("cotizacion_numero"),
         "cotizacion_fecha": row.get("cotizacion_fecha"),
         "cotizacion_vigencia": row.get("cotizacion_vigencia"),
@@ -539,10 +541,14 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     if tipo_imp not in (None, "iva", "aiu"):
         raise ValueError("tipo_impuesto debe ser 'iva' o 'aiu'.")
     impuestos = _normalize_impuestos(body.get("impuestos"))
+    tributos = normalize_tributos(body.get("tributos"))
     costo_base = _to_float(body.get("costo_base"))
     if body.get("costo_base") is None and body.get("costo") is not None:
         costo_base = _to_float(body.get("costo"))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
+    # Cálculo de valor_compra_referencia: se mantiene el esquema legado
+    # (tipo_impuesto / impuestos). El desglose AIU/IVA en «tributos» es captura
+    # independiente (fuera de alcance aplicar en fórmulas de este prompt).
     valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
     cantidad_negociada = (
         _to_float(body.get("cantidad_negociada"))
@@ -577,6 +583,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
         "tipo_impuesto": tipo_imp,
         "impuesto_porcentaje": imp_pct if tipo_imp else None,
         "impuestos": impuestos if not tipo_imp else [],
+        "tributos": tributos,
         "valor_compra_referencia": valor_total,
         "cotizacion_numero": (body.get("cotizacion_numero") or "").strip() or None,
         "cotizacion_fecha": _parse_fecha(body.get("cotizacion_fecha")),

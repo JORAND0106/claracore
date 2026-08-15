@@ -16,7 +16,6 @@ import { ContratoDocumentosMatriz } from "./ContratoDocumentosContractuales";
 import { ContratoOrdenesPagoAlertasDev } from "./ContratoOrdenesPagoAlertasDev";
 import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
-import SeccionCatalogoInsumos from "./admin/SeccionCatalogoInsumos";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 
@@ -8279,7 +8278,6 @@ const TAB_FUNCIONES = {
   permisos:        ["panel de administración"],
   contratos:       ["contratos"],
   precios:         ["listado de precios"],
-  catalogo_insumos: ["catálogo de insumos", "catalogo de insumos"],
   subcontratistas: ["subcontratistas"],
   resets:          ["panel de administración"],
   actas:           ["actas"],
@@ -8304,7 +8302,6 @@ const ADMIN_PANEL_TABS = [
   { id: "permisos",  label: "Control de accesos"  },
   { id: "contratos", label: "Contratos"            },
   { id: "precios",          label: "Listado de Precios"   },
-  { id: "catalogo_insumos", label: "Catálogo de insumos"  },
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
@@ -8464,13 +8461,6 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
 
   const subPerms = (user?.permisos || []).find(
     p => p.funcion_nombre?.toLowerCase() === "subcontratistas"
-  ) || {};
-
-  const catalogoInsumosPerms = (user?.permisos || []).find(
-    p => {
-      const n = (p.funcion_nombre || "").toLowerCase();
-      return n === "catálogo de insumos" || n === "catalogo de insumos";
-    }
   ) || {};
 
   return (
@@ -8647,7 +8637,6 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
             }
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={permsDevOAdmin || precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
-            {tab === "catalogo_insumos" && <SeccionCatalogoInsumos token={token} user={user} perms={permsDevOAdmin || catalogoInsumosPerms} theme={activeTheme} t={t} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}

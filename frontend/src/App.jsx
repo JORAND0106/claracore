@@ -22181,6 +22181,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               key={`almacen-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               token={getToken()}
+              usuario={usuario}
               permisos={{
                 ...almacenPerm,
                 contratoId: usuario?.contrato_id,

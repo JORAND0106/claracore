@@ -52,6 +52,81 @@ def _normalize_impuestos(raw: Any) -> List[dict]:
     return out
 
 
+_IVA_SOBRE_VALIDOS = frozenset({"costo_base", "utilidad", "aiu", "costo_mas_aiu"})
+
+
+def _pct_or_none(raw: Any) -> Optional[float]:
+    if raw is None or raw == "":
+        return None
+    try:
+        n = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    return n
+
+
+def normalize_tributos(raw: Any) -> Dict[str, Any]:
+    """Desglose AIU/IVA independiente (captura). No redefine valor_compra_referencia."""
+    src = raw if isinstance(raw, dict) else {}
+    aiu_in = src.get("aiu") if isinstance(src.get("aiu"), dict) else {}
+    iva_in = src.get("iva") if isinstance(src.get("iva"), dict) else {}
+    sobre = str(iva_in.get("sobre") or "costo_base").strip()
+    if sobre not in _IVA_SOBRE_VALIDOS:
+        sobre = "costo_base"
+    return {
+        "aiu": {
+            "administracion": _pct_or_none(aiu_in.get("administracion")),
+            "imprevistos": _pct_or_none(aiu_in.get("imprevistos")),
+            "utilidad": _pct_or_none(aiu_in.get("utilidad")),
+            "iva_utilidad": _pct_or_none(aiu_in.get("iva_utilidad")),
+        },
+        "iva": {
+            "porcentaje": _pct_or_none(iva_in.get("porcentaje")),
+            "sobre": sobre,
+        },
+    }
+
+
+def _aiu_tiene_datos(aiu: Optional[dict]) -> bool:
+    if not isinstance(aiu, dict):
+        return False
+    return any(aiu.get(k) is not None for k in ("administracion", "imprevistos", "utilidad", "iva_utilidad"))
+
+
+def _iva_tiene_datos(iva: Optional[dict]) -> bool:
+    return isinstance(iva, dict) and iva.get("porcentaje") is not None
+
+
+def _tributos_etiqueta(tributos: Any) -> Optional[str]:
+    t = normalize_tributos(tributos)
+    parts: List[str] = []
+    aiu = t.get("aiu") or {}
+    if _aiu_tiene_datos(aiu):
+        bits = []
+        if aiu.get("administracion") is not None:
+            bits.append(f"A {aiu['administracion']:g}%")
+        if aiu.get("imprevistos") is not None:
+            bits.append(f"I {aiu['imprevistos']:g}%")
+        if aiu.get("utilidad") is not None:
+            bits.append(f"U {aiu['utilidad']:g}%")
+        if aiu.get("iva_utilidad") is not None:
+            bits.append(f"IVA/U {aiu['iva_utilidad']:g}%")
+        parts.append(f"AIU ({' · '.join(bits)})" if bits else "AIU")
+    iva = t.get("iva") or {}
+    if _iva_tiene_datos(iva):
+        labels = {
+            "costo_base": "costo base",
+            "utilidad": "utilidad",
+            "aiu": "AIU",
+            "costo_mas_aiu": "costo+AIU",
+        }
+        sobre = labels.get(iva.get("sobre") or "", iva.get("sobre") or "")
+        parts.append(f"IVA {iva['porcentaje']:g}% · {sobre}")
+    return " | ".join(parts) if parts else None
+
+
 def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]] = None) -> float:
     base = max(_to_float(costo_base), 0)
     total = base
@@ -79,7 +154,10 @@ def compute_costo_total_insumo(
     return round(base, 2)
 
 
-def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float) -> str:
+def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float, tributos: Any = None) -> str:
+    trib = _tributos_etiqueta(tributos)
+    if trib:
+        return trib
     tipo = (tipo_impuesto or "").strip().lower()
     pct = _to_float(impuesto_porcentaje)
     if tipo == "iva" and pct:
@@ -601,10 +679,11 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
         "rendimiento": row.get("rendimiento"),
         "costo": costo if tiene else None,
         "tipo_impuesto": tipo,
-        "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct) if tiene else "—",
+        "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct, row.get("tributos")) if tiene else "—",
         "costo_total": total,
         "valor_compra_referencia": total,
         "tiene_precio_compra": tiene,
+        "tributos": normalize_tributos(row.get("tributos")),
         "origen": "almacen_insumo",
         "label": _insumo_label(row),
     }
