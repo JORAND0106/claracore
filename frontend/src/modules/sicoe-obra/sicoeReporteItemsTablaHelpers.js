@@ -76,3 +76,44 @@ export function etiquetaCortaRolNivel(encabezado, nivelNum) {
 export function pastelDeEstadoValidacion(estado) {
   return PASTEL_ESTADO_VALIDACION[estado] || PASTEL_ESTADO_VALIDACION['No Revisado']
 }
+
+/** Normaliza estado de nivel para conteos (agrupa No Objeto de Cobro → Rechazado). */
+export function normalizarEstadoParaConteo(estadoRaw) {
+  let est = estadoRaw || 'No Revisado'
+  if (est === 'No Objeto de Cobro') est = 'Rechazado'
+  if (!['Aprobado', 'Pendiente', 'Rechazado', 'No Revisado'].includes(est)) return 'No Revisado'
+  return est
+}
+
+/**
+ * Cuenta registros por estado del nivel del usuario (solo entre `regs`).
+ * @param {object[]} regs
+ * @param {(reg) => string} estadoMiNivel
+ */
+export function conteoEstadosPorNivel(regs, estadoMiNivel) {
+  const conteo = { Aprobado: 0, Pendiente: 0, Rechazado: 0, 'No Revisado': 0 }
+  for (const r of regs || []) {
+    const est = normalizarEstadoParaConteo(estadoMiNivel?.(r) || 'No Revisado')
+    conteo[est] = (conteo[est] || 0) + 1
+  }
+  return conteo
+}
+
+/** IDs de registros cuyo estado (nivel usuario) coincide con `estadoFiltro`. */
+export function idsRegistrosEnEstado(regs, estadoMiNivel, estadoFiltro) {
+  const target = normalizarEstadoParaConteo(estadoFiltro)
+  return (regs || [])
+    .filter((r) => normalizarEstadoParaConteo(estadoMiNivel?.(r) || 'No Revisado') === target)
+    .map((r) => r.id)
+    .filter((id) => id != null)
+}
+
+/** Suma de costo_directo de filas de ítem (ya agregadas). */
+export function sumatoriaCostoDirectoFilasItem(filasItem) {
+  return (filasItem || []).reduce((acc, f) => acc + (Number(f.sumCd) || 0), 0)
+}
+
+/** Suma de cantidad_total de filas de ítem. */
+export function sumatoriaCantidadFilasItem(filasItem) {
+  return (filasItem || []).reduce((acc, f) => acc + (Number(f.sumCant) || 0), 0)
+}

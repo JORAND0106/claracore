@@ -5363,23 +5363,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     return {}
   })()
 
-  const idsPortadaResumenMasivoElegibles = (() => {
-    if (!portadaResumenEstado || !puedeMasivaNivel) return []
-    const nv = nvMasivo
-    if (elevCapLimiteN3Carpeta) {
-      if (nv < 1 || nv > 3) return []
-    } else if (elevCapCarpeta) {
-      if (nv < 1 || nv > 6) return []
-    } else if (nv < 2 || nv > 6) {
-      return []
-    }
-    return registrosPortadaResumenFiltrados.filter((r) => {
-      if (reporteExcluidoValidacionAvanzada) return false
-      if (!String(r.item_numero || '').trim()) return false
-      return regCumplePrereqMasivoNivel(r)
-    }).map((r) => r.id)
-  })()
-
   const recargar = async (opts = {}) => {
     const forzarSinFiltros = !!opts.forzarSinFiltros
     const preservarIds = Array.isArray(opts.preservarIds) ? opts.preservarIds : []
@@ -6616,6 +6599,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
                     📊 Resumen del reporte · Nivel {nivelParaResumenPortada}
                   </div>
+                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.4 }}>
+                    Contadores e ir al registro. La validación masiva está en la pestaña <strong>Ítems y registros</strong>.
+                  </div>
                   <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom: portadaResumenEstado ? '14px' : 0 }}>
                     {[
                       { key:'Aprobado', label:'Aprobados' },
@@ -6648,30 +6634,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>
                           Registros {portadaResumenEstado === 'No Revisado' ? 'sin revisar' : portadaResumenEstado.toLowerCase()} ({registrosPortadaResumenFiltrados.length})
                         </span>
-                        <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
-                          {puedeMasivaNivel && portadaResumenEstado !== 'Aprobado' && idsPortadaResumenMasivoElegibles.length > 0 && (
-                            <>
-                              <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Masivo N{nvMasivo}:</span>
-                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
-                                onClick={() => ejecutarMasivoSeleccion('Aprobado', null, idsPortadaResumenMasivoElegibles)}
-                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#16a34a', color: '#fff', border:'none' }}>
-                                Aprobar todos ({idsPortadaResumenMasivoElegibles.length})
-                              </button>
-                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
-                                onClick={() => setPopupMasivo({ estado: 'Pendiente', idsOverride: idsPortadaResumenMasivoElegibles })}
-                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#d97706', color: '#fff', border:'none' }}>
-                                Pendiente todos
-                              </button>
-                              <button type="button" className="cc-sicoe-touch-btn" disabled={ejecutandoMasivo}
-                                onClick={() => setPopupMasivo({ estado: 'Rechazado', idsOverride: idsPortadaResumenMasivoElegibles })}
-                                style={{ padding: carpetaCompact ? '10px 14px' : '5px 12px', minHeight: carpetaCompact ? 44 : undefined, borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: '#dc2626', color: '#fff', border:'none' }}>
-                                Rechazar todos
-                              </button>
-                            </>
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                           <button type="button" onClick={() => setPortadaResumenEstado(null)}
                             style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
                             Cerrar lista
@@ -7191,6 +7154,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 ejecutandoMasivo={ejecutandoMasivo}
                 seleccionados={seleccionados}
                 onToggleSeleccion={toggleSeleccion}
+                onSetSeleccionados={setSeleccionados}
                 onValidacionAprobar={(ids) => {
                   const elegibles = (ids || []).filter((id) => {
                     const r = registrosVisibles.find((x) => x.id === id)
