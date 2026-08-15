@@ -6,6 +6,11 @@ import {
   estadoNivelUsuarioRegistro,
   pastelDeEstadoValidacion,
   etiquetaCortaRolNivel,
+  conteoEstadosPorNivel,
+  idsRegistrosEnEstado,
+  sumatoriaCostoDirectoFilasItem,
+  sumatoriaCantidadFilasItem,
+  normalizarEstadoParaConteo,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
@@ -62,5 +67,33 @@ describe('etiquetaCortaRolNivel', () => {
     assert.equal(etiquetaCortaRolNivel('Nivel 2 · Contratista', 2), 'Contratista')
     assert.equal(etiquetaCortaRolNivel('Director de obra (N3)', 3), 'Director de obra')
     assert.equal(etiquetaCortaRolNivel('', 1), 'N1')
+  })
+})
+
+describe('conteoEstadosPorNivel e idsRegistrosEnEstado', () => {
+  it('cuenta e identifica por estado del nivel', () => {
+    const regs = [
+      { id: 1, nivel2_estado: 'Pendiente' },
+      { id: 2, nivel2_estado: 'Pendiente' },
+      { id: 3, nivel2_estado: 'Aprobado' },
+      { id: 4, nivel2_estado: 'No Revisado' },
+      { id: 5, nivel2_estado: 'No Objeto de Cobro' },
+    ]
+    const estadoFn = (r) => estadoNivelUsuarioRegistro(r, 2)
+    const c = conteoEstadosPorNivel(regs, estadoFn)
+    assert.equal(c.Pendiente, 2)
+    assert.equal(c.Aprobado, 1)
+    assert.equal(c['No Revisado'], 1)
+    assert.equal(c.Rechazado, 1)
+    assert.deepEqual(idsRegistrosEnEstado(regs, estadoFn, 'Pendiente'), [1, 2])
+    assert.equal(normalizarEstadoParaConteo('No Objeto de Cobro'), 'Rechazado')
+  })
+})
+
+describe('sumatorias de filas ítem', () => {
+  it('suma cantidad y costo', () => {
+    const filas = [{ sumCant: 10, sumCd: 100 }, { sumCant: 5.5, sumCd: 50 }]
+    assert.equal(sumatoriaCantidadFilasItem(filas), 15.5)
+    assert.equal(sumatoriaCostoDirectoFilasItem(filas), 150)
   })
 })

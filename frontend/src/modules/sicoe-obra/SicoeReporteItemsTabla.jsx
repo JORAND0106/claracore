@@ -12,6 +12,10 @@ import {
   estadoNivelRegistro,
   etiquetaCortaRolNivel,
   PASTEL_ESTADO_VALIDACION,
+  conteoEstadosPorNivel,
+  idsRegistrosEnEstado,
+  sumatoriaCostoDirectoFilasItem,
+  sumatoriaCantidadFilasItem,
 } from './sicoeReporteItemsTablaHelpers'
 
 const COLOR_PUNTO = {
@@ -160,6 +164,7 @@ export default function SicoeReporteItemsTabla({
   ejecutandoMasivo = false,
   seleccionados = [],
   onToggleSeleccion,
+  onSetSeleccionados,
   onValidacionAprobar,
   onPedirComentarioMasivo,
   registroExpandido = null,
@@ -176,6 +181,7 @@ export default function SicoeReporteItemsTabla({
   const [menuGraf, setMenuGraf] = useState(null) // { regId, anchor }
   const [menuVal, setMenuVal] = useState(null)
   const [lightbox, setLightbox] = useState(null)
+  const [estadoFiltroMasivo, setEstadoFiltroMasivo] = useState(null) // 'Aprobado'|'Pendiente'|...
 
   useEffect(() => {
     if (itemExpandidoInicial != null && itemExpandidoInicial !== '') {
@@ -198,13 +204,49 @@ export default function SicoeReporteItemsTabla({
     return () => clearTimeout(tmr)
   }, [registroExpandido, itemExpandido])
 
+  useEffect(() => {
+    if (seleccionados.length === 0) setEstadoFiltroMasivo(null)
+  }, [seleccionados.length])
+
   const filasItem = useMemo(() => agruparRegistrosPorItem(registros), [registros])
+  const todosIds = useMemo(() => registros.map((r) => r.id).filter((id) => id != null), [registros])
+  const todosSeleccionados = todosIds.length > 0 && todosIds.every((id) => seleccionados.includes(id))
+  const algunoSeleccionado = seleccionados.length > 0
+
+  const regsSeleccionados = useMemo(
+    () => registros.filter((r) => seleccionados.includes(r.id)),
+    [registros, seleccionados],
+  )
+  const conteoSeleccion = useMemo(
+    () => conteoEstadosPorNivel(regsSeleccionados, estadoMiNivel),
+    [regsSeleccionados, estadoMiNivel],
+  )
+  const idsFiltroEstado = useMemo(() => {
+    if (!estadoFiltroMasivo) return []
+    return idsRegistrosEnEstado(regsSeleccionados, estadoMiNivel, estadoFiltroMasivo)
+  }, [regsSeleccionados, estadoMiNivel, estadoFiltroMasivo])
+  const idsFiltroElegibles = useMemo(
+    () => idsFiltroEstado.filter((id) => {
+      const r = registros.find((x) => x.id === id)
+      return r && puedeValidarRapido?.(r)
+    }),
+    [idsFiltroEstado, registros, puedeValidarRapido],
+  )
+
+  const totalCant = useMemo(() => sumatoriaCantidadFilasItem(filasItem), [filasItem])
+  const totalCd = useMemo(() => sumatoriaCostoDirectoFilasItem(filasItem), [filasItem])
 
   const toggleItem = useCallback((itemNum) => {
     setItemExpandido((prev) => (prev === itemNum ? null : itemNum))
     setMenuGraf(null)
     setMenuVal(null)
   }, [])
+
+  const toggleSeleccionarTodos = useCallback(() => {
+    if (!onSetSeleccionados) return
+    if (todosSeleccionados) onSetSeleccionados([])
+    else onSetSeleccionados([...todosIds])
+  }, [onSetSeleccionados, todosSeleccionados, todosIds])
 
   const idsSeleccionadosEnItem = useCallback(
     (regs) => regs.filter((r) => seleccionados.includes(r.id)).map((r) => r.id),
@@ -231,8 +273,146 @@ export default function SicoeReporteItemsTabla({
   const menuGrafMedia = menuGrafReg ? mediaItemsDeRegistro(menuGrafReg, reporte) : []
   const menuGrafTiene = menuGrafMedia.some((m) => String(m.label || '').startsWith('Gráfico'))
 
+  const ESTADOS_RESUMEN = [
+    { key: 'No Revisado', label: 'No revisados', color: COLOR_PUNTO['No Revisado'] },
+    { key: 'Pendiente', label: 'Pendientes', color: COLOR_PUNTO.Pendiente },
+    { key: 'Rechazado', label: 'Rechazados', color: COLOR_PUNTO.Rechazado },
+    { key: 'Aprobado', label: 'Aprobados', color: COLOR_PUNTO.Aprobado },
+  ]
+
   return (
-    <div className="cc-sicoe-items-sheet-wrap" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+    <div className="cc-sicoe-items-sheet-wrap" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Barra: seleccionar todo + resumen por estado de la selección */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          padding: carpetaCompact ? '10px' : '12px 14px',
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+        }}
+      >
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            cursor: 'pointer',
+            fontSize: 'var(--cc-sm)',
+            fontWeight: 700,
+            color: t.text,
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={todosSeleccionados}
+            ref={(el) => {
+              if (el) el.indeterminate = algunoSeleccionado && !todosSeleccionados
+            }}
+            onChange={toggleSeleccionarTodos}
+            style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
+            aria-label="Seleccionar o deseleccionar todos los registros"
+          />
+          {todosSeleccionados
+            ? `Deseleccionar todo (${todosIds.length})`
+            : `Seleccionar todo (${todosIds.length} registros)`}
+        </label>
+
+        {algunoSeleccionado && (
+          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
+              Selección · {seleccionados.length} registro(s){nivelLabel ? ` · ${nivelLabel}` : ''}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: estadoFiltroMasivo ? 10 : 0 }}>
+              {ESTADOS_RESUMEN.map(({ key, label, color }) => {
+                const cnt = conteoSeleccion[key] ?? 0
+                const activo = estadoFiltroMasivo === key
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled={cnt === 0}
+                    onClick={() => setEstadoFiltroMasivo(activo ? null : key)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      background: activo ? `${color}22` : t.bg,
+                      border: `1px solid ${activo ? color : t.border}`,
+                      borderRadius: 16,
+                      padding: '6px 12px',
+                      cursor: cnt > 0 ? 'pointer' : 'default',
+                      opacity: cnt > 0 ? 1 : 0.45,
+                    }}
+                  >
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>{cnt}</span>
+                    <span style={{ fontSize: 'var(--cc-label)', color: t.textMuted }}>{label}</span>
+                  </button>
+                )
+              })}
+            </div>
+            {estadoFiltroMasivo && puedeMasivaNivel && estadoFiltroMasivo !== 'Aprobado' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+                  Masivo sobre {estadoFiltroMasivo === 'No Revisado' ? 'no revisados' : estadoFiltroMasivo.toLowerCase()} ({idsFiltroElegibles.length} elegibles):
+                </span>
+                <button
+                  type="button"
+                  disabled={ejecutandoMasivo || idsFiltroElegibles.length === 0}
+                  onClick={() => onValidacionAprobar?.(idsFiltroElegibles)}
+                  style={{
+                    ...btnVal('#16a34a', ejecutandoMasivo || idsFiltroElegibles.length === 0),
+                    width: 'auto',
+                    padding: '6px 12px',
+                    height: 'auto',
+                    fontSize: 'var(--cc-label)',
+                  }}
+                >
+                  Aprobar
+                </button>
+                <button
+                  type="button"
+                  disabled={ejecutandoMasivo || idsFiltroElegibles.length === 0}
+                  onClick={() => onPedirComentarioMasivo?.('Pendiente', idsFiltroElegibles)}
+                  style={{
+                    ...btnVal('#d97706', ejecutandoMasivo || idsFiltroElegibles.length === 0),
+                    width: 'auto',
+                    padding: '6px 12px',
+                    height: 'auto',
+                    fontSize: 'var(--cc-label)',
+                  }}
+                >
+                  Pendiente
+                </button>
+                <button
+                  type="button"
+                  disabled={ejecutandoMasivo || idsFiltroElegibles.length === 0}
+                  onClick={() => onPedirComentarioMasivo?.('Rechazado', idsFiltroElegibles)}
+                  style={{
+                    ...btnVal('#dc2626', ejecutandoMasivo || idsFiltroElegibles.length === 0),
+                    width: 'auto',
+                    padding: '6px 12px',
+                    height: 'auto',
+                    fontSize: 'var(--cc-label)',
+                  }}
+                >
+                  Rechazar
+                </button>
+              </div>
+            )}
+            {estadoFiltroMasivo === 'Aprobado' && (
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                Los registros ya aprobados no se revalidan en bloque desde este resumen. Elige otro estado o desmarca la selección.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div
         style={{
           overflowX: 'auto',
@@ -247,9 +427,17 @@ export default function SicoeReporteItemsTabla({
             width: '100%',
             borderCollapse: 'collapse',
             minWidth: verValoresEconomicos ? 980 : 820,
-            tableLayout: 'auto',
+            tableLayout: 'fixed',
           }}
         >
+          <colgroup>
+            <col style={{ width: carpetaCompact ? '72px' : '88px' }} />
+            <col />
+            <col style={{ width: '56px' }} />
+            <col style={{ width: carpetaCompact ? '88px' : '110px' }} />
+            {verValoresEconomicos && <col style={{ width: carpetaCompact ? '110px' : '130px' }} />}
+            <col style={{ width: carpetaCompact ? '100px' : '130px' }} />
+          </colgroup>
           <thead>
             <tr>
               <th style={sheetTh}>Ítem</th>
@@ -259,7 +447,7 @@ export default function SicoeReporteItemsTabla({
               {verValoresEconomicos && (
                 <th style={{ ...sheetTh, textAlign: 'right' }}>Costo Directo</th>
               )}
-              <th style={{ ...sheetTh, minWidth: 120 }}>
+              <th style={sheetTh}>
                 {nivelLabel ? `Validación · ${nivelLabel}` : 'Validación'}
               </th>
             </tr>
@@ -303,6 +491,42 @@ export default function SicoeReporteItemsTabla({
                 />
               )
             })}
+            <tr style={{ background: t.headerBg || t.bg }}>
+              <td
+                colSpan={3}
+                style={{ ...sheetTd, fontWeight: 800, color: t.text, textAlign: 'right' }}
+              >
+                Total
+              </td>
+              <td
+                style={{
+                  ...sheetTd,
+                  textAlign: 'right',
+                  fontWeight: 800,
+                  fontVariantNumeric: 'tabular-nums',
+                  fontFamily: 'ui-monospace, Consolas, monospace',
+                  color: t.text,
+                }}
+              >
+                {fmtNum(totalCant)}
+              </td>
+              {verValoresEconomicos && (
+                <td
+                  style={{
+                    ...sheetTd,
+                    textAlign: 'right',
+                    fontWeight: 900,
+                    fontVariantNumeric: 'tabular-nums',
+                    fontFamily: 'ui-monospace, Consolas, monospace',
+                    color: t.primary,
+                    fontSize: '14px',
+                  }}
+                >
+                  {fmtPesos(totalCd)}
+                </td>
+              )}
+              <td style={sheetTd} />
+            </tr>
           </tbody>
         </table>
       </div>
@@ -435,20 +659,11 @@ function FragmentItem({
         data-item={fila.itemNum}
         title={abierto ? 'Clic para contraer' : 'Clic para ver registros'}
       >
-        <td style={{ ...sheetTd, fontWeight: 800, color: t.primary, whiteSpace: 'nowrap', width: 88 }}>
+        <td style={{ ...sheetTd, fontWeight: 800, color: t.primary, whiteSpace: 'nowrap' }}>
           {fila.itemNum}
         </td>
-        <td style={{ ...sheetTd, maxWidth: 420 }}>
-          <span
-            title={fila.descripcion}
-            style={{
-              display: 'block',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: carpetaCompact ? 200 : 420,
-            }}
-          >
+        <td style={{ ...sheetTd, wordBreak: 'break-word' }}>
+          <span title={fila.descripcion} style={{ display: 'block', whiteSpace: 'normal', lineHeight: 1.35 }}>
             {fila.descripcion}
           </span>
         </td>
