@@ -98,6 +98,7 @@ import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPa
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
+import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -2541,6 +2542,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   pkIdsContrato = null,
   /** Tras guardar dimensiones/costo: vuelve a cargar la grilla de reportes (costo_directo_validación) sin cerrar la carpeta. */
   onRefrescarListadoSicoe = null,
+  /** Al montar (p. ej. desde tabla de ítems): abre el editor de esquema una vez. */
+  autoAbrirEsquema = false,
+  onEsquemaAutoAbierto = null,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -3091,7 +3095,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   /** Abre el editor de esquema (mismo que Seguimiento / wizard) asociado a este registro. */
   const abrirEsquemaEditor = async () => {
-    if (!editableFotoGrafico || esquemaCargando || uploadingGraf) return
+    if ((!editableFotoGrafico && !autoAbrirEsquema) || esquemaCargando || uploadingGraf) return
     setEsquemaCargando(true)
     try {
       const base = grafVista || null
@@ -3106,6 +3110,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       setEsquemaCargando(false)
     }
   }
+
+  const autoEsquemaDoneRef = useRef(false)
+  useEffect(() => {
+    if (!autoAbrirEsquema || autoEsquemaDoneRef.current) return
+    autoEsquemaDoneRef.current = true
+    onEsquemaAutoAbierto?.()
+    void abrirEsquemaEditor()
+    // Solo al montar / primera solicitud de esquema desde la tabla de ítems
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAbrirEsquema])
 
   /** Guarda el PNG del editor como gráfico de este registro (next-grafico + upload + PUT). */
   const guardarEsquemaComoGrafico = async (dataUrl) => {
@@ -4170,9 +4184,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       </div>
 
-      {/* ─ Sección: Localización ─ */}
+      {/* ─ Sección: Localización (solo si el reporte es multi-localización; en única está en Portada) ─ */}
+      {esLocMultiple && (
       <div style={{ marginBottom:'16px' }}>
-        {esLocMultiple && editableCampos ? (
+        {editableCampos ? (
           <SicoeLocalizacionFields
             t={t}
             token={getToken()}
@@ -4185,7 +4200,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             pkIds={pkIdsHoja}
             nodos={nodosHoja}
           />
-        ) : esLocMultiple ? (
+        ) : (
           <SicoeLocalizacionFields
             t={t}
             token={getToken()}
@@ -4193,20 +4208,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             value={sicoeLocFromRegistro(registro, pkIdsHoja)}
             readOnly
           />
-        ) : (
-          <>
-            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
-            <div className="cc-sicoe-abscisa-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
-              <CampoRO label="Abs. Inicio" labelShort="Abs. Ini." valor={registro.abs_inicio} />
-              <CampoRO label="Abs. Final"  labelShort="Abs. Fin." valor={registro.abs_final} />
-              <CampoRO label="Nodo Inicial" labelShort="Nod. Ini." valor={registro.nodo_ini} />
-              <CampoRO label="Nodo Final"   labelShort="Nod. Fin." valor={registro.nodo_fin} />
-            </div>
-          </>
         )}
       </div>
+      )}
 
-      {/* ─ Sección: Coordenadas Topográficas ─ */}
+      {/* ─ Sección: Coordenadas Topográficas (solo multi-loc; en única viven en Portada) ─ */}
+      {esLocMultiple && (
       <div style={{ marginBottom:'16px' }}>
         <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
         {!tieneCoordenadas ? (
@@ -4240,6 +4247,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         )}
       </div>
+      )}
+      {!esLocMultiple && !tieneCoordenadas && exigeTopoAprobarN2 && (
+        <div style={{ marginBottom:'16px', background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'10px 14px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
+          ⚠️ Sin coordenadas topográficas en la Portada — necesarias para aprobar en Nivel 2.
+        </div>
+      )}
 
       {/* ─ Sección: Registros Fotográficos ─ */}
       <div style={{ marginBottom:'16px' }}>
@@ -4944,14 +4957,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [registroExpandido, setRegistroExpandido] = useState(null)
   const [menuAccionesRegId, setMenuAccionesRegId] = useState(null)
   const [itemInfoPopup, setItemInfoPopup] = useState(null)
+  const [itemExpandidoNav, setItemExpandidoNav] = useState(null)
+  const [esquemaPendienteRegId, setEsquemaPendienteRegId] = useState(null)
 
   useEffect(() => {
     if (!repoProp?._autoRegistro) return
     const id = Number(repoProp._autoRegistro)
     setRegistroExpandido(repoProp._autoRegistro)
     const reg = (repoProp.registros || []).find(r => String(r.id) === String(id))
-    const tabTarget = reg?.item_numero || 'sin_asignar'
-    setTabActiva(tabTarget)
+    if (reg?.item_numero) {
+      setTabActiva('items')
+      setItemExpandidoNav(reg.item_numero)
+    } else {
+      setTabActiva('sin_asignar')
+    }
     setTimeout(() => {
       const el = document.getElementById(`registro-${id}`)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -5254,10 +5273,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   )
 
   // Si la vista filtrada deja fuera el tab activo, volver a Portada.
+  // Tabs fijos: portada | sin_asignar | items (ya no hay pestaña por ítem).
   useEffect(() => {
-    if (tabActiva === 'portada' || tabActiva === 'sin_asignar') return
-    if (!itemsAsignados.includes(tabActiva)) setTabActiva('portada')
-  }, [itemsAsignados, tabActiva])
+    if (tabActiva === 'portada' || tabActiva === 'sin_asignar' || tabActiva === 'items') return
+    setTabActiva('portada')
+  }, [tabActiva])
 
   useEffect(() => {
     setMsgMasivo('')
@@ -5298,7 +5318,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const irARegistroDesdePortada = (reg) => {
     setPortadaResumenEstado(null)
-    setTabActiva(reg.item_numero || 'sin_asignar')
+    if (reg.item_numero) {
+      setTabActiva('items')
+      setItemExpandidoNav(reg.item_numero)
+    } else {
+      setTabActiva('sin_asignar')
+    }
     setRegistroExpandido(reg.id)
     setTimeout(() => {
       document.getElementById(`registro-${reg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -6518,13 +6543,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </button>
           </div>
         )}
-        {/* ─ Tab bar horizontal ─ */}
+        {/* ─ Tab bar horizontal (exactamente 3 pestañas) ─ */}
         <div className={`cc-sicoe-tabs-scroll${carpetaCompact ? ' cc-sicoe-carpeta-tabs' : ''}`} style={{ display:'flex', gap:'4px', padding: carpetaCompact ? '6px 8px 0' : '12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch', flexShrink: 0 }}>
-          {[
-            { key: 'portada',      label: '📋 Portada' },
-            { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
-            ...itemsAsignados.map(it => {
-              const tienePendiente = capasF && registrosDominioValidacion.some((r) => {
+          {(() => {
+            const tienePendienteItems = capasF && itemsAsignados.some((it) =>
+              registrosDominioValidacion.some((r) => {
                 if (r.item_numero !== it) return false
                 return capasF.some((capa) => {
                   const fld = campoDeCapa(capa)
@@ -6533,10 +6556,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   if (pc && !estadoRegistroAprobadoEn(r, pc)) return false
                   return r[fld] === 'No Revisado' || r[fld] == null
                 })
-              })
-              return { key: it, label: `${tienePendiente ? '🔴' : '🔖'} ${it}` }
-            })
-          ].map(tab => (
+              }),
+            )
+            const nItems = itemsAsignados.length
+            return [
+              { key: 'portada',      label: '📋 Portada' },
+              { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
+              { key: 'items',        label: `${tienePendienteItems ? '🔴' : '🔖'} Ítems y registros${nItems > 0 ? ` (${nItems})` : ''}` },
+            ]
+          })().map(tab => (
             <button key={tab.key} type="button" onClick={() => setTabActiva(tab.key)} style={{
               background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
               color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
@@ -7148,123 +7176,81 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </div>
           )}
 
-          {/* ── TABS POR ÍTEM ── */}
-          {itemsAsignados.map(itemNum => tabActiva === itemNum && (
-            <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-              {renderResumenEconomicoLineaItem(
-                registrosVisibles.filter((r) => r.item_numero === itemNum),
-                itemNum,
-              )}
-              {registrosVisibles.filter(r => r.item_numero === itemNum).map(reg => {
-                const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
-                const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
-                const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
-                const nivelesInfo = [
-                  ...nivelesActivosTabla.map((nn) => ({
-                    emoji: emojiPorNivelSicoe[nn] || '📋',
-                    label: `N${nn}`,
-                    nivelNum: nn,
-                    estado: reg[`nivel${nn}_estado`] || 'No Revisado',
-                  })),
-                  { emoji: '🔨', label: 'Sub', nivelNum: null, estado: reg.sub_estado || 'No Revisado' },
-                ]
-                return (
-                  <div key={reg.id} id={`registro-${reg.id}`}>
-                    <div
-                      className="cc-sicoe-reg-card"
-                      onClick={() => {
-                        setMenuAccionesRegId(null)
-                        setRegistroExpandido(expandido ? null : reg.id)
-                      }}
-                      style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:`4px solid ${colorNivel(nivelesInfo.find(n => n.nivelNum != null && nivelInfo.nivelValidacion === n.nivelNum)?.estado || 'No Revisado')}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding: carpetaCompact ? '6px 8px' : '12px 14px', cursor:'pointer', transition:'border 0.15s', minHeight: carpetaCompact ? 0 : 52 }}
-                    >
-                      {puedeEditar && (
-                        <input type="checkbox" checked={seleccionados.includes(reg.id)}
-                          onClick={e => e.stopPropagation()}
-                          onChange={() => toggleSeleccion(reg.id)}
-                          style={{ width:'15px', height:'15px', accentColor:'#8B5CF6', flexShrink:0 }} />
-                      )}
-                      <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)', flexShrink:0 }}>
-                        📄 Registro #{reg.numero_registro}
-                      </span>
-                      {strRefCarpetaFoto(reg) && (
-                        <span
-                          title={regTieneFotoNumeroEnBd(reg) ? 'N.º consecutivo de foto' : 'N.º de registro (referencia de carpeta)'}
-                          style={{
-                            fontSize: 'var(--cc-label)',
-                            fontWeight: '800',
-                            color: '#0f766e',
-                            flexShrink: 0,
-                            background: '#0d948818',
-                            border: '1px solid #0d948840',
-                            borderRadius: '8px',
-                            padding: '2px 8px',
-                            fontFamily: 'ui-monospace, Consolas, monospace',
-                          }}
-                        >
-                          📷 {strRefCarpetaFoto(reg)}
-                        </span>
-                      )}
-                      <span className="cc-sicoe-reg-obs" style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
-                        {reg.observacion || 'Sin observación'}
-                      </span>
-                      <span className="cc-sicoe-reg-fecha-inline" style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
-                      <div className="cc-sicoe-reg-status-row" style={{ display:'flex', gap:'12px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
-                        {nivelesInfo.map((item) => {
-                          const esMiNivel = item.nivelNum != null && nivelInfo.nivelValidacion === item.nivelNum
-                          const estado = item.estado
-                          const sinRevisar = estado === 'No Revisado'
-                          return (
-                            <div key={item.nivelNum != null ? `nv-${item.nivelNum}` : 'sub'} title={`${item.label}: ${estado}`}
-                              style={{ display:'flex', alignItems:'center', gap:'3px',
-                                background: esMiNivel && sinRevisar ? '#3B82F620' : 'transparent',
-                                border: esMiNivel && sinRevisar ? '1px solid #3B82F6' : '1px solid transparent',
-                                borderRadius:'10px', padding:'1px 5px' }}>
-                              <span style={{ fontSize:'var(--cc-sm)', lineHeight:1 }}>{item.emoji}</span>
-                              <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
-                              {esMiNivel && sinRevisar && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#3B82F6' }}>SIN REV.</span>}
-                            </div>
-                          )
-                        })}
-                      </div>
-                      {renderMenuAccionesReg(reg)}
-                      {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
-                        <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
-                      )}
-                      {String(reg.foto_url || '').trim() ? (
-                        <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
-                      ) : null}
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
-                      {renderAccionesValidacionCard(reg)}
-                    </div>
-                    {expandido && (
-                      <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
-                        <HojaRegistro
-                          key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
-                          contrato_id={contrato_id} reporte={reporte} registro={reg}
-                          puedeEditar={puedeEditar} actasList={actasList}
-                          nivelesContrato={nivelesContrato}
-                          seleccionado={seleccionados.includes(reg.id)}
-                          onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                          mostrarSeleccionValidacion={false}
-                          onItemAsignado={recargar}
-                          onRefrescarListadoSicoe={onRefrescarListadoSicoe}
-                          onOptimisticValidacion={aplicarOptimisticValidacion}
-                          onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
-                          hdrs={hdrs}
-                          pkIdsContrato={listaPkIds}
-                          esDeveloper={esDeveloper}
-                          puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
-                          onDevEliminarRegistro={devEliminarRegistro}
-                          devEliminando={devEliminando}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+          {/* ── TAB ÍTEMS Y REGISTROS (tabla única expandible) ── */}
+          {tabActiva === 'items' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+              <SicoeReporteItemsTabla
+                t={t}
+                reporte={reporte}
+                registros={registrosVisibles.filter((r) => String(r?.item_numero || '').trim())}
+                verValoresEconomicos={nivelInfo.verValoresEconomicos}
+                carpetaCompact={carpetaCompact}
+                estadoMiNivel={estadoMiNivelRegistro}
+                puedeValidarRapido={puedeValidarRapidoRegistro}
+                puedeMasivaNivel={puedeMasivaNivel}
+                ejecutandoMasivo={ejecutandoMasivo}
+                seleccionados={seleccionados}
+                onToggleSeleccion={toggleSeleccion}
+                onValidacionAprobar={(ids) => {
+                  const elegibles = (ids || []).filter((id) => {
+                    const r = registrosVisibles.find((x) => x.id === id)
+                    return r && puedeValidarRapidoRegistro(r)
+                  })
+                  void ejecutarMasivoSeleccion('Aprobado', null, elegibles)
+                }}
+                onPedirComentarioMasivo={(estado, ids) => {
+                  const elegibles = (ids || []).filter((id) => {
+                    const r = registrosVisibles.find((x) => x.id === id)
+                    return r && puedeValidarRapidoRegistro(r)
+                  })
+                  setPopupMasivo({ estado, idsOverride: elegibles })
+                }}
+                registroExpandido={registroExpandido}
+                onToggleRegistroExpandido={(id) => {
+                  setMenuAccionesRegId(null)
+                  setRegistroExpandido(id)
+                  if (id == null) setEsquemaPendienteRegId(null)
+                }}
+                itemExpandidoInicial={itemExpandidoNav}
+                nivelLabel={nvMasivo ? `N${nvMasivo}` : ''}
+                onPedirEsquema={(reg) => {
+                  setItemExpandidoNav(reg.item_numero || null)
+                  setEsquemaPendienteRegId(reg.id)
+                  setRegistroExpandido(reg.id)
+                }}
+                renderMenuAcciones={(reg) => renderMenuAccionesReg(reg)}
+                renderHojaRegistro={(reg) => (
+                  <HojaRegistro
+                    key={sicoeHojaRegistroSyncKey(reg)}
+                    t={t}
+                    usuario={usuario}
+                    API_URL={API_URL}
+                    contrato_id={contrato_id}
+                    reporte={reporte}
+                    registro={reg}
+                    puedeEditar={puedeEditar}
+                    actasList={actasList}
+                    nivelesContrato={nivelesContrato}
+                    seleccionado={seleccionados.includes(reg.id)}
+                    onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                    mostrarSeleccionValidacion={false}
+                    onItemAsignado={recargar}
+                    onRefrescarListadoSicoe={onRefrescarListadoSicoe}
+                    onOptimisticValidacion={aplicarOptimisticValidacion}
+                    onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
+                    hdrs={hdrs}
+                    pkIdsContrato={listaPkIds}
+                    esDeveloper={esDeveloper}
+                    puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
+                    onDevEliminarRegistro={devEliminarRegistro}
+                    devEliminando={devEliminando}
+                    autoAbrirEsquema={esquemaPendienteRegId != null && String(esquemaPendienteRegId) === String(reg.id)}
+                    onEsquemaAutoAbierto={() => setEsquemaPendienteRegId(null)}
+                  />
+                )}
+              />
             </div>
-          ))}
+          )}
         </div>
       </div>
 
