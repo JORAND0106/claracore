@@ -6596,7 +6596,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         </div>
 
         {/* ─ Contenido del tab ─ */}
-        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding: carpetaCompact ? '10px 10px' : '24px', overflowY:'auto', minHeight: 0 }}>
+        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding: carpetaCompact ? '10px 8px' : '16px 14px', overflowY:'auto', minHeight: 0 }}>
           {msgMasivo && (
             <div style={{
               marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
