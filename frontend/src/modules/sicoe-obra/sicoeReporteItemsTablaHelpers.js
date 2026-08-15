@@ -48,6 +48,31 @@ export function estadoNivelUsuarioRegistro(reg, nivelValidacion) {
   return reg?.[`nivel${nv}_estado`] || 'No Revisado'
 }
 
+/** Estado de un nivel concreto (1–6) o subcontratista. */
+export function estadoNivelRegistro(reg, nivelNum) {
+  const nv = Number(nivelNum)
+  if (!nv || nv < 1 || nv > 6) return reg?.sub_estado || 'No Revisado'
+  return reg?.[`nivel${nv}_estado`] || 'No Revisado'
+}
+
+/**
+ * Etiqueta corta de rol a partir del encabezado del contrato.
+ * Ej: "Nivel 2 · Contratista" → "Contratista"; "Director de obra (N3)" → "Director de obra".
+ */
+export function etiquetaCortaRolNivel(encabezado, nivelNum) {
+  const n = Number(nivelNum)
+  let s = String(encabezado || '').trim()
+  if (!s) return n ? `N${n}` : '—'
+  s = s.replace(new RegExp(`\\s*\\(N${n}\\)\\s*$`, 'i'), '').trim()
+  const parts = s.split(/\s*[·•|]\s*/)
+  if (parts.length >= 2) {
+    const tail = parts.slice(1).join(' · ').trim()
+    if (tail) return tail
+  }
+  s = s.replace(new RegExp(`^Nivel\\s*${n}\\s*`, 'i'), '').trim()
+  return s || (n ? `N${n}` : '—')
+}
+
 export function pastelDeEstadoValidacion(estado) {
   return PASTEL_ESTADO_VALIDACION[estado] || PASTEL_ESTADO_VALIDACION['No Revisado']
 }

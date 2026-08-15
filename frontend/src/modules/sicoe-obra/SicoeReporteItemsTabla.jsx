@@ -1,13 +1,16 @@
 /**
- * TAB «Ítems y registros»: tabla principal por ítem con subtabla expandible de registros.
- * Rendimiento: un solo ítem expandido a la vez; HojaRegistro solo para el registro detallado.
+ * TAB «Ítems y registros»: tabla tipo hoja de cálculo, expansión por clic en fila,
+ * menús flotantes (portal) e indicadores de validación por nivel/rol.
  */
 import { useMemo, useState, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
 import {
   agruparRegistrosPorItem,
   pastelDeEstadoValidacion,
+  estadoNivelRegistro,
+  etiquetaCortaRolNivel,
   PASTEL_ESTADO_VALIDACION,
 } from './sicoeReporteItemsTablaHelpers'
 
@@ -18,6 +21,9 @@ const COLOR_PUNTO = {
   'No Objeto de Cobro': '#374151',
   'No Revisado': '#3B82F6',
 }
+
+const GRID = '#94a3b8'
+const GRID_SOFT = 'rgba(148, 163, 184, 0.45)'
 
 function fmtNum(v, digits = 2) {
   if (v == null || v === '') return '—'
@@ -48,6 +54,71 @@ function mediaItemsDeRegistro(reg, reporte) {
   return items
 }
 
+function rectFromEvent(e) {
+  const el = e?.currentTarget
+  if (!el?.getBoundingClientRect) return null
+  const r = el.getBoundingClientRect()
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }
+}
+
+/** Menú flotante fuera del overflow de la tabla (portal a body). */
+function FloatingMenu({ anchor, onClose, children, width = 168 }) {
+  useEffect(() => {
+    if (!anchor) return undefined
+    const close = () => onClose?.()
+    const onKey = (ev) => { if (ev.key === 'Escape') close() }
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [anchor, onClose])
+
+  if (!anchor || typeof document === 'undefined') return null
+
+  const vw = window.innerWidth || 800
+  const vh = window.innerHeight || 600
+  const menuW = width
+  let left = anchor.right - menuW
+  if (left < 8) left = 8
+  if (left + menuW > vw - 8) left = Math.max(8, vw - menuW - 8)
+  let top = anchor.bottom + 4
+  const estH = 140
+  if (top + estH > vh - 8) top = Math.max(8, anchor.top - estH - 4)
+
+  return createPortal(
+    <>
+      <div
+        role="presentation"
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, zIndex: 11040, background: 'transparent' }}
+      />
+      <div
+        role="menu"
+        style={{
+          position: 'fixed',
+          top,
+          left,
+          zIndex: 11050,
+          minWidth: menuW,
+          background: '#0F1923',
+          border: '1px solid #475569',
+          borderRadius: 10,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+          padding: 4,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </>,
+    document.body,
+  )
+}
+
 export default function SicoeReporteItemsTabla({
   t,
   reporte,
@@ -69,10 +140,12 @@ export default function SicoeReporteItemsTabla({
   onPedirEsquema,
   renderMenuAcciones,
   nivelLabel = '',
+  nivelesIndicadores = [],
+  nivelUsuario = null,
 }) {
   const [itemExpandido, setItemExpandido] = useState(itemExpandidoInicial)
-  const [menuGrafRegId, setMenuGrafRegId] = useState(null)
-  const [menuValRegId, setMenuValRegId] = useState(null)
+  const [menuGraf, setMenuGraf] = useState(null) // { regId, anchor }
+  const [menuVal, setMenuVal] = useState(null)
   const [lightbox, setLightbox] = useState(null)
 
   useEffect(() => {
@@ -100,8 +173,8 @@ export default function SicoeReporteItemsTabla({
 
   const toggleItem = useCallback((itemNum) => {
     setItemExpandido((prev) => (prev === itemNum ? null : itemNum))
-    setMenuGrafRegId(null)
-    setMenuValRegId(null)
+    setMenuGraf(null)
+    setMenuVal(null)
   }, [])
 
   const idsSeleccionadosEnItem = useCallback(
@@ -109,28 +182,29 @@ export default function SicoeReporteItemsTabla({
     [seleccionados],
   )
 
-  const thStyle = {
-    fontSize: 'var(--cc-caption)',
-    fontWeight: 700,
+  const sheetTh = {
+    fontSize: '11px',
+    fontWeight: 800,
     color: t.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-    padding: carpetaCompact ? '8px 6px' : '10px 8px',
+    letterSpacing: '0.05em',
+    padding: carpetaCompact ? '7px 8px' : '8px 10px',
     textAlign: 'left',
     whiteSpace: 'nowrap',
-    borderBottom: `1px solid ${t.border}`,
-    background: t.bgCard,
+    border: `1px solid ${GRID_SOFT}`,
+    background: 'linear-gradient(180deg, #1e293b 0%, #15202b 100%)',
     position: 'sticky',
     top: 0,
     zIndex: 2,
   }
 
-  const tdStyle = {
-    padding: carpetaCompact ? '8px 6px' : '10px 8px',
-    fontSize: 'var(--cc-sm)',
+  const sheetTd = {
+    padding: carpetaCompact ? '5px 8px' : '6px 10px',
+    fontSize: '13px',
     color: t.text,
-    borderBottom: `1px solid ${t.border}`,
+    border: `1px solid ${GRID_SOFT}`,
     verticalAlign: 'middle',
+    lineHeight: 1.25,
   }
 
   if (filasItem.length === 0) {
@@ -141,21 +215,44 @@ export default function SicoeReporteItemsTabla({
     )
   }
 
+  const menuGrafReg = menuGraf ? registros.find((r) => r.id === menuGraf.regId) : null
+  const menuValReg = menuVal ? registros.find((r) => r.id === menuVal.regId) : null
+  const menuValEstado = menuValReg ? (estadoMiNivel?.(menuValReg) || 'No Revisado') : null
+  const menuValRapido = menuValReg ? !!puedeValidarRapido?.(menuValReg) : false
+  const menuGrafMedia = menuGrafReg ? mediaItemsDeRegistro(menuGrafReg, reporte) : []
+  const menuGrafTiene = menuGrafMedia.some((m) => String(m.label || '').startsWith('Gráfico'))
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ overflowX: 'auto', borderRadius: 10, border: `1px solid ${t.border}`, background: t.bgCard }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: verValoresEconomicos ? 720 : 560 }}>
+    <div className="cc-sicoe-items-sheet-wrap" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+      <div
+        style={{
+          overflowX: 'auto',
+          border: `1px solid ${GRID}`,
+          background: t.bgCard,
+          borderRadius: 4,
+        }}
+      >
+        <table
+          className="cc-sicoe-items-sheet"
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            minWidth: verValoresEconomicos ? 980 : 820,
+            tableLayout: 'auto',
+          }}
+        >
           <thead>
             <tr>
-              <th style={{ ...thStyle, width: 36 }} aria-label="Expandir" />
-              <th style={thStyle}>Ítem</th>
-              <th style={thStyle}>Descripción</th>
-              <th style={thStyle}>Und</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Cantidad</th>
+              <th style={sheetTh}>Ítem</th>
+              <th style={sheetTh}>Descripción</th>
+              <th style={{ ...sheetTh, textAlign: 'center' }}>Und</th>
+              <th style={{ ...sheetTh, textAlign: 'right' }}>Cantidad</th>
               {verValoresEconomicos && (
-                <th style={{ ...thStyle, textAlign: 'right' }}>Costo Directo</th>
+                <th style={{ ...sheetTh, textAlign: 'right' }}>Costo Directo</th>
               )}
-              <th style={{ ...thStyle, width: 140 }}>{nivelLabel ? `Valid. ${nivelLabel}` : 'Validación'}</th>
+              <th style={{ ...sheetTh, minWidth: 120 }}>
+                {nivelLabel ? `Validación · ${nivelLabel}` : 'Validación'}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -169,7 +266,8 @@ export default function SicoeReporteItemsTabla({
                   fila={fila}
                   abierto={abierto}
                   toggleItem={toggleItem}
-                  tdStyle={tdStyle}
+                  sheetTd={sheetTd}
+                  sheetTh={sheetTh}
                   t={t}
                   verValoresEconomicos={verValoresEconomicos}
                   carpetaCompact={carpetaCompact}
@@ -185,20 +283,89 @@ export default function SicoeReporteItemsTabla({
                   registroExpandido={registroExpandido}
                   onToggleRegistroExpandido={onToggleRegistroExpandido}
                   renderHojaRegistro={renderHojaRegistro}
-                  menuGrafRegId={menuGrafRegId}
-                  setMenuGrafRegId={setMenuGrafRegId}
-                  menuValRegId={menuValRegId}
-                  setMenuValRegId={setMenuValRegId}
+                  setMenuGraf={setMenuGraf}
+                  setMenuVal={setMenuVal}
                   setLightbox={setLightbox}
                   reporte={reporte}
                   onPedirEsquema={onPedirEsquema}
                   renderMenuAcciones={renderMenuAcciones}
+                  nivelesIndicadores={nivelesIndicadores}
+                  nivelUsuario={nivelUsuario}
                 />
               )
             })}
           </tbody>
         </table>
       </div>
+
+      {menuGraf && (
+        <FloatingMenu anchor={menuGraf.anchor} onClose={() => setMenuGraf(null)} width={180}>
+          <button
+            type="button"
+            disabled={!menuGrafTiene}
+            onClick={() => {
+              const idx = menuGrafMedia.findIndex((m) => String(m.label || '').startsWith('Gráfico'))
+              if (idx >= 0) setLightbox({ items: menuGrafMedia, index: idx })
+              setMenuGraf(null)
+            }}
+            style={menuItem(t, !menuGrafTiene)}
+          >
+            Ver gráfico
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const reg = menuGrafReg
+              setMenuGraf(null)
+              if (reg) onPedirEsquema?.(reg)
+            }}
+            style={menuItem(t, false)}
+          >
+            Crear / editar esquema
+          </button>
+        </FloatingMenu>
+      )}
+
+      {menuVal && menuValRapido && (
+        <FloatingMenu anchor={menuVal.anchor} onClose={() => setMenuVal(null)} width={168}>
+          <button
+            type="button"
+            disabled={ejecutandoMasivo || menuValEstado === 'Aprobado'}
+            onClick={() => {
+              const id = menuVal.regId
+              setMenuVal(null)
+              onValidacionAprobar?.([id])
+            }}
+            style={menuItem(t, ejecutandoMasivo || menuValEstado === 'Aprobado')}
+          >
+            ✅ Aprobar
+          </button>
+          <button
+            type="button"
+            disabled={ejecutandoMasivo}
+            onClick={() => {
+              const id = menuVal.regId
+              setMenuVal(null)
+              onPedirComentarioMasivo?.('Pendiente', [id])
+            }}
+            style={menuItem(t, ejecutandoMasivo)}
+          >
+            🟡 Pendiente
+          </button>
+          <button
+            type="button"
+            disabled={ejecutandoMasivo}
+            onClick={() => {
+              const id = menuVal.regId
+              setMenuVal(null)
+              onPedirComentarioMasivo?.('Rechazado', [id])
+            }}
+            style={menuItem(t, ejecutandoMasivo)}
+          >
+            🔴 Rechazar
+          </button>
+        </FloatingMenu>
+      )}
 
       {lightbox && (
         <SicoeMediaLightbox
@@ -218,7 +385,8 @@ function FragmentItem({
   fila,
   abierto,
   toggleItem,
-  tdStyle,
+  sheetTd,
+  sheetTh,
   t,
   verValoresEconomicos,
   carpetaCompact,
@@ -234,16 +402,17 @@ function FragmentItem({
   registroExpandido,
   onToggleRegistroExpandido,
   renderHojaRegistro,
-  menuGrafRegId,
-  setMenuGrafRegId,
-  menuValRegId,
-  setMenuValRegId,
+  setMenuGraf,
+  setMenuVal,
   setLightbox,
   reporte,
   onPedirEsquema,
   renderMenuAcciones,
+  nivelesIndicadores,
+  nivelUsuario,
 }) {
-  const colSpan = verValoresEconomicos ? 7 : 6
+  const colSpan = verValoresEconomicos ? 6 : 5
+  const itemRowBg = abierto ? 'rgba(14, 165, 168, 0.12)' : '#15202b'
 
   return (
     <>
@@ -251,39 +420,39 @@ function FragmentItem({
         onClick={() => toggleItem(fila.itemNum)}
         style={{
           cursor: 'pointer',
-          background: abierto ? `${t.primary}12` : t.bgCard,
-          transition: 'background 0.12s',
+          background: itemRowBg,
+          transition: 'background 0.1s',
         }}
         data-item={fila.itemNum}
+        title={abierto ? 'Clic para contraer' : 'Clic para ver registros'}
       >
-        <td style={tdStyle}>
-          <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>{abierto ? '▼' : '▶'}</span>
+        <td style={{ ...sheetTd, fontWeight: 800, color: t.primary, whiteSpace: 'nowrap', width: 88 }}>
+          {fila.itemNum}
         </td>
-        <td style={{ ...tdStyle, fontWeight: 800, color: t.primary, whiteSpace: 'nowrap' }}>{fila.itemNum}</td>
-        <td style={{ ...tdStyle, maxWidth: 280 }}>
+        <td style={{ ...sheetTd, maxWidth: 420 }}>
           <span
             title={fila.descripcion}
             style={{
               display: 'block',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              whiteSpace: carpetaCompact ? 'nowrap' : 'normal',
-              maxWidth: carpetaCompact ? 160 : 320,
+              whiteSpace: 'nowrap',
+              maxWidth: carpetaCompact ? 200 : 420,
             }}
           >
             {fila.descripcion}
           </span>
         </td>
-        <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{fila.unidad}</td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+        <td style={{ ...sheetTd, textAlign: 'center', whiteSpace: 'nowrap' }}>{fila.unidad}</td>
+        <td style={{ ...sheetTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontFamily: 'ui-monospace, Consolas, monospace' }}>
           {fmtNum(fila.sumCant)}
         </td>
         {verValoresEconomicos && (
-          <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: t.primary, fontVariantNumeric: 'tabular-nums' }}>
+          <td style={{ ...sheetTd, textAlign: 'right', fontWeight: 700, color: t.primary, fontVariantNumeric: 'tabular-nums', fontFamily: 'ui-monospace, Consolas, monospace' }}>
             {fmtPesos(fila.sumCd)}
           </td>
         )}
-        <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
+        <td style={sheetTd} onClick={(e) => e.stopPropagation()}>
           {mostrarMasiva ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }} title={`Validar ${selIds.length} seleccionado(s)`}>
               <span
@@ -292,9 +461,9 @@ function FragmentItem({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  fontSize: 'var(--cc-caption)',
+                  fontSize: 11,
                   fontWeight: 800,
-                  color: '#64748b',
+                  color: '#94a3b8',
                 }}
               >
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#8B5CF6' }} />
@@ -329,7 +498,7 @@ function FragmentItem({
               </button>
             </div>
           ) : (
-            <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+            <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
               {fila.regs.length} reg.
             </span>
           )}
@@ -338,25 +507,28 @@ function FragmentItem({
 
       {abierto && (
         <tr>
-          <td colSpan={colSpan} style={{ padding: 0, background: t.bg, borderBottom: `1px solid ${t.border}` }}>
-            <div style={{ padding: carpetaCompact ? '8px 6px 12px' : '10px 12px 14px', overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
+          <td colSpan={colSpan} style={{ padding: 0, background: '#0b1220', border: `1px solid ${GRID_SOFT}` }}>
+            <div style={{ padding: carpetaCompact ? '6px 4px 8px' : '8px 8px 10px', overflowX: 'auto' }}>
+              <table
+                className="cc-sicoe-items-sheet cc-sicoe-items-sheet--sub"
+                style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}
+              >
                 <thead>
                   <tr>
-                    <th style={{ ...subTh(t), width: 32 }} />
-                    <th style={subTh(t)}># Registro</th>
-                    <th style={{ ...subTh(t), textAlign: 'right' }}>Long</th>
-                    <th style={{ ...subTh(t), textAlign: 'right' }}>Ancho</th>
-                    <th style={{ ...subTh(t), textAlign: 'right' }}>Espesor</th>
-                    <th style={{ ...subTh(t), textAlign: 'right' }}>Cantidad</th>
-                    <th style={{ ...subTh(t), textAlign: 'right' }}>Cant. Total</th>
+                    <th style={{ ...sheetTh, width: 28, textAlign: 'center' }} />
+                    <th style={sheetTh}># Registro</th>
+                    <th style={{ ...sheetTh, textAlign: 'right' }}>Long</th>
+                    <th style={{ ...sheetTh, textAlign: 'right' }}>Ancho</th>
+                    <th style={{ ...sheetTh, textAlign: 'right' }}>Espesor</th>
+                    <th style={{ ...sheetTh, textAlign: 'right' }}>Cantidad</th>
+                    <th style={{ ...sheetTh, textAlign: 'right' }}>Cant. Total</th>
                     {verValoresEconomicos && (
-                      <th style={{ ...subTh(t), textAlign: 'right' }}>Costo Directo</th>
+                      <th style={{ ...sheetTh, textAlign: 'right' }}>Costo Directo</th>
                     )}
-                    <th style={{ ...subTh(t), textAlign: 'center', width: 44 }}>📷</th>
-                    <th style={{ ...subTh(t), textAlign: 'center', width: 52 }}>📐</th>
-                    <th style={{ ...subTh(t), textAlign: 'center', width: 56 }}>●</th>
-                    <th style={{ ...subTh(t), width: 28 }} />
+                    <th style={{ ...sheetTh, textAlign: 'center', width: 40 }}>📷</th>
+                    <th style={{ ...sheetTh, textAlign: 'center', width: 40 }}>📐</th>
+                    <th style={{ ...sheetTh, textAlign: 'center', minWidth: 88 }}>Validadores</th>
+                    <th style={{ ...sheetTh, width: 28 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -378,28 +550,24 @@ function FragmentItem({
                         estado={estado}
                         pastel={pastel}
                         expandido={expandido}
-                        tdStyle={tdStyle}
+                        sheetTd={sheetTd}
                         t={t}
                         verValoresEconomicos={verValoresEconomicos}
                         seleccionados={seleccionados}
                         onToggleSeleccion={onToggleSeleccion}
                         onToggleRegistroExpandido={onToggleRegistroExpandido}
                         renderHojaRegistro={renderHojaRegistro}
-                        menuGrafRegId={menuGrafRegId}
-                        setMenuGrafRegId={setMenuGrafRegId}
-                        menuValRegId={menuValRegId}
-                        setMenuValRegId={setMenuValRegId}
+                        setMenuGraf={setMenuGraf}
+                        setMenuVal={setMenuVal}
                         setLightbox={setLightbox}
                         media={media}
                         tieneFoto={tieneFoto}
                         tieneGraf={tieneGraf}
                         rapido={rapido}
-                        ejecutandoMasivo={ejecutandoMasivo}
-                        onValidacionAprobar={onValidacionAprobar}
-                        onPedirComentarioMasivo={onPedirComentarioMasivo}
-                        onPedirEsquema={onPedirEsquema}
                         renderMenuAcciones={renderMenuAcciones}
                         subCols={subCols}
+                        nivelesIndicadores={nivelesIndicadores}
+                        nivelUsuario={nivelUsuario}
                       />
                     )
                   })}
@@ -413,75 +581,146 @@ function FragmentItem({
   )
 }
 
+function IndicadoresNiveles({
+  reg,
+  nivelesIndicadores,
+  nivelUsuario,
+  rapido,
+  onOpenValMenu,
+  t,
+}) {
+  const lista = Array.isArray(nivelesIndicadores) && nivelesIndicadores.length
+    ? nivelesIndicadores
+    : [{ nivel: Number(nivelUsuario) || 1, emoji: '📋', label: 'N?', encabezado: 'Validación' }]
+
+  return (
+    <div
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap', justifyContent: 'center' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {lista.map((nv) => {
+        const est = estadoNivelRegistro(reg, nv.nivel)
+        const color = COLOR_PUNTO[est] || COLOR_PUNTO['No Revisado']
+        const rolCorto = etiquetaCortaRolNivel(nv.encabezado, nv.nivel)
+        const esMi = Number(nv.nivel) === Number(nivelUsuario)
+        const tip = `${nv.label} · ${rolCorto}: ${est}${esMi && rapido ? ' — clic para validar' : ''}`
+        return (
+          <button
+            key={nv.nivel}
+            type="button"
+            title={tip}
+            aria-label={tip}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (esMi && rapido) onOpenValMenu?.(e)
+            }}
+            style={{
+              display: 'inline-flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 2,
+              background: esMi ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
+              border: esMi ? '1px solid #3B82F6' : '1px solid transparent',
+              borderRadius: 6,
+              padding: '2px 4px',
+              cursor: esMi && rapido ? 'pointer' : 'default',
+              minWidth: 28,
+              lineHeight: 1,
+            }}
+          >
+            <span style={{ fontSize: 11, lineHeight: 1 }} aria-hidden>{nv.emoji || '📋'}</span>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 9,
+                height: 9,
+                borderRadius: '50%',
+                background: color,
+                boxShadow: est === 'No Revisado' ? 'inset 0 0 0 1px #64748b' : `0 0 0 1px ${color}55`,
+              }}
+            />
+            <span style={{ fontSize: 9, fontWeight: 800, color: esMi ? '#93c5fd' : t.textMuted, letterSpacing: '0.02em' }}>
+              {nv.label}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function FragmentReg({
   reg,
   estado,
   pastel,
   expandido,
-  tdStyle,
+  sheetTd,
   t,
   verValoresEconomicos,
   seleccionados,
   onToggleSeleccion,
   onToggleRegistroExpandido,
   renderHojaRegistro,
-  menuGrafRegId,
-  setMenuGrafRegId,
-  menuValRegId,
-  setMenuValRegId,
+  setMenuGraf,
+  setMenuVal,
   setLightbox,
   media,
   tieneFoto,
   tieneGraf,
   rapido,
-  ejecutandoMasivo,
-  onValidacionAprobar,
-  onPedirComentarioMasivo,
-  onPedirEsquema,
   renderMenuAcciones,
   subCols,
+  nivelesIndicadores,
+  nivelUsuario,
 }) {
-  const colorPunto = COLOR_PUNTO[estado] || COLOR_PUNTO['No Revisado']
+  const rowBg = pastel.bg !== 'transparent'
+    ? pastel.bg
+    : expandido
+      ? 'rgba(14, 165, 168, 0.10)'
+      : '#0f172a'
+  const numStyle = {
+    ...sheetTd,
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+    fontFamily: 'ui-monospace, Consolas, monospace',
+    fontSize: 12,
+  }
+
+  const openDetail = () => onToggleRegistroExpandido?.(expandido ? null : reg.id)
 
   return (
     <>
       <tr
         id={`registro-${reg.id}`}
+        onClick={openDetail}
+        title={expandido ? 'Clic para cerrar detalle' : 'Clic para abrir detalle'}
         style={{
-          background: pastel.bg !== 'transparent' ? pastel.bg : expandido ? `${t.primary}10` : undefined,
-          outline: pastel.border !== 'transparent' ? `1px solid ${pastel.border}55` : undefined,
+          background: rowBg,
+          cursor: 'pointer',
+          outline: pastel.border !== 'transparent' ? `1px solid ${pastel.border}66` : undefined,
         }}
       >
-        <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={seleccionados.includes(reg.id)}
             onChange={() => onToggleSeleccion?.(reg.id)}
-            style={{ width: 15, height: 15, accentColor: '#8B5CF6', cursor: 'pointer' }}
+            style={{ width: 14, height: 14, accentColor: '#8B5CF6', cursor: 'pointer' }}
             aria-label={`Seleccionar registro ${reg.numero_registro}`}
           />
         </td>
-        <td
-          style={{ ...tdStyle, fontWeight: 800, color: '#D97706', cursor: 'pointer', whiteSpace: 'nowrap' }}
-          onClick={() => onToggleRegistroExpandido?.(expandido ? null : reg.id)}
-          title="Abrir detalle del registro"
-        >
+        <td style={{ ...sheetTd, fontWeight: 800, color: '#D97706', whiteSpace: 'nowrap' }}>
           #{reg.numero_registro}
-          <span style={{ marginLeft: 6, color: t.textMuted, fontWeight: 500 }}>{expandido ? '▲' : '▼'}</span>
         </td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(reg.longitud)}</td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(reg.ancho)}</td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(reg.espesor)}</td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(reg.cantidad)}</td>
-        <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-          {fmtNum(reg.cantidad_total)}
-        </td>
+        <td style={numStyle}>{fmtNum(reg.longitud)}</td>
+        <td style={numStyle}>{fmtNum(reg.ancho)}</td>
+        <td style={numStyle}>{fmtNum(reg.espesor)}</td>
+        <td style={numStyle}>{fmtNum(reg.cantidad)}</td>
+        <td style={{ ...numStyle, fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
         {verValoresEconomicos && (
-          <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: t.primary, fontVariantNumeric: 'tabular-nums' }}>
-            {fmtPesos(reg.costo_directo)}
-          </td>
+          <td style={{ ...numStyle, fontWeight: 700, color: t.primary }}>{fmtPesos(reg.costo_directo)}</td>
         )}
-        <td style={{ ...tdStyle, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             title={tieneFoto ? 'Ver foto' : 'Sin foto — abrir detalle para cargar'}
@@ -497,140 +736,40 @@ function FragmentReg({
             📷
           </button>
         </td>
-        <td style={{ ...tdStyle, textAlign: 'center', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             title="Gráfico / esquema"
-            onClick={() => setMenuGrafRegId(menuGrafRegId === reg.id ? null : reg.id)}
+            onClick={(e) => {
+              setMenuVal(null)
+              setMenuGraf({ regId: reg.id, anchor: rectFromEvent(e) })
+            }}
             style={btnIcon(tieneGraf ? t.primary : t.textMuted)}
           >
             📐
           </button>
-          {menuGrafRegId === reg.id && (
-            <div
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: '100%',
-                zIndex: 20,
-                background: t.bgCard,
-                border: `1px solid ${t.border}`,
-                borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-                minWidth: 160,
-                padding: 4,
-              }}
-            >
-              <button
-                type="button"
-                disabled={!tieneGraf}
-                onClick={() => {
-                  const idx = media.findIndex((m) => String(m.label || '').startsWith('Gráfico'))
-                  if (idx >= 0) setLightbox({ items: media, index: idx })
-                  setMenuGrafRegId(null)
-                }}
-                style={menuItem(t, !tieneGraf)}
-              >
-                Ver gráfico
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuGrafRegId(null)
-                  onPedirEsquema?.(reg)
-                }}
-                style={menuItem(t, false)}
-              >
-                Crear / editar esquema
-              </button>
-            </div>
-          )}
         </td>
-        <td style={{ ...tdStyle, textAlign: 'center', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            title={`${estado}`}
-            onClick={() => {
-              if (!rapido) return
-              setMenuValRegId(menuValRegId === reg.id ? null : reg.id)
+        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <IndicadoresNiveles
+            reg={reg}
+            nivelesIndicadores={nivelesIndicadores}
+            nivelUsuario={nivelUsuario}
+            rapido={rapido}
+            t={t}
+            onOpenValMenu={(e) => {
+              setMenuGraf(null)
+              setMenuVal({ regId: reg.id, anchor: rectFromEvent(e) })
             }}
-            style={{
-              ...btnIcon(colorPunto),
-              opacity: rapido ? 1 : 0.55,
-              cursor: rapido ? 'pointer' : 'default',
-            }}
-            aria-label={`Validación: ${estado}`}
-          >
-            <span
-              style={{
-                display: 'inline-block',
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                background: colorPunto,
-                boxShadow: `0 0 0 2px ${pastel.bg !== 'transparent' ? pastel.border : '#cbd5e1'}`,
-              }}
-            />
-          </button>
-          {menuValRegId === reg.id && rapido && (
-            <div
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: '100%',
-                zIndex: 20,
-                background: t.bgCard,
-                border: `1px solid ${t.border}`,
-                borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-                minWidth: 140,
-                padding: 4,
-              }}
-            >
-              <button
-                type="button"
-                disabled={ejecutandoMasivo || estado === 'Aprobado'}
-                onClick={() => {
-                  setMenuValRegId(null)
-                  onValidacionAprobar?.([reg.id])
-                }}
-                style={menuItem(t, ejecutandoMasivo || estado === 'Aprobado')}
-              >
-                ✅ Aprobar
-              </button>
-              <button
-                type="button"
-                disabled={ejecutandoMasivo}
-                onClick={() => {
-                  setMenuValRegId(null)
-                  onPedirComentarioMasivo?.('Pendiente', [reg.id])
-                }}
-                style={menuItem(t, ejecutandoMasivo)}
-              >
-                🟡 Pendiente
-              </button>
-              <button
-                type="button"
-                disabled={ejecutandoMasivo}
-                onClick={() => {
-                  setMenuValRegId(null)
-                  onPedirComentarioMasivo?.('Rechazado', [reg.id])
-                }}
-                style={menuItem(t, ejecutandoMasivo)}
-              >
-                🔴 Rechazar
-              </button>
-            </div>
-          )}
+          />
         </td>
-        <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
+        <td style={sheetTd} onClick={(e) => e.stopPropagation()}>
           {renderMenuAcciones?.(reg)}
         </td>
       </tr>
       {expandido && (
         <tr>
-          <td colSpan={subCols} style={{ padding: 0, borderBottom: `1px solid ${t.border}` }}>
-            <div style={{ border: `1px solid ${t.primary}66`, borderRadius: '0 0 8px 8px', overflow: 'hidden' }}>
+          <td colSpan={subCols} style={{ padding: 0, border: `1px solid ${GRID_SOFT}` }}>
+            <div style={{ borderTop: `2px solid ${t.primary}`, overflow: 'hidden' }}>
               {renderHojaRegistro?.(reg)}
             </div>
           </td>
@@ -640,31 +779,16 @@ function FragmentReg({
   )
 }
 
-function subTh(t) {
-  return {
-    fontSize: 'var(--cc-caption)',
-    fontWeight: 700,
-    color: t.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: '0.03em',
-    padding: '6px 6px',
-    textAlign: 'left',
-    whiteSpace: 'nowrap',
-    borderBottom: `1px solid ${t.border}`,
-    background: t.bg,
-  }
-}
-
 function btnVal(bg, disabled) {
   return {
     background: bg,
     color: '#fff',
     border: 'none',
-    borderRadius: 6,
-    width: 26,
-    height: 26,
+    borderRadius: 4,
+    width: 24,
+    height: 24,
     fontWeight: 800,
-    fontSize: 12,
+    fontSize: 11,
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.55 : 1,
     padding: 0,
@@ -676,9 +800,9 @@ function btnIcon(color) {
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
-    fontSize: 16,
+    fontSize: 15,
     lineHeight: 1,
-    padding: '2px 4px',
+    padding: '2px 3px',
     color,
   }
 }
@@ -690,10 +814,10 @@ function menuItem(t, disabled) {
     textAlign: 'left',
     background: 'transparent',
     border: 'none',
-    padding: '8px 10px',
-    fontSize: 'var(--cc-sm)',
+    padding: '9px 12px',
+    fontSize: '13px',
     fontWeight: 600,
-    color: t.text,
+    color: '#E2E8F0',
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.45 : 1,
     borderRadius: 6,
