@@ -147,6 +147,15 @@ def path_guia_bloque(nombre: str) -> str:
     return f"guias-bloques/{nombre}"
 
 
+def path_ayuda_mapa_doc() -> str:
+    """Documento JSON del mapa panorámico de navegación (contenido editable)."""
+    return "ayuda/mapa-navegacion.json"
+
+
+def path_ayuda_mapa_imagen(nombre: str) -> str:
+    return f"ayuda/mapa-pantallazos/{nombre}"
+
+
 def sicoe_blob_path(contrato_id: int, subcarpeta: str, public_id: str, ext: str = ".jpg") -> str:
     """Mapea subcarpeta + public_id (p. ej. fotos, foto_123) al path Azure."""
     sub = (subcarpeta or "").strip().lower()

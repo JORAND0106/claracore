@@ -18,6 +18,7 @@ import { Bot, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE } from '../../apiBase'
 import { base64DesdeDataUrl, comprimirImagenADataUrl } from '../../comprimirImagen'
+import ModuloMapaNavegacion from '../../modules/ayuda/ModuloMapaNavegacion'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
 
   // Estado del panel
   const [abierto, setAbierto]                       = useState(false)
+  const [panelTab, setPanelTab]                     = useState('chat') // chat | mapa
   const [badgeVisible, setBadgeVisible]             = useState(true)
   const [bienvenidaMostrada, setBienvenidaMostrada] = useState(false)
   const [panelAncho, setPanelAncho]                 = useState(PANEL_ANCHO_DEFAULT)
@@ -218,10 +220,10 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
 
   // ── Foco al textarea al abrir ──────────────────────────────────────────────────
   useEffect(() => {
-    if (abierto && !vistaFeedback) {
+    if (abierto && !vistaFeedback && panelTab === 'chat') {
       setTimeout(() => textareaRef.current?.focus(), 60)
     }
-  }, [abierto, vistaFeedback])
+  }, [abierto, vistaFeedback, panelTab])
 
   // ── Resize: listeners globales de arrastre ─────────────────────────────────────
   useEffect(() => {
@@ -250,9 +252,10 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
   }, [])
 
   // ── Abrir panel ───────────────────────────────────────────────────────────────
-  function handleAbrirPanel() {
+  function handleAbrirPanel(tabInicial = 'chat') {
     setAbierto(true)
     setBadgeVisible(false)
+    setPanelTab(tabInicial === 'mapa' ? 'mapa' : 'chat')
     if (!bienvenidaMostrada) {
       setMensajes([{
         id: generarId(), role: 'avi', content: BIENVENIDA_TEXTO,
@@ -436,7 +439,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
         <button
           type="button"
           className={`cc-avi-trigger-btn cc-avi-trigger-btn--compact${fabPressed ? ' cc-avi-trigger-btn--pressed' : ''}${abierto ? ' cc-avi-trigger-btn--open' : ''}`}
-          onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
+          onClick={abierto ? handleCerrarPanel : () => handleAbrirPanel('chat')}
           onMouseDown={() => setFabPressed(true)}
           onMouseUp={() => setFabPressed(false)}
           onMouseLeave={() => setFabPressed(false)}
@@ -516,8 +519,16 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
         )}
       </div>
     )
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [abierto, fabPressed, badgeVisible, handleAbrirPanel, handleCerrarPanel])
+  }, [abierto, fabPressed, badgeVisible, handleCerrarPanel])
+
+  const temaMapaClara = {
+    text: '#1e293b',
+    textMuted: '#64748b',
+    primary: '#0077B6',
+    border: '#e2e8f0',
+    bg: '#f8fafc',
+    bgCard: '#ffffff',
+  }
 
   const panel = (
       <div
@@ -585,6 +596,52 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
             <X size={18} color="#fff" aria-hidden />
           </button>
         </div>
+
+        {/* ── Pestañas Chat | Mapa ─────────────────────────────────────────────── */}
+        {!vistaFeedback && (
+          <div
+            role="tablist"
+            aria-label="Secciones de Clara"
+            style={{
+              display: 'flex',
+              gap: 4,
+              padding: '8px 10px',
+              borderBottom: '1px solid #e8eef3',
+              background: '#f7fafc',
+              flexShrink: 0,
+            }}
+          >
+            {[
+              { id: 'chat', label: 'Chat' },
+              { id: 'mapa', label: 'Mapa' },
+            ].map((tab) => {
+              const activo = panelTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activo}
+                  onClick={() => setPanelTab(tab.id)}
+                  style={{
+                    flex: 1,
+                    border: `1px solid ${activo ? '#0077B6' : '#dbe4ec'}`,
+                    background: activo ? '#0077B6' : '#fff',
+                    color: activo ? '#fff' : '#475569',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    minHeight: 40,
+                  }}
+                >
+                  {tab.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* ── Cuerpo del panel (feedback o historial+footer) ─────────────────── */}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -660,6 +717,16 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
                 {enviandoFeedback ? 'Enviando...' : 'Enviar y cerrar'}
               </button>
             </div>
+          </div>
+        ) : panelTab === 'mapa' ? (
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#fff' }}>
+            <ModuloMapaNavegacion
+              t={temaMapaClara}
+              token={getToken()}
+              usuario={usuario}
+              compact
+              showEditor={false}
+            />
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

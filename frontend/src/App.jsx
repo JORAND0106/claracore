@@ -183,6 +183,7 @@ import {
 import { crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
+import ModuloMapaNavegacion from './modules/ayuda/ModuloMapaNavegacion'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
 import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
 import { usuarioPuedeReportarErrores } from './config/reporteErroresHelpers'
@@ -16825,7 +16826,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   useEffect(() => {
     if (showAdmin) { _setCtxModulo('admin'); return }
     if (showContabilidad) { _setCtxModulo('contabilidad'); return }
-    _setCtxModulo(moduloActivo === 'dashboard' ? 'cobro' : moduloActivo)
+    _setCtxModulo(
+      moduloActivo === 'dashboard'
+        ? 'cobro'
+        : moduloActivo === 'mapa_navegacion'
+          ? 'mapa_navegacion'
+          : moduloActivo,
+    )
   }, [moduloActivo, showAdmin, showContabilidad])
 
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
@@ -18575,7 +18582,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }, [progRibbonEnHeader])
 
   useEffect(() => {
-    if (esContador && moduloActivo !== 'inicio') setModuloActivo('inicio')
+    if (esContador && moduloActivo !== 'inicio' && moduloActivo !== 'mapa_navegacion') {
+      setModuloActivo('inicio')
+    }
   }, [esContador, moduloActivo])
 
   const handleCambioContratoUsuario = useCallback(
@@ -19192,6 +19201,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           {/* Items del menú */}
           {[
             ['inicio',       '🏠', 'Inicio',         true],
+            ['mapa_navegacion', '🧭', 'Mapa',        true],
             ['dashboard',    '📊', 'Dashboard',      !esContador && tienePermisoDashboard],
             ['presupuesto',  '📋', 'Presupuesto',    !esContador && tienePermisoPresupuesto],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    !esContador && tienePermisoSicoeObra],
@@ -19246,6 +19256,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           }}>
             {[
               ['inicio', '🏠', 'Inicio', true],
+              ['mapa_navegacion', '🧭', 'Mapa', true],
               ['dashboard', '📊', 'Dashboard', !esContador && tienePermisoDashboard],
               ['presupuesto', '📋', 'Presupuesto', !esContador && tienePermisoPresupuesto],
               ['sicoe_obra', '🏗️', 'SICOE', !esContador && tienePermisoSicoeObra],
@@ -19315,6 +19326,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             token={getToken()}
             esContador={esContador}
             onIrSeguimiento={tienePermisoSeguimiento ? () => setModuloActivo('seguimiento') : undefined}
+          />
+        )}
+        {moduloActivo === 'mapa_navegacion' && (
+          <ModuloMapaNavegacion
+            key="mapa-navegacion"
+            t={t}
+            token={getToken()}
+            usuario={usuario}
+            compact={false}
+            showEditor
           />
         )}
         {moduloActivo === 'dashboard' && (() => {
