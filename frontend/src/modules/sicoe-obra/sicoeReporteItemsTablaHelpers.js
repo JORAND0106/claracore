@@ -1,11 +1,11 @@
 /** Helpers puros para la tabla de ítems/registros del reporte SicoeObra. */
 
 export const PASTEL_ESTADO_VALIDACION = {
-  Aprobado: { bg: '#dcfce7', border: '#86efac' },
-  Pendiente: { bg: '#fef3c7', border: '#fcd34d' },
-  Rechazado: { bg: '#fee2e2', border: '#fca5a5' },
-  'No Objeto de Cobro': { bg: '#fee2e2', border: '#fca5a5' },
-  'No Revisado': { bg: 'transparent', border: 'transparent' },
+  Aprobado: { bg: '#dcfce7', border: '#86efac', color: '#166534' },
+  Pendiente: { bg: '#fef3c7', border: '#fcd34d', color: '#92400e' },
+  Rechazado: { bg: '#fee2e2', border: '#fca5a5', color: '#991b1b' },
+  'No Objeto de Cobro': { bg: '#fee2e2', border: '#fca5a5', color: '#991b1b' },
+  'No Revisado': { bg: 'transparent', border: 'transparent', color: null },
 }
 
 export function sortItemKeysSicoe(keys) {

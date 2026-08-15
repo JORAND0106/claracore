@@ -22,8 +22,37 @@ const COLOR_PUNTO = {
   'No Revisado': '#3B82F6',
 }
 
-const GRID = '#94a3b8'
-const GRID_SOFT = 'rgba(148, 163, 184, 0.45)'
+/** Estilos de grilla/celdas derivados del tema de la plataforma (sin paleta aislada). */
+function sheetStyles(t, carpetaCompact) {
+  const grid = t.border
+  return {
+    grid,
+    th: {
+      fontSize: '11px',
+      fontWeight: 800,
+      color: t.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: '0.05em',
+      padding: carpetaCompact ? '7px 8px' : '8px 10px',
+      textAlign: 'left',
+      whiteSpace: 'nowrap',
+      border: `1px solid ${grid}`,
+      background: t.headerBg || t.bg,
+      position: 'sticky',
+      top: 0,
+      zIndex: 2,
+    },
+    td: {
+      padding: carpetaCompact ? '5px 8px' : '6px 10px',
+      fontSize: '13px',
+      color: t.text,
+      border: `1px solid ${grid}`,
+      verticalAlign: 'middle',
+      lineHeight: 1.25,
+      background: 'transparent',
+    },
+  }
+}
 
 function fmtNum(v, digits = 2) {
   if (v == null || v === '') return '—'
@@ -62,7 +91,7 @@ function rectFromEvent(e) {
 }
 
 /** Menú flotante fuera del overflow de la tabla (portal a body). */
-function FloatingMenu({ anchor, onClose, children, width = 168 }) {
+function FloatingMenu({ anchor, onClose, children, width = 168, t }) {
   useEffect(() => {
     if (!anchor) return undefined
     const close = () => onClose?.()
@@ -104,10 +133,10 @@ function FloatingMenu({ anchor, onClose, children, width = 168 }) {
           left,
           zIndex: 11050,
           minWidth: menuW,
-          background: '#0F1923',
-          border: '1px solid #475569',
+          background: t?.bgCard || '#fff',
+          border: `1px solid ${t?.border || '#cbd5e1'}`,
           borderRadius: 10,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+          boxShadow: t?.shadow || '0 12px 40px rgba(0,0,0,0.18)',
           padding: 4,
         }}
         onClick={(e) => e.stopPropagation()}
@@ -182,30 +211,10 @@ export default function SicoeReporteItemsTabla({
     [seleccionados],
   )
 
-  const sheetTh = {
-    fontSize: '11px',
-    fontWeight: 800,
-    color: t.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    padding: carpetaCompact ? '7px 8px' : '8px 10px',
-    textAlign: 'left',
-    whiteSpace: 'nowrap',
-    border: `1px solid ${GRID_SOFT}`,
-    background: 'linear-gradient(180deg, #1e293b 0%, #15202b 100%)',
-    position: 'sticky',
-    top: 0,
-    zIndex: 2,
-  }
-
-  const sheetTd = {
-    padding: carpetaCompact ? '5px 8px' : '6px 10px',
-    fontSize: '13px',
-    color: t.text,
-    border: `1px solid ${GRID_SOFT}`,
-    verticalAlign: 'middle',
-    lineHeight: 1.25,
-  }
+  const { grid, th: sheetTh, td: sheetTd } = useMemo(
+    () => sheetStyles(t, carpetaCompact),
+    [t, carpetaCompact],
+  )
 
   if (filasItem.length === 0) {
     return (
@@ -227,7 +236,7 @@ export default function SicoeReporteItemsTabla({
       <div
         style={{
           overflowX: 'auto',
-          border: `1px solid ${GRID}`,
+          border: `1px solid ${grid}`,
           background: t.bgCard,
           borderRadius: 4,
         }}
@@ -299,7 +308,7 @@ export default function SicoeReporteItemsTabla({
       </div>
 
       {menuGraf && (
-        <FloatingMenu anchor={menuGraf.anchor} onClose={() => setMenuGraf(null)} width={180}>
+        <FloatingMenu anchor={menuGraf.anchor} onClose={() => setMenuGraf(null)} width={180} t={t}>
           <button
             type="button"
             disabled={!menuGrafTiene}
@@ -327,7 +336,7 @@ export default function SicoeReporteItemsTabla({
       )}
 
       {menuVal && menuValRapido && (
-        <FloatingMenu anchor={menuVal.anchor} onClose={() => setMenuVal(null)} width={168}>
+        <FloatingMenu anchor={menuVal.anchor} onClose={() => setMenuVal(null)} width={168} t={t}>
           <button
             type="button"
             disabled={ejecutandoMasivo || menuValEstado === 'Aprobado'}
@@ -412,7 +421,7 @@ function FragmentItem({
   nivelUsuario,
 }) {
   const colSpan = verValoresEconomicos ? 6 : 5
-  const itemRowBg = abierto ? 'rgba(14, 165, 168, 0.12)' : '#15202b'
+  const itemRowBg = abierto ? `${t.primary}18` : t.bgCard
 
   return (
     <>
@@ -463,10 +472,10 @@ function FragmentItem({
                   gap: 4,
                   fontSize: 11,
                   fontWeight: 800,
-                  color: '#94a3b8',
+                  color: t.textMuted,
                 }}
               >
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#8B5CF6' }} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.primary }} />
                 {selIds.length}
               </span>
               <button
@@ -507,7 +516,7 @@ function FragmentItem({
 
       {abierto && (
         <tr>
-          <td colSpan={colSpan} style={{ padding: 0, background: '#0b1220', border: `1px solid ${GRID_SOFT}` }}>
+          <td colSpan={colSpan} style={{ padding: 0, background: t.bg, border: `1px solid ${t.border}` }}>
             <div style={{ padding: carpetaCompact ? '6px 4px 8px' : '8px 8px 10px', overflowX: 'auto' }}>
               <table
                 className="cc-sicoe-items-sheet cc-sicoe-items-sheet--sub"
@@ -619,8 +628,8 @@ function IndicadoresNiveles({
               flexDirection: 'column',
               alignItems: 'center',
               gap: 2,
-              background: esMi ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
-              border: esMi ? '1px solid #3B82F6' : '1px solid transparent',
+              background: esMi ? `${t.primary}22` : 'transparent',
+              border: esMi ? `1px solid ${t.primary}` : '1px solid transparent',
               borderRadius: 6,
               padding: '2px 4px',
               cursor: esMi && rapido ? 'pointer' : 'default',
@@ -636,10 +645,10 @@ function IndicadoresNiveles({
                 height: 9,
                 borderRadius: '50%',
                 background: color,
-                boxShadow: est === 'No Revisado' ? 'inset 0 0 0 1px #64748b' : `0 0 0 1px ${color}55`,
+                boxShadow: est === 'No Revisado' ? `inset 0 0 0 1px ${t.border}` : `0 0 0 1px ${color}55`,
               }}
             />
-            <span style={{ fontSize: 9, fontWeight: 800, color: esMi ? '#93c5fd' : t.textMuted, letterSpacing: '0.02em' }}>
+            <span style={{ fontSize: 9, fontWeight: 800, color: esMi ? t.primary : t.textMuted, letterSpacing: '0.02em' }}>
               {nv.label}
             </span>
           </button>
@@ -673,13 +682,16 @@ function FragmentReg({
   nivelesIndicadores,
   nivelUsuario,
 }) {
-  const rowBg = pastel.bg !== 'transparent'
+  const hasPastel = pastel.bg !== 'transparent'
+  const rowBg = hasPastel
     ? pastel.bg
     : expandido
-      ? 'rgba(14, 165, 168, 0.10)'
-      : '#0f172a'
+      ? `${t.primary}14`
+      : t.bgCard
+  const rowFg = hasPastel && pastel.color ? pastel.color : t.text
+  const tdTheme = { ...sheetTd, color: rowFg }
   const numStyle = {
-    ...sheetTd,
+    ...tdTheme,
     textAlign: 'right',
     fontVariantNumeric: 'tabular-nums',
     fontFamily: 'ui-monospace, Consolas, monospace',
@@ -697,19 +709,20 @@ function FragmentReg({
         style={{
           background: rowBg,
           cursor: 'pointer',
-          outline: pastel.border !== 'transparent' ? `1px solid ${pastel.border}66` : undefined,
+          outline: hasPastel ? `1px solid ${pastel.border}66` : undefined,
+          color: rowFg,
         }}
       >
-        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...tdTheme, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={seleccionados.includes(reg.id)}
             onChange={() => onToggleSeleccion?.(reg.id)}
-            style={{ width: 14, height: 14, accentColor: '#8B5CF6', cursor: 'pointer' }}
+            style={{ width: 14, height: 14, accentColor: t.primary, cursor: 'pointer' }}
             aria-label={`Seleccionar registro ${reg.numero_registro}`}
           />
         </td>
-        <td style={{ ...sheetTd, fontWeight: 800, color: '#D97706', whiteSpace: 'nowrap' }}>
+        <td style={{ ...tdTheme, fontWeight: 800, color: hasPastel ? rowFg : '#D97706', whiteSpace: 'nowrap' }}>
           #{reg.numero_registro}
         </td>
         <td style={numStyle}>{fmtNum(reg.longitud)}</td>
@@ -718,9 +731,9 @@ function FragmentReg({
         <td style={numStyle}>{fmtNum(reg.cantidad)}</td>
         <td style={{ ...numStyle, fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
         {verValoresEconomicos && (
-          <td style={{ ...numStyle, fontWeight: 700, color: t.primary }}>{fmtPesos(reg.costo_directo)}</td>
+          <td style={{ ...numStyle, fontWeight: 700, color: hasPastel ? rowFg : t.primary }}>{fmtPesos(reg.costo_directo)}</td>
         )}
-        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...tdTheme, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             title={tieneFoto ? 'Ver foto' : 'Sin foto — abrir detalle para cargar'}
@@ -736,7 +749,7 @@ function FragmentReg({
             📷
           </button>
         </td>
-        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...tdTheme, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             title="Gráfico / esquema"
@@ -749,7 +762,7 @@ function FragmentReg({
             📐
           </button>
         </td>
-        <td style={{ ...sheetTd, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ ...tdTheme, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
           <IndicadoresNiveles
             reg={reg}
             nivelesIndicadores={nivelesIndicadores}
@@ -762,14 +775,14 @@ function FragmentReg({
             }}
           />
         </td>
-        <td style={sheetTd} onClick={(e) => e.stopPropagation()}>
+        <td style={tdTheme} onClick={(e) => e.stopPropagation()}>
           {renderMenuAcciones?.(reg)}
         </td>
       </tr>
       {expandido && (
         <tr>
-          <td colSpan={subCols} style={{ padding: 0, border: `1px solid ${GRID_SOFT}` }}>
-            <div style={{ borderTop: `2px solid ${t.primary}`, overflow: 'hidden' }}>
+          <td colSpan={subCols} style={{ padding: 0, border: `1px solid ${t.border}` }}>
+            <div style={{ borderTop: `2px solid ${t.primary}`, overflow: 'hidden', background: t.bgCard }}>
               {renderHojaRegistro?.(reg)}
             </div>
           </td>
@@ -817,7 +830,7 @@ function menuItem(t, disabled) {
     padding: '9px 12px',
     fontSize: '13px',
     fontWeight: 600,
-    color: '#E2E8F0',
+    color: t?.text || '#0F2942',
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.45 : 1,
     borderRadius: 6,
