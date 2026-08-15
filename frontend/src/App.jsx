@@ -6317,7 +6317,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   return (
     <div className="cc-sicoe-carpeta-overlay" style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
-      <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
+      <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'min(1480px, 98vw)', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
         {carpetaCompact ? (
@@ -7213,6 +7213,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }}
                 itemExpandidoInicial={itemExpandidoNav}
                 nivelLabel={nvMasivo ? `N${nvMasivo}` : ''}
+                nivelesIndicadores={nivelesActivosTabla.map((n) => ({
+                  nivel: n,
+                  emoji: emojiPorNivelSicoe[n] || '📋',
+                  label: `N${n}`,
+                  encabezado: encPorNivelHoja[n] || `Nivel ${n}`,
+                }))}
+                nivelUsuario={nvMasivo || nivelInfo.nivelValidacion}
                 onPedirEsquema={(reg) => {
                   setItemExpandidoNav(reg.item_numero || null)
                   setEsquemaPendienteRegId(reg.id)

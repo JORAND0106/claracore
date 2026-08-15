@@ -5,6 +5,7 @@ import {
   agruparRegistrosPorItem,
   estadoNivelUsuarioRegistro,
   pastelDeEstadoValidacion,
+  etiquetaCortaRolNivel,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
@@ -50,5 +51,13 @@ describe('pastelDeEstadoValidacion', () => {
     assert.equal(pastelDeEstadoValidacion('Aprobado').bg, '#dcfce7')
     assert.equal(pastelDeEstadoValidacion('Pendiente').bg, '#fef3c7')
     assert.equal(pastelDeEstadoValidacion('Rechazado').bg, '#fee2e2')
+  })
+})
+
+describe('etiquetaCortaRolNivel', () => {
+  it('extrae el rol del encabezado', () => {
+    assert.equal(etiquetaCortaRolNivel('Nivel 2 · Contratista', 2), 'Contratista')
+    assert.equal(etiquetaCortaRolNivel('Director de obra (N3)', 3), 'Director de obra')
+    assert.equal(etiquetaCortaRolNivel('', 1), 'N1')
   })
 })
