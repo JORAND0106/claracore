@@ -47,10 +47,13 @@ describe('estadoNivelUsuarioRegistro', () => {
 })
 
 describe('pastelDeEstadoValidacion', () => {
-  it('devuelve verdes/amarillos/rojos pastel', () => {
+  it('devuelve verdes/amarillos/rojos pastel con color de texto legible', () => {
     assert.equal(pastelDeEstadoValidacion('Aprobado').bg, '#dcfce7')
+    assert.equal(pastelDeEstadoValidacion('Aprobado').color, '#166534')
     assert.equal(pastelDeEstadoValidacion('Pendiente').bg, '#fef3c7')
+    assert.equal(pastelDeEstadoValidacion('Pendiente').color, '#92400e')
     assert.equal(pastelDeEstadoValidacion('Rechazado').bg, '#fee2e2')
+    assert.equal(pastelDeEstadoValidacion('Rechazado').color, '#991b1b')
   })
 })
 
