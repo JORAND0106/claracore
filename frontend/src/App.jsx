@@ -2192,6 +2192,10 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     nivelValidacionComentario,
     puedeEditar,
     puedeValidar,
+    /** Validación masiva: contratista/interventoría/gerencial (no operativos). */
+    puedeValidacionMasiva: puedeValidar && !esOperativoContratista && !esOperativoInterventoria,
+    esOperativoContratista,
+    esOperativoInterventoria,
     esApoyoTecnico,
     esSubcontratista,
     esSoloComentarista,
@@ -5331,8 +5335,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const nvMasivo = elevCapCarpeta ? nivelMasivoDevAdmin : nivelInfo.nivelValidacion
-  const puedeMasivaNivel =
-    nivelInfo.puedeValidar &&
+  const nivelEnRangoValidacionCarpeta =
     nvMasivo != null &&
     nvMasivo !== 0 &&
     (elevCapCarpeta
@@ -5340,15 +5343,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         ? nvMasivo >= 1 && nvMasivo <= 3
         : nvMasivo >= 1 && nvMasivo <= 6
       : nvMasivo >= 2 && nvMasivo <= 6)
+  /** Masiva (ítem + global): solo no-operativos con permiso de validar. */
+  const puedeMasivaNivel = !!nivelInfo.puedeValidacionMasiva && nivelEnRangoValidacionCarpeta
+  /** Validación individual (semáforo): respeta nivel; no exige rol no-operativo. */
+  const puedeValidarIndividualCarpeta = !!nivelInfo.puedeValidar && nivelEnRangoValidacionCarpeta
   const campoValidacionMasivo =
-    nvMasivo != null &&
-    (elevCapCarpeta
-      ? elevCapLimiteN3Carpeta
-        ? nvMasivo >= 1 && nvMasivo <= 3
-        : nvMasivo >= 1 && nvMasivo <= 6
-      : nvMasivo >= 2 && nvMasivo <= 6)
-      ? CAMPO_POR_NIVEL[nvMasivo]
-      : null
+    nivelEnRangoValidacionCarpeta ? CAMPO_POR_NIVEL[nvMasivo] : null
   const prereqCampoMasivoNv = campoValidacionMasivo ? prereqCampoActivos(campoValidacionMasivo) : null
   const regCumplePrereqMasivoNivel = (reg) =>
     !prereqCampoMasivoNv ||
@@ -6174,7 +6174,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const puedeValidarRapidoRegistro = (reg) =>
-    puedeMasivaNivel &&
+    puedeValidarIndividualCarpeta &&
     !reg.bloqueado &&
     !!String(reg.item_numero || '').trim() &&
     regCumplePrereqMasivoNivel(reg) &&

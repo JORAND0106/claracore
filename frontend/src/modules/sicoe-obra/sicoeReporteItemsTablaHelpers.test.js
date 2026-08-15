@@ -11,6 +11,7 @@ import {
   sumatoriaCostoDirectoFilasItem,
   sumatoriaCantidadFilasItem,
   normalizarEstadoParaConteo,
+  puedeValidacionMasivaPorRol,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
@@ -95,5 +96,14 @@ describe('sumatorias de filas ítem', () => {
     const filas = [{ sumCant: 10, sumCd: 100 }, { sumCant: 5.5, sumCd: 50 }]
     assert.equal(sumatoriaCantidadFilasItem(filas), 15.5)
     assert.equal(sumatoriaCostoDirectoFilasItem(filas), 150)
+  })
+})
+
+describe('puedeValidacionMasivaPorRol', () => {
+  it('bloquea operativos aunque puedan validar', () => {
+    assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: true, esOperativoContratista: true, esOperativoInterventoria: false }), false)
+    assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: true, esOperativoContratista: false, esOperativoInterventoria: true }), false)
+    assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: true, esOperativoContratista: false, esOperativoInterventoria: false }), true)
+    assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: false, esOperativoContratista: false, esOperativoInterventoria: false }), false)
   })
 })

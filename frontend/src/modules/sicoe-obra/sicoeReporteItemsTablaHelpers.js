@@ -117,3 +117,8 @@ export function sumatoriaCostoDirectoFilasItem(filasItem) {
 export function sumatoriaCantidadFilasItem(filasItem) {
   return (filasItem || []).reduce((acc, f) => acc + (Number(f.sumCant) || 0), 0)
 }
+
+/** Roles operativos no usan validación masiva (ítem ni global). */
+export function puedeValidacionMasivaPorRol({ puedeValidar, esOperativoContratista, esOperativoInterventoria }) {
+  return !!puedeValidar && !esOperativoContratista && !esOperativoInterventoria
+}

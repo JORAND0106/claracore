@@ -321,7 +321,13 @@ export default function SicoeReporteItemsTabla({
             : `Seleccionar todo (${todosIds.length} registros)`}
         </label>
 
-        {algunoSeleccionado && (
+        {algunoSeleccionado && !puedeMasivaNivel && (
+          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, borderTop: `1px solid ${t.border}`, paddingTop: 8 }}>
+            {seleccionados.length} registro(s) seleccionado(s)
+          </div>
+        )}
+
+        {algunoSeleccionado && puedeMasivaNivel && (
           <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
               Selección · {seleccionados.length} registro(s){nivelLabel ? ` · ${nivelLabel}` : ''}
@@ -413,6 +419,70 @@ export default function SicoeReporteItemsTabla({
         )}
       </div>
 
+      {carpetaCompact ? (
+        <div className="cc-sicoe-items-mobile" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {filasItem.map((fila) => {
+              const abierto = itemExpandido === fila.itemNum
+              const selIds = idsSeleccionadosEnItem(fila.regs)
+              const mostrarMasiva = puedeMasivaNivel && selIds.length > 0
+              return (
+                <MobileItemCard
+                  key={fila.itemNum}
+                  fila={fila}
+                  abierto={abierto}
+                  toggleItem={toggleItem}
+                  t={t}
+                  verValoresEconomicos={verValoresEconomicos}
+                  mostrarMasiva={mostrarMasiva}
+                  selIds={selIds}
+                  ejecutandoMasivo={ejecutandoMasivo}
+                  onValidacionAprobar={onValidacionAprobar}
+                  onPedirComentarioMasivo={onPedirComentarioMasivo}
+                  estadoMiNivel={estadoMiNivel}
+                  puedeValidarRapido={puedeValidarRapido}
+                  seleccionados={seleccionados}
+                  onToggleSeleccion={onToggleSeleccion}
+                  registroExpandido={registroExpandido}
+                  onToggleRegistroExpandido={onToggleRegistroExpandido}
+                  renderHojaRegistro={renderHojaRegistro}
+                  setMenuGraf={setMenuGraf}
+                  setMenuVal={setMenuVal}
+                  setLightbox={setLightbox}
+                  reporte={reporte}
+                  onPedirEsquema={onPedirEsquema}
+                  renderMenuAcciones={renderMenuAcciones}
+                  nivelesIndicadores={nivelesIndicadores}
+                  nivelUsuario={nivelUsuario}
+                />
+              )
+          })}
+          <div
+            style={{
+              background: t.headerBg || t.bg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              padding: '12px 14px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'baseline',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span style={{ fontWeight: 800, color: t.text }}>Total</span>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <span style={{ fontSize: 12, color: t.textMuted }}>
+                Cant. <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(totalCant)}</strong>
+              </span>
+              {verValoresEconomicos && (
+                <span style={{ fontSize: 13, color: t.textMuted }}>
+                  CD <strong style={{ color: t.primary, fontWeight: 900, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtPesos(totalCd)}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div
         style={{
           overflowX: 'auto',
@@ -431,12 +501,12 @@ export default function SicoeReporteItemsTabla({
           }}
         >
           <colgroup>
-            <col style={{ width: carpetaCompact ? '72px' : '88px' }} />
+            <col style={{ width: '88px' }} />
             <col />
             <col style={{ width: '56px' }} />
-            <col style={{ width: carpetaCompact ? '88px' : '110px' }} />
-            {verValoresEconomicos && <col style={{ width: carpetaCompact ? '110px' : '130px' }} />}
-            <col style={{ width: carpetaCompact ? '100px' : '130px' }} />
+            <col style={{ width: '110px' }} />
+            {verValoresEconomicos && <col style={{ width: '130px' }} />}
+            <col style={{ width: '130px' }} />
           </colgroup>
           <thead>
             <tr>
@@ -467,7 +537,7 @@ export default function SicoeReporteItemsTabla({
                   sheetTh={sheetTh}
                   t={t}
                   verValoresEconomicos={verValoresEconomicos}
-                  carpetaCompact={carpetaCompact}
+                  carpetaCompact={false}
                   mostrarMasiva={mostrarMasiva}
                   selIds={selIds}
                   ejecutandoMasivo={ejecutandoMasivo}
@@ -530,6 +600,7 @@ export default function SicoeReporteItemsTabla({
           </tbody>
         </table>
       </div>
+      )}
 
       {menuGraf && (
         <FloatingMenu anchor={menuGraf.anchor} onClose={() => setMenuGraf(null)} width={180} t={t}>
@@ -609,6 +680,190 @@ export default function SicoeReporteItemsTabla({
           onIndexChange={(i) => setLightbox((prev) => (prev ? { ...prev, index: i } : null))}
           t={t}
         />
+      )}
+    </div>
+  )
+}
+
+
+/** Vista móvil: tarjetas apiladas (misma funcionalidad, menos columnas). */
+function MobileItemCard({
+  fila,
+  abierto,
+  toggleItem,
+  t,
+  verValoresEconomicos,
+  mostrarMasiva,
+  selIds,
+  ejecutandoMasivo,
+  onValidacionAprobar,
+  onPedirComentarioMasivo,
+  estadoMiNivel,
+  puedeValidarRapido,
+  seleccionados,
+  onToggleSeleccion,
+  registroExpandido,
+  onToggleRegistroExpandido,
+  renderHojaRegistro,
+  setMenuGraf,
+  setMenuVal,
+  setLightbox,
+  reporte,
+  onPedirEsquema,
+  renderMenuAcciones,
+  nivelesIndicadores,
+  nivelUsuario,
+}) {
+  return (
+    <div
+      style={{
+        background: abierto ? `${t.primary}14` : t.bgCard,
+        border: `1px solid ${abierto ? t.primary : t.border}`,
+        borderRadius: 10,
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => toggleItem(fila.itemNum)}
+        style={{
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          background: 'transparent',
+          border: 'none',
+          padding: '12px 14px',
+          cursor: 'pointer',
+          color: t.text,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 800, color: t.primary, fontSize: 14 }}>{fila.itemNum}</div>
+            <div style={{ fontSize: 13, lineHeight: 1.35, marginTop: 4, wordBreak: 'break-word' }}>{fila.descripcion}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', marginTop: 8, fontSize: 12, color: t.textMuted }}>
+              <span>Und <strong style={{ color: t.text }}>{fila.unidad}</strong></span>
+              <span>Cant <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(fila.sumCant)}</strong></span>
+              {verValoresEconomicos && (
+                <span>CD <strong style={{ color: t.primary, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtPesos(fila.sumCd)}</strong></span>
+              )}
+              <span>{fila.regs.length} reg.</span>
+            </div>
+          </div>
+          <span style={{ color: t.textMuted, fontSize: 12, flexShrink: 0 }}>{abierto ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {mostrarMasiva && (
+        <div
+          style={{ padding: '0 14px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span style={{ fontSize: 11, fontWeight: 800, color: t.textMuted }}>Masivo ({selIds.length})</span>
+          <button type="button" disabled={ejecutandoMasivo} onClick={() => onValidacionAprobar?.(selIds)} style={{ ...btnVal('#16a34a', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>✓</button>
+          <button type="button" disabled={ejecutandoMasivo} onClick={() => onPedirComentarioMasivo?.('Pendiente', selIds)} style={{ ...btnVal('#d97706', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>●</button>
+          <button type="button" disabled={ejecutandoMasivo} onClick={() => onPedirComentarioMasivo?.('Rechazado', selIds)} style={{ ...btnVal('#dc2626', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>✕</button>
+        </div>
+      )}
+
+      {abierto && (
+        <div style={{ borderTop: `1px solid ${t.border}`, background: t.bg, padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {fila.regs.map((reg) => {
+            const estado = estadoMiNivel?.(reg) || 'No Revisado'
+            const pastel = pastelDeEstadoValidacion(estado)
+            const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
+            const media = mediaItemsDeRegistro(reg, reporte)
+            const tieneFoto = !!String(reg.foto_url || '').trim()
+            const tieneGraf = media.some((m) => String(m.label || '').startsWith('Gráfico'))
+            const rapido = puedeValidarRapido?.(reg)
+            const hasPastel = pastel.bg !== 'transparent'
+            const rowFg = hasPastel && pastel.color ? pastel.color : t.text
+            return (
+              <div
+                key={reg.id}
+                id={`registro-${reg.id}`}
+                style={{
+                  background: hasPastel ? pastel.bg : t.bgCard,
+                  border: `1px solid ${hasPastel ? pastel.border : t.border}`,
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  color: rowFg,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={seleccionados.includes(reg.id)}
+                    onChange={() => onToggleSeleccion?.(reg.id)}
+                    style={{ width: 16, height: 16, accentColor: t.primary }}
+                    aria-label={`Seleccionar registro ${reg.numero_registro}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onToggleRegistroExpandido?.(expandido ? null : reg.id)}
+                    style={{
+                      flex: 1,
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 0,
+                      color: rowFg,
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: hasPastel ? rowFg : '#D97706' }}>#{reg.numero_registro}</div>
+                    <div style={{ fontSize: 12, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
+                      <span>Cant {fmtNum(reg.cantidad)}</span>
+                      <span>Total <strong>{fmtNum(reg.cantidad_total)}</strong></span>
+                      {verValoresEconomicos && <span>CD <strong>{fmtPesos(reg.costo_directo)}</strong></span>}
+                    </div>
+                  </button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    title={tieneFoto ? 'Ver foto' : 'Sin foto'}
+                    onClick={() => {
+                      if (tieneFoto && media.length) setLightbox({ items: media, index: 0 })
+                      else onToggleRegistroExpandido?.(reg.id)
+                    }}
+                    style={btnIcon(tieneFoto ? t.primary : t.textMuted)}
+                  >
+                    📷
+                  </button>
+                  <button
+                    type="button"
+                    title="Gráfico / esquema"
+                    onClick={(e) => {
+                      setMenuVal(null)
+                      setMenuGraf({ regId: reg.id, anchor: rectFromEvent(e) })
+                    }}
+                    style={btnIcon(tieneGraf ? t.primary : t.textMuted)}
+                  >
+                    📐
+                  </button>
+                  <IndicadoresNiveles
+                    reg={reg}
+                    nivelesIndicadores={nivelesIndicadores}
+                    nivelUsuario={nivelUsuario}
+                    rapido={rapido}
+                    t={t}
+                    onOpenValMenu={(e) => {
+                      setMenuGraf(null)
+                      setMenuVal({ regId: reg.id, anchor: rectFromEvent(e) })
+                    }}
+                  />
+                  <div style={{ marginLeft: 'auto' }}>{renderMenuAcciones?.(reg)}</div>
+                </div>
+                {expandido && (
+                  <div style={{ marginTop: 8, borderTop: `2px solid ${t.primary}`, overflow: 'hidden', borderRadius: '0 0 6px 6px' }}>
+                    {renderHojaRegistro?.(reg)}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )
