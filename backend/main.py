@@ -55,8 +55,11 @@ from pk_ids_csv import (
     validar_estructura_csv,
 )
 from azure_blob_storage import (
+    blob_exists,
     blob_path_from_url,
     download_blob_bytes,
+    path_ayuda_mapa_doc,
+    path_ayuda_mapa_imagen,
     path_firma,
     path_guia_bloque,
     path_inicio_novedad,
@@ -5320,6 +5323,155 @@ async def guias_subir_imagen_bloque(file: UploadFile = File(...), current_user=D
         raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede subir imágenes para guías")
     contents = await file.read()
     url = _guia_bloque_subir_imagen(contents, file.content_type)
+    return {"url": url}
+
+
+# ── Ayuda contextual: mapa panorámico de navegación ───────────────────────────
+
+_MAPA_NAVEGACION_MODULOS_IDS = frozenset({
+    "dashboard",
+    "reporte_cantidades",
+    "programacion_obra",
+    "topografia",
+    "seguimiento",
+    "editar_registros_presupuesto",
+    "listado_precios",
+    "informes_ccd",
+    "almacen",
+    "catalogo_insumos",
+    "contratos",
+    "actas",
+    "contabilidad",
+    "subcontratistas",
+    "auditor_sst",
+})
+
+
+def _mapa_navegacion_contenido_vacio() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "updated_at": None,
+        "modulos": {
+            mid: {"descripcion": "", "imagenes": []}
+            for mid in sorted(_MAPA_NAVEGACION_MODULOS_IDS)
+        },
+    }
+
+
+def _mapa_navegacion_normalizar(raw: Any) -> Dict[str, Any]:
+    base = _mapa_navegacion_contenido_vacio()
+    if not isinstance(raw, dict):
+        return base
+    mods_in = raw.get("modulos") if isinstance(raw.get("modulos"), dict) else {}
+    for mid in _MAPA_NAVEGACION_MODULOS_IDS:
+        src = mods_in.get(mid) if isinstance(mods_in.get(mid), dict) else {}
+        imgs = []
+        for img in (src.get("imagenes") or []):
+            if not isinstance(img, dict):
+                continue
+            url = str(img.get("url") or "").strip()
+            if not url:
+                continue
+            imgs.append({
+                "url": url,
+                "caption": str(img.get("caption") or "").strip(),
+            })
+        base["modulos"][mid] = {
+            "descripcion": str(src.get("descripcion") or "").strip(),
+            "imagenes": imgs,
+        }
+    try:
+        base["version"] = int(raw.get("version") or 1)
+    except (TypeError, ValueError):
+        base["version"] = 1
+    base["updated_at"] = raw.get("updated_at") or None
+    return base
+
+
+def _mapa_navegacion_leer_blob() -> Optional[Dict[str, Any]]:
+    blob_path = path_ayuda_mapa_doc()
+    try:
+        if not blob_exists(blob_path):
+            return None
+        raw = download_blob_bytes(blob_path)
+        data = json.loads(raw.decode("utf-8"))
+        return _mapa_navegacion_normalizar(data)
+    except Exception as exc:
+        _log_api.warning("ayuda mapa leer blob: %s", exc)
+        return None
+
+
+def _mapa_navegacion_escribir_blob(contenido: Dict[str, Any]) -> Dict[str, Any]:
+    doc = _mapa_navegacion_normalizar(contenido)
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8")
+    try:
+        upload_blob(path_ayuda_mapa_doc(), payload, "application/json", overwrite=True)
+    except Exception as exc:
+        _log_api.warning("ayuda mapa escribir blob: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo publicar el mapa en Azure Blob Storage. "
+                "Comprueba AZURE_STORAGE_CONNECTION_STRING."
+            ),
+        ) from exc
+    return doc
+
+
+def _ayuda_mapa_subir_imagen(contents: bytes, content_type: Optional[str]) -> str:
+    if len(contents) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
+    ext = _ext_desde_content_type(content_type)
+    ct = (content_type or "image/jpeg").split(";")[0].strip()
+    nombre = f"mapa_{uuid.uuid4().hex[:16]}{ext}"
+    blob_path = path_ayuda_mapa_imagen(nombre)
+    try:
+        return upload_blob(blob_path, contents, ct, overwrite=False)
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload ayuda mapa %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Azure Blob Storage.") from exc
+
+
+class AyudaMapaUpdate(BaseModel):
+    version: Optional[int] = 1
+    modulos: Dict[str, Any]
+
+
+@app.get("/ayuda/mapa-navegacion")
+def ayuda_mapa_navegacion_get(current_user=Depends(get_current_user)):
+    """Contenido educativo del mapa (blob publicado o plantilla vacía)."""
+    blob = _mapa_navegacion_leer_blob()
+    contenido = blob if blob is not None else _mapa_navegacion_contenido_vacio()
+    return {
+        "contenido": contenido,
+        "fuente": "blob" if blob is not None else "seed",
+        "puede_editar": _es_desarrollador(current_user),
+    }
+
+
+@app.put("/ayuda/mapa-navegacion")
+def ayuda_mapa_navegacion_put(body: AyudaMapaUpdate, current_user=Depends(get_current_user)):
+    """Publica contenido del mapa. Solo Desarrollador."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede editar el mapa de navegación")
+    doc = _mapa_navegacion_escribir_blob({
+        "version": body.version or 1,
+        "modulos": body.modulos or {},
+    })
+    return {"ok": True, "contenido": doc, "fuente": "blob", "puede_editar": True}
+
+
+@app.post("/ayuda/mapa-navegacion/imagen")
+async def ayuda_mapa_navegacion_imagen(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Sube un pantallazo ilustrativo del mapa. Solo Desarrollador."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede subir pantallazos del mapa")
+    contents = await file.read()
+    url = _ayuda_mapa_subir_imagen(contents, file.content_type)
     return {"url": url}
 
 

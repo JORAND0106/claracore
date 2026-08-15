@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "updated_at": null,
+  "modulos": {
+    "dashboard": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "reporte_cantidades": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "programacion_obra": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "topografia": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "seguimiento": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "editar_registros_presupuesto": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "listado_precios": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "informes_ccd": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "almacen": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "catalogo_insumos": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "contratos": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "actas": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "contabilidad": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "subcontratistas": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "auditor_sst": {
+      "descripcion": "",
+      "imagenes": []
+    }
+  }
+}
