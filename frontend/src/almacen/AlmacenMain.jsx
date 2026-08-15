@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ModuloDataRefreshBar from '../components/ModuloDataRefreshBar'
 import { useModulo } from '../context/ModuloContext'
+import SeccionCatalogoInsumos from '../admin/SeccionCatalogoInsumos'
+import { permisosCatalogoInsumos } from '../admin/catalogoInsumosPermisos'
 import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
 import SalidasPanel from './SalidasPanel'
@@ -20,16 +22,23 @@ const TABS = [
   { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Gráficos comparativos: presupuesto, entradas, salidas y cobro SICOE.' },
 ]
 
-function AlmacenLayout({ permisos, token, t, compact }) {
+function AlmacenLayout({ permisos, token, t, compact, usuario }) {
   const ui = useAlmacenTheme()
   const api = useAlmacenApi()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const [tab, setTab] = useState('solicitudes')
+  const [vistaCatalogo, setVistaCatalogo] = useState(false)
   const [pendientes, setPendientes] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [refreshSignal, setRefreshSignal] = useState(0)
   const refreshPendingRef = useRef(false)
+
+  const catalogoPerms = useMemo(
+    () => permisosCatalogoInsumos(usuario, permisos?.contratoId),
+    [usuario, permisos?.contratoId],
+  )
+  const puedeVerCatalogo = !!catalogoPerms?.ver
 
   const theme = useMemo(() => t || {
     primary: ui.accent,
@@ -83,6 +92,46 @@ function AlmacenLayout({ permisos, token, t, compact }) {
 
   const cssVars = useMemo(() => buildAlmacenCssVars(t), [t])
 
+  if (vistaCatalogo && puedeVerCatalogo) {
+    return (
+      <div
+        className={`cc-almacen-theme-scope ${compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'}`}
+        style={{ ...cssVars, maxWidth: compact ? '100%' : 1200, margin: '0 auto' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setVistaCatalogo(false)}
+            style={{
+              border: `1px solid ${theme.border}`,
+              background: theme.bgCard,
+              color: theme.text,
+              borderRadius: 8,
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: 'var(--cc-sm)',
+              minHeight: 40,
+            }}
+          >
+            ← Volver a Almacén
+          </button>
+          <span style={{ fontSize: 'var(--cc-sm)', color: theme.textMuted }}>
+            Catálogo de insumos del contrato
+          </span>
+        </div>
+        <SeccionCatalogoInsumos
+          token={token}
+          user={usuario}
+          perms={catalogoPerms}
+          theme={null}
+          t={theme}
+          embedded
+        />
+      </div>
+    )
+  }
+
   return (
     <div
       className={`cc-almacen-theme-scope ${compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'}`}
@@ -103,13 +152,35 @@ function AlmacenLayout({ permisos, token, t, compact }) {
             Compras, entradas, salidas e inventario de materiales ligados al presupuesto del contrato.
           </div>
         </div>
-        <ModuloDataRefreshBar
-          theme={theme}
-          label="Almacén"
-          updatedAt={updatedAt}
-          busy={refreshBusy}
-          onRefresh={() => { void doRefresh() }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {puedeVerCatalogo && (
+            <button
+              type="button"
+              title="Catálogo de insumos: crear y editar materiales del contrato (con AIU e IVA independientes)."
+              onClick={() => setVistaCatalogo(true)}
+              style={{
+                border: `1px solid ${theme.border}`,
+                background: theme.bgCard,
+                color: theme.primary,
+                borderRadius: 8,
+                padding: '8px 14px',
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 'var(--cc-sm)',
+                minHeight: 40,
+              }}
+            >
+              Insumos
+            </button>
+          )}
+          <ModuloDataRefreshBar
+            theme={theme}
+            label="Almacén"
+            updatedAt={updatedAt}
+            busy={refreshBusy}
+            onRefresh={() => { void doRefresh() }}
+          />
+        </div>
       </div>
 
       <div style={ui.tabBar} className="cc-almacen-tab-bar">
@@ -179,7 +250,7 @@ function AlmacenLayout({ permisos, token, t, compact }) {
   )
 }
 
-export default function AlmacenMain({ t, token, permisos }) {
+export default function AlmacenMain({ t, token, permisos, usuario }) {
   const { isCompact } = useAlmacenViewport()
   const contratoId = permisos?.contratoId
   if (!contratoId) {
@@ -192,7 +263,13 @@ export default function AlmacenMain({ t, token, permisos }) {
 
   return (
     <AlmacenProviders t={t} compact={isCompact} contratoId={contratoId} token={token}>
-      <AlmacenLayout permisos={permisos} token={token} t={t} compact={isCompact} />
+      <AlmacenLayout
+        permisos={permisos}
+        token={token}
+        t={t}
+        compact={isCompact}
+        usuario={usuario || { contrato_id: contratoId }}
+      />
     </AlmacenProviders>
   )
 }

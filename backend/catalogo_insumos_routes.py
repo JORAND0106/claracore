@@ -5,8 +5,9 @@ Prefijo: /catalogo-insumos
 from __future__ import annotations
 
 import io
+import json
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -29,7 +30,7 @@ from catalogo_insumos_service import (
     next_codigo_insumo,
     update_insumo_catalogo,
 )
-from almacen_insumos_service import search_proveedores
+from almacen_insumos_service import normalize_tributos, search_proveedores
 from main import _require_contract_access, get_current_user, registrar_log
 
 _log = logging.getLogger("claracore.catalogo_insumos.routes")
@@ -69,6 +70,7 @@ class InsumoCatalogoJsonBody(BaseModel):
     rendimiento: Optional[float] = None
     tipo_impuesto: Optional[str] = None
     impuesto_porcentaje: Optional[float] = None
+    tributos: Optional[Dict[str, Any]] = None
     proveedor_id: Optional[int] = None
     razon_social: Optional[str] = None
     nit: Optional[str] = None
@@ -76,6 +78,16 @@ class InsumoCatalogoJsonBody(BaseModel):
     cotizacion_fecha: Optional[str] = None
     cotizacion_vigencia: Optional[str] = None
     force_update_id: Optional[int] = None
+
+
+def _parse_tributos_form(raw: Optional[str]) -> Dict[str, Any]:
+    if raw is None or str(raw).strip() == "":
+        return normalize_tributos({})
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="tributos debe ser JSON válido.") from exc
+    return normalize_tributos(data)
 
 
 @router.get("/{contrato_id}/config")
@@ -194,6 +206,7 @@ async def route_create_insumo(
     rendimiento: Optional[float] = Form(None),
     tipo_impuesto: Optional[str] = Form(None),
     impuesto_porcentaje: Optional[float] = Form(None),
+    tributos: Optional[str] = Form(None),
     proveedor_id: Optional[int] = Form(None),
     razon_social: Optional[str] = Form(None),
     nit: Optional[str] = Form(None),
@@ -221,6 +234,7 @@ async def route_create_insumo(
         "rendimiento": rendimiento,
         "tipo_impuesto": tipo_impuesto,
         "impuesto_porcentaje": impuesto_porcentaje,
+        "tributos": _parse_tributos_form(tributos),
         "proveedor_id": proveedor_id,
         "razon_social": razon_social,
         "nit": nit,
@@ -286,6 +300,7 @@ async def route_update_insumo(
     rendimiento: Optional[float] = Form(None),
     tipo_impuesto: Optional[str] = Form(None),
     impuesto_porcentaje: Optional[float] = Form(None),
+    tributos: Optional[str] = Form(None),
     proveedor_id: Optional[int] = Form(None),
     razon_social: Optional[str] = Form(None),
     nit: Optional[str] = Form(None),
@@ -312,6 +327,7 @@ async def route_update_insumo(
         "rendimiento": rendimiento,
         "tipo_impuesto": tipo_impuesto,
         "impuesto_porcentaje": impuesto_porcentaje,
+        "tributos": _parse_tributos_form(tributos),
         "proveedor_id": proveedor_id,
         "razon_social": razon_social,
         "nit": nit,
