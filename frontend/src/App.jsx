@@ -4957,7 +4957,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [locPortada, setLocPortada]               = useState(() => sicoeLocFromRegistro(repoProp, []))
   const [planoGeojsonPortada, setPlanoGeojsonPortada] = useState(null)
   const [seleccionados, setSeleccionados]         = useState([])
-  const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
   const [registroExpandido, setRegistroExpandido] = useState(null)
   const [menuAccionesRegId, setMenuAccionesRegId] = useState(null)
   const [itemInfoPopup, setItemInfoPopup] = useState(null)
@@ -5286,53 +5285,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   useEffect(() => {
     setMsgMasivo('')
   }, [tabActiva])
-
-  const nivelParaResumenPortada = nivelInfo.puedeValidar
-    ? elevCapCarpeta
-      ? nivelMasivoDevAdmin
-      : nivelInfo.nivelValidacion
-    : null
-  const campoEstadoResumen =
-    nivelParaResumenPortada != null && nivelParaResumenPortada !== 0
-      ? CAMPO_POR_NIVEL[nivelParaResumenPortada] || null
-      : null
-
-  const normalizarEstadoParaConteo = (r) => {
-    if (!campoEstadoResumen) return 'No Revisado'
-    let est = r[campoEstadoResumen] || 'No Revisado'
-    if (est === 'No Objeto de Cobro') est = 'Rechazado'
-    if (!['Aprobado', 'Pendiente', 'Rechazado', 'No Revisado'].includes(est)) return 'No Revisado'
-    return est
-  }
-
-  const conteoPortadaResumen = (() => {
-    const conteo = { Aprobado: 0, Pendiente: 0, Rechazado: 0, 'No Revisado': 0 }
-    if (!campoEstadoResumen) return conteo
-    registrosVisibles.forEach(r => {
-      const est = normalizarEstadoParaConteo(r)
-      conteo[est]++
-    })
-    return conteo
-  })()
-
-  const registrosPortadaResumenFiltrados = (() => {
-    if (!portadaResumenEstado || !campoEstadoResumen) return []
-    return registrosVisibles.filter(r => normalizarEstadoParaConteo(r) === portadaResumenEstado)
-  })()
-
-  const irARegistroDesdePortada = (reg) => {
-    setPortadaResumenEstado(null)
-    if (reg.item_numero) {
-      setTabActiva('items')
-      setItemExpandidoNav(reg.item_numero)
-    } else {
-      setTabActiva('sin_asignar')
-    }
-    setRegistroExpandido(reg.id)
-    setTimeout(() => {
-      document.getElementById(`registro-${reg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 350)
-  }
 
   const nvMasivo = elevCapCarpeta ? nivelMasivoDevAdmin : nivelInfo.nivelValidacion
   const nivelEnRangoValidacionCarpeta =
@@ -5812,7 +5764,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (campoNivel) {
       setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, [campoNivel]: estado } : r))
     }
-    if (idsOverride != null) setPortadaResumenEstado(null)
 
     const usarEndpointMasivoReporte = nv === 1 || nv === 2 || nv === 3
     const sufijo =
@@ -6593,88 +6544,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {tabActiva === 'portada' && (
             <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
 
-              {/* PANEL — Resumen por estado (N1/N2/N3 según rol) */}
-              {campoEstadoResumen && (
-                <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                  <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
-                    📊 Resumen del reporte · Nivel {nivelParaResumenPortada}
-                  </div>
-                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.4 }}>
-                    Contadores e ir al registro. La validación masiva está en la pestaña <strong>Ítems y registros</strong>.
-                  </div>
-                  <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom: portadaResumenEstado ? '14px' : 0 }}>
-                    {[
-                      { key:'Aprobado', label:'Aprobados' },
-                      { key:'Pendiente', label:'Pendientes' },
-                      { key:'Rechazado', label:'Rechazados' },
-                      { key:'No Revisado', label:'No revisado' },
-                    ].map(({ key, label }) => {
-                      const cnt = conteoPortadaResumen[key] ?? 0
-                      const activo = portadaResumenEstado === key
-                      const puedeClic = cnt > 0
-                      return (
-                        <button key={key} type="button"
-                          disabled={!puedeClic}
-                          onClick={() => setPortadaResumenEstado(activo ? null : key)}
-                          style={{
-                            display:'flex', alignItems:'center', gap:'6px', background: activo ? `${t.primary}14` : t.bg,
-                            border:`1px solid ${activo ? t.primary : t.border}`, borderRadius:'20px', padding:'6px 14px',
-                            cursor: puedeClic ? 'pointer' : 'default', opacity: puedeClic ? 1 : 0.55,
-                          }}>
-                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: activo ? t.primary : t.border, flexShrink:0 }} />
-                          <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.text }}>{cnt}</span>
-                          <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {portadaResumenEstado && (
-                    <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'14px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px', flexWrap:'wrap', gap:'8px' }}>
-                        <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>
-                          Registros {portadaResumenEstado === 'No Revisado' ? 'sin revisar' : portadaResumenEstado.toLowerCase()} ({registrosPortadaResumenFiltrados.length})
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                          <button type="button" onClick={() => setPortadaResumenEstado(null)}
-                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
-                            Cerrar lista
-                          </button>
-                        </div>
-                      </div>
-                      {registrosPortadaResumenFiltrados.length === 0 ? (
-                        <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>No hay registros en este estado.</div>
-                      ) : (
-                        <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'260px', overflowY:'auto' }}>
-                          {registrosPortadaResumenFiltrados.map(reg => (
-                            <button key={reg.id} type="button"
-                              onClick={() => irARegistroDesdePortada(reg)}
-                              style={{
-                                background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px',
-                                textAlign:'left', cursor:'pointer', display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center',
-                              }}>
-                              <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)' }}>Registro #{reg.numero_registro}</span>
-                              {strRefCarpetaFoto(reg) && (
-                                <span
-                                  title={regTieneFotoNumeroEnBd(reg) ? 'Foto' : 'N.º reg. (carpeta)'}
-                                  style={{ fontSize: 'var(--cc-caption)', fontWeight: '800', color: '#0f766e' }}
-                                >
-                                  📷 {strRefCarpetaFoto(reg)}
-                                </span>
-                              )}
-                              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{reg.item_numero || 'Sin ítem'}</span>
-                              <span style={{ fontSize:'var(--cc-label)', color:t.text, flex:'1 1 200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                                {reg.observacion || '—'}
-                              </span>
-                              <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'700' }}>Ir al registro →</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
+              {/* Resumen general del reporte (sin contadores de validación; esos viven en TAB 3) */}
               {renderResumenPortadaTotalesReporte()}
 
               {/* GRUPO 2 — Identificación del Reporte */}
