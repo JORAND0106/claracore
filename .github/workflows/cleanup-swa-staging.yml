@@ -44,34 +44,75 @@ jobs:
         shell: bash
     env:
       SWA_NAME: happy-grass-0aea5f31e
+      SWA_DEPLOY_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_HAPPY_GRASS_0AEA5F31E }}
     steps:
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Resolve Static Web App resource group
+      - name: Resolve Static Web App from deploy token + ARM
         id: resolve
         run: |
           set -euo pipefail
           python3 << 'PY'
-          import json, os, subprocess, sys
+          import base64, json, os, subprocess, sys
 
-          def run(cmd):
+          def run(cmd, check=True):
               print("+", " ".join(cmd), flush=True)
-              return subprocess.check_output(cmd, text=True)
+              p = subprocess.run(cmd, text=True, capture_output=True)
+              if check and p.returncode != 0:
+                  print(p.stdout)
+                  print(p.stderr, file=sys.stderr)
+                  raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
+              return p.stdout
 
           summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
-          summary.write("## Suscripciones visibles\n```\n")
-          try:
-              summary.write(run(["az", "account", "list", "-o", "table"]))
-          except Exception as e:
-              summary.write(f"(error listing accounts: {e})\n")
+
+          # 1) Decificar claims del deployment token (sin imprimir el secreto)
+          token = os.environ.get("SWA_DEPLOY_TOKEN") or ""
+          resource_id = ""
+          if token.count(".") >= 2:
+              payload = token.split(".")[1]
+              payload += "=" * (-len(payload) % 4)
+              try:
+                  claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+              except Exception as e:
+                  claims = {"_decode_error": str(e)}
+              safe = {
+                  k: claims[k]
+                  for k in claims
+                  if any(
+                      x in k.lower()
+                      for x in (
+                          "resource", "tid", "oid", "iss", "aud", "appid",
+                          "sub", "ver", "name", "stable",
+                      )
+                  )
+              }
+              summary.write("## Claims del deployment token (filtrados)\n```json\n")
+              summary.write(json.dumps(safe, indent=2))
+              summary.write("\n```\n")
+              print("Token claims (filtered):", json.dumps(safe, indent=2), flush=True)
+              resource_id = (
+                  claims.get("ResourceId")
+                  or claims.get("resourceId")
+                  or claims.get("stable_resource_id")
+                  or ""
+              )
+          else:
+              summary.write("## Deployment token\nNo disponible o formato inesperado.\n")
+
+          # 2) Suscripciones / RGs visibles para el SP (diagnóstico)
+          summary.write("\n## Suscripciones del service principal\n```\n")
+          summary.write(run(["az", "account", "list", "-o", "table"], check=False) or "(vacío)\n")
+          summary.write("```\n")
+          summary.write("\n## Resource groups visibles\n```\n")
+          summary.write(run(["az", "group", "list", "-o", "table"], check=False) or "(vacío)\n")
           summary.write("```\n")
 
-          subs = json.loads(run(["az", "account", "list", "--query", "[].id", "-o", "json"]))
           apps = []
-          for sub in subs:
+          for sub in json.loads(run(["az", "account", "list", "--query", "[].id", "-o", "json"])):
               try:
                   run(["az", "account", "set", "--subscription", sub])
                   partial = json.loads(run(["az", "staticwebapp", "list", "-o", "json"]))
@@ -80,51 +121,94 @@ jobs:
               except subprocess.CalledProcessError as e:
                   print(f"skip sub {sub}: {e}", flush=True)
 
-          with open("/tmp/swa-list.json", "w", encoding="utf-8") as f:
-              json.dump(apps, f, indent=2)
-
-          summary.write("\n## Static Web Apps encontradas\n```json\n")
-          summary.write(json.dumps(apps, indent=2))
+          summary.write("\n## Static Web Apps visibles al SP\n```json\n")
+          summary.write(json.dumps([
+              {
+                  "name": a.get("name"),
+                  "resourceGroup": a.get("resourceGroup"),
+                  "defaultHostname": a.get("defaultHostname"),
+                  "id": a.get("id"),
+              }
+              for a in apps
+          ], indent=2))
           summary.write("\n```\n")
 
-          target = os.environ["SWA_NAME"].lower()
-          matches = [
-              a for a in apps
-              if (a.get("name") or "").lower() == target
-              or target in (a.get("name") or "").lower()
-          ]
-          if not matches:
+          name = os.environ["SWA_NAME"]
+          rg = ""
+          sub = ""
+
+          if resource_id:
+              parts = resource_id.strip("/").split("/")
+              # subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Web/staticSites/{name}
+              try:
+                  sub = parts[parts.index("subscriptions") + 1]
+                  rg = parts[parts.index("resourceGroups") + 1]
+                  name = parts[parts.index("staticSites") + 1]
+              except (ValueError, IndexError):
+                  print(f"Could not parse ResourceId: {resource_id}", flush=True)
+              else:
+                  print(f"From token ResourceId: sub={sub} rg={rg} name={name}", flush=True)
+                  summary.write(f"\nResourceId del token: `{resource_id}`\n")
+                  run(["az", "account", "set", "--subscription", sub], check=False)
+
+          if not rg:
+              target = os.environ["SWA_NAME"].lower()
               matches = [
                   a for a in apps
-                  if "happy-grass-0aea5f31e" in (a.get("defaultHostname") or "").lower()
+                  if (a.get("name") or "").lower() == target
+                  or target in (a.get("name") or "").lower()
                   or "happy-grass" in (a.get("defaultHostname") or "").lower()
               ]
+              if matches:
+                  app = matches[0]
+                  rg = app.get("resourceGroup") or ""
+                  name = app.get("name") or name
+                  rid = app.get("id") or ""
+                  parts = rid.split("/")
+                  if "subscriptions" in parts:
+                      sub = parts[parts.index("subscriptions") + 1]
+                      run(["az", "account", "set", "--subscription", sub])
 
-          if not matches:
-              print("No Static Web App matched. Available:")
-              for a in apps:
-                  print(
-                      f"  - {a.get('name')} rg={a.get('resourceGroup')} "
-                      f"host={a.get('defaultHostname')} id={a.get('id')}"
-                  )
+          if not rg:
+              msg = (
+                  "No se pudo resolver el resource group del Static Web App. "
+                  "El service principal de AZURE_CREDENTIALS no ve happy-grass-0aea5f31e. "
+                  "Concede al SP rol Contributor (o Static Web App Contributor) sobre el "
+                  "resource group del SWA, o ejecuta localmente: "
+                  "az staticwebapp environment list --name happy-grass-0aea5f31e -g <RG>"
+              )
+              print(msg, flush=True)
+              summary.write(f"\n### Bloqueo\n{msg}\n")
               summary.close()
               sys.exit(1)
 
-          app = matches[0]
-          rg = app.get("resourceGroup")
-          name = app.get("name")
-          host = app.get("defaultHostname")
-          rid = app.get("id") or ""
-          parts = rid.split("/")
-          if "subscriptions" in parts:
-              sub = parts[parts.index("subscriptions") + 1]
-              run(["az", "account", "set", "--subscription", sub])
+          # Probar acceso ARM
+          show = subprocess.run(
+              ["az", "staticwebapp", "show", "--name", name, "--resource-group", rg, "-o", "json"],
+              text=True, capture_output=True,
+          )
+          summary.write("\n## az staticwebapp show\n```\n")
+          summary.write(show.stdout or show.stderr or "(sin salida)\n")
+          summary.write("```\n")
+          if show.returncode != 0:
+              msg = (
+                  f"El SP no tiene permiso ARM sobre {name} en rg={rg} (sub={sub or '?'}). "
+                  "En Azure Portal: Access control (IAM) del resource group del SWA → "
+                  "Add role assignment → Contributor → el service principal de AZURE_CREDENTIALS."
+              )
+              print(msg, flush=True)
+              print(show.stderr, flush=True)
+              summary.write(f"\n### Bloqueo de permisos\n{msg}\n")
+              summary.close()
+              sys.exit(1)
 
-          print(f"Resolved SWA name={name} rg={rg} host={host}", flush=True)
+          print(f"Resolved SWA name={name} rg={rg} sub={sub}", flush=True)
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as envf:
               envf.write(f"SWA_NAME={name}\n")
               envf.write(f"SWA_RG={rg}\n")
-          summary.write(f"\nResolved: **{name}** in `{rg}` (`{host}`)\n")
+              if sub:
+                  envf.write(f"SWA_SUB={sub}\n")
+          summary.write(f"\nResolved: **{name}** in `{rg}` (sub `{sub}`)\n")
           summary.close()
           PY
 
@@ -132,6 +216,9 @@ jobs:
         id: list
         run: |
           set -euo pipefail
+          if [ -n "${SWA_SUB:-}" ]; then
+            az account set --subscription "$SWA_SUB"
+          fi
           echo "## Entornos actuales de \`$SWA_NAME\` (rg=\`$SWA_RG\`)" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           az staticwebapp environment list \
