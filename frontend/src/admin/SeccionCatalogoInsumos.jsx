@@ -178,6 +178,42 @@ function IconActionBtn({ title, onClick, disabled, children, t, variant = 'ghost
   )
 }
 
+/** Botón de barra de herramientas con etiqueta visible y tipografía de plataforma. */
+function ToolbarBtn({ title, label, onClick, disabled, children, t, variant = 'ghost' }) {
+  const isPrimary = variant === 'primary'
+  return (
+    <button
+      type="button"
+      title={title || label}
+      aria-label={title || label}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        minHeight: 36,
+        padding: '6px 12px',
+        borderRadius: 8,
+        border: isPrimary ? 'none' : `1px solid ${t.border}`,
+        background: isPrimary ? t.primary : t.inputBg,
+        color: isPrimary ? '#fff' : t.text,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        fontSize: 'var(--cc-sm)',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        lineHeight: 1.2,
+      }}
+    >
+      {children}
+      <span>{label}</span>
+    </button>
+  )
+}
+
 function SvgIcon({ children }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -272,6 +308,28 @@ function IconPriceRefresh() {
 
 function IconCatalogRefresh() {
   return <IconPriceRefresh />
+}
+
+function IconProveedoresTemplate() {
+  return (
+    <SvgIcon>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6" />
+      <path d="M22 11h-6" />
+    </SvgIcon>
+  )
+}
+
+function IconProveedoresImport() {
+  return (
+    <SvgIcon>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v4" />
+      <path d="M17 12l2 2 2-2" />
+    </SvgIcon>
+  )
 }
 
 function TributoModalShell({ open, title, onClose, onSave, t, children }) {
@@ -369,7 +427,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const th = {
     padding: '7px 8px',
     textAlign: 'left',
-    fontSize: '11px',
+    fontSize: 'var(--cc-caption)',
     fontWeight: 800,
     color: t.textMuted,
     textTransform: 'uppercase',
@@ -383,7 +441,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   }
   const td = {
     padding: '5px 8px',
-    fontSize: '13px',
+    fontSize: 'var(--cc-sm)',
     color: t.text,
     border: `1px solid ${grid}`,
     verticalAlign: 'middle',
@@ -396,7 +454,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fontVariantNumeric: 'tabular-nums',
     fontFamily: 'ui-monospace, Consolas, monospace',
     fontWeight: 700,
-    fontSize: 12,
+    fontSize: 'var(--cc-xs)',
   }
   const tdCodigo = { ...td, color: t.primaryLight || t.primary, fontWeight: 600, whiteSpace: 'nowrap' }
   const tdDesc = { ...td, color: t.text, fontWeight: 500 }
@@ -436,8 +494,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [dupAlert, setDupAlert] = useState(null)
   const [historial, setHistorial] = useState(null)
   const csvRef = useRef(null)
+  const csvProvRef = useRef(null)
   const ocrCamRef = useRef(null)
-  const [csvPending, setCsvPending] = useState(null)
+  const [csvPending, setCsvPending] = useState(null) // { file, kind: 'insumos'|'proveedores' }
   const [csvModo, setCsvModo] = useState('agregar')
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
   const [unidadCustom, setUnidadCustom] = useState('')
@@ -753,33 +812,44 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
   }
 
-  const onCsvSelect = (e) => {
+  const onCsvSelect = (e, kind = 'insumos') => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
     setCsvModo('agregar')
-    setCsvPending(file)
+    setCsvPending({ file, kind })
   }
 
   const confirmCsvImport = async () => {
-    if (!csvPending || !api) return
+    if (!csvPending?.file || !api) return
+    const kind = csvPending.kind || 'insumos'
     if (csvModo === 'reemplazar') {
       const ok = window.confirm(
-        '¿Reemplazar todo el catálogo? Los insumos actuales se desactivarán y solo quedarán los del CSV.',
+        kind === 'proveedores'
+          ? '¿Reemplazar el directorio de proveedores? Se desactivarán los proveedores sin insumos activos y se cargarán los del CSV.'
+          : '¿Reemplazar todo el catálogo? Los insumos actuales se desactivarán y solo quedarán los del CSV.',
       )
       if (!ok) return
     }
     setBusy(true)
     try {
-      const r = await api.importCsv(csvPending, csvModo)
+      const r = kind === 'proveedores'
+        ? await api.importCsvProveedores(csvPending.file, csvModo)
+        : await api.importCsv(csvPending.file, csvModo)
       setMsg({
         type: 'success',
-        text: `Importación (${csvModo}): ${r.creados} creados, ${r.actualizados} actualizados`
+        text: `Importación ${kind === 'proveedores' ? 'de proveedores' : 'de insumos'} (${csvModo}): ${r.creados} creados, ${r.actualizados} actualizados`
           + (r.desactivados ? `, ${r.desactivados} desactivados` : '')
           + (r.errores?.length ? `, ${r.errores.length} errores` : ''),
       })
       setCsvPending(null)
-      load()
+      if (kind === 'proveedores') {
+        loadProveedores()
+        setMainTab('proveedores')
+      } else {
+        load()
+        loadProveedores()
+      }
     } catch (err) {
       setMsg({ type: 'error', text: err.message })
     } finally {
@@ -836,8 +906,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       className={compactCatalog ? 'cc-catalogo-insumos-root cc-catalogo-insumos-root--compact' : 'cc-catalogo-insumos-root'}
       style={{ padding: compactCatalog ? '12px 12px' : '16px 20px', color: t.text }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-        <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: t.primary }}>Catálogo de insumos</h2>
           <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
             {embedded
@@ -845,27 +915,73 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               : 'Gestión centralizada del catálogo. Las solicitudes de almacén solo pueden seleccionar insumos existentes.'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <IconActionBtn
+        <div
+          className="cc-catalogo-toolbar"
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}
+        >
+          <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'insumos')} />
+          <input ref={csvProvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'proveedores')} />
+          <ToolbarBtn
+            label={mainTab === 'proveedores' ? 'Actualizar' : 'Actualizar insumos'}
             title={mainTab === 'proveedores' ? 'Actualizar proveedores' : 'Actualizar insumos'}
             disabled={busy || isRefreshing}
             t={t}
             onClick={refreshActiveTab}
           >
             <IconCatalogRefresh />
-          </IconActionBtn>
-          {canCrear && mainTab === 'insumos' && (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <IconActionBtn title="Nuevo insumo" onClick={openNew} t={t} variant="primary">
-              <IconNewInsumo />
-            </IconActionBtn>
-            <span
-              title="Cree el insumo con la cotización ganadora (OCR opcional) y adjunte las cotizaciones de soporte en PDF. Se comprimen automáticamente si no tienen firma digital certificada; el peso cuenta contra la cuota del contrato."
-              style={{ cursor: 'help', opacity: 0.6, fontSize: 'var(--cc-md)' }}
-            >
-              ?
-            </span>
-          </div>
+          </ToolbarBtn>
+          {canCrear && (
+            <>
+              <ToolbarBtn
+                label="Crear insumo"
+                title="Nuevo insumo"
+                t={t}
+                variant="primary"
+                disabled={busy}
+                onClick={() => {
+                  setMainTab('insumos')
+                  openNew()
+                }}
+              >
+                <IconNewInsumo />
+              </ToolbarBtn>
+              <ToolbarBtn
+                label="Plantilla insumos"
+                title="Descargar plantilla CSV de insumos"
+                disabled={busy}
+                t={t}
+                onClick={() => api?.downloadPlantillaCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
+              >
+                <IconTemplateDownload />
+              </ToolbarBtn>
+              <ToolbarBtn
+                label="Cargar CSV"
+                title="Importar insumos desde CSV"
+                disabled={busy}
+                t={t}
+                onClick={() => csvRef.current?.click()}
+              >
+                <IconCsvImport />
+              </ToolbarBtn>
+              <ToolbarBtn
+                label="Plantilla proveedores"
+                title="Descargar plantilla CSV de proveedores"
+                disabled={busy}
+                t={t}
+                onClick={() => api?.downloadPlantillaProveedoresCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
+              >
+                <IconProveedoresTemplate />
+              </ToolbarBtn>
+              <ToolbarBtn
+                label="Cargar proveedores"
+                title="Importar proveedores desde CSV"
+                disabled={busy}
+                t={t}
+                onClick={() => csvProvRef.current?.click()}
+              >
+                <IconProveedoresImport />
+              </ToolbarBtn>
+            </>
           )}
         </div>
       </div>
@@ -886,48 +1002,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       )}
 
       <ModalTabs tabs={MAIN_CATALOG_TABS} active={mainTab} onChange={setMainTab} ui={ui} />
-
-      {mainTab === 'insumos' && canCrear && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: '14px 18px',
-            borderRadius: 10,
-            border: `1px solid ${t.border}`,
-            background: ui.cardSubtle,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 4, color: t.primary }}>
-                Carga masiva
-              </div>
-              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                Descargue la plantilla, complétela con sus insumos y cárguela de vuelta.
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={onCsvSelect} />
-              <IconActionBtn
-                title="Descargar plantilla CSV"
-                disabled={busy}
-                t={t}
-                onClick={() => api?.downloadPlantillaCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
-              >
-                <IconTemplateDownload />
-              </IconActionBtn>
-              <IconActionBtn
-                title="Importar CSV"
-                disabled={busy}
-                t={t}
-                onClick={() => csvRef.current?.click()}
-              >
-                <IconCsvImport />
-              </IconActionBtn>
-            </div>
-          </div>
-        </div>
-      )}
 
       {mainTab === 'insumos' && (
       <>
@@ -973,7 +1047,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{r.unidad}</td>
                 <td style={tdNum}>{r.rendimiento ?? '—'}</td>
                 <td style={tdMoney}>{fmtMoney(r.costo)}</td>
-                <td style={{ ...tdMuted, fontSize: 12 }}>{r.impuesto_etiqueta || '—'}</td>
+                <td style={tdMuted}>{r.impuesto_etiqueta || '—'}</td>
                 <td style={tdTotal}>{fmtMoney(r.costo_total)}</td>
                 <td style={td}>
                   <div style={{ display: 'inline-flex', gap: 4 }}>
@@ -1068,7 +1142,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             </table>
           </div>
           <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 8 }}>
-            Los proveedores se agregan al crear insumos o al importar CSV. No se duplican por NIT.
+            Los proveedores se agregan al crear insumos, al importar CSV de insumos o con «Cargar proveedores».
+            No se duplican por NIT.
             {canEliminar && ' Solo puede eliminar proveedores sin insumos activos asociados.'}
           </div>
         </div>
@@ -1443,17 +1518,28 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
       {csvPending && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 10004, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => !busy && setCsvPending(null)}>
-          <div style={{ width: 'min(420px,95vw)', ...modalPanelStyle, padding: 18 }} onClick={(e) => e.stopPropagation()}>
-            <h4 style={{ marginTop: 0, color: t.text }}>Importar CSV</h4>
+          <div style={{ width: 'min(440px,95vw)', ...modalPanelStyle, padding: 18 }} onClick={(e) => e.stopPropagation()}>
+            <h4 style={{ marginTop: 0, color: t.text }}>
+              {csvPending.kind === 'proveedores' ? 'Importar proveedores (CSV)' : 'Importar insumos (CSV)'}
+            </h4>
             <p style={{ fontSize: 'var(--cc-sm)', opacity: 0.85, margin: '0 0 8px' }}>
-              Archivo: <strong>{csvPending.name}</strong>
+              Archivo: <strong>{csvPending.file?.name}</strong>
             </p>
             <p style={{ fontSize: 'var(--cc-xs)', opacity: 0.75, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span>Columnas obligatorias: codigo, descripcion, unidad, costo.</span>
+              <span>
+                {csvPending.kind === 'proveedores'
+                  ? 'Columnas obligatorias: razon_social, nit. Opcionales: contacto_email, contacto_nombre, contacto_telefono.'
+                  : 'Columnas obligatorias: codigo, descripcion, unidad, costo.'}
+              </span>
               <IconActionBtn
-                title="Descargar plantilla CSV"
+                title={csvPending.kind === 'proveedores' ? 'Descargar plantilla de proveedores' : 'Descargar plantilla CSV'}
                 t={t}
-                onClick={() => api?.downloadPlantillaCsv().catch(() => {})}
+                onClick={() => {
+                  const p = csvPending.kind === 'proveedores'
+                    ? api?.downloadPlantillaProveedoresCsv()
+                    : api?.downloadPlantillaCsv()
+                  p?.catch(() => {})
+                }}
               >
                 <IconTemplateDownload />
               </IconActionBtn>
@@ -1461,11 +1547,21 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
                 <input type="radio" name="csvModo" checked={csvModo === 'agregar'} onChange={() => setCsvModo('agregar')} />
-                <span><strong>Agregar</strong> — suma los insumos del CSV al catálogo actual.</span>
+                <span>
+                  <strong>Agregar</strong>
+                  {csvPending.kind === 'proveedores'
+                    ? ' — crea o actualiza proveedores por NIT sin borrar el directorio.'
+                    : ' — suma los insumos del CSV al catálogo actual.'}
+                </span>
               </label>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
                 <input type="radio" name="csvModo" checked={csvModo === 'reemplazar'} onChange={() => setCsvModo('reemplazar')} />
-                <span><strong>Reemplazar todo</strong> — desactiva el catálogo actual y lo sustituye por el CSV.</span>
+                <span>
+                  <strong>Reemplazar</strong>
+                  {csvPending.kind === 'proveedores'
+                    ? ' — desactiva proveedores sin insumos activos y carga el CSV.'
+                    : ' — desactiva el catálogo actual y lo sustituye por el CSV.'}
+                </span>
               </label>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
