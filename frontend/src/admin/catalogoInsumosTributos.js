@@ -65,12 +65,24 @@ export const IVA_SOBRE_OPCIONES = [
   { id: 'costo_mas_aiu', label: 'Costo base + AIU' },
 ]
 
-/** Fracción decimal (0.05) → puntos % (5). */
+/**
+ * ─── Reglas de redondeo (no mezclar) ─────────────────────────────────────────
+ *
+ * 1) Porcentajes A / Í / U / IVA y Total A+Í+U:
+ *    Son valores porcentuales. Se muestran y se suman con todos los decimales
+ *    resultantes. NUNCA usar fmtMoney ni Math.round a enteros.
+ *
+ * 2) Montos COP (Costo Directo, Valor después de AIU/IVA):
+ *    Se redondean a 0 decimales (enteros). Usar computeValorDespuesAiuIva + fmtMoney.
+ */
+
+/** Fracción decimal (0.05) → puntos % (5) para persistencia/API (sin truncar a entero). */
 export function decimalAPuntosPct(raw) {
   if (raw === '' || raw == null) return null
   const n = Number(String(raw).replace(',', '.'))
   if (!Number.isFinite(n) || n < 0) return null
-  return Math.round(n * 10000) / 100
+  // Conserva decimales de la fracción×100; solo limpia ruido binario.
+  return Number((n * 100).toFixed(10))
 }
 
 /** Puntos % (5) → fracción decimal para el input (0.05). */
@@ -78,20 +90,44 @@ export function puntosPctADecimal(raw) {
   if (raw === '' || raw == null) return ''
   const n = Number(raw)
   if (!Number.isFinite(n)) return ''
-  const d = Math.round((n / 100) * 1e8) / 1e8
+  // Exacto en la medida de float; sin forzar redondeo a 2 dp.
+  const d = Number((n / 100).toFixed(12))
   return String(d)
 }
 
+/**
+ * Fracción decimal → puntos % exactos para UI (sin redondeo de negocio).
+ * No usar para montos COP.
+ */
+export function puntosPctExactosDesdeFraccion(raw) {
+  if (raw === '' || raw == null) return null
+  const n = Number(String(raw).replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0) return null
+  return Number((n * 100).toFixed(10))
+}
+
+/** Formatea puntos % sin forzar redondeo; elimina solo ceros finales / ruido FP. */
+export function formatPuntosPctExacto(pts) {
+  if (pts == null || !Number.isFinite(Number(pts))) return '—'
+  const n = Number(pts)
+  let s = n.toFixed(10).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '')
+  if (s === '-0') s = '0'
+  return s
+}
+
+/**
+ * Equivalente % de un campo A/Í/U/IVA en el modal (UI).
+ * Completo, con decimales — nunca entero COP / fmtMoney.
+ */
 export function fmtPctDesdeDecimal(raw) {
-  const pts = decimalAPuntosPct(raw)
+  const pts = puntosPctExactosDesdeFraccion(raw)
   if (pts == null) return '—'
-  return `${pts}%`
+  return `${formatPuntosPctExacto(pts)}%`
 }
 
 /**
  * Suma exacta A+Í+U en puntos % (fracción decimal × 100).
  * No redondea: conserva los decimales resultantes de la suma.
- * El redondeo a 0 decimales aplica solo a montos COP, no a esta sumatoria %.
  */
 export function sumatoriaAiuPuntosPct(form) {
   const keys = ['administracion', 'imprevistos', 'utilidad']
@@ -106,20 +142,10 @@ export function sumatoriaAiuPuntosPct(form) {
     sumFrac += n
   }
   if (!any) return null
-  // ×100 sin redondeo de negocio; toFixed(10) solo limpia ruido binario de float.
   return Number((sumFrac * 100).toFixed(10))
 }
 
-/** Formatea puntos % sin forzar redondeo; elimina solo ceros finales / ruido FP. */
-export function formatPuntosPctExacto(pts) {
-  if (pts == null || !Number.isFinite(Number(pts))) return '—'
-  const n = Number(pts)
-  // toFixed(10) acota ruido binario; strip de ceros finales mantiene decimales reales.
-  let s = n.toFixed(10).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '')
-  if (s === '-0') s = '0'
-  return s
-}
-
+/** Total A+Í+U para UI — porcentual exacto, nunca fmtMoney. */
 export function fmtSumatoriaAiu(form) {
   const s = sumatoriaAiuPuntosPct(form)
   if (s == null) return '—'
