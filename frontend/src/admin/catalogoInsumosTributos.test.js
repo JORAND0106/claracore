@@ -62,10 +62,20 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
     assert.equal(fmtPctDesdeDecimal('0.05'), '5%')
   })
 
-  it('sumatoria A+I+U en % (sin IVA)', () => {
+  it('sumatoria A+I+U en % exacta (sin redondear)', () => {
     const form = { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' }
     assert.equal(sumatoriaAiuPuntosPct(form), 13)
     assert.equal(fmtSumatoriaAiu(form), '13%')
+
+    // 5.1 + 3.25 + 4.075 = 12.425 — no redondear a 12 ni a 12.43
+    const formDec = { administracion: '0.051', imprevistos: '0.0325', utilidad: '0.04075' }
+    assert.equal(sumatoriaAiuPuntosPct(formDec), 12.425)
+    assert.equal(fmtSumatoriaAiu(formDec), '12.425%')
+
+    // 0.055 + 0.033 + 0.051 = 13.9
+    const form2 = { administracion: '0.055', imprevistos: '0.033', utilidad: '0.051' }
+    assert.equal(sumatoriaAiuPuntosPct(form2), 13.9)
+    assert.equal(fmtSumatoriaAiu(form2), '13.9%')
   })
 
   it('parse CSV: decimal o puntos', () => {
