@@ -511,7 +511,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState(null)
-  const [cotMin, setCotMin] = useState(3)
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
@@ -644,11 +643,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   }, [mainTab, load, loadProveedores])
 
   const isRefreshing = mainTab === 'proveedores' ? provLoading : loading
-
-  useEffect(() => {
-    if (!api) return
-    api.getConfig().then((c) => setCotMin(c.cotizaciones_minimas || 3)).catch(() => {})
-  }, [api])
 
   const openNew = async () => {
     setEditId(null)
@@ -795,18 +789,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       return
     }
     if (form.requiere_cotizacion && !editId) {
-      const needSop = Math.max(0, cotMin - 1)
-      const sopCount = (form.soportes_pdf || []).length
       const hasGanadora = form.ganadora_pdf || (form.cotizacion_numero || '').trim()
       if (!hasGanadora) {
         setMsg({ type: 'error', text: 'Registre la cotización ganadora (PDF o número de cotización).' })
-        return
-      }
-      if (sopCount < needSop) {
-        setMsg({
-          type: 'error',
-          text: `Se requieren al menos ${needSop} PDF(s) de cotización de soporte (mínimo ${cotMin} cotizaciones comparativas).`,
-        })
         return
       }
     }
@@ -1393,14 +1378,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
             {modalTab === 'cotizaciones' && (
               <div role="tabpanel">
-                <Field label="¿Requiere cotización?" hint="Si está activo, el insumo debe cumplir el mínimo de cotizaciones (ganadora + soportes) antes de guardarse.">
+                <Field label="¿Requiere cotización?" hint="Si está activo, debe registrar la cotización ganadora (PDF o número). Las cotizaciones de soporte/comparativas son opcionales.">
                   <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
                     <input
                       type="checkbox"
                       checked={!!form.requiere_cotizacion}
                       onChange={(e) => setForm({ ...form, requiere_cotizacion: e.target.checked })}
                     />
-                    <span>{form.requiere_cotizacion ? 'Sí, exige cotizaciones comparativas' : 'No requiere cotizaciones'}</span>
+                    <span>{form.requiere_cotizacion ? 'Sí, exige cotización ganadora' : 'No requiere cotizaciones'}</span>
                   </label>
                 </Field>
 
@@ -1508,10 +1493,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                             Cotizaciones de soporte
                           </span>
                           <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                            Comparativas adicionales — solo archivo PDF
+                            Comparativas adicionales (opcionales) — solo archivo PDF
                           </span>
                         </div>
-                        <Field label={`PDFs de soporte (mín. ${Math.max(0, cotMin - 1)} requeridos)`}>
+                        <Field label="PDFs de soporte (opcionales)" hint="Útiles cuando hay varias cotizaciones. En proveedor único puede dejarlo vacío.">
                           <input
                             type="file"
                             accept="application/pdf"

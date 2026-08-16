@@ -804,27 +804,19 @@ def _get_cotizaciones_minimas(contrato_id: int) -> int:
 
 
 def _insumo_disponible_solicitud(row: dict, sb, min_cot: int, soportes_count: Optional[int] = None) -> bool:
-    """Insumo seleccionable en solicitudes: precio válido y cotizaciones si aplica."""
+    """Insumo seleccionable en solicitudes: precio válido y cotización ganadora si aplica.
+
+    Los PDFs de soporte/comparativas son opcionales; no bloquean la selección.
+    `min_cot` y `soportes_count` se conservan por compatibilidad con callers.
+    """
+    del min_cot, soportes_count  # ya no se exige umbral de soportes
     if not _insumo_tiene_precio_compra({**row, "origen": "almacen_insumo"}):
         return False
     if row.get("requiere_cotizacion") is False:
         return True
-    insumo_id = row.get("id")
-    if not insumo_id:
+    if not row.get("id"):
         return False
-    tiene_ganadora = bool(row.get("soporte_pdf_blob_path") or row.get("cotizacion_numero"))
-    if soportes_count is None:
-        soportes = (
-            sb.table("almacen_insumo_cotizacion_soporte")
-            .select("id")
-            .eq("insumo_id", insumo_id)
-            .execute()
-            .data
-            or []
-        )
-        soportes_count = len(soportes)
-    total = (1 if tiene_ganadora else 0) + int(soportes_count or 0)
-    return total >= min_cot
+    return bool(row.get("soporte_pdf_blob_path") or row.get("cotizacion_numero"))
 
 
 def search_insumos(contrato_id: int, q: str = "", limit: int = 30) -> List[dict]:
