@@ -67,23 +67,76 @@ def _pct_or_none(raw: Any) -> Optional[float]:
     return n
 
 
+TIPO_IMPUESTO_IVA_PLENO = "iva_pleno"
+TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD = "iva_sobre_utilidad"
+TIPO_IMPUESTO_AIU_SIN_IVA = "aiu_sin_iva"
+
+_TIPO_IMPUESTO_LABEL = {
+    TIPO_IMPUESTO_IVA_PLENO: "IVA Pleno",
+    TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD: "IVA sobre Utilidad",
+    TIPO_IMPUESTO_AIU_SIN_IVA: "AIU (sin IVA)",
+}
+
+
 def normalize_tributos(raw: Any) -> Dict[str, Any]:
-    """Desglose AIU/IVA independiente (captura). No redefine valor_compra_referencia."""
+    """
+    Impuesto unificado por insumo (captura). No redefine valor_compra_referencia.
+
+    Inferencia de tipo (no seleccionable por el usuario):
+    - solo IVA → iva_pleno (sobre costo_base)
+    - A/I/U + IVA → iva_sobre_utilidad (sobre utilidad)
+    - solo A/I/U → aiu_sin_iva
+    """
     src = raw if isinstance(raw, dict) else {}
     aiu_in = src.get("aiu") if isinstance(src.get("aiu"), dict) else {}
     iva_in = src.get("iva") if isinstance(src.get("iva"), dict) else {}
-    sobre = str(iva_in.get("sobre") or "costo_base").strip()
-    if sobre not in _IVA_SOBRE_VALIDOS:
+
+    administracion = _pct_or_none(
+        src.get("administracion") if src.get("administracion") is not None else aiu_in.get("administracion")
+    )
+    imprevistos = _pct_or_none(
+        src.get("imprevistos") if src.get("imprevistos") is not None else aiu_in.get("imprevistos")
+    )
+    utilidad = _pct_or_none(
+        src.get("utilidad") if src.get("utilidad") is not None else aiu_in.get("utilidad")
+    )
+
+    iva_pct = None
+    if not isinstance(src.get("iva"), dict) and src.get("iva") is not None:
+        iva_pct = _pct_or_none(src.get("iva"))
+    if iva_pct is None:
+        iva_pct = _pct_or_none(iva_in.get("porcentaje"))
+    if iva_pct is None:
+        iva_pct = _pct_or_none(aiu_in.get("iva_utilidad"))
+
+    tiene_aiu = any(v is not None for v in (administracion, imprevistos, utilidad))
+    tiene_iva = iva_pct is not None
+    if tiene_aiu and tiene_iva:
+        tipo = TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD
+        sobre = "utilidad"
+    elif not tiene_aiu and tiene_iva:
+        tipo = TIPO_IMPUESTO_IVA_PLENO
         sobre = "costo_base"
+    elif tiene_aiu and not tiene_iva:
+        tipo = TIPO_IMPUESTO_AIU_SIN_IVA
+        sobre = "costo_base"
+    else:
+        tipo = None
+        sobre = "costo_base"
+
     return {
+        "tipo": tipo,
+        "administracion": administracion,
+        "imprevistos": imprevistos,
+        "utilidad": utilidad,
         "aiu": {
-            "administracion": _pct_or_none(aiu_in.get("administracion")),
-            "imprevistos": _pct_or_none(aiu_in.get("imprevistos")),
-            "utilidad": _pct_or_none(aiu_in.get("utilidad")),
-            "iva_utilidad": _pct_or_none(aiu_in.get("iva_utilidad")),
+            "administracion": administracion,
+            "imprevistos": imprevistos,
+            "utilidad": utilidad,
+            "iva_utilidad": iva_pct if tipo == TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD else None,
         },
         "iva": {
-            "porcentaje": _pct_or_none(iva_in.get("porcentaje")),
+            "porcentaje": iva_pct,
             "sobre": sobre,
         },
     }
@@ -92,7 +145,7 @@ def normalize_tributos(raw: Any) -> Dict[str, Any]:
 def _aiu_tiene_datos(aiu: Optional[dict]) -> bool:
     if not isinstance(aiu, dict):
         return False
-    return any(aiu.get(k) is not None for k in ("administracion", "imprevistos", "utilidad", "iva_utilidad"))
+    return any(aiu.get(k) is not None for k in ("administracion", "imprevistos", "utilidad"))
 
 
 def _iva_tiene_datos(iva: Optional[dict]) -> bool:
@@ -101,30 +154,23 @@ def _iva_tiene_datos(iva: Optional[dict]) -> bool:
 
 def _tributos_etiqueta(tributos: Any) -> Optional[str]:
     t = normalize_tributos(tributos)
-    parts: List[str] = []
+    tipo = t.get("tipo")
     aiu = t.get("aiu") or {}
-    if _aiu_tiene_datos(aiu):
-        bits = []
-        if aiu.get("administracion") is not None:
-            bits.append(f"A {aiu['administracion']:g}%")
-        if aiu.get("imprevistos") is not None:
-            bits.append(f"I {aiu['imprevistos']:g}%")
-        if aiu.get("utilidad") is not None:
-            bits.append(f"U {aiu['utilidad']:g}%")
-        if aiu.get("iva_utilidad") is not None:
-            bits.append(f"IVA/U {aiu['iva_utilidad']:g}%")
-        parts.append(f"AIU ({' · '.join(bits)})" if bits else "AIU")
     iva = t.get("iva") or {}
-    if _iva_tiene_datos(iva):
-        labels = {
-            "costo_base": "costo base",
-            "utilidad": "utilidad",
-            "aiu": "AIU",
-            "costo_mas_aiu": "costo+AIU",
-        }
-        sobre = labels.get(iva.get("sobre") or "", iva.get("sobre") or "")
-        parts.append(f"IVA {iva['porcentaje']:g}% · {sobre}")
-    return " | ".join(parts) if parts else None
+    if not tipo and not _aiu_tiene_datos(aiu) and not _iva_tiene_datos(iva):
+        return None
+    bits: List[str] = []
+    if tipo:
+        bits.append(_TIPO_IMPUESTO_LABEL.get(tipo, str(tipo)))
+    if aiu.get("administracion") is not None:
+        bits.append(f"A {aiu['administracion']:g}%")
+    if aiu.get("imprevistos") is not None:
+        bits.append(f"Í {aiu['imprevistos']:g}%")
+    if aiu.get("utilidad") is not None:
+        bits.append(f"U {aiu['utilidad']:g}%")
+    if iva.get("porcentaje") is not None:
+        bits.append(f"IVA {iva['porcentaje']:g}%")
+    return " · ".join(bits) if bits else None
 
 
 def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]] = None) -> float:
