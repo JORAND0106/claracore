@@ -187,6 +187,7 @@ def _pct_frac(puntos: Any) -> float:
 def compute_valor_despues_aiu_iva(costo_base: float, tributos: Any = None) -> float:
     """
     Valor unitario después de aplicar A/Í/U e IVA según tipo inferido.
+    Resultado en pesos COP enteros (0 decimales).
 
     - IVA Pleno: base × (1 + IVA%)
     - AIU sin IVA: base × (1 + A% + Í% + U%)
@@ -202,14 +203,14 @@ def compute_valor_despues_aiu_iva(costo_base: float, tributos: Any = None) -> fl
     iva = _pct_frac((t.get("iva") or {}).get("porcentaje"))
 
     if tipo == TIPO_IMPUESTO_IVA_PLENO:
-        return round(base * (1.0 + iva), 2)
+        return float(round(base * (1.0 + iva)))
     if tipo == TIPO_IMPUESTO_AIU_SIN_IVA:
-        return round(base * (1.0 + a + i + u), 2)
+        return float(round(base * (1.0 + a + i + u)))
     if tipo == TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD:
         aiu_total = base * (a + i + u)
         iva_util = base * u * iva
-        return round(base + aiu_total + iva_util, 2)
-    return round(base, 2)
+        return float(round(base + aiu_total + iva_util))
+    return float(round(base))
 
 
 def tributos_tienen_datos(tributos: Any) -> bool:
@@ -225,7 +226,7 @@ def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]
             total += base * (imp["valor"] / 100.0)
         else:
             total += imp["valor"]
-    return round(total, 2)
+    return float(round(total))
 
 
 def compute_costo_total_insumo(
@@ -238,10 +239,10 @@ def compute_costo_total_insumo(
     tipo = (tipo_impuesto or "").strip().lower()
     pct = _to_float(impuesto_porcentaje)
     if tipo in ("iva", "aiu") and pct > 0:
-        return round(base * (1 + pct / 100.0), 2)
+        return float(round(base * (1 + pct / 100.0)))
     if impuestos:
         return compute_valor_total_insumo(base, impuestos)
-    return round(base, 2)
+    return float(round(base))
 
 
 def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float, tributos: Any = None) -> str:
@@ -753,7 +754,8 @@ def _row_from_listado(lp: dict) -> dict:
 
 
 def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
-    costo = _to_float(row.get("costo_base") if row.get("costo_base") is not None else row.get("valor_compra_referencia"))
+    costo_raw = _to_float(row.get("costo_base") if row.get("costo_base") is not None else row.get("valor_compra_referencia"))
+    costo = float(round(max(costo_raw, 0.0)))
     tipo = row.get("tipo_impuesto")
     pct = _to_float(row.get("impuesto_porcentaje"))
     tributos = normalize_tributos(row.get("tributos"))
@@ -763,7 +765,8 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
         if tributos_tienen_datos(tributos):
             total = compute_valor_despues_aiu_iva(costo, tributos)
         else:
-            total = _to_float(row.get("valor_compra_referencia")) or compute_costo_total_insumo(
+            stored = _to_float(row.get("valor_compra_referencia"))
+            total = float(round(stored)) if stored else compute_costo_total_insumo(
                 costo, tipo, pct, row.get("impuestos"),
             )
     return {
@@ -772,6 +775,7 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
         "proveedor_nombre": proveedor_nombre,
         "rendimiento": row.get("rendimiento"),
         "costo": costo if tiene else None,
+        "costo_base": costo if tiene else row.get("costo_base"),
         "tipo_impuesto": tipo,
         "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct, tributos) if tiene else "—",
         "costo_total": total,
@@ -1062,6 +1066,7 @@ def create_insumo(contrato_id: int, user_id: int, body: dict, soporte: Optional[
         costo_base = _to_float(body.get("costo"))
     if body.get("costo_base") is None and body.get("valor_compra_referencia") is not None:
         costo_base = _to_float(body.get("valor_compra_referencia"))
+    costo_base = float(round(max(costo_base, 0.0)))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
     valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
     proveedor_id = body.get("proveedor_id")

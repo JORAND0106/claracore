@@ -131,13 +131,28 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
       }),
       11395,
     )
+    // 18500×1.13 + 18500×0.05×0.19 = 21080.75 → redondeo COP a 21081
     assert.equal(
       computeValorDespuesAiuIva(
         18500,
         { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' },
         { valoresEnDecimal: true },
       ),
-      21080.75,
+      21081,
+    )
+  })
+
+  it('redondea a 0 decimales (pesos COP)', () => {
+    assert.equal(
+      computeValorDespuesAiuIva(10001, { iva: { porcentaje: 19 } }),
+      11901,
+    )
+    // 10001 * 1.19 = 11901.19 → 11901
+    assert.equal(
+      computeValorDespuesAiuIva(3333, {
+        administracion: 5, imprevistos: 3, utilidad: 5, iva: { porcentaje: 19 },
+      }),
+      Math.round(3333 * 1.13 + 3333 * 0.05 * 0.19),
     )
   })
 

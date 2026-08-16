@@ -134,6 +134,21 @@ def test_compute_valor_despues_solo_aiu():
     assert total == 11300.0
 
 
+def test_compute_valor_despues_redondeo_cop():
+    from almacen_insumos_service import compute_valor_despues_aiu_iva
+    # 18500×1.13 + 18500×0.05×0.19 = 21080.75 → 21081
+    total = compute_valor_despues_aiu_iva(18500, {
+        "administracion": 5,
+        "imprevistos": 3,
+        "utilidad": 5,
+        "iva": 19,
+    })
+    assert total == 21081.0
+    assert total == float(int(total))
+    # 10001 × 1.19 = 11901.19 → 11901
+    assert compute_valor_despues_aiu_iva(10001, {"iva": {"porcentaje": 19}}) == 11901.0
+
+
 def test_csv_import_calcula_valor_despues():
     """El payload de guardado usa valor después de AIU/IVA en valor_compra_referencia."""
     from catalogo_insumos_service import _build_insumo_payload
@@ -149,7 +164,7 @@ def test_csv_import_calcula_valor_despues():
             "codigo": "CC-1-001",
             "descripcion": "Prueba",
             "unidad": "UND",
-            "costo_base": 10000,
+            "costo_base": 18500.4,  # se redondea a entero (costo directo)
             "tributos": {
                 "administracion": 5,
                 "imprevistos": 3,
@@ -161,6 +176,6 @@ def test_csv_import_calcula_valor_despues():
         contrato_id=1,
         user_id=1,
     )
-    assert payload["costo_base"] == 10000.0
-    assert payload["valor_compra_referencia"] == 11395.0
+    assert payload["costo_base"] == 18500.0
+    assert payload["valor_compra_referencia"] == 21081.0
     assert payload["tributos"]["tipo"] == "iva_sobre_utilidad"
