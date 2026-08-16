@@ -45,76 +45,87 @@ async function parseJsonList(res) {
   return Array.isArray(data) ? data : []
 }
 
-export function createAlmacenApi(contratoId, token) {
+export function createAlmacenApi(contratoId, tokenOrGetter) {
+  const resolveToken = () => {
+    if (typeof tokenOrGetter === 'function') {
+      try {
+        return String(tokenOrGetter() || '')
+      } catch {
+        return ''
+      }
+    }
+    return String(tokenOrGetter || '')
+  }
+  const authHeaders = (extra = {}) => headers(resolveToken(), extra)
   const base = `${API_BASE}/almacen/${contratoId}`
 
   return {
     getConfig: () =>
-      fetch(`${base}/config`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/config`, { headers: authHeaders() }).then(parseJson),
 
     updateConfig: (body) =>
       fetch(`${base}/config`, {
         method: 'PUT',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     getPresupuestoItems: () =>
-      fetch(`${base}/presupuesto-items`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/presupuesto-items`, { headers: authHeaders() }).then(parseJsonList),
 
     getListadoCapitulos: () =>
-      fetch(`${base}/listado-capitulos`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/listado-capitulos`, { headers: authHeaders() }).then(parseJsonList),
 
     getListadoItems: (capitulo) =>
-      fetch(`${base}/listado-items?capitulo=${encodeURIComponent(capitulo)}`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/listado-items?capitulo=${encodeURIComponent(capitulo)}`, { headers: authHeaders() }).then(parseJsonList),
 
     searchInsumos: (q = '') =>
-      fetch(`${base}/insumos/search?q=${encodeURIComponent(q)}`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/insumos/search?q=${encodeURIComponent(q)}`, { headers: authHeaders() }).then(parseJsonList),
 
     searchInsumosCatalog: (q = '', limit = 50, offset = 0) =>
-      fetch(`${base}/insumos/catalog?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/insumos/catalog?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(parseJson),
 
     createInsumoForm: (formData) =>
       fetch(`${base}/insumos`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
         body: formData,
       }).then(parseJson),
 
     createInsumo: (body) =>
       fetch(`${base}/insumos/json`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     deleteInsumo: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}`, {
         method: 'DELETE',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     listPreciosInsumoProveedor: (insumoId) =>
-      fetch(`${base}/insumos/${insumoId}/precios-proveedor`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/insumos/${insumoId}/precios-proveedor`, { headers: authHeaders() }).then(parseJsonList),
 
     searchProveedores: (q = '') =>
-      fetch(`${base}/proveedores/search?q=${encodeURIComponent(q)}`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/proveedores/search?q=${encodeURIComponent(q)}`, { headers: authHeaders() }).then(parseJsonList),
 
     createProveedor: (body) =>
       fetch(`${base}/proveedores`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     getTransportadorPorPlaca: (placa) =>
       fetch(`${base}/transportadores/por-placa?placa=${encodeURIComponent(placa)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     searchTransportadores: (q = '') =>
       fetch(`${base}/transportadores/search?q=${encodeURIComponent(q)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList),
 
     getPresupuestoRegistros: (capitulo, item, pkId, excludeSolicitudId) => {
@@ -124,7 +135,7 @@ export function createAlmacenApi(contratoId, token) {
         pk_id: pkId,
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
-      return fetch(`${base}/presupuesto-registros?${params}`, { headers: headers(token) }).then(parseJson)
+      return fetch(`${base}/presupuesto-registros?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
     getPresupuestoContext: (presupuestoId, pkId, cantidad, excludeSolicitudId) => {
@@ -134,13 +145,13 @@ export function createAlmacenApi(contratoId, token) {
         cantidad: String(cantidad || 0),
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
-      return fetch(`${base}/presupuesto-context?${params}`, { headers: headers(token) }).then(parseJson)
+      return fetch(`${base}/presupuesto-context?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
     previewInsumoLine: (body) =>
       fetch(`${base}/insumos/preview-line`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
@@ -149,112 +160,112 @@ export function createAlmacenApi(contratoId, token) {
       if (estado) params.set('estado', estado)
       params.set('resumen', resumen ? 'true' : 'false')
       const q = `?${params.toString()}`
-      return fetch(`${base}/solicitudes${q}`, { headers: headers(token) }).then(parseJsonList)
+      return fetch(`${base}/solicitudes${q}`, { headers: authHeaders() }).then(parseJsonList)
     },
 
     countSolicitudes: (estado) => {
       const q = estado ? `?estado=${encodeURIComponent(estado)}` : ''
-      return fetch(`${base}/solicitudes-count${q}`, { headers: headers(token) })
+      return fetch(`${base}/solicitudes-count${q}`, { headers: authHeaders() })
         .then(parseJson)
         .then((r) => Number(r?.count) || 0)
     },
 
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
-      return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: headers(token) })
+      return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: authHeaders() })
     },
 
     createSolicitud: (body) =>
       fetchJson(`${base}/solicitudes`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }),
 
     updateSolicitud: (id, body) =>
       fetchJson(`${base}/solicitudes/${id}`, {
         method: 'PUT',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }),
 
     enviarSolicitud: (id) =>
       fetchJson(`${base}/solicitudes/${id}/enviar`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
       }),
 
     aprobarSolicitud: (id, body = {}) =>
       fetch(`${base}/solicitudes/${id}/aprobar`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     aprobarTodosItemsSolicitud: (id) =>
       fetch(`${base}/solicitudes/${id}/aprobar-todos-items`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     validarItemSolicitud: (solicitudId, itemId, body) =>
       fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/validar`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     mapearItemSolicitud: (solicitudId, itemId, body) =>
       fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/mapear`, {
         method: 'PATCH',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     rechazarSolicitud: (id, motivo) =>
       fetch(`${base}/solicitudes/${id}/rechazar`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ motivo }),
       }).then(parseJson),
 
     anularSolicitud: (id) =>
       fetch(`${base}/solicitudes/${id}/anular`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     eliminarSolicitudDesarrollador: (id) =>
       fetch(`${base}/solicitudes/${id}/desarrollador`, {
         method: 'DELETE',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     addCotizacion: (itemId, body) =>
       fetch(`${base}/solicitudes/items/${itemId}/cotizaciones`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     deleteCotizacion: (cotId) =>
       fetch(`${base}/cotizaciones/${cotId}`, {
         method: 'DELETE',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     listOrdenesCompra: () =>
-      fetch(`${base}/ordenes-compra`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/ordenes-compra`, { headers: authHeaders() }).then(parseJsonList),
 
     getOrdenCompra: (ocId) =>
-      fetch(`${base}/ordenes-compra/${ocId}`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/ordenes-compra/${ocId}`, { headers: authHeaders() }).then(parseJson),
 
     uploadFactura: (ocId, file) => {
       const fd = new FormData()
       fd.append('archivo', file)
       return fetch(`${base}/ordenes-compra/${ocId}/factura`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
         body: fd,
       }).then(parseJson)
     },
@@ -265,7 +276,7 @@ export function createAlmacenApi(contratoId, token) {
 
     async openOcPdf(ocId) {
       const res = await fetch(`${base}/ordenes-compra/${ocId}/pdf/download`, {
-        headers: headers(token),
+        headers: authHeaders(),
       })
       if (!res.ok) {
         let msg = `Error ${res.status}`
@@ -293,46 +304,46 @@ export function createAlmacenApi(contratoId, token) {
     },
 
     listEntradas: () =>
-      fetch(`${base}/entradas`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/entradas`, { headers: authHeaders() }).then(parseJsonList),
 
     getEntrada: (entradaId) =>
-      fetch(`${base}/entradas/${entradaId}`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/entradas/${entradaId}`, { headers: authHeaders() }).then(parseJson),
 
     deleteEntrada: (entradaId) =>
       fetch(`${base}/entradas/${entradaId}`, {
         method: 'DELETE',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     createEntrada: (formData) =>
       fetch(`${base}/entradas`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
         body: formData,
       }).then(parseJson),
 
     remisionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/remision/download`,
 
     listInventario: () =>
-      fetch(`${base}/inventario`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/inventario`, { headers: authHeaders() }).then(parseJsonList),
 
     getInventarioGraficos: (capitulo, item) => {
       const params = new URLSearchParams()
       if (capitulo) params.set('capitulo', capitulo)
       if (item) params.set('item', item)
       const q = params.toString() ? `?${params.toString()}` : ''
-      return fetch(`${base}/inventario/graficos${q}`, { headers: headers(token) }).then(parseJson)
+      return fetch(`${base}/inventario/graficos${q}`, { headers: authHeaders() }).then(parseJson)
     },
 
     listMovimientos: (presupuestoId, material) => {
       const q = material ? `?material=${encodeURIComponent(material)}` : ''
       return fetch(`${base}/inventario/${presupuestoId}/movimientos${q}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList)
     },
 
     exportInventarioExcel: async () => {
-      const res = await fetch(`${base}/inventario/export/excel`, { headers: headers(token) })
+      const res = await fetch(`${base}/inventario/export/excel`, { headers: authHeaders() })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.detail || 'Error al exportar')
@@ -347,29 +358,29 @@ export function createAlmacenApi(contratoId, token) {
     },
 
     getAlertasVencimiento: () =>
-      fetch(`${base}/alertas-vencimiento`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/alertas-vencimiento`, { headers: authHeaders() }).then(parseJsonList),
 
     getExpediente: (ocId) =>
-      fetch(`${base}/expedientes/${ocId}`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/expedientes/${ocId}`, { headers: authHeaders() }).then(parseJson),
 
     listInsumosPorProveedor: (proveedorId, q = '') =>
       fetch(`${base}/proveedores/${proveedorId}/insumos?q=${encodeURIComponent(q)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList),
 
     buscarOrdenesCompraVigentes: (proveedorId, insumoId) =>
       fetch(`${base}/ordenes-compra/buscar-vigentes?proveedor_id=${proveedorId}&insumo_id=${insumoId}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList),
 
     buscarOrdenesCompraPorPk: (pkId) =>
       fetch(`${base}/ordenes-compra/contexto-por-pk?pk_id=${encodeURIComponent(pkId)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     getProximoNumeroDisposicion: () =>
       fetch(`${base}/entradas/proximo-numero-disposicion`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     ocrRemisionEntrada: (file) => {
@@ -377,7 +388,7 @@ export function createAlmacenApi(contratoId, token) {
       fd.append('archivo', file)
       return fetch(`${base}/entradas/ocr-remision`, {
         method: 'POST',
-        headers: headers(token),
+        headers: authHeaders(),
         body: fd,
       }).then(parseJson)
     },
@@ -386,7 +397,7 @@ export function createAlmacenApi(contratoId, token) {
 
     async openDisposicionPdf(entradaId) {
       const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
-        headers: headers(token),
+        headers: authHeaders(),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -398,7 +409,7 @@ export function createAlmacenApi(contratoId, token) {
 
     async printDisposicionPdf(entradaId) {
       const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
-        headers: headers(token),
+        headers: authHeaders(),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -409,39 +420,39 @@ export function createAlmacenApi(contratoId, token) {
     },
 
     listSalidas: () =>
-      fetch(`${base}/salidas`, { headers: headers(token) }).then(parseJsonList),
+      fetch(`${base}/salidas`, { headers: authHeaders() }).then(parseJsonList),
 
     getSalida: (salidaId) =>
-      fetch(`${base}/salidas/${salidaId}`, { headers: headers(token) }).then(parseJson),
+      fetch(`${base}/salidas/${salidaId}`, { headers: authHeaders() }).then(parseJson),
 
     createSalida: (body) =>
       fetch(`${base}/salidas`, {
         method: 'POST',
-        headers: headers(token, { 'Content-Type': 'application/json' }),
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       }).then(parseJson),
 
     deleteSalida: (salidaId) =>
       fetch(`${base}/salidas/${salidaId}`, {
         method: 'DELETE',
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJson),
 
     searchUsuariosReceptorObra: (q = '') =>
       fetch(`${base}/usuarios-receptor-obra?q=${encodeURIComponent(q)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList),
 
     listEntradasDisponiblesPorPk: (pkId) =>
       fetch(`${base}/entradas/disponibles-por-pk?pk_id=${encodeURIComponent(pkId)}`, {
-        headers: headers(token),
+        headers: authHeaders(),
       }).then(parseJsonList),
 
     salidaPdfDownloadUrl: (salidaId) => `${base}/salidas/${salidaId}/recibo/download`,
 
     async openSalidaPdf(salidaId) {
       const res = await fetch(`${base}/salidas/${salidaId}/recibo/download`, {
-        headers: headers(token),
+        headers: authHeaders(),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -453,7 +464,7 @@ export function createAlmacenApi(contratoId, token) {
 
     async printSalidaPdf(salidaId) {
       const res = await fetch(`${base}/salidas/${salidaId}/recibo/download`, {
-        headers: headers(token),
+        headers: authHeaders(),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))

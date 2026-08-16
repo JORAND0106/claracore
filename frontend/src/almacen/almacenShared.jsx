@@ -215,14 +215,25 @@ export function AlmacenThemeProvider({ t, compact = false, children }) {
 }
 
 export function AlmacenApiProvider({ contratoId, token, children }) {
-  const api = useMemo(() => createAlmacenApi(contratoId, token), [contratoId, token])
+  const tokenRef = useRef(token)
+  tokenRef.current = token
+  const api = useMemo(
+    () => createAlmacenApi(contratoId, () => tokenRef.current),
+    [contratoId],
+  )
   return <AlmacenApiContext.Provider value={api}>{children}</AlmacenApiContext.Provider>
 }
 
 /** Agrupa tema + API en un solo árbol de contexto (evita desincronización entre providers). */
 export function AlmacenProviders({ t, compact = false, contratoId, token, children }) {
   const styles = useMemo(() => almacenStyles(t, compact), [t, compact])
-  const api = useMemo(() => createAlmacenApi(contratoId, token), [contratoId, token])
+  const tokenRef = useRef(token)
+  tokenRef.current = token
+  // API estable por contrato: el token se resuelve en cada request (evita remount/efectos al renovar sesión).
+  const api = useMemo(
+    () => createAlmacenApi(contratoId, () => tokenRef.current),
+    [contratoId],
+  )
   return (
     <AlmacenCompactContext.Provider value={compact}>
       <AlmacenThemeContext.Provider value={styles}>
