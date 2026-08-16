@@ -18,6 +18,7 @@ import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapb
 import { useClaraViewport } from "./useClaraViewport";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
+import SeccionAlmacenamientoAzure from "./admin/SeccionAlmacenamientoAzure";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -8309,6 +8310,7 @@ const ADMIN_PANEL_TABS = [
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   { id: "diagnostico", label: "📊 Diagnóstico plataforma", soloDeveloper: true },
   { id: "licencias-claracad", label: "Licencias ClaraCAD", soloDeveloper: true },
+  { id: "almacenamiento", label: "Almacenamiento Azure", soloDeveloper: true },
 ];
 
 export default function AdminPanel({ user, token, onClose, onContratosMutated, activeTheme, t: tProp }) {
@@ -8653,6 +8655,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
               {tab === "diagnostico" && <SeccionDiagnosticoPlataforma call={call} theme={activeTheme} />}
               {tab === "licencias-claracad" && <SeccionLicenciasClaraCAD call={call} theme={activeTheme} />}
+              {tab === "almacenamiento" && <SeccionAlmacenamientoAzure call={call} theme={activeTheme} />}
           </div>
         </div>
       </div>

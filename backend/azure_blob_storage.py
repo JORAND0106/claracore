@@ -66,16 +66,79 @@ def blob_public_url(blob_path: str) -> str:
     return cc.get_blob_client(path).url
 
 
+def get_blob_size(blob_path: str) -> int:
+    """Tamaño actual del blob público, o 0 si no existe."""
+    path = (blob_path or "").lstrip("/")
+    if not path:
+        return 0
+    blob = get_blob_service_client().get_container_client(container_name()).get_blob_client(path)
+    if not blob.exists():
+        return 0
+    props = blob.get_blob_properties()
+    return int(getattr(props, "size", 0) or 0)
+
+
+def delete_blob(
+    blob_path: str,
+    *,
+    contrato_id: Optional[int] = None,
+    storage_tipo: Optional[str] = None,
+    account_storage: bool = True,
+) -> int:
+    """Elimina blob público. Devuelve bytes liberados (0 si no existía)."""
+    path = (blob_path or "").strip().lstrip("/")
+    if not path:
+        return 0
+    blob = get_blob_service_client().get_container_client(container_name()).get_blob_client(path)
+    if not blob.exists():
+        return 0
+    size = 0
+    try:
+        size = int(blob.get_blob_properties().size or 0)
+    except Exception:
+        size = 0
+    blob.delete_blob()
+    if account_storage and size > 0:
+        try:
+            from storage_quota_service import record_delete
+
+            record_delete(contrato_id, size, tipo=storage_tipo, blob_path=path)
+        except Exception as exc:
+            _log.warning("record_delete público falló path=%s: %s", path, exc)
+    return size
+
+
 def upload_blob(
     blob_path: str,
     data: bytes,
     content_type: Optional[str] = None,
     *,
     overwrite: bool = True,
+    contrato_id: Optional[int] = None,
+    storage_tipo: Optional[str] = None,
+    account_storage: bool = True,
 ) -> str:
+    """
+    Sube al contenedor público.
+    Si account_storage y hay contrato_id (o se infiere del path), aplica cuota.
+    """
     ensure_container_public()
     path = blob_path.lstrip("/")
     ct = (content_type or "image/jpeg").split(";")[0].strip()
+    old_size = 0
+    if account_storage:
+        from storage_quota_service import guard_upload, infer_contrato_id_from_path
+
+        cid = int(contrato_id) if contrato_id else infer_contrato_id_from_path(path)
+        if cid:
+            if overwrite:
+                try:
+                    old_size = get_blob_size(path)
+                except Exception as exc:
+                    _log.debug("get_blob_size %s: %s", path, exc)
+                    old_size = 0
+            guard_upload(cid, len(data), blob_path=path, replaced_old_bytes=old_size)
+
     cc = get_blob_service_client().get_container_client(container_name())
     cc.upload_blob(
         name=path,
@@ -83,6 +146,22 @@ def upload_blob(
         overwrite=overwrite,
         content_settings=ContentSettings(content_type=ct),
     )
+
+    if account_storage:
+        try:
+            from storage_quota_service import record_upload
+
+            record_upload(
+                contrato_id,
+                len(data),
+                tipo=storage_tipo,
+                content_type=ct,
+                blob_path=path,
+                replaced_old_bytes=old_size,
+            )
+        except Exception as exc:
+            _log.warning("record_upload público falló path=%s: %s", path, exc)
+
     return blob_public_url(path)
 
 
@@ -193,19 +272,51 @@ def ensure_private_container() -> None:
         _private_initialized = True
 
 
+def get_blob_size_private(blob_path: str) -> int:
+    path = (blob_path or "").lstrip("/")
+    if not path:
+        return 0
+    blob = (
+        get_blob_service_client()
+        .get_container_client(private_container_name())
+        .get_blob_client(path)
+    )
+    if not blob.exists():
+        return 0
+    return int(blob.get_blob_properties().size or 0)
+
+
 def upload_blob_private(
     blob_path: str,
     data: bytes,
     content_type: Optional[str] = None,
     *,
     overwrite: bool = False,
+    contrato_id: Optional[int] = None,
+    storage_tipo: Optional[str] = None,
+    account_storage: bool = True,
 ) -> str:
     """
     Sube al contenedor privado. Devuelve la ruta del blob (no URL pública).
+    Aplica cuota por contrato cuando corresponde.
     """
     ensure_private_container()
     path = blob_path.lstrip("/")
     ct = (content_type or "application/octet-stream").split(";")[0].strip()
+    old_size = 0
+    if account_storage:
+        from storage_quota_service import guard_upload, infer_contrato_id_from_path
+
+        cid = int(contrato_id) if contrato_id else infer_contrato_id_from_path(path)
+        if cid:
+            if overwrite:
+                try:
+                    old_size = get_blob_size_private(path)
+                except Exception as exc:
+                    _log.debug("get_blob_size_private %s: %s", path, exc)
+                    old_size = 0
+            guard_upload(cid, len(data), blob_path=path, replaced_old_bytes=old_size)
+
     cc = get_blob_service_client().get_container_client(private_container_name())
     cc.upload_blob(
         name=path,
@@ -213,6 +324,22 @@ def upload_blob_private(
         overwrite=overwrite,
         content_settings=ContentSettings(content_type=ct),
     )
+
+    if account_storage:
+        try:
+            from storage_quota_service import record_upload
+
+            record_upload(
+                contrato_id,
+                len(data),
+                tipo=storage_tipo,
+                content_type=ct,
+                blob_path=path,
+                replaced_old_bytes=old_size,
+            )
+        except Exception as exc:
+            _log.warning("record_upload privado falló path=%s: %s", path, exc)
+
     return path
 
 
@@ -222,15 +349,40 @@ def download_blob_bytes_private(blob_path: str) -> bytes:
     return cc.download_blob(path).readall()
 
 
-def delete_blob_private(blob_path: str) -> None:
-    """Elimina un blob del contenedor privado (idempotente si no existe)."""
+def delete_blob_private(
+    blob_path: str,
+    *,
+    contrato_id: Optional[int] = None,
+    storage_tipo: Optional[str] = None,
+    account_storage: bool = True,
+) -> int:
+    """Elimina un blob del contenedor privado. Devuelve bytes liberados."""
     path = (blob_path or "").strip().lstrip("/")
     if not path:
-        return
+        return 0
     cc = get_blob_service_client().get_container_client(private_container_name())
     blob = cc.get_blob_client(path)
-    if blob.exists():
-        blob.delete_blob()
+    if not blob.exists():
+        return 0
+    size = 0
+    try:
+        size = int(blob.get_blob_properties().size or 0)
+    except Exception:
+        size = 0
+    blob.delete_blob()
+    if account_storage and size > 0:
+        try:
+            from storage_quota_service import record_delete
+
+            record_delete(
+                contrato_id,
+                size,
+                tipo=storage_tipo,
+                blob_path=path,
+            )
+        except Exception as exc:
+            _log.warning("record_delete privado falló path=%s: %s", path, exc)
+    return size
 
 
 def blob_exists_private(blob_path: str) -> bool:

@@ -338,7 +338,16 @@ def register_deps(supabase, get_current_user, require_contract_access):
         nombre = f"g_{uuid.uuid4().hex}"
         blob_path = path_presupuesto_grafico(contrato_id, nombre, ext)
         try:
-            url = upload_blob(blob_path, contents, file.content_type, overwrite=True)
+            url = upload_blob(
+                blob_path,
+                contents,
+                file.content_type,
+                overwrite=True,
+                contrato_id=contrato_id,
+                storage_tipo="fotos",
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
             _log.warning("Azure Blob upload presupuesto grafico %s: %s", blob_path, exc)
             raise HTTPException(

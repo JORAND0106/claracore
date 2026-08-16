@@ -2998,6 +2998,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         setModalGaleriaHoja(true)
         return
       }
+      if (up.status === 413) {
+        const body = await up.json().catch(() => ({}))
+        const detail = body?.detail
+        const msg = typeof detail === 'object'
+          ? (detail?.message || 'Se alcanzó el límite de almacenamiento de este contrato.')
+          : (typeof detail === 'string' ? detail : 'Se alcanzó el límite de almacenamiento de este contrato.')
+        limpiarPreviewFotoLocal()
+        setFotoLocal(registro.foto_url || null)
+        alert(msg)
+        return
+      }
       const res = await sicoeFetchJsonOThrow(up)
       const rid = registro?.id
       const fotoPatch = { foto_url: res.url, foto_numero: res.numero ?? numero }
@@ -14353,6 +14364,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       if (dupUrl) setGaleriaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
                       setGaleriaRefreshKey((k) => k + 1)
                       setModalGaleria(true)
+                      return
+                    }
+                    if (r.status === 413) {
+                      URL.revokeObjectURL(previewUrl)
+                      const body = await r.json().catch(() => ({}))
+                      const detail = body?.detail
+                      const msg = typeof detail === 'object'
+                        ? (detail?.message || 'Se alcanzó el límite de almacenamiento de este contrato.')
+                        : (typeof detail === 'string' ? detail : 'Se alcanzó el límite de almacenamiento de este contrato.')
+                      const aQuota=[...registros]; aQuota[modalRegistro]={...aQuota[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aQuota)
+                      alert(msg)
                       return
                     }
                     const data = await sicoeFetchJsonOThrow(r)
