@@ -108,6 +108,31 @@ function formatAbscisaValor(val) {
   return s
 }
 
+/** Descripción del ítem de cobro (actividad del presupuesto). */
+export function descripcionItemPresupuesto(item) {
+  const ctx = item?.contexto_presupuesto || item?.preview?.contexto_presupuesto
+  return String(
+    ctx?.descripcion
+    || item?.item_descripcion
+    || item?.descripcion_item
+    || '',
+  ).trim()
+}
+
+/** Nodos inicio/fin de la línea (presupuesto o guardados). */
+export function nodosLineaSolicitud(item) {
+  const ctx = item?.contexto_presupuesto || item?.preview?.contexto_presupuesto
+  const inicio = String(item?.nodo_inicio || ctx?.nodo_inicio || '').trim()
+  const final = String(item?.nodo_final || ctx?.nodo_final || '').trim()
+  return { inicio, final }
+}
+
+export function fmtNodosLinea(item) {
+  const { inicio, final } = nodosLineaSolicitud(item)
+  if (inicio && final && inicio !== final) return `${inicio} → ${final}`
+  return inicio || final || '—'
+}
+
 /** Abscisas diligenciadas en la línea (prioriza lo guardado en la solicitud). */
 export function abscisasLineaSolicitud(item) {
   const ctx = item?.preview?.contexto_presupuesto || item?.contexto_presupuesto
