@@ -1899,7 +1899,7 @@ def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, 
 
 
 def _upload_soporte(contrato_id: int, subcarpeta: str, ref_id: int, data: bytes, nombre: str, mime: str) -> dict:
-    from pdf_prepare import PDF_TECHNICAL_MAX_BYTES, PdfPrepareError, prepare_pdf_for_storage
+    from pdf_prepare import PdfPrepareError, prepare_pdf_for_storage
 
     payload = data
     skip_prepare = False
