@@ -11,6 +11,12 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
+function clearSalidaDraft(contratoId) {
+  try {
+    sessionStorage.removeItem(`cc_almacen_salida_draft_${contratoId || 'x'}`)
+  } catch { /* ignore */ }
+}
+
 export default function SalidasPanel({
   permisos, token, t, refreshSignal = 0, onDataLoaded,
 }) {
@@ -33,13 +39,20 @@ export default function SalidasPanel({
   useEffect(() => { reload() }, [reload])
 
   useEffect(() => {
+    // No recargar listado (ni tocar el modal) mientras se diligencia una salida.
     if (refreshSignal > 0) {
       if (!creating) reload()
       else onDataLoaded?.()
     }
   }, [refreshSignal, creating, reload, onDataLoaded])
 
+  const cerrarFormulario = () => {
+    clearSalidaDraft(permisos?.contratoId)
+    setCreating(false)
+  }
+
   const onSaved = async (saved) => {
+    clearSalidaDraft(permisos?.contratoId)
     setCreating(false)
     await reload()
     if (saved?.id && saved?.pdf_generando) {
@@ -191,7 +204,7 @@ export default function SalidasPanel({
           t={t}
           token={token}
           contratoId={permisos?.contratoId}
-          onClose={() => setCreating(false)}
+          onClose={cerrarFormulario}
           onSaved={onSaved}
         />
       )}

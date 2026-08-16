@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import ReceptorObraSelector from './ReceptorObraSelector'
 import UbicacionSolicitudFields from './UbicacionSolicitudFields'
@@ -15,6 +15,35 @@ import {
   nowDatetimeLocalColombia,
 } from './almacenShared'
 
+const DRAFT_KEY_PREFIX = 'cc_almacen_salida_draft_'
+
+function draftStorageKey(contratoId) {
+  return `${DRAFT_KEY_PREFIX}${contratoId || 'x'}`
+}
+
+function readDraft(contratoId) {
+  try {
+    const raw = sessionStorage.getItem(draftStorageKey(contratoId))
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    return data && typeof data === 'object' ? data : null
+  } catch {
+    return null
+  }
+}
+
+function writeDraft(contratoId, payload) {
+  try {
+    sessionStorage.setItem(draftStorageKey(contratoId), JSON.stringify(payload))
+  } catch { /* quota / private mode */ }
+}
+
+function clearDraft(contratoId) {
+  try {
+    sessionStorage.removeItem(draftStorageKey(contratoId))
+  } catch { /* ignore */ }
+}
+
 export default function SalidaForm({
   permisos,
   token,
@@ -28,20 +57,25 @@ export default function SalidaForm({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const sessionUser = getAlmacenSessionUser()
+  const restoredRef = useRef(false)
+  const initialDraft = useMemo(() => readDraft(contratoId), [contratoId])
 
-  const [receptor, setReceptor] = useState(null)
-  const [fechaHora, setFechaHora] = useState(nowDatetimeLocalColombia())
-  const [pkId, setPkId] = useState('')
-  const [pkLabel, setPkLabel] = useState('')
-  const [pkIdId, setPkIdId] = useState(null)
-  const [tramo, setTramo] = useState('')
-  const [costado, setCostado] = useState('')
-  const [abscisaInicial, setAbscisaInicial] = useState('')
-  const [abscisaFinal, setAbscisaFinal] = useState('')
+  const [receptor, setReceptor] = useState(() => initialDraft?.receptor || null)
+  const [fechaHora, setFechaHora] = useState(
+    () => initialDraft?.fechaHora || nowDatetimeLocalColombia(),
+  )
+  const [pkId, setPkId] = useState(() => initialDraft?.pkId || '')
+  const [pkLabel, setPkLabel] = useState(() => initialDraft?.pkLabel || '')
+  const [pkIdId, setPkIdId] = useState(() => initialDraft?.pkIdId ?? null)
+  const [tramo, setTramo] = useState(() => initialDraft?.tramo || '')
+  const [costado, setCostado] = useState(() => initialDraft?.costado || '')
+  const [abscisaInicial, setAbscisaInicial] = useState(() => initialDraft?.abscisaInicial || '')
+  const [abscisaFinal, setAbscisaFinal] = useState(() => initialDraft?.abscisaFinal || '')
   const [entradasDisp, setEntradasDisp] = useState([])
   const [entradaSel, setEntradaSel] = useState(null)
-  const [cantidad, setCantidad] = useState('')
-  const [observaciones, setObservaciones] = useState('')
+  const [entradaItemIdDraft] = useState(() => initialDraft?.entradaItemId ?? null)
+  const [cantidad, setCantidad] = useState(() => initialDraft?.cantidad || '')
+  const [observaciones, setObservaciones] = useState(() => initialDraft?.observaciones || '')
   const [loadingEntradas, setLoadingEntradas] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -55,7 +89,33 @@ export default function SalidaForm({
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
-  const loadEntradas = useCallback((pk) => {
+  // Persistir borrador ante cambio de pestaña / remount (token refresh, focus).
+  useEffect(() => {
+    if (!dirty && !pkId) {
+      clearDraft(contratoId)
+      return undefined
+    }
+    writeDraft(contratoId, {
+      receptor,
+      fechaHora,
+      pkId,
+      pkLabel,
+      pkIdId,
+      tramo,
+      costado,
+      abscisaInicial,
+      abscisaFinal,
+      entradaItemId: entradaSel?.entrada_item_id ?? entradaItemIdDraft,
+      cantidad,
+      observaciones,
+    })
+    return undefined
+  }, [
+    dirty, contratoId, receptor, fechaHora, pkId, pkLabel, pkIdId, tramo, costado,
+    abscisaInicial, abscisaFinal, entradaSel, entradaItemIdDraft, cantidad, observaciones,
+  ])
+
+  const loadEntradas = useCallback((pk, { preferEntradaItemId = null } = {}) => {
     const pkNorm = (pk || '').trim()
     if (!pkNorm) {
       setEntradasDisp([])
@@ -66,8 +126,14 @@ export default function SalidaForm({
     api.listEntradasDisponiblesPorPk(pkNorm)
       .then((rows) => {
         setEntradasDisp(rows)
-        setEntradaSel(null)
-        setCantidad('')
+        if (preferEntradaItemId != null) {
+          const match = rows.find((r) => String(r.entrada_item_id) === String(preferEntradaItemId))
+          setEntradaSel(match || null)
+          if (!match) setCantidad('')
+        } else {
+          setEntradaSel(null)
+          setCantidad('')
+        }
       })
       .catch((e) => {
         setEntradasDisp([])
@@ -76,6 +142,14 @@ export default function SalidaForm({
       })
       .finally(() => setLoadingEntradas(false))
   }, [api])
+
+  // Restaurar entradas tras remount si había PK en el borrador.
+  useEffect(() => {
+    if (restoredRef.current) return
+    restoredRef.current = true
+    if (!pkId) return
+    loadEntradas(pkId, { preferEntradaItemId: entradaItemIdDraft })
+  }, [pkId, entradaItemIdDraft, loadEntradas])
 
   const onPkSeleccionar = (sel) => {
     setError('')
@@ -102,6 +176,7 @@ export default function SalidaForm({
     setEntradasDisp([])
     setEntradaSel(null)
     setCantidad('')
+    clearDraft(contratoId)
   }
 
   const cantidadNum = parseFloat(String(cantidad).replace(',', '.'))
@@ -109,6 +184,13 @@ export default function SalidaForm({
     ? Number(entradaSel.cantidad_recibida_entrada ?? entradaSel.cantidad_recibida ?? 0)
     : 0
   const disponible = entradaSel ? Number(entradaSel.cantidad_disponible || 0) : 0
+  const despachadaPrev = entradaSel ? Number(entradaSel.cantidad_despachada || 0) : 0
+  const ocAutorizada = entradaSel?.cantidad_oc_autorizada != null
+    ? Number(entradaSel.cantidad_oc_autorizada)
+    : null
+  const saldoTrasEsta = Number.isFinite(cantidadNum) && cantidadNum > 0
+    ? Math.max(0, disponible - cantidadNum)
+    : disponible
   const cantidadInvalida = entradaSel && cantidad.trim() && (
     !Number.isFinite(cantidadNum) || cantidadNum <= 0 || cantidadNum > disponible + 1e-9
   )
@@ -149,7 +231,7 @@ export default function SalidaForm({
     if (!cantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum <= 0) {
       errs.cantidad = 'Indique una cantidad válida.'
     } else if (cantidadNum > disponible + 1e-9) {
-      errs.cantidad = `No puede superar la disponible (${fmtCant(disponible)}).`
+      errs.cantidad = `No puede superar el saldo disponible (${fmtCant(disponible)}).`
     }
     if (
       String(abscisaInicial ?? '').trim() !== ''
@@ -179,6 +261,7 @@ export default function SalidaForm({
         observaciones: observaciones.trim() || null,
       }
       const saved = await api.createSalida(body)
+      clearDraft(contratoId)
       onSaved?.(saved)
     } catch (err) {
       setError(err.message)
@@ -243,6 +326,7 @@ export default function SalidaForm({
 
       {pkId && (
         <UbicacionSolicitudFields
+          variant="excel"
           pkId={pkLabel || pkId}
           tramo={tramo}
           costado={costado}
@@ -365,35 +449,86 @@ export default function SalidaForm({
             )}
           </div>
 
-          <AlmacenFieldLabel
-            icon="🔢"
-            label="Cantidad de salida"
-            ayuda={`Recibido en esta entrada: ${fmtCant(recibidoEntrada)} ${entradaSel.unidad || ''}. Máximo disponible para salida: ${fmtCant(disponible)}.`.trim()}
-          />
-          <input
-            type="text"
-            inputMode="decimal"
-            style={{
-              ...ui.input,
-              marginBottom: fieldErrors.cantidad ? 4 : 8,
-              ...inputErrorStyle('cantidad'),
+          <div style={{
+            border: `1px solid ${ui.textMuted}33`,
+            borderRadius: 10,
+            padding: '12px 14px',
+            marginBottom: 12,
+            background: ui.card?.background || '#fff',
+          }}
+          >
+            <AlmacenFieldLabel
+              icon="🔢"
+              label="Cantidad a despachar"
+              ayuda="Indique cuánto sale en este despacho. Puede hacer varias salidas parciales mientras no exceda el saldo disponible de la entrada."
+            />
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(140px, 200px) 1fr',
+              gap: 12,
+              alignItems: 'start',
             }}
-            value={cantidad}
-            disabled={busy}
-            placeholder={`Máx. ${fmtCant(disponible)}`}
-            onChange={(e) => {
-              setCantidad(e.target.value)
-              clearFieldError('cantidad')
-            }}
-          />
-          {fieldErrors.cantidad && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 8 }}>{fieldErrors.cantidad}</div>
-          )}
-          {cantidadInvalida && !fieldErrors.cantidad && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 8 }}>
-              La cantidad no puede superar {fmtCant(disponible)} {entradaSel.unidad}.
+            >
+              <div>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  style={{
+                    ...ui.input,
+                    marginBottom: 4,
+                    ...inputErrorStyle('cantidad'),
+                  }}
+                  value={cantidad}
+                  disabled={busy}
+                  placeholder={`Máx. ${fmtCant(disponible)}`}
+                  onChange={(e) => {
+                    setCantidad(e.target.value)
+                    clearFieldError('cantidad')
+                  }}
+                />
+                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                  {entradaSel.unidad || 'UND'}
+                </div>
+              </div>
+              <div style={{ fontSize: 'var(--cc-xs)', lineHeight: 1.55, color: ui.text }}>
+                <div>
+                  Recibido en entrada:{' '}
+                  <strong>{fmtCant(recibidoEntrada)} {entradaSel.unidad || ''}</strong>
+                </div>
+                <div>
+                  Ya despachado:{' '}
+                  <strong>{fmtCant(despachadaPrev)} {entradaSel.unidad || ''}</strong>
+                </div>
+                <div>
+                  Saldo disponible:{' '}
+                  <strong style={{ color: disponible > 0 ? 'var(--cc-color-positive, #059669)' : '#dc2626' }}>
+                    {fmtCant(disponible)} {entradaSel.unidad || ''}
+                  </strong>
+                </div>
+                {ocAutorizada != null && (
+                  <div style={{ color: ui.textMuted }}>
+                    OC autorizó {fmtCant(ocAutorizada)} {entradaSel.unidad || ''}
+                    {entradaSel.numero_oc != null ? ` (OC ${formatNumeroOcDisplay(entradaSel.numero_oc)})` : ''}
+                  </div>
+                )}
+                {cantidad.trim() && Number.isFinite(cantidadNum) && cantidadNum > 0 && !cantidadInvalida && (
+                  <div style={{ marginTop: 4, fontWeight: 600 }}>
+                    Tras esta salida quedará:{' '}
+                    {fmtCant(saldoTrasEsta)} {entradaSel.unidad || ''}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+            {fieldErrors.cantidad && (
+              <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>{fieldErrors.cantidad}</div>
+            )}
+            {cantidadInvalida && !fieldErrors.cantidad && (
+              <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
+                La cantidad no puede superar el saldo disponible ({fmtCant(disponible)} {entradaSel.unidad}).
+              </div>
+            )}
+          </div>
+
           {alertaProximidad && (
             <div style={{
               background: '#fffbeb',
