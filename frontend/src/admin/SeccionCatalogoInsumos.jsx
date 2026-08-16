@@ -860,7 +860,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <IconNewInsumo />
             </IconActionBtn>
             <span
-              title="Cree el insumo con la cotización ganadora (OCR opcional) y adjunte las cotizaciones de soporte en PDF (máx. 200 KB c/u). El rendimiento puede completarse después."
+              title="Cree el insumo con la cotización ganadora (OCR opcional) y adjunte las cotizaciones de soporte en PDF. Se comprimen automáticamente si no tienen firma digital certificada; el peso cuenta contra la cuota del contrato."
               style={{ cursor: 'help', opacity: 0.6, fontSize: 'var(--cc-md)' }}
             >
               ?
@@ -1331,7 +1331,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                             Documento principal — OCR y datos de precio
                           </span>
                         </div>
-                        <Field label="PDF cotización ganadora (máx. 200 KB)" hint="Adjunte el PDF y use OCR para autocompletar proveedor, costo e impuestos en las otras pestañas.">
+                        <Field label="PDF cotización ganadora" hint="Adjunte el PDF y use OCR para autocompletar proveedor, costo e impuestos. Sin firma certificada se comprime al cargar; el peso final cuenta en la cuota del contrato.">
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexDirection: compactCatalog ? 'column' : 'row' }}>
                             {compactCatalog && (
                               <>
@@ -1398,7 +1398,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                             Comparativas adicionales — solo archivo PDF
                           </span>
                         </div>
-                        <Field label={`PDFs de soporte (máx. 200 KB c/u — mín. ${Math.max(0, cotMin - 1)} requeridos)`}>
+                        <Field label={`PDFs de soporte (mín. ${Math.max(0, cotMin - 1)} requeridos)`}>
                           <input
                             type="file"
                             accept="application/pdf"

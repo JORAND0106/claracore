@@ -1320,7 +1320,7 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
 
    Pestaña 3 — **Cotizaciones**
    - Checkbox **requiere cotizacion** (default activo).
-   - Si requiere cotización: número, fecha, vigencia; PDF **cotización ganadora** (máx. 200 KB);
+   - Si requiere cotización: número, fecha, vigencia; PDF **cotización ganadora** (compresión automática si no tiene firma certificada; peso contra cuota del contrato);
      PDFs de **soporte** comparativos (cantidad mínima configurable, default 3 incluyendo ganadora).
    - Botón **OCR** sobre PDF ganadora: autocompleta proveedor, NIT, fecha, costo e IVA (reutiliza motor OCR contabilidad).
    - Si NO requiere cotización: el insumo queda disponible sin PDFs (solo para casos excepcionales).
@@ -1591,7 +1591,7 @@ CATÁLOGO DE INSUMOS — PRECISIÓN OBLIGATORIA
 - Las solicitudes de Almacén **solo** seleccionan insumos de este catálogo; no invente creación rápida sin permiso catálogo.
 - Código formato `CC-{segmento}-NNN`; auto al crear; **inmutable** al editar.
 - Modal en **3 pestañas**: Proveedor | Insumo | Cotizaciones.
-- Cotizaciones: mínimo configurable (default 3) = 1 ganadora + soportes PDF; máx. 200 KB c/u.
+- Cotizaciones: mínimo configurable (default 3) = 1 ganadora + soportes PDF; sin límite fijo de 200 KB (rige cuota por contrato; PDFs sin firma certificada se comprimen al cargar).
 - OCR solo sobre PDF ganadora (permiso crear); no sustituye revisión humana.
 - CSV: modos Agregar / Reemplazar; `requiere_cotizacion=true` en CSV se rechaza (PDFs solo formulario).
 - Eliminar = desactivar; bloqueado si insumo en solicitud borrador/enviada.

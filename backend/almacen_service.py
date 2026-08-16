@@ -1899,14 +1899,38 @@ def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, 
 
 
 def _upload_soporte(contrato_id: int, subcarpeta: str, ref_id: int, data: bytes, nombre: str, mime: str) -> dict:
-    if len(data) > MAX_SOPORTE_BYTES:
+    from pdf_prepare import PDF_TECHNICAL_MAX_BYTES, PdfPrepareError, prepare_pdf_for_storage
+
+    payload = data
+    skip_prepare = False
+    if mime == "application/pdf":
+        try:
+            prepared = prepare_pdf_for_storage(payload)
+        except PdfPrepareError as exc:
+            raise ValueError(str(exc)) from exc
+        payload = prepared.data
+        skip_prepare = True
+    elif len(payload) > MAX_SOPORTE_BYTES:
         raise ValueError("El archivo supera el tamaño máximo (20 MB).")
     if mime not in SOPORTE_MIMES:
         raise ValueError("Formato no permitido. Use PDF, JPEG, PNG o WebP.")
     safe = _safe_filename(nombre)
     blob_path = f"almacen-soportes/{contrato_id}/{subcarpeta}/{ref_id}/{safe}"
-    upload_blob_private(blob_path, data, mime, overwrite=True)
-    return {"blob_path": blob_path, "nombre": safe, "mime": mime}
+    upload_blob_private(
+        blob_path,
+        payload,
+        mime,
+        overwrite=True,
+        contrato_id=contrato_id,
+        storage_tipo="documentos" if mime == "application/pdf" else None,
+        skip_pdf_prepare=skip_prepare,
+    )
+    return {
+        "blob_path": blob_path,
+        "nombre": safe,
+        "mime": mime,
+        "tamano_bytes": len(payload),
+    }
 
 
 def upload_factura_oc(
