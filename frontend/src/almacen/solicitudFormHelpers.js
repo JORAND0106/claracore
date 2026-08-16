@@ -126,6 +126,9 @@ export function lineasSuperanNegociado(items) {
 
 export function parseSolicitudApiError(err) {
   const raw = String(err?.message || err || '')
+  if (/failed to fetch|networkerror|network request failed|load failed|fetch failed|timeout|aborted|econnreset|econnrefused|etimedout/i.test(raw)) {
+    return 'No se pudo completar la operación (tiempo de espera o conexión). Verifique su conexión e intente de nuevo. Si el problema continúa, la solicitud puede tener muchas líneas: guarde el borrador e intente enviar a aprobación otra vez.'
+  }
   if (/APIError|PGRST|schema cache|column.*could not find/i.test(raw)) {
     return 'No se pudo guardar la solicitud por un error interno. Intente de nuevo; si persiste, contacte al administrador.'
   }
@@ -137,6 +140,9 @@ export function parseSolicitudApiError(err) {
   }
   if (/no encontrad|404/i.test(raw)) {
     return 'No se encontró el recurso solicitado. Verifique los datos e intente de nuevo.'
+  }
+  if (/^failed$/i.test(raw.trim()) || raw.trim().toLowerCase() === 'error') {
+    return 'La operación falló sin detalle del servidor. Intente de nuevo; si persiste, contacte al administrador.'
   }
   if (raw.length > 180) {
     return 'Ocurrió un error al guardar. Verifique los datos e intente de nuevo.'

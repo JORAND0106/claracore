@@ -280,22 +280,85 @@ def _next_consecutivo(contrato_id: int, tabla: str, col: str) -> int:
 
 
 def _fetch_ppto_row(presupuesto_id: int, contrato_id: int) -> dict:
+    rows = _fetch_ppto_rows_batch([presupuesto_id], contrato_id)
+    row = rows.get(int(presupuesto_id))
+    if not row:
+        raise ValueError("Ítem de presupuesto no encontrado.")
+    return row
+
+
+def _fetch_ppto_rows_batch(presupuesto_ids: List[int], contrato_id: int) -> Dict[int, dict]:
+    ids = sorted({int(x) for x in presupuesto_ids if x})
+    if not ids:
+        return {}
     sb = _sb()
     rows = (
         sb.table("presupuesto")
-        .select("id, pk_id, capitulo, item, descripcion, und, cant_total, contrato_id")
-        .eq("id", presupuesto_id)
-        .limit(1)
+        .select(
+            "id, pk_id, capitulo, item, descripcion, und, cant_total, contrato_id, "
+            "tramo, abs_inicio, abs_final, no_inicio, no_final"
+        )
+        .in_("id", ids)
         .execute()
         .data
         or []
     )
+    out: Dict[int, dict] = {}
+    for row in rows:
+        if int(row.get("contrato_id") or 0) != int(contrato_id):
+            continue
+        out[int(row["id"])] = row
+    return out
+
+
+def _insert_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) -> None:
     if not rows:
-        raise ValueError("Ítem de presupuesto no encontrado.")
-    row = rows[0]
-    if int(row.get("contrato_id") or 0) != contrato_id:
-        raise ValueError("El ítem de presupuesto no pertenece a este contrato.")
-    return row
+        return
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        sb.table("almacen_solicitud_item").insert(chunk).execute()
+
+
+def _cotizaciones_catalogo_batch(sb, insumo_ids: List[int]) -> Dict[int, dict]:
+    """Cotizaciones de catálogo para varios insumos (2 queries)."""
+    ids = sorted({int(x) for x in insumo_ids if x})
+    empty = {"total": 0, "ganadora": False, "soportes": 0}
+    if not ids:
+        return {}
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, soporte_pdf_blob_path, cotizacion_numero, proveedor_id, valor_compra_referencia")
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    soportes = (
+        sb.table("almacen_insumo_cotizacion_soporte")
+        .select("id, insumo_id")
+        .in_("insumo_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    sop_count: Dict[int, int] = {i: 0 for i in ids}
+    for s in soportes:
+        iid = int(s.get("insumo_id") or 0)
+        if iid in sop_count:
+            sop_count[iid] += 1
+    out: Dict[int, dict] = {i: dict(empty) for i in ids}
+    for row in rows:
+        iid = int(row["id"])
+        tiene_ganadora = bool(row.get("soporte_pdf_blob_path") or row.get("cotizacion_numero"))
+        n_sop = sop_count.get(iid, 0)
+        out[iid] = {
+            "total": (1 if tiene_ganadora else 0) + n_sop,
+            "ganadora": tiene_ganadora,
+            "soportes": n_sop,
+            "valor_compra_referencia": _to_float(row.get("valor_compra_referencia")),
+            "proveedor_id": row.get("proveedor_id"),
+        }
+    return out
 
 
 def _cotizaciones_catalogo_insumo(sb, insumo_id: int) -> dict:
@@ -429,6 +492,7 @@ def _enrich_solicitud(
     validadores_pendientes: Optional[List[str]] = None,
     ver_economicos: bool = True,
     ligera: bool = False,
+    include_rentabilidad: bool = False,
 ) -> dict:
     sid = sol["id"]
     items = (
@@ -465,93 +529,119 @@ def _enrich_solicitud(
                 _strip_economics_item(it)
         sol["items"] = items
     else:
+        from almacen_insumos_service import (
+            _build_analisis_valor,
+            apply_saldo_flags_batch,
+            get_analisis_rentabilidad_por_oc,
+        )
+
+        insumo_ids = sorted({int(it["insumo_id"]) for it in items if it.get("insumo_id")})
+        listado_ids = sorted({
+            int(it["listado_precio_id"]) for it in items
+            if it.get("listado_precio_id") and not it.get("insumo_id")
+        })
+        insumo_meta: Dict[int, dict] = {}
+        if insumo_ids:
+            for r in (
+                sb.table("almacen_insumo")
+                .select("id, codigo, descripcion, cantidad_negociada, valor_negociado_total, unidad")
+                .in_("id", insumo_ids)
+                .execute()
+                .data
+                or []
+            ):
+                insumo_meta[int(r["id"])] = r
+        listado_codes: Dict[int, str] = {}
+        if listado_ids:
+            for r in (
+                sb.table("listado_precios")
+                .select("id, item_numero")
+                .in_("id", listado_ids)
+                .execute()
+                .data
+                or []
+            ):
+                listado_codes[int(r["id"])] = (r.get("item_numero") or "").strip() or None
+
+        cot_map = _cotizaciones_catalogo_batch(sb, insumo_ids)
+        prov_ids = sorted({
+            int(c["proveedor_id"]) for c in cot_map.values() if c.get("proveedor_id")
+        })
+        prov_names: Dict[int, str] = {}
+        if prov_ids:
+            for r in (
+                sb.table("almacen_proveedor")
+                .select("id, razon_social")
+                .in_("id", prov_ids)
+                .execute()
+                .data
+                or []
+            ):
+                prov_names[int(r["id"])] = r.get("razon_social")
+
+        ppto_ids = [int(it["presupuesto_id"]) for it in items if it.get("presupuesto_id")]
+        ppto_map = _fetch_ppto_rows_batch(ppto_ids, int(sol["contrato_id"]))
+        for it in items:
+            pid = it.get("presupuesto_id")
+            if pid and int(pid) in ppto_map:
+                pr = ppto_map[int(pid)]
+                if it.get("cant_presupuestada") is None:
+                    it["cant_presupuestada"] = _to_float(pr.get("cant_total"))
+                if not it.get("capitulo"):
+                    it["capitulo"] = pr.get("capitulo")
+                if not it.get("item"):
+                    it["item"] = pr.get("item")
+
+        apply_saldo_flags_batch(
+            int(sol["contrato_id"]),
+            items,
+            exclude_solicitud_id=None,
+            descontar_linea_actual=False,
+        )
+
         for it in items:
             insumo_id = it.get("insumo_id")
             listado_id = it.get("listado_precio_id")
+            if insumo_id and int(insumo_id) in insumo_meta:
+                meta = insumo_meta[int(insumo_id)]
+                it["insumo_codigo"] = (meta.get("codigo") or "").strip() or None
+            elif listado_id and int(listado_id) in listado_codes:
+                it["insumo_codigo"] = listado_codes[int(listado_id)]
             if insumo_id:
-                ins_row = (
-                    sb.table("almacen_insumo")
-                    .select("codigo, descripcion")
-                    .eq("id", int(insumo_id))
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if ins_row:
-                    it["insumo_codigo"] = (ins_row[0].get("codigo") or "").strip() or None
-            elif listado_id:
-                lp = (
-                    sb.table("listado_precios")
-                    .select("item_numero")
-                    .eq("id", int(listado_id))
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if lp:
-                    it["insumo_codigo"] = (lp[0].get("item_numero") or "").strip() or None
-            if insumo_id:
-                cat_cot = _cotizaciones_catalogo_insumo(sb, int(insumo_id))
+                cat_cot = cot_map.get(int(insumo_id)) or {
+                    "total": 0, "ganadora": False, "soportes": 0,
+                }
                 it["cotizaciones_catalogo"] = cat_cot
                 it["cotizaciones_count"] = cat_cot.get("total", 0)
                 pid = cat_cot.get("proveedor_id")
-                if pid:
-                    prov = (
-                        sb.table("almacen_proveedor")
-                        .select("razon_social")
-                        .eq("id", int(pid))
-                        .limit(1)
-                        .execute()
-                        .data
-                        or []
-                    )
-                    if prov:
-                        it["proveedor_catalogo"] = prov[0].get("razon_social")
+                if pid and int(pid) in prov_names:
+                    it["proveedor_catalogo"] = prov_names[int(pid)]
             else:
                 it["cotizaciones_catalogo"] = {"total": 0, "ganadora": False, "soportes": 0}
                 it["cotizaciones_count"] = 0
             it["cotizaciones"] = []
-            if insumo_id:
-                try:
-                    from almacen_insumos_service import get_presupuesto_context
-                    ctx = get_presupuesto_context(
-                        sol["contrato_id"],
-                        int(it["presupuesto_id"]),
-                        str(it.get("pk_id") or ""),
-                        _to_float(it.get("cantidad")),
-                        capitulo_listado=it.get("capitulo"),
-                        item_listado=it.get("item"),
-                    )
-                    it["contexto_presupuesto"] = ctx
-                    it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
-                except Exception:
-                    pass
-                try:
-                    from almacen_insumos_service import get_contexto_negociado_insumo
-                    ctx_neg = get_contexto_negociado_insumo(
-                        sol["contrato_id"],
-                        int(insumo_id),
-                        _to_float(it.get("cantidad")),
-                    )
-                    it["contexto_negociado"] = ctx_neg
-                    if ctx_neg.get("tiene_negociado"):
-                        it["supera_negociado"] = bool(it.get("supera_negociado")) or ctx_neg.get("supera_negociado")
-                except Exception:
-                    pass
+            # Completar nodos/abs en contexto desde fila presupuesto
+            pid = it.get("presupuesto_id")
+            if pid and int(pid) in ppto_map and isinstance(it.get("contexto_presupuesto"), dict):
+                pr = ppto_map[int(pid)]
+                ctx = it["contexto_presupuesto"]
+                ctx.setdefault("descripcion", pr.get("descripcion"))
+                ctx.setdefault("unidad", pr.get("und"))
+                ctx.setdefault("tramo", pr.get("tramo"))
+                ctx.setdefault("abs_inicio", pr.get("abs_inicio"))
+                ctx.setdefault("abs_final", pr.get("abs_final"))
+                ctx.setdefault("nodo_inicio", pr.get("no_inicio"))
+                ctx.setdefault("nodo_final", pr.get("no_final"))
             vc = _to_float(it.get("valor_compra_unitario"))
             vlr = _to_float(it.get("vlr_unitario_cobro"))
             cant = _to_float(it.get("cantidad"))
-            from almacen_insumos_service import _build_analisis_valor
             it["analisis_valor"] = _build_analisis_valor(
                 cant,
                 vc if vc > 0 else None,
                 vlr,
             )
-            if ver_economicos and it.get("id"):
+            if include_rentabilidad and ver_economicos and it.get("id"):
                 try:
-                    from almacen_insumos_service import get_analisis_rentabilidad_por_oc
                     it["analisis_rentabilidad"] = get_analisis_rentabilidad_por_oc(
                         int(sol["contrato_id"]),
                         solicitud_item_id=int(it["id"]),
@@ -738,6 +828,7 @@ def get_solicitud(
     *,
     ver_economicos: bool = True,
     ligera: bool = False,
+    include_rentabilidad: bool = False,
 ) -> dict:
     sb = _sb()
     rows = (
@@ -752,13 +843,29 @@ def get_solicitud(
     )
     if not rows:
         raise ValueError("Solicitud no encontrada.")
-    return _enrich_solicitud(sb, rows[0], ver_economicos=ver_economicos, ligera=ligera)
+    return _enrich_solicitud(
+        sb,
+        rows[0],
+        ver_economicos=ver_economicos,
+        ligera=ligera,
+        include_rentabilidad=include_rentabilidad,
+    )
 
 
 def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 0, exclude_solicitud_id: Optional[int] = None) -> List[dict]:
     if not items:
         raise ValueError("Debe incluir al menos un material en la solicitud.")
-    from almacen_insumos_service import resolve_insumo_for_solicitud
+    from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
+
+    # Prefetch presupuesto rows (una query) para líneas sin resolve_insumo.
+    ppto_ids_prefetch = []
+    for raw in items:
+        desc_sol = (raw.get("descripcion_solicitada") or "").strip()
+        if raw.get("insumo_id") or raw.get("listado_precio_id"):
+            continue
+        if raw.get("presupuesto_id"):
+            ppto_ids_prefetch.append(int(raw["presupuesto_id"]))
+    ppto_cache = _fetch_ppto_rows_batch(ppto_ids_prefetch, contrato_id)
 
     out = []
     for raw in items:
@@ -770,7 +877,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         desc_sol = (raw.get("descripcion_solicitada") or "").strip()
         if desc_sol and not raw.get("insumo_id") and not raw.get("listado_precio_id"):
             pid = int(raw["presupuesto_id"])
-            ppto = _fetch_ppto_row(pid, contrato_id)
+            ppto = ppto_cache.get(pid) or _fetch_ppto_row(pid, contrato_id)
             cant = _to_float(raw.get("cantidad"))
             if cant <= 0:
                 raise ValueError("La cantidad debe ser mayor a cero.")
@@ -779,8 +886,6 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
             cap_cobro = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or ppto.get("capitulo") or "").strip()
             item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
-            from almacen_insumos_service import get_listado_precio_unitario
-            vlr_cobro = get_listado_precio_unitario(contrato_id, cap_cobro, item_cobro)
             out.append({
                 "presupuesto_id": pid,
                 "pk_id": pk or None,
@@ -794,7 +899,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 "es_recurrente": bool(raw.get("es_recurrente")),
                 "cant_presupuestada": _to_float(ppto.get("cant_total")),
                 "valor_compra_unitario": None,
-                "vlr_unitario_cobro": vlr_cobro if vlr_cobro is not None else 0,
+                "vlr_unitario_cobro": 0,
                 "supera_presupuesto": False,
                 "supera_negociado": False,
                 "tramo": raw.get("tramo"),
@@ -807,7 +912,9 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             })
             continue
         if raw.get("insumo_id") or raw.get("listado_precio_id"):
-            resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw)
+            resolved = resolve_insumo_for_solicitud(
+                contrato_id, user_id, raw, skip_context=True
+            )
             # Conservar descripción solicitada si venía (legado / remapeo)
             if desc_sol:
                 resolved["descripcion_solicitada"] = desc_sol
@@ -819,7 +926,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             out.append({k: v for k, v in resolved.items() if k not in ("contexto_presupuesto", "analisis_valor")})
             continue
         pid = int(raw["presupuesto_id"])
-        ppto = _fetch_ppto_row(pid, contrato_id)
+        ppto = ppto_cache.get(pid) or _fetch_ppto_row(pid, contrato_id)
         cant = _to_float(raw.get("cantidad"))
         if cant <= 0:
             raise ValueError("La cantidad debe ser mayor a cero.")
@@ -829,8 +936,6 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
         cap_cobro = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or ppto.get("capitulo") or "").strip()
         item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
-        from almacen_insumos_service import get_listado_precio_unitario
-        vlr_cobro = get_listado_precio_unitario(contrato_id, cap_cobro, item_cobro)
         out.append({
             "presupuesto_id": pid,
             "pk_id": pk or None,
@@ -843,58 +948,17 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "es_recurrente": bool(raw.get("es_recurrente")),
             "cant_presupuestada": _to_float(ppto.get("cant_total")),
             "valor_compra_unitario": _to_float(raw.get("valor_compra_unitario")) or None,
-            "vlr_unitario_cobro": vlr_cobro if vlr_cobro is not None else 0,
+            "vlr_unitario_cobro": 0,
             "supera_presupuesto": False,
         })
     if out:
-        from almacen_insumos_service import get_presupuesto_context
-        from collections import defaultdict
-        batch_qty: dict = defaultdict(float)
-        for it in out:
-            key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
-            batch_qty[key] += _to_float(it.get("cantidad"))
-        for it in out:
-            key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
-            if not it.get("pk_id"):
-                continue
-            ctx = get_presupuesto_context(
-                contrato_id,
-                int(it["presupuesto_id"]),
-                str(it.get("pk_id") or ""),
-                _to_float(it.get("cantidad")),
-                exclude_solicitud_id=exclude_solicitud_id,
-                cantidad_extra_borrador=batch_qty[key] - _to_float(it.get("cantidad")),
-                descontar_linea_actual=True,
-                capitulo_listado=it.get("capitulo"),
-                item_listado=it.get("item"),
-            )
-            it["supera_presupuesto"] = ctx.get("supera_presupuesto")
-            it["contexto_presupuesto"] = ctx
-            it["cant_presupuestada"] = ctx.get("cant_presupuestada")
-            # No pisar cobro manual del Gerencial si ya viene set
-            if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
-                if ctx.get("vlr_unitario_cobro") is not None:
-                    it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
-        from almacen_insumos_service import get_contexto_negociado_insumo
-        batch_insumo: dict = defaultdict(float)
-        for it in out:
-            if it.get("insumo_id"):
-                batch_insumo[int(it["insumo_id"])] += _to_float(it.get("cantidad"))
-        for it in out:
-            iid = it.get("insumo_id")
-            if not iid:
-                it["supera_negociado"] = False
-                continue
-            key = int(iid)
-            ctx_neg = get_contexto_negociado_insumo(
-                contrato_id,
-                key,
-                _to_float(it.get("cantidad")),
-                exclude_solicitud_id=exclude_solicitud_id,
-                cantidad_extra_borrador=batch_insumo[key] - _to_float(it.get("cantidad")),
-            )
-            it["supera_negociado"] = ctx_neg.get("supera_negociado")
-            it["contexto_negociado"] = ctx_neg
+        # Una pasada: listado cacheado + acumulados en lote (sin N× get_presupuesto_context).
+        apply_saldo_flags_batch(
+            contrato_id,
+            out,
+            exclude_solicitud_id=exclude_solicitud_id,
+            descontar_linea_actual=True,
+        )
     return out
 
 
@@ -1010,12 +1074,15 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
     if not ins:
         raise ValueError("No se pudo crear la solicitud.")
     sid = ins[0]["id"]
+    rows = []
     for i, it in enumerate(items, start=1):
         row = _item_for_db_insert(it)
         row["solicitud_id"] = sid
         row["numero_linea"] = i
-        sb.table("almacen_solicitud_item").insert(row).execute()
-    return get_solicitud(contrato_id, sid)
+        rows.append(row)
+    _insert_solicitud_items_batch(sb, rows)
+    # Respuesta ligera: el formulario no necesita contexto/rentabilidad por línea.
+    return get_solicitud(contrato_id, sid, ligera=True)
 
 
 def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: dict) -> dict:
@@ -1043,7 +1110,7 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
         if not upd:
             raise ValueError("La solicitud aprobada solo permite editar el título.")
         sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
-        return get_solicitud(contrato_id, solicitud_id)
+        return get_solicitud(contrato_id, solicitud_id, ligera=True)
     if not _solicitud_editable(estado):
         raise ValueError("La solicitud ya fue aprobada y no puede editarse.")
     upd = {}
@@ -1056,14 +1123,16 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     if "items" in body:
         sb.table("almacen_solicitud_item").delete().eq("solicitud_id", solicitud_id).execute()
         items = _validate_items_payload(body["items"], contrato_id, user_id, exclude_solicitud_id=solicitud_id)
+        rows = []
         for i, it in enumerate(items, start=1):
             row = _item_for_db_insert(it)
             row["solicitud_id"] = solicitud_id
             row["numero_linea"] = i
             if estado in ("enviada", "rechazada"):
                 row["estado_validacion"] = "pendiente"
-            sb.table("almacen_solicitud_item").insert(row).execute()
-    return get_solicitud(contrato_id, solicitud_id)
+            rows.append(row)
+        _insert_solicitud_items_batch(sb, rows)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def add_cotizacion(
