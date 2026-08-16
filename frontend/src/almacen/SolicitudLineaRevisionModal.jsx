@@ -14,9 +14,40 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
+function Section({ ui, title, children, style }) {
+  return (
+    <section
+      style={{
+        border: `1px solid ${ui.textMuted}33`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        background: 'var(--cc-almacen-bg-card, #fff)',
+        ...style,
+      }}
+    >
+      {title && (
+        <div style={{
+          fontSize: 'var(--cc-xs)',
+          fontWeight: 800,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: ui.textMuted,
+          marginBottom: 10,
+          paddingBottom: 8,
+          borderBottom: `1px solid ${ui.textMuted}22`,
+        }}
+        >
+          {title}
+        </div>
+      )}
+      {children}
+    </section>
+  )
+}
+
 /**
- * Modal enfocado en la revisión Gerencial de una línea:
- * texto libre RO, insumo, cantidad, costo/cobro, comentarios, aprobar/rechazar.
+ * Modal enfocado en la revisión Gerencial de una línea.
+ * Ancho amplio y bloques separados por bordes definidos.
  */
 export default function SolicitudLineaRevisionModal({
   sol,
@@ -136,15 +167,15 @@ export default function SolicitudLineaRevisionModal({
     setError('')
     try {
       const r = await guardarMapeo()
-      if (r) {
-        onUpdated?.(r)
-      }
+      if (r) onUpdated?.(r)
     } catch (e) {
       setError(e.message || 'No se pudo guardar el mapeo.')
     } finally {
       setBusy(false)
     }
   }
+
+  const dialogBorder = `1px solid ${ui.textMuted}40`
 
   return (
     <div
@@ -156,7 +187,7 @@ export default function SolicitudLineaRevisionModal({
         display: 'flex',
         alignItems: compact ? 'flex-end' : 'center',
         justifyContent: 'center',
-        padding: compact ? 0 : 16,
+        padding: compact ? 0 : 20,
       }}
       onClick={() => !busy && onClose?.()}
     >
@@ -167,32 +198,43 @@ export default function SolicitudLineaRevisionModal({
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
         style={{
-          ...almacenFormModalDialogStyle({ width: 'min(720px, 100%)', compact }),
-          maxHeight: compact ? '92vh' : '90vh',
+          ...almacenFormModalDialogStyle({ width: 'min(960px, 100%)', compact }),
+          maxHeight: compact ? '94vh' : '92vh',
           overflow: 'auto',
+          border: dialogBorder,
+          boxShadow: '0 24px 64px rgba(15, 23, 42, 0.28)',
+          padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '22px 24px 24px',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+        <header style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 16,
+          paddingBottom: 14,
+          borderBottom: `1px solid ${ui.textMuted}33`,
+        }}
+        >
           <div style={{ minWidth: 0 }}>
             <div id="solicitud-linea-revision-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
               Revisión de línea {item.numero_linea != null ? `#${item.numero_linea}` : ''}
             </div>
             {metaLinea && (
-              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
+              <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
                 {metaLinea}
               </div>
             )}
           </div>
           <button
             type="button"
-            style={{ ...ui.btnSecondary, padding: '6px 12px', flexShrink: 0 }}
+            style={{ ...ui.btnSecondary, padding: '8px 14px', flexShrink: 0 }}
             disabled={busy}
             onClick={onClose}
             aria-label="Cerrar"
           >
             ✕
           </button>
-        </div>
+        </header>
 
         {error && (
           <div style={{
@@ -200,8 +242,8 @@ export default function SolicitudLineaRevisionModal({
             background: '#fef2f2',
             border: '1px solid #fecaca',
             borderRadius: 8,
-            padding: '8px 10px',
-            marginBottom: 10,
+            padding: '10px 12px',
+            marginBottom: 14,
             fontSize: 'var(--cc-sm)',
           }}
           >
@@ -209,145 +251,164 @@ export default function SolicitudLineaRevisionModal({
           </div>
         )}
 
-        <div style={{
-          marginBottom: 12,
-          padding: '10px 12px',
-          borderRadius: 8,
-          background: `${ui.accentSoft}`,
-          border: `1px solid ${ui.textMuted}22`,
-        }}
-        >
-          <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted, marginBottom: 4 }}>
-            Descripción del Contratista
-          </div>
-          <div style={{ fontSize: 'var(--cc-sm)', whiteSpace: 'pre-wrap' }}>
-            {textoLibreSolicitudItem(item) || '—'}
-          </div>
-        </div>
-
-        {puedeEditar ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <InsumoSearchTable
-              value={draft.insumo}
-              disabled={busy}
-              onChange={(ins) => setDraft((d) => ({
-                ...d,
-                insumo: ins,
-                valor_compra_unitario: ins?.tiene_precio_compra
-                  ? String(ins.valor_compra_referencia ?? '')
-                  : d.valor_compra_unitario,
-              }))}
-            />
-
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Section ui={ui} title="Descripción del Contratista">
             <div style={{
-              display: 'grid',
-              gridTemplateColumns: compact ? '1fr' : (verEconomicos ? 'repeat(3, minmax(0, 1fr))' : '1fr'),
-              gap: 8,
+              fontSize: 'var(--cc-sm)',
+              whiteSpace: 'pre-wrap',
+              lineHeight: 1.45,
+              minHeight: 48,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: `${ui.accentSoft}`,
+              border: `1px solid ${ui.textMuted}22`,
             }}
             >
-              <div>
-                <AlmacenFieldLabel icon="🔢" label="Cantidad" compact />
-                <input
-                  style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={draft.cantidad}
+              {textoLibreSolicitudItem(item) || '—'}
+            </div>
+          </Section>
+
+          {puedeEditar ? (
+            <>
+              <Section ui={ui} title="Insumo del catálogo">
+                <InsumoSearchTable
+                  value={draft.insumo}
                   disabled={busy}
-                  onChange={(e) => setDraft((d) => ({ ...d, cantidad: e.target.value }))}
+                  onChange={(ins) => setDraft((d) => ({
+                    ...d,
+                    insumo: ins,
+                    valor_compra_unitario: ins?.tiene_precio_compra
+                      ? String(ins.valor_compra_referencia ?? '')
+                      : d.valor_compra_unitario,
+                  }))}
                 />
-              </div>
-              {verEconomicos && (
-                <>
-                  <div>
-                    <AlmacenFieldLabel icon="💵" label="Costo de compra" compact ayuda="Valor unitario de adquisición." />
-                    <input
-                      style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={draft.valor_compra_unitario}
-                      disabled={busy}
-                      onChange={(e) => setDraft((d) => ({ ...d, valor_compra_unitario: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <AlmacenFieldLabel icon="💰" label="Valor de cobro" compact ayuda="Valor unitario a cobrar." />
-                    <input
-                      style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={draft.vlr_unitario_cobro}
-                      disabled={busy}
-                      onChange={(e) => setDraft((d) => ({ ...d, vlr_unitario_cobro: e.target.value }))}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
+              </Section>
 
-            <div>
-              <AlmacenFieldLabel icon="💬" label="Comentarios" compact ayuda="Motivo si rechaza este ítem." />
-              <textarea
-                style={{
-                  ...ui.input,
-                  minHeight: 72,
-                  resize: 'vertical',
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  fontSize: 'var(--cc-sm)',
+              <Section ui={ui} title="Cantidad y costos">
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: compact ? '1fr' : (verEconomicos ? 'repeat(3, minmax(0, 1fr))' : '1fr'),
+                  gap: 14,
                 }}
-                placeholder="Motivo si rechaza este ítem…"
-                value={motivo}
-                disabled={busy}
-                onChange={(e) => setMotivo(e.target.value)}
-              />
-            </div>
+                >
+                  <div>
+                    <AlmacenFieldLabel icon="🔢" label="Cantidad" compact />
+                    <input
+                      style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={draft.cantidad}
+                      disabled={busy}
+                      onChange={(e) => setDraft((d) => ({ ...d, cantidad: e.target.value }))}
+                    />
+                  </div>
+                  {verEconomicos && (
+                    <>
+                      <div>
+                        <AlmacenFieldLabel icon="💵" label="Costo de compra" compact ayuda="Valor unitario de adquisición." />
+                        <input
+                          style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={draft.valor_compra_unitario}
+                          disabled={busy}
+                          onChange={(e) => setDraft((d) => ({ ...d, valor_compra_unitario: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <AlmacenFieldLabel icon="💰" label="Valor de cobro" compact ayuda="Valor unitario a cobrar." />
+                        <input
+                          style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={draft.vlr_unitario_cobro}
+                          disabled={busy}
+                          onChange={(e) => setDraft((d) => ({ ...d, vlr_unitario_cobro: e.target.value }))}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </Section>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-              <button
-                type="button"
-                style={{ ...ui.btnSecondary, padding: '8px 12px' }}
-                disabled={busy}
-                onClick={() => { void soloGuardar() }}
+              <Section ui={ui} title="Comentarios">
+                <textarea
+                  style={{
+                    ...ui.input,
+                    minHeight: 110,
+                    resize: 'vertical',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    fontSize: 'var(--cc-sm)',
+                    padding: '12px 14px',
+                    lineHeight: 1.45,
+                  }}
+                  placeholder="Motivo si rechaza este ítem…"
+                  value={motivo}
+                  disabled={busy}
+                  onChange={(e) => setMotivo(e.target.value)}
+                />
+              </Section>
+
+              <section style={{
+                border: `1px solid ${ui.textMuted}33`,
+                borderRadius: 10,
+                padding: '14px 16px',
+                background: `${ui.accentSoft}55`,
+                display: 'flex',
+                gap: 10,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+              }}
               >
-                {busy ? 'Guardando…' : 'Guardar mapeo'}
-              </button>
-              <button
-                type="button"
-                style={btnSuccessStyle(ui.btnPrimary)}
-                disabled={busy}
-                onClick={() => { void validar('aprobar') }}
-              >
-                ✓ Aprobar ítem
-              </button>
-              <button
-                type="button"
-                style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}
-                disabled={busy}
-                onClick={() => { void validar('rechazar') }}
-              >
-                ✕ Rechazar ítem
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-            <div style={{ marginBottom: 8 }}>
-              Insumo: <strong style={{ color: ui.text }}>{item.material_descripcion || '—'}</strong>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              Cantidad: <strong style={{ color: ui.text }}>{fmtCant(item.cantidad)} {item.unidad || ''}</strong>
-            </div>
-            {verEconomicos && (
-              <div style={{ marginBottom: 8 }}>
-                Costo: {fmtCant(item.valor_compra_unitario)} · Cobro: {fmtCant(item.vlr_unitario_cobro)}
+                <button
+                  type="button"
+                  style={{ ...ui.btnSecondary, padding: '10px 16px' }}
+                  disabled={busy}
+                  onClick={() => { void soloGuardar() }}
+                >
+                  {busy ? 'Guardando…' : 'Guardar mapeo'}
+                </button>
+                <button
+                  type="button"
+                  style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
+                  disabled={busy}
+                  onClick={() => { void validar('aprobar') }}
+                >
+                  ✓ Aprobar ítem
+                </button>
+                <button
+                  type="button"
+                  style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                  disabled={busy}
+                  onClick={() => { void validar('rechazar') }}
+                >
+                  ✕ Rechazar ítem
+                </button>
+              </section>
+            </>
+          ) : (
+            <Section ui={ui} title="Resumen">
+              <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
+                <div style={{ marginBottom: 10 }}>
+                  Insumo: <strong style={{ color: ui.text }}>{item.material_descripcion || '—'}</strong>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  Cantidad: <strong style={{ color: ui.text }}>{fmtCant(item.cantidad)} {item.unidad || ''}</strong>
+                </div>
+                {verEconomicos && (
+                  <div style={{ marginBottom: 10 }}>
+                    Costo: {fmtCant(item.valor_compra_unitario)} · Cobro: {fmtCant(item.vlr_unitario_cobro)}
+                  </div>
+                )}
+                <div>Esta línea ya no admite revisión (aprobada, rechazada o con OC).</div>
               </div>
-            )}
-            <div>Esta línea ya no admite revisión (aprobada, rechazada o con OC).</div>
-          </div>
-        )}
+            </Section>
+          )}
+        </div>
       </div>
     </div>
   )

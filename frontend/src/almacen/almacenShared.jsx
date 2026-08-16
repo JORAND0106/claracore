@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useClaraViewport } from '../useClaraViewport'
 import { createAlmacenApi } from './almacenApi'
 
@@ -258,27 +258,77 @@ export function getAlmacenSessionUser() {
 }
 
 export function AlmacenHelpIcon({ ayuda }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [open])
+
   if (!ayuda) return null
   return (
-    <span
-      title={ayuda}
-      aria-label="Ayuda"
-      style={{
-        display: 'inline-flex',
-        width: '1.1em',
-        height: '1.1em',
-        borderRadius: '50%',
-        background: '#64748b',
-        color: '#fff',
-        fontSize: '0.7em',
-        fontWeight: 700,
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'help',
-        flexShrink: 0,
-      }}
-    >
-      ?
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+      <button
+        type="button"
+        title={ayuda}
+        aria-label={`Ayuda: ${ayuda}`}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+        style={{
+          display: 'inline-flex',
+          width: '1.15em',
+          height: '1.15em',
+          borderRadius: '50%',
+          background: '#64748b',
+          color: '#fff',
+          fontSize: '0.7em',
+          fontWeight: 700,
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'help',
+          flexShrink: 0,
+          border: 'none',
+          padding: 0,
+          lineHeight: 1,
+        }}
+      >
+        ?
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 'calc(100% + 8px)',
+            transform: 'translateX(-50%)',
+            zIndex: 80,
+            minWidth: 160,
+            maxWidth: 260,
+            padding: '8px 10px',
+            background: 'var(--cc-almacen-bg-card, #fff)',
+            border: '1px solid var(--cc-almacen-border, #e2e8f0)',
+            borderRadius: 8,
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+            fontSize: 'var(--cc-xs)',
+            color: 'var(--cc-almacen-text, #0f172a)',
+            fontWeight: 500,
+            lineHeight: 1.4,
+            textAlign: 'left',
+            whiteSpace: 'normal',
+          }}
+        >
+          {ayuda}
+        </span>
+      )}
     </span>
   )
 }
