@@ -9,6 +9,12 @@
 name: Cleanup SWA staging environments
 
 on:
+  # También en push de este archivo a main (el token de integración no puede
+  # hacer workflow_dispatch; así el merge dispara la limpieza una vez).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-swa-staging.yml'
   workflow_dispatch:
     inputs:
       dry_run:
