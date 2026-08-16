@@ -564,12 +564,11 @@ def _validar_cotizaciones_requeridas(
     soporte_pdfs=None,
     body: Optional[dict] = None,
 ) -> None:
+    """Si requiere cotización, exige cotización ganadora. Los PDFs de soporte son opcionales."""
     if not requiere_cotizacion:
         return
-    min_cot = get_almacen_config(contrato_id)["cotizaciones_minimas"]
-    need_sop = max(0, min_cot - 1)
     sb = _sb()
-    tiene_ganadora, n_sop = _count_cotizaciones_insumo(
+    tiene_ganadora, _n_sop = _count_cotizaciones_insumo(
         sb,
         insumo_id,
         existing_row=existing_row,
@@ -580,12 +579,6 @@ def _validar_cotizaciones_requeridas(
     if not tiene_ganadora:
         raise ValueError(
             "Este insumo requiere cotización: registre la cotización ganadora (PDF o número de cotización)."
-        )
-    if n_sop < need_sop:
-        raise ValueError(
-            f"Este insumo requiere cotización: faltan PDFs de soporte "
-            f"({n_sop}/{need_sop}). Se exigen al menos {min_cot} cotizaciones comparativas "
-            "(ganadora + soportes)."
         )
 
 

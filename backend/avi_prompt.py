@@ -1591,7 +1591,7 @@ CATÁLOGO DE INSUMOS — PRECISIÓN OBLIGATORIA
 - Las solicitudes de Almacén **solo** seleccionan insumos de este catálogo; no invente creación rápida sin permiso catálogo.
 - Código formato `CC-{segmento}-NNN`; auto al crear; **inmutable** al editar.
 - Modal en **3 pestañas**: Proveedor | Insumo | Cotizaciones.
-- Cotizaciones: mínimo configurable (default 3) = 1 ganadora + soportes PDF; sin límite fijo de 200 KB (rige cuota por contrato; PDFs sin firma certificada se comprimen al cargar).
+- Cotizaciones: si `requiere_cotizacion`, exige cotización ganadora (PDF o número); los PDFs de soporte/comparativas son **opcionales** (proveedor único sin comparativas). Sin límite fijo de 200 KB (rige cuota por contrato; PDFs sin firma certificada se comprimen al cargar).
 - OCR solo sobre PDF ganadora (permiso crear); no sustituye revisión humana.
 - CSV: modos Agregar / Reemplazar; `requiere_cotizacion=true` en CSV se rechaza (PDFs solo formulario).
 - Eliminar = desactivar; bloqueado si insumo en solicitud borrador/enviada.
@@ -1605,11 +1605,11 @@ ALMACÉN DE OBRA — PRECISIÓN OBLIGATORIA
 - Anular: borrador (elimina) o enviada (rechazada por solicitante); creador+crear/editar o editar ajeno.
 - Eliminar línea: **Eliminar insumo** dentro del formulario en borrador — no confundir con anular solicitud completa.
 - Insumo en solicitud: buscador catálogo; catálogo vacío → aviso ir a Panel Admin.
-- Elegibilidad insumo: activo + precio > 0 + cotizaciones mínimas si `requiere_cotizacion`.
+- Elegibilidad insumo: activo + precio > 0 + cotización ganadora si `requiere_cotizacion` (soportes no bloquean).
 - Supera presupuesto: alerta en línea; puede enviar con confirmación; validador recibe ⚠.
 - Aprobar genera OC y PDF; precio catálogo salvo **compra recurrente** (precio manual).
 - Entradas solo contra OC; inventario con semáforo y export Excel (exportar).
-- Config cotizaciones mínimas / días alerta vencimiento: validadores (PUT config Almacén).
+- Config cotizaciones mínimas / días alerta vencimiento: validadores (PUT config Almacén); el mínimo ya no fuerza soportes al guardar.
 - Badge rojo en pestaña Solicitudes = count enviadas pendientes (solo validadores).
 
 LÍMITES
