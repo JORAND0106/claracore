@@ -117,43 +117,49 @@ export default function SolicitudesPanel({
           No hay solicitudes registradas.
         </div>
       ) : (
-        <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
-          <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
+          <table className="cc-almacen-responsive-table" style={{ ...ui.sheetTable, minWidth: 920 }}>
             <thead>
               <tr>
-                <th style={ui.th}>#</th>
+                <th style={{ ...ui.th, width: 56 }}>#</th>
                 <th style={ui.th}>Título</th>
-                <th style={ui.th}>Estado</th>
+                <th style={{ ...ui.th, width: 110 }}>Estado</th>
                 <th style={ui.th}>Solicitante</th>
                 <th style={ui.th}>Aprobación</th>
-                <th style={ui.th}>Materiales</th>
-                <th style={ui.th}>Fecha</th>
-                <th style={ui.th}>OC</th>
-                <th style={ui.th} />
+                <th style={{ ...ui.th, textAlign: 'right', width: 88 }}>Ítems</th>
+                <th style={{ ...ui.th, width: 100 }}>Fecha</th>
+                <th style={{ ...ui.th, width: 72 }}>OC</th>
+                <th style={{ ...ui.th, width: 140 }} />
               </tr>
             </thead>
             <tbody>
-              {lista.map((s) => (
+              {lista.map((s) => {
+                const nItems = s.items_count != null ? s.items_count : (s.items || []).length
+                return (
                 <tr
                   key={s.id}
                   style={{ cursor: 'pointer' }}
                   onClick={() => abrirDetalle(s)}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                 >
-                  <td style={ui.td} data-label="#">{s.consecutivo}</td>
-                  <td style={{ ...ui.td, fontWeight: 600, maxWidth: 220 }} data-label="Título">
+                  <td style={ui.tdNum} data-label="#">{s.consecutivo}</td>
+                  <td style={{ ...ui.td, fontWeight: 600 }} data-label="Título">
                     {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   </td>
-                  <td style={{ ...ui.td, color: ESTADO_SOLICITUD_COLOR[s.estado], fontWeight: 600 }} data-label="Estado">
+                  <td style={{ ...ui.td, color: ESTADO_SOLICITUD_COLOR[s.estado], fontWeight: 700 }} data-label="Estado">
                     {ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
-                  <td style={{ ...ui.td, fontSize: 'var(--cc-xs)' }} data-label="Solicitante">
+                  <td style={{ ...ui.td, fontSize: 12 }} data-label="Solicitante">
                     {s.solicitante_nombre || '—'}
                   </td>
-                  <td style={{ ...ui.td, fontSize: 'var(--cc-xs)', maxWidth: 220 }} data-label="Aprobación">
+                  <td style={{ ...ui.td, fontSize: 12 }} data-label="Aprobación">
                     {textoAprobacionSolicitud(s)}
                   </td>
-                  <td style={ui.td} data-label="Materiales">{(s.items || []).length} ítem(s)</td>
-                  <td style={ui.td} data-label="Fecha">{fmtFechaAlmacenCorta(s.created_at)}</td>
+                  <td style={ui.tdNum} data-label="Ítems">{nItems}</td>
+                  <td style={{ ...ui.td, fontSize: 12, whiteSpace: 'nowrap' }} data-label="Fecha">
+                    {fmtFechaAlmacenCorta(s.created_at)}
+                  </td>
                   <td style={ui.td} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && s.orden_compra?.id && permisos?.exportar ? (
                       <OrdenCompraPdfClip ordenCompra={s.orden_compra} compact puedeExportar />
@@ -164,7 +170,7 @@ export default function SolicitudesPanel({
                       {solicitudPuedeValidar(s, permisos) && (
                         <button
                           type="button"
-                          style={{ ...ui.btnPrimary, padding: '6px 10px', fontSize: 'var(--cc-xs)' }}
+                          style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 11, minHeight: 0 }}
                           onClick={() => abrirDetalle(s, 'portada')}
                         >
                           Revisar
@@ -175,8 +181,9 @@ export default function SolicitudesPanel({
                           type="button"
                           style={{
                             ...ui.btnSecondary,
-                            padding: '6px 10px',
-                            fontSize: 'var(--cc-xs)',
+                            padding: '4px 8px',
+                            fontSize: 11,
+                            minHeight: 0,
                             color: '#7c2d12',
                             borderColor: '#7c2d1266',
                           }}
@@ -191,8 +198,9 @@ export default function SolicitudesPanel({
                           type="button"
                           style={{
                             ...ui.btnSecondary,
-                            padding: '6px 10px',
-                            fontSize: 'var(--cc-xs)',
+                            padding: '4px 8px',
+                            fontSize: 11,
+                            minHeight: 0,
                             color: '#dc2626',
                             borderColor: '#dc262666',
                           }}
@@ -204,7 +212,8 @@ export default function SolicitudesPanel({
                     </div>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

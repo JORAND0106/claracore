@@ -73,6 +73,7 @@ from almacen_service import (
     list_presupuesto_items,
     list_salidas,
     list_solicitudes,
+    count_solicitudes,
     list_usuarios_receptor_obra,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
@@ -507,12 +508,25 @@ def route_presupuesto_context(
 def route_list_solicitudes(
     contrato_id: int,
     estado: Optional[str] = None,
+    resumen: bool = Query(True),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
-    return list_solicitudes(contrato_id, estado, ver_economicos=ver_eco)
+    return list_solicitudes(contrato_id, estado, ver_economicos=ver_eco, resumen=resumen)
+
+
+@router.get("/{contrato_id}/solicitudes-count")
+def route_count_solicitudes(
+    contrato_id: int,
+    estado: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """Conteo ligero (p. ej. badge de enviadas pendientes de validar)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return {"count": count_solicitudes(contrato_id, estado)}
 
 
 @router.get("/{contrato_id}/solicitudes/{solicitud_id}")

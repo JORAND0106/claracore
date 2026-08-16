@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import PptoFiltroMapaPk from '../modules/presupuesto/PptoFiltroMapaPk'
 import { API_BASE } from '../apiBase'
 import { resolverPkMaestroAlmacen } from './almacenPkResolver'
@@ -52,10 +52,6 @@ export default function AlmacenPkMapaSelector({
       setPkLoading(false)
     }
   }, [contratoId, token])
-
-  useEffect(() => {
-    if (contratoId) cargarMaestro()
-  }, [contratoId, cargarMaestro])
 
   const pkDisplay = pkLabel || (pkIdSeleccionado && pkList.length
     ? (pkList.find((p) => String(p.id) === String(pkIdSeleccionado))?.pk_id || pkLabel || `ID ${pkIdSeleccionado}`)
