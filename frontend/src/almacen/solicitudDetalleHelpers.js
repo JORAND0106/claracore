@@ -21,6 +21,11 @@ export function solicitudPuedeValidar(sol, permisos) {
   )
 }
 
+/** Modal de revisión de línea: solo Contratista Gerencial (o Desarrollador). */
+export function puedeAbrirRevisionLinea(permisos) {
+  return Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
+}
+
 export function itemPuedeValidar(item, sol, permisos) {
   return Boolean(
     solicitudPuedeValidar(sol, permisos)

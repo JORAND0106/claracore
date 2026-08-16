@@ -10,6 +10,7 @@ import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import {
   estadoValidacionItem,
+  puedeAbrirRevisionLinea,
   solicitudPuedeValidar,
   solicitudTieneOrdenCompra,
 } from './solicitudDetalleHelpers'
@@ -50,13 +51,15 @@ export default function SolicitudDetalleModal({
   const [materialesOpen, setMaterialesOpen] = useState(true)
   const [mapaItem, setMapaItem] = useState(null)
   const [revisionItemId, setRevisionItemId] = useState(null)
+  const [ocProgreso, setOcProgreso] = useState('')
 
   // initialTab legado (pestaña por ítem) → abrir modal de revisión de esa línea
   useEffect(() => {
+    if (!puedeAbrirRevisionLinea(permisos)) return
     if (!initialTab || initialTab === 'portada') return
     const m = String(initialTab).match(/^item-(.+)$/)
     if (m?.[1]) setRevisionItemId(Number(m[1]) || m[1])
-  }, [initialTab])
+  }, [initialTab, permisos])
 
   const modalTheme = useMemo(() => ({
     primary: ui.accent,
@@ -86,11 +89,12 @@ export default function SolicitudDetalleModal({
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
   const tieneOc = solicitudTieneOrdenCompra(sol)
+  const esRolRevision = puedeAbrirRevisionLinea(permisos)
 
   const revisionItem = useMemo(() => {
-    if (revisionItemId == null) return null
+    if (!esRolRevision || revisionItemId == null) return null
     return items.find((it) => String(it.id) === String(revisionItemId)) || null
-  }, [items, revisionItemId])
+  }, [items, revisionItemId, esRolRevision])
 
   const resumenValidacion = useMemo(() => {
     const counts = { pendiente: 0, aprobado: 0, rechazado: 0 }
@@ -104,6 +108,7 @@ export default function SolicitudDetalleModal({
   const ejecutarAprobar = async (aprobarTodosPendientes = true) => {
     if (!sol) return
     setBusy(true)
+    setOcProgreso('Generando orden de compra…')
     setError('')
     try {
       const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: aprobarTodosPendientes })
@@ -120,6 +125,7 @@ export default function SolicitudDetalleModal({
       setError(e.message)
     } finally {
       setBusy(false)
+      setOcProgreso('')
     }
   }
 
@@ -442,7 +448,7 @@ export default function SolicitudDetalleModal({
         />
       )}
 
-      {revisionItem && (
+      {revisionItem && esRolRevision && (
         <SolicitudLineaRevisionModal
           sol={sol}
           item={revisionItem}
@@ -455,6 +461,56 @@ export default function SolicitudDetalleModal({
             setSol(r)
           }}
         />
+      )}
+
+      {ocProgreso && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100055,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(15, 23, 42, 0.5)',
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              background: ui.card?.background || '#fff',
+              color: ui.text,
+              borderRadius: 12,
+              padding: '28px 32px',
+              maxWidth: 380,
+              textAlign: 'center',
+              boxShadow: '0 20px 48px rgba(15, 23, 42, 0.35)',
+              border: `1px solid ${ui.textMuted}33`,
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                width: 36,
+                height: 36,
+                margin: '0 auto 14px',
+                border: `3px solid ${ui.textMuted}33`,
+                borderTopColor: ui.accent || '#2563eb',
+                borderRadius: '50%',
+                animation: 'cc-almacen-spin 0.8s linear infinite',
+              }}
+            />
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', marginBottom: 6 }}>
+              {ocProgreso}
+            </div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.45 }}>
+              Se está creando la Orden de Compra. Espere un momento; no cierre esta ventana.
+            </div>
+          </div>
+          <style>{`@keyframes cc-almacen-spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
       )}
     </div>
   )

@@ -6,6 +6,7 @@ import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
   descripcionItemPresupuesto,
   itemPuedeValidar,
+  puedeAbrirRevisionLinea,
   rentabilidadDesdeAnalisis,
   textoLibreSolicitudItem,
 } from './solicitudDetalleHelpers'
@@ -79,6 +80,7 @@ export default function SolicitudLineaRevisionModal({
 
   const puedeEditar = itemPuedeValidar(item, sol, permisos)
   const verEconomicos = permisos?.verEconomicos !== false
+  const puedeAbrir = puedeAbrirRevisionLinea(permisos)
 
   useEffect(() => {
     if (!item) return
@@ -152,7 +154,8 @@ export default function SolicitudLineaRevisionModal({
     })
   }, [item, draft.cantidad, draft.vlr_unitario_cobro, draft.valor_compra_unitario, sol?.consecutivo, sol?.orden_compra?.numero_oc])
 
-  if (!item || !sol) return null
+  // Exclusivo Contratista Gerencial (o Desarrollador): sin acceso ni en lectura.
+  if (!puedeAbrir || !item || !sol) return null
 
   const theme = t || {
     primary: ui.accent,

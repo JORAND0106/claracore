@@ -597,6 +597,7 @@ def _enrich_solicitud(
             items,
             exclude_solicitud_id=None,
             descontar_linea_actual=False,
+            refresh_listado=False,
         )
 
         for it in items:
@@ -973,13 +974,22 @@ def mapear_item_solicitud_gerencial(
     Contratista Gerencial: asocia insumo del catálogo, ajusta cantidad/costo/cobro.
     Conserva descripcion_solicitada inmutable.
     """
-    from almacen_insumos_service import resolve_insumo_for_solicitud
+    from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
 
     sb = _sb()
-    sol = get_solicitud(contrato_id, solicitud_id)
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "borrador", "rechazada"):
         raise ValueError("No se puede mapear ítems en el estado actual de la solicitud.")
-    if _solicitud_tiene_orden_compra(sol):
+    oc_exists = (
+        sb.table("almacen_orden_compra")
+        .select("id")
+        .eq("solicitud_id", solicitud_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if oc_exists:
         raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
 
     item_rows = (
@@ -995,9 +1005,6 @@ def mapear_item_solicitud_gerencial(
     if not item_rows:
         raise ValueError("Ítem de solicitud no encontrado.")
     existing = item_rows[0]
-    if (existing.get("estado_validacion") or "pendiente") == "aprobado" and sol["estado"] == "enviada":
-        # Permitir remapeo solo si aún pendiente/rechazado; si ya aprobado, exigir reabrir
-        pass
 
     insumo_id = body.get("insumo_id")
     if not insumo_id:
@@ -1025,8 +1032,19 @@ def mapear_item_solicitud_gerencial(
     if body.get("valor_compra_unitario") is not None:
         raw["valor_compra_unitario"] = body.get("valor_compra_unitario")
 
-    resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw)
+    # skip_context: flags se calculan en batch sin N× context; listado solo si falta cobro.
+    resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw, skip_context=True)
     desc_sol = (existing.get("descripcion_solicitada") or existing.get("material_descripcion") or "").strip()
+
+    if body.get("vlr_unitario_cobro") is not None:
+        resolved["vlr_unitario_cobro"] = _to_float(body["vlr_unitario_cobro"])
+    apply_saldo_flags_batch(
+        contrato_id,
+        [resolved],
+        exclude_solicitud_id=solicitud_id,
+        descontar_linea_actual=True,
+        refresh_listado=resolved.get("vlr_unitario_cobro") in (None, 0),
+    )
 
     patch = {
         "insumo_id": resolved.get("insumo_id"),
@@ -1592,10 +1610,19 @@ def validar_item_solicitud(
 ) -> dict:
     """Aprueba o rechaza un ítem individual de una solicitud enviada."""
     sb = _sb()
-    sol = get_solicitud(contrato_id, solicitud_id)
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] != "enviada":
         raise ValueError("Solo se pueden validar ítems de solicitudes enviadas.")
-    if _solicitud_tiene_orden_compra(sol):
+    oc_exists = (
+        sb.table("almacen_orden_compra")
+        .select("id")
+        .eq("solicitud_id", solicitud_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if oc_exists:
         raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
     accion = _norm(accion)
     if accion not in ("aprobar", "rechazar"):
@@ -1617,16 +1644,25 @@ def validar_item_solicitud(
         raise ValueError("Indique el motivo del rechazo del ítem.")
     upd = {"estado_validacion": nuevo}
     sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
-    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+    return get_solicitud(contrato_id, solicitud_id)
 
 
 def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     """Marca como aprobados todos los ítems pendientes de una solicitud enviada."""
     sb = _sb()
-    sol = get_solicitud(contrato_id, solicitud_id)
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] != "enviada":
         raise ValueError("Solo aplica a solicitudes enviadas.")
-    if _solicitud_tiene_orden_compra(sol):
+    oc_exists = (
+        sb.table("almacen_orden_compra")
+        .select("id")
+        .eq("solicitud_id", solicitud_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if oc_exists:
         raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
     sb.table("almacen_solicitud_item").update({
         "estado_validacion": "aprobado",
@@ -1634,18 +1670,16 @@ def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: 
     sb.table("almacen_solicitud_item").update({
         "estado_validacion": "aprobado",
     }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
-    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+    return get_solicitud(contrato_id, solicitud_id)
 
 
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:
     sb = _sb()
     body = body or {}
-    sol = get_solicitud(contrato_id, solicitud_id)
-    if _solicitud_tiene_orden_compra(sol):
-        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+    # Evitar enrich completo (listado/contexto): solo cabecera + ítems crudos.
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] != "enviada":
         raise ValueError("Solo se pueden aprobar solicitudes enviadas.")
-
     existing_oc = (
         sb.table("almacen_orden_compra")
         .select("id")
@@ -1665,17 +1699,6 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         sb.table("almacen_solicitud_item").update({
             "estado_validacion": "aprobado",
         }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
-        for it in sol.get("items") or []:
-            ev = it.get("estado_validacion") or "pendiente"
-            if ev in ("pendiente", "null"):
-                it["estado_validacion"] = "aprobado"
-
-    items_aprobados = [
-        it for it in (sol.get("items") or [])
-        if (it.get("estado_validacion") or "pendiente") == "aprobado"
-    ]
-    if not items_aprobados:
-        raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
 
     # Recargar ítems desde BD (pueden haberse mapeado tras el GET inicial)
     fresh_items = (
@@ -1686,13 +1709,12 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         .data
         or []
     )
-    fresh_by_id = {int(r["id"]): r for r in fresh_items if r.get("id") is not None}
     items_aprobados = []
     for it in fresh_items:
         ev = it.get("estado_validacion") or "pendiente"
         if ev != "aprobado":
             continue
-        merged = {**(fresh_by_id.get(int(it["id"])) or {}), **it}
+        merged = dict(it)
         if not merged.get("insumo_id") and not merged.get("es_recurrente"):
             raise ValueError(
                 f"Línea {merged.get('numero_linea') or merged.get('id')}: "
@@ -1712,11 +1734,9 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         int(it["insumo_id"]) for it in items_aprobados
         if it.get("insumo_id") and not it.get("es_recurrente")
     })
-    cat_map: Dict[int, dict] = {}
+    cat_map = _cotizaciones_catalogo_batch(sb, insumo_ids)
     prov_ids: set = set()
-    for iid in insumo_ids:
-        cat = _cotizaciones_catalogo_insumo(sb, iid)
-        cat_map[iid] = cat
+    for cat in cat_map.values():
         if cat.get("proveedor_id"):
             prov_ids.add(int(cat["proveedor_id"]))
     prov_nombres: Dict[int, str] = {}
@@ -2127,24 +2147,29 @@ def generar_y_guardar_pdf_oc(
 
 
 def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, str]:
+    """Descarga el PDF de la OC. Reutiliza blob existente; solo regenera si falta."""
     oc = get_orden_compra(contrato_id, oc_id)
+    fname = oc.get("pdf_nombre") or f"OC-{oc.get('numero_oc') or oc_id}.pdf"
+    if oc.get("pdf_blob_path"):
+        data, _mime = download_soporte(oc.get("pdf_blob_path"))
+        if data:
+            return data, fname
     sol_id = oc.get("solicitud_id")
     if not sol_id:
         raise ValueError("La orden de compra no tiene solicitud asociada.")
-    solicitud = get_solicitud(contrato_id, int(sol_id))
+    # Ligera: el PDF no necesita contexto/listado/rentabilidad por línea.
+    solicitud = get_solicitud(contrato_id, int(sol_id), ligera=True)
     try:
         generar_y_guardar_pdf_oc(contrato_id, oc_id, oc, solicitud, user_id)
     except Exception as exc:
-        if not oc.get("pdf_blob_path"):
-            raise ValueError(f"No se pudo generar el PDF de la Orden de Compra: {exc}") from exc
-        _log.warning("Regeneración PDF OC %s falló, usando copia previa: %s", oc_id, exc)
+        raise ValueError(f"No se pudo generar el PDF de la Orden de Compra: {exc}") from exc
     oc = get_orden_compra(contrato_id, oc_id)
     if not oc.get("pdf_blob_path"):
         raise ValueError("No se pudo generar el PDF de la Orden de Compra.")
     data, _mime = download_soporte(oc.get("pdf_blob_path"))
     if not data:
         raise ValueError("El PDF de la Orden de Compra está vacío o no está disponible.")
-    fname = oc.get("pdf_nombre") or f"OC-{oc.get('numero_oc')}.pdf"
+    fname = oc.get("pdf_nombre") or fname
     return data, fname
 
 
