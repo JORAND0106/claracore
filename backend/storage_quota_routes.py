@@ -21,6 +21,7 @@ from storage_quota_service import (
     get_contrato_usage,
     list_contratos_usage,
     list_tarifas,
+    reconcile_storage_from_azure,
     schema_available,
     update_config,
     upsert_tarifa,
@@ -165,6 +166,40 @@ def admin_storage_contrato_plan(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ReconciliarBody(BaseModel):
+    """Opcional: limitar a un contrato. Sin body o contrato_id null = todos."""
+
+    contrato_id: Optional[int] = Field(None, gt=0)
+    zero_missing: bool = Field(
+        True,
+        description="En reconciliación global, poner en 0 contratos sin blobs en Azure",
+    )
+
+
+@router.post("/admin/storage/reconciliar")
+def admin_storage_reconciliar(
+    body: Optional[ReconciliarBody] = None,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """
+    Recalcula consumo histórico desde Azure Blob Storage y actualiza Postgres.
+    Repetible bajo demanda (idempotente respecto al estado actual de blobs).
+    """
+    payload = body or ReconciliarBody()
+    try:
+        return reconcile_storage_from_azure(
+            contrato_id=payload.contrato_id,
+            zero_missing=bool(payload.zero_missing),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("reconciliar storage falló")
+        raise HTTPException(
+            status_code=500, detail=f"Error al reconciliar almacenamiento: {exc}"
+        ) from exc
 
 
 @router.get("/contratos/{contrato_id}/storage")

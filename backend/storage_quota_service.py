@@ -717,3 +717,238 @@ def guard_upload(
         assert_can_upload(cid, net)
     except StorageQuotaExceeded as exc:
         raise HTTPException(status_code=413, detail=exc.detail) from exc
+
+
+# Prefijos por-contrato en contenedores público/privado (reconciliación puntual).
+_CONTRACT_BLOB_PREFIX_TEMPLATES = (
+    "{cid}/",
+    "almacen-soportes/{cid}/",
+    "contratos-documentos/{cid}/",
+    "contratos-ordenes-pago/{cid}/",
+    "seguimiento-actas/{cid}/",
+    "seguimiento-llamados/{cid}/",
+)
+
+
+def contract_blob_prefixes(contrato_id: int) -> list[str]:
+    cid = int(contrato_id)
+    return [tpl.format(cid=cid) for tpl in _CONTRACT_BLOB_PREFIX_TEMPLATES]
+
+
+def aggregate_blob_usage(
+    entries: list[tuple],
+) -> dict[int, dict[str, int]]:
+    """
+    Agrega (path, size, content_type) → consumo por contrato.
+    Ignora blobs globales (infer_contrato_id_from_path → None).
+    """
+    out: dict[int, dict[str, int]] = {}
+    for item in entries:
+        if not item or len(item) < 2:
+            continue
+        path = item[0]
+        try:
+            size = int(item[1] or 0)
+        except (TypeError, ValueError):
+            size = 0
+        ct = item[2] if len(item) > 2 else None
+        if size <= 0:
+            continue
+        cid = infer_contrato_id_from_path(path)
+        if not cid:
+            continue
+        tipo = classify_storage_tipo(content_type=ct, blob_path=path)
+        bucket = out.setdefault(
+            int(cid),
+            {
+                "bytes_fotos": 0,
+                "bytes_documentos": 0,
+                "bytes_otros": 0,
+                "bytes_total": 0,
+                "blob_count": 0,
+            },
+        )
+        if tipo == TIPO_FOTOS:
+            bucket["bytes_fotos"] += size
+        elif tipo == TIPO_DOCUMENTOS:
+            bucket["bytes_documentos"] += size
+        else:
+            bucket["bytes_otros"] += size
+        bucket["bytes_total"] += size
+        bucket["blob_count"] += 1
+    return out
+
+
+def set_usage_absolute(
+    contrato_id: int,
+    *,
+    bytes_fotos: int = 0,
+    bytes_documentos: int = 0,
+    bytes_otros: int = 0,
+) -> dict:
+    """Sobrescribe contadores con valores absolutos (reconciliación). Conserva plan/override."""
+    if not schema_available(force=True):
+        raise RuntimeError("Esquema storage_quota no disponible")
+    cid = int(contrato_id)
+    _ensure_uso_row(cid)
+    fotos = max(0, int(bytes_fotos or 0))
+    docs = max(0, int(bytes_documentos or 0))
+    otros = max(0, int(bytes_otros or 0))
+    from datetime import datetime, timezone
+
+    _sb().table("contrato_storage_uso").update(
+        {
+            "bytes_fotos": fotos,
+            "bytes_documentos": docs,
+            "bytes_otros": otros,
+            "bytes_total": fotos + docs + otros,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("contrato_id", cid).execute()
+    return get_contrato_usage(cid)
+
+
+def _scan_container_entries(
+    container: str,
+    *,
+    contrato_id: Optional[int] = None,
+) -> tuple[list[tuple], int]:
+    """Devuelve (entries, blobs_scanned)."""
+    from azure_blob_storage import iter_container_blob_entries
+
+    entries: list[tuple] = []
+    scanned = 0
+    if contrato_id is not None:
+        prefixes = contract_blob_prefixes(int(contrato_id))
+        seen: set[str] = set()
+        for prefix in prefixes:
+            for path, size, ct in iter_container_blob_entries(
+                container, name_starts_with=prefix
+            ):
+                scanned += 1
+                if path in seen:
+                    continue
+                seen.add(path)
+                entries.append((path, size, ct))
+    else:
+        for path, size, ct in iter_container_blob_entries(container):
+            scanned += 1
+            entries.append((path, size, ct))
+    return entries, scanned
+
+
+def reconcile_storage_from_azure(
+    *,
+    contrato_id: Optional[int] = None,
+    zero_missing: bool = True,
+) -> dict:
+    """
+    Recorre Azure Blob (público + privado), calcula peso real por contrato/tipo
+    y sobrescribe contadores en Postgres. Repetible bajo demanda.
+
+    - contrato_id: limita el escaneo/actualización a un contrato.
+    - zero_missing: en reconciliación global, pone en 0 filas de uso sin blobs.
+    """
+    import time
+
+    from azure_blob_storage import container_name, private_container_name
+
+    if not schema_available(force=True):
+        raise RuntimeError(
+            "Aplique la migración backend/migrations/20260816170000_contrato_storage_quota.sql"
+        )
+
+    t0 = time.monotonic()
+    public_name = container_name()
+    private_name = private_container_name()
+    filter_cid = int(contrato_id) if contrato_id is not None else None
+
+    all_entries: list[tuple] = []
+    blobs_scanned = 0
+    containers_ok: list[str] = []
+    container_errors: list[dict] = []
+
+    for cname in (public_name, private_name):
+        try:
+            entries, scanned = _scan_container_entries(cname, contrato_id=filter_cid)
+            all_entries.extend(entries)
+            blobs_scanned += scanned
+            containers_ok.append(cname)
+        except Exception as exc:
+            _log.warning("Reconciliación: no se pudo listar %s: %s", cname, exc)
+            container_errors.append({"container": cname, "error": str(exc)})
+
+    totals = aggregate_blob_usage(all_entries)
+    blobs_attributed = sum(int(v.get("blob_count") or 0) for v in totals.values())
+    blobs_skipped = max(0, len(all_entries) - blobs_attributed)
+
+    # Snapshot previo (solo contratos a tocar)
+    before_map: dict[int, dict] = {}
+    target_ids: set[int] = set(totals.keys())
+    if filter_cid is not None:
+        target_ids.add(filter_cid)
+    elif zero_missing:
+        existing = (
+            _sb().table("contrato_storage_uso").select("contrato_id").execute().data or []
+        )
+        for r in existing:
+            if r.get("contrato_id") is not None:
+                target_ids.add(int(r["contrato_id"]))
+
+    for cid in sorted(target_ids):
+        before_map[cid] = get_contrato_usage(cid)
+
+    updated: list[dict] = []
+    for cid in sorted(target_ids):
+        agg = totals.get(cid) or {
+            "bytes_fotos": 0,
+            "bytes_documentos": 0,
+            "bytes_otros": 0,
+            "bytes_total": 0,
+            "blob_count": 0,
+        }
+        after = set_usage_absolute(
+            cid,
+            bytes_fotos=agg["bytes_fotos"],
+            bytes_documentos=agg["bytes_documentos"],
+            bytes_otros=agg["bytes_otros"],
+        )
+        prev = before_map.get(cid) or {}
+        updated.append(
+            {
+                "contrato_id": cid,
+                "blob_count": int(agg.get("blob_count") or 0),
+                "before": {
+                    "bytes_fotos": int(prev.get("bytes_fotos") or 0),
+                    "bytes_documentos": int(prev.get("bytes_documentos") or 0),
+                    "bytes_otros": int(prev.get("bytes_otros") or 0),
+                    "bytes_total": int(prev.get("bytes_total") or 0),
+                    "used_human": prev.get("used_human") or format_bytes(0),
+                },
+                "after": {
+                    "bytes_fotos": after["bytes_fotos"],
+                    "bytes_documentos": after["bytes_documentos"],
+                    "bytes_otros": after["bytes_otros"],
+                    "bytes_total": after["bytes_total"],
+                    "used_human": after.get("used_human"),
+                    "fotos_human": after.get("fotos_human"),
+                    "documentos_human": after.get("documentos_human"),
+                    "otros_human": after.get("otros_human"),
+                },
+                "delta_total": int(after["bytes_total"]) - int(prev.get("bytes_total") or 0),
+            }
+        )
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    return {
+        "ok": True,
+        "containers_scanned": containers_ok,
+        "container_errors": container_errors,
+        "blobs_scanned": blobs_scanned,
+        "blobs_attributed": blobs_attributed,
+        "blobs_skipped_global": blobs_skipped,
+        "contratos_actualizados": len(updated),
+        "contrato_id_filtro": filter_cid,
+        "elapsed_ms": elapsed_ms,
+        "contratos": updated,
+    }
