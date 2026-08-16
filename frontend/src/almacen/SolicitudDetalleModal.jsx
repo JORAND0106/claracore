@@ -447,6 +447,9 @@ export default function SolicitudDetalleModal({
           sol={sol}
           item={revisionItem}
           permisos={permisos}
+          token={token}
+          contratoId={contratoId}
+          t={t}
           onClose={() => setRevisionItemId(null)}
           onUpdated={(r) => {
             setSol(r)

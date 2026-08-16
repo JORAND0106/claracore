@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import InsumoSearchTable from './InsumoSearchTable'
+import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
+import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
+  descripcionItemPresupuesto,
   itemPuedeValidar,
+  rentabilidadDesdeAnalisis,
   textoLibreSolicitudItem,
 } from './solicitudDetalleHelpers'
 import {
@@ -53,6 +57,9 @@ export default function SolicitudLineaRevisionModal({
   sol,
   item,
   permisos,
+  token,
+  contratoId,
+  t,
   onClose,
   onUpdated,
 }) {
@@ -62,6 +69,7 @@ export default function SolicitudLineaRevisionModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [motivo, setMotivo] = useState('')
+  const [mapaOpen, setMapaOpen] = useState(false)
   const [draft, setDraft] = useState({
     insumo: null,
     cantidad: '',
@@ -76,6 +84,7 @@ export default function SolicitudLineaRevisionModal({
     if (!item) return
     setMotivo('')
     setError('')
+    setMapaOpen(false)
     setDraft({
       insumo: item.insumo_id
         ? {
@@ -97,6 +106,8 @@ export default function SolicitudLineaRevisionModal({
     })
   }, [item?.id, item?.insumo_id, item?.cantidad, item?.valor_compra_unitario, item?.vlr_unitario_cobro, item?.material_descripcion])
 
+  const descItem = useMemo(() => descripcionItemPresupuesto(item), [item])
+
   const metaLinea = useMemo(() => {
     if (!item) return ''
     const parts = [
@@ -107,7 +118,49 @@ export default function SolicitudLineaRevisionModal({
     return parts.join(' · ')
   }, [item])
 
+  const tablaRentabilidad = useMemo(() => {
+    if (!item) return null
+    const raw = item.analisis_rentabilidad || item.preview?.analisis_rentabilidad
+    if (raw) return raw
+    const analisis = item.analisis_valor || item.preview?.analisis_valor
+    if (analisis) {
+      return rentabilidadDesdeAnalisis(analisis, {
+        numeroOc: sol?.orden_compra?.numero_oc ?? item.numero_oc ?? null,
+        consecutivo: sol?.consecutivo,
+      })
+    }
+    // Provisional mientras el Gerencial ajusta cantidad/costos (antes de guardar).
+    const cant = Number(draft.cantidad)
+    const vuCobro = Number(draft.vlr_unitario_cobro)
+    const vuCosto = Number(draft.valor_compra_unitario)
+    if (!(cant > 0)) return null
+    if (!(vuCobro > 0) && !(vuCosto > 0)) return null
+    const cobroLinea = cant * (vuCobro > 0 ? vuCobro : 0)
+    const costoLinea = cant * (vuCosto > 0 ? vuCosto : 0)
+    return rentabilidadDesdeAnalisis({
+      cantidad: cant,
+      valor_cobro_unitario: vuCobro > 0 ? vuCobro : 0,
+      valor_cobro_linea: cobroLinea,
+      costo_insumo_unitario: vuCosto > 0 ? vuCosto : 0,
+      costo_insumo_linea: costoLinea,
+      utilidad_estimada_linea: cobroLinea - costoLinea,
+      rentabilidad_pct: cobroLinea > 0 ? ((cobroLinea - costoLinea) / cobroLinea) * 100 : null,
+      tiene_precio_compra: vuCosto > 0,
+    }, {
+      numeroOc: sol?.orden_compra?.numero_oc ?? null,
+      consecutivo: sol?.consecutivo,
+    })
+  }, [item, draft.cantidad, draft.vlr_unitario_cobro, draft.valor_compra_unitario, sol?.consecutivo, sol?.orden_compra?.numero_oc])
+
   if (!item || !sol) return null
+
+  const theme = t || {
+    primary: ui.accent,
+    border: '#e2e8f0',
+    text: ui.text,
+    textMuted: ui.textMuted,
+    bgCard: ui.card?.background || '#fff',
+  }
 
   const guardarMapeo = async () => {
     if (!draft.insumo?.insumo_id) {
@@ -189,7 +242,7 @@ export default function SolicitudLineaRevisionModal({
         justifyContent: 'center',
         padding: compact ? 0 : 20,
       }}
-      onClick={() => !busy && onClose?.()}
+      onClick={() => !busy && !mapaOpen && onClose?.()}
     >
       <div
         role="dialog"
@@ -215,7 +268,7 @@ export default function SolicitudLineaRevisionModal({
           borderBottom: `1px solid ${ui.textMuted}33`,
         }}
         >
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <div id="solicitud-linea-revision-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
               Revisión de línea {item.numero_linea != null ? `#${item.numero_linea}` : ''}
             </div>
@@ -224,16 +277,39 @@ export default function SolicitudLineaRevisionModal({
                 {metaLinea}
               </div>
             )}
+            {descItem && (
+              <div style={{
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 600,
+                color: ui.text,
+                marginTop: 6,
+                lineHeight: 1.4,
+              }}
+              >
+                {descItem}
+              </div>
+            )}
           </div>
-          <button
-            type="button"
-            style={{ ...ui.btnSecondary, padding: '8px 14px', flexShrink: 0 }}
-            disabled={busy}
-            onClick={onClose}
-            aria-label="Cerrar"
-          >
-            ✕
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-start' }}>
+            <button
+              type="button"
+              style={{ ...ui.btnSecondary, padding: '8px 14px' }}
+              disabled={busy || !item.pk_id}
+              title={item.pk_id ? 'Ver ubicación en mapa' : 'Sin PK-ID'}
+              onClick={() => setMapaOpen(true)}
+            >
+              🗺️ Mapa
+            </button>
+            <button
+              type="button"
+              style={{ ...ui.btnSecondary, padding: '8px 14px' }}
+              disabled={busy}
+              onClick={onClose}
+              aria-label="Cerrar"
+            >
+              ✕
+            </button>
+          </div>
         </header>
 
         {error && (
@@ -332,6 +408,16 @@ export default function SolicitudLineaRevisionModal({
                     </>
                   )}
                 </div>
+                {verEconomicos && tablaRentabilidad && (
+                  <div style={{ marginTop: 12 }}>
+                    <TablaRentabilidadAcumulada
+                      analisisRentabilidad={tablaRentabilidad}
+                      proveedorCatalogo={item.proveedor_catalogo}
+                      verEconomicos={verEconomicos}
+                      defaultExpanded={false}
+                    />
+                  </div>
+                )}
               </Section>
 
               <Section ui={ui} title="Comentarios">
@@ -404,12 +490,30 @@ export default function SolicitudLineaRevisionModal({
                     Costo: {fmtCant(item.valor_compra_unitario)} · Cobro: {fmtCant(item.vlr_unitario_cobro)}
                   </div>
                 )}
-                <div>Esta línea ya no admite revisión (aprobada, rechazada o con OC).</div>
+                <div style={{ marginBottom: 10 }}>Esta línea ya no admite revisión (aprobada, rechazada o con OC).</div>
+                {verEconomicos && tablaRentabilidad && (
+                  <TablaRentabilidadAcumulada
+                    analisisRentabilidad={tablaRentabilidad}
+                    proveedorCatalogo={item.proveedor_catalogo}
+                    verEconomicos={verEconomicos}
+                    defaultExpanded={false}
+                  />
+                )}
               </div>
             </Section>
           )}
         </div>
       </div>
+
+      {mapaOpen && (
+        <SolicitudLineaMapaModal
+          item={item}
+          token={token}
+          contratoId={contratoId}
+          t={theme}
+          onClose={() => setMapaOpen(false)}
+        />
+      )}
     </div>
   )
 }
