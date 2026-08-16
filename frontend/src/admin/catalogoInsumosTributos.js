@@ -88,24 +88,42 @@ export function fmtPctDesdeDecimal(raw) {
   return `${pts}%`
 }
 
+/**
+ * Suma exacta A+Í+U en puntos % (fracción decimal × 100).
+ * No redondea: conserva los decimales resultantes de la suma.
+ * El redondeo a 0 decimales aplica solo a montos COP, no a esta sumatoria %.
+ */
 export function sumatoriaAiuPuntosPct(form) {
   const keys = ['administracion', 'imprevistos', 'utilidad']
-  let sum = 0
+  let sumFrac = 0
   let any = false
   for (const k of keys) {
-    const pts = decimalAPuntosPct(form?.[k])
-    if (pts == null) continue
+    const raw = form?.[k]
+    if (raw === '' || raw == null) continue
+    const n = Number(String(raw).replace(',', '.'))
+    if (!Number.isFinite(n) || n < 0) continue
     any = true
-    sum += pts
+    sumFrac += n
   }
   if (!any) return null
-  return Math.round(sum * 100) / 100
+  // ×100 sin redondeo de negocio; toFixed(10) solo limpia ruido binario de float.
+  return Number((sumFrac * 100).toFixed(10))
+}
+
+/** Formatea puntos % sin forzar redondeo; elimina solo ceros finales / ruido FP. */
+export function formatPuntosPctExacto(pts) {
+  if (pts == null || !Number.isFinite(Number(pts))) return '—'
+  const n = Number(pts)
+  // toFixed(10) acota ruido binario; strip de ceros finales mantiene decimales reales.
+  let s = n.toFixed(10).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '')
+  if (s === '-0') s = '0'
+  return s
 }
 
 export function fmtSumatoriaAiu(form) {
   const s = sumatoriaAiuPuntosPct(form)
   if (s == null) return '—'
-  return `${s}%`
+  return `${formatPuntosPctExacto(s)}%`
 }
 
 /**
