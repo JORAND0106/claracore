@@ -168,7 +168,7 @@ export default function SolicitudForm({
 
   useEffect(() => {
     if (!solicitudId) return
-    api.getSolicitud(solicitudId).then((s) => {
+    api.getSolicitud(solicitudId, { ligera: true }).then((s) => {
       aplicarSolicitudServidor(s)
     }).catch((e) => setError(parseSolicitudApiError(e)))
   }, [api, solicitudId])

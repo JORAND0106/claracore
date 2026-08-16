@@ -12,12 +12,31 @@ function headers(token, extra = {}) {
 }
 
 async function parseJson(res) {
-  const data = await res.json().catch(() => ({}))
+  let data = {}
+  try {
+    data = await res.json()
+  } catch {
+    data = {}
+  }
   if (!res.ok) {
-    const msg = data.detail || data.message || `Error ${res.status}`
+    const msg = data.detail || data.message || (res.statusText && res.statusText !== 'OK' ? res.statusText : null) || `Error ${res.status}`
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
   return data
+}
+
+/** Envuelve fetch para mapear errores de red a mensajes claros. */
+async function fetchJson(url, options) {
+  try {
+    const res = await fetch(url, options)
+    return await parseJson(res)
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (/failed to fetch|networkerror|network request failed|load failed|fetch failed/i.test(msg)) {
+      throw new Error('Failed to fetch')
+    }
+    throw err
+  }
 }
 
 /** Respuesta de listados: garantiza array aunque el proxy devuelva basura. */
@@ -142,28 +161,28 @@ export function createAlmacenApi(contratoId, token) {
 
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
-      return fetch(`${base}/solicitudes/${id}${q}`, { headers: headers(token) }).then(parseJson)
+      return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: headers(token) })
     },
 
     createSolicitud: (body) =>
-      fetch(`${base}/solicitudes`, {
+      fetchJson(`${base}/solicitudes`, {
         method: 'POST',
         headers: headers(token, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
-      }).then(parseJson),
+      }),
 
     updateSolicitud: (id, body) =>
-      fetch(`${base}/solicitudes/${id}`, {
+      fetchJson(`${base}/solicitudes/${id}`, {
         method: 'PUT',
         headers: headers(token, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
-      }).then(parseJson),
+      }),
 
     enviarSolicitud: (id) =>
-      fetch(`${base}/solicitudes/${id}/enviar`, {
+      fetchJson(`${base}/solicitudes/${id}/enviar`, {
         method: 'POST',
         headers: headers(token),
-      }).then(parseJson),
+      }),
 
     aprobarSolicitud: (id, body = {}) =>
       fetch(`${base}/solicitudes/${id}/aprobar`, {

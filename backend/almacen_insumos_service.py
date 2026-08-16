@@ -4,9 +4,28 @@ Insumos, proveedores y contexto presupuestal — módulo Almacén.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from almacen_service import _sb, _to_float
+
+# Caché en proceso del listado de precios (escaneo paginado es costoso).
+_LISTADO_CACHE: Dict[Tuple[int, str], Tuple[float, List[dict]]] = {}
+_LISTADO_TTL_SEC = 90.0
+_LISTADO_LOOKUP_CACHE: Dict[int, Tuple[float, Dict[Tuple[str, str], float]]] = {}
+
+
+def clear_listado_cache(contrato_id: Optional[int] = None) -> None:
+    """Invalida caché de listado (tests / tras cambios de precios)."""
+    if contrato_id is None:
+        _LISTADO_CACHE.clear()
+        _LISTADO_LOOKUP_CACHE.clear()
+        return
+    cid = int(contrato_id)
+    for key in list(_LISTADO_CACHE.keys()):
+        if key[0] == cid:
+            _LISTADO_CACHE.pop(key, None)
+    _LISTADO_LOOKUP_CACHE.pop(cid, None)
 
 
 def _norm_item_key(item: Optional[str]) -> str:
@@ -271,6 +290,13 @@ def _norm_capitulo_key(s: Optional[str]) -> str:
 
 
 def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
+    """Escaneo paginado de listado_precios con TTL corto (evita N× full-scan por línea)."""
+    cid = int(contrato_id)
+    cache_key = (cid, select)
+    now = time.monotonic()
+    hit = _LISTADO_CACHE.get(cache_key)
+    if hit and hit[0] > now:
+        return hit[1]
     sb = _sb()
     out: List[dict] = []
     offset = 0
@@ -278,7 +304,7 @@ def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
         batch = (
             sb.table("listado_precios")
             .select(select)
-            .eq("contrato_id", contrato_id)
+            .eq("contrato_id", cid)
             .order("item_numero")
             .range(offset, offset + 999)
             .execute()
@@ -289,7 +315,51 @@ def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
         if len(batch) < 1000:
             break
         offset += 1000
+    _LISTADO_CACHE[cache_key] = (now + _LISTADO_TTL_SEC, out)
     return out
+
+
+def get_listado_precio_lookup(contrato_id: int) -> Dict[Tuple[str, str], float]:
+    """Mapa (capitulo_norm, item_norm) → precio_unitario (una sola pasada cacheada)."""
+    cid = int(contrato_id)
+    now = time.monotonic()
+    hit = _LISTADO_LOOKUP_CACHE.get(cid)
+    if hit and hit[0] > now:
+        return hit[1]
+    lookup: Dict[Tuple[str, str], float] = {}
+    for row in _fetch_all_listado_rows(cid, "capitulo, item_numero, precio_unitario"):
+        raw_cap = (row.get("capitulo") or "").strip()
+        if not raw_cap:
+            continue
+        item_k = _norm_item_key(row.get("item_numero")).lower()
+        if not item_k:
+            continue
+        price = _to_float(row.get("precio_unitario"))
+        key = (_norm_capitulo_key(raw_cap), item_k)
+        # Primera coincidencia; también indexar por capitulo literal normalizado
+        lookup.setdefault(key, price)
+        lookup.setdefault((raw_cap.lower(), item_k), price)
+    _LISTADO_LOOKUP_CACHE[cid] = (now + _LISTADO_TTL_SEC, lookup)
+    return lookup
+
+
+def lookup_listado_precio(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    lookup: Optional[Dict[Tuple[str, str], float]] = None,
+) -> Optional[float]:
+    capitulo = (capitulo or "").strip()
+    item_numero = (item_numero or "").strip()
+    if not capitulo or not item_numero:
+        return None
+    table = lookup if lookup is not None else get_listado_precio_lookup(contrato_id)
+    want_item = _norm_item_key(item_numero).lower()
+    for cap_key in (_norm_capitulo_key(capitulo), capitulo.lower()):
+        val = table.get((cap_key, want_item))
+        if val is not None:
+            return val
+    return None
 
 
 def list_listado_capitulos(contrato_id: int) -> List[str]:
@@ -334,22 +404,7 @@ def get_listado_precio_unitario(
     item_numero: str,
 ) -> Optional[float]:
     """Precio unitario de cobro desde listado_precios (capítulo + ítem del listado)."""
-    capitulo = (capitulo or "").strip()
-    item_numero = (item_numero or "").strip()
-    if not capitulo or not item_numero:
-        return None
-    cap_key = _norm_capitulo_key(capitulo)
-    want_item = _norm_item_key(item_numero).lower()
-    for row in _fetch_all_listado_rows(contrato_id, "capitulo, item_numero, precio_unitario"):
-        raw_cap = (row.get("capitulo") or "").strip()
-        if not raw_cap:
-            continue
-        if raw_cap != capitulo and _norm_capitulo_key(raw_cap) != cap_key:
-            continue
-        if _norm_item_key(row.get("item_numero")).lower() != want_item:
-            continue
-        return _to_float(row.get("precio_unitario"))
-    return None
+    return lookup_listado_precio(contrato_id, capitulo, item_numero)
 
 
 def _build_analisis_valor(
@@ -1544,20 +1599,90 @@ def _cantidad_solicitada_acumulada(
     pk_id: str,
     exclude_solicitud_id: Optional[int] = None,
 ) -> float:
-    pk_norm = _norm_pk_id(pk_id)
-    if not pk_norm:
+    key = (int(presupuesto_id), _norm_pk_id(pk_id))
+    if not key[1]:
         return 0.0
+    return batch_cantidad_solicitada_acumulada(
+        sb, contrato_id, [key], exclude_solicitud_id
+    ).get(key, 0.0)
+
+
+def batch_cantidad_solicitada_acumulada(
+    sb,
+    contrato_id: int,
+    keys: Sequence[Tuple[int, str]],
+    exclude_solicitud_id: Optional[int] = None,
+) -> Dict[Tuple[int, str], float]:
+    """Acumulado de cantidades solicitadas por (presupuesto_id, pk_id) en una o dos queries."""
+    norm_keys: List[Tuple[int, str]] = []
+    seen = set()
+    for pid, pk in keys:
+        k = (int(pid), _norm_pk_id(pk))
+        if not k[1] or k in seen:
+            continue
+        seen.add(k)
+        norm_keys.append(k)
+    if not norm_keys:
+        return {}
+    pids = list({k[0] for k in norm_keys})
     items = (
         sb.table("almacen_solicitud_item")
         .select("cantidad, solicitud_id, pk_id, presupuesto_id")
-        .eq("presupuesto_id", presupuesto_id)
+        .in_("presupuesto_id", pids)
         .execute()
         .data
         or []
     )
-    items = [it for it in items if _norm_pk_id(it.get("pk_id")) == pk_norm]
+    want = set(norm_keys)
+    filtered = []
+    for it in items:
+        k = (int(it.get("presupuesto_id") or 0), _norm_pk_id(it.get("pk_id")))
+        if k in want:
+            filtered.append((k, it))
+    if not filtered:
+        return {k: 0.0 for k in norm_keys}
+    sol_ids = list({it["solicitud_id"] for _, it in filtered if it.get("solicitud_id")})
+    sols = (
+        sb.table("almacen_solicitud")
+        .select("id, estado, contrato_id")
+        .in_("id", sol_ids)
+        .execute()
+        .data
+        or []
+    ) if sol_ids else []
+    sol_map = {s["id"]: s for s in sols}
+    totals: Dict[Tuple[int, str], float] = {k: 0.0 for k in norm_keys}
+    for k, it in filtered:
+        sol = sol_map.get(it.get("solicitud_id")) or {}
+        if int(sol.get("contrato_id") or 0) != int(contrato_id):
+            continue
+        if sol.get("estado") == "rechazada":
+            continue
+        if exclude_solicitud_id and int(it.get("solicitud_id") or 0) == int(exclude_solicitud_id):
+            continue
+        totals[k] = totals.get(k, 0.0) + _to_float(it.get("cantidad"))
+    return totals
+
+
+def batch_cantidad_consumida_insumo(
+    sb,
+    contrato_id: int,
+    insumo_ids: Sequence[int],
+    exclude_solicitud_id: Optional[int] = None,
+) -> Dict[int, float]:
+    ids = sorted({int(i) for i in insumo_ids if i})
+    if not ids:
+        return {}
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("cantidad, solicitud_id, insumo_id")
+        .in_("insumo_id", ids)
+        .execute()
+        .data
+        or []
+    )
     if not items:
-        return 0.0
+        return {i: 0.0 for i in ids}
     sol_ids = list({it["solicitud_id"] for it in items if it.get("solicitud_id")})
     sols = (
         sb.table("almacen_solicitud")
@@ -1566,19 +1691,154 @@ def _cantidad_solicitada_acumulada(
         .execute()
         .data
         or []
-    )
+    ) if sol_ids else []
     sol_map = {s["id"]: s for s in sols}
-    total = 0.0
+    totals: Dict[int, float] = {i: 0.0 for i in ids}
     for it in items:
+        iid = int(it.get("insumo_id") or 0)
+        if iid not in totals:
+            continue
         sol = sol_map.get(it.get("solicitud_id")) or {}
-        if int(sol.get("contrato_id") or 0) != contrato_id:
+        if int(sol.get("contrato_id") or 0) != int(contrato_id):
             continue
         if sol.get("estado") == "rechazada":
             continue
         if exclude_solicitud_id and int(it.get("solicitud_id") or 0) == int(exclude_solicitud_id):
             continue
-        total += _to_float(it.get("cantidad"))
-    return total
+        totals[iid] += _to_float(it.get("cantidad"))
+    return totals
+
+
+def apply_saldo_flags_batch(
+    contrato_id: int,
+    items: List[dict],
+    exclude_solicitud_id: Optional[int] = None,
+    *,
+    descontar_linea_actual: bool = True,
+) -> None:
+    """
+    Marca supera_presupuesto / vlr cobro / cant_presupuestada sin N× get_presupuesto_context
+    (sin combo ni listado por línea). Mutates items in place.
+
+    - Guardado/preview: descontar_linea_actual=True (+ exclude_solicitud_id al editar).
+    - Lectura de líneas ya persistidas: descontar_linea_actual=False (la qty ya está en acum).
+    """
+    from collections import defaultdict
+
+    sb = _sb()
+    keys = [
+        (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
+        for it in items
+        if it.get("presupuesto_id") and it.get("pk_id")
+    ]
+    acum_map = batch_cantidad_solicitada_acumulada(sb, contrato_id, keys, exclude_solicitud_id)
+    lookup = get_listado_precio_lookup(contrato_id)
+    batch_qty: dict = defaultdict(float)
+    for it in items:
+        if it.get("presupuesto_id") and it.get("pk_id"):
+            key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
+            batch_qty[key] += _to_float(it.get("cantidad"))
+
+    for it in items:
+        cap = (it.get("capitulo") or "").strip()
+        item_n = (it.get("item") or "").strip()
+        vlr = lookup_listado_precio(contrato_id, cap, item_n, lookup)
+        if vlr is not None:
+            # No pisar cobro manual del Gerencial si ya viene set con insumo
+            if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
+                it["vlr_unitario_cobro"] = vlr
+        elif it.get("vlr_unitario_cobro") is None:
+            it["vlr_unitario_cobro"] = 0
+
+        if not it.get("pk_id") or not it.get("presupuesto_id"):
+            it["supera_presupuesto"] = False
+            continue
+        key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
+        presupuestada = _to_float(it.get("cant_presupuestada"))
+        acum = acum_map.get((key[0], _norm_pk_id(key[1])), 0.0)
+        cant = _to_float(it.get("cantidad"))
+        extra = batch_qty[key] - cant
+        if descontar_linea_actual:
+            saldo = presupuestada - acum - cant - extra
+        else:
+            saldo = presupuestada - acum
+        it["supera_presupuesto"] = saldo < -0.0001
+        it["contexto_presupuesto"] = {
+            "presupuesto_id": key[0],
+            "pk_id": key[1],
+            "cant_presupuestada": presupuestada,
+            "cant_solicitada_acumulada": acum,
+            "cantidad_solicitada": cant,
+            "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
+            "saldo_disponible_despues": saldo,
+            "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
+            "supera_presupuesto": it["supera_presupuesto"],
+            "capitulo": it.get("capitulo"),
+            "item": it.get("item"),
+        }
+
+    batch_insumo: dict = defaultdict(float)
+    for it in items:
+        if it.get("insumo_id"):
+            batch_insumo[int(it["insumo_id"])] += _to_float(it.get("cantidad"))
+    if not batch_insumo:
+        for it in items:
+            it.setdefault("supera_negociado", False)
+        return
+
+    consumido = batch_cantidad_consumida_insumo(
+        sb, contrato_id, list(batch_insumo.keys()), exclude_solicitud_id
+    )
+    # Una query de insumos con negociado
+    ins_rows = (
+        sb.table("almacen_insumo")
+        .select("id, cantidad_negociada, valor_negociado_total, unidad, codigo, descripcion")
+        .in_("id", list(batch_insumo.keys()))
+        .execute()
+        .data
+        or []
+    )
+    ins_map = {int(r["id"]): r for r in ins_rows}
+    for it in items:
+        iid = it.get("insumo_id")
+        if not iid:
+            it["supera_negociado"] = False
+            continue
+        row = ins_map.get(int(iid)) or {}
+        neg = row.get("cantidad_negociada")
+        if neg is None or _to_float(neg) <= 0:
+            it["supera_negociado"] = False
+            it["contexto_negociado"] = {"tiene_negociado": False, "supera_negociado": False}
+            continue
+        cantidad_negociada = _to_float(neg)
+        acum = consumido.get(int(iid), 0.0)
+        cant = _to_float(it.get("cantidad"))
+        extra = batch_insumo[int(iid)] - cant
+        if descontar_linea_actual:
+            consumo_despues = acum + cant + extra
+        else:
+            consumo_despues = acum
+        saldo = cantidad_negociada - consumo_despues
+        supera = saldo < -0.0001
+        it["supera_negociado"] = supera
+        it["contexto_negociado"] = {
+            "tiene_negociado": True,
+            "cantidad_negociada": cantidad_negociada,
+            "valor_negociado_total": (
+                _to_float(row.get("valor_negociado_total"))
+                if row.get("valor_negociado_total") is not None
+                else None
+            ),
+            "cantidad_consumida_acumulada": acum,
+            "cantidad_solicitada": cant,
+            "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
+            "consumo_total_despues": consumo_despues,
+            "saldo_negociado_despues": saldo,
+            "supera_negociado": supera,
+            "unidad": row.get("unidad") or "UND",
+            "insumo_codigo": row.get("codigo"),
+            "insumo_descripcion": row.get("descripcion"),
+        }
 
 
 def get_presupuesto_context(
@@ -1663,8 +1923,14 @@ def resolve_insumo_for_solicitud(
     contrato_id: int,
     user_id: int,
     raw: dict,
+    *,
+    skip_context: bool = False,
 ) -> dict:
-    """Resuelve insumo + ítem de cobro explícito + presupuesto + flags para una línea."""
+    """Resuelve insumo + ítem de cobro explícito + presupuesto + flags para una línea.
+
+    ``skip_context=True`` omite get_presupuesto_context / negociado (útil en validación
+    por lote donde ``apply_saldo_flags_batch`` rellena los flags una sola vez).
+    """
     insumo_id = raw.get("insumo_id")
     listado_precio_id = raw.get("listado_precio_id")
     pk_id = (raw.get("pk_id") or "").strip()
@@ -1688,7 +1954,6 @@ def resolve_insumo_for_solicitud(
     else:
         raise ValueError("Seleccione un insumo del catálogo.")
 
-    sb = _sb()
     if presupuesto_id:
         ppto = resolve_presupuesto_row(
             contrato_id,
@@ -1709,24 +1974,27 @@ def resolve_insumo_for_solicitud(
     if abs_fin in (None, ""):
         abs_fin = ubic.get("abscisa_final")
 
-    ctx = get_presupuesto_context(
-        contrato_id,
-        int(ppto["id"]),
-        pk_id,
-        cant,
-        exclude_solicitud_id=raw.get("exclude_solicitud_id"),
-        cantidad_extra_borrador=_to_float(raw.get("cantidad_borrador_adicional")),
-        descontar_linea_actual=True,
-        capitulo_listado=capitulo_ppto,
-        item_listado=item_ppto,
-    )
-    ctx_neg = get_contexto_negociado_insumo(
-        contrato_id,
-        int(insumo_id),
-        cant,
-        exclude_solicitud_id=raw.get("exclude_solicitud_id"),
-        cantidad_extra_borrador=_to_float(raw.get("cantidad_borrador_adicional_insumo")),
-    )
+    ctx = None
+    ctx_neg = None
+    if not skip_context:
+        ctx = get_presupuesto_context(
+            contrato_id,
+            int(ppto["id"]),
+            pk_id,
+            cant,
+            exclude_solicitud_id=raw.get("exclude_solicitud_id"),
+            cantidad_extra_borrador=_to_float(raw.get("cantidad_borrador_adicional")),
+            descontar_linea_actual=True,
+            capitulo_listado=capitulo_ppto,
+            item_listado=item_ppto,
+        )
+        ctx_neg = get_contexto_negociado_insumo(
+            contrato_id,
+            int(insumo_id),
+            cant,
+            exclude_solicitud_id=raw.get("exclude_solicitud_id"),
+            cantidad_extra_borrador=_to_float(raw.get("cantidad_borrador_adicional_insumo")),
+        )
     valor_compra_raw = raw.get("valor_compra_unitario")
     if valor_compra_raw not in (None, ""):
         valor_compra = _to_float(valor_compra_raw)
@@ -1734,7 +2002,21 @@ def resolve_insumo_for_solicitud(
         valor_compra = _to_float(insumo.get("valor_compra_referencia"))
     else:
         valor_compra = None
-    vlr_cobro = ctx.get("vlr_unitario_cobro") or 0
+    if ctx is not None:
+        vlr_cobro = ctx.get("vlr_unitario_cobro") or 0
+        cant_presupuestada = ctx.get("cant_presupuestada")
+        supera_presupuesto = ctx.get("supera_presupuesto")
+        supera_negociado = (ctx_neg or {}).get("supera_negociado")
+    else:
+        vlr_lookup = get_listado_precio_unitario(
+            contrato_id,
+            capitulo_ppto or ppto.get("capitulo") or "",
+            item_ppto or ppto.get("item") or "",
+        )
+        vlr_cobro = vlr_lookup if vlr_lookup is not None else 0
+        cant_presupuestada = _to_float(ppto.get("cant_total"))
+        supera_presupuesto = False
+        supera_negociado = False
     costo_insumos = (valor_compra * cant) if valor_compra is not None and valor_compra > 0 else None
     utilidad_estimada = None
     if costo_insumos is not None and vlr_cobro > 0:
@@ -1757,12 +2039,12 @@ def resolve_insumo_for_solicitud(
         "unidad": insumo.get("unidad") or ppto.get("und") or "UND",
         "cantidad": cant,
         "es_recurrente": bool(raw.get("es_recurrente")),
-        "cant_presupuestada": ctx.get("cant_presupuestada"),
+        "cant_presupuestada": cant_presupuestada,
         "valor_compra_unitario": valor_compra,
         "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
         "vlr_unitario_cobro": vlr_cobro,
-        "supera_presupuesto": ctx.get("supera_presupuesto"),
-        "supera_negociado": ctx_neg.get("supera_negociado"),
+        "supera_presupuesto": supera_presupuesto,
+        "supera_negociado": supera_negociado,
         "contexto_presupuesto": ctx,
         "contexto_negociado": ctx_neg,
         "analisis_valor": _build_analisis_valor(cant, valor_compra, vlr_cobro),
