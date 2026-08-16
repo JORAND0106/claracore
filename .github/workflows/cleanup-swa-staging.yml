@@ -72,6 +72,17 @@ jobs:
           # 1) Decificar claims del deployment token (sin imprimir el secreto)
           token = os.environ.get("SWA_DEPLOY_TOKEN") or ""
           resource_id = ""
+          # No imprimir valores de claims (GitHub puede redactar la línea entera
+          # si algún valor coincide con el secreto). Solo metadatos + ResourceId.
+          print(
+              f"deploy_token: present={bool(token)} len={len(token)} "
+              f"dot_count={token.count('.')}",
+              flush=True,
+          )
+          summary.write(
+              f"## Deployment token\npresent={bool(token)} len={len(token)} "
+              f"dots={token.count('.')}\n"
+          )
           if token.count(".") >= 2:
               payload = token.split(".")[1]
               payload += "=" * (-len(payload) % 4)
@@ -79,29 +90,23 @@ jobs:
                   claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
               except Exception as e:
                   claims = {"_decode_error": str(e)}
-              safe = {
-                  k: claims[k]
-                  for k in claims
-                  if any(
-                      x in k.lower()
-                      for x in (
-                          "resource", "tid", "oid", "iss", "aud", "appid",
-                          "sub", "ver", "name", "stable",
-                      )
-                  )
-              }
-              summary.write("## Claims del deployment token (filtrados)\n```json\n")
-              summary.write(json.dumps(safe, indent=2))
-              summary.write("\n```\n")
-              print("Token claims (filtered):", json.dumps(safe, indent=2), flush=True)
+              keys = sorted(claims.keys())
+              print(f"token claim keys: {keys}", flush=True)
+              summary.write(f"claim keys: `{keys}`\n")
               resource_id = (
                   claims.get("ResourceId")
                   or claims.get("resourceId")
                   or claims.get("stable_resource_id")
                   or ""
               )
+              # ResourceId es una ruta ARM, no el secreto; seguro de mostrar.
+              if resource_id:
+                  print(f"ResourceId from token: {resource_id}", flush=True)
+                  summary.write(f"ResourceId: `{resource_id}`\n")
+              else:
+                  print("ResourceId claim missing in token", flush=True)
           else:
-              summary.write("## Deployment token\nNo disponible o formato inesperado.\n")
+              summary.write("Token ausente o no es JWT (sin dots).\n")
 
           # 2) Suscripciones / RGs visibles para el SP (diagnóstico)
           summary.write("\n## Suscripciones del service principal\n```\n")

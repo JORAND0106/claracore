@@ -1,5 +1,12 @@
 name: Azure Static Web Apps CI/CD
 
+# Staging: los previews de PR están desactivados temporalmente porque Azure
+# reporta "maximum number of staging environments" y los entornos huérfanos no
+# se pueden borrar con el SP actual (AZURE_CREDENTIALS no ve el SWA).
+# Production (push a main) sigue activo. Tras limpiar staging en Portal o
+# conceder Contributor del SP al RG del SWA, restaurar el if de build_and_deploy_job:
+#   if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+
 on:
   push:
     branches:
@@ -11,7 +18,8 @@ on:
 
 jobs:
   build_and_deploy_job:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    # Solo production hasta liberar cupo de staging en Azure.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     name: Build and Deploy Job
     steps:
