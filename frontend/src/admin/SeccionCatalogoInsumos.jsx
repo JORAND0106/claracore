@@ -4,19 +4,17 @@ import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
 import { esDesarrolladorUsuario } from '../utils/permisosContrato'
 import { permisosCatalogoInsumos } from './catalogoInsumosPermisos'
 import {
-  AIU_CAMPOS_UI,
-  EMPTY_AIU,
-  EMPTY_IVA,
-  IVA_SOBRE_OPCIONES,
-  aiuTieneDatos,
+  EMPTY_IMPUESTO,
+  IMPUESTO_CAMPOS_UI,
   etiquetaTributos,
-  formAiuDesdeTributos,
-  formIvaDesdeTributos,
+  formImpuestoDesdeTributos,
   fmtPctDesdeDecimal,
   fmtSumatoriaAiu,
-  ivaTieneDatos,
+  inferirTipoImpuesto,
+  impuestoTieneDatos,
+  labelTipoImpuesto,
   seedTributosDesdeLegado,
-  tributosDesdeForm,
+  tributosPayloadDesdeForm,
 } from './catalogoInsumosTributos'
 import { buildContratoUiTheme } from '../theme/adminPanelTheme'
 import { UnidadSelector } from '../utils/unidadesListadoPrecios'
@@ -36,8 +34,7 @@ const EMPTY_FORM = {
   rendimiento: '',
   costo_base: '',
   cantidad_negociada: '',
-  aiu: { ...EMPTY_AIU },
-  iva: { ...EMPTY_IVA },
+  impuesto: { ...EMPTY_IMPUESTO },
   cotizacion_numero: '',
   cotizacion_fecha: '',
   cotizacion_vigencia: '',
@@ -60,8 +57,7 @@ function snapshotForm(f) {
     rendimiento: String(f.rendimiento ?? ''),
     costo_base: String(f.costo_base ?? ''),
     cantidad_negociada: String(f.cantidad_negociada ?? ''),
-    aiu: f.aiu || EMPTY_AIU,
-    iva: f.iva || EMPTY_IVA,
+    impuesto: f.impuesto || EMPTY_IMPUESTO,
     cotizacion_numero: f.cotizacion_numero || '',
     cotizacion_fecha: f.cotizacion_fecha || '',
     cotizacion_vigencia: f.cotizacion_vigencia || '',
@@ -294,7 +290,7 @@ function TributoModalShell({ open, title, onClose, onSave, t, children }) {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(440px, 96vw)',
+          width: 'min(520px, 96vw)',
           background: t.bgCard,
           border: `1px solid ${t.border}`,
           borderRadius: 12,
@@ -426,10 +422,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [provQ, setProvQ] = useState('')
   const [provLoading, setProvLoading] = useState(false)
   const [consumoNegociado, setConsumoNegociado] = useState(null)
-  const [modalAiuOpen, setModalAiuOpen] = useState(false)
-  const [modalIvaOpen, setModalIvaOpen] = useState(false)
-  const [draftAiu, setDraftAiu] = useState({ ...EMPTY_AIU })
-  const [draftIva, setDraftIva] = useState({ ...EMPTY_IVA })
+  const [modalImpuestoOpen, setModalImpuestoOpen] = useState(false)
+  const [draftImpuesto, setDraftImpuesto] = useState({ ...EMPTY_IMPUESTO })
 
   const formHasChanges = useCallback(() => snapshotForm(form) !== formBaselineRef.current, [form])
 
@@ -456,8 +450,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   )
 
   const tributosResumen = useMemo(
-    () => etiquetaTributos(tributosDesdeForm(form.aiu || EMPTY_AIU, form.iva || EMPTY_IVA)),
-    [form.aiu, form.iva],
+    () => etiquetaTributos(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)),
+    [form.impuesto],
+  )
+
+  const tipoImpuestoInferido = useMemo(
+    () => inferirTipoImpuesto(form.impuesto || EMPTY_IMPUESTO, { valoresEnDecimal: true }),
+    [form.impuesto],
+  )
+
+  const draftTipoImpuesto = useMemo(
+    () => inferirTipoImpuesto(draftImpuesto, { valoresEnDecimal: true }),
+    [draftImpuesto],
   )
 
   const valorNegociadoPreview = useMemo(() => {
@@ -568,8 +572,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       rendimiento: row.rendimiento ?? '',
       costo_base: row.costo ?? row.costo_base ?? '',
       cantidad_negociada: row.cantidad_negociada ?? '',
-      aiu: formAiuDesdeTributos(trib),
-      iva: formIvaDesdeTributos(trib),
+      impuesto: formImpuestoDesdeTributos(trib),
       cotizacion_numero: row.cotizacion_numero || '',
       cotizacion_fecha: row.cotizacion_fecha || '',
       cotizacion_vigencia: row.cotizacion_vigencia || '',
@@ -598,13 +601,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         nit: c.nit || f.nit,
         cotizacion_fecha: c.cotizacion_fecha || f.cotizacion_fecha,
         costo_base: c.costo_base != null ? String(c.costo_base) : f.costo_base,
-        iva: c.impuesto_porcentaje != null || c.tipo_impuesto === 'iva'
+        impuesto: (c.impuesto_porcentaje != null || c.tipo_impuesto === 'iva')
           ? {
-              ...f.iva,
-              porcentaje: c.impuesto_porcentaje != null ? String(c.impuesto_porcentaje) : f.iva?.porcentaje,
-              sobre: f.iva?.sobre || 'costo_base',
+              ...f.impuesto,
+              iva: c.impuesto_porcentaje != null
+                ? String(Number(c.impuesto_porcentaje) / 100)
+                : f.impuesto?.iva,
             }
-          : f.iva,
+          : f.impuesto,
       }))
       setMsg({ type: 'success', text: r.mensaje || 'OCR completado. Revise los campos.' })
     } catch (e) {
@@ -635,8 +639,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fd.append('unidad', form.unidad || 'UND')
     fd.append('costo_base', String(form.costo_base))
     if (form.rendimiento !== '') fd.append('rendimiento', String(form.rendimiento))
-    // Legado: sin tipo único; el desglose vive en tributos.
-    fd.append('tributos', JSON.stringify(tributosDesdeForm(form.aiu || EMPTY_AIU, form.iva || EMPTY_IVA)))
+    // Desglose unificado Tipo | A | Í | U | IVA (tipo inferido automáticamente).
+    fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)))
     if (form.proveedor_id) fd.append('proveedor_id', String(form.proveedor_id))
     else if (form.razon_social && form.nit) {
       fd.append('razon_social', form.razon_social.trim())
@@ -1136,45 +1140,41 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 }}
                 >
                   <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: t.primary, marginBottom: 8 }}>
-                    Impuestos y AIU
+                    Impuesto del insumo
                   </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
                     <button
                       type="button"
-                      title="A., Í., U. e IVA/Util. (ingreso decimal, visualización en %)"
+                      title="Captura unificada: Tipo impuesto | A | Í | U | IVA"
                       onClick={() => {
-                        setDraftAiu({ ...(form.aiu || EMPTY_AIU) })
-                        setModalAiuOpen(true)
+                        setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
+                        setModalImpuestoOpen(true)
                       }}
                       style={{
                         ...btnSecondary,
-                        borderColor: aiuTieneDatos(form.aiu) ? t.primary : t.border,
-                        color: aiuTieneDatos(form.aiu) ? t.primary : t.text,
+                        borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
+                        color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
                         fontWeight: 700,
                       }}
                     >
-                      AIU{aiuTieneDatos(form.aiu) ? ' ✓' : ''}
+                      A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
                     </button>
-                    <button
-                      type="button"
-                      title="Define el IVA y sobre qué valor se aplica"
-                      onClick={() => {
-                        setDraftIva({ ...(form.iva || EMPTY_IVA) })
-                        setModalIvaOpen(true)
-                      }}
-                      style={{
-                        ...btnSecondary,
-                        borderColor: ivaTieneDatos(form.iva) ? t.primary : t.border,
-                        color: ivaTieneDatos(form.iva) ? t.primary : t.text,
-                        fontWeight: 700,
-                      }}
+                    <span style={{
+                      fontSize: 'var(--cc-caption)',
+                      fontWeight: 700,
+                      color: tipoImpuestoInferido ? t.primary : t.textMuted,
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: `1px solid ${tipoImpuestoInferido ? t.primary : t.border}`,
+                      background: t.bgCard,
+                    }}
                     >
-                      IVA{ivaTieneDatos(form.iva) ? ' ✓' : ''}
-                    </button>
+                      Tipo: {labelTipoImpuesto(tipoImpuestoInferido)}
+                    </span>
                   </div>
                   <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
                     {tributosResumen === '—'
-                      ? 'Sin AIU ni IVA diligenciados. Use los botones para capturarlos de forma independiente.'
+                      ? 'Sin impuesto diligenciado. Capture A, Í, U e IVA en un solo formulario; el tipo se infiere automáticamente.'
                       : tributosResumen}
                   </div>
                 </div>
@@ -1510,20 +1510,45 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       )}
 
       <TributoModalShell
-        open={modalAiuOpen}
-        title="AIU — desglose independiente"
+        open={modalImpuestoOpen}
+        title="Impuesto del insumo — A · Í · U · IVA"
         t={t}
-        onClose={() => setModalAiuOpen(false)}
+        onClose={() => setModalImpuestoOpen(false)}
         onSave={() => {
-          setForm((f) => ({ ...f, aiu: { ...draftAiu } }))
-          setModalAiuOpen(false)
+          setForm((f) => ({ ...f, impuesto: { ...draftImpuesto } }))
+          setModalImpuestoOpen(false)
         }}
       >
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-          Digite el valor en decimal (ej. 0.05). La plataforma lo muestra en porcentaje.
+          Digite A, Í, U e IVA en decimal (ej. 0.05). La plataforma muestra el equivalente en % e infiere el tipo de impuesto.
         </p>
+        <div style={{
+          marginBottom: 12,
+          padding: '10px 12px',
+          borderRadius: 8,
+          border: `1px solid ${draftTipoImpuesto ? t.primary : t.border}`,
+          background: ui.cardSubtle,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+        >
+          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
+            Tipo impuesto (inferido)
+          </span>
+          <span style={{
+            fontSize: 'var(--cc-md)',
+            fontWeight: 800,
+            color: draftTipoImpuesto ? t.primary : t.textMuted,
+          }}
+          >
+            {labelTipoImpuesto(draftTipoImpuesto)}
+          </span>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
-          {AIU_CAMPOS_UI.map(({ key, label }) => (
+          {IMPUESTO_CAMPOS_UI.map(({ key, label }) => (
             <Field key={key} label={label}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
@@ -1534,8 +1559,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   step="0.0001"
                   inputMode="decimal"
                   placeholder="0.05"
-                  value={draftAiu[key] ?? ''}
-                  onChange={(e) => setDraftAiu((d) => ({ ...d, [key]: e.target.value }))}
+                  value={draftImpuesto[key] ?? ''}
+                  onChange={(e) => setDraftImpuesto((d) => ({ ...d, [key]: e.target.value }))}
                 />
                 <span
                   style={{
@@ -1548,7 +1573,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   }}
                   title="Equivalente en porcentaje"
                 >
-                  {fmtPctDesdeDecimal(draftAiu[key])}
+                  {fmtPctDesdeDecimal(draftImpuesto[key])}
                 </span>
               </div>
             </Field>
@@ -1577,42 +1602,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             fontVariantNumeric: 'tabular-nums',
           }}
           >
-            {fmtSumatoriaAiu(draftAiu)}
+            {fmtSumatoriaAiu(draftImpuesto)}
           </span>
         </div>
-      </TributoModalShell>
-
-      <TributoModalShell
-        open={modalIvaOpen}
-        title="IVA — aplicación"
-        t={t}
-        onClose={() => setModalIvaOpen(false)}
-        onSave={() => {
-          setForm((f) => ({ ...f, iva: { ...draftIva } }))
-          setModalIvaOpen(false)
-        }}
-      >
-        <Field label="Porcentaje IVA %">
-          <input
-            style={inputStyle}
-            type="number"
-            min="0"
-            step="0.01"
-            value={draftIva.porcentaje ?? ''}
-            onChange={(e) => setDraftIva((d) => ({ ...d, porcentaje: e.target.value }))}
-          />
-        </Field>
-        <Field label="¿Sobre qué valor se aplica el IVA?">
-          <select
-            style={{ ...inputStyle, fontSize: 16 }}
-            value={draftIva.sobre || 'costo_base'}
-            onChange={(e) => setDraftIva((d) => ({ ...d, sobre: e.target.value }))}
-          >
-            {IVA_SOBRE_OPCIONES.map((o) => (
-              <option key={o.id} value={o.id}>{o.label}</option>
-            ))}
-          </select>
-        </Field>
+        <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
+          Solo IVA → IVA Pleno. A/Í/U + IVA → IVA sobre Utilidad. El tipo no se elige manualmente.
+        </p>
       </TributoModalShell>
     </div>
   )

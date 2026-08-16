@@ -1,19 +1,44 @@
 /**
- * Desglose AIU / IVA del catálogo de insumos (solo captura; no redefine costos).
+ * Impuesto unificado por insumo: Tipo | A | Í | U | IVA
  *
  * Convención:
  * - En BD / tributos: porcentajes en puntos (5 = 5%).
- * - En el modal AIU: el usuario digita fracción decimal (0.05) y la UI muestra % (5%).
- * - El modal IVA sigue en puntos porcentuales (sin cambio de UX).
+ * - En UI: el usuario digita fracción decimal (0.05) y se muestra en % (5%).
+ *
+ * Inferencia automática del tipo (no seleccionable):
+ * - Solo IVA → IVA Pleno (sobre costo base)
+ * - A/Í/U + IVA → IVA sobre Utilidad
+ * - Solo A/Í/U → AIU (sin IVA)
  */
 
-export const IVA_SOBRE_OPCIONES = [
-  { id: 'costo_base', label: 'Costo base del insumo' },
-  { id: 'utilidad', label: 'Utilidad (componente U del AIU)' },
-  { id: 'aiu', label: 'AIU total (A + I + U)' },
-  { id: 'costo_mas_aiu', label: 'Costo base + AIU' },
+export const TIPO_IMPUESTO = {
+  IVA_PLENO: 'iva_pleno',
+  IVA_SOBRE_UTILIDAD: 'iva_sobre_utilidad',
+  AIU_SIN_IVA: 'aiu_sin_iva',
+}
+
+export const TIPO_IMPUESTO_LABEL = {
+  [TIPO_IMPUESTO.IVA_PLENO]: 'IVA Pleno',
+  [TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD]: 'IVA sobre Utilidad',
+  [TIPO_IMPUESTO.AIU_SIN_IVA]: 'AIU (sin IVA)',
+}
+
+/** Formulario unificado (valores en decimal para A/Í/U/IVA). */
+export const EMPTY_IMPUESTO = {
+  administracion: '',
+  imprevistos: '',
+  utilidad: '',
+  iva: '',
+}
+
+export const IMPUESTO_CAMPOS_UI = [
+  { key: 'administracion', label: 'A.' },
+  { key: 'imprevistos', label: 'Í.' },
+  { key: 'utilidad', label: 'U.' },
+  { key: 'iva', label: 'IVA' },
 ]
 
+/** @deprecated usar EMPTY_IMPUESTO / IMPUESTO_CAMPOS_UI */
 export const EMPTY_AIU = {
   administracion: '',
   imprevistos: '',
@@ -21,24 +46,24 @@ export const EMPTY_AIU = {
   iva_utilidad: '',
 }
 
-export const EMPTY_IVA = {
-  porcentaje: '',
-  sobre: 'costo_base',
-}
-
-/** Etiquetas cortas del modal AIU. */
+/** @deprecated */
 export const AIU_CAMPOS_UI = [
   { key: 'administracion', label: 'A.' },
   { key: 'imprevistos', label: 'Í.' },
   { key: 'utilidad', label: 'U.' },
-  { key: 'iva_utilidad', label: 'IVA/Util.' },
+  { key: 'iva_utilidad', label: 'IVA' },
 ]
 
-function numOrEmpty(v) {
-  if (v == null || v === '') return ''
-  const n = Number(v)
-  return Number.isFinite(n) ? String(n) : ''
-}
+/** @deprecated */
+export const EMPTY_IVA = { porcentaje: '', sobre: 'costo_base' }
+
+/** @deprecated */
+export const IVA_SOBRE_OPCIONES = [
+  { id: 'costo_base', label: 'Costo base del insumo' },
+  { id: 'utilidad', label: 'Utilidad (componente U del AIU)' },
+  { id: 'aiu', label: 'AIU total (A + I + U)' },
+  { id: 'costo_mas_aiu', label: 'Costo base + AIU' },
+]
 
 /** Fracción decimal (0.05) → puntos % (5). */
 export function decimalAPuntosPct(raw) {
@@ -57,21 +82,18 @@ export function puntosPctADecimal(raw) {
   return String(d)
 }
 
-/** Texto de visualización % a partir del decimal digitado. */
 export function fmtPctDesdeDecimal(raw) {
   const pts = decimalAPuntosPct(raw)
   if (pts == null) return '—'
-  const pretty = Number.isInteger(pts) ? String(pts) : String(pts)
-  return `${pretty}%`
+  return `${pts}%`
 }
 
-/** Sumatoria A+I+U en puntos % (IVA/Util no entra en el total AIU). */
-export function sumatoriaAiuPuntosPct(aiuForm) {
+export function sumatoriaAiuPuntosPct(form) {
   const keys = ['administracion', 'imprevistos', 'utilidad']
   let sum = 0
   let any = false
   for (const k of keys) {
-    const pts = decimalAPuntosPct(aiuForm?.[k])
+    const pts = decimalAPuntosPct(form?.[k])
     if (pts == null) continue
     any = true
     sum += pts
@@ -80,8 +102,8 @@ export function sumatoriaAiuPuntosPct(aiuForm) {
   return Math.round(sum * 100) / 100
 }
 
-export function fmtSumatoriaAiu(aiuForm) {
-  const s = sumatoriaAiuPuntosPct(aiuForm)
+export function fmtSumatoriaAiu(form) {
+  const s = sumatoriaAiuPuntosPct(form)
   if (s == null) return '—'
   return `${s}%`
 }
@@ -100,103 +122,212 @@ export function parseEntradaAPuntosPct(raw) {
   return Math.round(n * 100) / 100
 }
 
+function tieneValorPct(v) {
+  return v != null && v !== '' && Number.isFinite(Number(v))
+}
+
+function numOrNull(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** ¿Hay A, Í o U? (no cuenta IVA). */
+export function tieneAiuComponentes(obj) {
+  if (!obj) return false
+  return ['administracion', 'imprevistos', 'utilidad'].some((k) => tieneValorPct(obj[k]))
+}
+
+/**
+ * Inferencia automática del tipo de impuesto.
+ * @param {{ administracion?, imprevistos?, utilidad?, iva? }} vals — puntos % o decimales del form
+ * @param {{ valoresEnDecimal?: boolean }} [opts]
+ */
+export function inferirTipoImpuesto(vals, opts = {}) {
+  const toPts = opts.valoresEnDecimal
+    ? (v) => decimalAPuntosPct(v)
+    : (v) => (tieneValorPct(v) ? Number(v) : null)
+  const a = toPts(vals?.administracion)
+  const i = toPts(vals?.imprevistos)
+  const u = toPts(vals?.utilidad)
+  const iva = toPts(vals?.iva)
+  const tieneAiu = a != null || i != null || u != null
+  const tieneIva = iva != null
+  if (tieneAiu && tieneIva) return TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD
+  if (!tieneAiu && tieneIva) return TIPO_IMPUESTO.IVA_PLENO
+  if (tieneAiu && !tieneIva) return TIPO_IMPUESTO.AIU_SIN_IVA
+  return null
+}
+
+export function labelTipoImpuesto(tipo) {
+  if (!tipo) return '—'
+  return TIPO_IMPUESTO_LABEL[tipo] || tipo
+}
+
+/**
+ * Normaliza tributos guardados (legado anidado o plano) → forma canónica + tipo inferido.
+ * Shape: { tipo, administracion, imprevistos, utilidad, aiu, iva: { porcentaje, sobre } }
+ */
 export function normalizarTributos(raw) {
   const src = raw && typeof raw === 'object' ? raw : {}
   const aiuIn = src.aiu && typeof src.aiu === 'object' ? src.aiu : {}
   const ivaIn = src.iva && typeof src.iva === 'object' ? src.iva : {}
-  const sobre = String(ivaIn.sobre || 'costo_base').trim()
-  const sobreOk = IVA_SOBRE_OPCIONES.some((o) => o.id === sobre) ? sobre : 'costo_base'
+
+  let administracion = numOrNull(
+    src.administracion != null && src.administracion !== ''
+      ? src.administracion
+      : aiuIn.administracion,
+  )
+  let imprevistos = numOrNull(
+    src.imprevistos != null && src.imprevistos !== ''
+      ? src.imprevistos
+      : aiuIn.imprevistos,
+  )
+  let utilidad = numOrNull(
+    src.utilidad != null && src.utilidad !== ''
+      ? src.utilidad
+      : aiuIn.utilidad,
+  )
+
+  let iva = null
+  if (src.iva != null && typeof src.iva !== 'object' && src.iva !== '') {
+    iva = numOrNull(src.iva)
+  } else if (ivaIn.porcentaje != null && ivaIn.porcentaje !== '') {
+    iva = numOrNull(ivaIn.porcentaje)
+  } else if (aiuIn.iva_utilidad != null && aiuIn.iva_utilidad !== '') {
+    iva = numOrNull(aiuIn.iva_utilidad)
+  }
+
+  const tipo = inferirTipoImpuesto({
+    administracion, imprevistos, utilidad, iva,
+  })
+
+  const sobre = tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD ? 'utilidad' : 'costo_base'
+
   return {
+    tipo,
+    administracion,
+    imprevistos,
+    utilidad,
     aiu: {
-      administracion: aiuIn.administracion != null && aiuIn.administracion !== '' ? Number(aiuIn.administracion) : null,
-      imprevistos: aiuIn.imprevistos != null && aiuIn.imprevistos !== '' ? Number(aiuIn.imprevistos) : null,
-      utilidad: aiuIn.utilidad != null && aiuIn.utilidad !== '' ? Number(aiuIn.utilidad) : null,
-      iva_utilidad: aiuIn.iva_utilidad != null && aiuIn.iva_utilidad !== '' ? Number(aiuIn.iva_utilidad) : null,
+      administracion,
+      imprevistos,
+      utilidad,
+      iva_utilidad: tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD ? iva : null,
     },
     iva: {
-      porcentaje: ivaIn.porcentaje != null && ivaIn.porcentaje !== '' ? Number(ivaIn.porcentaje) : null,
-      sobre: sobreOk,
+      porcentaje: iva,
+      sobre,
     },
   }
 }
 
-/** Form AIU en decimales → tributos en puntos %. IVA del form ya viene en puntos %. */
-export function tributosDesdeForm(aiuForm, ivaForm) {
-  const aiu = {
-    administracion: decimalAPuntosPct(aiuForm?.administracion),
-    imprevistos: decimalAPuntosPct(aiuForm?.imprevistos),
-    utilidad: decimalAPuntosPct(aiuForm?.utilidad),
-    iva_utilidad: decimalAPuntosPct(aiuForm?.iva_utilidad),
-  }
-  const iva = {
-    porcentaje: ivaForm?.porcentaje === '' || ivaForm?.porcentaje == null
-      ? null
-      : Number(ivaForm.porcentaje),
-    sobre: ivaForm?.sobre || 'costo_base',
-  }
-  return normalizarTributos({ aiu, iva })
+/** Serializa al shape que el backend `normalize_tributos` espera. */
+export function tributosPayloadDesdeForm(impuestoForm) {
+  const administracion = decimalAPuntosPct(impuestoForm?.administracion)
+  const imprevistos = decimalAPuntosPct(impuestoForm?.imprevistos)
+  const utilidad = decimalAPuntosPct(impuestoForm?.utilidad)
+  const ivaPts = decimalAPuntosPct(impuestoForm?.iva)
+  return normalizarTributos({
+    administracion,
+    imprevistos,
+    utilidad,
+    iva: ivaPts,
+  })
 }
 
-export function formAiuDesdeTributos(tributos) {
+/** @deprecated usar tributosPayloadDesdeForm */
+export function tributosDesdeForm(aiuForm, ivaForm) {
+  if (aiuForm && Object.prototype.hasOwnProperty.call(aiuForm, 'iva') && ivaForm == null) {
+    return tributosPayloadDesdeForm(aiuForm)
+  }
+  // Form unificado ya tiene iva en decimal; legado: iva_utilidad o iva.porcentaje en puntos.
+  let ivaDecimal = ''
+  if (aiuForm?.iva != null && aiuForm.iva !== '') {
+    ivaDecimal = aiuForm.iva
+  } else if (aiuForm?.iva_utilidad != null && aiuForm.iva_utilidad !== '') {
+    ivaDecimal = aiuForm.iva_utilidad
+  } else if (ivaForm?.porcentaje != null && ivaForm.porcentaje !== '') {
+    // El modal IVA antiguo pedía puntos %; convertir a decimal de form.
+    ivaDecimal = puntosPctADecimal(ivaForm.porcentaje)
+  }
+  return tributosPayloadDesdeForm({
+    administracion: aiuForm?.administracion ?? '',
+    imprevistos: aiuForm?.imprevistos ?? '',
+    utilidad: aiuForm?.utilidad ?? '',
+    iva: ivaDecimal,
+  })
+}
+
+export function formImpuestoDesdeTributos(tributos) {
   const t = normalizarTributos(tributos)
   return {
-    administracion: puntosPctADecimal(t.aiu.administracion),
-    imprevistos: puntosPctADecimal(t.aiu.imprevistos),
-    utilidad: puntosPctADecimal(t.aiu.utilidad),
-    iva_utilidad: puntosPctADecimal(t.aiu.iva_utilidad),
+    administracion: puntosPctADecimal(t.administracion),
+    imprevistos: puntosPctADecimal(t.imprevistos),
+    utilidad: puntosPctADecimal(t.utilidad),
+    iva: puntosPctADecimal(t.iva?.porcentaje),
   }
 }
 
+/** @deprecated */
+export function formAiuDesdeTributos(tributos) {
+  const f = formImpuestoDesdeTributos(tributos)
+  return {
+    administracion: f.administracion,
+    imprevistos: f.imprevistos,
+    utilidad: f.utilidad,
+    iva_utilidad: f.iva,
+  }
+}
+
+/** @deprecated */
 export function formIvaDesdeTributos(tributos) {
   const t = normalizarTributos(tributos)
   return {
-    porcentaje: numOrEmpty(t.iva.porcentaje),
-    sobre: t.iva.sobre || 'costo_base',
+    porcentaje: t.iva?.porcentaje != null ? String(t.iva.porcentaje) : '',
+    sobre: t.tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD ? 'utilidad' : 'costo_base',
   }
 }
 
 export function aiuTieneDatos(aiu) {
   if (!aiu) return false
-  // Acepta form decimal o tributos en puntos %
-  return ['administracion', 'imprevistos', 'utilidad', 'iva_utilidad'].some((k) => {
-    const v = aiu[k]
-    if (v == null || v === '') return false
-    return Number.isFinite(Number(v))
-  })
+  return ['administracion', 'imprevistos', 'utilidad', 'iva', 'iva_utilidad'].some((k) => tieneValorPct(aiu[k]))
 }
 
 export function ivaTieneDatos(iva) {
   if (!iva) return false
-  return iva.porcentaje != null && iva.porcentaje !== '' && Number.isFinite(Number(iva.porcentaje))
+  if (typeof iva !== 'object') return tieneValorPct(iva)
+  return tieneValorPct(iva.porcentaje) || tieneValorPct(iva.iva)
+}
+
+export function impuestoTieneDatos(form) {
+  return tieneAiuComponentes(form) || tieneValorPct(form?.iva)
 }
 
 export function etiquetaTributos(tributos, tipoImpuesto, impuestoPorcentaje) {
   const t = normalizarTributos(tributos)
-  const parts = []
-  if (aiuTieneDatos(t.aiu)) {
+  if (t.tipo || t.administracion != null || t.imprevistos != null || t.utilidad != null || t.iva?.porcentaje != null) {
     const bits = []
-    if (t.aiu.administracion != null) bits.push(`A ${t.aiu.administracion}%`)
-    if (t.aiu.imprevistos != null) bits.push(`Í ${t.aiu.imprevistos}%`)
-    if (t.aiu.utilidad != null) bits.push(`U ${t.aiu.utilidad}%`)
-    if (t.aiu.iva_utilidad != null) bits.push(`IVA/Util ${t.aiu.iva_utilidad}%`)
-    parts.push(`AIU (${bits.join(' · ')})`)
+    if (t.tipo) bits.push(labelTipoImpuesto(t.tipo))
+    if (t.administracion != null) bits.push(`A ${t.administracion}%`)
+    if (t.imprevistos != null) bits.push(`Í ${t.imprevistos}%`)
+    if (t.utilidad != null) bits.push(`U ${t.utilidad}%`)
+    if (t.iva?.porcentaje != null) bits.push(`IVA ${t.iva.porcentaje}%`)
+    return bits.join(' · ') || '—'
   }
-  if (ivaTieneDatos(t.iva)) {
-    const opt = IVA_SOBRE_OPCIONES.find((o) => o.id === t.iva.sobre)
-    parts.push(`IVA ${t.iva.porcentaje}% · ${opt?.label || t.iva.sobre}`)
-  }
-  if (parts.length) return parts.join(' | ')
   const tipo = String(tipoImpuesto || '').toLowerCase()
   const pct = Number(impuestoPorcentaje) || 0
-  if (tipo === 'iva' && pct) return `IVA ${pct}%`
+  if (tipo === 'iva' && pct) return `IVA Pleno · IVA ${pct}%`
   if (tipo === 'aiu' && pct) return `AIU ${pct}%`
   return '—'
 }
 
-/** Migra legado (tipo_impuesto único) a formularios AIU/IVA si aún no hay tributos. */
 export function seedTributosDesdeLegado(row) {
-  if (row?.tributos && (aiuTieneDatos(row.tributos.aiu) || ivaTieneDatos(row.tributos.iva))) {
-    return normalizarTributos(row.tributos)
+  if (row?.tributos) {
+    const t = normalizarTributos(row.tributos)
+    if (t.tipo || t.administracion != null || t.iva?.porcentaje != null || t.utilidad != null || t.imprevistos != null) {
+      return t
+    }
   }
   const tipo = String(row?.tipo_impuesto || '').toLowerCase()
   const pct = row?.impuesto_porcentaje
@@ -205,7 +336,7 @@ export function seedTributosDesdeLegado(row) {
   }
   if (tipo === 'aiu' && pct != null && pct !== '') {
     return normalizarTributos({
-      aiu: { administracion: null, imprevistos: null, utilidad: pct, iva_utilidad: null },
+      aiu: { administracion: null, imprevistos: null, utilidad: pct },
     })
   }
   return normalizarTributos(row?.tributos)

@@ -40,14 +40,15 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
     ],
     "tipo_impuesto": ["tipo_impuesto", "tipo impuesto", "iva o aiu", "impuesto", "iva/aiu"],
     "impuesto_porcentaje": ["impuesto_porcentaje", "impuesto porcentaje", "iva_pct", "iva %", "porcentaje iva", "pct"],
-    "aiu_a": ["aiu_a", "a", "a.", "administracion", "administración", "aiu administracion"],
-    "aiu_i": ["aiu_i", "i", "i.", "í", "í.", "imprevistos", "aiu imprevistos"],
-    "aiu_u": ["aiu_u", "u", "u.", "utilidad", "aiu utilidad"],
-    "aiu_iva_util": [
-        "aiu_iva_util", "iva_util", "iva/util", "iva/util.", "iva sobre utilidad",
-        "iva_utilidad", "iva utilidad",
+    "aiu_a": ["a", "a.", "aiu_a", "administracion", "administración", "aiu administracion"],
+    "aiu_i": ["i", "i.", "í", "í.", "aiu_i", "imprevistos", "aiu imprevistos"],
+    "aiu_u": ["u", "u.", "aiu_u", "utilidad", "aiu utilidad"],
+    # Columna unificada IVA; aliases incluyen nombres legacy de plantillas anteriores.
+    "iva": [
+        "iva", "iva_porcentaje", "iva porcentaje", "porcentaje_iva", "pct_iva",
+        "aiu_iva_util", "iva_util", "iva/util", "iva/util.", "iva_utilidad", "iva utilidad",
     ],
-    "iva_porcentaje": ["iva_porcentaje", "iva porcentaje", "porcentaje_iva", "pct_iva"],
+    # Alias legacy (ignorado: el tipo se infiere de A/Í/U + IVA).
     "iva_sobre": [
         "iva_sobre", "iva sobre", "base_iva", "base iva", "aplica_iva_sobre",
         "sobre", "iva base",
@@ -67,12 +68,16 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
 CSV_TEMPLATE = (
     "proveedor,nit,contacto_email,contacto_nombre,contacto_telefono,"
     "codigo,descripcion,unidad,rendimiento,costo,"
-    "aiu_a,aiu_i,aiu_u,aiu_iva_util,iva_porcentaje,iva_sobre,"
+    "a,i,u,iva,"
     "requiere_cotizacion,cotizacion_numero,cotizacion_fecha,cotizacion_vigencia\n"
     "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
     "CC-0000-001,Cemento gris 50 kg,UND,1.05,18500,"
-    "0.05,0.03,0.05,0.19,0.19,costo_base,"
+    "0.05,0.03,0.05,0.19,"
     "false,COT-2026-001,2026-07-01,15 dias\n"
+    "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
+    "CC-0000-002,Arena de río m3,M3,1,45000,"
+    ",,,0.19,"
+    "false,COT-2026-002,2026-07-01,15 dias\n"
 )
 
 
@@ -95,27 +100,20 @@ def _csv_entrada_a_puntos_pct(raw: Any) -> Optional[float]:
 
 
 def _csv_build_tributos(col_fn) -> Optional[dict]:
-    """Arma tributos desde columnas CSV si hay algún valor AIU/IVA nuevo."""
-    aiu = {
-        "administracion": _csv_entrada_a_puntos_pct(col_fn("aiu_a")),
-        "imprevistos": _csv_entrada_a_puntos_pct(col_fn("aiu_i")),
-        "utilidad": _csv_entrada_a_puntos_pct(col_fn("aiu_u")),
-        "iva_utilidad": _csv_entrada_a_puntos_pct(col_fn("aiu_iva_util")),
-    }
-    iva_pct = _csv_entrada_a_puntos_pct(col_fn("iva_porcentaje"))
-    iva_sobre = (col_fn("iva_sobre") or "").strip().lower() or None
-    tiene_aiu = any(v is not None for v in aiu.values())
+    """Arma tributos unificados (A|Í|U|IVA). El tipo se infiere automáticamente."""
+    administracion = _csv_entrada_a_puntos_pct(col_fn("aiu_a"))
+    imprevistos = _csv_entrada_a_puntos_pct(col_fn("aiu_i"))
+    utilidad = _csv_entrada_a_puntos_pct(col_fn("aiu_u"))
+    iva_pct = _csv_entrada_a_puntos_pct(col_fn("iva"))
+    tiene_aiu = any(v is not None for v in (administracion, imprevistos, utilidad))
     tiene_iva = iva_pct is not None
     if not tiene_aiu and not tiene_iva:
         return None
-    if iva_sobre and iva_sobre not in ("costo_base", "utilidad", "aiu", "costo_mas_aiu"):
-        iva_sobre = "costo_base"
     return normalize_tributos({
-        "aiu": aiu,
-        "iva": {
-            "porcentaje": iva_pct,
-            "sobre": iva_sobre or "costo_base",
-        },
+        "administracion": administracion,
+        "imprevistos": imprevistos,
+        "utilidad": utilidad,
+        "iva": iva_pct,
     })
 
 
@@ -222,8 +220,8 @@ def _csv_columns_error(col_map: Dict[str, str]) -> None:
         f"Columnas obligatorias faltantes: {', '.join(hints.get(m, m) for m in missing)}.\n"
         "Columnas obligatorias: codigo, descripcion, unidad, costo (o costo_base).\n"
         "Opcionales: proveedor, nit, contacto_email, contacto_nombre, contacto_telefono, "
-        "rendimiento, aiu_a / aiu_i / aiu_u / aiu_iva_util (decimal 0.05 = 5%), "
-        "iva_porcentaje, iva_sobre (costo_base|utilidad|aiu|costo_mas_aiu), "
+        "rendimiento, a / i / u / iva (decimal 0.05 = 5%; el tipo se infiere: "
+        "solo IVA → IVA Pleno; A/Í/U + IVA → IVA sobre Utilidad), "
         "tipo_impuesto / impuesto_porcentaje (legado), requiere_cotizacion (true/false), "
         "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia.\n"
         "Los PDF de cotización no se importan por CSV; use el formulario para adjuntarlos.\n"
