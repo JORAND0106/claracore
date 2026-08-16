@@ -96,7 +96,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
     return (
       <div
         className={`cc-almacen-theme-scope ${compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'}`}
-        style={{ ...cssVars, maxWidth: compact ? '100%' : 1200, margin: '0 auto' }}
+        style={{ ...cssVars, maxWidth: '100%', width: '100%', margin: 0, boxSizing: 'border-box' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
           <button
@@ -135,7 +135,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
   return (
     <div
       className={`cc-almacen-theme-scope ${compact ? 'cc-almacen-root cc-almacen-root--compact' : 'cc-almacen-root'}`}
-      style={{ ...cssVars, maxWidth: compact ? '100%' : 1200, margin: '0 auto' }}
+      style={{ ...cssVars, maxWidth: '100%', width: '100%', margin: 0, boxSizing: 'border-box' }}
     >
       <div style={{
         display: 'flex',

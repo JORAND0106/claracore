@@ -179,8 +179,9 @@ function IconActionBtn({ title, onClick, disabled, children, t, variant = 'ghost
 }
 
 /** Botón de barra de herramientas con etiqueta visible y tipografía de plataforma. */
-function ToolbarBtn({ title, label, onClick, disabled, children, t, variant = 'ghost' }) {
+function ToolbarBtn({ title, label, onClick, disabled, children, t, variant = 'ghost', iconColor }) {
   const isPrimary = variant === 'primary'
+  const resolvedIconColor = isPrimary ? '#fff' : (iconColor || t.primary)
   return (
     <button
       type="button"
@@ -208,10 +209,35 @@ function ToolbarBtn({ title, label, onClick, disabled, children, t, variant = 'g
         lineHeight: 1.2,
       }}
     >
-      {children}
+      <span
+        aria-hidden
+        className="cc-catalogo-toolbar-icon"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: resolvedIconColor,
+          flexShrink: 0,
+        }}
+      >
+        {children}
+      </span>
       <span>{label}</span>
     </button>
   )
+}
+
+/**
+ * Paleta de íconos de la barra — tonos ClaraCore (azul / teal / verde),
+ * sin saturaciones que rompan claro/oscuro/descanso.
+ */
+const TOOLBAR_ICON_COLORS = {
+  refresh: '#0077B6',
+  create: '#ffffff',
+  plantillaInsumos: '#0284C7',
+  cargarInsumos: '#0D9488',
+  plantillaProveedores: '#1D4ED8',
+  cargarProveedores: '#047857',
 }
 
 function SvgIcon({ children }) {
@@ -904,7 +930,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   return (
     <div
       className={compactCatalog ? 'cc-catalogo-insumos-root cc-catalogo-insumos-root--compact' : 'cc-catalogo-insumos-root'}
-      style={{ padding: compactCatalog ? '12px 12px' : '16px 20px', color: t.text }}
+      style={{
+        padding: compactCatalog ? '12px 8px' : embedded ? '0' : '12px 8px',
+        color: t.text,
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+      }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ flex: '1 1 220px', minWidth: 0 }}>
@@ -926,6 +958,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             title={mainTab === 'proveedores' ? 'Actualizar proveedores' : 'Actualizar insumos'}
             disabled={busy || isRefreshing}
             t={t}
+            iconColor={t.primary || TOOLBAR_ICON_COLORS.refresh}
             onClick={refreshActiveTab}
           >
             <IconCatalogRefresh />
@@ -937,6 +970,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 title="Nuevo insumo"
                 t={t}
                 variant="primary"
+                iconColor={TOOLBAR_ICON_COLORS.create}
                 disabled={busy}
                 onClick={() => {
                   setMainTab('insumos')
@@ -950,6 +984,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 title="Descargar plantilla CSV de insumos"
                 disabled={busy}
                 t={t}
+                iconColor={TOOLBAR_ICON_COLORS.plantillaInsumos}
                 onClick={() => api?.downloadPlantillaCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
               >
                 <IconTemplateDownload />
@@ -959,6 +994,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 title="Importar insumos desde CSV"
                 disabled={busy}
                 t={t}
+                iconColor={TOOLBAR_ICON_COLORS.cargarInsumos}
                 onClick={() => csvRef.current?.click()}
               >
                 <IconCsvImport />
@@ -968,6 +1004,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 title="Descargar plantilla CSV de proveedores"
                 disabled={busy}
                 t={t}
+                iconColor={TOOLBAR_ICON_COLORS.plantillaProveedores}
                 onClick={() => api?.downloadPlantillaProveedoresCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
               >
                 <IconProveedoresTemplate />
@@ -977,6 +1014,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 title="Importar proveedores desde CSV"
                 disabled={busy}
                 t={t}
+                iconColor={TOOLBAR_ICON_COLORS.cargarProveedores}
                 onClick={() => csvProvRef.current?.click()}
               >
                 <IconProveedoresImport />
