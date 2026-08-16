@@ -2713,6 +2713,9 @@ app.include_router(catalogo_insumos_router)
 from seguimiento_routes import router as seguimiento_router
 app.include_router(seguimiento_router)
 
+from storage_quota_routes import router as storage_quota_router
+app.include_router(storage_quota_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
     BienvenidaEmailError,
@@ -23500,7 +23503,16 @@ async def upload_foto(
     ext = _ext_desde_content_type(file.content_type)
     blob_path = path_sicoe_foto(contrato_id, numero, ext)
     try:
-        url = upload_blob(blob_path, contents, file.content_type, overwrite=True)
+        url = upload_blob(
+            blob_path,
+            contents,
+            file.content_type,
+            overwrite=True,
+            contrato_id=contrato_id,
+            storage_tipo="fotos",
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         _log_api.warning("Azure Blob upload foto %s: %s", blob_path, exc)
         raise HTTPException(status_code=503, detail="No se pudo subir la foto a Azure Blob Storage.") from exc
@@ -23513,7 +23525,16 @@ async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero:
     ext = _ext_desde_content_type(file.content_type)
     blob_path = path_sicoe_grafico(contrato_id, numero, ext)
     try:
-        url = upload_blob(blob_path, contents, file.content_type, overwrite=True)
+        url = upload_blob(
+            blob_path,
+            contents,
+            file.content_type,
+            overwrite=True,
+            contrato_id=contrato_id,
+            storage_tipo="fotos",
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         _log_api.warning("Azure Blob upload grafico %s: %s", blob_path, exc)
         raise HTTPException(status_code=503, detail="No se pudo subir el gráfico a Azure Blob Storage.") from exc
