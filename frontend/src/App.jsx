@@ -22223,6 +22223,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 contratoId: usuario?.contrato_id,
                 userId: usuario?.id,
                 esDesarrollador: esDeveloper,
+                esContratistaGerencial: esDeveloper || almacenAcceso.esContratistaGerencial,
                 ver: tienePermisoAlmacen,
                 crear: puedeCrearAlmacen,
                 editar: puedeEditarAlmacen,

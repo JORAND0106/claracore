@@ -47,6 +47,21 @@ export function puedeVerValoresEconomicosAlmacen(usuario) {
   return false
 }
 
+/** Solo Contratista Gerencial (o Desarrollador) mapea insumo y aprueba. */
+export function esContratistaGerencialUsuario(usuario) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  if (rol === 'contratista gerencial') return true
+  if (rol.includes('contrat') && rol.includes('gerencial') && !rol.includes('intervent')) return true
+  return false
+}
+
+/** Revisión Gerencial: permiso validar + rol Contratista Gerencial. */
+export function puedeRevisarSolicitudGerencial(usuario, permisos) {
+  if (permisos?.esDesarrollador || esDesarrolladorUsuario(usuario)) return Boolean(permisos?.validar ?? true)
+  return Boolean(permisos?.validar && (permisos?.esContratistaGerencial || esContratistaGerencialUsuario(usuario)))
+}
+
 export function permisoAlmacen(usuario, accion, contratoId) {
   if (rolExcluidoAlmacen(usuario)) return false
   if (esDesarrolladorUsuario(usuario)) return true
@@ -74,10 +89,15 @@ export function permisosAlmacen(usuario, contratoId) {
 export function accesoAlmacen(usuario, contratoId) {
   const bloqueado = rolExcluidoAlmacen(usuario)
   const permisos = permisosAlmacen(usuario, contratoId)
+  const esGerencial = !bloqueado && esContratistaGerencialUsuario(usuario)
   return {
     bloqueado,
-    permisos,
+    permisos: {
+      ...permisos,
+      esContratistaGerencial: esGerencial,
+    },
     verEconomicos: !bloqueado && puedeVerValoresEconomicosAlmacen(usuario),
+    esContratistaGerencial: esGerencial,
   }
 }
 

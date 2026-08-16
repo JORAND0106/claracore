@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
-import InsumoSearchTable from './InsumoSearchTable'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import PresupuestoRegistroGrid from './PresupuestoRegistroGrid'
 import UbicacionSolicitudFields from './UbicacionSolicitudFields'
@@ -32,6 +31,7 @@ import { solicitudAlmacenEditable } from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
 
 const emptyItem = () => ({
+  descripcion_solicitada: '',
   insumo: null,
   presupuesto_capitulo: '',
   presupuesto_item: '',
@@ -133,6 +133,9 @@ export default function SolicitudForm({
   solicitudId,
   onSaved,
   onCancel,
+  onDirtyChange,
+  onApprovalSent,
+  onEstadoChange,
   permisos,
   t,
   token,
@@ -160,6 +163,7 @@ export default function SolicitudForm({
     setTitulo(s?.titulo || '')
     const mapped = mapSolicitudItemsFromServer(s)
     setItems(mapped.length ? mapped : [emptyItem()])
+    onEstadoChange?.(s?.estado || null)
   }
 
   useEffect(() => {
@@ -173,11 +177,41 @@ export default function SolicitudForm({
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)))
   }
 
+  const markDirty = () => onDirtyChange?.(true)
+
   const refreshPreview = useCallback(async (idx, draftItems) => {
     const it = draftItems[idx]
+    if (!it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.presupuesto_id || !it.cantidad || Number(it.cantidad) <= 0) {
+      setItems((prev) => prev.map((row, i) => (i === idx ? { ...row, preview: null } : row)))
+      return
+    }
     const ins = it.insumo
-    if (!ins || !it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.presupuesto_id || !it.cantidad || Number(it.cantidad) <= 0) {
-      updateItem(idx, { preview: null })
+    // Sin insumo (flujo Contratista): solo contexto presupuestal.
+    if (!ins?.insumo_id && !ins?.listado_precio_id) {
+      try {
+        const cantBorradorAdicional = draftItems.reduce((acc, row, i) => {
+          if (i === idx) return acc
+          if (!row.cantidad || Number(row.cantidad) <= 0) return acc
+          if (Number(row.presupuesto_id) !== Number(it.presupuesto_id)) return acc
+          return acc + Number(row.cantidad)
+        }, 0)
+        const ctx = await api.getPresupuestoContext(
+          it.presupuesto_id,
+          it.pk_id,
+          Number(it.cantidad) + cantBorradorAdicional,
+          solicitudId || undefined,
+        )
+        setItems((prev) => prev.map((row, i) => (i === idx ? {
+          ...row,
+          preview: {
+            contexto_presupuesto: ctx,
+            supera_presupuesto: ctx?.supera_presupuesto,
+            presupuesto_id: it.presupuesto_id,
+          },
+        } : row)))
+      } catch (e) {
+        setItems((prev) => prev.map((row, i) => (i === idx ? { ...row, preview: { error: e.message } } : row)))
+      }
       return
     }
     try {
@@ -214,13 +248,14 @@ export default function SolicitudForm({
         ...ubicacionPayload(it),
       }
       const preview = await api.previewInsumoLine(body)
-      updateItem(idx, {
+      setItems((prev) => prev.map((row, i) => (i === idx ? {
+        ...row,
         preview,
         presupuesto_id: preview.presupuesto_id,
         valor_compra_unitario: preview.tiene_precio_compra ? (preview.valor_compra_unitario ?? '') : '',
-      })
+      } : row)))
     } catch (e) {
-      updateItem(idx, { preview: { error: e.message } })
+      setItems((prev) => prev.map((row, i) => (i === idx ? { ...row, preview: { error: e.message } } : row)))
     }
   }, [api, solicitudId])
 
@@ -241,6 +276,7 @@ export default function SolicitudForm({
   }
 
   const onPptoChange = (idx, { capitulo, item }) => {
+    markDirty()
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
         ...it,
@@ -253,20 +289,13 @@ export default function SolicitudForm({
     })
   }
 
-  const onInsumoChange = (idx, insumo) => {
-    setItems((prev) => {
-      const next = prev.map((it, i) => (i === idx ? {
-        ...it,
-        insumo,
-        valor_compra_unitario: insumo?.tiene_precio_compra ? (insumo?.valor_compra_referencia ?? '') : '',
-        preview: null,
-      } : it))
-      triggerPreview(idx, next)
-      return next
-    })
+  const onDescripcionChange = (idx, val) => {
+    markDirty()
+    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, descripcion_solicitada: val } : it)))
   }
 
   const onPkSelect = (idx, sel) => {
+    markDirty()
     const pkVal = sel.pk_id || sel.pk_label || ''
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
@@ -282,6 +311,7 @@ export default function SolicitudForm({
   }
 
   const onRegistroSelect = (idx, reg) => {
+    markDirty()
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
         ...it,
@@ -301,6 +331,7 @@ export default function SolicitudForm({
   }
 
   const onUbicacionChange = (idx, patch) => {
+    markDirty()
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? { ...it, ...patch } : it))
       triggerPreview(idx, next)
@@ -309,6 +340,7 @@ export default function SolicitudForm({
   }
 
   const onCantidadChange = (idx, val) => {
+    markDirty()
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? { ...it, cantidad: val } : it))
       triggerPreview(idx, next)
@@ -317,6 +349,7 @@ export default function SolicitudForm({
   }
 
   const removeItem = (idx) => {
+    markDirty()
     setItems((prev) => {
       if (prev.length <= 1) return [emptyItem()]
       return prev.filter((_, i) => i !== idx)
@@ -338,16 +371,20 @@ export default function SolicitudForm({
           presupuesto_capitulo: it.presupuesto_capitulo,
           presupuesto_item: it.presupuesto_item,
           presupuesto_id: it.presupuesto_id,
-          valor_compra_unitario: it.valor_compra_unitario !== '' ? Number(it.valor_compra_unitario) : undefined,
+          descripcion_solicitada: String(it.descripcion_solicitada || '').trim(),
           ...ubicacionPayload(it),
         }
+        // Conservar mapeo Gerencial/legado si la línea ya tenía insumo (no se muestra al Contratista).
         if (it.insumo?.insumo_id) {
-          return { ...base, insumo_id: it.insumo.insumo_id }
+          return {
+            ...base,
+            insumo_id: it.insumo.insumo_id,
+            valor_compra_unitario: it.valor_compra_unitario !== ''
+              ? Number(it.valor_compra_unitario)
+              : undefined,
+          }
         }
-        if (it.insumo?.listado_precio_id) {
-          return { ...base, listado_precio_id: it.insumo.listado_precio_id }
-        }
-        throw new Error('Cada línea debe tener un insumo seleccionado.')
+        return base
       }),
     }
   }
@@ -432,6 +469,7 @@ export default function SolicitudForm({
         consecutivo: r.consecutivo,
         solicitud: r,
       })
+      onApprovalSent?.(r)
     } catch (e) {
       setError(parseSolicitudApiError(e))
     } finally {
@@ -505,7 +543,7 @@ export default function SolicitudForm({
             value={titulo}
             disabled={busy}
             placeholder="Ej.: Materiales muro PK-12 tramo norte"
-            onChange={(e) => setTitulo(e.target.value)}
+            onChange={(e) => { markDirty(); setTitulo(e.target.value) }}
           />
         </div>
       )}
@@ -534,7 +572,7 @@ export default function SolicitudForm({
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Solicitud rechazada</div>
           <div>{sol.motivo_rechazo}</div>
           <div style={{ marginTop: 6, color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
-            Corrija los insumos y use «Reenviar a aprobación» cuando esté listo.
+            Corrija la solicitud y use «Reenviar a aprobación» cuando esté listo.
           </div>
         </div>
       )}
@@ -577,7 +615,7 @@ export default function SolicitudForm({
       )}
 
       <div style={{ fontWeight: 600, marginBottom: embedded ? 4 : 6, fontSize: 'var(--cc-sm)' }}>
-        📦 Insumos solicitados
+        📦 Materiales solicitados
         {sol?.consecutivo && !editable && (
           <span style={{ fontWeight: 400, color: ui.textMuted, marginLeft: 8 }}>
             ({items.length} línea{items.length !== 1 ? 's' : ''})
@@ -628,7 +666,7 @@ export default function SolicitudForm({
           {editable && (
             <button
               type="button"
-              title="Eliminar insumo de la solicitud"
+              title="Eliminar material de la solicitud"
               onClick={() => removeItem(idx)}
               style={{
                 position: 'absolute',
@@ -643,7 +681,7 @@ export default function SolicitudForm({
                 fontWeight: 600,
               }}
             >
-              Eliminar insumo
+              Eliminar línea
             </button>
           )}
 
@@ -655,11 +693,29 @@ export default function SolicitudForm({
               onChange={(sel) => onPptoChange(idx, sel)}
             />
 
-            <InsumoSearchTable
-              value={it.insumo}
-              onChange={(ins) => onInsumoChange(idx, ins)}
-              disabled={!editable}
-            />
+            <div>
+              <AlmacenFieldLabel
+                icon="📝"
+                label="Descripción del material"
+                compact
+                ayuda="Describa el material que necesita. El Contratista Gerencial seleccionará el insumo del catálogo al aprobar."
+              />
+              <textarea
+                style={{
+                  ...ui.input,
+                  padding: '8px 10px',
+                  fontSize: 'var(--cc-sm)',
+                  minHeight: 64,
+                  resize: 'vertical',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+                value={it.descripcion_solicitada || ''}
+                disabled={!editable}
+                placeholder="Ej.: Cemento gris tipo I, bultos de 50 kg…"
+                onChange={(e) => onDescripcionChange(idx, e.target.value)}
+              />
+            </div>
 
             <div>
               <AlmacenFieldLabel icon="🗺️" label="Ubicación PK-ID" compact ayuda="Seleccione en el mapa el sector." />
@@ -670,9 +726,9 @@ export default function SolicitudForm({
                 pkIdSeleccionado={it.pk_id_id ? String(it.pk_id_id) : ''}
                 pkLabel={it.pk_label || it.pk_id}
                 onSeleccionar={(sel) => onPkSelect(idx, sel)}
-                onLimpiar={() => updateItem(idx, {
+                onLimpiar={() => { markDirty(); updateItem(idx, {
                   pk_id: '', pk_label: '', pk_id_id: null, ...clearUbicacionPresupuesto(),
-                })}
+                }) }}
                 compact
               />
               <PresupuestoRegistroGrid
@@ -726,19 +782,19 @@ export default function SolicitudForm({
                 <input
                   type="checkbox"
                   checked={!!it.es_recurrente}
-                  onChange={(e) => updateItem(idx, { es_recurrente: e.target.checked })}
+                  onChange={(e) => { markDirty(); updateItem(idx, { es_recurrente: e.target.checked }) }}
                   disabled={!editable}
                 />
                 Recurrente
               </label>
               <div>
-                <AlmacenFieldLabel icon="💬" label="Observaciones" compact ayuda="Notas de esta línea de insumo." />
+                <AlmacenFieldLabel icon="💬" label="Observaciones" compact ayuda="Notas de esta línea." />
                 <input
                   style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
                   value={it.observacion_residente || ''}
                   disabled={!editable}
                   placeholder="Opcional…"
-                  onChange={(e) => updateItem(idx, { observacion_residente: e.target.value })}
+                  onChange={(e) => { markDirty(); updateItem(idx, { observacion_residente: e.target.value }) }}
                 />
               </div>
             </div>
@@ -753,7 +809,7 @@ export default function SolicitudForm({
             supera={it.preview?.supera_presupuesto}
             superaNegociado={it.preview?.supera_negociado}
             ctxNeg={it.preview?.contexto_negociado}
-            sinPrecio={it.insumo && it.insumo.tiene_precio_compra === false}
+            sinPrecio={false}
             verEconomicos={verEconomicos}
             ui={ui}
           />
@@ -765,9 +821,9 @@ export default function SolicitudForm({
         <button
           type="button"
           style={{ ...ui.btnSecondary, marginBottom: 12, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
-          onClick={() => setItems((p) => [...p, emptyItem()])}
+          onClick={() => { markDirty(); setItems((p) => [...p, emptyItem()]) }}
         >
-          + Agregar insumo
+          + Agregar material
         </button>
       )}
 

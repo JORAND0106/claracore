@@ -185,6 +185,13 @@ export function createAlmacenApi(contratoId, token) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    mapearItemSolicitud: (solicitudId, itemId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/mapear`, {
+        method: 'PATCH',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     rechazarSolicitud: (id, motivo) =>
       fetch(`${base}/solicitudes/${id}/rechazar`, {
         method: 'POST',

@@ -9,8 +9,13 @@ export function solicitudTieneOrdenCompra(sol) {
 }
 
 export function solicitudPuedeValidar(sol, permisos) {
+  const esGerencial = Boolean(
+    permisos?.esContratistaGerencial
+    || permisos?.esDesarrollador,
+  )
   return Boolean(
     permisos?.validar
+    && esGerencial
     && sol?.estado === 'enviada'
     && !solicitudTieneOrdenCompra(sol),
   )
@@ -28,8 +33,18 @@ export function itemPuedeValidar(item, sol, permisos) {
 export function labelPestañaInsumo(item, idx) {
   const codigo = (item?.insumo_codigo || '').trim()
   if (codigo) return codigo
+  const desc = (item?.descripcion_solicitada || item?.material_descripcion || '').trim()
+  if (desc) {
+    const short = desc.length > 28 ? `${desc.slice(0, 28)}…` : desc
+    return short
+  }
   const num = item?.numero_linea ?? idx + 1
   return `Línea ${num}`
+}
+
+/** Texto libre del Contratista (solo lectura en revisión Gerencial). */
+export function textoLibreSolicitudItem(item) {
+  return String(item?.descripcion_solicitada || item?.material_descripcion || '').trim()
 }
 
 export function estadoValidacionItem(item, sol) {

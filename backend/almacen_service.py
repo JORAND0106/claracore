@@ -36,6 +36,7 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "capitulo",
     "item",
     "material_descripcion",
+    "descripcion_solicitada",
     "unidad",
     "cantidad",
     "es_recurrente",
@@ -756,7 +757,7 @@ def get_solicitud(
 
 def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 0, exclude_solicitud_id: Optional[int] = None) -> List[dict]:
     if not items:
-        raise ValueError("Debe incluir al menos un insumo en la solicitud.")
+        raise ValueError("Debe incluir al menos un material en la solicitud.")
     from almacen_insumos_service import resolve_insumo_for_solicitud
 
     out = []
@@ -764,8 +765,57 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         raw = dict(raw)
         if raw.get("exclude_solicitud_id") is None and exclude_solicitud_id:
             raw["exclude_solicitud_id"] = exclude_solicitud_id
+        # Flujo nuevo: Contratista describe en texto libre (sin insumo).
+        # Solo resuelve catálogo si llega insumo_id/listado (legado o mapeo Gerencial vía PATCH).
+        desc_sol = (raw.get("descripcion_solicitada") or "").strip()
+        if desc_sol and not raw.get("insumo_id") and not raw.get("listado_precio_id"):
+            pid = int(raw["presupuesto_id"])
+            ppto = _fetch_ppto_row(pid, contrato_id)
+            cant = _to_float(raw.get("cantidad"))
+            if cant <= 0:
+                raise ValueError("La cantidad debe ser mayor a cero.")
+            if len(desc_sol) < 3:
+                raise ValueError("Describa el material solicitado (mínimo 3 caracteres).")
+            pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
+            cap_cobro = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or ppto.get("capitulo") or "").strip()
+            item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
+            from almacen_insumos_service import get_listado_precio_unitario
+            vlr_cobro = get_listado_precio_unitario(contrato_id, cap_cobro, item_cobro)
+            out.append({
+                "presupuesto_id": pid,
+                "pk_id": pk or None,
+                "pk_id_id": raw.get("pk_id_id"),
+                "capitulo": cap_cobro or ppto.get("capitulo"),
+                "item": item_cobro or ppto.get("item"),
+                "descripcion_solicitada": desc_sol,
+                "material_descripcion": desc_sol,
+                "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
+                "cantidad": cant,
+                "es_recurrente": bool(raw.get("es_recurrente")),
+                "cant_presupuestada": _to_float(ppto.get("cant_total")),
+                "valor_compra_unitario": None,
+                "vlr_unitario_cobro": vlr_cobro if vlr_cobro is not None else 0,
+                "supera_presupuesto": False,
+                "supera_negociado": False,
+                "tramo": raw.get("tramo"),
+                "costado": raw.get("costado"),
+                "abscisa_inicial": raw.get("abscisa_inicial"),
+                "abscisa_final": raw.get("abscisa_final"),
+                "observacion_residente": raw.get("observacion_residente"),
+                "insumo_id": None,
+                "listado_precio_id": None,
+            })
+            continue
         if raw.get("insumo_id") or raw.get("listado_precio_id"):
             resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw)
+            # Conservar descripción solicitada si venía (legado / remapeo)
+            if desc_sol:
+                resolved["descripcion_solicitada"] = desc_sol
+            elif not resolved.get("descripcion_solicitada"):
+                resolved["descripcion_solicitada"] = (
+                    raw.get("descripcion_solicitada")
+                    or resolved.get("material_descripcion")
+                )
             out.append({k: v for k, v in resolved.items() if k not in ("contexto_presupuesto", "analisis_valor")})
             continue
         pid = int(raw["presupuesto_id"])
@@ -773,7 +823,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         cant = _to_float(raw.get("cantidad"))
         if cant <= 0:
             raise ValueError("La cantidad debe ser mayor a cero.")
-        mat = (raw.get("material_descripcion") or ppto.get("descripcion") or "").strip()
+        mat = (raw.get("material_descripcion") or desc_sol or ppto.get("descripcion") or "").strip()
         if not mat:
             raise ValueError("Cada material debe tener descripción.")
         pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
@@ -786,12 +836,13 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "pk_id": pk or None,
             "capitulo": cap_cobro or ppto.get("capitulo"),
             "item": item_cobro or ppto.get("item"),
+            "descripcion_solicitada": desc_sol or mat,
             "material_descripcion": mat,
             "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
             "cantidad": cant,
             "es_recurrente": bool(raw.get("es_recurrente")),
             "cant_presupuestada": _to_float(ppto.get("cant_total")),
-            "valor_compra_unitario": _to_float(raw.get("valor_compra_unitario")),
+            "valor_compra_unitario": _to_float(raw.get("valor_compra_unitario")) or None,
             "vlr_unitario_cobro": vlr_cobro if vlr_cobro is not None else 0,
             "supera_presupuesto": False,
         })
@@ -820,7 +871,10 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             it["supera_presupuesto"] = ctx.get("supera_presupuesto")
             it["contexto_presupuesto"] = ctx
             it["cant_presupuestada"] = ctx.get("cant_presupuestada")
-            it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
+            # No pisar cobro manual del Gerencial si ya viene set
+            if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
+                if ctx.get("vlr_unitario_cobro") is not None:
+                    it["vlr_unitario_cobro"] = ctx.get("vlr_unitario_cobro")
         from almacen_insumos_service import get_contexto_negociado_insumo
         batch_insumo: dict = defaultdict(float)
         for it in out:
@@ -842,6 +896,102 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             it["supera_negociado"] = ctx_neg.get("supera_negociado")
             it["contexto_negociado"] = ctx_neg
     return out
+
+
+def mapear_item_solicitud_gerencial(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    user_id: int,
+    body: dict,
+) -> dict:
+    """
+    Contratista Gerencial: asocia insumo del catálogo, ajusta cantidad/costo/cobro.
+    Conserva descripcion_solicitada inmutable.
+    """
+    from almacen_insumos_service import resolve_insumo_for_solicitud
+
+    sb = _sb()
+    sol = get_solicitud(contrato_id, solicitud_id)
+    if sol["estado"] not in ("enviada", "borrador", "rechazada"):
+        raise ValueError("No se puede mapear ítems en el estado actual de la solicitud.")
+    if _solicitud_tiene_orden_compra(sol):
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+
+    item_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .eq("solicitud_id", int(solicitud_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not item_rows:
+        raise ValueError("Ítem de solicitud no encontrado.")
+    existing = item_rows[0]
+    if (existing.get("estado_validacion") or "pendiente") == "aprobado" and sol["estado"] == "enviada":
+        # Permitir remapeo solo si aún pendiente/rechazado; si ya aprobado, exigir reabrir
+        pass
+
+    insumo_id = body.get("insumo_id")
+    if not insumo_id:
+        raise ValueError("Seleccione el insumo del catálogo.")
+    cantidad = _to_float(body.get("cantidad") if body.get("cantidad") is not None else existing.get("cantidad"))
+    if cantidad <= 0:
+        raise ValueError("La cantidad debe ser mayor a cero.")
+
+    raw = {
+        "insumo_id": int(insumo_id),
+        "presupuesto_id": existing.get("presupuesto_id"),
+        "presupuesto_capitulo": existing.get("capitulo"),
+        "presupuesto_item": existing.get("item"),
+        "pk_id": existing.get("pk_id"),
+        "pk_id_id": existing.get("pk_id_id"),
+        "cantidad": cantidad,
+        "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
+        "exclude_solicitud_id": solicitud_id,
+        "tramo": existing.get("tramo"),
+        "costado": existing.get("costado"),
+        "abscisa_inicial": existing.get("abscisa_inicial"),
+        "abscisa_final": existing.get("abscisa_final"),
+        "observacion_residente": existing.get("observacion_residente"),
+    }
+    if body.get("valor_compra_unitario") is not None:
+        raw["valor_compra_unitario"] = body.get("valor_compra_unitario")
+
+    resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw)
+    desc_sol = (existing.get("descripcion_solicitada") or existing.get("material_descripcion") or "").strip()
+
+    patch = {
+        "insumo_id": resolved.get("insumo_id"),
+        "listado_precio_id": resolved.get("listado_precio_id"),
+        "material_descripcion": resolved.get("material_descripcion"),
+        "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
+        "unidad": resolved.get("unidad") or existing.get("unidad"),
+        "cantidad": cantidad,
+        "valor_compra_unitario": (
+            _to_float(body["valor_compra_unitario"])
+            if body.get("valor_compra_unitario") is not None
+            else resolved.get("valor_compra_unitario")
+        ),
+        "vlr_unitario_cobro": (
+            _to_float(body["vlr_unitario_cobro"])
+            if body.get("vlr_unitario_cobro") is not None
+            else resolved.get("vlr_unitario_cobro")
+        ),
+        "supera_presupuesto": resolved.get("supera_presupuesto", False),
+        "supera_negociado": resolved.get("supera_negociado", False),
+        "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
+    }
+    if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
+        raise ValueError("El costo de compra no puede ser negativo.")
+    if patch["vlr_unitario_cobro"] is not None and _to_float(patch["vlr_unitario_cobro"]) < 0:
+        raise ValueError("El valor de cobro no puede ser negativo.")
+
+    sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
+    return get_solicitud(contrato_id, solicitud_id)
 
 
 def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
@@ -1455,6 +1605,37 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         it for it in (sol.get("items") or [])
         if (it.get("estado_validacion") or "pendiente") == "aprobado"
     ]
+    if not items_aprobados:
+        raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
+
+    # Recargar ítems desde BD (pueden haberse mapeado tras el GET inicial)
+    fresh_items = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    fresh_by_id = {int(r["id"]): r for r in fresh_items if r.get("id") is not None}
+    items_aprobados = []
+    for it in fresh_items:
+        ev = it.get("estado_validacion") or "pendiente"
+        if ev != "aprobado":
+            continue
+        merged = {**(fresh_by_id.get(int(it["id"])) or {}), **it}
+        if not merged.get("insumo_id") and not merged.get("es_recurrente"):
+            raise ValueError(
+                f"Línea {merged.get('numero_linea') or merged.get('id')}: "
+                "el Contratista Gerencial debe seleccionar el insumo del catálogo antes de aprobar."
+            )
+        vu = _to_float(merged.get("valor_compra_unitario"))
+        if vu <= 0 and not merged.get("es_recurrente"):
+            raise ValueError(
+                f"Línea {merged.get('numero_linea') or merged.get('id')}: "
+                "defina el costo de compra unitario antes de generar la OC."
+            )
+        items_aprobados.append(merged)
     if not items_aprobados:
         raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
 

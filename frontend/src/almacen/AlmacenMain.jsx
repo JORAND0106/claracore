@@ -60,13 +60,13 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
     refreshPendingRef.current = true
     setRefreshBusy(true)
     setRefreshSignal((s) => s + 1)
-    if (permisos?.validar) {
+    if (permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador)) {
       try {
         const n = await api.countSolicitudes('enviada')
         setPendientes(n)
       } catch { /* ignore */ }
     }
-  }, [api, permisos?.validar])
+  }, [api, permisos?.validar, permisos?.esContratistaGerencial, permisos?.esDesarrollador])
 
   useEffect(() => {
     setModuloRefresh({
@@ -79,9 +79,9 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    if (!permisos?.validar) return
+    if (!(permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador))) return
     api.countSolicitudes('enviada').then(setPendientes).catch(() => {})
-  }, [api, permisos?.validar, tab])
+  }, [api, permisos?.validar, permisos?.esContratistaGerencial, permisos?.esDesarrollador, tab])
 
   const visibleTabs = useMemo(() => TABS.filter((tb) => {
     if (tb.id === 'entradas' || tb.id === 'salidas') {
@@ -194,7 +194,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
           >
             <span>{tb.icon}</span>
             <span>{tb.label}</span>
-            {tb.id === 'solicitudes' && pendientes > 0 && permisos?.validar && (
+            {tb.id === 'solicitudes' && pendientes > 0 && permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador) && (
               <span style={{
                 background: '#dc2626',
                 color: '#fff',
