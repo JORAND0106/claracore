@@ -126,10 +126,22 @@ export default function SalidaForm({
     api.listEntradasDisponiblesPorPk(pkNorm)
       .then((rows) => {
         setEntradasDisp(rows)
+        let next = null
         if (preferEntradaItemId != null) {
-          const match = rows.find((r) => String(r.entrada_item_id) === String(preferEntradaItemId))
-          setEntradaSel(match || null)
-          if (!match) setCantidad('')
+          next = rows.find((r) => String(r.entrada_item_id) === String(preferEntradaItemId)) || null
+        }
+        // Auto-seleccionar para que "Cantidad a despachar" quede visible de inmediato
+        // (una sola entrada, o la primera si hay varias y no hay borrador).
+        if (!next && rows.length >= 1) next = rows[0]
+        if (next) {
+          const restored = preferEntradaItemId != null
+            && String(next.entrada_item_id) === String(preferEntradaItemId)
+          setEntradaSel(next)
+          if (!restored) setCantidad('')
+          if (next.tramo) setTramo(next.tramo)
+          if (next.costado) setCostado(next.costado)
+          if (next.abscisa_inicial) setAbscisaInicial(next.abscisa_inicial)
+          if (next.abscisa_final) setAbscisaFinal(next.abscisa_final)
         } else {
           setEntradaSel(null)
           setCantidad('')
@@ -181,11 +193,15 @@ export default function SalidaForm({
 
   const cantidadNum = parseFloat(String(cantidad).replace(',', '.'))
   const disponible = entradaSel ? Number(entradaSel.cantidad_disponible || 0) : 0
-  const saldoTrasEsta = Number.isFinite(cantidadNum) && cantidadNum > 0
-    ? Math.max(0, disponible - cantidadNum)
-    : disponible
   const cantidadInvalida = entradaSel && cantidad.trim() && (
     !Number.isFinite(cantidadNum) || cantidadNum <= 0 || cantidadNum > disponible + 1e-9
+  )
+  const puedeRegistrar = Boolean(
+    entradaSel
+    && cantidad.trim()
+    && Number.isFinite(cantidadNum)
+    && cantidadNum > 0
+    && !cantidadInvalida,
   )
 
   const alertaProximidad = useMemo(() => {
@@ -224,7 +240,7 @@ export default function SalidaForm({
     if (!cantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum <= 0) {
       errs.cantidad = 'Indique una cantidad válida.'
     } else if (cantidadNum > disponible + 1e-9) {
-      errs.cantidad = `No puede superar el saldo disponible (${fmtCant(disponible)}).`
+      errs.cantidad = `La cantidad a despachar (${fmtCant(cantidadNum)}) supera el disponible para salida (${fmtCant(disponible)}).`
     }
     if (
       String(abscisaInicial ?? '').trim() !== ''
@@ -364,12 +380,22 @@ export default function SalidaForm({
                 const cod = op.insumo_codigo ? `${op.insumo_codigo} · ` : ''
                 const ppto = [op.presupuesto_capitulo, op.presupuesto_item].filter(Boolean).join(' · ')
                 const dispOp = Number(op.cantidad_disponible || 0)
+                const und = op.unidad || 'UND'
+                const cantOk = sel
+                  && cantidad.trim()
+                  && Number.isFinite(cantidadNum)
+                  && cantidadNum > 0
+                  && cantidadNum <= dispOp + 1e-9
+                const saldoTxt = cantOk
+                  ? `${fmtCant(Math.max(0, dispOp - cantidadNum))} ${und}`
+                  : '—'
                 return (
                   <div
                     key={op.entrada_item_id}
                     role="button"
                     tabIndex={busy ? -1 : 0}
                     aria-pressed={sel}
+                    data-testid={`entrada-card-${op.entrada_item_id}`}
                     onClick={() => {
                       if (busy) return
                       if (sel) return
@@ -412,11 +438,11 @@ export default function SalidaForm({
                     )}
                     <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
                       Recibido en esta entrada:{' '}
-                      <strong>{fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)} {op.unidad}</strong>
+                      <strong>{fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)} {und}</strong>
                       {' · '}Disponible para salida:{' '}
-                      <strong style={{ color: ui.text }}>{fmtCant(op.cantidad_disponible)} {op.unidad}</strong>
+                      <strong style={{ color: ui.text }}>{fmtCant(op.cantidad_disponible)} {und}</strong>
                       {op.cantidad_oc_autorizada != null && (
-                        <span>{' · '}OC autoriza {fmtCant(op.cantidad_oc_autorizada)} {op.unidad}</span>
+                        <span>{' · '}OC autoriza {fmtCant(op.cantidad_oc_autorizada)} {und}</span>
                       )}
                     </div>
                     {op.alerta_proximidad_consumo && !sel && (
@@ -425,9 +451,18 @@ export default function SalidaForm({
                       </div>
                     )}
 
+                    {/* Cantidad a despachar: siempre visible en la entrada seleccionada,
+                        justo debajo de Recibido / Disponible / OC autoriza. */}
                     {sel && (
                       <div
-                        style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${ui.border}` }}
+                        data-testid="cantidad-despachar-block"
+                        style={{
+                          marginTop: 12,
+                          padding: '12px 12px 10px',
+                          borderRadius: 8,
+                          border: `1px solid ${ui.border}`,
+                          background: ui.card?.background || '#fff',
+                        }}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
                       >
@@ -443,56 +478,48 @@ export default function SalidaForm({
                         >
                           Cantidad a despachar <span style={{ color: '#dc2626' }}>*</span>
                         </label>
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'minmax(140px, 200px) 1fr',
-                          gap: 12,
-                          alignItems: 'start',
-                        }}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 280 }}>
+                          <input
+                            id={`salida-cantidad-${op.entrada_item_id}`}
+                            data-testid="cantidad-despachar-input"
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            style={{
+                              ...ui.input,
+                              marginBottom: 0,
+                              flex: 1,
+                              fontSize: 'var(--cc-md, 1rem)',
+                              fontWeight: 600,
+                              ...inputErrorStyle('cantidad'),
+                              ...(cantidadInvalida ? { borderColor: '#dc2626' } : {}),
+                            }}
+                            value={cantidad}
+                            disabled={busy}
+                            placeholder="Ej. 100"
+                            onChange={(e) => {
+                              setCantidad(e.target.value)
+                              clearFieldError('cantidad')
+                            }}
+                          />
+                          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: ui.textMuted }}>
+                            {und}
+                          </span>
+                        </div>
+                        <div
+                          data-testid="saldo-despues-salida"
+                          style={{
+                            marginTop: 10,
+                            fontSize: 'var(--cc-sm)',
+                            fontWeight: 600,
+                            color: cantOk
+                              ? 'var(--cc-color-positive, #059669)'
+                              : (cantidadInvalida ? '#dc2626' : ui.text),
+                            lineHeight: 1.4,
+                          }}
                         >
-                          <div>
-                            <input
-                              id={`salida-cantidad-${op.entrada_item_id}`}
-                              type="text"
-                              inputMode="decimal"
-                              style={{
-                                ...ui.input,
-                                marginBottom: 4,
-                                ...inputErrorStyle('cantidad'),
-                              }}
-                              value={cantidad}
-                              disabled={busy}
-                              placeholder={`Máx. ${fmtCant(dispOp)}`}
-                              onChange={(e) => {
-                                setCantidad(e.target.value)
-                                clearFieldError('cantidad')
-                              }}
-                            />
-                            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-                              {op.unidad || 'UND'}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 'var(--cc-xs)', lineHeight: 1.55, color: ui.text }}>
-                            {Number(op.cantidad_despachada || 0) > 0 && (
-                              <div>
-                                Ya despachado:{' '}
-                                <strong>{fmtCant(op.cantidad_despachada)} {op.unidad || ''}</strong>
-                              </div>
-                            )}
-                            {cantidad.trim() && Number.isFinite(cantidadNum) && cantidadNum > 0 && !cantidadInvalida && (
-                              <div style={{ fontWeight: 600 }}>
-                                Tras esta salida quedará disponible:{' '}
-                                <strong style={{ color: 'var(--cc-color-positive, #059669)' }}>
-                                  {fmtCant(saldoTrasEsta)} {op.unidad || ''}
-                                </strong>
-                              </div>
-                            )}
-                            {(!cantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum <= 0) && (
-                              <div style={{ color: ui.textMuted }}>
-                                Indique cuánto sale en este despacho. El saldo disponible se actualizará al confirmar.
-                              </div>
-                            )}
-                          </div>
+                          Saldo después de esta salida:{' '}
+                          <strong>{saldoTxt}</strong>
                         </div>
                         {fieldErrors.cantidad && (
                           <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
@@ -501,10 +528,20 @@ export default function SalidaForm({
                         )}
                         {cantidadInvalida && !fieldErrors.cantidad && (
                           <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
-                            La cantidad a despachar ({fmtCant(cantidadNum)} {op.unidad}) supera el disponible
-                            para salida ({fmtCant(disponible)} {op.unidad}).
+                            La cantidad a despachar ({fmtCant(cantidadNum)} {und}) supera el disponible
+                            para salida ({fmtCant(dispOp)} {und}).
                           </div>
                         )}
+                        {!cantidad.trim() && fieldErrors.cantidad && (
+                          <div style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)', marginTop: 4 }}>
+                            Campo obligatorio para registrar la salida.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {!sel && (
+                      <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8, fontStyle: 'italic' }}>
+                        Clic para seleccionar e indicar la cantidad a despachar
                       </div>
                     )}
                   </div>
@@ -557,7 +594,7 @@ export default function SalidaForm({
         <button
           type="submit"
           style={ui.btnPrimary}
-          disabled={busy || cantidadInvalida}
+          disabled={busy || !puedeRegistrar}
         >
           {busy ? 'Registrando…' : 'Registrar salida'}
         </button>

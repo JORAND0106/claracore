@@ -16,8 +16,18 @@ function cantidadExcedeSaldo(cantidad, disponible) {
 
 function saldoTrasDespacho(disponible, cantidad) {
   const n = Number(String(cantidad).replace(',', '.'))
-  if (!Number.isFinite(n) || n <= 0) return Number(disponible) || 0
+  if (!Number.isFinite(n) || n <= 0) return null
+  if (n > Number(disponible) + 1e-9) return null
   return Math.max(0, Number(disponible) - n)
+}
+
+/** Texto exacto bajo el campo "Cantidad a despachar". */
+function labelSaldoDespues(disponible, cantidad, unidad = 'KG') {
+  const saldo = saldoTrasDespacho(disponible, cantidad)
+  const valor = saldo == null
+    ? '—'
+    : `${saldo.toLocaleString('es-CO', { maximumFractionDigits: 4 })} ${unidad}`
+  return `Saldo después de esta salida: ${valor}`
 }
 
 describe('salida form saldo y validación', () => {
@@ -39,14 +49,24 @@ describe('salida form saldo y validación', () => {
     assert.equal(saldoTrasDespacho(100, '100'), 0)
   })
 
-  it('escenario 1500 KG: despacho 500 deja 1000 y bloquea exceso', () => {
+  it('ejemplo crítico 1500 KG → despacho 100 → saldo 1400', () => {
     const disponible = disponibleEntradaItem(1500, 0)
     assert.equal(disponible, 1500)
-    assert.equal(cantidadExcedeSaldo('500', disponible), false)
-    const trasParcial = saldoTrasDespacho(disponible, '500')
-    assert.equal(trasParcial, 1000)
-    assert.equal(cantidadExcedeSaldo('1001', trasParcial), true)
-    assert.equal(cantidadExcedeSaldo('1000', trasParcial), false)
-    assert.equal(saldoTrasDespacho(trasParcial, '1000'), 0)
+    assert.equal(cantidadExcedeSaldo('', disponible), true)
+    assert.equal(cantidadExcedeSaldo('100', disponible), false)
+    assert.equal(saldoTrasDespacho(disponible, '100'), 1400)
+    assert.equal(
+      labelSaldoDespues(disponible, '100', 'KG'),
+      'Saldo después de esta salida: 1.400 KG',
+    )
+    assert.equal(
+      labelSaldoDespues(disponible, '', 'KG'),
+      'Saldo después de esta salida: —',
+    )
+    // Tras registrar 100, la siguiente salida parte de 1400.
+    const trasRegistro = disponibleEntradaItem(1500, 100)
+    assert.equal(trasRegistro, 1400)
+    assert.equal(cantidadExcedeSaldo('1401', trasRegistro), true)
+    assert.equal(cantidadExcedeSaldo('1400', trasRegistro), false)
   })
 })
