@@ -66,7 +66,7 @@ export function almacenStyles(t, compact = false) {
     th: {
       textAlign: 'left',
       padding: '7px 8px',
-      fontSize: '11px',
+      fontSize: 'var(--cc-caption)',
       fontWeight: 800,
       color: textMuted,
       textTransform: 'uppercase',
@@ -80,7 +80,7 @@ export function almacenStyles(t, compact = false) {
     },
     td: {
       padding: '5px 8px',
-      fontSize: '13px',
+      fontSize: 'var(--cc-sm)',
       color: text,
       border: `1px solid ${border}`,
       verticalAlign: 'middle',
@@ -89,7 +89,7 @@ export function almacenStyles(t, compact = false) {
     },
     tdNum: {
       padding: '5px 8px',
-      fontSize: '12px',
+      fontSize: 'var(--cc-xs)',
       color: text,
       border: `1px solid ${border}`,
       verticalAlign: 'middle',

@@ -90,6 +90,28 @@ export function createCatalogoInsumosApi(contratoId, token) {
       a.click()
       URL.revokeObjectURL(url)
     },
+
+    importCsvProveedores: (file, modo = 'agregar') => {
+      const fd = new FormData()
+      fd.append('archivo', file)
+      fd.append('modo', modo)
+      return fetch(`${base}/proveedores/import/csv`, { method: 'POST', headers: headers(token), body: fd }).then(parseJson)
+    },
+
+    downloadPlantillaProveedoresCsv: async () => {
+      const res = await fetch(`${base}/proveedores/import/plantilla.csv`, { headers: headers(token) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'plantilla_catalogo_proveedores.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    },
   }
 }
 

@@ -201,11 +201,15 @@ def _norm_csv_header(h: str) -> str:
     return re.sub(r"\s+", " ", s.lower().strip())
 
 
-def _resolve_csv_columns(fieldnames: List[str]) -> Dict[str, str]:
+def _resolve_csv_columns(
+    fieldnames: List[str],
+    aliases: Optional[Dict[str, List[str]]] = None,
+) -> Dict[str, str]:
+    alias_map = aliases or CSV_COLUMN_ALIASES
     norm_to_orig = {_norm_csv_header(h): h for h in fieldnames if h}
     col_map: Dict[str, str] = {}
-    for canonical, aliases in CSV_COLUMN_ALIASES.items():
-        for alias in aliases:
+    for canonical, alist in alias_map.items():
+        for alias in alist:
             key = _norm_csv_header(alias)
             if key in norm_to_orig:
                 col_map[canonical] = norm_to_orig[key]
@@ -996,5 +1000,175 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
         "creados": creados,
         "actualizados": actualizados,
         "duplicados": duplicados,
+        "errores": errores,
+    }
+
+
+PROV_CSV_REQUIRED = ("razon_social", "nit")
+
+PROV_CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
+    "razon_social": [
+        "razon_social", "razon social", "proveedor", "nombre", "nombre proveedor",
+        "empresa", "razón social",
+    ],
+    "nit": [
+        "nit", "nit proveedor", "documento", "identificacion", "identificación",
+        "id proveedor", "cedula", "cédula",
+    ],
+    "contacto_email": [
+        "contacto_email", "contacto email", "email", "correo", "correo contacto", "email contacto",
+    ],
+    "contacto_nombre": [
+        "contacto_nombre", "contacto nombre", "nombre comercial", "comercial", "nombre contacto",
+    ],
+    "contacto_telefono": [
+        "contacto_telefono", "contacto telefono", "telefono", "teléfono", "telefono contacto", "celular",
+    ],
+}
+
+PROV_CSV_TEMPLATE = (
+    "razon_social,nit,contacto_email,contacto_nombre,contacto_telefono\n"
+    "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567\n"
+    "Materiales del Norte Ltda,800987654-2,compras@norte.com,Ana Gómez,3105558899\n"
+)
+
+
+def get_csv_template_proveedores() -> str:
+    return PROV_CSV_TEMPLATE
+
+
+def _prov_csv_columns_error(col_map: Dict[str, str]) -> None:
+    missing = [c for c in PROV_CSV_REQUIRED if c not in col_map]
+    if not missing:
+        return
+    raise ValueError(
+        "El CSV de proveedores no cumple el formato esperado.\n"
+        f"Columnas obligatorias faltantes: {', '.join(missing)}.\n"
+        "Columnas obligatorias: razon_social (o proveedor/nombre), nit.\n"
+        "Opcionales: contacto_email, contacto_nombre, contacto_telefono.\n"
+        "Use «Plantilla para Proveedores» en este módulo para ver el formato exacto."
+    )
+
+
+def clear_proveedores_sin_insumos(contrato_id: int) -> int:
+    """
+    Soft-delete de proveedores activos sin insumos activos (modo reemplazar CSV).
+    Conserva proveedores que aún tienen insumos en el catálogo.
+    """
+    sb = _sb()
+    provs = (
+        sb.table("almacen_proveedor")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    if not provs:
+        return 0
+    insumos = (
+        sb.table("almacen_insumo")
+        .select("proveedor_id")
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    protected = {
+        int(r["proveedor_id"])
+        for r in insumos
+        if r.get("proveedor_id") is not None
+    }
+    to_clear = [int(p["id"]) for p in provs if int(p["id"]) not in protected]
+    if not to_clear:
+        return 0
+    for pid in to_clear:
+        sb.table("almacen_proveedor").update({"activo": False}).eq("id", pid).execute()
+    return len(to_clear)
+
+
+def import_csv_proveedores(
+    contrato_id: int, user_id: int, csv_text: str, modo: str = "agregar"
+) -> dict:
+    modo = (modo or "agregar").strip().lower()
+    if modo not in ("agregar", "reemplazar"):
+        raise ValueError("modo debe ser 'agregar' o 'reemplazar'.")
+    desactivados = 0
+    if modo == "reemplazar":
+        desactivados = clear_proveedores_sin_insumos(contrato_id)
+
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if not reader.fieldnames:
+        raise ValueError(
+            "El CSV está vacío o no tiene encabezados.\n"
+            "La primera fila debe incluir al menos: razon_social, nit.\n"
+            "Descargue la plantilla de proveedores desde este módulo."
+        )
+    col_map = _resolve_csv_columns(list(reader.fieldnames), PROV_CSV_COLUMN_ALIASES)
+    _prov_csv_columns_error(col_map)
+
+    def col(name: str, row: dict) -> str:
+        key = col_map.get(name)
+        return (row.get(key) or "").strip() if key else ""
+
+    creados = 0
+    actualizados = 0
+    errores: List[str] = []
+    seen_nits: set[str] = set()
+
+    for i, row in enumerate(reader, start=2):
+        try:
+            razon = col("razon_social", row)
+            nit = col("nit", row)
+            if not razon and not nit:
+                continue
+            if not razon or not nit:
+                errores.append(f"Fila {i}: razón social y NIT son obligatorios.")
+                continue
+            if nit in seen_nits:
+                errores.append(f"Fila {i}: NIT duplicado en el CSV ({nit}).")
+                continue
+            seen_nits.add(nit)
+
+            sb = _sb()
+            existing = (
+                sb.table("almacen_proveedor")
+                .select("id, razon_social, activo")
+                .eq("contrato_id", contrato_id)
+                .eq("nit", nit)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            body = {
+                "razon_social": razon,
+                "nit": nit,
+                "contacto_email": col("contacto_email", row) or None,
+                "contacto_nombre": col("contacto_nombre", row) or None,
+                "contacto_telefono": col("contacto_telefono", row) or None,
+            }
+            if existing:
+                create_proveedor(contrato_id, user_id, body)
+                # create_proveedor no siempre actualiza razón social; forzar si cambió
+                if existing[0].get("razon_social") != razon:
+                    sb.table("almacen_proveedor").update({"razon_social": razon}).eq(
+                        "id", existing[0]["id"]
+                    ).execute()
+                sync_proveedor_contacto(int(existing[0]["id"]), body)
+                actualizados += 1
+            else:
+                create_proveedor(contrato_id, user_id, body)
+                creados += 1
+        except Exception as exc:
+            errores.append(f"Fila {i}: {exc}")
+
+    return {
+        "modo": modo,
+        "desactivados": desactivados,
+        "creados": creados,
+        "actualizados": actualizados,
         "errores": errores,
     }

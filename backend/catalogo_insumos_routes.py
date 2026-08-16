@@ -21,7 +21,9 @@ from catalogo_insumos_service import (
     find_duplicados,
     get_almacen_config,
     get_csv_template,
+    get_csv_template_proveedores,
     import_csv_insumos,
+    import_csv_proveedores,
     list_catalogo_insumos,
     list_cotizaciones_soporte,
     list_precio_historial,
@@ -413,6 +415,52 @@ async def route_import_csv(
         registrar_log(
             current_user, "IMPORTAR", "CATALOGO_INSUMOS", "almacen_insumo", str(contrato_id),
             {"modo": modo, "creados": result.get("creados"), "actualizados": result.get("actualizados"), "desactivados": result.get("desactivados")},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/proveedores/import/plantilla.csv")
+def route_csv_plantilla_proveedores(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    content = get_csv_template_proveedores()
+    return Response(
+        content=content.encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="plantilla_catalogo_proveedores.csv"'},
+    )
+
+
+@router.post("/{contrato_id}/proveedores/import/csv")
+async def route_import_csv_proveedores(
+    contrato_id: int,
+    archivo: UploadFile = File(...),
+    modo: str = Form("agregar"),
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "crear")
+    raw = await archivo.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    try:
+        result = import_csv_proveedores(contrato_id, _uid(current_user), text, modo=modo)
+        registrar_log(
+            current_user,
+            "IMPORTAR",
+            "CATALOGO_PROVEEDORES",
+            "almacen_proveedor",
+            str(contrato_id),
+            {
+                "modo": modo,
+                "creados": result.get("creados"),
+                "actualizados": result.get("actualizados"),
+                "desactivados": result.get("desactivados"),
+            },
         )
         return result
     except ValueError as exc:

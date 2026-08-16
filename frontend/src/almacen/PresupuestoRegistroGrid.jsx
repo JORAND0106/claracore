@@ -87,17 +87,14 @@ export default function PresupuestoRegistroGrid({
   const th = {
     ...ui.th,
     padding: '5px 6px',
-    fontSize: 10,
   }
   const td = {
     ...ui.td,
     padding: '4px 6px',
-    fontSize: 12,
   }
   const tdNum = {
     ...ui.tdNum,
     padding: '4px 6px',
-    fontSize: 11,
   }
 
   return (
@@ -109,7 +106,7 @@ export default function PresupuestoRegistroGrid({
         ayuda="Seleccione el tramo/abscisa contra el cual consumirá cantidad."
       />
       {data?.registros_count > 1 && (
-        <div style={{ fontSize: 10, color: ui.textMuted, marginBottom: 4 }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted, marginBottom: 4 }}>
           Total ítem en PK ({data.registros_count} registros):{' '}
           <strong>{fmtCant(data.cant_presupuestada_combo)}</strong>
           {registros[0]?.unidad ? ` ${registros[0].unidad}` : ''}

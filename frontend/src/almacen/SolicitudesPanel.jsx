@@ -150,14 +150,14 @@ export default function SolicitudesPanel({
                   <td style={{ ...ui.td, color: ESTADO_SOLICITUD_COLOR[s.estado], fontWeight: 700 }} data-label="Estado">
                     {ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
-                  <td style={{ ...ui.td, fontSize: 12 }} data-label="Solicitante">
+                  <td style={ui.td} data-label="Solicitante">
                     {s.solicitante_nombre || '—'}
                   </td>
-                  <td style={{ ...ui.td, fontSize: 12 }} data-label="Aprobación">
+                  <td style={ui.td} data-label="Aprobación">
                     {textoAprobacionSolicitud(s)}
                   </td>
                   <td style={ui.tdNum} data-label="Ítems">{nItems}</td>
-                  <td style={{ ...ui.td, fontSize: 12, whiteSpace: 'nowrap' }} data-label="Fecha">
+                  <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="Fecha">
                     {fmtFechaAlmacenCorta(s.created_at)}
                   </td>
                   <td style={ui.td} data-label="OC" onClick={(e) => e.stopPropagation()}>
@@ -170,7 +170,7 @@ export default function SolicitudesPanel({
                       {solicitudPuedeValidar(s, permisos) && (
                         <button
                           type="button"
-                          style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 11, minHeight: 0 }}
+                          style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
                           onClick={() => abrirDetalle(s, 'portada')}
                         >
                           Revisar
@@ -182,7 +182,7 @@ export default function SolicitudesPanel({
                           style={{
                             ...ui.btnSecondary,
                             padding: '4px 8px',
-                            fontSize: 11,
+                            fontSize: 'var(--cc-caption)',
                             minHeight: 0,
                             color: '#7c2d12',
                             borderColor: '#7c2d1266',
@@ -199,7 +199,7 @@ export default function SolicitudesPanel({
                           style={{
                             ...ui.btnSecondary,
                             padding: '4px 8px',
-                            fontSize: 11,
+                            fontSize: 'var(--cc-caption)',
                             minHeight: 0,
                             color: '#dc2626',
                             borderColor: '#dc262666',
