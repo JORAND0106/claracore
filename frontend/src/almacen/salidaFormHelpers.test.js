@@ -38,4 +38,15 @@ describe('salida form saldo y validación', () => {
     assert.equal(saldoTrasDespacho(100, '30'), 70)
     assert.equal(saldoTrasDespacho(100, '100'), 0)
   })
+
+  it('escenario 1500 KG: despacho 500 deja 1000 y bloquea exceso', () => {
+    const disponible = disponibleEntradaItem(1500, 0)
+    assert.equal(disponible, 1500)
+    assert.equal(cantidadExcedeSaldo('500', disponible), false)
+    const trasParcial = saldoTrasDespacho(disponible, '500')
+    assert.equal(trasParcial, 1000)
+    assert.equal(cantidadExcedeSaldo('1001', trasParcial), true)
+    assert.equal(cantidadExcedeSaldo('1000', trasParcial), false)
+    assert.equal(saldoTrasDespacho(trasParcial, '1000'), 0)
+  })
 })
