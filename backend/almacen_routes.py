@@ -625,16 +625,14 @@ def route_mapear_item_gerencial(
     """Contratista Gerencial: selecciona insumo, ajusta cantidad/costo/cobro."""
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
-    ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
-        mapear_item_solicitud_gerencial(
+        return mapear_item_solicitud_gerencial(
             contrato_id,
             solicitud_id,
             item_id,
             _uid(current_user),
             body.model_dump(exclude_none=True),
         )
-        return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_eco)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -649,9 +647,8 @@ def route_validar_item_solicitud(
 ):
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
-    ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
-        validar_item_solicitud(
+        return validar_item_solicitud(
             contrato_id,
             solicitud_id,
             item_id,
@@ -659,7 +656,6 @@ def route_validar_item_solicitud(
             body.accion,
             body.motivo,
         )
-        return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_eco)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

@@ -1715,6 +1715,7 @@ def apply_saldo_flags_batch(
     exclude_solicitud_id: Optional[int] = None,
     *,
     descontar_linea_actual: bool = True,
+    refresh_listado: bool = True,
 ) -> None:
     """
     Marca supera_presupuesto / vlr cobro / cant_presupuestada sin N× get_presupuesto_context
@@ -1722,6 +1723,8 @@ def apply_saldo_flags_batch(
 
     - Guardado/preview: descontar_linea_actual=True (+ exclude_solicitud_id al editar).
     - Lectura de líneas ya persistidas: descontar_linea_actual=False (la qty ya está en acum).
+    - refresh_listado=False: no escanea listado_precios (usar vlr ya guardado en el ítem).
+      Crítico en GET detalle: el full-scan del listado era ~5s incluso con 1 línea.
     """
     from collections import defaultdict
 
@@ -1732,7 +1735,14 @@ def apply_saldo_flags_batch(
         if it.get("presupuesto_id") and it.get("pk_id")
     ]
     acum_map = batch_cantidad_solicitada_acumulada(sb, contrato_id, keys, exclude_solicitud_id)
-    lookup = get_listado_precio_lookup(contrato_id)
+    lookup = None
+    if refresh_listado:
+        needs_price = any(
+            (it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"))
+            for it in items
+        )
+        if needs_price:
+            lookup = get_listado_precio_lookup(contrato_id)
     batch_qty: dict = defaultdict(float)
     for it in items:
         if it.get("presupuesto_id") and it.get("pk_id"):
@@ -1740,13 +1750,16 @@ def apply_saldo_flags_batch(
             batch_qty[key] += _to_float(it.get("cantidad"))
 
     for it in items:
-        cap = (it.get("capitulo") or "").strip()
-        item_n = (it.get("item") or "").strip()
-        vlr = lookup_listado_precio(contrato_id, cap, item_n, lookup)
-        if vlr is not None:
-            # No pisar cobro manual del Gerencial si ya viene set con insumo
-            if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
-                it["vlr_unitario_cobro"] = vlr
+        if lookup is not None:
+            cap = (it.get("capitulo") or "").strip()
+            item_n = (it.get("item") or "").strip()
+            vlr = lookup_listado_precio(contrato_id, cap, item_n, lookup)
+            if vlr is not None:
+                # No pisar cobro manual del Gerencial si ya viene set con insumo
+                if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
+                    it["vlr_unitario_cobro"] = vlr
+            elif it.get("vlr_unitario_cobro") is None:
+                it["vlr_unitario_cobro"] = 0
         elif it.get("vlr_unitario_cobro") is None:
             it["vlr_unitario_cobro"] = 0
 

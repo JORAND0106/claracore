@@ -35,6 +35,7 @@ export default function SolicitudRevisionModal({
   const [confirmAprobar, setConfirmAprobar] = useState(false)
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [loading, setLoading] = useState(!solicitudInicial)
+  const [ocProgreso, setOcProgreso] = useState('')
 
   const theme = t || {
     primary: ui.accent,
@@ -66,6 +67,7 @@ export default function SolicitudRevisionModal({
   const ejecutarAprobar = async () => {
     if (!sol) return
     setBusy(true)
+    setOcProgreso('Generando orden de compra…')
     setError('')
     try {
       const r = await api.aprobarSolicitud(sol.id, {})
@@ -81,6 +83,7 @@ export default function SolicitudRevisionModal({
       setError(e.message)
     } finally {
       setBusy(false)
+      setOcProgreso('')
     }
   }
 
@@ -272,6 +275,40 @@ export default function SolicitudRevisionModal({
             onClose?.()
           }}
         />
+      )}
+
+      {ocProgreso && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100055,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(15, 23, 42, 0.5)',
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              background: ui.card?.background || '#fff',
+              color: ui.text,
+              borderRadius: 12,
+              padding: '28px 32px',
+              maxWidth: 380,
+              textAlign: 'center',
+              boxShadow: '0 20px 48px rgba(15, 23, 42, 0.35)',
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>{ocProgreso}</div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+              Espere; no cierre esta ventana.
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

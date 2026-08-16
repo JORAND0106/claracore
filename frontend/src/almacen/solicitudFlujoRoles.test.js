@@ -30,6 +30,10 @@ function solicitudPuedeValidar(sol, permisos) {
   )
 }
 
+function puedeAbrirRevisionLinea(permisos) {
+  return Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
+}
+
 function validateSolicitudItems(items) {
   const errors = []
   items.forEach((it, idx) => {
@@ -63,6 +67,14 @@ describe('flujo solicitud por rol', () => {
     const sol = { estado: 'enviada' }
     assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: false }), false)
     assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: true }), true)
+  })
+
+  it('modal revisión de línea solo Gerencial/Desarrollador (ni lectura a otros roles)', () => {
+    assert.equal(puedeAbrirRevisionLinea({ esContratistaGerencial: true }), true)
+    assert.equal(puedeAbrirRevisionLinea({ esDesarrollador: true }), true)
+    assert.equal(puedeAbrirRevisionLinea({ validar: true, esContratistaGerencial: false }), false)
+    assert.equal(puedeAbrirRevisionLinea({ editar: true }), false)
+    assert.equal(puedeAbrirRevisionLinea({}), false)
   })
 
   it('creación exige texto libre, no insumo', () => {
