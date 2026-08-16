@@ -6,6 +6,7 @@ import {
   formImpuestoDesdeTributos,
   fmtPctDesdeDecimal,
   fmtSumatoriaAiu,
+  formatPuntosPctExacto,
   inferirTipoImpuesto,
   normalizarTributos,
   parseEntradaAPuntosPct,
@@ -62,34 +63,33 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
     assert.equal(fmtPctDesdeDecimal('0.05'), '5%')
   })
 
-  it('sumatoria A+I+U en % exacta (sin redondear)', () => {
-    const form = { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' }
-    assert.equal(sumatoriaAiuPuntosPct(form), 13)
-    assert.equal(fmtSumatoriaAiu(form), '13%')
+  it('total % efectivo incluye IVA sobre U', () => {
+    // A5 + I2 + (U5 + U5×19%) = 5+2+5.95 = 12.95
+    const form = { administracion: '0.05', imprevistos: '0.02', utilidad: '0.05', iva: '0.19' }
+    assert.equal(inferirTipoImpuesto(form, { valoresEnDecimal: true }), TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD)
+    assert.equal(sumatoriaAiuPuntosPct(form), 12.95)
+    assert.equal(fmtSumatoriaAiu(form), '12.95%')
 
-    // 5.1 + 3.25 + 4.075 = 12.425 — no redondear a 12 ni a 12.43
-    const formDec = { administracion: '0.051', imprevistos: '0.0325', utilidad: '0.04075' }
-    assert.equal(sumatoriaAiuPuntosPct(formDec), 12.425)
-    assert.equal(fmtSumatoriaAiu(formDec), '12.425%')
+    // Sin IVA: solo A+Í+U
+    const sinIva = { administracion: '0.051', imprevistos: '0.0325', utilidad: '0.04075', iva: '' }
+    assert.equal(sumatoriaAiuPuntosPct(sinIva), 12.425)
+    assert.equal(fmtSumatoriaAiu(sinIva), '12.425%')
 
-    // 0.055 + 0.033 + 0.051 = 13.9
-    const form2 = { administracion: '0.055', imprevistos: '0.033', utilidad: '0.051' }
-    assert.equal(sumatoriaAiuPuntosPct(form2), 13.9)
-    assert.equal(fmtSumatoriaAiu(form2), '13.9%')
+    // IVA pleno: solo IVA
+    const pleno = { administracion: '', imprevistos: '', utilidad: '', iva: '0.19' }
+    assert.equal(sumatoriaAiuPuntosPct(pleno), 19)
+    assert.equal(fmtSumatoriaAiu(pleno), '19%')
   })
 
   it('porcentajes UI exactos vs montos COP enteros (reglas separadas)', () => {
-    // UI %: no usa Math.round a entero
     assert.equal(fmtPctDesdeDecimal('0.04075'), '4.075%')
     assert.equal(fmtPctDesdeDecimal('0.051234'), '5.1234%')
-    assert.equal(
-      fmtSumatoriaAiu({ administracion: '0.051234', imprevistos: '0.0325', utilidad: '0.04075' }),
-      '12.4484%',
-    )
-    // Persistencia conserva decimales (no trunca a 2 dp ni a entero)
+    // Con IVA sobre U: 5.1234 + 3.25 + (4.075 + 4.075×0.19) = 13.22265
+    const form = { administracion: '0.051234', imprevistos: '0.0325', utilidad: '0.04075', iva: '0.19' }
+    assert.equal(sumatoriaAiuPuntosPct(form), 13.22265)
+    assert.equal(fmtSumatoriaAiu(form), '13.22265%')
     assert.equal(decimalAPuntosPct('0.04075'), 4.075)
     assert.equal(decimalAPuntosPct('0.051234'), 5.1234)
-    // Monto COP: sí redondea a 0 decimales
     assert.equal(
       computeValorDespuesAiuIva(
         18500,

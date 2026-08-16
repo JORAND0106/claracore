@@ -68,9 +68,10 @@ export const IVA_SOBRE_OPCIONES = [
 /**
  * ─── Reglas de redondeo (no mezclar) ─────────────────────────────────────────
  *
- * 1) Porcentajes A / Í / U / IVA y Total A+Í+U:
- *    Son valores porcentuales. Se muestran y se suman con todos los decimales
- *    resultantes. NUNCA usar fmtMoney ni Math.round a enteros.
+ * 1) Porcentajes A / Í / U / IVA y Total efectivo:
+ *    Se muestran con todos los decimales. Total = A+Í+(U+U×IVA) si IVA sobre
+ *    Utilidad; solo IVA si IVA Pleno; A+Í+U si AIU sin IVA.
+ *    NUNCA usar fmtMoney ni Math.round a enteros.
  *
  * 2) Montos COP (Costo Directo, Valor después de AIU/IVA):
  *    Se redondean a 0 decimales (enteros). Usar computeValorDespuesAiuIva + fmtMoney.
@@ -126,30 +127,71 @@ export function fmtPctDesdeDecimal(raw) {
 }
 
 /**
- * Suma exacta A+Í+U en puntos % (fracción decimal × 100).
- * No redondea: conserva los decimales resultantes de la suma.
+ * Total porcentual efectivo del impuesto (UI), sin redondear.
+ *
+ * - IVA sobre Utilidad: A + Í + (U + U×IVA)
+ *   ej. 5 + 2 + (5 + 5×0.19) = 12.95
+ * - IVA Pleno: solo IVA
+ * - AIU sin IVA: A + Í + U
+ *
+ * @param {object} form — fracciones decimales del formulario
+ * @returns {number|null} puntos %
  */
 export function sumatoriaAiuPuntosPct(form) {
-  const keys = ['administracion', 'imprevistos', 'utilidad']
-  let sumFrac = 0
-  let any = false
-  for (const k of keys) {
-    const raw = form?.[k]
-    if (raw === '' || raw == null) continue
+  const frac = (raw) => {
+    if (raw === '' || raw == null) return null
     const n = Number(String(raw).replace(',', '.'))
-    if (!Number.isFinite(n) || n < 0) continue
-    any = true
-    sumFrac += n
+    if (!Number.isFinite(n) || n < 0) return null
+    return n
   }
-  if (!any) return null
-  return Number((sumFrac * 100).toFixed(10))
+  const a = frac(form?.administracion)
+  const i = frac(form?.imprevistos)
+  const u = frac(form?.utilidad)
+  const iva = frac(form?.iva)
+  const tipo = inferirTipoImpuesto(form, { valoresEnDecimal: true })
+
+  if (tipo === TIPO_IMPUESTO.IVA_PLENO) {
+    if (iva == null) return null
+    return Number((iva * 100).toFixed(10))
+  }
+  if (tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD) {
+    const af = a ?? 0
+    const iF = i ?? 0
+    const uF = u ?? 0
+    const ivaF = iva ?? 0
+    // A + I + (U + U×IVA) en fracción → puntos %
+    const totalFrac = af + iF + (uF + uF * ivaF)
+    return Number((totalFrac * 100).toFixed(10))
+  }
+  if (tipo === TIPO_IMPUESTO.AIU_SIN_IVA) {
+    const af = a ?? 0
+    const iF = i ?? 0
+    const uF = u ?? 0
+    return Number(((af + iF + uF) * 100).toFixed(10))
+  }
+  return null
 }
 
-/** Total A+Í+U para UI — porcentual exacto, nunca fmtMoney. */
+/** Total % efectivo para UI — exacto, nunca fmtMoney. */
 export function fmtSumatoriaAiu(form) {
   const s = sumatoriaAiuPuntosPct(form)
   if (s == null) return '—'
   return `${formatPuntosPctExacto(s)}%`
+}
+
+/** Tooltip corto de la fórmula del total según tipo. */
+export function tooltipTotalPorcentaje(form) {
+  const tipo = inferirTipoImpuesto(form, { valoresEnDecimal: true })
+  if (tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD) {
+    return 'A + Í + (U + U×IVA) — sin redondear'
+  }
+  if (tipo === TIPO_IMPUESTO.IVA_PLENO) {
+    return 'IVA pleno — sin redondear'
+  }
+  if (tipo === TIPO_IMPUESTO.AIU_SIN_IVA) {
+    return 'A + Í + U — sin redondear'
+  }
+  return 'Total porcentual efectivo'
 }
 
 /**
