@@ -1,0 +1,139 @@
+# Lista y elimina entornos de staging huérfanos de Azure Static Web Apps.
+# Mantiene production. Úsalo cuando los deploys de PR fallen con:
+#   "This Static Web App already has the maximum number of staging environments"
+#
+# Secrets: AZURE_CREDENTIALS (mismo JSON de service principal que deploy-backend.yml)
+#
+# Trigger: workflow_dispatch (manual).
+
+name: Cleanup SWA staging environments
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Si es true, solo lista entornos sin borrar'
+        required: false
+        type: boolean
+        default: false
+      keep_environment_names:
+        description: 'Nombres extra a conservar (comma-separated), además de default/production'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup-swa-staging
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: List and delete staging environments
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      SWA_NAME: happy-grass-0aea5f31e
+      SWA_RG: andres_jaimes82_rg_5760
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: List Static Web App environments
+        id: list
+        run: |
+          set -euo pipefail
+          echo "## Entornos actuales de \`$SWA_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          az staticwebapp environment list \
+            --name "$SWA_NAME" \
+            --resource-group "$SWA_RG" \
+            -o json | tee /tmp/swa-envs.json | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete non-production staging environments
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          KEEP_EXTRA: ${{ inputs.keep_environment_names }}
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          import json, os, subprocess, sys
+
+          dry = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+          keep_extra = {
+              x.strip().lower()
+              for x in os.environ.get("KEEP_EXTRA", "").split(",")
+              if x.strip()
+          }
+          # Azure usa "default" para production en builds de SWA
+          keep = {"default", "production"} | keep_extra
+
+          with open("/tmp/swa-envs.json", encoding="utf-8") as f:
+              envs = json.load(f)
+
+          if not isinstance(envs, list):
+              print("Unexpected list payload:", type(envs), envs)
+              sys.exit(1)
+
+          print(f"Found {len(envs)} environment(s). Keep set: {sorted(keep)}")
+          deleted = []
+          kept = []
+          for env in envs:
+              name = (
+                  env.get("name")
+                  or env.get("buildId")
+                  or env.get("environmentName")
+                  or ""
+              )
+              hostname = env.get("hostname") or env.get("defaultHostname") or ""
+              status = env.get("status") or env.get("buildStatus") or ""
+              key = str(name).strip().lower()
+              print(f"- name={name!r} hostname={hostname!r} status={status!r}")
+              if key in keep:
+                  kept.append(name)
+                  print(f"  KEEP {name}")
+                  continue
+              if dry:
+                  print(f"  DRY-RUN would delete {name}")
+                  deleted.append(name)
+                  continue
+              cmd = [
+                  "az", "staticwebapp", "environment", "delete",
+                  "--name", os.environ["SWA_NAME"],
+                  "--resource-group", os.environ["SWA_RG"],
+                  "--environment-name", str(name),
+                  "--yes",
+              ]
+              print(f"  DELETE {name} ...")
+              subprocess.check_call(cmd)
+              deleted.append(name)
+
+          summary = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary, "a", encoding="utf-8") as s:
+              s.write("\n## Resultado\n")
+              s.write(f"- Dry run: `{dry}`\n")
+              s.write(f"- Conservados: {kept or ['(ninguno aparte de filtro)']}\n")
+              s.write(f"- Eliminados / a eliminar: {deleted or ['(ninguno)']}\n")
+
+          print("Kept:", kept)
+          print("Deleted:", deleted)
+          PY
+
+      - name: Re-list environments after cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "## Entornos tras la operación" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          az staticwebapp environment list \
+            --name "$SWA_NAME" \
+            --resource-group "$SWA_RG" \
+            -o json | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
