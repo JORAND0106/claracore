@@ -184,6 +184,7 @@ import { crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import ModuloMapaNavegacion from './modules/ayuda/ModuloMapaNavegacion'
+import MapaNavegacionHeaderButton from './modules/ayuda/MapaNavegacionHeaderButton'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
 import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
 import { usuarioPuedeReportarErrores } from './config/reporteErroresHelpers'
@@ -18840,7 +18841,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           </div>
         ) : (
         <div className="cc-header-actions-desktop" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
-          <AVITriggerButton t={t} />
+          <div className="cc-header-ayuda-cluster" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <MapaNavegacionHeaderButton
+              t={t}
+              active={moduloActivo === 'mapa_navegacion'}
+              onClick={() => setModuloActivo('mapa_navegacion')}
+            />
+            <AVITriggerButton t={t} />
+          </div>
           <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} />
           <div style={{ display:'flex', gap:'2px', alignItems:'center', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 6px' }}>
             {[['pequena','A',11],['normal','A',14],['grande','A',17]].map(([key, lbl, sz]) => (
@@ -19071,7 +19079,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <MapaNavegacionHeaderButton
+                    t={t}
+                    active={moduloActivo === 'mapa_navegacion'}
+                    onClick={() => {
+                      setModuloActivo('mapa_navegacion')
+                      setMobileNavOpen(false)
+                    }}
+                  />
                   <AVITriggerButton t={t} />
                 </div>
                 <button
@@ -19223,7 +19239,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           {/* Items del menú */}
           {[
             ['inicio',       '🏠', 'Inicio',         true],
-            ['mapa_navegacion', '🧭', 'Mapa',        true],
             ['dashboard',    '📊', 'Dashboard',      !esContador && tienePermisoDashboard],
             ['presupuesto',  '📋', 'Presupuesto',    !esContador && tienePermisoPresupuesto],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    !esContador && tienePermisoSicoeObra],
@@ -19278,7 +19293,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           }}>
             {[
               ['inicio', '🏠', 'Inicio', true],
-              ['mapa_navegacion', '🧭', 'Mapa', true],
               ['dashboard', '📊', 'Dashboard', !esContador && tienePermisoDashboard],
               ['presupuesto', '📋', 'Presupuesto', !esContador && tienePermisoPresupuesto],
               ['sicoe_obra', '🏗️', 'SICOE', !esContador && tienePermisoSicoeObra],
