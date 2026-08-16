@@ -2147,6 +2147,16 @@ select.cc-dashboard-acta-select--light option {
    Almacén de Obra — responsive (móvil / tablet compacto)
    ═══════════════════════════════════════════════════════════ */
 
+.cc-almacen-root {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.cc-catalogo-toolbar-icon svg {
+  display: block;
+}
+
 .cc-almacen-table-scroll {
   width: 100%;
   max-width: 100%;
