@@ -4,7 +4,7 @@
 #
 # Secrets: AZURE_CREDENTIALS (mismo JSON de service principal que deploy-backend.yml)
 #
-# Trigger: workflow_dispatch (manual).
+# Trigger: workflow_dispatch, o push de este archivo a main.
 
 name: Cleanup SWA staging environments
 
@@ -44,18 +44,95 @@ jobs:
         shell: bash
     env:
       SWA_NAME: happy-grass-0aea5f31e
-      SWA_RG: andres_jaimes82_rg_5760
     steps:
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Resolve Static Web App resource group
+        id: resolve
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          import json, os, subprocess, sys
+
+          def run(cmd):
+              print("+", " ".join(cmd), flush=True)
+              return subprocess.check_output(cmd, text=True)
+
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
+          summary.write("## Suscripciones visibles\n```\n")
+          try:
+              summary.write(run(["az", "account", "list", "-o", "table"]))
+          except Exception as e:
+              summary.write(f"(error listing accounts: {e})\n")
+          summary.write("```\n")
+
+          subs = json.loads(run(["az", "account", "list", "--query", "[].id", "-o", "json"]))
+          apps = []
+          for sub in subs:
+              try:
+                  run(["az", "account", "set", "--subscription", sub])
+                  partial = json.loads(run(["az", "staticwebapp", "list", "-o", "json"]))
+                  if isinstance(partial, list):
+                      apps.extend(partial)
+              except subprocess.CalledProcessError as e:
+                  print(f"skip sub {sub}: {e}", flush=True)
+
+          with open("/tmp/swa-list.json", "w", encoding="utf-8") as f:
+              json.dump(apps, f, indent=2)
+
+          summary.write("\n## Static Web Apps encontradas\n```json\n")
+          summary.write(json.dumps(apps, indent=2))
+          summary.write("\n```\n")
+
+          target = os.environ["SWA_NAME"].lower()
+          matches = [
+              a for a in apps
+              if (a.get("name") or "").lower() == target
+              or target in (a.get("name") or "").lower()
+          ]
+          if not matches:
+              matches = [
+                  a for a in apps
+                  if "happy-grass-0aea5f31e" in (a.get("defaultHostname") or "").lower()
+                  or "happy-grass" in (a.get("defaultHostname") or "").lower()
+              ]
+
+          if not matches:
+              print("No Static Web App matched. Available:")
+              for a in apps:
+                  print(
+                      f"  - {a.get('name')} rg={a.get('resourceGroup')} "
+                      f"host={a.get('defaultHostname')} id={a.get('id')}"
+                  )
+              summary.close()
+              sys.exit(1)
+
+          app = matches[0]
+          rg = app.get("resourceGroup")
+          name = app.get("name")
+          host = app.get("defaultHostname")
+          rid = app.get("id") or ""
+          parts = rid.split("/")
+          if "subscriptions" in parts:
+              sub = parts[parts.index("subscriptions") + 1]
+              run(["az", "account", "set", "--subscription", sub])
+
+          print(f"Resolved SWA name={name} rg={rg} host={host}", flush=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as envf:
+              envf.write(f"SWA_NAME={name}\n")
+              envf.write(f"SWA_RG={rg}\n")
+          summary.write(f"\nResolved: **{name}** in `{rg}` (`{host}`)\n")
+          summary.close()
+          PY
+
       - name: List Static Web App environments
         id: list
         run: |
           set -euo pipefail
-          echo "## Entornos actuales de \`$SWA_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Entornos actuales de \`$SWA_NAME\` (rg=\`$SWA_RG\`)" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           az staticwebapp environment list \
             --name "$SWA_NAME" \
@@ -133,9 +210,13 @@ jobs:
           PY
 
       - name: Re-list environments after cleanup
-        if: always()
+        if: always() && env.SWA_RG != ''
         run: |
           set -euo pipefail
+          if [ -z "${SWA_RG:-}" ]; then
+            echo "SWA_RG not set; skip re-list"
+            exit 0
+          fi
           echo "## Entornos tras la operación" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           az staticwebapp environment list \
