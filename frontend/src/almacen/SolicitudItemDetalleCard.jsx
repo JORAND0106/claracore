@@ -40,7 +40,10 @@ export default function SolicitudItemDetalleCard({
   const pkLabel = item.pk_label || item.pk_id || ''
   const absResumen = fmtAbscisasLinea(item)
   const observacion = (item.observacion_residente || '').trim()
-  const material = item.insumo?.label || item.material_descripcion || '—'
+  const textoLibre = (item.descripcion_solicitada || '').trim()
+  const materialCatalogo = item.insumo?.label || (item.insumo_id ? item.material_descripcion : '') || ''
+  const materialHeader = materialCatalogo || textoLibre || item.material_descripcion || '—'
+  const unidadInfo = item.unidad || ctx?.unidad || ''
 
   const toggle = () => {
     if (accordion) setExpanded((v) => !v)
@@ -60,8 +63,17 @@ export default function SolicitudItemDetalleCard({
         {formatSolicitudLinea(consecutivo, numeroLinea)}
       </div>
       <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
-        {item.presupuesto_capitulo || item.capitulo} · {item.presupuesto_item || item.item} — {material}
+        {item.presupuesto_capitulo || item.capitulo} · {item.presupuesto_item || item.item}
+        {unidadInfo ? ` · Und: ${unidadInfo}` : ''}
       </div>
+      <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)', marginTop: 2 }}>
+        {materialHeader}
+      </div>
+      {textoLibre && materialCatalogo && textoLibre !== materialCatalogo && (
+        <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2, fontStyle: 'italic' }}>
+          Solicitado: {textoLibre}
+        </div>
+      )}
       <div style={{ fontSize: resaltarCantidad ? 'var(--cc-sm)' : 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
         Cantidad:{' '}
         <span style={resaltarCantidad ? {
@@ -71,7 +83,7 @@ export default function SolicitudItemDetalleCard({
           letterSpacing: '0.01em',
         } : undefined}
         >
-          {fmtCant(item.cantidad)} {item.unidad || ctx?.unidad || ''}
+          {fmtCant(item.cantidad)} {unidadInfo}
         </span>
         {item.es_recurrente ? ' · Compra recurrente' : ''}
         {accordion && !expanded && absResumen !== '—' && (
@@ -125,6 +137,15 @@ export default function SolicitudItemDetalleCard({
                 💬 Observación del solicitante
               </div>
               <div style={{ fontSize: 'var(--cc-sm)', whiteSpace: 'pre-wrap' }}>{observacion}</div>
+            </div>
+          )}
+
+          {textoLibre && (
+            <div>
+              <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.text, marginBottom: 2 }}>
+                📝 Descripción solicitada
+              </div>
+              <div style={{ fontSize: 'var(--cc-sm)', whiteSpace: 'pre-wrap' }}>{textoLibre}</div>
             </div>
           )}
 

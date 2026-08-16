@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
+import InsumoSearchTable from './InsumoSearchTable'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
@@ -12,9 +13,11 @@ import {
   labelPestañaInsumo,
   solicitudPuedeValidar,
   solicitudTieneOrdenCompra,
+  textoLibreSolicitudItem,
 } from './solicitudDetalleHelpers'
 import {
   ESTADO_SOLICITUD_LABEL,
+  AlmacenFieldLabel,
   almacenFormModalDialogStyle,
   fmtCant,
   useAlmacenApi,
@@ -62,6 +65,13 @@ export default function SolicitudDetalleModal({
   const [loading, setLoading] = useState(true)
   const [tituloDraft, setTituloDraft] = useState('')
   const [guardandoTitulo, setGuardandoTitulo] = useState(false)
+  const [mapDraft, setMapDraft] = useState({
+    insumo: null,
+    cantidad: '',
+    valor_compra_unitario: '',
+    vlr_unitario_cobro: '',
+  })
+  const [mapSaving, setMapSaving] = useState(false)
 
   const theme = t || {
     primary: ui.accent,
@@ -111,6 +121,39 @@ export default function SolicitudDetalleModal({
     })),
   ], [items, sol])
 
+  const activeItem = useMemo(() => {
+    if (tab === 'portada') return null
+    const tabIdx = tabs.findIndex((tb) => tb.key === tab)
+    if (tabIdx <= 0) return null
+    return items[tabIdx - 1] || null
+  }, [tab, tabs, items])
+
+  useEffect(() => {
+    if (!activeItem) {
+      setMapDraft({ insumo: null, cantidad: '', valor_compra_unitario: '', vlr_unitario_cobro: '' })
+      return
+    }
+    setMapDraft({
+      insumo: activeItem.insumo_id
+        ? {
+          insumo_id: activeItem.insumo_id,
+          listado_precio_id: activeItem.listado_precio_id,
+          label: activeItem.material_descripcion,
+          unidad: activeItem.unidad,
+          valor_compra_referencia: activeItem.valor_compra_unitario,
+          tiene_precio_compra: Number(activeItem.valor_compra_unitario) > 0,
+        }
+        : null,
+      cantidad: activeItem.cantidad != null ? String(activeItem.cantidad) : '',
+      valor_compra_unitario: activeItem.valor_compra_unitario != null && activeItem.valor_compra_unitario !== ''
+        ? String(activeItem.valor_compra_unitario)
+        : '',
+      vlr_unitario_cobro: activeItem.vlr_unitario_cobro != null && activeItem.vlr_unitario_cobro !== ''
+        ? String(activeItem.vlr_unitario_cobro)
+        : '',
+    })
+  }, [activeItem?.id, activeItem?.insumo_id, activeItem?.cantidad, activeItem?.valor_compra_unitario, activeItem?.vlr_unitario_cobro, activeItem?.material_descripcion])
+
   const resumenValidacion = useMemo(() => {
     const counts = { pendiente: 0, aprobado: 0, rechazado: 0 }
     items.forEach((it) => {
@@ -119,6 +162,44 @@ export default function SolicitudDetalleModal({
     })
     return counts
   }, [items, sol])
+
+  const guardarMapeoItem = async (itemId) => {
+    if (!sol || !itemId) return null
+    if (!mapDraft.insumo?.insumo_id) {
+      setError('Seleccione el insumo del catálogo antes de continuar.')
+      return null
+    }
+    const cant = Number(mapDraft.cantidad)
+    if (!(cant > 0)) {
+      setError('La cantidad debe ser mayor a cero.')
+      return null
+    }
+    const costo = Number(mapDraft.valor_compra_unitario)
+    if (!(costo > 0)) {
+      setError('Defina el costo de compra unitario.')
+      return null
+    }
+    setMapSaving(true)
+    setError('')
+    try {
+      const body = {
+        insumo_id: Number(mapDraft.insumo.insumo_id),
+        cantidad: cant,
+        valor_compra_unitario: costo,
+      }
+      if (mapDraft.vlr_unitario_cobro !== '') {
+        body.vlr_unitario_cobro = Number(mapDraft.vlr_unitario_cobro)
+      }
+      const r = await api.mapearItemSolicitud(sol.id, itemId, body)
+      setSol(r)
+      return r
+    } catch (e) {
+      setError(e.message)
+      return null
+    } finally {
+      setMapSaving(false)
+    }
+  }
 
   const ejecutarAprobar = async (aprobarTodosPendientes = true) => {
     if (!sol) return
@@ -165,6 +246,13 @@ export default function SolicitudDetalleModal({
     setBusy(true)
     setError('')
     try {
+      if (accion === 'aprobar') {
+        const mapped = await guardarMapeoItem(itemId)
+        if (!mapped) {
+          setBusy(false)
+          return
+        }
+      }
       const r = await api.validarItemSolicitud(sol.id, itemId, {
         accion,
         motivo: accion === 'rechazar' ? motivoItem : undefined,
@@ -275,14 +363,14 @@ export default function SolicitudDetalleModal({
       )}
 
       <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 6 }}>
-        Insumos solicitados ({items.length})
+        Materiales solicitados ({items.length})
       </div>
       <div style={{ overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
           <thead>
             <tr>
               <th style={{ ...ui.th, textAlign: 'left' }}>#</th>
-              <th style={{ ...ui.th, textAlign: 'left' }}>Insumo</th>
+              <th style={{ ...ui.th, textAlign: 'left' }}>Descripción / Insumo</th>
               <th style={{ ...ui.th, textAlign: 'right' }}>Cantidad</th>
               {puedeValidar && <th style={{ ...ui.th, textAlign: 'left' }}>Validación</th>}
             </tr>
@@ -290,6 +378,9 @@ export default function SolicitudDetalleModal({
           <tbody>
             {items.map((it, idx) => {
               const ev = estadoValidacionItem(it, sol) || 'pendiente'
+              const label = it.insumo_id
+                ? (it.material_descripcion || textoLibreSolicitudItem(it) || '—')
+                : (textoLibreSolicitudItem(it) || it.material_descripcion || '—')
               return (
                 <tr
                   key={it.id ?? idx}
@@ -297,7 +388,14 @@ export default function SolicitudDetalleModal({
                   onClick={() => setTab(`item-${it.id ?? idx}`)}
                 >
                   <td style={ui.td}>{it.numero_linea ?? idx + 1}</td>
-                  <td style={ui.td}>{it.material_descripcion}</td>
+                  <td style={ui.td}>
+                    {label}
+                    {!it.insumo_id && puedeValidar && (
+                      <div style={{ fontSize: 'var(--cc-xs)', color: '#d97706', marginTop: 2 }}>
+                        Pendiente de mapear insumo
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...ui.td, textAlign: 'right' }}>
                     {fmtCant(it.cantidad)} {it.unidad || ''}
                   </td>
@@ -316,7 +414,7 @@ export default function SolicitudDetalleModal({
       <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
         {editable && (
           <button type="button" style={ui.btnPrimary} disabled={busy} onClick={() => onEdit?.(sol)}>
-            ✏️ Editar / agregar insumos
+            ✏️ Editar / agregar materiales
           </button>
         )}
         {puedeValidar && (
@@ -361,13 +459,6 @@ export default function SolicitudDetalleModal({
       )}
     </div>
   )
-
-  const activeItem = useMemo(() => {
-    if (tab === 'portada') return null
-    const tabIdx = tabs.findIndex((tb) => tb.key === tab)
-    if (tabIdx <= 0) return null
-    return items[tabIdx - 1] || null
-  }, [tab, tabs, items])
 
   return (
     <div
@@ -486,7 +577,10 @@ export default function SolicitudDetalleModal({
                   ...activeItem,
                   presupuesto_capitulo: activeItem.capitulo,
                   presupuesto_item: activeItem.item,
-                  insumo: { label: activeItem.material_descripcion },
+                  descripcion_solicitada: activeItem.descripcion_solicitada,
+                  insumo: activeItem.insumo_id
+                    ? { label: activeItem.material_descripcion, insumo_id: activeItem.insumo_id }
+                    : null,
                   numero_oc: sol?.orden_compra?.numero_oc,
                   orden_compra: sol?.orden_compra,
                   preview: {
@@ -509,9 +603,93 @@ export default function SolicitudDetalleModal({
 
               {itemPuedeValidar(activeItem, sol, permisos) && (
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${ui.textMuted}33` }}>
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
-                    Validación de este ítem
+                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 10 }}>
+                    Revisión Contratista Gerencial
                   </div>
+
+                  <div style={{
+                    marginBottom: 10,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: `${ui.accentSoft}`,
+                    border: `1px solid ${ui.textMuted}22`,
+                  }}
+                  >
+                    <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, marginBottom: 4, color: ui.textMuted }}>
+                      Descripción del Contratista (solo lectura)
+                    </div>
+                    <div style={{ fontSize: 'var(--cc-sm)', whiteSpace: 'pre-wrap' }}>
+                      {textoLibreSolicitudItem(activeItem) || '—'}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                    <InsumoSearchTable
+                      value={mapDraft.insumo}
+                      onChange={(ins) => setMapDraft((d) => ({
+                        ...d,
+                        insumo: ins,
+                        valor_compra_unitario: ins?.tiene_precio_compra
+                          ? String(ins.valor_compra_referencia ?? '')
+                          : d.valor_compra_unitario,
+                      }))}
+                      disabled={busy || mapSaving}
+                    />
+
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                    >
+                      <div>
+                        <AlmacenFieldLabel icon="🔢" label="Cantidad" compact />
+                        <input
+                          style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={mapDraft.cantidad}
+                          disabled={busy || mapSaving}
+                          onChange={(e) => setMapDraft((d) => ({ ...d, cantidad: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <AlmacenFieldLabel icon="💵" label="Costo de compra" compact ayuda="Valor unitario de adquisición." />
+                        <input
+                          style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={mapDraft.valor_compra_unitario}
+                          disabled={busy || mapSaving}
+                          onChange={(e) => setMapDraft((d) => ({ ...d, valor_compra_unitario: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <AlmacenFieldLabel icon="💰" label="Valor de cobro" compact ayuda="Valor unitario a cobrar." />
+                        <input
+                          style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={mapDraft.vlr_unitario_cobro}
+                          disabled={busy || mapSaving}
+                          onChange={(e) => setMapDraft((d) => ({ ...d, vlr_unitario_cobro: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      style={{ ...ui.btnSecondary, alignSelf: 'flex-start', padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
+                      disabled={busy || mapSaving}
+                      onClick={() => { void guardarMapeoItem(activeItem.id) }}
+                    >
+                      {mapSaving ? 'Guardando…' : 'Guardar mapeo'}
+                    </button>
+                  </div>
+
                   <div style={{
                     fontSize: 'var(--cc-sm)',
                     marginBottom: 8,
@@ -525,14 +703,14 @@ export default function SolicitudDetalleModal({
                     style={{ ...ui.input, marginBottom: 8 }}
                     placeholder="Motivo si rechaza este ítem…"
                     value={motivoItem}
-                    disabled={busy}
+                    disabled={busy || mapSaving}
                     onChange={(e) => setMotivoItem(e.target.value)}
                   />
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       style={btnSuccessStyle(ui.btnSecondary)}
-                      disabled={busy}
+                      disabled={busy || mapSaving}
                       onClick={() => validarItem(activeItem.id, 'aprobar')}
                     >
                       ✓ Aprobar ítem
@@ -540,7 +718,7 @@ export default function SolicitudDetalleModal({
                     <button
                       type="button"
                       style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}
-                      disabled={busy}
+                      disabled={busy || mapSaving}
                       onClick={() => validarItem(activeItem.id, 'rechazar')}
                     >
                       ✕ Rechazar ítem

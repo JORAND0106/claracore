@@ -33,13 +33,17 @@ export function mapSolicitudItemsFromServer(s) {
   return (s?.items || []).map((it, idx) => ({
     id: it.id,
     numero_linea: it.numero_linea ?? idx + 1,
-    insumo: {
-      insumo_id: it.insumo_id,
-      listado_precio_id: it.listado_precio_id,
-      label: it.material_descripcion,
-      valor_compra_referencia: it.valor_compra_unitario,
-      tiene_precio_compra: it.valor_compra_unitario != null && Number(it.valor_compra_unitario) > 0,
-    },
+    descripcion_solicitada: it.descripcion_solicitada || it.material_descripcion || '',
+    insumo: it.insumo_id
+      ? {
+        insumo_id: it.insumo_id,
+        listado_precio_id: it.listado_precio_id,
+        label: it.material_descripcion,
+        unidad: it.unidad,
+        valor_compra_referencia: it.valor_compra_unitario,
+        tiene_precio_compra: it.valor_compra_unitario != null && Number(it.valor_compra_unitario) > 0,
+      }
+      : null,
     presupuesto_capitulo: it.capitulo || '',
     presupuesto_item: it.item || '',
     presupuesto_id: it.presupuesto_id,
@@ -60,6 +64,9 @@ export function mapSolicitudItemsFromServer(s) {
       || (idx === 0 && s.observaciones ? s.observaciones : ''),
     cantidad: it.cantidad,
     valor_compra_unitario: it.valor_compra_unitario ?? '',
+    vlr_unitario_cobro: it.vlr_unitario_cobro ?? '',
+    unidad: it.unidad || '',
+    material_descripcion: it.material_descripcion || '',
     es_recurrente: it.es_recurrente,
     preview: {
       contexto_presupuesto: it.contexto_presupuesto,
@@ -79,8 +86,9 @@ export function validateSolicitudItems(items) {
     if (!it.presupuesto_capitulo || !it.presupuesto_item) {
       errors.push(`Línea ${n}: seleccione capítulo e ítem de cobro.`)
     }
-    if (!it.insumo?.insumo_id && !it.insumo?.listado_precio_id) {
-      errors.push(`Línea ${n}: seleccione un insumo del catálogo.`)
+    const desc = String(it.descripcion_solicitada || '').trim()
+    if (desc.length < 3) {
+      errors.push(`Línea ${n}: describa el material que necesita (mínimo 3 caracteres).`)
     }
     if (!it.pk_id) {
       errors.push(`Línea ${n}: seleccione la ubicación PK-ID en el mapa.`)
@@ -121,7 +129,7 @@ export function parseSolicitudApiError(err) {
   if (/APIError|PGRST|schema cache|column.*could not find/i.test(raw)) {
     return 'No se pudo guardar la solicitud por un error interno. Intente de nuevo; si persiste, contacte al administrador.'
   }
-  if (/complete todos los campos|seleccione|obligatorio|cantidad debe|grilla|varios registros|catálogo de insumos/i.test(raw)) {
+  if (/complete todos los campos|seleccione|obligatorio|cantidad debe|grilla|varios registros|catálogo de insumos|describa el material|insumo del catálogo|costo de compra/i.test(raw)) {
     return raw
   }
   if (/Token inválido|401|403|permiso/i.test(raw)) {

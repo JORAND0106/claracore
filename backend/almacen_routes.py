@@ -31,6 +31,7 @@ from almacen_insumos_service import (
 )
 from almacen_permissions import (
     puede_ver_valores_economicos_almacen,
+    require_contratista_gerencial_almacen,
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
@@ -75,6 +76,7 @@ from almacen_service import (
     list_solicitudes,
     count_solicitudes,
     list_usuarios_receptor_obra,
+    mapear_item_solicitud_gerencial,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
     rechazar_solicitud,
@@ -135,10 +137,20 @@ class SolicitudItemBody(BaseModel):
     abscisa_final: Optional[float] = None
     observacion_residente: Optional[str] = None
     material_descripcion: Optional[str] = None
+    descripcion_solicitada: Optional[str] = None
     unidad: Optional[str] = None
     cantidad: float = Field(..., gt=0)
     valor_compra_unitario: Optional[float] = None
+    vlr_unitario_cobro: Optional[float] = None
     es_recurrente: bool = False
+
+
+class MapearItemGerencialBody(BaseModel):
+    insumo_id: int = Field(..., gt=0)
+    cantidad: Optional[float] = Field(None, gt=0)
+    valor_compra_unitario: Optional[float] = Field(None, ge=0)
+    vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
+    es_recurrente: Optional[bool] = None
 
 
 class ImpuestoInsumoBody(BaseModel):
@@ -593,11 +605,36 @@ def route_aprobar_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "validar")
+    require_contratista_gerencial_almacen(current_user)
     try:
         result = aprobar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
         registrar_log(current_user, "VALIDAR", "ALMACEN", "solicitud", solicitud_id, {"accion": "aprobar"})
         return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/mapear")
+def route_mapear_item_gerencial(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    body: MapearItemGerencialBody,
+    current_user=Depends(get_current_user),
+):
+    """Contratista Gerencial: selecciona insumo, ajusta cantidad/costo/cobro."""
+    _check_contrato(current_user, contrato_id)
+    require_contratista_gerencial_almacen(current_user)
+    ver_eco = puede_ver_valores_economicos_almacen(current_user)
+    try:
+        mapear_item_solicitud_gerencial(
+            contrato_id,
+            solicitud_id,
+            item_id,
+            _uid(current_user),
+            body.model_dump(exclude_none=True),
+        )
+        return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_eco)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -611,7 +648,7 @@ def route_validar_item_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "validar")
+    require_contratista_gerencial_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
         validar_item_solicitud(
@@ -634,7 +671,7 @@ def route_aprobar_todos_items(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "validar")
+    require_contratista_gerencial_almacen(current_user)
     try:
         return aprobar_todos_items_solicitud(contrato_id, solicitud_id, _uid(current_user))
     except ValueError as exc:
@@ -649,7 +686,7 @@ def route_rechazar_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "validar")
+    require_contratista_gerencial_almacen(current_user)
     try:
         return rechazar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.motivo)
     except ValueError as exc:

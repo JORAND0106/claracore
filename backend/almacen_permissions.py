@@ -58,6 +58,33 @@ def puede_ver_valores_economicos_almacen(current_user) -> bool:
     return False
 
 
+def es_contratista_gerencial(current_user) -> bool:
+    """Rol Contratista Gerencial (o Desarrollador)."""
+    try:
+        from main import _es_desarrollador
+
+        if _es_desarrollador(current_user):
+            return True
+    except Exception:
+        pass
+    rol = _norm_rol(current_user)
+    if rol == "contratista gerencial":
+        return True
+    if "contrat" in rol and "gerencial" in rol and "intervent" not in rol:
+        return True
+    return False
+
+
+def require_contratista_gerencial_almacen(current_user) -> None:
+    """Gate duro para mapear insumos / aprobar solicitudes (flujo Gerencial)."""
+    require_permiso_almacen(current_user, "validar")
+    if not es_contratista_gerencial(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el rol Contratista Gerencial puede mapear insumos y aprobar solicitudes de materiales.",
+        )
+
+
 def _es_validador_almacen_por_cargo(current_user) -> bool:
     cargo = _norm(current_user.get("cargo_nombre") or "")
     return cargo in ("director de obra", "administrador")
