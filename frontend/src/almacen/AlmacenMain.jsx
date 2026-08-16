@@ -62,8 +62,8 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
     setRefreshSignal((s) => s + 1)
     if (permisos?.validar) {
       try {
-        const r = await api.listSolicitudes('enviada')
-        setPendientes(r.length)
+        const n = await api.countSolicitudes('enviada')
+        setPendientes(n)
       } catch { /* ignore */ }
     }
   }, [api, permisos?.validar])
@@ -80,7 +80,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
 
   useEffect(() => {
     if (!permisos?.validar) return
-    api.listSolicitudes('enviada').then((r) => setPendientes(r.length)).catch(() => {})
+    api.countSolicitudes('enviada').then(setPendientes).catch(() => {})
   }, [api, permisos?.validar, tab])
 
   const visibleTabs = useMemo(() => TABS.filter((tb) => {

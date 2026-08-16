@@ -29,10 +29,7 @@ export default function InsumoSearchTable({ value, onChange, disabled }) {
     if (value?.label) setQ(value.label)
   }, [value?.label])
 
-  useEffect(() => {
-    load()
-  }, [load])
-
+  // Cargar catálogo solo al abrir el buscador (evita round-trip al montar cada línea).
   useEffect(() => {
     if (!open) return
     const t = setTimeout(load, 200)

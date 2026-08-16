@@ -125,9 +125,19 @@ export function createAlmacenApi(contratoId, token) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
-    listSolicitudes: (estado) => {
-      const q = estado ? `?estado=${encodeURIComponent(estado)}` : ''
+    listSolicitudes: (estado, { resumen = true } = {}) => {
+      const params = new URLSearchParams()
+      if (estado) params.set('estado', estado)
+      params.set('resumen', resumen ? 'true' : 'false')
+      const q = `?${params.toString()}`
       return fetch(`${base}/solicitudes${q}`, { headers: headers(token) }).then(parseJsonList)
+    },
+
+    countSolicitudes: (estado) => {
+      const q = estado ? `?estado=${encodeURIComponent(estado)}` : ''
+      return fetch(`${base}/solicitudes-count${q}`, { headers: headers(token) })
+        .then(parseJson)
+        .then((r) => Number(r?.count) || 0)
     },
 
     getSolicitud: (id, { ligera = false } = {}) => {

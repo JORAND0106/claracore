@@ -85,18 +85,19 @@ export default function PresupuestoRegistroGrid({
   }
 
   const th = {
-    padding: '4px 6px',
-    textAlign: 'left',
-    fontWeight: 600,
+    ...ui.th,
+    padding: '5px 6px',
     fontSize: 10,
-    borderBottom: `1px solid ${ui.textMuted}33`,
-    whiteSpace: 'nowrap',
   }
   const td = {
-    padding: '5px 6px',
-    fontSize: 'var(--cc-xs)',
-    borderBottom: `1px solid ${ui.textMuted}18`,
-    verticalAlign: 'middle',
+    ...ui.td,
+    padding: '4px 6px',
+    fontSize: 12,
+  }
+  const tdNum = {
+    ...ui.tdNum,
+    padding: '4px 6px',
+    fontSize: 11,
   }
 
   return (
@@ -114,18 +115,18 @@ export default function PresupuestoRegistroGrid({
           {registros[0]?.unidad ? ` ${registros[0].unidad}` : ''}
         </div>
       )}
-      <div style={{ overflowX: 'auto', border: `1px solid ${ui.textMuted}28`, borderRadius: 6 }} className="cc-almacen-table-scroll">
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+      <div style={ui.sheetWrap} className="cc-almacen-table-scroll">
+        <table style={{ ...ui.sheetTable, minWidth: 520 }}>
           <thead>
-            <tr style={{ background: `${ui.accentSoft}88` }}>
-              <th style={th} />
+            <tr>
+              <th style={{ ...th, width: 28 }} />
               <th style={th}>Tramo</th>
               <th style={th}>Absc. ini.</th>
               <th style={th}>Absc. fin.</th>
               <th style={th}>Nodo</th>
-              <th style={th}>Ppto</th>
-              <th style={th}>Acum.</th>
-              <th style={th}>Saldo</th>
+              <th style={{ ...th, textAlign: 'right' }}>Ppto</th>
+              <th style={{ ...th, textAlign: 'right' }}>Acum.</th>
+              <th style={{ ...th, textAlign: 'right' }}>Saldo</th>
             </tr>
           </thead>
           <tbody>
@@ -155,12 +156,11 @@ export default function PresupuestoRegistroGrid({
                   <td style={td}>{r.abs_inicio || '—'}</td>
                   <td style={td}>{r.abs_final || '—'}</td>
                   <td style={td}>{nodo}</td>
-                  <td style={td}>{fmtCant(r.cant_total)} {r.unidad || ''}</td>
-                  <td style={td}>{fmtCant(r.cant_solicitada_acumulada)}</td>
+                  <td style={tdNum}>{fmtCant(r.cant_total)} {r.unidad || ''}</td>
+                  <td style={tdNum}>{fmtCant(r.cant_solicitada_acumulada)}</td>
                   <td style={{
-                    ...td,
+                    ...tdNum,
                     color: (r.saldo_disponible ?? 0) < 0 ? 'var(--cc-color-danger)' : 'var(--cc-color-positive)',
-                    fontWeight: 600,
                   }}
                   >
                     {fmtCant(r.saldo_disponible)}

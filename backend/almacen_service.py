@@ -620,12 +620,16 @@ def list_solicitudes(
     estado: Optional[str] = None,
     *,
     ver_economicos: bool = True,
+    resumen: bool = True,
 ) -> List[dict]:
+    """Lista solicitudes. Por defecto ``resumen=True`` (rápido para grilla)."""
     sb = _sb()
     q = sb.table("almacen_solicitud").select("*").eq("contrato_id", contrato_id)
     if estado:
         q = q.eq("estado", estado)
     rows = q.order("created_at", desc=True).execute().data or []
+    if resumen:
+        return _list_solicitudes_resumen(sb, rows, contrato_id)
     validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
     out = []
     for r in rows:
@@ -634,6 +638,96 @@ def list_solicitudes(
             validadores_pendientes=validadores_pendientes,
             ver_economicos=ver_economicos,
         ))
+    return out
+
+
+def count_solicitudes(contrato_id: int, estado: Optional[str] = None) -> int:
+    """Conteo barato (badge de pendientes) sin enriquecer filas."""
+    sb = _sb()
+    q = (
+        sb.table("almacen_solicitud")
+        .select("id", count="exact")
+        .eq("contrato_id", contrato_id)
+    )
+    if estado:
+        q = q.eq("estado", estado)
+    resp = q.limit(1).execute()
+    if resp.count is not None:
+        return int(resp.count)
+    return len(resp.data or [])
+
+
+def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[dict]:
+    """Enriquecimiento mínimo para la grilla: conteo de ítems, OC y nombres."""
+    if not rows:
+        return []
+    ids = [int(r["id"]) for r in rows if r.get("id")]
+    item_counts: Dict[int, int] = {i: 0 for i in ids}
+    if ids:
+        # Una sola consulta de ítems (solo ids) en lugar de enriquecer cada solicitud.
+        item_rows = (
+            sb.table("almacen_solicitud_item")
+            .select("id, solicitud_id")
+            .in_("solicitud_id", ids)
+            .execute()
+            .data
+            or []
+        )
+        for it in item_rows:
+            sid = int(it.get("solicitud_id") or 0)
+            if sid in item_counts:
+                item_counts[sid] += 1
+
+    oc_by_sol: Dict[int, dict] = {}
+    if ids:
+        oc_rows = (
+            sb.table("almacen_orden_compra")
+            .select("id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, solicitud_id")
+            .in_("solicitud_id", ids)
+            .execute()
+            .data
+            or []
+        )
+        for oc in oc_rows:
+            sid = int(oc.get("solicitud_id") or 0)
+            if sid and sid not in oc_by_sol:
+                oc = dict(oc)
+                oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
+                oc_by_sol[sid] = oc
+
+    user_ids = []
+    for r in rows:
+        if r.get("created_by"):
+            user_ids.append(int(r["created_by"]))
+        if r.get("validada_by"):
+            user_ids.append(int(r["validada_by"]))
+    names = _map_usuario_nombres(sb, user_ids)
+    validadores_pendientes = None
+    if any((r.get("estado") or "") == "enviada" for r in rows):
+        validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
+
+    out: List[dict] = []
+    for r in rows:
+        sol = dict(r)
+        sid = int(sol["id"])
+        sol["items_count"] = item_counts.get(sid, 0)
+        sol["items"] = []  # grilla usa items_count; detalle carga enrich completo
+        oc = oc_by_sol.get(sid)
+        if oc:
+            sol["orden_compra"] = oc
+            sol["tiene_orden_compra"] = True
+            if sol.get("estado") != "aprobada":
+                sol["estado"] = "aprobada"
+        else:
+            sol["orden_compra"] = None
+            sol["tiene_orden_compra"] = False
+        if sol.get("created_by"):
+            sol["solicitante_nombre"] = names.get(int(sol["created_by"]))
+        if sol.get("validada_by"):
+            sol["validador_nombre"] = names.get(int(sol["validada_by"]))
+        if sol.get("estado") == "enviada":
+            sol["validadores_pendientes"] = validadores_pendientes or []
+        out.append(sol)
     return out
 
 

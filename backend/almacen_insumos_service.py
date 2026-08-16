@@ -803,7 +803,7 @@ def _get_cotizaciones_minimas(contrato_id: int) -> int:
     return 3
 
 
-def _insumo_disponible_solicitud(row: dict, sb, min_cot: int) -> bool:
+def _insumo_disponible_solicitud(row: dict, sb, min_cot: int, soportes_count: Optional[int] = None) -> bool:
     """Insumo seleccionable en solicitudes: precio válido y cotizaciones si aplica."""
     if not _insumo_tiene_precio_compra({**row, "origen": "almacen_insumo"}):
         return False
@@ -813,15 +813,17 @@ def _insumo_disponible_solicitud(row: dict, sb, min_cot: int) -> bool:
     if not insumo_id:
         return False
     tiene_ganadora = bool(row.get("soporte_pdf_blob_path") or row.get("cotizacion_numero"))
-    soportes = (
-        sb.table("almacen_insumo_cotizacion_soporte")
-        .select("id")
-        .eq("insumo_id", insumo_id)
-        .execute()
-        .data
-        or []
-    )
-    total = (1 if tiene_ganadora else 0) + len(soportes)
+    if soportes_count is None:
+        soportes = (
+            sb.table("almacen_insumo_cotizacion_soporte")
+            .select("id")
+            .eq("insumo_id", insumo_id)
+            .execute()
+            .data
+            or []
+        )
+        soportes_count = len(soportes)
+    total = (1 if tiene_ganadora else 0) + int(soportes_count or 0)
     return total >= min_cot
 
 
@@ -843,7 +845,11 @@ def search_insumos_solo_catalogo(
     q_lower = q_raw.lower()
     query = (
         sb.table("almacen_insumo")
-        .select("*")
+        .select(
+            "id, codigo, descripcion, unidad, rendimiento, costo_base, valor_compra_referencia, "
+            "proveedor_id, activo, requiere_cotizacion, soporte_pdf_blob_path, cotizacion_numero, "
+            "tipo_impuesto, impuesto_porcentaje, impuestos, tributos"
+        )
         .eq("contrato_id", contrato_id)
         .eq("activo", True)
         .order("codigo")
@@ -864,22 +870,45 @@ def search_insumos_solo_catalogo(
         )
         prov_map = {int(p["id"]): p.get("razon_social") or "—" for p in provs}
 
+    if q_lower:
+        filtered = []
+        for r in rows:
+            pname = prov_map.get(int(r.get("proveedor_id") or 0), "—")
+            label = _insumo_label(r)
+            if (
+                q_lower in label.lower()
+                or q_lower in (r.get("codigo") or "").lower()
+                or q_lower in (r.get("descripcion") or "").lower()
+                or q_lower in pname.lower()
+            ):
+                filtered.append(r)
+        rows = filtered
+
+    # Batch de soportes de cotización (1 query) en lugar de 1 por insumo.
     min_cot = _get_cotizaciones_minimas(contrato_id)
+    soportes_by_insumo: Dict[int, int] = {}
+    cand_ids = [int(r["id"]) for r in rows if r.get("id") and r.get("requiere_cotizacion") is not False]
+    if cand_ids:
+        for i in range(0, len(cand_ids), 200):
+            chunk = cand_ids[i: i + 200]
+            sop_rows = (
+                sb.table("almacen_insumo_cotizacion_soporte")
+                .select("id, insumo_id")
+                .in_("insumo_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for s in sop_rows:
+                iid = int(s.get("insumo_id") or 0)
+                soportes_by_insumo[iid] = soportes_by_insumo.get(iid, 0) + 1
+
     out: List[dict] = []
     for row in rows:
-        if not _insumo_disponible_solicitud(row, sb, min_cot):
+        iid = int(row.get("id") or 0)
+        if not _insumo_disponible_solicitud(row, sb, min_cot, soportes_by_insumo.get(iid, 0)):
             continue
-        label = _insumo_label(row)
         pname = prov_map.get(int(row.get("proveedor_id") or 0), "—")
-        if q_lower:
-            hay = (
-                q_lower in label.lower()
-                or q_lower in (row.get("codigo") or "").lower()
-                or q_lower in (row.get("descripcion") or "").lower()
-                or q_lower in pname.lower()
-            )
-            if not hay:
-                continue
         out.append(_row_from_almacen_insumo(row, pname))
 
     total = len(out)
