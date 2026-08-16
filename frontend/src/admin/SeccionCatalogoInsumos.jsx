@@ -365,28 +365,56 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     color: t.text,
     border: `1px solid ${t.border}`,
   }
+  const grid = t.border
   const th = {
-    padding: '8px 6px',
+    padding: '7px 8px',
     textAlign: 'left',
-    borderBottom: `1px solid ${t.border}`,
-    fontSize: 'var(--cc-xs)',
-    color: t.primaryLight || t.primary,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
+    fontSize: '11px',
+    fontWeight: 800,
+    color: t.textMuted,
     textTransform: 'uppercase',
-    background: ui.dark ? 'rgba(0,180,198,0.08)' : t.inputBg,
+    letterSpacing: '0.05em',
+    whiteSpace: 'nowrap',
+    border: `1px solid ${grid}`,
+    background: t.headerBg || t.inputBg,
+    position: 'sticky',
+    top: 0,
+    zIndex: 2,
   }
   const td = {
-    padding: '7px 6px',
-    borderBottom: `1px solid ${t.border}44`,
-    fontSize: 'var(--cc-xs)',
+    padding: '5px 8px',
+    fontSize: '13px',
     color: t.text,
+    border: `1px solid ${grid}`,
+    verticalAlign: 'middle',
+    lineHeight: 1.25,
+    background: 'transparent',
   }
-  const tdCodigo = { ...td, color: t.primaryLight || t.primary, fontWeight: 600 }
+  const tdNum = {
+    ...td,
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+    fontFamily: 'ui-monospace, Consolas, monospace',
+    fontWeight: 700,
+    fontSize: 12,
+  }
+  const tdCodigo = { ...td, color: t.primaryLight || t.primary, fontWeight: 600, whiteSpace: 'nowrap' }
   const tdDesc = { ...td, color: t.text, fontWeight: 500 }
   const tdMuted = { ...td, color: t.textMuted }
-  const tdMoney = { ...td, color: 'var(--cc-color-positive)', fontWeight: 600 }
-  const tdTotal = { ...td, color: t.primary, fontWeight: 700 }
+  const tdMoney = { ...tdNum, color: 'var(--cc-color-positive)' }
+  const tdTotal = { ...tdNum, color: t.primary }
+  const sheetWrap = {
+    overflow: 'auto',
+    border: `1px solid ${grid}`,
+    borderRadius: 4,
+    background: t.bgCard,
+  }
+  const sheetTable = {
+    width: '100%',
+    borderCollapse: 'collapse',
+    tableLayout: 'fixed',
+    minWidth: 980,
+  }
   const modalPanelStyle = {
     background: t.bgCard,
     borderRadius: 12,
@@ -913,13 +941,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         <span style={{ fontSize: 'var(--cc-xs)', alignSelf: 'center', color: t.textMuted, fontWeight: 600 }}>{total} insumo(s)</span>
       </div>
 
-      <div style={{ overflow: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div style={sheetWrap} className="cc-almacen-table-scroll cc-catalogo-insumos-sheet">
+        <table style={sheetTable}>
           <thead>
             <tr>
-              {['Proveedor', 'Código', 'Descripción', 'Und', 'Rend.', 'Antes AIU/IVA', 'Tributos', 'Después AIU/IVA', ''].map((h) => (
-                <th key={h || 'acc'} style={th}>{h}</th>
-              ))}
+              <th style={th}>Proveedor</th>
+              <th style={{ ...th, width: 120 }}>Código</th>
+              <th style={th}>Descripción</th>
+              <th style={{ ...th, width: 64 }}>Und</th>
+              <th style={{ ...th, textAlign: 'right', width: 72 }}>Rend.</th>
+              <th style={{ ...th, textAlign: 'right', width: 120 }}>Antes AIU/IVA</th>
+              <th style={th}>Tributos</th>
+              <th style={{ ...th, textAlign: 'right', width: 130 }}>Después AIU/IVA</th>
+              <th style={{ ...th, width: 108 }} />
             </tr>
           </thead>
           <tbody>
@@ -928,14 +962,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             ) : rows.length === 0 ? (
               <tr><td colSpan={9} style={{ ...td, color: t.textMuted }}>Sin insumos en el catálogo.</td></tr>
             ) : rows.map((r) => (
-              <tr key={r.insumo_id || r.id}>
+              <tr
+                key={r.insumo_id || r.id}
+                onMouseEnter={(e) => { e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+              >
                 <td style={tdMuted}>{r.proveedor_nombre || '—'}</td>
                 <td style={tdCodigo}>{r.codigo}</td>
                 <td style={tdDesc}>{r.descripcion}</td>
-                <td style={tdMuted}>{r.unidad}</td>
-                <td style={tdMuted}>{r.rendimiento ?? '—'}</td>
+                <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{r.unidad}</td>
+                <td style={tdNum}>{r.rendimiento ?? '—'}</td>
                 <td style={tdMoney}>{fmtMoney(r.costo)}</td>
-                <td style={tdMuted}>{r.impuesto_etiqueta || '—'}</td>
+                <td style={{ ...tdMuted, fontSize: 12 }}>{r.impuesto_etiqueta || '—'}</td>
                 <td style={tdTotal}>{fmtMoney(r.costo_total)}</td>
                 <td style={td}>
                   <div style={{ display: 'inline-flex', gap: 4 }}>
@@ -981,13 +1019,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               {provTotal} proveedor(es)
             </span>
           </div>
-          <div style={{ overflow: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div style={{ ...sheetWrap, minWidth: 0 }}>
+            <table style={{ ...sheetTable, minWidth: 720 }}>
               <thead>
                 <tr>
-                  {['Razón social', 'NIT', 'Contacto', 'Correo', 'Teléfono', 'Insumos', ''].map((h) => (
-                    <th key={h || 'acc'} style={th}>{h}</th>
-                  ))}
+                  <th style={th}>Razón social</th>
+                  <th style={{ ...th, width: 110 }}>NIT</th>
+                  <th style={th}>Contacto</th>
+                  <th style={th}>Correo</th>
+                  <th style={{ ...th, width: 110 }}>Teléfono</th>
+                  <th style={{ ...th, textAlign: 'right', width: 80 }}>Insumos</th>
+                  <th style={{ ...th, width: 52 }} />
                 </tr>
               </thead>
               <tbody>
@@ -1002,7 +1044,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <td style={tdMuted}>{p.contacto_nombre || '—'}</td>
                     <td style={tdMuted}>{p.contacto_email || '—'}</td>
                     <td style={tdMuted}>{p.contacto_telefono || '—'}</td>
-                    <td style={tdTotal}>{p.insumos_activos ?? 0}</td>
+                    <td style={tdNum}>{p.insumos_activos ?? 0}</td>
                     <td style={td}>
                       {canEliminar && (
                         <IconActionBtn
