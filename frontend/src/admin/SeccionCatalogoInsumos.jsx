@@ -1488,15 +1488,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
                 <thead>
                   <tr>
-                    {['Fecha', 'Antes AIU/IVA', 'Después AIU/IVA', 'Motivo'].map((h) => <th key={h} style={th}>{h}</th>)}
+                    <th style={th}>Fecha</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Antes AIU/IVA</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Después AIU/IVA</th>
+                    <th style={th}>Motivo</th>
                   </tr>
                 </thead>
                 <tbody>
                   {historial.items.map((h) => (
                     <tr key={h.id}>
                       <td style={td}>{h.created_at ? String(h.created_at).slice(0, 10) : '—'}</td>
-                      <td style={td}>{fmtMoney(h.costo_base)}</td>
-                      <td style={td}>{fmtMoney(h.valor_compra_referencia)}</td>
+                      <td style={tdMoney}>{fmtMoney(h.costo_base)}</td>
+                      <td style={tdTotal}>{fmtMoney(h.valor_compra_referencia)}</td>
                       <td style={td}>{h.motivo || '—'}</td>
                     </tr>
                   ))}
