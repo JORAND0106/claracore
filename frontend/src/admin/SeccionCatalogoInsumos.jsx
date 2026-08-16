@@ -15,6 +15,7 @@ import {
   impuestoTieneDatos,
   labelTipoImpuesto,
   seedTributosDesdeLegado,
+  tooltipTotalPorcentaje,
   tributosPayloadDesdeForm,
 } from './catalogoInsumosTributos'
 import { buildContratoUiTheme } from '../theme/adminPanelTheme'
@@ -1157,7 +1158,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
                     <button
                       type="button"
-                      title="Captura unificada: Tipo impuesto | A | Í | U | IVA"
+                      title="A · Í · U · IVA"
                       onClick={() => {
                         setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
                         setModalImpuestoOpen(true)
@@ -1523,7 +1524,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
       <TributoModalShell
         open={modalImpuestoOpen}
-        title="Impuesto del insumo — A · Í · U · IVA"
+        title="Impuesto"
         t={t}
         onClose={() => setModalImpuestoOpen(false)}
         onSave={() => {
@@ -1531,12 +1532,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           setModalImpuestoOpen(false)
         }}
       >
-        <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-          Digite A, Í, U e IVA en decimal (ej. 0.05). La plataforma muestra el equivalente en % e infiere el tipo de impuesto.
-        </p>
         <div style={{
-          marginBottom: 12,
-          padding: '10px 12px',
+          marginBottom: 10,
+          padding: '8px 10px',
           borderRadius: 8,
           border: `1px solid ${draftTipoImpuesto ? t.primary : t.border}`,
           background: ui.cardSubtle,
@@ -1547,8 +1545,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           flexWrap: 'wrap',
         }}
         >
-          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
-            Tipo impuesto (inferido)
+          <span
+            style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}
+            title="Inferido: solo IVA → Pleno; A/Í/U + IVA → sobre Utilidad"
+          >
+            Tipo
           </span>
           <span style={{
             fontSize: 'var(--cc-md)',
@@ -1571,6 +1572,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   step="any"
                   inputMode="decimal"
                   placeholder="0.05"
+                  title="Decimal (0.05 = 5%)"
                   value={draftImpuesto[key] ?? ''}
                   onChange={(e) => setDraftImpuesto((d) => ({ ...d, [key]: e.target.value }))}
                 />
@@ -1583,7 +1585,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     color: t.primary,
                     fontVariantNumeric: 'tabular-nums',
                   }}
-                  title="Equivalente en porcentaje (sin redondear)"
+                  title="Equivalente %"
                   data-fmt="pct-exacto"
                 >
                   {fmtPctDesdeDecimal(draftImpuesto[key])}
@@ -1593,8 +1595,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           ))}
         </div>
         <div style={{
-          marginTop: 12,
-          padding: '10px 12px',
+          marginTop: 10,
+          padding: '8px 10px',
           borderRadius: 8,
           border: `1px solid ${t.border}`,
           background: ui.cardSubtle,
@@ -1605,8 +1607,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           flexWrap: 'wrap',
         }}
         >
-          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
-            Total A. + Í. + U. (porcentaje, sin redondear)
+          <span
+            style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}
+            title={tooltipTotalPorcentaje(draftImpuesto)}
+          >
+            Total
           </span>
           <span
             style={{
@@ -1615,16 +1620,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               color: t.primary,
               fontVariantNumeric: 'tabular-nums',
             }}
-            title="Suma porcentual exacta de A+Í+U — no es un valor monetario"
+            title={tooltipTotalPorcentaje(draftImpuesto)}
             data-fmt="pct-sumatoria-exacta"
-            aria-label={`Total A Í U ${fmtSumatoriaAiu(draftImpuesto)}`}
+            aria-label={`Total ${fmtSumatoriaAiu(draftImpuesto)}`}
           >
             {fmtSumatoriaAiu(draftImpuesto)}
           </span>
         </div>
         <div style={{
-          marginTop: 10,
-          padding: '10px 12px',
+          marginTop: 8,
+          padding: '8px 10px',
           borderRadius: 8,
           border: `1px solid ${t.border}`,
           background: ui.cardSubtle,
@@ -1635,8 +1640,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           flexWrap: 'wrap',
         }}
         >
-          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
-            Valor después de AIU o IVA (COP, entero)
+          <span
+            style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}
+            title="Pesos COP redondeados a entero"
+          >
+            Después
           </span>
           <span
             style={{
@@ -1645,15 +1653,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               color: t.primary,
               fontVariantNumeric: 'tabular-nums',
             }}
-            title="Monto en pesos — redondeado a 0 decimales"
+            title="Pesos COP redondeados a entero"
             data-fmt="cop-entero"
           >
             {fmtMoney(draftValorDespues)}
           </span>
         </div>
-        <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
-          Solo IVA → IVA Pleno. A/Í/U + IVA → IVA sobre Utilidad. El tipo no se elige manualmente.
-        </p>
       </TributoModalShell>
     </div>
   )
