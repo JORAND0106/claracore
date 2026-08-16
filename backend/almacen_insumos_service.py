@@ -80,12 +80,15 @@ _TIPO_IMPUESTO_LABEL = {
 
 def normalize_tributos(raw: Any) -> Dict[str, Any]:
     """
-    Impuesto unificado por insumo (captura). No redefine valor_compra_referencia.
+    Impuesto unificado por insumo (captura).
 
     Inferencia de tipo (no seleccionable por el usuario):
     - solo IVA → iva_pleno (sobre costo_base)
     - A/I/U + IVA → iva_sobre_utilidad (sobre utilidad)
     - solo A/I/U → aiu_sin_iva
+
+    El valor unitario después de AIU/IVA se calcula con
+    ``compute_valor_despues_aiu_iva`` (costo_base + estos componentes).
     """
     src = raw if isinstance(raw, dict) else {}
     aiu_in = src.get("aiu") if isinstance(src.get("aiu"), dict) else {}
@@ -171,6 +174,47 @@ def _tributos_etiqueta(tributos: Any) -> Optional[str]:
     if iva.get("porcentaje") is not None:
         bits.append(f"IVA {iva['porcentaje']:g}%")
     return " · ".join(bits) if bits else None
+
+
+def _pct_frac(puntos: Any) -> float:
+    """Puntos porcentuales (5 = 5%) → fracción (0.05)."""
+    n = _pct_or_none(puntos)
+    if n is None:
+        return 0.0
+    return n / 100.0
+
+
+def compute_valor_despues_aiu_iva(costo_base: float, tributos: Any = None) -> float:
+    """
+    Valor unitario después de aplicar A/Í/U e IVA según tipo inferido.
+
+    - IVA Pleno: base × (1 + IVA%)
+    - AIU sin IVA: base × (1 + A% + Í% + U%)
+    - IVA sobre Utilidad: base × (1 + A% + Í% + U%) + (base × U% × IVA%)
+    - Sin tributos: base
+    """
+    base = max(_to_float(costo_base), 0.0)
+    t = normalize_tributos(tributos)
+    tipo = t.get("tipo")
+    a = _pct_frac(t.get("administracion"))
+    i = _pct_frac(t.get("imprevistos"))
+    u = _pct_frac(t.get("utilidad"))
+    iva = _pct_frac((t.get("iva") or {}).get("porcentaje"))
+
+    if tipo == TIPO_IMPUESTO_IVA_PLENO:
+        return round(base * (1.0 + iva), 2)
+    if tipo == TIPO_IMPUESTO_AIU_SIN_IVA:
+        return round(base * (1.0 + a + i + u), 2)
+    if tipo == TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD:
+        aiu_total = base * (a + i + u)
+        iva_util = base * u * iva
+        return round(base + aiu_total + iva_util, 2)
+    return round(base, 2)
+
+
+def tributos_tienen_datos(tributos: Any) -> bool:
+    t = normalize_tributos(tributos)
+    return bool(t.get("tipo")) or _aiu_tiene_datos(t.get("aiu")) or _iva_tiene_datos(t.get("iva"))
 
 
 def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]] = None) -> float:
@@ -712,12 +756,16 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
     costo = _to_float(row.get("costo_base") if row.get("costo_base") is not None else row.get("valor_compra_referencia"))
     tipo = row.get("tipo_impuesto")
     pct = _to_float(row.get("impuesto_porcentaje"))
+    tributos = normalize_tributos(row.get("tributos"))
     tiene = _insumo_tiene_precio_compra({**row, "origen": "almacen_insumo"})
     total = None
     if tiene:
-        total = _to_float(row.get("valor_compra_referencia")) or compute_costo_total_insumo(
-            costo, tipo, pct, row.get("impuestos"),
-        )
+        if tributos_tienen_datos(tributos):
+            total = compute_valor_despues_aiu_iva(costo, tributos)
+        else:
+            total = _to_float(row.get("valor_compra_referencia")) or compute_costo_total_insumo(
+                costo, tipo, pct, row.get("impuestos"),
+            )
     return {
         **row,
         "insumo_id": row.get("id"),
@@ -725,11 +773,11 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
         "rendimiento": row.get("rendimiento"),
         "costo": costo if tiene else None,
         "tipo_impuesto": tipo,
-        "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct, row.get("tributos")) if tiene else "—",
+        "impuesto_etiqueta": _impuesto_etiqueta(tipo, pct, tributos) if tiene else "—",
         "costo_total": total,
         "valor_compra_referencia": total,
         "tiene_precio_compra": tiene,
-        "tributos": normalize_tributos(row.get("tributos")),
+        "tributos": tributos,
         "origen": "almacen_insumo",
         "label": _insumo_label(row),
     }

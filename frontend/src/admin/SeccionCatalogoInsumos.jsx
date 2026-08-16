@@ -6,6 +6,7 @@ import { permisosCatalogoInsumos } from './catalogoInsumosPermisos'
 import {
   EMPTY_IMPUESTO,
   IMPUESTO_CAMPOS_UI,
+  computeValorDespuesAiuIva,
   etiquetaTributos,
   formImpuestoDesdeTributos,
   fmtPctDesdeDecimal,
@@ -72,9 +73,9 @@ const MAIN_CATALOG_TABS = [
   { id: 'proveedores', label: 'Proveedores' },
 ]
 
-/** Vista previa de total: costo base (el desglose AIU/IVA se captura aparte). */
-function computeTotal(costo) {
-  return Math.round((Number(costo) || 0) * 100) / 100
+/** Vista previa: valor después de AIU/IVA (solo lectura). */
+function computeTotal(costo, impuestoForm) {
+  return computeValorDespuesAiuIva(costo, impuestoForm || EMPTY_IMPUESTO, { valoresEnDecimal: true })
 }
 
 function Field({ label, children, hint }) {
@@ -445,8 +446,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   }, [busy, closeModal, formHasChanges])
 
   const totalPreview = useMemo(
-    () => computeTotal(form.costo_base),
-    [form.costo_base],
+    () => computeTotal(form.costo_base, form.impuesto),
+    [form.costo_base, form.impuesto],
+  )
+
+  const draftValorDespues = useMemo(
+    () => computeTotal(form.costo_base, draftImpuesto),
+    [form.costo_base, draftImpuesto],
   )
 
   const tributosResumen = useMemo(
@@ -910,7 +916,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              {['Proveedor', 'Código', 'Descripción', 'Und', 'Rend.', 'Costo', 'Tributos', 'Total', ''].map((h) => (
+              {['Proveedor', 'Código', 'Descripción', 'Und', 'Rend.', 'Antes AIU/IVA', 'Tributos', 'Después AIU/IVA', ''].map((h) => (
                 <th key={h || 'acc'} style={th}>{h}</th>
               ))}
             </tr>
@@ -1124,11 +1130,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   <input style={inputStyle} value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} />
                 </Field>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 16px' }}>
-                  <Field label="Costo base *">
+                  <Field
+                    label="Valor antes de AIU o IVA *"
+                    hint="Costo base del insumo (sin A, Í, U ni IVA)."
+                  >
                     <input style={inputStyle} type="number" min="0" step="0.01" value={form.costo_base} onChange={(e) => setForm({ ...form, costo_base: e.target.value })} />
                   </Field>
-                  <Field label="Costo base (referencia)" hint="El desglose AIU/IVA se guarda aparte; aún no redefine el total de compra.">
-                    <input style={{ ...inputStyle, opacity: 0.85 }} readOnly value={fmtMoney(totalPreview)} />
+                  <Field
+                    label="Valor después de AIU o IVA"
+                    hint="Calculado automáticamente según A, Í, U e IVA (no editable)."
+                  >
+                    <input style={{ ...inputStyle, opacity: 0.9, fontWeight: 700 }} readOnly value={fmtMoney(totalPreview)} />
                   </Field>
                 </div>
                 <div style={{
@@ -1193,7 +1205,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <Field label="Cantidad negociada" hint="Volumen total pactado con el proveedor (ej. 1000 m³).">
                       <input style={inputStyle} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })} />
                     </Field>
-                    <Field label="Valor total negociado" hint="Se calcula automáticamente: cantidad negociada × costo total del insumo.">
+                    <Field label="Valor total negociado" hint="Se calcula automáticamente: cantidad negociada × valor después de AIU/IVA.">
                       <div style={{
                         ...inputStyle,
                         background: ui.cardSubtle,
@@ -1433,7 +1445,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
                 <thead>
                   <tr>
-                    {['Fecha', 'Costo base', 'Total', 'Motivo'].map((h) => <th key={h} style={th}>{h}</th>)}
+                    {['Fecha', 'Antes AIU/IVA', 'Después AIU/IVA', 'Motivo'].map((h) => <th key={h} style={th}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1603,6 +1615,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           }}
           >
             {fmtSumatoriaAiu(draftImpuesto)}
+          </span>
+        </div>
+        <div style={{
+          marginTop: 10,
+          padding: '10px 12px',
+          borderRadius: 8,
+          border: `1px solid ${t.border}`,
+          background: ui.cardSubtle,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+        >
+          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
+            Valor después de AIU o IVA
+          </span>
+          <span style={{
+            fontSize: 'var(--cc-md)',
+            fontWeight: 800,
+            color: t.primary,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+          >
+            {fmtMoney(draftValorDespues)}
           </span>
         </div>
         <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
