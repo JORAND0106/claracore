@@ -78,6 +78,37 @@ def get_blob_size(blob_path: str) -> int:
     return int(getattr(props, "size", 0) or 0)
 
 
+def iter_container_blob_entries(
+    container: str,
+    *,
+    name_starts_with: Optional[str] = None,
+):
+    """
+    Lista blobs de un contenedor sin descargar contenido.
+    Yields: (blob_path, size_bytes, content_type|None)
+    """
+    name = (container or "").strip()
+    if not name:
+        return
+    cc = get_blob_service_client().get_container_client(name)
+    kwargs: dict = {}
+    prefix = (name_starts_with or "").lstrip("/")
+    if prefix:
+        kwargs["name_starts_with"] = prefix
+    for blob in cc.list_blobs(**kwargs):
+        path = getattr(blob, "name", None) or ""
+        if not path:
+            continue
+        size = int(getattr(blob, "size", 0) or 0)
+        ct = None
+        try:
+            settings = getattr(blob, "content_settings", None)
+            ct = getattr(settings, "content_type", None) if settings else None
+        except Exception:
+            ct = None
+        yield path, size, ct
+
+
 def delete_blob(
     blob_path: str,
     *,

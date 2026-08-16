@@ -3,8 +3,10 @@ from storage_quota_service import (
     TIPO_DOCUMENTOS,
     TIPO_FOTOS,
     TIPO_OTROS,
+    aggregate_blob_usage,
     build_quota_detail,
     classify_storage_tipo,
+    contract_blob_prefixes,
     format_bytes,
     infer_contrato_id_from_path,
     resolve_limite_bytes,
@@ -77,3 +79,31 @@ def test_build_quota_detail_code():
     assert d["code"] == "storage_quota_exceeded"
     assert d["remaining_bytes"] == 0
     assert "límite" in d["message"].lower() or "limite" in d["message"].lower()
+
+
+def test_aggregate_blob_usage_por_contrato_y_tipo():
+    entries = [
+        ("12/fotos/foto_1.jpg", 1000, "image/jpeg"),
+        ("12/graficos/grafico_1.jpg", 500, "image/jpeg"),
+        ("contratos-documentos/12/firmados/v001.pdf", 2000, "application/pdf"),
+        ("almacen-soportes/9/oc/1/factura.pdf", 300, "application/pdf"),
+        ("perfiles/1.jpg", 9999, "image/jpeg"),  # global → omitido
+        ("12/fotos/vacio.jpg", 0, "image/jpeg"),  # tamaño 0 → omitido
+        ("algo/raro.bin", 50, "application/octet-stream"),  # sin contrato
+    ]
+    totals = aggregate_blob_usage(entries)
+    assert set(totals.keys()) == {12, 9}
+    assert totals[12]["bytes_fotos"] == 1500
+    assert totals[12]["bytes_documentos"] == 2000
+    assert totals[12]["bytes_otros"] == 0
+    assert totals[12]["bytes_total"] == 3500
+    assert totals[12]["blob_count"] == 3
+    assert totals[9]["bytes_documentos"] == 300
+    assert totals[9]["blob_count"] == 1
+
+
+def test_contract_blob_prefixes():
+    prefs = contract_blob_prefixes(42)
+    assert "42/" in prefs
+    assert "contratos-documentos/42/" in prefs
+    assert "almacen-soportes/42/" in prefs
