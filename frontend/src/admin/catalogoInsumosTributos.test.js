@@ -14,6 +14,7 @@ import {
   sumatoriaAiuPuntosPct,
   TIPO_IMPUESTO,
   tributosPayloadDesdeForm,
+  computeValorDespuesAiuIva,
 } from './catalogoInsumosTributos.js'
 
 describe('catalogoInsumosTributos — impuesto unificado', () => {
@@ -110,5 +111,42 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
     assert.equal(form.administracion, '0.05')
     assert.equal(form.imprevistos, '')
     assert.equal(form.iva, '0.19')
+  })
+
+  it('calcula valor después: IVA pleno', () => {
+    assert.equal(
+      computeValorDespuesAiuIva(10000, { iva: { porcentaje: 19 } }),
+      11900,
+    )
+    assert.equal(
+      computeValorDespuesAiuIva(10000, { administracion: '', imprevistos: '', utilidad: '', iva: '0.19' }, { valoresEnDecimal: true }),
+      11900,
+    )
+  })
+
+  it('calcula valor después: IVA sobre utilidad', () => {
+    assert.equal(
+      computeValorDespuesAiuIva(10000, {
+        administracion: 5, imprevistos: 3, utilidad: 5, iva: { porcentaje: 19 },
+      }),
+      11395,
+    )
+    assert.equal(
+      computeValorDespuesAiuIva(
+        18500,
+        { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' },
+        { valoresEnDecimal: true },
+      ),
+      21080.75,
+    )
+  })
+
+  it('calcula valor después: solo AIU', () => {
+    assert.equal(
+      computeValorDespuesAiuIva(10000, {
+        aiu: { administracion: 5, imprevistos: 3, utilidad: 5 },
+      }),
+      11300,
+    )
   })
 })

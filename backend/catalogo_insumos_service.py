@@ -17,12 +17,14 @@ from almacen_insumos_service import (
     _normalize_impuestos,
     _row_from_almacen_insumo,
     compute_costo_total_insumo,
+    compute_valor_despues_aiu_iva,
     create_proveedor,
     get_contexto_negociado_insumo,
     get_insumo,
     normalize_tributos,
     search_proveedores,
     sync_proveedor_contacto,
+    tributos_tienen_datos,
 )
 from almacen_service import _sb, _to_float, _upload_soporte
 
@@ -37,6 +39,9 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
     "costo_base": [
         "costo_base", "costo base", "costo", "precio", "precio_unitario", "precio unitario",
         "valor", "valor unitario", "valor_compra", "valor compra", "precio compra",
+        "costo (antes de aiu o iva)", "costo antes de aiu o iva",
+        "costo (antes de aiu/iva)", "valor antes de aiu o iva",
+        "valor (antes de aiu o iva)",
     ],
     "tipo_impuesto": ["tipo_impuesto", "tipo impuesto", "iva o aiu", "impuesto", "iva/aiu"],
     "impuesto_porcentaje": ["impuesto_porcentaje", "impuesto porcentaje", "iva_pct", "iva %", "porcentaje iva", "pct"],
@@ -67,15 +72,18 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
 
 CSV_TEMPLATE = (
     "proveedor,nit,contacto_email,contacto_nombre,contacto_telefono,"
-    "codigo,descripcion,unidad,rendimiento,costo,"
+    "codigo,descripcion,unidad,rendimiento,"
+    "\"Costo (Antes de AIU o IVA)\","
     "a,i,u,iva,"
     "requiere_cotizacion,cotizacion_numero,cotizacion_fecha,cotizacion_vigencia\n"
     "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
-    "CC-0000-001,Cemento gris 50 kg,UND,1.05,18500,"
+    "CC-0000-001,Cemento gris 50 kg,UND,1.05,"
+    "18500,"
     "0.05,0.03,0.05,0.19,"
     "false,COT-2026-001,2026-07-01,15 dias\n"
     "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
-    "CC-0000-002,Arena de río m3,M3,1,45000,"
+    "CC-0000-002,Arena de río m3,M3,1,"
+    "45000,"
     ",,,0.19,"
     "false,COT-2026-002,2026-07-01,15 dias\n"
 )
@@ -218,10 +226,11 @@ def _csv_columns_error(col_map: Dict[str, str]) -> None:
     raise ValueError(
         "El CSV no cumple el formato esperado.\n"
         f"Columnas obligatorias faltantes: {', '.join(hints.get(m, m) for m in missing)}.\n"
-        "Columnas obligatorias: codigo, descripcion, unidad, costo (o costo_base).\n"
+        "Columnas obligatorias: codigo, descripcion, unidad, costo / «Costo (Antes de AIU o IVA)».\n"
         "Opcionales: proveedor, nit, contacto_email, contacto_nombre, contacto_telefono, "
         "rendimiento, a / i / u / iva (decimal 0.05 = 5%; el tipo se infiere: "
-        "solo IVA → IVA Pleno; A/Í/U + IVA → IVA sobre Utilidad), "
+        "solo IVA → IVA Pleno; A/Í/U + IVA → IVA sobre Utilidad). "
+        "El valor después de AIU/IVA se calcula automáticamente al importar (no va en el CSV). "
         "tipo_impuesto / impuesto_porcentaje (legado), requiere_cotizacion (true/false), "
         "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia.\n"
         "Los PDF de cotización no se importan por CSV; use el formulario para adjuntarlos.\n"
@@ -604,10 +613,11 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     if body.get("costo_base") is None and body.get("costo") is not None:
         costo_base = _to_float(body.get("costo"))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
-    # Cálculo de valor_compra_referencia: se mantiene el esquema legado
-    # (tipo_impuesto / impuestos). El desglose AIU/IVA en «tributos» es captura
-    # independiente (fuera de alcance aplicar en fórmulas de este prompt).
-    valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
+    # Valor después de AIU/IVA: prioriza tributos unificados; si no hay, esquema legado.
+    if tributos_tienen_datos(tributos):
+        valor_total = compute_valor_despues_aiu_iva(costo_base, tributos)
+    else:
+        valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
     cantidad_negociada = (
         _to_float(body.get("cantidad_negociada"))
         if body.get("cantidad_negociada") not in (None, "")
@@ -883,7 +893,7 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
     if not reader.fieldnames:
         raise ValueError(
             "El CSV está vacío o no tiene encabezados.\n"
-            "La primera fila debe incluir al menos: codigo, descripcion, unidad, costo.\n"
+            "La primera fila debe incluir al menos: codigo, descripcion, unidad, costo / «Costo (Antes de AIU o IVA)».\n"
             "Descargue la plantilla CSV desde este módulo."
         )
     col_map = _resolve_csv_columns(list(reader.fieldnames))

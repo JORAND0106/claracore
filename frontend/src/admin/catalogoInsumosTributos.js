@@ -304,6 +304,40 @@ export function impuestoTieneDatos(form) {
   return tieneAiuComponentes(form) || tieneValorPct(form?.iva)
 }
 
+/**
+ * Valor unitario después de A/Í/U e IVA.
+ * @param {number|string} costoBase — valor antes de AIU/IVA
+ * @param {object} tributosOrForm — tributos normalizados o form decimal (si opts.valoresEnDecimal)
+ * @param {{ valoresEnDecimal?: boolean }} [opts]
+ */
+export function computeValorDespuesAiuIva(costoBase, tributosOrForm, opts = {}) {
+  const base = Math.max(Number(costoBase) || 0, 0)
+  let t
+  if (opts.valoresEnDecimal) {
+    t = tributosPayloadDesdeForm(tributosOrForm || EMPTY_IMPUESTO)
+  } else {
+    t = normalizarTributos(tributosOrForm)
+  }
+  const a = (Number(t.administracion) || 0) / 100
+  const i = (Number(t.imprevistos) || 0) / 100
+  const u = (Number(t.utilidad) || 0) / 100
+  const iva = (Number(t.iva?.porcentaje) || 0) / 100
+  const tipo = t.tipo
+
+  if (tipo === TIPO_IMPUESTO.IVA_PLENO) {
+    return Math.round(base * (1 + iva) * 100) / 100
+  }
+  if (tipo === TIPO_IMPUESTO.AIU_SIN_IVA) {
+    return Math.round(base * (1 + a + i + u) * 100) / 100
+  }
+  if (tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD) {
+    const aiuTotal = base * (a + i + u)
+    const ivaUtil = base * u * iva
+    return Math.round((base + aiuTotal + ivaUtil) * 100) / 100
+  }
+  return Math.round(base * 100) / 100
+}
+
 export function etiquetaTributos(tributos, tipoImpuesto, impuestoPorcentaje) {
   const t = normalizarTributos(tributos)
   if (t.tipo || t.administracion != null || t.imprevistos != null || t.utilidad != null || t.iva?.porcentaje != null) {

@@ -99,9 +99,68 @@ def test_csv_build_tributos_iva_pleno():
 
 def test_csv_template_unificado():
     tpl = get_csv_template()
-    assert ",a,i,u,iva," in tpl or "a,i,u,iva" in tpl
+    assert "a,i,u,iva" in tpl
+    assert "Costo (Antes de AIU o IVA)" in tpl
     assert "aiu_iva_util" not in tpl
     assert "iva_sobre" not in tpl
     assert "0.05,0.03,0.05,0.19" in tpl
     assert ",,,0.19," in tpl  # fila ejemplo IVA pleno
     assert CSV_TEMPLATE == tpl
+
+
+def test_compute_valor_despues_iva_pleno():
+    from almacen_insumos_service import compute_valor_despues_aiu_iva
+    total = compute_valor_despues_aiu_iva(10000, {"iva": {"porcentaje": 19}})
+    assert total == 11900.0
+
+
+def test_compute_valor_despues_iva_sobre_utilidad():
+    from almacen_insumos_service import compute_valor_despues_aiu_iva
+    # base 10000; A5% I3% U5% → AIU 1300; IVA 19% sobre U (500) → 95; total 11395
+    total = compute_valor_despues_aiu_iva(10000, {
+        "administracion": 5,
+        "imprevistos": 3,
+        "utilidad": 5,
+        "iva": 19,
+    })
+    assert total == 11395.0
+
+
+def test_compute_valor_despues_solo_aiu():
+    from almacen_insumos_service import compute_valor_despues_aiu_iva
+    total = compute_valor_despues_aiu_iva(10000, {
+        "aiu": {"administracion": 5, "imprevistos": 3, "utilidad": 5},
+    })
+    assert total == 11300.0
+
+
+def test_csv_import_calcula_valor_despues():
+    """El payload de guardado usa valor después de AIU/IVA en valor_compra_referencia."""
+    from catalogo_insumos_service import _build_insumo_payload
+    # Monkeypatch mínimo: evitar DB en resolución de código / proveedor
+    import catalogo_insumos_service as cis
+
+    def _fake_codigo(body, contrato_id, *, codigo_fijo=None):
+        return (codigo_fijo or body.get("codigo") or "CC-1-001").upper()
+
+    cis._resolve_codigo_insumo = _fake_codigo
+    payload = _build_insumo_payload(
+        {
+            "codigo": "CC-1-001",
+            "descripcion": "Prueba",
+            "unidad": "UND",
+            "costo_base": 10000,
+            "tributos": {
+                "administracion": 5,
+                "imprevistos": 3,
+                "utilidad": 5,
+                "iva": 19,
+            },
+            "requiere_cotizacion": False,
+        },
+        contrato_id=1,
+        user_id=1,
+    )
+    assert payload["costo_base"] == 10000.0
+    assert payload["valor_compra_referencia"] == 11395.0
+    assert payload["tributos"]["tipo"] == "iva_sobre_utilidad"
