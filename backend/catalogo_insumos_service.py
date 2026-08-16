@@ -40,6 +40,18 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
     ],
     "tipo_impuesto": ["tipo_impuesto", "tipo impuesto", "iva o aiu", "impuesto", "iva/aiu"],
     "impuesto_porcentaje": ["impuesto_porcentaje", "impuesto porcentaje", "iva_pct", "iva %", "porcentaje iva", "pct"],
+    "aiu_a": ["aiu_a", "a", "a.", "administracion", "administración", "aiu administracion"],
+    "aiu_i": ["aiu_i", "i", "i.", "í", "í.", "imprevistos", "aiu imprevistos"],
+    "aiu_u": ["aiu_u", "u", "u.", "utilidad", "aiu utilidad"],
+    "aiu_iva_util": [
+        "aiu_iva_util", "iva_util", "iva/util", "iva/util.", "iva sobre utilidad",
+        "iva_utilidad", "iva utilidad",
+    ],
+    "iva_porcentaje": ["iva_porcentaje", "iva porcentaje", "porcentaje_iva", "pct_iva"],
+    "iva_sobre": [
+        "iva_sobre", "iva sobre", "base_iva", "base iva", "aplica_iva_sobre",
+        "sobre", "iva base",
+    ],
     "cotizacion_numero": ["cotizacion_numero", "cotizacion numero", "numero cotizacion", "n cotizacion", "no cotizacion"],
     "cotizacion_fecha": ["cotizacion_fecha", "cotizacion fecha", "fecha cotizacion", "fecha"],
     "cotizacion_vigencia": ["cotizacion_vigencia", "cotizacion vigencia", "vigencia"],
@@ -54,12 +66,58 @@ CSV_COLUMN_ALIASES: Dict[str, List[str]] = {
 
 CSV_TEMPLATE = (
     "proveedor,nit,contacto_email,contacto_nombre,contacto_telefono,"
-    "codigo,descripcion,unidad,rendimiento,costo,tipo_impuesto,impuesto_porcentaje,requiere_cotizacion,"
-    "cotizacion_numero,cotizacion_fecha,cotizacion_vigencia\n"
+    "codigo,descripcion,unidad,rendimiento,costo,"
+    "aiu_a,aiu_i,aiu_u,aiu_iva_util,iva_porcentaje,iva_sobre,"
+    "requiere_cotizacion,cotizacion_numero,cotizacion_fecha,cotizacion_vigencia\n"
     "Proveedor Ejemplo SA,900123456-1,ventas@ejemplo.com,Juan Pérez,3001234567,"
-    "CC-0000-001,Cemento gris 50 kg,UND,1.05,18500,iva,19,false,"
-    "COT-2026-001,2026-07-01,15 dias\n"
+    "CC-0000-001,Cemento gris 50 kg,UND,1.05,18500,"
+    "0.05,0.03,0.05,0.19,0.19,costo_base,"
+    "false,COT-2026-001,2026-07-01,15 dias\n"
 )
+
+
+def _csv_entrada_a_puntos_pct(raw: Any) -> Optional[float]:
+    """Decimal (0.05) o puntos (5 / '5%') → puntos %. None si vacío/inválido."""
+    if raw is None:
+        return None
+    s = str(raw).strip().replace("%", "").replace(",", ".")
+    if not s:
+        return None
+    try:
+        n = float(s)
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    if n <= 1:
+        return round(n * 100, 4)
+    return round(n, 4)
+
+
+def _csv_build_tributos(col_fn) -> Optional[dict]:
+    """Arma tributos desde columnas CSV si hay algún valor AIU/IVA nuevo."""
+    aiu = {
+        "administracion": _csv_entrada_a_puntos_pct(col_fn("aiu_a")),
+        "imprevistos": _csv_entrada_a_puntos_pct(col_fn("aiu_i")),
+        "utilidad": _csv_entrada_a_puntos_pct(col_fn("aiu_u")),
+        "iva_utilidad": _csv_entrada_a_puntos_pct(col_fn("aiu_iva_util")),
+    }
+    iva_pct = _csv_entrada_a_puntos_pct(col_fn("iva_porcentaje"))
+    iva_sobre = (col_fn("iva_sobre") or "").strip().lower() or None
+    tiene_aiu = any(v is not None for v in aiu.values())
+    tiene_iva = iva_pct is not None
+    if not tiene_aiu and not tiene_iva:
+        return None
+    if iva_sobre and iva_sobre not in ("costo_base", "utilidad", "aiu", "costo_mas_aiu"):
+        iva_sobre = "costo_base"
+    return normalize_tributos({
+        "aiu": aiu,
+        "iva": {
+            "porcentaje": iva_pct,
+            "sobre": iva_sobre or "costo_base",
+        },
+    })
+
 
 
 def contrato_codigo_segment(contrato_id: int) -> str:
@@ -164,7 +222,9 @@ def _csv_columns_error(col_map: Dict[str, str]) -> None:
         f"Columnas obligatorias faltantes: {', '.join(hints.get(m, m) for m in missing)}.\n"
         "Columnas obligatorias: codigo, descripcion, unidad, costo (o costo_base).\n"
         "Opcionales: proveedor, nit, contacto_email, contacto_nombre, contacto_telefono, "
-        "rendimiento, tipo_impuesto (iva/aiu), impuesto_porcentaje, requiere_cotizacion (true/false), "
+        "rendimiento, aiu_a / aiu_i / aiu_u / aiu_iva_util (decimal 0.05 = 5%), "
+        "iva_porcentaje, iva_sobre (costo_base|utilidad|aiu|costo_mas_aiu), "
+        "tipo_impuesto / impuesto_porcentaje (legado), requiere_cotizacion (true/false), "
         "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia.\n"
         "Los PDF de cotización no se importan por CSV; use el formulario para adjuntarlos.\n"
         "Use «Descargar plantilla CSV» en este módulo para ver el formato exacto."
@@ -848,8 +908,6 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 "unidad": col("unidad", row) or "UND",
                 "rendimiento": col("rendimiento", row) or None,
                 "costo_base": col("costo_base", row),
-                "tipo_impuesto": col("tipo_impuesto", row) or "iva",
-                "impuesto_porcentaje": col("impuesto_porcentaje", row) or "19",
                 "cotizacion_numero": col("cotizacion_numero", row),
                 "cotizacion_fecha": col("cotizacion_fecha", row),
                 "cotizacion_vigencia": col("cotizacion_vigencia", row),
@@ -860,6 +918,17 @@ def import_csv_insumos(contrato_id: int, user_id: int, csv_text: str, modo: str 
                 "contacto_telefono": col("contacto_telefono", row),
                 "requiere_cotizacion": _parse_bool(col("requiere_cotizacion", row) or "false", default=False),
             }
+            tributos = _csv_build_tributos(lambda name: col(name, row))
+            if tributos is not None:
+                body["tributos"] = tributos
+                body["tipo_impuesto"] = None
+                body["impuesto_porcentaje"] = None
+            else:
+                # Legado: un solo tipo/porcentaje IVA|AIU
+                body["tipo_impuesto"] = col("tipo_impuesto", row) or None
+                body["impuesto_porcentaje"] = col("impuesto_porcentaje", row) or None
+                if not body["tipo_impuesto"] and body["impuesto_porcentaje"]:
+                    body["tipo_impuesto"] = "iva"
             if not body["descripcion"]:
                 errores.append(f"Fila {i}: descripción obligatoria.")
                 continue

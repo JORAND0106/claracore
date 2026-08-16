@@ -4,6 +4,7 @@ import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
 import { esDesarrolladorUsuario } from '../utils/permisosContrato'
 import { permisosCatalogoInsumos } from './catalogoInsumosPermisos'
 import {
+  AIU_CAMPOS_UI,
   EMPTY_AIU,
   EMPTY_IVA,
   IVA_SOBRE_OPCIONES,
@@ -11,6 +12,8 @@ import {
   etiquetaTributos,
   formAiuDesdeTributos,
   formIvaDesdeTributos,
+  fmtPctDesdeDecimal,
+  fmtSumatoriaAiu,
   ivaTieneDatos,
   seedTributosDesdeLegado,
   tributosDesdeForm,
@@ -1138,7 +1141,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                     <button
                       type="button"
-                      title="Administración, Imprevistos, Utilidad e IVA sobre Utilidad"
+                      title="A., Í., U. e IVA/Util. (ingreso decimal, visualización en %)"
                       onClick={() => {
                         setDraftAiu({ ...(form.aiu || EMPTY_AIU) })
                         setModalAiuOpen(true)
@@ -1517,26 +1520,65 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         }}
       >
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-          Capture Administración, Imprevistos, Utilidad e IVA sobre la Utilidad por separado (porcentajes).
+          Digite el valor en decimal (ej. 0.05). La plataforma lo muestra en porcentaje.
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
-          {[
-            ['administracion', 'Administración (A) %'],
-            ['imprevistos', 'Imprevistos (I) %'],
-            ['utilidad', 'Utilidad (U) %'],
-            ['iva_utilidad', 'IVA sobre Utilidad %'],
-          ].map(([key, label]) => (
+          {AIU_CAMPOS_UI.map(({ key, label }) => (
             <Field key={key} label={label}>
-              <input
-                style={inputStyle}
-                type="number"
-                min="0"
-                step="0.01"
-                value={draftAiu[key] ?? ''}
-                onChange={(e) => setDraftAiu((d) => ({ ...d, [key]: e.target.value }))}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  style={{ ...inputStyle, flex: 1 }}
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.0001"
+                  inputMode="decimal"
+                  placeholder="0.05"
+                  value={draftAiu[key] ?? ''}
+                  onChange={(e) => setDraftAiu((d) => ({ ...d, [key]: e.target.value }))}
+                />
+                <span
+                  style={{
+                    minWidth: 52,
+                    textAlign: 'right',
+                    fontWeight: 700,
+                    fontSize: 'var(--cc-sm)',
+                    color: t.primary,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                  title="Equivalente en porcentaje"
+                >
+                  {fmtPctDesdeDecimal(draftAiu[key])}
+                </span>
+              </div>
             </Field>
           ))}
+        </div>
+        <div style={{
+          marginTop: 12,
+          padding: '10px 12px',
+          borderRadius: 8,
+          border: `1px solid ${t.border}`,
+          background: ui.cardSubtle,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+        >
+          <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
+            Total A. + Í. + U.
+          </span>
+          <span style={{
+            fontSize: 'var(--cc-md)',
+            fontWeight: 800,
+            color: t.primary,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+          >
+            {fmtSumatoriaAiu(draftAiu)}
+          </span>
         </div>
       </TributoModalShell>
 
