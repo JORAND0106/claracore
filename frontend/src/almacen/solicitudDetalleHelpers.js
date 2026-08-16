@@ -47,6 +47,30 @@ export function textoLibreSolicitudItem(item) {
   return String(item?.descripcion_solicitada || item?.material_descripcion || '').trim()
 }
 
+/** Descripción a mostrar en grilla: catálogo si ya mapeado, si no texto libre. */
+export function descripcionGrillaItem(item) {
+  if (item?.insumo_id && item?.material_descripcion) {
+    return String(item.material_descripcion).trim()
+  }
+  return textoLibreSolicitudItem(item) || String(item?.material_descripcion || '').trim() || '—'
+}
+
+/** Saldo negociado residual (null si no hay pacto con proveedor). */
+export function saldoNegociadoItem(item) {
+  const ctx = item?.contexto_negociado || item?.preview?.contexto_negociado
+  if (!ctx?.tiene_negociado) return null
+  const v = ctx.saldo_negociado_despues ?? ctx.saldo_negociado
+  return v == null ? null : Number(v)
+}
+
+/** Saldo presupuestado residual en el PK-ID. */
+export function saldoPresupuestadoItem(item) {
+  const ctx = item?.contexto_presupuesto || item?.preview?.contexto_presupuesto
+  if (!ctx) return null
+  const v = ctx.saldo_disponible_despues ?? ctx.saldo_disponible
+  return v == null ? null : Number(v)
+}
+
 export function estadoValidacionItem(item, sol) {
   if (item?.en_orden_compra || item?.estado_validacion === 'aprobado') return 'aprobado'
   if (item?.estado_validacion) return item.estado_validacion
