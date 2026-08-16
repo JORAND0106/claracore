@@ -1568,7 +1568,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   type="number"
                   min="0"
                   max="1"
-                  step="0.0001"
+                  step="any"
                   inputMode="decimal"
                   placeholder="0.05"
                   value={draftImpuesto[key] ?? ''}
@@ -1576,14 +1576,15 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 />
                 <span
                   style={{
-                    minWidth: 52,
+                    minWidth: 64,
                     textAlign: 'right',
                     fontWeight: 700,
                     fontSize: 'var(--cc-sm)',
                     color: t.primary,
                     fontVariantNumeric: 'tabular-nums',
                   }}
-                  title="Equivalente en porcentaje"
+                  title="Equivalente en porcentaje (sin redondear)"
+                  data-fmt="pct-exacto"
                 >
                   {fmtPctDesdeDecimal(draftImpuesto[key])}
                 </span>
@@ -1605,14 +1606,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         }}
         >
           <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
-            Total A. + Í. + U.
+            Total A. + Í. + U. (porcentaje, sin redondear)
           </span>
-          <span style={{
-            fontSize: 'var(--cc-md)',
-            fontWeight: 800,
-            color: t.primary,
-            fontVariantNumeric: 'tabular-nums',
-          }}
+          <span
+            style={{
+              fontSize: 'var(--cc-md)',
+              fontWeight: 800,
+              color: t.primary,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+            title="Suma porcentual exacta de A+Í+U — no es un valor monetario"
+            data-fmt="pct-sumatoria-exacta"
+            aria-label={`Total A Í U ${fmtSumatoriaAiu(draftImpuesto)}`}
           >
             {fmtSumatoriaAiu(draftImpuesto)}
           </span>
@@ -1631,14 +1636,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         }}
         >
           <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 600 }}>
-            Valor después de AIU o IVA
+            Valor después de AIU o IVA (COP, entero)
           </span>
-          <span style={{
-            fontSize: 'var(--cc-md)',
-            fontWeight: 800,
-            color: t.primary,
-            fontVariantNumeric: 'tabular-nums',
-          }}
+          <span
+            style={{
+              fontSize: 'var(--cc-md)',
+              fontWeight: 800,
+              color: t.primary,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+            title="Monto en pesos — redondeado a 0 decimales"
+            data-fmt="cop-entero"
           >
             {fmtMoney(draftValorDespues)}
           </span>

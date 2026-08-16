@@ -78,6 +78,28 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
     assert.equal(fmtSumatoriaAiu(form2), '13.9%')
   })
 
+  it('porcentajes UI exactos vs montos COP enteros (reglas separadas)', () => {
+    // UI %: no usa Math.round a entero
+    assert.equal(fmtPctDesdeDecimal('0.04075'), '4.075%')
+    assert.equal(fmtPctDesdeDecimal('0.051234'), '5.1234%')
+    assert.equal(
+      fmtSumatoriaAiu({ administracion: '0.051234', imprevistos: '0.0325', utilidad: '0.04075' }),
+      '12.4484%',
+    )
+    // Persistencia conserva decimales (no trunca a 2 dp ni a entero)
+    assert.equal(decimalAPuntosPct('0.04075'), 4.075)
+    assert.equal(decimalAPuntosPct('0.051234'), 5.1234)
+    // Monto COP: sí redondea a 0 decimales
+    assert.equal(
+      computeValorDespuesAiuIva(
+        18500,
+        { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' },
+        { valoresEnDecimal: true },
+      ),
+      21081,
+    )
+  })
+
   it('parse CSV: decimal o puntos', () => {
     assert.equal(parseEntradaAPuntosPct('0.05'), 5)
     assert.equal(parseEntradaAPuntosPct('5'), 5)
