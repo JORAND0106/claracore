@@ -612,6 +612,8 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     costo_base = _to_float(body.get("costo_base"))
     if body.get("costo_base") is None and body.get("costo") is not None:
         costo_base = _to_float(body.get("costo"))
+    # Costo directo / valor antes de AIU-IVA: pesos COP enteros.
+    costo_base = float(round(max(costo_base, 0.0)))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
     # Valor después de AIU/IVA: prioriza tributos unificados; si no hay, esquema legado.
     if tributos_tienen_datos(tributos):
@@ -625,7 +627,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     )
     valor_negociado_total = None
     if cantidad_negociada is not None and cantidad_negociada > 0 and valor_total > 0:
-        valor_negociado_total = round(cantidad_negociada * valor_total, 2)
+        valor_negociado_total = float(round(cantidad_negociada * valor_total))
     proveedor_id = body.get("proveedor_id")
     if body.get("razon_social") and body.get("nit") and not proveedor_id:
         prov = create_proveedor(contrato_id, user_id, {

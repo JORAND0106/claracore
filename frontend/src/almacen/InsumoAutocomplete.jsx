@@ -15,7 +15,7 @@ function computeTotal(costoBase, impuestos) {
     if (imp.tipo === 'valor') total += v
     else total += base * (v / 100)
   }
-  return Math.round(total * 100) / 100
+  return Math.round(total)
 }
 
 export default function InsumoAutocomplete({ value, onChange, disabled }) {

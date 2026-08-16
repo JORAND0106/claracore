@@ -473,7 +473,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const valorNegociadoPreview = useMemo(() => {
     const cant = Number(form.cantidad_negociada)
     if (!cant || cant <= 0 || !totalPreview) return null
-    return Math.round(cant * totalPreview * 100) / 100
+    return Math.round(cant * totalPreview)
   }, [form.cantidad_negociada, totalPreview])
 
   const permsEfectivos = useMemo(

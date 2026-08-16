@@ -325,17 +325,17 @@ export function computeValorDespuesAiuIva(costoBase, tributosOrForm, opts = {}) 
   const tipo = t.tipo
 
   if (tipo === TIPO_IMPUESTO.IVA_PLENO) {
-    return Math.round(base * (1 + iva) * 100) / 100
+    return Math.round(base * (1 + iva))
   }
   if (tipo === TIPO_IMPUESTO.AIU_SIN_IVA) {
-    return Math.round(base * (1 + a + i + u) * 100) / 100
+    return Math.round(base * (1 + a + i + u))
   }
   if (tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD) {
     const aiuTotal = base * (a + i + u)
     const ivaUtil = base * u * iva
-    return Math.round((base + aiuTotal + ivaUtil) * 100) / 100
+    return Math.round(base + aiuTotal + ivaUtil)
   }
-  return Math.round(base * 100) / 100
+  return Math.round(base)
 }
 
 export function etiquetaTributos(tributos, tipoImpuesto, impuestoPorcentaje) {
