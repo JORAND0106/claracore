@@ -323,8 +323,6 @@ async def route_create_insumo(
     soporte = None
     if soporte_pdf and soporte_pdf.filename:
         data = await soporte_pdf.read()
-        if len(data) > 204800:
-            raise HTTPException(status_code=400, detail="El PDF de soporte no puede superar 200 KB.")
         mime = soporte_pdf.content_type or "application/pdf"
         if mime != "application/pdf":
             raise HTTPException(status_code=400, detail="El soporte debe ser un archivo PDF.")

@@ -1126,8 +1126,6 @@ def create_insumo(contrato_id: int, user_id: int, body: dict, soporte: Optional[
     insumo_id = ins[0]["id"]
     if soporte:
         data, nombre, mime = soporte
-        if len(data) > 204800:
-            raise ValueError("El PDF de soporte no puede superar 200 KB.")
         from almacen_service import _upload_soporte
         meta = _upload_soporte(contrato_id, "insumos-soporte", insumo_id, data, nombre, mime)
         sb.table("almacen_insumo").update({

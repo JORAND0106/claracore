@@ -28,7 +28,7 @@ from almacen_insumos_service import (
 )
 from almacen_service import _sb, _to_float, _upload_soporte
 
-PDF_MAX_BYTES = 204800
+# Límite fijo de 200 KB eliminado: rige la cuota por contrato (+ tope técnico en pdf_prepare).
 
 CSV_REQUIRED = ("codigo", "descripcion", "unidad", "costo_base")
 
@@ -665,8 +665,6 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
 
 
 def _save_ganadora_pdf(contrato_id: int, insumo_id: int, data: bytes, nombre: str, mime: str) -> dict:
-    if len(data) > PDF_MAX_BYTES:
-        raise ValueError("El PDF de la cotización ganadora no puede superar 200 KB.")
     meta = _upload_soporte(contrato_id, "insumos-soporte", insumo_id, data, nombre, mime)
     sb = _sb()
     sb.table("almacen_insumo").update({
@@ -685,16 +683,14 @@ def _save_soporte_pdfs(
     sb = _sb()
     count = 0
     for data, nombre, mime in files:
-        if len(data) > PDF_MAX_BYTES:
-            raise ValueError(f"El PDF «{nombre}» supera 200 KB.")
         if mime != "application/pdf":
             raise ValueError(f"«{nombre}» debe ser PDF.")
         meta = _upload_soporte(contrato_id, "insumos-cot-soporte", insumo_id, data, nombre, mime)
         sb.table("almacen_insumo_cotizacion_soporte").insert({
-            "insumo_id": insumo_id,
+            "insumo_id": int(insumo_id),
             "blob_path": meta["blob_path"],
             "nombre": meta["nombre"],
-            "tamano_bytes": len(data),
+            "tamano_bytes": meta.get("tamano_bytes") or len(data),
             "created_by": user_id,
         }).execute()
         count += 1

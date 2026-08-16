@@ -295,14 +295,48 @@ def upload_blob_private(
     contrato_id: Optional[int] = None,
     storage_tipo: Optional[str] = None,
     account_storage: bool = True,
+    skip_pdf_prepare: bool = False,
 ) -> str:
     """
     Sube al contenedor privado. Devuelve la ruta del blob (no URL pública).
     Aplica cuota por contrato cuando corresponde.
+
+    Para application/pdf: prepara el archivo (firma certificada → intacto;
+    si no → comprime) ANTES del pre-check de cuota, para validar el peso final.
     """
     ensure_private_container()
     path = blob_path.lstrip("/")
     ct = (content_type or "application/octet-stream").split(";")[0].strip()
+    payload = data
+
+    if (
+        not skip_pdf_prepare
+        and ct == "application/pdf"
+        and isinstance(payload, (bytes, bytearray))
+    ):
+        from fastapi import HTTPException
+
+        from pdf_prepare import PdfPrepareError, prepare_pdf_for_storage
+
+        try:
+            prepared = prepare_pdf_for_storage(bytes(payload))
+            payload = prepared.data
+            _log.info(
+                "pdf_prepare path=%s original=%s final=%s signed=%s compressed=%s note=%s",
+                path,
+                prepared.original_size,
+                prepared.final_size,
+                prepared.had_certified_signature,
+                prepared.compressed,
+                prepared.note,
+            )
+        except PdfPrepareError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.warning("pdf_prepare inesperado path=%s: %s", path, exc)
+
     old_size = 0
     if account_storage:
         from storage_quota_service import guard_upload, infer_contrato_id_from_path
@@ -315,12 +349,12 @@ def upload_blob_private(
                 except Exception as exc:
                     _log.debug("get_blob_size_private %s: %s", path, exc)
                     old_size = 0
-            guard_upload(cid, len(data), blob_path=path, replaced_old_bytes=old_size)
+            guard_upload(cid, len(payload), blob_path=path, replaced_old_bytes=old_size)
 
     cc = get_blob_service_client().get_container_client(private_container_name())
     cc.upload_blob(
         name=path,
-        data=data,
+        data=payload,
         overwrite=overwrite,
         content_settings=ContentSettings(content_type=ct),
     )
@@ -331,7 +365,7 @@ def upload_blob_private(
 
             record_upload(
                 contrato_id,
-                len(data),
+                len(payload),
                 tipo=storage_tipo,
                 content_type=ct,
                 blob_path=path,
