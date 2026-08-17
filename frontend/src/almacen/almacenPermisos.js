@@ -115,6 +115,14 @@ export function puedeRegistrarSalidaAlmacen(permisos) {
   return Boolean(permisos?.crear || permisos?.editar)
 }
 
+/**
+ * Editar cantidad de una salida ya registrada.
+ * Solo Contratista Gerencial o Desarrollador (no aparece para ningún otro rol).
+ */
+export function puedeEditarCantidadSalidaAlmacen(permisos) {
+  return Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
+}
+
 /** Nivel 2 / Nivel 3 — alertas silenciosas de control en entradas Despachador. */
 export function puedeVerAlertasEntrada(permisos) {
   return Boolean(permisos?.validar || permisos?.editar)

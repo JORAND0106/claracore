@@ -432,6 +432,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    updateSalidaCantidad: (salidaId, cantidad_salida) =>
+      fetch(`${base}/salidas/${salidaId}/cantidad`, {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ cantidad_salida }),
+      }).then(parseJson),
+
     deleteSalida: (salidaId) =>
       fetch(`${base}/salidas/${salidaId}`, {
         method: 'DELETE',
