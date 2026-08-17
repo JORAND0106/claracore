@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
+import SalidasFiltrosModal from './SalidasFiltrosModal'
+import {
+  countSalidasFiltrosActivos,
+  EMPTY_SALIDAS_FILTROS,
+  filterSalidasLista,
+} from './salidasFiltros'
 import {
   puedeEditarCantidadSalidaAlmacen,
   puedeRegistrarSalidaAlmacen,
@@ -46,8 +52,16 @@ export default function SalidasPanel({
   const [editCantidadError, setEditCantidadError] = useState('')
   const [editCantidadBusy, setEditCantidadBusy] = useState(false)
   const [pdfBusyId, setPdfBusyId] = useState(null)
+  const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SALIDAS_FILTROS }))
+  const [filtrosOpen, setFiltrosOpen] = useState(false)
   const lastRefreshSignal = useRef(refreshSignal)
   const mountedRef = useRef(true)
+
+  const listaFiltrada = useMemo(
+    () => filterSalidasLista(lista, filtros),
+    [lista, filtros],
+  )
+  const filtrosActivos = countSalidasFiltrosActivos(filtros)
 
   useEffect(() => {
     mountedRef.current = true
@@ -247,17 +261,39 @@ export default function SalidasPanel({
             Entrega de material desde almacén hacia obra, descontando contra entradas por PK-ID.
           </div>
         </div>
-        {puedeSalida && (
-          <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
-            + Nueva salida
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            onClick={() => setFiltrosOpen(true)}
+            title="Filtrar salidas"
+          >
+            🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
-        )}
+          {puedeSalida && (
+            <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
+              + Nueva salida
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
 
       {lista.length === 0 ? (
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>No hay salidas registradas.</div>
+      ) : listaFiltrada.length === 0 ? (
+        <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>
+          Ninguna salida coincide con los filtros.
+          {' '}
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-caption)' }}
+            onClick={() => setFiltros({ ...EMPTY_SALIDAS_FILTROS })}
+          >
+            Limpiar filtros
+          </button>
+        </div>
       ) : (
         <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
           <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -279,7 +315,7 @@ export default function SalidasPanel({
               </tr>
             </thead>
             <tbody>
-              {lista.map((s) => {
+              {listaFiltrada.map((s) => {
                 const busyPdf = pdfBusyId === s.id
                 const tienePdf = Boolean(s.tiene_pdf_salida || s.salida_pdf_blob_path)
                 const und = s.unidad || ''
@@ -387,6 +423,18 @@ export default function SalidasPanel({
             </tbody>
           </table>
         </div>
+      )}
+
+      {filtrosOpen && (
+        <SalidasFiltrosModal
+          theme={t}
+          filtros={filtros}
+          onClose={() => setFiltrosOpen(false)}
+          onApply={(next) => {
+            setFiltros({ ...EMPTY_SALIDAS_FILTROS, ...next })
+            setFiltrosOpen(false)
+          }}
+        />
       )}
 
       {creating && (

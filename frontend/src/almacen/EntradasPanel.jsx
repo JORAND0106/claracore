@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
 import DevolucionFormModal from './DevolucionFormModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
+import EntradasFiltrosModal from './EntradasFiltrosModal'
+import {
+  countEntradasFiltrosActivos,
+  EMPTY_ENTRADAS_FILTROS,
+  filterEntradasLista,
+} from './entradasFiltros'
 import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
@@ -83,6 +89,14 @@ export default function EntradasPanel({
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [filtros, setFiltros] = useState(() => ({ ...EMPTY_ENTRADAS_FILTROS }))
+  const [filtrosOpen, setFiltrosOpen] = useState(false)
+
+  const listaFiltrada = useMemo(
+    () => filterEntradasLista(lista, filtros),
+    [lista, filtros],
+  )
+  const filtrosActivos = countEntradasFiltrosActivos(filtros)
 
   const solicitarEliminar = (e, entrada) => {
     e.stopPropagation()
@@ -130,6 +144,14 @@ export default function EntradasPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            onClick={() => setFiltrosOpen(true)}
+            title="Filtrar entradas"
+          >
+            🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
+          </button>
           {permisos?.crear && (
             <button type="button" style={ui.btnSecondary} onClick={() => setDevolucionOpen(true)}>
               ↩️ Devolución
@@ -152,6 +174,18 @@ export default function EntradasPanel({
 
       {lista.length === 0 ? (
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>No hay entradas registradas.</div>
+      ) : listaFiltrada.length === 0 ? (
+        <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>
+          Ninguna entrada coincide con los filtros.
+          {' '}
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-caption)' }}
+            onClick={() => setFiltros({ ...EMPTY_ENTRADAS_FILTROS })}
+          >
+            Limpiar filtros
+          </button>
+        </div>
       ) : (
         <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
           <table
@@ -217,7 +251,7 @@ export default function EntradasPanel({
               </tr>
             </thead>
             <tbody>
-              {lista.map((e) => {
+              {listaFiltrada.map((e) => {
                 const oc = e.almacen_orden_compra || {}
                 const tienePdf = Boolean(e.disposicion_pdf_blob_path)
                 const und = e.unidad || e.cantidad_recibida_unidad || ''
@@ -345,6 +379,18 @@ export default function EntradasPanel({
             </tbody>
           </table>
         </div>
+      )}
+
+      {filtrosOpen && (
+        <EntradasFiltrosModal
+          theme={t}
+          filtros={filtros}
+          onClose={() => setFiltrosOpen(false)}
+          onApply={(next) => {
+            setFiltros({ ...EMPTY_ENTRADAS_FILTROS, ...next })
+            setFiltrosOpen(false)
+          }}
+        />
       )}
 
       {despachadorOpen && (
