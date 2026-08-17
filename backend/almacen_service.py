@@ -4913,6 +4913,16 @@ def _enrich_salidas_rows(sb, contrato_id: int, rows: List[dict]) -> List[dict]:
         r["tiene_pdf_salida"] = bool(r.get("salida_pdf_blob_path"))
         if not (r.get("codigo") or "").strip() and r.get("numero_salida"):
             r["codigo"] = _codigo_salida_cached(int(r["numero_salida"]))
+
+    # Devoluciones por salida → neto visible en grilla (misma base que despacho neto por línea).
+    salida_ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    dev_map = _sum_devoluciones_por_salida(sb, salida_ids) if salida_ids else {}
+    for r in rows:
+        sid = int(r["id"]) if r.get("id") is not None else None
+        qty = _to_float(r.get("cantidad_salida"))
+        devuelta = _to_float(dev_map.get(sid, 0.0)) if sid is not None else 0.0
+        r["cantidad_devuelta"] = round(devuelta, 4)
+        r["cantidad_neta"] = max(0.0, round(qty - devuelta, 4))
     return rows
 
 

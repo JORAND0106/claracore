@@ -168,3 +168,58 @@ def test_create_devolucion_rechaza_ubicacion_vacia_sin_heredar_salida(monkeypatc
             "abscisa_inicial": "0+100",
             "abscisa_final": None,
         })
+
+
+def test_enrich_salidas_incluye_devuelta_y_neta(monkeypatch):
+    """listado de salidas expone cantidad_devuelta / cantidad_neta (opción A+)."""
+    from almacen_service import _enrich_salidas_rows
+
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_entrada_item":
+            q.select.return_value.in_.return_value.execute.return_value.data = [{
+                "id": 10,
+                "orden_compra_item_id": 3,
+                "presupuesto_id": 1,
+            }]
+        elif name == "almacen_orden_compra_item":
+            q.select.return_value.in_.return_value.execute.return_value.data = [{
+                "id": 3,
+                "material_descripcion": "Cemento",
+                "unidad": "KG",
+                "orden_compra_id": 2,
+            }]
+        elif name == "almacen_orden_compra":
+            q.select.return_value.in_.return_value.execute.return_value.data = [{
+                "id": 2,
+                "numero_oc": 14,
+            }]
+        elif name == "almacen_devolucion":
+            q.select.return_value.in_.return_value.execute.return_value.data = [
+                {"salida_id": 5, "cantidad": 50},
+            ]
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr("almacen_service._map_usuario_nombres", lambda *_a, **_k: {})
+    monkeypatch.setattr("almacen_service._contrato_segmento_documento", lambda *_a, **_k: "1614")
+
+    rows = [{
+        "id": 5,
+        "numero_salida": 1,
+        "codigo": "Sal-1614-00001",
+        "entrada_item_id": 10,
+        "cantidad_salida": 200,
+        "receptor_usuario_id": None,
+        "created_by": None,
+        "salida_pdf_blob_path": None,
+    }]
+    out = _enrich_salidas_rows(sb, 1, rows)
+    assert out[0]["cantidad_devuelta"] == 50.0
+    assert out[0]["cantidad_neta"] == 150.0
