@@ -56,6 +56,12 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
     }
   }, [])
 
+  const bumpRelatedPanels = useCallback(() => {
+    // Sube refreshSignal para que Entradas/Inventario recalculen saldos al volver a la pestaña
+    // o si ya están montados. Salidas ya recargó en local.
+    setRefreshSignal((s) => s + 1)
+  }, [])
+
   const doRefresh = useCallback(async () => {
     refreshPendingRef.current = true
     setRefreshBusy(true)
@@ -236,6 +242,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
           token={token}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}
+          onSalidaMutated={bumpRelatedPanels}
         />
       )}
       {tab === 'inventario' && (

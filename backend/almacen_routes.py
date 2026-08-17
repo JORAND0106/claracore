@@ -32,6 +32,7 @@ from almacen_insumos_service import (
 from almacen_permissions import (
     puede_ver_valores_economicos_almacen,
     require_contratista_gerencial_almacen,
+    require_editar_cantidad_salida_almacen,
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
@@ -58,6 +59,7 @@ from almacen_service import (
     eliminar_entrada,
     eliminar_salida,
     eliminar_solicitud_desarrollador,
+    update_salida_cantidad,
     entradas_disponibles_por_pk,
     enviar_solicitud,
     _fetch_solicitud_head,
@@ -1079,6 +1081,10 @@ class SalidaCreateBody(BaseModel):
     observaciones: Optional[str] = None
 
 
+class SalidaCantidadUpdateBody(BaseModel):
+    cantidad_salida: float = Field(..., gt=0)
+
+
 @router.get("/{contrato_id}/usuarios-receptor-obra")
 def route_usuarios_receptor_obra(
     contrato_id: int,
@@ -1130,6 +1136,39 @@ def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=D
     try:
         result = create_salida(contrato_id, _uid(current_user), body.dict())
         registrar_log(current_user, "CREAR", "ALMACEN", "salida", result.get("id"), {})
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/{contrato_id}/salidas/{salida_id}/cantidad")
+def route_update_salida_cantidad(
+    contrato_id: int,
+    salida_id: int,
+    body: SalidaCantidadUpdateBody,
+    current_user=Depends(get_current_user),
+):
+    """Edición sensible: solo Contratista Gerencial o Desarrollador."""
+    _check_contrato(current_user, contrato_id)
+    require_editar_cantidad_salida_almacen(current_user)
+    try:
+        result = update_salida_cantidad(contrato_id, salida_id, body.cantidad_salida)
+        anterior = result.get("cantidad_salida_anterior")
+        nuevo = result.get("cantidad_salida")
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "ALMACEN",
+            "salida",
+            salida_id,
+            {
+                "campo": "cantidad_salida",
+                "entrada_item_id": result.get("entrada_item_id"),
+                "numero_salida": result.get("numero_salida"),
+            },
+            valor_anterior={"cantidad_salida": anterior},
+            valor_nuevo={"cantidad_salida": nuevo},
+        )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc

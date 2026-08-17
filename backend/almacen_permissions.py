@@ -85,6 +85,19 @@ def require_contratista_gerencial_almacen(current_user) -> None:
         )
 
 
+def require_editar_cantidad_salida_almacen(current_user) -> None:
+    """Gate duro: solo Contratista Gerencial o Desarrollador editan cantidad de salida."""
+    require_permiso_almacen(current_user, "editar")
+    if not es_contratista_gerencial(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Solo Contratista Gerencial o Desarrollador puede editar "
+                "la cantidad de una salida registrada."
+            ),
+        )
+
+
 def _es_validador_almacen_por_cargo(current_user) -> bool:
     cargo = _norm(current_user.get("cargo_nombre") or "")
     return cargo in ("director de obra", "administrador")
