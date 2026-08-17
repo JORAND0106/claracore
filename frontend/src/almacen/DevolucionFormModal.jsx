@@ -16,6 +16,7 @@ export default function DevolucionFormModal({
   contratoId,
   onClose,
   onSaved,
+  zIndex = 100008,
 }) {
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
@@ -38,7 +39,7 @@ export default function DevolucionFormModal({
         style={{
           position: 'fixed',
           inset: 0,
-          zIndex: 100008,
+          zIndex,
           display: 'flex',
           alignItems: compact ? 'flex-end' : 'center',
           justifyContent: 'center',
@@ -87,6 +88,7 @@ export default function DevolucionFormModal({
           titulo="Descartar devolución"
           confirmar="Descartar"
           cancelar="Seguir editando"
+          zIndex={Number(zIndex) + 20}
           onCancel={() => setConfirmDiscard(false)}
           onConfirm={() => { setConfirmDiscard(false); onClose() }}
         >

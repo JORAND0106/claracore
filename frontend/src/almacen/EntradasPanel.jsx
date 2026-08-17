@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
-import DevolucionFormModal from './DevolucionFormModal'
 import DevolucionesListModal from './DevolucionesListModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import EntradasFiltrosModal from './EntradasFiltrosModal'
@@ -85,7 +84,6 @@ export default function EntradasPanel({
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
   const [despachadorOpen, setDespachadorOpen] = useState(false)
-  const [devolucionOpen, setDevolucionOpen] = useState(false)
   const [devolucionesListOpen, setDevolucionesListOpen] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
   const [error, setError] = useState('')
@@ -131,10 +129,10 @@ export default function EntradasPanel({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      if (!creating && !despachadorOpen && !devolucionOpen) reload()
+      if (!creating && !despachadorOpen && !devolucionesListOpen) reload()
       else onDataLoaded?.()
     }
-  }, [refreshSignal, creating, despachadorOpen, devolucionOpen, reload, onDataLoaded])
+  }, [refreshSignal, creating, despachadorOpen, devolucionesListOpen, reload, onDataLoaded])
 
   return (
     <div>
@@ -154,18 +152,13 @@ export default function EntradasPanel({
           >
             🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
-          {permisos?.crear && (
-            <button type="button" style={ui.btnSecondary} onClick={() => setDevolucionOpen(true)}>
-              ↩️ Devolución
-            </button>
-          )}
           <button
             type="button"
             style={ui.btnSecondary}
             onClick={() => setDevolucionesListOpen(true)}
-            title="Ver y eliminar devoluciones registradas"
+            title="Ver devoluciones y registrar una nueva"
           >
-            📋 Devoluciones
+            ↩️ Devoluciones
           </button>
           {permisos?.crear && (
             <button type="button" style={ui.btnSecondary} onClick={() => setDespachadorOpen(true)}>
@@ -411,20 +404,6 @@ export default function EntradasPanel({
           theme={t}
           onClose={() => setDespachadorOpen(false)}
           onSaved={() => reload()}
-        />
-      )}
-
-      {devolucionOpen && (
-        <DevolucionFormModal
-          t={t}
-          token={token}
-          contratoId={permisos?.contratoId}
-          onClose={() => setDevolucionOpen(false)}
-          onSaved={() => {
-            setDevolucionOpen(false)
-            invalidateSalidasCache(permisos?.contratoId)
-            reload()
-          }}
         />
       )}
 
