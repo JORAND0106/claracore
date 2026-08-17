@@ -374,3 +374,68 @@ def test_create_salida_rechaza_2000_cuando_disponible_1500(monkeypatch):
             "entrada_item_id": 10,
             "cantidad_salida": 2000,
         })
+
+
+def test_download_salida_pdf_reutiliza_blob(monkeypatch):
+    """Si ya hay blob, no regenerar (mismo patrón que download_pdf_oc)."""
+    import almacen_service as svc
+
+    sal = {
+        "id": 12,
+        "salida_pdf_blob_path": "almacen-soportes/1/salidas/12/salida-12.pdf",
+        "salida_pdf_nombre": "salida-12.pdf",
+    }
+    monkeypatch.setattr(svc, "get_salida", lambda *_a, **_k: dict(sal))
+    monkeypatch.setattr(svc, "download_soporte", lambda path: (b"%PDF-salida", "application/pdf"))
+
+    def _no_gen(*_a, **_k):
+        raise AssertionError("no debe regenerar PDF si ya hay blob")
+
+    monkeypatch.setattr(svc, "_generar_pdf_salida", _no_gen)
+    monkeypatch.setattr(svc, "_pdf_ctx_for_salida", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no ctx")))
+
+    data, fname = svc.download_salida_pdf(1, 12)
+    assert data == b"%PDF-salida"
+    assert fname == "salida-12.pdf"
+
+
+def test_get_salida_no_lista_todas(monkeypatch):
+    """get_salida enriquece solo la fila pedida (no list_salidas completo)."""
+    import almacen_service as svc
+
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_salida":
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 5,
+                "contrato_id": 1,
+                "numero_salida": 3,
+                "codigo": "Sal-CC-00003",
+                "entrada_item_id": None,
+                "receptor_usuario_id": None,
+                "created_by": None,
+                "salida_pdf_blob_path": None,
+            }]
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr(svc, "_sb", lambda: sb)
+
+    called = {"list": 0}
+
+    def _boom(*_a, **_k):
+        called["list"] += 1
+        raise AssertionError("get_salida no debe llamar list_salidas")
+
+    monkeypatch.setattr(svc, "list_salidas", _boom)
+
+    out = svc.get_salida(1, 5)
+    assert out["id"] == 5
+    assert out["codigo"] == "Sal-CC-00003"
+    assert out["tiene_pdf_salida"] is False
+    assert called["list"] == 0

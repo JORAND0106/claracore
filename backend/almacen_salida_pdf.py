@@ -345,6 +345,9 @@ def generar_pdf_salida_pos(
     despachador_firma: Optional[str],
 ) -> bytes:
     """PDF térmico 80 mm: 2 copias (Obra + Almacén), 220 mm c/u."""
+    # Resolver firmas una sola vez (evita 4 HTTP fetches: 2 firmas × 2 copias).
+    receptor_firma_uri = _firma_imagen_data_uri(receptor_firma)
+    despachador_firma_uri = _firma_imagen_data_uri(despachador_firma)
     copias = list(COPIAS_SALIDA)
     blocks = [
         _render_copia_html(
@@ -357,9 +360,9 @@ def generar_pdf_salida_pos(
             presupuesto_label=presupuesto_label,
             unidad=unidad,
             receptor_nombre=receptor_nombre,
-            receptor_firma=receptor_firma,
+            receptor_firma=receptor_firma_uri,
             despachador_nombre=despachador_nombre,
-            despachador_firma=despachador_firma,
+            despachador_firma=despachador_firma_uri,
         )
         for idx, label in enumerate(copias)
     ]
