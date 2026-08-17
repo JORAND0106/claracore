@@ -80,6 +80,26 @@ def test_get_entrada_enriquece_saldo_por_item(monkeypatch):
         lambda *_a, **_k: {10: 900.0},
     )
     monkeypatch.setattr(
+        "almacen_service._movimientos_salida_devolucion_por_entrada_item",
+        lambda *_a, **_k: {10: [{
+            "id": 5,
+            "numero_salida": 1,
+            "codigo": "Sal-1",
+            "cantidad_salida": 350.0,
+            "cantidad_devuelta": 50.0,
+            "cantidad_neta": 300.0,
+            "fecha_hora_salida": "2026-08-10T15:00:00Z",
+            "pk_id": "PK-001",
+            "devoluciones": [{
+                "id": 9,
+                "numero_devolucion": 1,
+                "codigo": "Dev-1",
+                "cantidad": 50.0,
+                "fecha_hora_devolucion": "2026-08-11T10:00:00Z",
+            }],
+        }]},
+    )
+    monkeypatch.setattr(
         "almacen_service._asegurar_codigo_entrada",
         lambda _cid, ent: ent,
     )
@@ -91,3 +111,50 @@ def test_get_entrada_enriquece_saldo_por_item(monkeypatch):
     assert it["saldo_disponible"] == 100.0
     assert it["porcentaje_saldo_disponible"] == 10.0
     assert it["alerta_saldo"] == "rojo"
+    assert len(it["salidas"]) == 1
+    assert it["salidas"][0]["cantidad_salida"] == 350.0
+    assert it["salidas"][0]["cantidad_neta"] == 300.0
+    assert it["salidas"][0]["devoluciones"][0]["cantidad"] == 50.0
+
+
+def test_movimientos_salida_con_devolucion_anidada(monkeypatch):
+    from almacen_service import _movimientos_salida_devolucion_por_entrada_item
+
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_salida":
+            q.select.return_value.in_.return_value.execute.return_value.data = [{
+                "id": 5,
+                "entrada_item_id": 10,
+                "numero_salida": 1,
+                "codigo": "Sal-1",
+                "cantidad_salida": 350,
+                "fecha_hora_salida": "2026-08-10T15:00:00Z",
+                "created_at": "2026-08-10T15:00:00Z",
+                "pk_id": "PK-001",
+            }]
+        elif name == "almacen_devolucion":
+            q.select.return_value.in_.return_value.execute.return_value.data = [{
+                "id": 9,
+                "salida_id": 5,
+                "numero_devolucion": 1,
+                "codigo": "Dev-1",
+                "cantidad": 50,
+                "fecha_hora_devolucion": "2026-08-11T10:00:00Z",
+                "created_at": "2026-08-11T10:00:00Z",
+            }]
+        else:
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    mov = _movimientos_salida_devolucion_por_entrada_item(sb, [10])
+    assert len(mov[10]) == 1
+    sal = mov[10][0]
+    assert sal["cantidad_salida"] == 350.0
+    assert sal["cantidad_devuelta"] == 50.0
+    assert sal["cantidad_neta"] == 300.0
+    assert len(sal["devoluciones"]) == 1
+    assert sal["devoluciones"][0]["codigo"] == "Dev-1"
