@@ -3680,6 +3680,7 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
         it["almacen_orden_compra_item"] = oci[0] if oci else {}
     ei_ids = [int(it["id"]) for it in items if it.get("id") is not None]
     despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
+    mov_map = _movimientos_salida_devolucion_por_entrada_item(sb, ei_ids) if ei_ids else {}
     for it in items:
         ei_id = int(it["id"]) if it.get("id") is not None else None
         recibida = _to_float(it.get("cantidad_recibida"))
@@ -3690,6 +3691,7 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
         it["saldo_disponible"] = saldo
         it["porcentaje_saldo_disponible"] = pct
         it["alerta_saldo"] = _alerta_saldo_entrada(pct, recibida)
+        it["salidas"] = mov_map.get(ei_id, []) if ei_id is not None else []
     ent["items"] = items
     if not _norm_pk_id(ent.get("pk_id")) and items:
         ubic_map = _ubicacion_efectiva_entrada_items(sb, items, {int(ent["id"]): ent})
@@ -3969,6 +3971,85 @@ def _despacho_neto_por_entrada_item(sb, entrada_item_ids: List[int]) -> Dict[int
     for eid in ids:
         neto = salidas.get(eid, 0.0) - devoluciones.get(eid, 0.0)
         out[eid] = max(0.0, round(neto, 4))
+    return out
+
+
+def _movimientos_salida_devolucion_por_entrada_item(
+    sb,
+    entrada_item_ids: List[int],
+) -> Dict[int, List[dict]]:
+    """
+    Desglose de salidas con devoluciones anidadas por línea de entrada.
+    No altera el cálculo de saldo; solo expone el historial oculto detrás del neto.
+    """
+    ids = sorted({int(x) for x in entrada_item_ids if x})
+    if not ids:
+        return {}
+    sal_rows = (
+        sb.table("almacen_salida")
+        .select(
+            "id, entrada_item_id, numero_salida, codigo, cantidad_salida, "
+            "fecha_hora_salida, created_at, pk_id"
+        )
+        .in_("entrada_item_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    sal_rows = sorted(
+        sal_rows,
+        key=lambda r: (r.get("created_at") or r.get("fecha_hora_salida") or "", int(r.get("id") or 0)),
+    )
+    salida_ids = [int(s["id"]) for s in sal_rows if s.get("id") is not None]
+    dev_by_salida: Dict[int, List[dict]] = {}
+    if salida_ids:
+        dev_rows = (
+            sb.table("almacen_devolucion")
+            .select(
+                "id, salida_id, numero_devolucion, codigo, cantidad, "
+                "fecha_hora_devolucion, created_at"
+            )
+            .in_("salida_id", salida_ids)
+            .execute()
+            .data
+            or []
+        )
+        dev_rows = sorted(
+            dev_rows,
+            key=lambda r: (
+                r.get("created_at") or r.get("fecha_hora_devolucion") or "",
+                int(r.get("id") or 0),
+            ),
+        )
+        for d in dev_rows:
+            sid = int(d["salida_id"])
+            dev_by_salida.setdefault(sid, []).append({
+                "id": int(d["id"]),
+                "numero_devolucion": d.get("numero_devolucion"),
+                "codigo": d.get("codigo"),
+                "cantidad": _to_float(d.get("cantidad")),
+                "fecha_hora_devolucion": d.get("fecha_hora_devolucion"),
+            })
+
+    out: Dict[int, List[dict]] = {eid: [] for eid in ids}
+    for s in sal_rows:
+        eid = int(s["entrada_item_id"])
+        sid = int(s["id"])
+        qty = _to_float(s.get("cantidad_salida"))
+        devs = dev_by_salida.get(sid, [])
+        devuelta = round(sum(_to_float(d.get("cantidad")) for d in devs), 4)
+        neto = max(0.0, round(qty - devuelta, 4))
+        out.setdefault(eid, []).append({
+            "id": sid,
+            "numero_salida": s.get("numero_salida"),
+            "codigo": s.get("codigo"),
+            "cantidad_salida": qty,
+            "cantidad_devuelta": devuelta,
+            "cantidad_neta": neto,
+            "fecha_hora_salida": s.get("fecha_hora_salida"),
+            "pk_id": s.get("pk_id"),
+            "devoluciones": devs,
+        })
     return out
 
 
