@@ -208,6 +208,7 @@ export default function SalidasPanel({
                 <th style={ui.th}>Material</th>
                 <th style={ui.th}>Cantidad</th>
                 <th style={ui.th}>Devuelto</th>
+                <th style={ui.th}>Cant. Neta</th>
                 <th style={ui.th}>OC</th>
                 <th style={ui.th}>Recibe</th>
                 <th style={ui.th}>Despacha</th>
@@ -219,39 +220,38 @@ export default function SalidasPanel({
               {lista.map((s) => {
                 const busyPdf = pdfBusyId === s.id
                 const tienePdf = Boolean(s.tiene_pdf_salida || s.salida_pdf_blob_path)
+                const und = s.unidad || ''
+                const neto = s.cantidad_neta != null
+                  ? Number(s.cantidad_neta)
+                  : Math.max(0, (Number(s.cantidad_salida) || 0) - (Number(s.cantidad_devuelta) || 0))
                 return (
                   <tr key={s.id}>
                     <td style={ui.td} data-label="N.º">{formatSalidaNumero(s)}</td>
                     <td style={ui.td} data-label="Fecha">{fmtFechaAlmacen(s.fecha_hora_salida) || '—'}</td>
                     <td style={ui.td} data-label="PK-ID">{s.pk_id || '—'}</td>
                     <td style={ui.td} data-label="Material">{s.material_descripcion || '—'}</td>
-                    <td style={ui.td} data-label="Cantidad">
-                      {(() => {
-                        const und = s.unidad || ''
-                        const bruto = fmtCant(s.cantidad_salida)
-                        const devuelta = Number(s.cantidad_devuelta) || 0
-                        if (devuelta > 1e-9) {
-                          const neto = fmtCant(s.cantidad_neta ?? (Number(s.cantidad_salida) - devuelta))
-                          return (
-                            <span>
-                              {bruto}{und ? ` ${und}` : ''}
-                              <span style={{ display: 'block', fontSize: 'var(--cc-xs)', color: ui.textMuted, fontWeight: 600 }}>
-                                {`(neto ${neto}${und ? ` ${und}` : ''})`}
-                              </span>
-                            </span>
-                          )
-                        }
-                        return <>{bruto}{und ? ` ${und}` : ''}</>
-                      })()}
+                    <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Cantidad">
+                      {fmtCant(s.cantidad_salida)}{und ? ` ${und}` : ''}
                     </td>
                     <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Devuelto">
                       {(Number(s.cantidad_devuelta) || 0) > 1e-9
                         ? (
                           <span style={{ color: '#b91c1c', fontWeight: 600 }}>
-                            {fmtCant(s.cantidad_devuelta)}{s.unidad ? ` ${s.unidad}` : ''}
+                            {fmtCant(s.cantidad_devuelta)}{und ? ` ${und}` : ''}
                           </span>
                         )
                         : '—'}
+                    </td>
+                    <td style={{
+                      ...ui.td,
+                      textAlign: 'right',
+                      fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                      data-label="Cant. Neta"
+                      title="Cantidad neta = salida − devoluciones (consumo definitivo)"
+                    >
+                      {fmtCant(neto)}{und ? ` ${und}` : ''}
                     </td>
                     <td style={ui.td} data-label="OC">{formatNumeroOcDisplay(s.numero_oc)}</td>
                     <td style={ui.td} data-label="Recibe">{s.receptor_nombre || '—'}</td>
