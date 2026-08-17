@@ -5069,6 +5069,142 @@ def download_salida_pdf(contrato_id: int, salida_id: int) -> tuple:
     return data, fname
 
 
+def update_salida_cantidad(contrato_id: int, salida_id: int, cantidad_salida: float) -> dict:
+    """
+    Corrige la cantidad de una salida ya registrada.
+    Recalcula saldos derivados vía lectura (entradas/salidas enriquecidas usan despacho neto).
+    Validaciones: cantidad > 0, >= ya devuelto, <= disponible de la línea + cantidad actual.
+    """
+    sb = _sb()
+    nueva = _to_float(cantidad_salida)
+    if nueva <= 0:
+        raise ValueError("Indique una cantidad de salida mayor a cero.")
+
+    rows = (
+        sb.table("almacen_salida")
+        .select("*")
+        .eq("id", int(salida_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Salida no encontrada.")
+    sal = rows[0]
+    antigua = _to_float(sal.get("cantidad_salida"))
+    if abs(nueva - antigua) < 1e-9:
+        enriched = get_salida(contrato_id, int(salida_id))
+        return {
+            **enriched,
+            "cantidad_salida_anterior": antigua,
+            "cantidad_salida": antigua,
+            "sin_cambios": True,
+        }
+
+    ya_devuelta = _to_float(
+        _sum_devoluciones_por_salida(sb, [int(salida_id)]).get(int(salida_id), 0.0)
+    )
+    if nueva + 1e-9 < ya_devuelta:
+        raise ValueError(
+            f"La cantidad ({nueva}) no puede ser menor a lo ya devuelto "
+            f"({ya_devuelta}) contra esta salida."
+        )
+
+    ei_id = int(sal["entrada_item_id"])
+    recibida = _cantidad_recibida_entrada_item(sb, ei_id)
+    despacho_neto = _despacho_neto_por_entrada_item(sb, [ei_id]).get(ei_id, 0.0)
+    disponible = _disponible_entrada_item(recibida, despacho_neto)
+    # Al reemplazar esta cantidad se libera `antigua` y se consume `nueva`.
+    max_permitido = round(disponible + antigua, 4)
+    if nueva > max_permitido + 1e-9:
+        raise ValueError(
+            f"La cantidad ({nueva}) supera lo disponible en la línea de entrada "
+            f"asociada. Máximo permitido: {max_permitido}."
+        )
+
+    delta = round(nueva - antigua, 4)
+    sb.table("almacen_salida").update({
+        "cantidad_salida": nueva,
+    }).eq("id", int(salida_id)).eq("contrato_id", int(contrato_id)).execute()
+
+    movs = (
+        sb.table("almacen_movimiento")
+        .select("id")
+        .eq("referencia_tipo", "salida")
+        .eq("referencia_id", int(salida_id))
+        .execute()
+        .data
+        or []
+    )
+    for m in movs:
+        sb.table("almacen_movimiento").update({"cantidad": nueva}).eq("id", int(m["id"])).execute()
+
+    if abs(delta) > 1e-9:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("*")
+            .eq("id", ei_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ei_rows:
+            ei = ei_rows[0]
+            material = "—"
+            unidad = "UND"
+            presupuesto_id = ei.get("presupuesto_id")
+            oci_id = ei.get("orden_compra_item_id")
+            if oci_id:
+                oci = (
+                    sb.table("almacen_orden_compra_item")
+                    .select("material_descripcion, unidad, presupuesto_id")
+                    .eq("id", int(oci_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if oci:
+                    material = oci[0].get("material_descripcion") or material
+                    unidad = oci[0].get("unidad") or unidad
+                    presupuesto_id = oci[0].get("presupuesto_id") or presupuesto_id
+            if presupuesto_id:
+                # create_salida resta qty del stock; al subir cantidad restamos el delta.
+                _upsert_inventario(
+                    contrato_id, int(presupuesto_id), material, unidad, -delta, 0
+                )
+
+    enriched = get_salida(contrato_id, int(salida_id))
+
+    def _pdf_regen() -> None:
+        try:
+            pdf_ctx = _pdf_ctx_for_salida(sb, contrato_id, {**sal, **enriched})
+            _generar_pdf_salida(
+                contrato_id,
+                int(salida_id),
+                {**sal, "id": int(salida_id), "cantidad_salida": nueva},
+                pdf_ctx,
+            )
+        except Exception as exc:
+            _log.warning("PDF salida %s no regenerado tras editar cantidad: %s", salida_id, exc)
+
+    threading.Thread(target=_pdf_regen, daemon=True).start()
+    _invalidar_graficos_inventario(contrato_id)
+
+    return {
+        **enriched,
+        "cantidad_salida_anterior": antigua,
+        "cantidad_salida": nueva,
+        "cantidad_devuelta": round(ya_devuelta, 4),
+        "cantidad_neta": max(0.0, round(nueva - ya_devuelta, 4)),
+        "sin_cambios": False,
+        "pdf_generando": True,
+    }
+
+
 def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
     sb = _sb()
     sal = get_salida(contrato_id, salida_id)

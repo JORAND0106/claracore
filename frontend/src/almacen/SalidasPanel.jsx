@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
-import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
+import {
+  puedeEditarCantidadSalidaAlmacen,
+  puedeRegistrarSalidaAlmacen,
+} from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
+import { validateCantidadSalidaEdit } from './salidaCantidadEditHelpers'
 import {
   invalidateSalidasCache,
   readSalidasCache,
@@ -24,18 +28,23 @@ function clearSalidaDraft(contratoId) {
 }
 
 export default function SalidasPanel({
-  permisos, token, t, refreshSignal = 0, onDataLoaded,
+  permisos, token, t, refreshSignal = 0, onDataLoaded, onSalidaMutated,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
   const puedeEliminar = Boolean(permisos?.editar)
+  const puedeEditarCantidad = puedeEditarCantidadSalidaAlmacen(permisos)
   const contratoId = permisos?.contratoId
   const [lista, setLista] = useState(() => readSalidasCache(contratoId) || [])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [editCantidadTarget, setEditCantidadTarget] = useState(null)
+  const [editCantidadValor, setEditCantidadValor] = useState('')
+  const [editCantidadError, setEditCantidadError] = useState('')
+  const [editCantidadBusy, setEditCantidadBusy] = useState(false)
   const [pdfBusyId, setPdfBusyId] = useState(null)
   const lastRefreshSignal = useRef(refreshSignal)
   const mountedRef = useRef(true)
@@ -116,17 +125,67 @@ export default function SalidasPanel({
     setCreating(false)
   }
 
+  const notifySalidaMutated = useCallback(() => {
+    // Refresca Entradas/Inventario (saldos derivados) sin depender de un segundo reload local.
+    onSalidaMutated?.()
+  }, [onSalidaMutated])
+
   const onSaved = async (saved) => {
     clearSalidaDraft(contratoId)
     setCreating(false)
     invalidateSalidasCache(contratoId)
     await reload({ force: true })
+    notifySalidaMutated()
     if (saved?.id && saved?.pdf_generando) {
       // Una sola revalidación diferida para marcar tiene_pdf_salida (sin doble reload inmediato).
       setTimeout(() => {
         invalidateSalidasCache(contratoId)
         reload({ force: true })
       }, 2500)
+    }
+  }
+
+  const abrirEditarCantidad = (e, salida) => {
+    e.stopPropagation()
+    setEditCantidadError('')
+    setEditCantidadTarget(salida)
+    setEditCantidadValor(String(salida.cantidad_salida ?? ''))
+  }
+
+  const cerrarEditarCantidad = () => {
+    if (editCantidadBusy) return
+    setEditCantidadTarget(null)
+    setEditCantidadValor('')
+    setEditCantidadError('')
+  }
+
+  const guardarCantidad = async () => {
+    if (!editCantidadTarget) return
+    const check = validateCantidadSalidaEdit({
+      cantidadNueva: editCantidadValor,
+      cantidadActual: editCantidadTarget.cantidad_salida,
+      cantidadDevuelta: editCantidadTarget.cantidad_devuelta,
+      // Disponible exacto lo valida el backend; aquí solo tope por devoluciones.
+      disponibleLinea: null,
+    })
+    if (!check.ok) {
+      setEditCantidadError(check.message)
+      return
+    }
+    setEditCantidadBusy(true)
+    setEditCantidadError('')
+    setError('')
+    try {
+      await api.updateSalidaCantidad(editCantidadTarget.id, check.cantidad)
+      setEditCantidadTarget(null)
+      setEditCantidadValor('')
+      invalidateSalidasCache(contratoId)
+      await reload({ force: true })
+      notifySalidaMutated()
+    } catch (err) {
+      setEditCantidadError(err.message || String(err))
+    } finally {
+      setEditCantidadBusy(false)
     }
   }
 
@@ -171,6 +230,7 @@ export default function SalidasPanel({
       setEliminarTarget(null)
       invalidateSalidasCache(contratoId)
       await reload({ force: true })
+      notifySalidaMutated()
     } catch (err) {
       setError(err.message)
     } finally {
@@ -233,7 +293,24 @@ export default function SalidasPanel({
                     <td style={ui.td} data-label="PK-ID">{s.pk_id || '—'}</td>
                     <td style={ui.td} data-label="Material">{s.material_descripcion || '—'}</td>
                     <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Cantidad">
-                      {fmtCant(s.cantidad_salida)}{und ? ` ${und}` : ''}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                        {fmtCant(s.cantidad_salida)}{und ? ` ${und}` : ''}
+                        {puedeEditarCantidad && (
+                          <button
+                            type="button"
+                            style={{
+                              ...ui.btnSecondary,
+                              padding: '2px 6px',
+                              fontSize: 'var(--cc-xs)',
+                              lineHeight: 1.2,
+                            }}
+                            title="Editar cantidad (Contratista Gerencial / Desarrollador)"
+                            onClick={(e) => abrirEditarCantidad(e, s)}
+                          >
+                            ✎
+                          </button>
+                        )}
+                      </span>
                     </td>
                     <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Devuelto">
                       {(Number(s.cantidad_devuelta) || 0) > 1e-9
@@ -321,6 +398,54 @@ export default function SalidasPanel({
           onClose={cerrarFormulario}
           onSaved={onSaved}
         />
+      )}
+
+      {editCantidadTarget && (
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo="Editar cantidad de salida"
+          confirmar="Guardar"
+          cancelar="Cancelar"
+          procesando={editCantidadBusy}
+          onCancel={cerrarEditarCantidad}
+          onConfirm={guardarCantidad}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+              {formatSalidaNumero(editCantidadTarget)}
+              {editCantidadTarget.material_descripcion
+                ? ` · ${editCantidadTarget.material_descripcion}`
+                : ''}
+            </div>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+              Nueva cantidad
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={editCantidadValor}
+                disabled={editCantidadBusy}
+                onChange={(e) => setEditCantidadValor(e.target.value)}
+                style={{
+                  ...ui.input,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+                autoFocus
+              />
+            </label>
+            {(Number(editCantidadTarget.cantidad_devuelta) || 0) > 1e-9 && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                Ya devuelto: {fmtCant(editCantidadTarget.cantidad_devuelta)}
+                {editCantidadTarget.unidad ? ` ${editCantidadTarget.unidad}` : ''}
+                {' '}(mínimo permitido).
+              </div>
+            )}
+            {editCantidadError && (
+              <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)' }}>{editCantidadError}</div>
+            )}
+          </div>
+        </CcConfirmModal>
       )}
 
       {eliminarTarget && (
