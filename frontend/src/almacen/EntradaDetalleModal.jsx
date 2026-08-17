@@ -4,7 +4,6 @@ import { puedeVerAlertasEntrada } from './almacenPermisos'
 import {
   AlmacenFieldLabel,
   fmtCant,
-  fmtMoney,
   formatEntradaNumero,
   fmtFechaAlmacenSolo,
   useAlmacenApi,
@@ -15,6 +14,21 @@ import {
 const TIPO_LABEL = {
   disposicion: 'Disposición',
   recibo: 'Recibo de materiales',
+}
+
+const ALERTA_SALDO_BG = {
+  rojo: '#fecaca',
+  naranja: '#fed7aa',
+  normal: 'transparent',
+}
+
+function cellStyle(border) {
+  return {
+    border: `1px solid ${border}`,
+    padding: '6px 8px',
+    fontSize: 'var(--cc-sm)',
+    verticalAlign: 'middle',
+  }
 }
 
 export default function EntradaDetalleModal({
@@ -54,7 +68,7 @@ export default function EntradaDetalleModal({
   const modal = {
     ...ui.card,
     width: '100%',
-    maxWidth: compact ? '100%' : 560,
+    maxWidth: compact ? '100%' : 960,
     maxHeight: compact ? '96dvh' : '92vh',
     overflow: 'auto',
     boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
@@ -62,17 +76,43 @@ export default function EntradaDetalleModal({
     paddingBottom: compact ? 'calc(16px + env(safe-area-inset-bottom, 0px))' : ui.card.padding,
   }
 
-  const row = (label, val) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
-      <span style={{ color: ui.textMuted, flexShrink: 0 }}>{label}</span>
-      <span style={{ textAlign: 'right', fontWeight: 500 }}>{val ?? '—'}</span>
-    </div>
-  )
+  const border = ui.sheetWrap?.border?.split(' ').slice(1).join(' ') || 'var(--cc-border, #d1d5db)'
+  const th = {
+    ...cellStyle(border),
+    background: 'var(--cc-almacen-sheet-head, #f3f4f6)',
+    fontWeight: 700,
+    color: ui.textMuted,
+    whiteSpace: 'nowrap',
+  }
+  const td = {
+    ...cellStyle(border),
+    fontWeight: 500,
+  }
 
   const oc = ent?.almacen_orden_compra || {}
   const item0 = ent?.items?.[0]?.almacen_orden_compra_item || {}
   const verAlertas = puedeVerAlertasEntrada(permisos)
-  const unidad = item0.unidad || ent?.insumo_unidad || ''
+  const items = Array.isArray(ent?.items) ? ent.items : []
+
+  const cabeceraCols = ent ? [
+    { key: 'tipo', label: 'Tipo', value: TIPO_LABEL[ent.tipo] || ent.tipo },
+    { key: 'doc', label: 'Documento', value: ent.numero_documento || '—' },
+    { key: 'fecha', label: 'Fecha', value: fmtFechaAlmacenSolo(ent.fecha_entrada) },
+    { key: 'oc', label: 'OC', value: oc.numero_oc ? `#${oc.numero_oc}` : '—' },
+    { key: 'prov', label: 'Proveedor', value: ent.proveedor_nombre || '—' },
+    { key: 'insumo', label: 'Insumo', value: ent.insumo_label || item0.material_descripcion || '—' },
+    { key: 'pk', label: 'PK / sector', value: ent.pk_id || '—' },
+    { key: 'tramo', label: 'Tramo', value: ent.tramo || '—' },
+    { key: 'costado', label: 'Costado', value: ent.costado || '—' },
+    {
+      key: 'abs',
+      label: 'Abscisas',
+      value: [ent.abscisa_inicial, ent.abscisa_final].filter(Boolean).join(' → ') || '—',
+    },
+    { key: 'placa', label: 'Placa', value: ent.placa || '—' },
+    { key: 'trans', label: 'Transportador', value: ent.transportador || '—' },
+    { key: 'user', label: 'Registrado por', value: ent.usuario_nombre || '—' },
+  ] : []
 
   return (
     <div
@@ -99,24 +139,84 @@ export default function EntradaDetalleModal({
 
         {ent && (
           <>
-            {row('Tipo', TIPO_LABEL[ent.tipo] || ent.tipo)}
-            {row('Documento', ent.numero_documento || '—')}
-            {row('Fecha', fmtFechaAlmacenSolo(ent.fecha_entrada))}
-            {row('Orden de compra', oc.numero_oc ? `#${oc.numero_oc}` : '—')}
-            {row('Proveedor', ent.proveedor_nombre)}
-            {row('Insumo', ent.insumo_label || item0.material_descripcion)}
-            {row('Cantidad', `${fmtCant(ent.cantidad_recibida_total)} ${unidad}`.trim())}
-            {row('PK / sector', ent.pk_id)}
-            {row('Tramo', ent.tramo)}
-            {row('Costado', ent.costado)}
-            {row('Abscisas', [ent.abscisa_inicial, ent.abscisa_final].filter(Boolean).join(' → ') || '—')}
-            {row('Placa', ent.placa)}
-            {row('Transportador', ent.transportador)}
-            {row('Registrado por', ent.usuario_nombre)}
+            <div style={{ ...ui.sheetWrap, marginBottom: 14 }} className="cc-almacen-table-scroll">
+              <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
+                <thead>
+                  <tr>
+                    {cabeceraCols.map((c) => (
+                      <th key={c.key} style={th}>{c.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    {cabeceraCols.map((c) => (
+                      <td key={c.key} style={td}>{c.value}</td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <AlmacenFieldLabel
+              icon="📦"
+              label="Saldo disponible (por línea de entrada)"
+              ayuda="Cantidad entregada menos despacho neto (salidas − devoluciones) de esa remisión/insumo."
+            />
+            <div style={{ ...ui.sheetWrap, marginBottom: 14 }} className="cc-almacen-table-scroll">
+              <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 560 }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Insumo / línea</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Cantidad entregada</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Cantidad despachada</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Saldo disponible</th>
+                    <th style={{ ...th, textAlign: 'right' }}>% saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ ...td, color: ui.textMuted }}>Sin líneas de entrada</td>
+                    </tr>
+                  )}
+                  {items.map((it) => {
+                    const oci = it.almacen_orden_compra_item || {}
+                    const und = oci.unidad || ent.insumo_unidad || ''
+                    const alerta = it.alerta_saldo || 'normal'
+                    const bg = ALERTA_SALDO_BG[alerta] || ALERTA_SALDO_BG.normal
+                    const label = oci.material_descripcion
+                      || ent.insumo_label
+                      || `Línea #${it.id}`
+                    const pct = Number(it.porcentaje_saldo_disponible)
+                    const pctLabel = Number.isFinite(pct)
+                      ? `${pct.toLocaleString('es-CO', { maximumFractionDigits: 2 })}%`
+                      : '—'
+                    const rowTd = { ...td, background: bg }
+                    return (
+                      <tr key={it.id}>
+                        <td style={rowTd}>{label}</td>
+                        <td style={{ ...rowTd, textAlign: 'right' }}>
+                          {`${fmtCant(it.cantidad_recibida)} ${und}`.trim()}
+                        </td>
+                        <td style={{ ...rowTd, textAlign: 'right' }}>
+                          {`${fmtCant(it.cantidad_despachada)} ${und}`.trim()}
+                        </td>
+                        <td style={{ ...rowTd, textAlign: 'right' }}>
+                          {`${fmtCant(it.saldo_disponible)} ${und}`.trim()}
+                        </td>
+                        <td style={{ ...rowTd, textAlign: 'right', fontWeight: 700 }}>{pctLabel}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
 
             {verAlertas && ent.alerta_silenciosa_detalle && (
               <div style={{
-                marginTop: 12,
+                marginTop: 4,
+                marginBottom: 8,
                 padding: '10px 12px',
                 borderRadius: 8,
                 background: '#fffbeb',
