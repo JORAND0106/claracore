@@ -102,4 +102,69 @@ def test_create_devolucion_rechaza_exceso(monkeypatch):
             "receptor_usuario_id": 2,
             "salida_id": 5,
             "cantidad": 120,
+            "costado": "Derecha",
+            "abscisa_inicial": "0+100",
+            "abscisa_final": "0+120",
+        })
+
+
+def test_create_devolucion_rechaza_ubicacion_vacia_sin_heredar_salida(monkeypatch):
+    """No acepta costado/abscisas vacíos aunque la salida los tuviera."""
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_salida":
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 5,
+                "contrato_id": 1,
+                "entrada_item_id": 10,
+                "cantidad_salida": 100,
+                "pk_id": "PK-001",
+                "pk_id_id": None,
+                "tramo": "T1",
+                "costado": "Derecha",
+                "abscisa_inicial": "0+100",
+                "abscisa_final": "0+120",
+                "numero_salida": 1,
+                "codigo": "Sal-1",
+            }]
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr("almacen_service._sb", lambda: sb)
+    monkeypatch.setattr(
+        "almacen_service._validar_receptor_obra",
+        lambda *_a, **_k: {"id": 2, "label": "Ana Obra"},
+    )
+    monkeypatch.setattr(
+        "almacen_service._sum_devoluciones_por_salida",
+        lambda *_a, **_k: {5: 0.0},
+    )
+
+    base = {
+        "pk_id": "PK-001",
+        "receptor_usuario_id": 2,
+        "salida_id": 5,
+        "cantidad": 10,
+    }
+    with pytest.raises(ValueError, match="costado"):
+        create_devolucion(1, 99, {**base, "costado": "", "abscisa_inicial": "0+100", "abscisa_final": "0+120"})
+    with pytest.raises(ValueError, match="abscisa"):
+        create_devolucion(1, 99, {
+            **base,
+            "costado": "Derecha",
+            "abscisa_inicial": "",
+            "abscisa_final": "0+120",
+        })
+    with pytest.raises(ValueError, match="abscisa"):
+        create_devolucion(1, 99, {
+            **base,
+            "costado": "Derecha",
+            "abscisa_inicial": "0+100",
+            "abscisa_final": None,
         })

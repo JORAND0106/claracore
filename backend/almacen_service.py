@@ -5025,6 +5025,22 @@ def create_devolucion(contrato_id: int, user_id: int, body: dict) -> dict:
             f"Máximo permitido: {pendiente}."
         )
 
+    costado = (body.get("costado") or "").strip() if body.get("costado") is not None else ""
+    if not costado:
+        raise ValueError("Indique el costado de la devolución.")
+    abscisa_inicial = (
+        (body.get("abscisa_inicial") or "").strip()
+        if body.get("abscisa_inicial") is not None else ""
+    )
+    abscisa_final = (
+        (body.get("abscisa_final") or "").strip()
+        if body.get("abscisa_final") is not None else ""
+    )
+    if not abscisa_inicial or not abscisa_final:
+        raise ValueError(
+            "Indique abscisa inicial (ingreso) y abscisa final (salida) de la devolución."
+        )
+
     fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
         (body.get("fecha_hora_devolucion") or "").strip()
     )
@@ -5043,9 +5059,9 @@ def create_devolucion(contrato_id: int, user_id: int, body: dict) -> dict:
         "pk_id": pk_id,
         "pk_id_id": int(body["pk_id_id"]) if body.get("pk_id_id") else sal.get("pk_id_id"),
         "tramo": (body.get("tramo") or sal.get("tramo") or "").strip() or None,
-        "costado": (body.get("costado") or sal.get("costado") or "").strip() or None,
-        "abscisa_inicial": (body.get("abscisa_inicial") or sal.get("abscisa_inicial") or "").strip() or None,
-        "abscisa_final": (body.get("abscisa_final") or sal.get("abscisa_final") or "").strip() or None,
+        "costado": costado,
+        "abscisa_inicial": abscisa_inicial,
+        "abscisa_final": abscisa_final,
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
     }

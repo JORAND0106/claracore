@@ -126,12 +126,21 @@ export default function DevolucionForm({
   const cantidadInvalida = salidaSel && cantidad.trim() && (
     !Number.isFinite(cantidadNum) || cantidadNum <= 0 || cantidadNum > pendiente + 1e-9
   )
+  const costadoOk = String(costado ?? '').trim() !== ''
+  const abscisaIniOk = String(abscisaInicial ?? '').trim() !== ''
+  const abscisaFinOk = String(abscisaFinal ?? '').trim() !== ''
+  const abscisasRangoOk = !abscisaIniOk || !abscisaFinOk
+    || validateAbscisaRango(abscisaInicial, abscisaFinal).ok
   const puedeRegistrar = Boolean(
     salidaSel
     && cantidad.trim()
     && Number.isFinite(cantidadNum)
     && cantidadNum > 0
-    && !cantidadInvalida,
+    && !cantidadInvalida
+    && costadoOk
+    && abscisaIniOk
+    && abscisaFinOk
+    && abscisasRangoOk,
   )
 
   const submit = async (e) => {
@@ -146,11 +155,12 @@ export default function DevolucionForm({
     } else if (cantidadExcedePendiente(cantidad, pendiente)) {
       errs.cantidad = mensajeExcesoDevolucion(cantidadNum, pendiente, salidaSel?.unidad || '')
     }
-    if (
-      String(abscisaInicial ?? '').trim() !== ''
-      && String(abscisaFinal ?? '').trim() !== ''
-      && !validateAbscisaRango(abscisaInicial, abscisaFinal).ok
-    ) {
+    if (!costadoOk) {
+      errs.costado = 'Seleccione el costado.'
+    }
+    if (!abscisaIniOk || !abscisaFinOk) {
+      errs.abscisas = 'Indique abscisa inicial (ingreso) y abscisa final (salida).'
+    } else if (!validateAbscisaRango(abscisaInicial, abscisaFinal).ok) {
       errs.abscisas = ABSCISA_RANGO_ERROR
     }
     if (Object.keys(errs).length) {
@@ -166,9 +176,9 @@ export default function DevolucionForm({
         pk_id: pkId.trim(),
         pk_id_id: pkIdId,
         tramo: tramo || null,
-        costado: costado || null,
-        abscisa_inicial: abscisaInicial || null,
-        abscisa_final: abscisaFinal || null,
+        costado: String(costado).trim(),
+        abscisa_inicial: String(abscisaInicial).trim(),
+        abscisa_final: String(abscisaFinal).trim(),
         salida_id: salidaSel.id,
         cantidad: cantidadNum,
         observaciones: observaciones.trim() || null,
@@ -258,7 +268,10 @@ export default function DevolucionForm({
           abscisaFinal={abscisaFinal}
           abscisasEditable
           onChange={(patch) => {
-            if (patch.costado != null) setCostado(patch.costado)
+            if (patch.costado != null) {
+              setCostado(patch.costado)
+              clearFieldError('costado')
+            }
             if (patch.abscisa_inicial != null) {
               setAbscisaInicial(patch.abscisa_inicial)
               clearFieldError('abscisas')
@@ -270,6 +283,9 @@ export default function DevolucionForm({
           }}
           disabled={busy}
         />
+      )}
+      {fieldErrors.costado && (
+        <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 6 }}>{fieldErrors.costado}</div>
       )}
       {fieldErrors.abscisas && (
         <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.abscisas}</div>

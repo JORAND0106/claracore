@@ -1168,9 +1168,9 @@ class DevolucionCreateBody(BaseModel):
     pk_id: str = Field(..., min_length=1)
     pk_id_id: Optional[int] = None
     tramo: Optional[str] = None
-    costado: Optional[str] = None
-    abscisa_inicial: Optional[str] = None
-    abscisa_final: Optional[str] = None
+    costado: str = Field(..., min_length=1)
+    abscisa_inicial: str = Field(..., min_length=1)
+    abscisa_final: str = Field(..., min_length=1)
     salida_id: int
     cantidad: float = Field(..., gt=0)
     observaciones: Optional[str] = None
