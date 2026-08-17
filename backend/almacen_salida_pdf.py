@@ -8,12 +8,19 @@ import html
 import io
 import logging
 from almacen_datetime import fmt_fecha_hora_bogota
+from almacen_pos_pdf_common import (
+    BODY_ANCHO_MM,
+    PAGE_ANCHO_MM,
+    estimate_copia_alto_mm,
+    page_height_mm as _sum_copias_alto_mm,
+    page_size_css,
+)
 from typing import Any, Dict, List, Optional, Sequence
 
 _log = logging.getLogger(__name__)
 
-_PAGE_ANCHO_MM = 80
-_COPIA_ALTO_MM = 220
+_PAGE_ANCHO_MM = PAGE_ANCHO_MM
+_COPIA_ALTO_MM = 220  # referencia legacy; el alto real es dinámico
 
 # Firma POS: 50% del tamaño base (28 mm × 14 mm) → 14 mm × 7 mm.
 _FIRMA_W_MM = 14.0
@@ -35,88 +42,114 @@ COPY_ICON: Dict[str, str] = {
 }
 
 
-def _page_size(num_copias: int) -> str:
-    return f"{_PAGE_ANCHO_MM}mm {_COPIA_ALTO_MM * num_copias}mm"
+def _has_devolucion(salida: Dict[str, Any]) -> bool:
+    try:
+        return float(salida.get("cantidad_devuelta") or 0) > 1e-9
+    except (TypeError, ValueError):
+        return False
 
 
-def _pos_css(num_copias: int) -> str:
-    page_size = _page_size(num_copias)
+def _estimate_salida_copia_alto_mm(contrato: Dict[str, Any], salida: Dict[str, Any]) -> int:
+    admins = contrato.get("administradores") or []
+    obs = (salida.get("observaciones") or "").strip()
+    return estimate_copia_alto_mm(
+        objeto=str(contrato.get("objeto") or ""),
+        n_admins=len(admins),
+        has_obs=bool(obs),
+        has_devol=_has_devolucion(salida),
+        has_firmas=True,
+    )
+
+
+def _page_size(num_copias: int, copia_alto_mm: Optional[int] = None) -> str:
+    per = int(copia_alto_mm) if copia_alto_mm else estimate_copia_alto_mm(has_firmas=True)
+    alto = _sum_copias_alto_mm([per] * max(1, int(num_copias)))
+    return page_size_css(PAGE_ANCHO_MM, alto)
+
+
+def _pos_css(num_copias: int, copia_alto_mm: Optional[int] = None) -> str:
+    page_size = _page_size(num_copias, copia_alto_mm)
     return f"""
-@page {{ size: {page_size}; margin: 2mm 3mm; }}
+@page {{ size: {page_size}; margin: 2mm 2.5mm; }}
 body {{
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 12.75pt;
-  line-height: 1.22;
+  font-size: 11.5pt;
+  line-height: 1.2;
   color: #111;
   margin: 0;
   padding: 0;
-  width: 74mm;
+  width: {BODY_ANCHO_MM}mm;
 }}
 .copy-block {{
   page-break-inside: avoid;
   margin: 0;
-  padding: 0 0 3px;
+  padding: 0 0 2px;
   border-bottom: 2px dashed #666;
 }}
 .copy-block-last {{ border-bottom: none; padding-bottom: 0; }}
 .copy-label {{
   text-align: center;
   font-weight: 700;
-  font-size: 13.75pt;
+  font-size: 12.5pt;
   border: 2px solid #111;
-  padding: 5px 7px;
-  margin-bottom: 6px;
+  padding: 4px 6px;
+  margin-bottom: 5px;
   text-transform: uppercase;
 }}
 .copy-icon {{
   display: inline-block;
-  font-size: 16pt;
+  font-size: 14pt;
   line-height: 1;
   margin-right: 4px;
   vertical-align: middle;
 }}
-.hdr {{ text-align: center; margin-bottom: 6px; border-bottom: 1px dashed #333; padding-bottom: 5px; }}
-.hdr h1 {{ font-size: 14.75pt; margin: 0 0 3px; font-weight: 700; }}
-.hdr p {{ margin: 1px 0; font-size: 11.75pt; word-break: break-word; }}
-.hdr p.objeto {{ font-size: 8.25pt; }}
-.title {{ text-align: center; font-weight: 700; font-size: 15.75pt; margin: 6px 0 5px; text-transform: uppercase; }}
+.hdr {{ text-align: center; margin-bottom: 5px; border-bottom: 1px dashed #333; padding-bottom: 4px; }}
+.hdr h1 {{ font-size: 13.5pt; margin: 0 0 2px; font-weight: 700; }}
+.hdr p {{ margin: 1px 0; font-size: 10.5pt; word-break: break-word; }}
+.hdr p.objeto {{ font-size: 8pt; }}
+.title {{ text-align: center; font-weight: 700; font-size: 14pt; margin: 5px 0 4px; text-transform: uppercase; }}
 .cantidad-hero {{
   text-align: center;
   font-weight: 800;
-  font-size: 20pt;
+  font-size: 18pt;
   line-height: 1.15;
-  margin: 6px 0 8px;
-  padding: 6px 4px;
+  margin: 5px 0 6px;
+  padding: 5px 3px;
   border: 2px solid #111;
 }}
 .cantidad-hero .lbl {{
   display: block;
-  font-size: 10.75pt;
+  font-size: 9.5pt;
   font-weight: 700;
   margin-bottom: 2px;
   text-transform: uppercase;
 }}
-.row-tbl {{ width: 100%; margin: 1px 0; font-size: 11.75pt; border-collapse: collapse; border: none; }}
+.row-tbl {{ width: 100%; margin: 1px 0; font-size: 10.5pt; border-collapse: collapse; border: none; }}
 .row-tbl td {{ vertical-align: top; padding: 0; border: none; }}
-.row-tbl .lbl {{ font-weight: 600; width: 46%; }}
-.row-tbl .val {{ text-align: right; width: 54%; word-break: break-word; }}
-.sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 4px 0; line-height: 0; font-size: 0; overflow: hidden; }}
+.row-tbl .lbl {{ font-weight: 600; width: 42%; }}
+.row-tbl .val {{ text-align: right; width: 58%; word-break: break-word; }}
+.sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 3px 0; line-height: 0; font-size: 0; overflow: hidden; }}
 .admin-block {{
-  margin-top: 6px;
-  padding-top: 4px;
+  margin-top: 5px;
+  padding-top: 3px;
   border-top: 1px dashed #666;
-  font-size: 10.25pt;
-  line-height: 1.25;
+  font-size: 9.25pt;
+  line-height: 1.2;
 }}
-.admin-title {{ font-weight: 700; font-size: 10.75pt; margin-bottom: 3px; text-align: center; }}
+.admin-title {{ font-weight: 700; font-size: 9.75pt; margin-bottom: 2px; text-align: center; }}
 .admin-line {{ margin: 1px 0; word-break: break-word; text-align: center; }}
-.firmas {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
-.firmas td {{ width: 50%; vertical-align: top; padding: 2pt 4pt; text-align: center; }}
+.firmas-stack {{ margin-top: 6px; width: 100%; }}
+.firma-block {{
+  width: 100%;
+  text-align: center;
+  margin: 0 0 6px;
+  padding: 0;
+}}
 .firma-lbl {{ font-size: 9pt; font-weight: 700; text-transform: uppercase; margin-bottom: 1pt; }}
 .firma-img-cage {{ border-collapse: collapse; table-layout: fixed; margin: 0 auto 2pt; }}
 .firma-img-cage td {{ overflow: hidden !important; padding: 0 !important; border: none; }}
-.firma-line {{ border-top: 1px solid #111; margin: 0 4pt; padding-top: 3pt; font-size: 10pt; }}
-.footer {{ text-align: center; font-size: 10.75pt; color: #444; margin-top: 4px; }}
+.firma-line {{ border-top: 1px solid #111; margin: 0 8pt; padding-top: 3pt; font-size: 10pt; }}
+.footer {{ text-align: center; font-size: 9.5pt; color: #444; margin-top: 3px; }}
 """
 
 
@@ -223,14 +256,15 @@ def _firma_img_cage_html(img_uri: str) -> str:
 
 
 def _firma_celda(lbl: str, nombre: str, firma_url: Optional[str]) -> str:
+    """Bloque vertical de firma (una columna; no lado a lado)."""
     img_uri = _firma_imagen_data_uri(firma_url)
     img_html = _firma_img_cage_html(img_uri) if img_uri else ""
     return (
-        f"<td>"
+        f'<div class="firma-block">'
         f'<div class="firma-lbl">{_esc(lbl)}</div>'
         f"{img_html}"
         f'<div class="firma-line">{_esc(nombre)}</div>'
-        f"</td>"
+        f"</div>"
     )
 
 
@@ -271,6 +305,29 @@ def _administradores_html(contrato: Dict[str, Any]) -> str:
     )
 
 
+def _devolucion_rows(salida: Dict[str, Any], unidad: str) -> str:
+    if not _has_devolucion(salida):
+        return ""
+    und = f" {_esc(unidad)}" if unidad else ""
+    dev = _fmt_cant(salida.get("cantidad_devuelta"))
+    if salida.get("cantidad_neta") is not None:
+        neto = _fmt_cant(salida.get("cantidad_neta"))
+    else:
+        try:
+            neto_n = max(
+                0.0,
+                float(salida.get("cantidad_salida") or 0) - float(salida.get("cantidad_devuelta") or 0),
+            )
+        except (TypeError, ValueError):
+            neto_n = 0.0
+        neto = _fmt_cant(neto_n)
+    return (
+        f"{_sep()}"
+        f"{_row('Devuelto:', f'{dev}{und}')}"
+        f"{_row('Cant. neta:', f'{neto}{und}')}"
+    )
+
+
 def _render_copia_html(
     *,
     copy_label: str,
@@ -300,13 +357,14 @@ def _render_copia_html(
     fecha_hora = _fmt_fecha_hora(salida.get("fecha_hora_salida"))
 
     firmas = (
-        f'<table class="firmas"><tr>'
+        f'<div class="firmas-stack">'
         f"{_firma_celda('Recibe en obra', receptor_nombre, receptor_firma)}"
         f"{_firma_celda('Despacha', despachador_nombre, despachador_firma)}"
-        f"</tr></table>"
+        f"</div>"
     )
 
     obs_row = _row("Observaciones:", _esc(obs)) if obs else ""
+    devol_rows = _devolucion_rows(salida, unidad)
 
     return f"""
 <div class="{block_cls}">
@@ -320,6 +378,7 @@ def _render_copia_html(
   {_row("Insumo:", _esc(insumo_label))}
   {_row("Ítem presupuesto:", _esc(presupuesto_label))}
   <div class="cantidad-hero"><span class="lbl">Cantidad</span>{cant} {_esc(unidad)}</div>
+  {devol_rows}
   {_sep()}
   {_row("PK / Ubicación:", _esc(pk))}
   {_row("Tramo:", _esc(tramo))}
@@ -344,11 +403,12 @@ def generar_pdf_salida_pos(
     despachador_nombre: str,
     despachador_firma: Optional[str],
 ) -> bytes:
-    """PDF térmico 80 mm: 2 copias (Obra + Almacén), 220 mm c/u."""
+    """PDF térmico 80 mm: 2 copias (Obra + Almacén), alto dinámico según contenido."""
     # Resolver firmas una sola vez (evita 4 HTTP fetches: 2 firmas × 2 copias).
     receptor_firma_uri = _firma_imagen_data_uri(receptor_firma)
     despachador_firma_uri = _firma_imagen_data_uri(despachador_firma)
     copias = list(COPIAS_SALIDA)
+    copia_alto = _estimate_salida_copia_alto_mm(contrato, salida)
     blocks = [
         _render_copia_html(
             copy_label=label,
@@ -368,6 +428,7 @@ def generar_pdf_salida_pos(
     ]
     html_doc = (
         f'<!DOCTYPE html><html><head><meta charset="utf-8"/>'
-        f"<style>{_pos_css(len(copias))}</style></head><body>{''.join(blocks)}</body></html>"
+        f"<style>{_pos_css(len(copias), copia_alto)}</style></head>"
+        f"<body>{''.join(blocks)}</body></html>"
     )
     return _to_pdf_pos_bytes(html_doc)

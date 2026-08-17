@@ -67,39 +67,53 @@ def test_generar_pdf_recibo_pagina_continua():
     assert _count_pdf_pages(pdf) == 1
 
 
-def test_pdf_altura_pagina_por_copias():
-    css_disp = _pos_css(len(COPIAS_DISPOSICION))
-    css_rec = _pos_css(len(COPIAS_RECIBO))
+def test_pdf_altura_pagina_dinamica_por_copias():
+    from almacen_disposicion_pdf import _estimate_entrada_copia_alto_mm
+
+    copia_alto = _estimate_entrada_copia_alto_mm(_BASE["contrato"])
+    css_disp = _pos_css(len(COPIAS_DISPOSICION), copia_alto)
+    css_rec = _pos_css(len(COPIAS_RECIBO), copia_alto)
 
     assert "page-break-after: always" not in css_disp
-    assert "80mm 600mm" in css_disp
-    assert "80mm 400mm" in css_rec
+    assert f"80mm {_page_height_mm(len(COPIAS_DISPOSICION), copia_alto)}mm" in css_disp
+    assert f"80mm {_page_height_mm(len(COPIAS_RECIBO), copia_alto)}mm" in css_rec
+    # Ya no usa altos fijos legacy 200×N.
+    assert "80mm 600mm" not in css_disp
+    assert "80mm 400mm" not in css_rec
     assert "cantidad-hero" in css_disp
     assert "admin-block" in css_disp
     assert "copy-icon" in css_disp
     assert "qr-wrap" not in css_disp
-    assert _page_height_mm(len(COPIAS_DISPOSICION)) == 600
-    assert _page_height_mm(len(COPIAS_RECIBO)) == 400
-    assert _page_height_mm(len(COPIAS_DISPOSICION)) == _COPIA_ALTO_MM * len(COPIAS_DISPOSICION)
+    assert _page_height_mm(len(COPIAS_DISPOSICION), copia_alto) == copia_alto * len(COPIAS_DISPOSICION)
+    assert _page_height_mm(len(COPIAS_RECIBO), copia_alto) == copia_alto * len(COPIAS_RECIBO)
+    assert copia_alto < _COPIA_ALTO_MM
 
 
-def test_pdf_mediabox_exacto():
+def test_pdf_mediabox_80mm_alto_dinamico():
     from pypdf import PdfReader
     import io
+    from almacen_disposicion_pdf import _estimate_entrada_copia_alto_mm
+
+    copia_alto = _estimate_entrada_copia_alto_mm(_BASE["contrato"])
 
     pdf_disp = generar_pdf_disposicion_pos(**_BASE)
     r_disp = PdfReader(io.BytesIO(pdf_disp))
     assert len(r_disp.pages) == 1
     mb = r_disp.pages[0].mediabox
     assert _mm(mb.width) == _PAGE_ANCHO_MM
-    assert _mm(mb.height) == _page_height_mm(len(COPIAS_DISPOSICION))
+    assert _mm(mb.height) == _page_height_mm(len(COPIAS_DISPOSICION), copia_alto)
+    assert _mm(mb.height) < 600  # legacy disposición
 
     pdf_rec = generar_pdf_despachador_pos("recibo", **_BASE)
     r_rec = PdfReader(io.BytesIO(pdf_rec))
     assert len(r_rec.pages) == 1
     mb = r_rec.pages[0].mediabox
     assert _mm(mb.width) == _PAGE_ANCHO_MM
-    assert _mm(mb.height) == _page_height_mm(len(COPIAS_RECIBO))
+    assert _mm(mb.height) == _page_height_mm(len(COPIAS_RECIBO), copia_alto)
+    assert _mm(mb.height) < 400  # legacy recibo
+    text = r_rec.pages[0].extract_text() or ""
+    assert "Recibo de materiales" in text
+    assert "Arena fina" in text
 
 
 def test_fmt_fecha_hora():

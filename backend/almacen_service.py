@@ -3092,15 +3092,73 @@ def upsert_transportador(contrato_id: int, user_id: int, placa: str, nombre: str
 
 
 def download_disposicion_pdf(contrato_id: int, entrada_id: int) -> tuple:
+    from almacen_pos_pdf_common import needs_pos_regen
+
     ent = get_entrada(contrato_id, entrada_id)
     if ent.get("tipo") not in ("disposicion", "recibo"):
         raise ValueError("Esta entrada no tiene PDF POS de Despachador.")
     path = ent.get("disposicion_pdf_blob_path")
-    if not path:
+    data = None
+    if path:
+        try:
+            data, _mime = download_soporte(path)
+        except Exception as exc:
+            _log.warning("Descarga PDF entrada %s: %s", entrada_id, exc)
+            data = None
+    if data and not needs_pos_regen(data):
+        fname = ent.get("disposicion_pdf_nombre") or f"entrada-{entrada_id}.pdf"
+        return data, fname
+    try:
+        _regenerar_pdf_pos_entrada(contrato_id, entrada_id, ent)
+        ent = get_entrada(contrato_id, entrada_id)
+        path = ent.get("disposicion_pdf_blob_path")
+        if path:
+            data, _mime = download_soporte(path)
+    except Exception as exc:
+        _log.warning("Regenerar PDF POS entrada %s: %s", entrada_id, exc)
+    if not data:
         raise ValueError("PDF POS no disponible.")
-    data, mime = download_soporte(path)
     fname = ent.get("disposicion_pdf_nombre") or f"entrada-{entrada_id}.pdf"
     return data, fname
+
+
+def _regenerar_pdf_pos_entrada(contrato_id: int, entrada_id: int, ent: Optional[dict] = None) -> None:
+    """Reconstruye el PDF POS de una entrada existente (primera línea / datos actuales)."""
+    if ent is None:
+        ent = get_entrada(contrato_id, entrada_id)
+    tipo = (ent.get("tipo") or "").strip().lower()
+    if tipo not in ("disposicion", "recibo"):
+        raise ValueError("Esta entrada no genera PDF POS.")
+    items = ent.get("items") or []
+    if not items:
+        raise ValueError("La entrada no tiene líneas para el PDF.")
+    first = items[0]
+    oci = first.get("almacen_orden_compra_item") or {}
+    material = oci.get("material_descripcion") or first.get("material_descripcion") or "—"
+    unidad = oci.get("unidad") or first.get("unidad") or ""
+    cantidad = _to_float(first.get("cantidad_recibida") or ent.get("cantidad_recibida_total"))
+    oc = ent.get("almacen_orden_compra") or {}
+    if ent.get("orden_compra_id") and not oc.get("numero_oc"):
+        try:
+            oc = get_orden_compra(contrato_id, int(ent["orden_compra_id"]), incluir_entradas=False)
+        except Exception:
+            oc = {"numero_oc": oc.get("numero_oc") or "—"}
+    user_id = int(ent.get("created_by") or ent.get("usuario_id") or 0)
+    entrada_pdf = {
+        **ent,
+        "cantidad_recibida": cantidad,
+        "numero_documento": ent.get("numero_documento"),
+    }
+    _generar_pdf_pos_entrada(
+        contrato_id,
+        int(entrada_id),
+        entrada_pdf,
+        oc,
+        {"material_descripcion": material, "unidad": unidad, "proveedor_nombre": ent.get("proveedor_nombre")},
+        cantidad,
+        user_id or 0,
+        tipo,
+    )
 
 
 def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Optional[bytes] = None,
@@ -4564,9 +4622,24 @@ def _generar_pdf_salida(
         **contrato_rows[0],
         "administradores": _administradores_contrato_contactos(sb, contrato_id),
     }
+    sid = int(salida_id)
+    qty = _to_float(salida_row.get("cantidad_salida"))
+    if salida_row.get("cantidad_devuelta") is not None:
+        ya_dev = _to_float(salida_row.get("cantidad_devuelta"))
+    else:
+        ya_dev = _to_float(_sum_devoluciones_por_salida(sb, [sid]).get(sid, 0.0))
+    if salida_row.get("cantidad_neta") is not None:
+        neto = _to_float(salida_row.get("cantidad_neta"))
+    else:
+        neto = max(0.0, qty - ya_dev)
+    salida_pdf = {
+        **salida_row,
+        "cantidad_devuelta": ya_dev,
+        "cantidad_neta": neto,
+    }
     pdf_bytes = generar_pdf_salida_pos(
         contrato_pdf,
-        salida_row,
+        salida_pdf,
         str(ctx.get("numero_oc") or "—"),
         ctx.get("insumo_label") or "—",
         ctx.get("presupuesto_label") or "—",
@@ -5047,12 +5120,19 @@ def _pdf_ctx_for_salida(sb, contrato_id: int, sal: dict) -> dict:
 
 
 def download_salida_pdf(contrato_id: int, salida_id: int) -> tuple:
-    """Descarga el recibo PDF. Reutiliza blob existente; solo regenera si falta."""
+    """Descarga el recibo PDF. Regenera si falta o si el blob es formato legacy (alto fijo)."""
+    from almacen_pos_pdf_common import needs_pos_regen
+
     sal = get_salida(contrato_id, salida_id)
     path = (sal.get("salida_pdf_blob_path") or "").strip()
+    data = None
     if path:
-        data, _mime = download_soporte(path)
-        if data:
+        try:
+            data, _mime = download_soporte(path)
+        except Exception as exc:
+            _log.warning("Descarga PDF salida %s: %s", salida_id, exc)
+            data = None
+        if data and not needs_pos_regen(data):
             fname = sal.get("salida_pdf_nombre") or f"salida-{salida_id}.pdf"
             return data, fname
     sb = _sb()
