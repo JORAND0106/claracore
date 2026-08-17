@@ -70,7 +70,7 @@ export default function EntradaDetalleModal({
   const modal = {
     ...ui.card,
     width: '100%',
-    maxWidth: compact ? '100%' : 960,
+    maxWidth: compact ? '100%' : 'min(1280px, 96vw)',
     maxHeight: compact ? '96dvh' : '92vh',
     overflow: 'auto',
     boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
@@ -89,6 +89,28 @@ export default function EntradaDetalleModal({
   const td = {
     ...cellStyle(border),
     fontWeight: 500,
+  }
+
+  const CABECERA_COL_STYLE = {
+    tipo: { width: 110, maxWidth: 130, whiteSpace: 'nowrap' },
+    doc: { width: 100, maxWidth: 120, whiteSpace: 'nowrap' },
+    fecha: { width: 100, maxWidth: 110, whiteSpace: 'nowrap' },
+    oc: { width: 72, maxWidth: 90, whiteSpace: 'nowrap' },
+    prov: { minWidth: 140, maxWidth: 200 },
+    insumo: {
+      minWidth: 260,
+      width: '28%',
+      whiteSpace: 'normal',
+      wordBreak: 'break-word',
+      overflowWrap: 'anywhere',
+    },
+    pk: { minWidth: 110, maxWidth: 160 },
+    tramo: { width: 90, maxWidth: 120, whiteSpace: 'nowrap' },
+    costado: { width: 90, maxWidth: 110, whiteSpace: 'nowrap' },
+    abs: { minWidth: 120, maxWidth: 160, whiteSpace: 'nowrap' },
+    placa: { width: 90, maxWidth: 110, whiteSpace: 'nowrap' },
+    trans: { minWidth: 120, maxWidth: 180 },
+    user: { minWidth: 120, maxWidth: 180 },
   }
 
   const oc = ent?.almacen_orden_compra || {}
@@ -142,18 +164,35 @@ export default function EntradaDetalleModal({
         {ent && (
           <>
             <div style={{ ...ui.sheetWrap, marginBottom: 14 }} className="cc-almacen-table-scroll">
-              <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
+              <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 1100, width: '100%' }}>
                 <thead>
                   <tr>
                     {cabeceraCols.map((c) => (
-                      <th key={c.key} style={th}>{c.label}</th>
+                      <th
+                        key={c.key}
+                        style={{
+                          ...th,
+                          ...(CABECERA_COL_STYLE[c.key] || {}),
+                          ...(c.key === 'insumo' ? { whiteSpace: 'nowrap' } : {}),
+                        }}
+                      >
+                        {c.label}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     {cabeceraCols.map((c) => (
-                      <td key={c.key} style={td}>{c.value}</td>
+                      <td
+                        key={c.key}
+                        style={{
+                          ...td,
+                          ...(CABECERA_COL_STYLE[c.key] || {}),
+                        }}
+                      >
+                        {c.value}
+                      </td>
                     ))}
                   </tr>
                 </tbody>
