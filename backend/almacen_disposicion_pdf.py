@@ -6,14 +6,22 @@ from __future__ import annotations
 import html
 import io
 import logging
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from almacen_datetime import fmt_fecha_hora_entrada
+from almacen_pos_pdf_common import (
+    BODY_ANCHO_MM,
+    PAGE_ANCHO_MM,
+    estimate_copia_alto_mm,
+    page_height_mm as _sum_copias_alto_mm,
+    page_size_css,
+)
 
 _log = logging.getLogger(__name__)
 
-_PAGE_ANCHO_MM = 80
-_COPIA_ALTO_MM = 200
+# Reexport para tests legacy.
+_PAGE_ANCHO_MM = PAGE_ANCHO_MM
+_COPIA_ALTO_MM = 200  # solo referencia legacy; el alto real es dinámico
 
 COPIAS_DISPOSICION: Sequence[str] = ("Transportador", "Escombrera", "Obra")
 COPIAS_RECIBO: Sequence[str] = ("Transportador", "Obra")
@@ -25,31 +33,41 @@ COPY_ICON: Dict[str, str] = {
 }
 
 
-def _page_height_mm(num_copias: int) -> int:
-    return _COPIA_ALTO_MM * num_copias
+def _estimate_entrada_copia_alto_mm(contrato: Dict[str, Any]) -> int:
+    admins = contrato.get("administradores") or []
+    return estimate_copia_alto_mm(
+        objeto=str(contrato.get("objeto") or ""),
+        n_admins=len(admins),
+    )
 
 
-def _page_size(num_copias: int) -> str:
-    return f"{_PAGE_ANCHO_MM}mm {_page_height_mm(num_copias)}mm"
+def _page_height_mm(num_copias: int, copia_alto_mm: Optional[int] = None) -> int:
+    """Alto total del rollo. Si no se pasa alto por copia, usa estimación base."""
+    per = int(copia_alto_mm) if copia_alto_mm else estimate_copia_alto_mm()
+    return _sum_copias_alto_mm([per] * max(1, int(num_copias)))
 
 
-def _pos_css(num_copias: int) -> str:
-    page_size = _page_size(num_copias)
+def _page_size(num_copias: int, copia_alto_mm: Optional[int] = None) -> str:
+    return page_size_css(PAGE_ANCHO_MM, _page_height_mm(num_copias, copia_alto_mm))
+
+
+def _pos_css(num_copias: int, copia_alto_mm: Optional[int] = None) -> str:
+    page_size = _page_size(num_copias, copia_alto_mm)
     return f"""
-@page {{ size: {page_size}; margin: 2mm 3mm; }}
+@page {{ size: {page_size}; margin: 2mm 2.5mm; }}
 body {{
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 12.75pt;
-  line-height: 1.22;
+  font-size: 11.5pt;
+  line-height: 1.2;
   color: #111;
   margin: 0;
   padding: 0;
-  width: 74mm;
+  width: {BODY_ANCHO_MM}mm;
 }}
 .copy-block {{
   page-break-inside: avoid;
   margin: 0;
-  padding: 0 0 3px;
+  padding: 0 0 2px;
   border-bottom: 2px dashed #666;
 }}
 .copy-block-last {{
@@ -59,15 +77,15 @@ body {{
 .copy-label {{
   text-align: center;
   font-weight: 700;
-  font-size: 13.75pt;
+  font-size: 12.5pt;
   border: 2px solid #111;
-  padding: 5px 7px;
-  margin-bottom: 6px;
+  padding: 4px 6px;
+  margin-bottom: 5px;
   text-transform: uppercase;
 }}
 .copy-icon {{
   display: inline-block;
-  font-size: 16pt;
+  font-size: 14pt;
   line-height: 1;
   margin-right: 4px;
   vertical-align: middle;
@@ -75,47 +93,47 @@ body {{
 .copy-icon-transportador {{ color: #111; }}
 .copy-icon-escombrera {{ color: #333; }}
 .copy-icon-obra {{ color: #000; }}
-.hdr {{ text-align: center; margin-bottom: 6px; border-bottom: 1px dashed #333; padding-bottom: 5px; }}
-.hdr h1 {{ font-size: 14.75pt; margin: 0 0 3px; font-weight: 700; }}
-.hdr p {{ margin: 1px 0; font-size: 11.75pt; word-break: break-word; }}
-.hdr p.objeto {{ font-size: 8.25pt; }}
-.title {{ text-align: center; font-weight: 700; font-size: 15.75pt; margin: 6px 0 5px; text-transform: uppercase; }}
+.hdr {{ text-align: center; margin-bottom: 5px; border-bottom: 1px dashed #333; padding-bottom: 4px; }}
+.hdr h1 {{ font-size: 13.5pt; margin: 0 0 2px; font-weight: 700; }}
+.hdr p {{ margin: 1px 0; font-size: 10.5pt; word-break: break-word; }}
+.hdr p.objeto {{ font-size: 8pt; }}
+.title {{ text-align: center; font-weight: 700; font-size: 14pt; margin: 5px 0 4px; text-transform: uppercase; }}
 .cantidad-hero {{
   text-align: center;
   font-weight: 800;
-  font-size: 20pt;
+  font-size: 18pt;
   line-height: 1.15;
-  margin: 6px 0 8px;
-  padding: 6px 4px;
+  margin: 5px 0 6px;
+  padding: 5px 3px;
   border: 2px solid #111;
 }}
 .cantidad-hero .lbl {{
   display: block;
-  font-size: 10.75pt;
+  font-size: 9.5pt;
   font-weight: 700;
   margin-bottom: 2px;
   text-transform: uppercase;
 }}
-.row-tbl {{ width: 100%; margin: 1px 0; font-size: 11.75pt; border-collapse: collapse; border: none; }}
+.row-tbl {{ width: 100%; margin: 1px 0; font-size: 10.5pt; border-collapse: collapse; border: none; }}
 .row-tbl td {{ vertical-align: top; padding: 0; border: none; }}
-.row-tbl .lbl {{ font-weight: 600; width: 46%; }}
-.row-tbl .val {{ text-align: right; width: 54%; word-break: break-word; }}
-.sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 4px 0; line-height: 0; font-size: 0; overflow: hidden; }}
+.row-tbl .lbl {{ font-weight: 600; width: 42%; }}
+.row-tbl .val {{ text-align: right; width: 58%; word-break: break-word; }}
+.sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 3px 0; line-height: 0; font-size: 0; overflow: hidden; }}
 .admin-block {{
-  margin-top: 6px;
-  padding-top: 4px;
+  margin-top: 5px;
+  padding-top: 3px;
   border-top: 1px dashed #666;
-  font-size: 10.25pt;
-  line-height: 1.25;
+  font-size: 9.25pt;
+  line-height: 1.2;
 }}
 .admin-title {{
   font-weight: 700;
-  font-size: 10.75pt;
-  margin-bottom: 3px;
+  font-size: 9.75pt;
+  margin-bottom: 2px;
   text-align: center;
 }}
 .admin-line {{ margin: 1px 0; word-break: break-word; text-align: center; }}
-.footer {{ text-align: center; font-size: 10.75pt; color: #444; margin-top: 4px; }}
+.footer {{ text-align: center; font-size: 9.5pt; color: #444; margin-top: 3px; }}
 """
 
 
@@ -295,9 +313,10 @@ def generar_pdf_despachador_pos(
     usuario_nombre: str,
     unidad: str = "",
 ) -> bytes:
-    """Genera PDF térmico 80 mm continuo: 200 mm por copia (Disposición 600 mm, Recibo 400 mm)."""
+    """Genera PDF térmico 80 mm continuo: alto dinámico según contenido × N copias."""
     copias = _copias_por_tipo(tipo)
     doc_title = _titulo_documento(tipo)
+    copia_alto = _estimate_entrada_copia_alto_mm(contrato)
     blocks = [
         _render_copia_html(
             copy_label=label,
@@ -315,7 +334,8 @@ def generar_pdf_despachador_pos(
     ]
     html_doc = (
         f'<!DOCTYPE html><html><head><meta charset="utf-8"/>'
-        f"<style>{_pos_css(len(copias))}</style></head><body>{''.join(blocks)}</body></html>"
+        f"<style>{_pos_css(len(copias), copia_alto)}</style></head>"
+        f"<body>{''.join(blocks)}</body></html>"
     )
     return _to_pdf_pos_bytes(html_doc)
 

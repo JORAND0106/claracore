@@ -44,6 +44,8 @@ def test_firma_celda_usa_jaula_altura_fija():
     html = _firma_celda("Recibe en obra", "Juan Pérez", _large_png_data_uri())
     assert f"height:{_FIRMA_H_PT}pt" in html
     assert "firma-img-cage" in html
+    assert "firma-block" in html
+    assert html.strip().startswith('<div class="firma-block">')
 
 
 def test_generar_pdf_salida_pos_bytes():
@@ -78,3 +80,54 @@ def test_generar_pdf_salida_pos_bytes():
     )
     assert isinstance(pdf, bytes)
     assert pdf[:4] == b"%PDF"
+
+    from pypdf import PdfReader
+    import io
+    from almacen_pos_pdf_common import PAGE_ANCHO_MM, needs_pos_regen
+    from almacen_salida_pdf import _estimate_salida_copia_alto_mm, COPIAS_SALIDA
+
+    r = PdfReader(io.BytesIO(pdf))
+    assert len(r.pages) == 1
+    mb = r.pages[0].mediabox
+    w_mm = round(float(mb.width) * 25.4 / 72, 1)
+    h_mm = round(float(mb.height) * 25.4 / 72, 1)
+    assert w_mm == PAGE_ANCHO_MM
+    expected = _estimate_salida_copia_alto_mm(contrato, salida) * len(COPIAS_SALIDA)
+    assert h_mm == expected
+    assert h_mm < 440  # legacy fijo 220×2
+    assert not needs_pos_regen(pdf)
+    text = r.pages[0].extract_text() or ""
+    assert "Salida de material" in text
+    assert "María López" in text
+
+
+def test_salida_pdf_incluye_devolucion_si_aplica():
+    from almacen_salida_pdf import _render_copia_html
+
+    contrato = {"numero": "CT-1", "contratista": "X", "nit": "1", "objeto": "O", "administradores": []}
+    salida = {
+        "numero_salida": 1,
+        "fecha_hora_salida": "2026-07-13T14:30:00+00:00",
+        "cantidad_salida": 10,
+        "cantidad_devuelta": 2.5,
+        "cantidad_neta": 7.5,
+        "pk_id": "PK",
+    }
+    html = _render_copia_html(
+        copy_label="Obra",
+        is_last=True,
+        contrato=contrato,
+        salida=salida,
+        oc_num="1",
+        insumo_label="Arena",
+        presupuesto_label="1.1",
+        unidad="M3",
+        receptor_nombre="R",
+        receptor_firma=None,
+        despachador_nombre="D",
+        despachador_firma=None,
+    )
+    assert "Devuelto:" in html
+    assert "Cant. neta:" in html
+    assert "firmas-stack" in html
+    assert "firma-block" in html
