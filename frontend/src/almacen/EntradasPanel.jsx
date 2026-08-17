@@ -38,10 +38,28 @@ function nombreUsuarioCorto(full) {
 }
 
 function ThHelp({ children, ayuda, style }) {
+  // ui.th trae whiteSpace:nowrap; sin override el texto + (?) se truncan en columnas angostas.
   return (
-    <th style={style}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        {children}
+    <th
+      style={{
+        ...style,
+        whiteSpace: 'normal',
+        overflow: 'visible',
+        verticalAlign: 'bottom',
+        lineHeight: 1.2,
+        textTransform: 'uppercase',
+      }}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          flexWrap: 'wrap',
+          maxWidth: '100%',
+        }}
+      >
+        <span style={{ whiteSpace: 'normal', hyphens: 'manual' }}>{children}</span>
         <AlmacenHelpIcon ayuda={ayuda} />
       </span>
     </th>
@@ -135,56 +153,64 @@ export default function EntradasPanel({
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>No hay entradas registradas.</div>
       ) : (
         <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
-          <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1100 }}>
+          <table
+            className="cc-almacen-responsive-table"
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              tableLayout: 'auto',
+              minWidth: 1180,
+            }}
+          >
             <thead>
               <tr>
-                <th style={{ ...ui.th, width: 118 }}>N.º</th>
-                <th style={{ ...ui.th, width: 88 }}>Fecha</th>
-                <th style={{ ...ui.th, width: 72 }}>Tipo</th>
-                <th style={{ ...ui.th, width: 88 }} title="Número de remisión / documento de ingreso">
+                <th style={{ ...ui.th, width: 118, whiteSpace: 'nowrap' }}>N.º</th>
+                <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }}>Fecha</th>
+                <th style={{ ...ui.th, width: 72, whiteSpace: 'nowrap' }}>Tipo</th>
+                <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }} title="Número de remisión / documento de ingreso">
                   Remisión
                 </th>
-                <th style={{ ...ui.th, width: 56 }}>OC</th>
-                <th style={{ ...ui.th, minWidth: 220, width: '22%' }}>Insumo</th>
+                <th style={{ ...ui.th, width: 56, whiteSpace: 'nowrap' }}>OC</th>
+                <th style={{ ...ui.th, minWidth: 240, width: '22%', whiteSpace: 'normal' }}>Insumo</th>
                 <ThHelp
-                  style={{ ...ui.th, width: 88 }}
-                  ayuda="Cantidad recibida en esta línea de la remisión (entrada_item)."
+                  style={{ ...ui.th, minWidth: 108 }}
+                  ayuda="Cantidad que ingresó al almacén en esta línea de la remisión (este insumo puntual)."
                 >
                   Recibido
                 </ThHelp>
                 <ThHelp
-                  style={{ ...ui.th, width: 88 }}
-                  ayuda="Cantidad despachada neta de esta línea: salidas − devoluciones."
+                  style={{ ...ui.th, minWidth: 112 }}
+                  ayuda="Cuánto de esta línea ya salió a obra en neto: suma de salidas menos las devoluciones registradas."
                 >
                   Consumido
                 </ThHelp>
                 <ThHelp
-                  style={{ ...ui.th, width: 100 }}
-                  ayuda="Saldo por consumir = recibido − consumido (disponible para nuevas salidas)."
+                  style={{ ...ui.th, minWidth: 118 }}
+                  ayuda="Lo que aún queda disponible de esta línea para despachar: Recibido − Consumido."
                 >
-                  Saldo x consumir
+                  <>Saldo x<br />consumir</>
                 </ThHelp>
                 <ThHelp
-                  style={{ ...ui.th, width: 72 }}
-                  ayuda="Porcentaje de saldo disponible respecto a la cantidad recibida de la línea."
+                  style={{ ...ui.th, minWidth: 88 }}
+                  ayuda="Qué porcentaje del recibido sigue disponible. Rojo ≤10%, naranja ≤20%, normal si es mayor."
                 >
                   % saldo
                 </ThHelp>
                 <ThHelp
-                  style={{ ...ui.th, width: 88 }}
-                  ayuda="Saldo pendiente de la orden de compra justo después de registrar esta entrada."
+                  style={{ ...ui.th, minWidth: 100 }}
+                  ayuda="Cuánto queda pendiente por recibir de la orden de compra después de esta entrada (vista de la OC, no del stock de la línea)."
                 >
                   Saldo OC
                 </ThHelp>
-                <th style={{ ...ui.th, width: 120 }}>Proveedor</th>
+                <th style={{ ...ui.th, minWidth: 120, whiteSpace: 'normal' }}>Proveedor</th>
                 <ThHelp
-                  style={{ ...ui.th, width: 100 }}
-                  ayuda="Usuario que registró la entrada. Pase el cursor sobre el nombre para ver el nombre completo."
+                  style={{ ...ui.th, minWidth: 108 }}
+                  ayuda="Quién registró la entrada. El nombre aparece abreviado; pase el cursor sobre la celda para ver el nombre completo."
                 >
                   Usuario
                 </ThHelp>
-                {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center' }}>⚠</th>}
-                <th style={{ ...ui.th, width: 72, textAlign: 'center' }}>PDF</th>
+                {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center', whiteSpace: 'nowrap' }}>⚠</th>}
+                <th style={{ ...ui.th, width: 72, textAlign: 'center', whiteSpace: 'nowrap' }}>PDF</th>
                 {puedeEliminar && <th style={{ ...ui.th, width: 44, textAlign: 'center' }}> </th>}
               </tr>
             </thead>
