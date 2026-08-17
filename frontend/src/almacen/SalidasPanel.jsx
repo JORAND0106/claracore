@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
 import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
+import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   invalidateSalidasCache,
   readSalidasCache,
@@ -212,6 +213,7 @@ export default function SalidasPanel({
                 <th style={ui.th}>OC</th>
                 <th style={ui.th}>Recibe</th>
                 <th style={ui.th}>Despacha</th>
+                <th style={{ ...ui.th, width: 44, textAlign: 'center' }} title="Trazabilidad">📜</th>
                 <th style={{ ...ui.th, width: 88, textAlign: 'center' }}>Recibo</th>
                 {puedeEliminar && <th style={{ ...ui.th, width: 44, textAlign: 'center' }}> </th>}
               </tr>
@@ -256,6 +258,17 @@ export default function SalidasPanel({
                     <td style={ui.td} data-label="OC">{formatNumeroOcDisplay(s.numero_oc)}</td>
                     <td style={ui.td} data-label="Recibe">{s.receptor_nombre || '—'}</td>
                     <td style={ui.td} data-label="Despacha">{s.despachador_nombre || '—'}</td>
+                    <td style={{ ...ui.td, textAlign: 'center' }} data-label="Historial">
+                      <AlmacenTrazabilidadButton
+                        token={token}
+                        theme={t}
+                        ui={ui}
+                        compact
+                        entidadTipo="salida"
+                        entidadId={s.id}
+                        titulo={`Almacén · Salida ${formatSalidaNumero(s)}${s.material_descripcion ? ` · ${s.material_descripcion}` : ''}`}
+                      />
+                    </td>
                     <td style={{ ...ui.td, textAlign: 'center' }} data-label="Recibo">
                       <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
                         <button

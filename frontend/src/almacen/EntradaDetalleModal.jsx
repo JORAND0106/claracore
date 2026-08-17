@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import { puedeVerAlertasEntrada } from './almacenPermisos'
+import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   AlmacenFieldLabel,
   fmtCant,
@@ -172,12 +173,13 @@ export default function EntradaDetalleModal({
                     <th style={{ ...th, textAlign: 'right' }}>Cantidad despachada</th>
                     <th style={{ ...th, textAlign: 'right' }}>Saldo disponible</th>
                     <th style={{ ...th, textAlign: 'right' }}>% saldo</th>
+                    <th style={{ ...th, textAlign: 'center', width: 44 }} title="Trazabilidad">📜</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={5} style={{ ...td, color: ui.textMuted }}>Sin líneas de entrada</td>
+                      <td colSpan={6} style={{ ...td, color: ui.textMuted }}>Sin líneas de entrada</td>
                     </tr>
                   )}
                   {items.map((it) => {
@@ -206,6 +208,17 @@ export default function EntradaDetalleModal({
                           {`${fmtCant(it.saldo_disponible)} ${und}`.trim()}
                         </td>
                         <td style={{ ...rowTd, textAlign: 'right', fontWeight: 700 }}>{pctLabel}</td>
+                        <td style={{ ...rowTd, textAlign: 'center' }}>
+                          <AlmacenTrazabilidadButton
+                            token={token}
+                            theme={theme}
+                            ui={ui}
+                            compact
+                            entidadTipo="entrada_item"
+                            entidadId={it.id}
+                            titulo={`Almacén · Entrada ${formatEntradaNumero(ent)} · ${label}`}
+                          />
+                        </td>
                       </tr>
                     )
                   })}

@@ -3223,6 +3223,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     primera_cantidad = 0.0
     primera_oci: Optional[dict] = None
     pdf_oc: dict = oc or {"numero_oc": "—"}
+    created_items: List[dict] = []
 
     for ln in lineas:
         qty = _to_float(ln.get("cantidad_recibida"))
@@ -3264,6 +3265,13 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
             }
             ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
             ei_id = ei_ins[0]["id"] if ei_ins else None
+            if ei_id is not None:
+                created_items.append({
+                    **ei_row,
+                    "id": ei_id,
+                    "material_descripcion": oci.get("material_descripcion"),
+                    "unidad": oci.get("unidad"),
+                })
 
             new_rec = _to_float(oci.get("cantidad_recibida")) + qty
             new_val_rec = round(_to_float(oci.get("valor_recibido")) + valor_linea, 2)
@@ -3317,6 +3325,13 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
             }
             ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
             ei_id = ei_ins[0]["id"] if ei_ins else None
+            if ei_id is not None:
+                created_items.append({
+                    **ei_row,
+                    "id": ei_id,
+                    "material_descripcion": material,
+                    "unidad": unidad,
+                })
 
             if presupuesto_id:
                 sb.table("almacen_movimiento").insert({
@@ -3381,7 +3396,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     result = {
         **entrada_row,
         "id": entrada_id,
-        "items": [],
+        "items": created_items,
         "cantidad_recibida_total": sum(_to_float(ln.get("cantidad_recibida")) for ln in lineas),
         "pdf_generando": pdf_generando,
         "tiene_pdf_disposicion": False,
