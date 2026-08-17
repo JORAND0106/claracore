@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import SolicitudFormModal from './SolicitudFormModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
+import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
   solicitudPuedeValidar,
   solicitudTieneOrdenCompra,
 } from './solicitudDetalleHelpers'
+import {
+  countSolicitudesFiltrosActivos,
+  EMPTY_SOLICITUDES_FILTROS,
+  filterSolicitudesLista,
+} from './solicitudesFiltros'
 import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
@@ -34,8 +40,16 @@ export default function SolicitudesPanel({
   const [anularBusy, setAnularBusy] = useState(false)
   const [eliminarDevTarget, setEliminarDevTarget] = useState(null)
   const [eliminarDevBusy, setEliminarDevBusy] = useState(false)
+  const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SOLICITUDES_FILTROS }))
+  const [filtrosOpen, setFiltrosOpen] = useState(false)
 
   const puedeEliminarDev = puedeEliminarSolicitudDesarrollador(permisos)
+
+  const listaFiltrada = useMemo(
+    () => filterSolicitudesLista(lista, filtros),
+    [lista, filtros],
+  )
+  const filtrosActivos = countSolicitudesFiltrosActivos(filtros)
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -94,18 +108,28 @@ export default function SolicitudesPanel({
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📋 Solicitudes de materiales</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
             Genere solicitudes de insumos con ubicación PK-ID, control presupuestal y trazabilidad por línea.
           </div>
         </div>
-        {permisos?.crear && (
-          <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
-            + Nueva solicitud
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            onClick={() => setFiltrosOpen(true)}
+            title="Filtrar solicitudes"
+          >
+            🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
-        )}
+          {permisos?.crear && (
+            <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
+              + Nueva solicitud
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
@@ -115,6 +139,18 @@ export default function SolicitudesPanel({
       ) : lista.length === 0 ? (
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>
           No hay solicitudes registradas.
+        </div>
+      ) : listaFiltrada.length === 0 ? (
+        <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>
+          Ninguna solicitud coincide con los filtros.
+          {' '}
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-caption)' }}
+            onClick={() => setFiltros({ ...EMPTY_SOLICITUDES_FILTROS })}
+          >
+            Limpiar filtros
+          </button>
         </div>
       ) : (
         <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
@@ -133,7 +169,7 @@ export default function SolicitudesPanel({
               </tr>
             </thead>
             <tbody>
-              {lista.map((s) => {
+              {listaFiltrada.map((s) => {
                 const nItems = s.items_count != null ? s.items_count : (s.items || []).length
                 return (
                 <tr
@@ -217,6 +253,18 @@ export default function SolicitudesPanel({
             </tbody>
           </table>
         </div>
+      )}
+
+      {filtrosOpen && (
+        <SolicitudesFiltrosModal
+          theme={t}
+          filtros={filtros}
+          onClose={() => setFiltrosOpen(false)}
+          onApply={(next) => {
+            setFiltros({ ...EMPTY_SOLICITUDES_FILTROS, ...next })
+            setFiltrosOpen(false)
+          }}
+        />
       )}
 
       {formModalOpen && (
