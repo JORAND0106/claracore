@@ -3678,6 +3678,18 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
             or []
         )
         it["almacen_orden_compra_item"] = oci[0] if oci else {}
+    ei_ids = [int(it["id"]) for it in items if it.get("id") is not None]
+    despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
+    for it in items:
+        ei_id = int(it["id"]) if it.get("id") is not None else None
+        recibida = _to_float(it.get("cantidad_recibida"))
+        despachada = despacho_map.get(ei_id, 0.0) if ei_id is not None else 0.0
+        saldo = _disponible_entrada_item(recibida, despachada)
+        pct = _porcentaje_saldo_disponible(recibida, saldo)
+        it["cantidad_despachada"] = despachada
+        it["saldo_disponible"] = saldo
+        it["porcentaje_saldo_disponible"] = pct
+        it["alerta_saldo"] = _alerta_saldo_entrada(pct, recibida)
     ent["items"] = items
     if not _norm_pk_id(ent.get("pk_id")) and items:
         ubic_map = _ubicacion_efectiva_entrada_items(sb, items, {int(ent["id"]): ent})
@@ -4109,6 +4121,23 @@ def _enriquecer_entradas_listado(sb, rows: List[dict]) -> None:
 
 def _disponible_entrada_item(cantidad_recibida: float, cantidad_despachada: float) -> float:
     return max(0.0, round(cantidad_recibida - cantidad_despachada, 4))
+
+
+def _porcentaje_saldo_disponible(cantidad_recibida: float, saldo_disponible: float) -> float:
+    if cantidad_recibida <= 0:
+        return 0.0
+    return round((saldo_disponible / cantidad_recibida) * 100, 2)
+
+
+def _alerta_saldo_entrada(porcentaje_saldo: float, cantidad_recibida: float = 1.0) -> str:
+    """rojo ≤10%, naranja ≤20%, normal >20% (sobre cantidad recibida de la línea)."""
+    if cantidad_recibida <= 0:
+        return "normal"
+    if porcentaje_saldo <= 10:
+        return "rojo"
+    if porcentaje_saldo <= 20:
+        return "naranja"
+    return "normal"
 
 
 def _alerta_proximidad_consumo(cantidad_recibida: float, cantidad_disponible: float) -> bool:
