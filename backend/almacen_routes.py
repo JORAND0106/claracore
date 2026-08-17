@@ -85,6 +85,8 @@ from almacen_service import (
     list_presupuesto_items,
     list_salidas,
     list_devoluciones,
+    get_devolucion,
+    eliminar_devolucion,
     list_solicitudes,
     count_solicitudes,
     list_usuarios_receptor_obra,
@@ -1422,6 +1424,51 @@ def route_create_devolucion(contrato_id: int, body: DevolucionCreateBody, curren
                 valor_anterior={"cantidad_devuelta_salida": dev_antes},
                 valor_nuevo={"cantidad_devuelta_salida": round(dev_antes + qty, 4), "cantidad": qty},
             )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/devoluciones/{devolucion_id}")
+def route_eliminar_devolucion(
+    contrato_id: int,
+    devolucion_id: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        prev = get_devolucion(contrato_id, devolucion_id)
+        result = eliminar_devolucion(contrato_id, devolucion_id)
+        log_almacen(
+            current_user, "ELIMINAR", "devolucion", devolucion_id,
+            {
+                "salida_id": prev.get("salida_id"),
+                "entrada_item_id": prev.get("entrada_item_id"),
+                "numero_devolucion": prev.get("numero_devolucion"),
+            },
+            valor_anterior=snapshot_devolucion(prev),
+            valor_nuevo={"deleted": True, "id": devolucion_id},
+        )
+        salida_id = prev.get("salida_id")
+        if salida_id is not None:
+            try:
+                sal_despues = get_salida(contrato_id, int(salida_id))
+            except ValueError:
+                sal_despues = None
+            if sal_despues is not None:
+                log_almacen(
+                    current_user, "REVERTIR_DEVOLUCION", "salida", salida_id,
+                    {"devolucion_id": devolucion_id, "cantidad": prev.get("cantidad")},
+                    valor_anterior={
+                        **snapshot_salida(sal_despues),
+                        "cantidad_devuelta_antes_delete": (
+                            float(sal_despues.get("cantidad_devuelta") or 0)
+                            + float(prev.get("cantidad") or 0)
+                        ),
+                    },
+                    valor_nuevo=snapshot_salida(sal_despues),
+                )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc

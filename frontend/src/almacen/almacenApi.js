@@ -470,6 +470,12 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    deleteDevolucion: (devolucionId) =>
+      fetch(`${base}/devoluciones/${devolucionId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      }).then(parseJson),
+
     salidaPdfDownloadUrl: (salidaId) => `${base}/salidas/${salidaId}/recibo/download`,
 
     async openSalidaPdf(salidaId) {

@@ -3,6 +3,7 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
 import DevolucionFormModal from './DevolucionFormModal'
+import DevolucionesListModal from './DevolucionesListModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import EntradasFiltrosModal from './EntradasFiltrosModal'
 import {
@@ -85,6 +86,7 @@ export default function EntradasPanel({
   const [creating, setCreating] = useState(false)
   const [despachadorOpen, setDespachadorOpen] = useState(false)
   const [devolucionOpen, setDevolucionOpen] = useState(false)
+  const [devolucionesListOpen, setDevolucionesListOpen] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
@@ -157,6 +159,14 @@ export default function EntradasPanel({
               ↩️ Devolución
             </button>
           )}
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            onClick={() => setDevolucionesListOpen(true)}
+            title="Ver y eliminar devoluciones registradas"
+          >
+            📋 Devoluciones
+          </button>
           {permisos?.crear && (
             <button type="button" style={ui.btnSecondary} onClick={() => setDespachadorOpen(true)}>
               🚚 Despachador
@@ -412,6 +422,19 @@ export default function EntradasPanel({
           onClose={() => setDevolucionOpen(false)}
           onSaved={() => {
             setDevolucionOpen(false)
+            invalidateSalidasCache(permisos?.contratoId)
+            reload()
+          }}
+        />
+      )}
+
+      {devolucionesListOpen && (
+        <DevolucionesListModal
+          t={t}
+          token={token}
+          permisos={permisos}
+          onClose={() => setDevolucionesListOpen(false)}
+          onChanged={() => {
             invalidateSalidasCache(permisos?.contratoId)
             reload()
           }}

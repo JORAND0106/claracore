@@ -223,3 +223,82 @@ def test_enrich_salidas_incluye_devuelta_y_neta(monkeypatch):
     out = _enrich_salidas_rows(sb, 1, rows)
     assert out[0]["cantidad_devuelta"] == 50.0
     assert out[0]["cantidad_neta"] == 150.0
+
+
+def test_eliminar_devolucion_revierte_inventario_y_borra(monkeypatch):
+    from almacen_service import eliminar_devolucion
+
+    sb = MagicMock()
+    upsert_calls = []
+    deleted_mov = []
+    deleted_dev = []
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_devolucion":
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 9,
+                "contrato_id": 1,
+                "numero_devolucion": 2,
+                "salida_id": 5,
+                "entrada_item_id": 10,
+                "cantidad": 20.0,
+            }]
+            def _del():
+                deleted_dev.append(True)
+                return MagicMock(execute=MagicMock(return_value=MagicMock(data=[])))
+            q.delete.return_value.eq.return_value.eq.return_value.execute = lambda: MagicMock(data=[])
+            q.delete.return_value.eq.return_value.eq.side_effect = lambda *a, **k: (
+                deleted_dev.append(True) or q.delete.return_value.eq.return_value
+            )
+        elif name == "almacen_entrada_item":
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 10,
+                "presupuesto_id": 7,
+                "orden_compra_item_id": 3,
+            }]
+        elif name == "almacen_orden_compra_item":
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "material_descripcion": "Arena",
+                "unidad": "M3",
+                "presupuesto_id": 7,
+            }]
+        elif name == "almacen_movimiento":
+            def _mov_del(*_a, **_k):
+                deleted_mov.append(True)
+                return q
+            q.delete.return_value.eq.return_value.eq.return_value.execute = lambda: MagicMock(data=[])
+            q.delete.return_value.eq.side_effect = lambda *a, **k: (
+                deleted_mov.append(a) or q.delete.return_value
+            )
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr("almacen_service._sb", lambda: sb)
+    monkeypatch.setattr(
+        "almacen_service._upsert_inventario",
+        lambda *a, **k: upsert_calls.append(a),
+    )
+    monkeypatch.setattr("almacen_service._max_consecutivo", lambda *_a, **_k: 2)
+    monkeypatch.setattr("almacen_service._invalidar_graficos_inventario", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "almacen_service.get_salida",
+        lambda *_a, **_k: {"id": 5, "entrada_item_id": 10, "cantidad_salida": 100},
+    )
+    monkeypatch.setattr("almacen_service._pdf_ctx_for_salida", lambda *_a, **_k: {})
+    monkeypatch.setattr("almacen_service._generar_pdf_salida", lambda *_a, **_k: None)
+
+    out = eliminar_devolucion(1, 9)
+    assert out["ok"] is True
+    assert out["id"] == 9
+    assert out["salida_id"] == 5
+    assert out["cantidad"] == 20.0
+    assert upsert_calls, "debe revertir inventario"
+    # delta = -qty
+    assert upsert_calls[0][4] == -20.0
+    assert deleted_mov, "debe borrar movimiento"
+    assert deleted_dev, "debe borrar fila devolución"

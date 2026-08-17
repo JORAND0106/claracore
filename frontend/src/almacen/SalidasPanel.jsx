@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
 import SalidasFiltrosModal from './SalidasFiltrosModal'
+import DevolucionesListModal from './DevolucionesListModal'
 import {
   countSalidasFiltrosActivos,
   EMPTY_SALIDAS_FILTROS,
@@ -54,6 +55,7 @@ export default function SalidasPanel({
   const [pdfBusyId, setPdfBusyId] = useState(null)
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SALIDAS_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
+  const [devolucionesSalidaId, setDevolucionesSalidaId] = useState(null)
   const lastRefreshSignal = useRef(refreshSignal)
   const mountedRef = useRef(true)
 
@@ -246,7 +248,11 @@ export default function SalidasPanel({
       await reload({ force: true })
       notifySalidaMutated()
     } catch (err) {
-      setError(err.message)
+      const msg = err.message || String(err)
+      setError(msg)
+      if (/devoluci/i.test(msg) && salida?.id) {
+        setDevolucionesSalidaId(salida.id)
+      }
     } finally {
       setEliminandoId(null)
     }
@@ -351,9 +357,25 @@ export default function SalidasPanel({
                     <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Devuelto">
                       {(Number(s.cantidad_devuelta) || 0) > 1e-9
                         ? (
-                          <span style={{ color: '#b91c1c', fontWeight: 600 }}>
+                          <button
+                            type="button"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              color: '#b91c1c',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              fontSize: 'inherit',
+                              fontFamily: 'inherit',
+                              fontVariantNumeric: 'tabular-nums',
+                            }}
+                            title="Ver / eliminar devoluciones de esta salida"
+                            onClick={() => setDevolucionesSalidaId(s.id)}
+                          >
                             {fmtCant(s.cantidad_devuelta)}{und ? ` ${und}` : ''}
-                          </span>
+                          </button>
                         )
                         : '—'}
                     </td>
@@ -433,6 +455,21 @@ export default function SalidasPanel({
           onApply={(next) => {
             setFiltros({ ...EMPTY_SALIDAS_FILTROS, ...next })
             setFiltrosOpen(false)
+          }}
+        />
+      )}
+
+      {devolucionesSalidaId != null && (
+        <DevolucionesListModal
+          t={t}
+          token={token}
+          permisos={permisos}
+          salidaId={devolucionesSalidaId}
+          onClose={() => setDevolucionesSalidaId(null)}
+          onChanged={() => {
+            invalidateSalidasCache(contratoId)
+            reload({ force: true })
+            notifySalidaMutated()
           }}
         />
       )}
