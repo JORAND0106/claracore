@@ -12,8 +12,8 @@
 |---|---|---|---|---|
 | Editar cantidad de salida (CG / Desarrollador) | Sí — PR #222 | **Sí** | **Sí** (SWA + backend OK) | Ninguna en lista de roles: **Desarrollador ya está incluido** |
 | Modal filtros Solicitudes | Sí — PR #223 | **Sí** | **Sí** (vía deploy posterior #226) | Ninguna |
-| Modal filtros Entradas | Sí — PR #224 | **No** (base incorrecta) | **No** | Traído a `main` en PR **#227** |
-| Modal filtros Salidas | Sí — PR #225 | **No** (base incorrecta) | **No** | Traído a `main` en PR **#227** |
+| Modal filtros Entradas | Sí — PR #224 | **Sí** (vía #227) | Tras deploy SWA de #227 | Antes no: base incorrecta en #224 |
+| Modal filtros Salidas | Sí — PR #225 | **Sí** (vía #227) | Tras deploy SWA de #227 | Antes no: base incorrecta en #225 |
 
 ---
 
@@ -92,7 +92,7 @@ Presente:
 - `SolicitudesFiltrosModal.jsx` + `solicitudesFiltros.js` (+ test)
 - Botón `🔎 Filtros` en `SolicitudesPanel.jsx`
 
-**Ausente en `main` (antes de #227):**
+**Ausente en `main` hasta el merge de #227:**
 
 - `EntradasFiltrosModal.jsx` / `entradasFiltros.js`
 - `SalidasFiltrosModal.jsx` / `salidasFiltros.js`
@@ -100,7 +100,7 @@ Presente:
 
 ### Conclusión sin rodeos
 
-No es “cero trabajo”: hubo tres PRs. El fallo operativo es que **#224 y #225 se fusionaron sobre la rama intermedia de Solicitudes, no sobre `main`**. GitHub los marca MERGED, pero **nunca entraron a la rama principal ni a producción**. Por eso el usuario no ve filtros en Entradas ni Salidas.
+No es “cero trabajo”: hubo tres PRs. El fallo operativo es que **#224 y #225 se fusionaron sobre la rama intermedia de Solicitudes, no sobre `main`**. GitHub los marca MERGED, pero **nunca entraron a la rama principal ni a producción** hasta la corrección.
 
 El deploy SWA de #223 falló (“Deployment Canceled”); el de #226 sí publicó Solicitudes (y el resto de `main` en ese commit).
 
@@ -109,12 +109,12 @@ El deploy SWA de #223 falló (“Deployment Canceled”); el de #226 sí public�
 | Campo | Valor |
 |---|---|
 | PR | [#227](https://github.com/JORAND0106/claracore/pull/227) |
+| Estado | **MERGED** a `main` (`bbd9396`) |
 | Rama | `cursor/almacen-filtros-entradas-salidas-a-main-168d` |
-| Base | `main` |
 | Contenido | Modales + helpers + botón `🔎 Filtros` en Entradas y Salidas (se preservan trazabilidad 📜 y edición de cantidad ✎) |
 | Tests | `node --test` filtros + cantidad: 18 OK |
 
-Hasta merge + SWA success de **#227**, Entradas/Salidas **seguirán sin filtros** en Azure.
+Tras SWA success del merge de **#227**, Entradas/Salidas quedan con filtros en Azure.
 
 ---
 
@@ -123,7 +123,7 @@ Hasta merge + SWA success de **#227**, Entradas/Salidas **seguirán sin filtros*
 | Pregunta | Respuesta |
 |---|---|
 | ¿Producción Azure vs rama local? | **Producción Azure** (SWA frontend + App Service backend), disparada por **push a `main`** |
-| ¿Explica “código existe pero no lo veo”? | **Parcialmente.** Cantidad: código + deploy OK → si no ve ✎, no es “falta merge”. Filtros Entradas/Salidas: el código existía en ramas, **no en `main`** → no puede verse en prod hasta #227 |
+| ¿Explica “código existe pero no lo veo”? | **Parcialmente.** Cantidad: código + deploy OK → si no ve ✎, no es “falta merge”. Filtros Entradas/Salidas: existían en ramas con base incorrecta; llegaron a `main` con **#227** |
 
 ---
 
