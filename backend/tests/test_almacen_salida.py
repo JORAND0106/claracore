@@ -249,6 +249,9 @@ def test_es_rol_receptor_obra_excluye_interventoria():
 def test_disponible_entrada_item():
     assert _disponible_entrada_item(100, 30) == 70
     assert _disponible_entrada_item(10, 12) == 0
+    # Ejemplo crítico: 1500 recibidos, despacho parcial 100 → queda 1400
+    assert _disponible_entrada_item(1500, 100) == 1400
+    assert _disponible_entrada_item(1500, 0) == 1500
 
 
 def test_alerta_proximidad_consumo():
