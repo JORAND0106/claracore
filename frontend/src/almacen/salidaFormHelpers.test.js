@@ -1,34 +1,16 @@
 /**
- * Helpers de formulario de salida (persistencia / saldo).
+ * Helpers de formulario de salida (persistencia / saldo / presentación).
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-
-function disponibleEntradaItem(recibida, despachada) {
-  return Math.max(0, Math.round((Number(recibida) - Number(despachada)) * 10000) / 10000)
-}
-
-function cantidadExcedeSaldo(cantidad, disponible) {
-  const n = Number(String(cantidad).replace(',', '.'))
-  if (!Number.isFinite(n) || n <= 0) return true
-  return n > Number(disponible) + 1e-9
-}
-
-function saldoTrasDespacho(disponible, cantidad) {
-  const n = Number(String(cantidad).replace(',', '.'))
-  if (!Number.isFinite(n) || n <= 0) return null
-  if (n > Number(disponible) + 1e-9) return null
-  return Math.max(0, Number(disponible) - n)
-}
-
-/** Texto exacto bajo el campo "Cantidad a despachar". */
-function labelSaldoDespues(disponible, cantidad, unidad = 'KG') {
-  const saldo = saldoTrasDespacho(disponible, cantidad)
-  const valor = saldo == null
-    ? '—'
-    : `${saldo.toLocaleString('es-CO', { maximumFractionDigits: 4 })} ${unidad}`
-  return `Saldo después de esta salida: ${valor}`
-}
+import {
+  cantidadExcedeSaldo,
+  disponibleEntradaItem,
+  labelSaldoDespues,
+  mensajeExcesoCantidadDespachar,
+  saldoTrasDespacho,
+  splitInsumoCodigoDescripcion,
+} from './salidaFormHelpers.js'
 
 describe('salida form saldo y validación', () => {
   it('disponible = recibido − despachado', () => {
@@ -42,6 +24,7 @@ describe('salida form saldo y validación', () => {
     assert.equal(cantidadExcedeSaldo('40', 40), false)
     assert.equal(cantidadExcedeSaldo('10,5', 10.5), false)
     assert.equal(cantidadExcedeSaldo('', 10), true)
+    assert.equal(cantidadExcedeSaldo('2000', 1500), true)
   })
 
   it('saldo tras despacho parcial se actualiza', () => {
@@ -63,10 +46,45 @@ describe('salida form saldo y validación', () => {
       labelSaldoDespues(disponible, '', 'KG'),
       'Saldo después de esta salida: —',
     )
-    // Tras registrar 100, la siguiente salida parte de 1400.
     const trasRegistro = disponibleEntradaItem(1500, 100)
     assert.equal(trasRegistro, 1400)
     assert.equal(cantidadExcedeSaldo('1401', trasRegistro), true)
     assert.equal(cantidadExcedeSaldo('1400', trasRegistro), false)
+  })
+
+  it('mensaje de exceso indica máximo permitido (2000 vs 1500)', () => {
+    const msg = mensajeExcesoCantidadDespachar(2000, 1500, 'KG')
+    assert.match(msg, /2\.000/)
+    assert.match(msg, /1\.500/)
+    assert.match(msg, /Máximo permitido/)
+    assert.equal(cantidadExcedeSaldo('2000', 1500), true)
+  })
+})
+
+describe('splitInsumoCodigoDescripcion sin duplicar código', () => {
+  it('quita el código ya presente en material_descripcion', () => {
+    const r = splitInsumoCodigoDescripcion(
+      'CC-1614-003',
+      'CC-1614-003 — Acero de refuerzo',
+    )
+    assert.equal(r.codigo, 'CC-1614-003')
+    assert.equal(r.descripcion, 'Acero de refuerzo')
+  })
+
+  it('soporta separador · usado en UI anterior', () => {
+    const r = splitInsumoCodigoDescripcion('CC-1614-003', 'CC-1614-003 · Acero de refuerzo')
+    assert.equal(r.descripcion, 'Acero de refuerzo')
+  })
+
+  it('no altera descripción sin prefijo de código', () => {
+    const r = splitInsumoCodigoDescripcion('CC-1', 'Acero corrugado')
+    assert.equal(r.codigo, 'CC-1')
+    assert.equal(r.descripcion, 'Acero corrugado')
+  })
+
+  it('maneja ausencia de código', () => {
+    const r = splitInsumoCodigoDescripcion(null, 'Material libre')
+    assert.equal(r.codigo, null)
+    assert.equal(r.descripcion, 'Material libre')
   })
 })

@@ -6,14 +6,18 @@ import { validateAbscisaRango, ABSCISA_RANGO_ERROR } from './almacenAbscisa'
 import {
   AlmacenFieldLabel,
   fmtCant,
+  formatEntradaNumero,
   formatNumeroOcDisplay,
-  formatSalidaNumero,
   getAlmacenSessionUser,
   useAlmacenApi,
   useAlmacenTheme,
   datetimeLocalColombiaToIsoUtc,
   nowDatetimeLocalColombia,
 } from './almacenShared'
+import {
+  mensajeExcesoCantidadDespachar,
+  splitInsumoCodigoDescripcion,
+} from './salidaFormHelpers'
 
 const DRAFT_KEY_PREFIX = 'cc_almacen_salida_draft_'
 
@@ -240,7 +244,11 @@ export default function SalidaForm({
     if (!cantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum <= 0) {
       errs.cantidad = 'Indique una cantidad válida.'
     } else if (cantidadNum > disponible + 1e-9) {
-      errs.cantidad = `La cantidad a despachar (${fmtCant(cantidadNum)}) supera el disponible para salida (${fmtCant(disponible)}).`
+      errs.cantidad = mensajeExcesoCantidadDespachar(
+        cantidadNum,
+        disponible,
+        entradaSel?.unidad || '',
+      )
     }
     if (
       String(abscisaInicial ?? '').trim() !== ''
@@ -374,15 +382,132 @@ export default function SalidaForm({
               No hay entradas con saldo disponible para este PK-ID.
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-              {entradasDisp.map((op) => {
-                const sel = entradaSel?.entrada_item_id === op.entrada_item_id
-                const cod = op.insumo_codigo ? `${op.insumo_codigo} · ` : ''
-                const ppto = [op.presupuesto_capitulo, op.presupuesto_item].filter(Boolean).join(' · ')
-                const dispOp = Number(op.cantidad_disponible || 0)
-                const und = op.unidad || 'UND'
-                const cantOk = sel
-                  && cantidad.trim()
+            <div style={{ marginBottom: 12 }}>
+              <div style={ui.sheetWrap} className="cc-almacen-table-scroll" data-testid="entrada-material-table">
+                <table style={{ ...ui.sheetTable, minWidth: 760, width: '100%' }}>
+                  <thead>
+                    <tr>
+                      {[
+                        { key: 'ent', label: 'Entrada', tip: 'Número de entrada', w: 90 },
+                        { key: 'oc', label: 'OC', tip: 'Orden de compra asociada', w: 80 },
+                        { key: 'cod', label: 'Código', tip: 'Código del insumo', w: 100 },
+                        { key: 'desc', label: 'Descripción', tip: 'Descripción del insumo', w: 180 },
+                        { key: 'ppto', label: 'Ítem ppto.', tip: 'Ítem de presupuesto', w: 120 },
+                        { key: 'rec', label: 'Recibido', tip: 'Cantidad recibida en esta entrada', w: 90 },
+                        { key: 'disp', label: 'Disponible', tip: 'Disponible para salida', w: 90 },
+                        { key: 'oca', label: 'OC autoriza', tip: 'Cantidad autorizada en la OC', w: 90 },
+                      ].map((c) => (
+                        <th
+                          key={c.key}
+                          title={c.tip}
+                          style={{
+                            ...ui.th,
+                            width: c.w,
+                            fontSize: 'var(--cc-xs)',
+                            padding: '6px 8px',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {c.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entradasDisp.map((op) => {
+                      const sel = entradaSel?.entrada_item_id === op.entrada_item_id
+                      const { codigo, descripcion } = splitInsumoCodigoDescripcion(
+                        op.insumo_codigo,
+                        op.material_descripcion,
+                      )
+                      const ppto = [op.presupuesto_capitulo, op.presupuesto_item].filter(Boolean).join(' · ') || '—'
+                      const und = op.unidad || ''
+                      const tdBase = {
+                        ...ui.td,
+                        fontSize: 'var(--cc-xs)',
+                        padding: '8px',
+                        verticalAlign: 'middle',
+                        cursor: busy ? 'default' : 'pointer',
+                        background: sel ? ui.accentSoft : undefined,
+                        borderLeft: sel ? `3px solid ${ui.accent}` : undefined,
+                      }
+                      const selectRow = () => {
+                        if (busy) return
+                        if (sel) return
+                        setEntradaSel(op)
+                        setCantidad('')
+                        if (op.tramo) setTramo(op.tramo)
+                        if (op.costado) setCostado(op.costado)
+                        if (op.abscisa_inicial) setAbscisaInicial(op.abscisa_inicial)
+                        if (op.abscisa_final) setAbscisaFinal(op.abscisa_final)
+                        clearFieldError('entrada')
+                        clearFieldError('cantidad')
+                      }
+                      return (
+                        <tr
+                          key={op.entrada_item_id}
+                          data-testid={`entrada-row-${op.entrada_item_id}`}
+                          aria-selected={sel}
+                          onClick={selectRow}
+                          onKeyDown={(e) => {
+                            if (busy || sel) return
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              selectRow()
+                            }
+                          }}
+                          tabIndex={busy ? -1 : 0}
+                          style={{ outline: 'none' }}
+                        >
+                          <td style={{ ...tdBase, fontWeight: 700 }}>
+                            {formatEntradaNumero(op)}
+                            {op.alerta_proximidad_consumo && (
+                              <div style={{ color: '#b45309', fontWeight: 600, marginTop: 2 }}>⚠ Bajo</div>
+                            )}
+                          </td>
+                          <td style={tdBase}>
+                            {op.numero_oc != null ? formatNumeroOcDisplay(op.numero_oc) : '—'}
+                          </td>
+                          <td style={{ ...tdBase, fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                            {codigo || '—'}
+                          </td>
+                          <td style={tdBase} title={descripcion || undefined}>
+                            {descripcion || '—'}
+                          </td>
+                          <td style={tdBase} title={ppto}>{ppto}</td>
+                          <td style={{ ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)}
+                            {und ? ` ${und}` : ''}
+                          </td>
+                          <td style={{
+                            ...tdBase,
+                            textAlign: 'right',
+                            fontWeight: 700,
+                            fontVariantNumeric: 'tabular-nums',
+                            color: Number(op.cantidad_disponible) > 0
+                              ? 'var(--cc-color-positive, #059669)'
+                              : '#dc2626',
+                          }}
+                          >
+                            {fmtCant(op.cantidad_disponible)}
+                            {und ? ` ${und}` : ''}
+                          </td>
+                          <td style={{ ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {op.cantidad_oc_autorizada != null
+                              ? `${fmtCant(op.cantidad_oc_autorizada)}${und ? ` ${und}` : ''}`
+                              : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {entradaSel && (() => {
+                const dispOp = Number(entradaSel.cantidad_disponible || 0)
+                const und = entradaSel.unidad || 'UND'
+                const cantOk = cantidad.trim()
                   && Number.isFinite(cantidadNum)
                   && cantidadNum > 0
                   && cantidadNum <= dispOp + 1e-9
@@ -391,162 +516,92 @@ export default function SalidaForm({
                   : '—'
                 return (
                   <div
-                    key={op.entrada_item_id}
-                    role="button"
-                    tabIndex={busy ? -1 : 0}
-                    aria-pressed={sel}
-                    data-testid={`entrada-card-${op.entrada_item_id}`}
-                    onClick={() => {
-                      if (busy) return
-                      if (sel) return
-                      setEntradaSel(op)
-                      setCantidad('')
-                      if (op.tramo) setTramo(op.tramo)
-                      if (op.costado) setCostado(op.costado)
-                      if (op.abscisa_inicial) setAbscisaInicial(op.abscisa_inicial)
-                      if (op.abscisa_final) setAbscisaFinal(op.abscisa_final)
-                      clearFieldError('entrada')
-                      clearFieldError('cantidad')
-                    }}
-                    onKeyDown={(e) => {
-                      if (busy || sel) return
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.currentTarget.click()
-                      }
-                    }}
+                    data-testid="cantidad-despachar-block"
                     style={{
-                      textAlign: 'left',
-                      padding: 12,
+                      marginTop: 10,
+                      padding: '12px 12px 10px',
                       borderRadius: 8,
-                      border: sel ? `2px solid ${ui.accent}` : `1px solid ${ui.border}`,
-                      background: sel ? ui.accentSoft : ui.card?.background,
-                      cursor: busy ? 'default' : (sel ? 'default' : 'pointer'),
+                      border: `1px solid ${ui.border}`,
+                      background: ui.card?.background || '#fff',
                     }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
-                      Entrada {formatSalidaNumero(op)}
-                      {op.numero_oc != null && ` · OC ${formatNumeroOcDisplay(op.numero_oc)}`}
-                    </div>
-                    <div style={{ fontSize: 'var(--cc-sm)', marginTop: 4 }}>
-                      {cod}{op.material_descripcion}
-                    </div>
-                    {ppto && (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
-                        Ítem presupuesto: {ppto}
-                      </div>
-                    )}
-                    <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
-                      Recibido en esta entrada:{' '}
-                      <strong>{fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)} {und}</strong>
-                      {' · '}Disponible para salida:{' '}
-                      <strong style={{ color: ui.text }}>{fmtCant(op.cantidad_disponible)} {und}</strong>
-                      {op.cantidad_oc_autorizada != null && (
-                        <span>{' · '}OC autoriza {fmtCant(op.cantidad_oc_autorizada)} {und}</span>
+                    <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 8 }}>
+                      Entrada seleccionada:{' '}
+                      <strong style={{ color: ui.text }}>{formatEntradaNumero(entradaSel)}</strong>
+                      {entradaSel.numero_oc != null && (
+                        <> · OC <strong style={{ color: ui.text }}>{formatNumeroOcDisplay(entradaSel.numero_oc)}</strong></>
                       )}
+                      {' · '}Máximo a despachar:{' '}
+                      <strong style={{ color: ui.text }}>{fmtCant(dispOp)} {und}</strong>
                     </div>
-                    {op.alerta_proximidad_consumo && !sel && (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: '#b45309', marginTop: 6, fontWeight: 600 }}>
-                        ⚠ Saldo bajo — considere nueva OC
-                      </div>
-                    )}
-
-                    {/* Cantidad a despachar: siempre visible en la entrada seleccionada,
-                        justo debajo de Recibido / Disponible / OC autoriza. */}
-                    {sel && (
-                      <div
-                        data-testid="cantidad-despachar-block"
+                    <label
+                      htmlFor={`salida-cantidad-${entradaSel.entrada_item_id}`}
+                      style={{
+                        display: 'block',
+                        fontSize: 'var(--cc-sm)',
+                        fontWeight: 700,
+                        marginBottom: 6,
+                        color: ui.text,
+                      }}
+                    >
+                      Cantidad a despachar <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 280 }}>
+                      <input
+                        id={`salida-cantidad-${entradaSel.entrada_item_id}`}
+                        data-testid="cantidad-despachar-input"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
                         style={{
-                          marginTop: 12,
-                          padding: '12px 12px 10px',
-                          borderRadius: 8,
-                          border: `1px solid ${ui.border}`,
-                          background: ui.card?.background || '#fff',
+                          ...ui.input,
+                          marginBottom: 0,
+                          flex: 1,
+                          fontSize: 'var(--cc-md, 1rem)',
+                          fontWeight: 600,
+                          ...inputErrorStyle('cantidad'),
+                          ...(cantidadInvalida ? { borderColor: '#dc2626' } : {}),
                         }}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => e.stopPropagation()}
-                      >
-                        <label
-                          htmlFor={`salida-cantidad-${op.entrada_item_id}`}
-                          style={{
-                            display: 'block',
-                            fontSize: 'var(--cc-sm)',
-                            fontWeight: 700,
-                            marginBottom: 6,
-                            color: ui.text,
-                          }}
-                        >
-                          Cantidad a despachar <span style={{ color: '#dc2626' }}>*</span>
-                        </label>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 280 }}>
-                          <input
-                            id={`salida-cantidad-${op.entrada_item_id}`}
-                            data-testid="cantidad-despachar-input"
-                            type="text"
-                            inputMode="decimal"
-                            autoComplete="off"
-                            style={{
-                              ...ui.input,
-                              marginBottom: 0,
-                              flex: 1,
-                              fontSize: 'var(--cc-md, 1rem)',
-                              fontWeight: 600,
-                              ...inputErrorStyle('cantidad'),
-                              ...(cantidadInvalida ? { borderColor: '#dc2626' } : {}),
-                            }}
-                            value={cantidad}
-                            disabled={busy}
-                            placeholder="Ej. 100"
-                            onChange={(e) => {
-                              setCantidad(e.target.value)
-                              clearFieldError('cantidad')
-                            }}
-                          />
-                          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: ui.textMuted }}>
-                            {und}
-                          </span>
-                        </div>
-                        <div
-                          data-testid="saldo-despues-salida"
-                          style={{
-                            marginTop: 10,
-                            fontSize: 'var(--cc-sm)',
-                            fontWeight: 600,
-                            color: cantOk
-                              ? 'var(--cc-color-positive, #059669)'
-                              : (cantidadInvalida ? '#dc2626' : ui.text),
-                            lineHeight: 1.4,
-                          }}
-                        >
-                          Saldo después de esta salida:{' '}
-                          <strong>{saldoTxt}</strong>
-                        </div>
-                        {fieldErrors.cantidad && (
-                          <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
-                            {fieldErrors.cantidad}
-                          </div>
-                        )}
-                        {cantidadInvalida && !fieldErrors.cantidad && (
-                          <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
-                            La cantidad a despachar ({fmtCant(cantidadNum)} {und}) supera el disponible
-                            para salida ({fmtCant(dispOp)} {und}).
-                          </div>
-                        )}
-                        {!cantidad.trim() && fieldErrors.cantidad && (
-                          <div style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)', marginTop: 4 }}>
-                            Campo obligatorio para registrar la salida.
-                          </div>
-                        )}
+                        value={cantidad}
+                        disabled={busy}
+                        placeholder="Ej. 100"
+                        onChange={(e) => {
+                          setCantidad(e.target.value)
+                          clearFieldError('cantidad')
+                        }}
+                      />
+                      <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: ui.textMuted }}>
+                        {und}
+                      </span>
+                    </div>
+                    <div
+                      data-testid="saldo-despues-salida"
+                      style={{
+                        marginTop: 10,
+                        fontSize: 'var(--cc-sm)',
+                        fontWeight: 600,
+                        color: cantOk
+                          ? 'var(--cc-color-positive, #059669)'
+                          : (cantidadInvalida ? '#dc2626' : ui.text),
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      Saldo después de esta salida:{' '}
+                      <strong>{saldoTxt}</strong>
+                    </div>
+                    {fieldErrors.cantidad && (
+                      <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
+                        {fieldErrors.cantidad}
                       </div>
                     )}
-                    {!sel && (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8, fontStyle: 'italic' }}>
-                        Clic para seleccionar e indicar la cantidad a despachar
+                    {cantidadInvalida && !fieldErrors.cantidad && (
+                      <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
+                        {mensajeExcesoCantidadDespachar(cantidadNum, dispOp, und)}
                       </div>
                     )}
                   </div>
                 )
-              })}
+              })()}
             </div>
           )}
           {fieldErrors.entrada && (

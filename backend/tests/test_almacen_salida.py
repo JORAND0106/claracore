@@ -302,10 +302,75 @@ def test_create_salida_rechaza_cantidad_mayor_disponible(monkeypatch):
     sb.table.side_effect = table
     monkeypatch.setattr("almacen_service._sb", lambda: sb)
 
-    with pytest.raises(ValueError, match="supera la disponible"):
+    with pytest.raises(ValueError, match="Máximo permitido"):
         create_salida(1, 99, {
             "pk_id": "PK-001",
             "receptor_usuario_id": 2,
             "entrada_item_id": 10,
             "cantidad_salida": 60,
+        })
+
+
+def test_create_salida_rechaza_2000_cuando_disponible_1500(monkeypatch):
+    """Tope estricto: 2000 KG > 1500 KG disponibles no debe guardarse."""
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_entrada_item":
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 10,
+                "entrada_id": 5,
+                "cantidad_recibida": 1500,
+                "presupuesto_id": 1,
+                "orden_compra_item_id": 7,
+            }]
+        elif name == "almacen_entrada":
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 5,
+                "contrato_id": 1,
+                "pk_id": "PK-001",
+                "tramo": "T1",
+            }]
+        elif name == "almacen_salida":
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        elif name == "usuarios":
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 2,
+                "nombre": "Juan",
+                "apellidos": "Pérez",
+                "activo": True,
+                "rol_id": 3,
+                "contrato_id": 1,
+                "firma_imagen_url": None,
+            }]
+        elif name == "roles":
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"nombre": "Contratista"}]
+        elif name == "usuario_contratos":
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"id": 1}]
+        else:
+            q.select.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr("almacen_service._sb", lambda: sb)
+    monkeypatch.setattr(
+        "almacen_service._cantidad_recibida_entrada_item",
+        lambda *_a, **_k: 1500.0,
+    )
+    monkeypatch.setattr(
+        "almacen_service._ubicacion_efectiva_entrada_items",
+        lambda *_a, **_k: {10: {"pk_id": "PK-001"}},
+    )
+    monkeypatch.setattr(
+        "almacen_service._validar_receptor_obra",
+        lambda *_a, **_k: {"id": 2},
+    )
+
+    with pytest.raises(ValueError, match="Máximo permitido: 1500"):
+        create_salida(1, 99, {
+            "pk_id": "PK-001",
+            "receptor_usuario_id": 2,
+            "entrada_item_id": 10,
+            "cantidad_salida": 2000,
         })
