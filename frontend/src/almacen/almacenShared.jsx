@@ -561,19 +561,20 @@ export {
   isoUtcToDatetimeLocalColombia,
 } from './almacenDatetime'
 
-/** Texto de aprobación para listado de solicitudes */
+/** Texto de aprobación para listado de solicitudes (sin repetir el encabezado). */
 export function textoAprobacionSolicitud(s) {
   if (!s) return '—'
+  // La columna "Estado" ya dice Aprobada/Rechazada; aquí solo el dato de quién / pendiente.
   if (s.estado === 'aprobada') {
-    return s.validador_nombre ? `Aprobada por ${s.validador_nombre}` : 'Aprobada'
+    return s.validador_nombre || '—'
   }
   if (s.estado === 'rechazada') {
-    return s.validador_nombre ? `Rechazada por ${s.validador_nombre}` : 'Rechazada'
+    return s.validador_nombre || '—'
   }
   if (s.estado === 'enviada') {
     const v = s.validadores_pendientes || []
-    if (v.length) return `Pendiente: ${v.join(', ')}`
-    return 'Pendiente aprobación'
+    if (v.length) return v.join(', ')
+    return 'Pendiente'
   }
   return '—'
 }
