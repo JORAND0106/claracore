@@ -7,6 +7,7 @@ import EntradaDetalleModal from './EntradaDetalleModal'
 import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
 import {
+  AlmacenHelpIcon,
   formatEntradaNumero,
   formatEntradaCantidadGrilla,
   formatEntradaSaldoOcDespuesGrilla,
@@ -25,6 +26,26 @@ const ALERTA_SALDO_BG = {
   rojo: '#fecaca',
   naranja: '#fed7aa',
   normal: 'transparent',
+}
+
+/** Nombre corto para grilla: primer nombre + inicial de apellido. */
+function nombreUsuarioCorto(full) {
+  const s = String(full || '').trim()
+  if (!s) return '—'
+  const parts = s.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) return parts[0]
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`
+}
+
+function ThHelp({ children, ayuda, style }) {
+  return (
+    <th style={style}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {children}
+        <AlmacenHelpIcon ayuda={ayuda} />
+      </span>
+    </th>
+  )
 }
 
 export default function EntradasPanel({
@@ -114,22 +135,54 @@ export default function EntradasPanel({
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>No hay entradas registradas.</div>
       ) : (
         <div style={{ ...ui.card, padding: 0, overflow: 'auto' }} className="cc-almacen-table-scroll">
-          <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="cc-almacen-responsive-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1100 }}>
             <thead>
               <tr>
-                <th style={ui.th}>N.º</th>
-                <th style={ui.th}>Fecha</th>
-                <th style={ui.th}>Tipo</th>
-                <th style={ui.th}>Documento</th>
-                <th style={ui.th}>OC</th>
-                <th style={ui.th}>Insumo</th>
-                <th style={ui.th}>Recibido en entrada</th>
-                <th style={ui.th}>Consumido</th>
-                <th style={ui.th}>Saldo por consumir</th>
-                <th style={ui.th}>% saldo</th>
-                <th style={ui.th}>Saldo OC tras entrada</th>
-                <th style={ui.th}>Proveedor</th>
-                <th style={ui.th}>Usuario</th>
+                <th style={{ ...ui.th, width: 118 }}>N.º</th>
+                <th style={{ ...ui.th, width: 88 }}>Fecha</th>
+                <th style={{ ...ui.th, width: 72 }}>Tipo</th>
+                <th style={{ ...ui.th, width: 88 }} title="Número de remisión / documento de ingreso">
+                  Remisión
+                </th>
+                <th style={{ ...ui.th, width: 56 }}>OC</th>
+                <th style={{ ...ui.th, minWidth: 220, width: '22%' }}>Insumo</th>
+                <ThHelp
+                  style={{ ...ui.th, width: 88 }}
+                  ayuda="Cantidad recibida en esta línea de la remisión (entrada_item)."
+                >
+                  Recibido
+                </ThHelp>
+                <ThHelp
+                  style={{ ...ui.th, width: 88 }}
+                  ayuda="Cantidad despachada neta de esta línea: salidas − devoluciones."
+                >
+                  Consumido
+                </ThHelp>
+                <ThHelp
+                  style={{ ...ui.th, width: 100 }}
+                  ayuda="Saldo por consumir = recibido − consumido (disponible para nuevas salidas)."
+                >
+                  Saldo x consumir
+                </ThHelp>
+                <ThHelp
+                  style={{ ...ui.th, width: 72 }}
+                  ayuda="Porcentaje de saldo disponible respecto a la cantidad recibida de la línea."
+                >
+                  % saldo
+                </ThHelp>
+                <ThHelp
+                  style={{ ...ui.th, width: 88 }}
+                  ayuda="Saldo pendiente de la orden de compra justo después de registrar esta entrada."
+                >
+                  Saldo OC
+                </ThHelp>
+                <th style={{ ...ui.th, width: 120 }}>Proveedor</th>
+                <ThHelp
+                  style={{ ...ui.th, width: 100 }}
+                  ayuda="Usuario que registró la entrada. Pase el cursor sobre el nombre para ver el nombre completo."
+                >
+                  Usuario
+                </ThHelp>
                 {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center' }}>⚠</th>}
                 <th style={{ ...ui.th, width: 72, textAlign: 'center' }}>PDF</th>
                 {puedeEliminar && <th style={{ ...ui.th, width: 44, textAlign: 'center' }}> </th>}
@@ -148,6 +201,7 @@ export default function EntradasPanel({
                   : '—'
                 const rowKey = e.entrada_item_id != null ? `ei-${e.entrada_item_id}` : `ent-${e.id}`
                 const tdAlert = bg !== 'transparent' ? { ...ui.td, background: bg } : ui.td
+                const usuarioFull = e.usuario_nombre || ''
                 return (
                   <tr
                     key={rowKey}
@@ -158,26 +212,41 @@ export default function EntradasPanel({
                     <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
                     <td style={tdAlert} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
                     <td style={tdAlert} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
-                    <td style={tdAlert} data-label="Documento">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
+                    <td style={tdAlert} data-label="Remisión">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
                     <td style={tdAlert} data-label="OC">#{oc.numero_oc || '—'}</td>
-                    <td style={tdAlert} data-label="Insumo">{e.material_descripcion || e.insumo_label || '—'}</td>
-                    <td style={tdAlert} data-label="Recibido en entrada" title={formatEntradaCantidadGrilla(e)}>
+                    <td
+                      style={{
+                        ...tdAlert,
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-word',
+                        overflowWrap: 'anywhere',
+                        lineHeight: 1.3,
+                      }}
+                      data-label="Insumo"
+                    >
+                      {e.material_descripcion || e.insumo_label || '—'}
+                    </td>
+                    <td style={tdAlert} data-label="Recibido" title={formatEntradaCantidadGrilla(e)}>
                       {formatEntradaCantidadGrilla(e)}
                     </td>
                     <td style={{ ...tdAlert, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Consumido">
                       {`${fmtCant(e.consumido ?? e.cantidad_despachada)} ${und}`.trim()}
                     </td>
-                    <td style={{ ...tdAlert, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Saldo por consumir">
+                    <td style={{ ...tdAlert, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Saldo x consumir">
                       {`${fmtCant(e.saldo_por_consumir ?? e.saldo_disponible)} ${und}`.trim()}
                     </td>
                     <td style={{ ...tdAlert, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} data-label="% saldo">
                       {pctLabel}
                     </td>
-                    <td style={tdAlert} data-label="Saldo OC tras entrada" title={formatEntradaSaldoOcDespuesGrilla(e)}>
+                    <td style={tdAlert} data-label="Saldo OC" title={formatEntradaSaldoOcDespuesGrilla(e)}>
                       {formatEntradaSaldoOcDespuesGrilla(e)}
                     </td>
-                    <td style={tdAlert} data-label="Proveedor">{e.proveedor_nombre || '—'}</td>
-                    <td style={tdAlert} data-label="Usuario">{e.usuario_nombre || '—'}</td>
+                    <td style={{ ...tdAlert, whiteSpace: 'normal', wordBreak: 'break-word' }} data-label="Proveedor">
+                      {e.proveedor_nombre || '—'}
+                    </td>
+                    <td style={tdAlert} data-label="Usuario" title={usuarioFull || undefined}>
+                      {nombreUsuarioCorto(usuarioFull)}
+                    </td>
                     {verAlertas && (
                       <td style={{ ...tdAlert, textAlign: 'center', color: '#d97706' }} data-label="Alerta" title={e.alerta_silenciosa_detalle || ''}>
                         {e.alerta_silenciosa_detalle ? '⚠' : '—'}
