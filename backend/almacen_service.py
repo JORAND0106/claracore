@@ -4410,8 +4410,8 @@ def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
     disponible = _disponible_entrada_item(recibida, despachada)
     if qty > disponible + 1e-9:
         raise ValueError(
-            f"La cantidad de salida ({qty}) supera la disponible ({disponible}) "
-            f"de esta entrada en el PK-ID {pk_id}."
+            f"La cantidad a despachar ({qty}) supera el disponible para salida ({disponible}) "
+            f"de esta entrada en el PK-ID {pk_id}. Máximo permitido: {disponible}."
         )
 
     fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
