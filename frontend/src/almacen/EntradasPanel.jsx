@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
+import DevolucionFormModal from './DevolucionFormModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
+import { invalidateSalidasCache } from './salidasListCache'
 import {
   formatEntradaNumero,
   formatEntradaCantidadGrilla,
@@ -29,6 +31,7 @@ export default function EntradasPanel({
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
   const [despachadorOpen, setDespachadorOpen] = useState(false)
+  const [devolucionOpen, setDevolucionOpen] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
@@ -65,10 +68,10 @@ export default function EntradasPanel({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      if (!creating && !despachadorOpen) reload()
+      if (!creating && !despachadorOpen && !devolucionOpen) reload()
       else onDataLoaded?.()
     }
-  }, [refreshSignal, creating, despachadorOpen, reload, onDataLoaded])
+  }, [refreshSignal, creating, despachadorOpen, devolucionOpen, reload, onDataLoaded])
 
   return (
     <div>
@@ -80,6 +83,11 @@ export default function EntradasPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {permisos?.crear && (
+            <button type="button" style={ui.btnSecondary} onClick={() => setDevolucionOpen(true)}>
+              ↩️ Devolución
+            </button>
+          )}
           {permisos?.crear && (
             <button type="button" style={ui.btnSecondary} onClick={() => setDespachadorOpen(true)}>
               🚚 Despachador
@@ -201,6 +209,20 @@ export default function EntradasPanel({
           theme={t}
           onClose={() => setDespachadorOpen(false)}
           onSaved={() => reload()}
+        />
+      )}
+
+      {devolucionOpen && (
+        <DevolucionFormModal
+          t={t}
+          token={token}
+          contratoId={permisos?.contratoId}
+          onClose={() => setDevolucionOpen(false)}
+          onSaved={() => {
+            setDevolucionOpen(false)
+            invalidateSalidasCache(permisos?.contratoId)
+            reload()
+          }}
         />
       )}
 
