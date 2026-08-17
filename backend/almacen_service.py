@@ -5520,3 +5520,126 @@ def list_devoluciones(contrato_id: int) -> List[dict]:
         r["numero_oc"] = sal.get("numero_oc")
     return rows
 
+
+def get_devolucion(contrato_id: int, devolucion_id: int) -> dict:
+    rows = [
+        r for r in list_devoluciones(contrato_id)
+        if int(r.get("id") or 0) == int(devolucion_id)
+    ]
+    if not rows:
+        # Fallback directo por si list filtró mal.
+        sb = _sb()
+        raw = (
+            sb.table("almacen_devolucion")
+            .select("*")
+            .eq("id", int(devolucion_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not raw:
+            raise ValueError("Devolución no encontrada.")
+        return raw[0]
+    return rows[0]
+
+
+def eliminar_devolucion(contrato_id: int, devolucion_id: int) -> dict:
+    """
+    Elimina una devolución y revierte su efecto en inventario / saldos.
+    Tras esto, la salida asociada puede eliminarse con el flujo normal.
+    """
+    sb = _sb()
+    rows = (
+        sb.table("almacen_devolucion")
+        .select("*")
+        .eq("id", int(devolucion_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Devolución no encontrada.")
+    dev = rows[0]
+    qty = _to_float(dev.get("cantidad"))
+    salida_id = int(dev["salida_id"]) if dev.get("salida_id") is not None else None
+    entrada_item_id = int(dev["entrada_item_id"]) if dev.get("entrada_item_id") is not None else None
+
+    material = "—"
+    unidad = "UND"
+    presupuesto_id = None
+    if entrada_item_id is not None:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("*")
+            .eq("id", entrada_item_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ei_rows:
+            ei = ei_rows[0]
+            presupuesto_id = ei.get("presupuesto_id")
+            oci_id = ei.get("orden_compra_item_id")
+            if oci_id:
+                oci = (
+                    sb.table("almacen_orden_compra_item")
+                    .select("material_descripcion, unidad, presupuesto_id")
+                    .eq("id", int(oci_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if oci:
+                    material = oci[0].get("material_descripcion") or material
+                    unidad = oci[0].get("unidad") or unidad
+                    presupuesto_id = oci[0].get("presupuesto_id") or presupuesto_id
+
+    # Invertir la reactivación de stock hecha al crear la devolución (+qty → −qty).
+    if presupuesto_id is not None and qty > 0:
+        _upsert_inventario(contrato_id, int(presupuesto_id), material, unidad, -qty, 0)
+
+    sb.table("almacen_movimiento").delete().eq(
+        "referencia_tipo", "devolucion"
+    ).eq("referencia_id", int(devolucion_id)).execute()
+
+    numero = int(dev.get("numero_devolucion") or 0)
+    max_num = _max_consecutivo(contrato_id, "almacen_devolucion", "numero_devolucion")
+    sb.table("almacen_devolucion").delete().eq(
+        "id", int(devolucion_id)
+    ).eq("contrato_id", int(contrato_id)).execute()
+
+    # Recibo PDF de la salida puede mostrar Devuelto / Cant. neta — regenerar.
+    if salida_id is not None:
+        try:
+            sal = get_salida(contrato_id, salida_id)
+            _generar_pdf_salida(
+                contrato_id,
+                salida_id,
+                sal,
+                _pdf_ctx_for_salida(sb, contrato_id, sal),
+            )
+        except Exception as exc:
+            _log.warning(
+                "PDF salida %s no regenerado tras eliminar devolución %s: %s",
+                salida_id,
+                devolucion_id,
+                exc,
+            )
+
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        "ok": True,
+        "id": int(devolucion_id),
+        "numero_devolucion": numero,
+        "salida_id": salida_id,
+        "entrada_item_id": entrada_item_id,
+        "cantidad": qty,
+        "consecutivo_liberado": numero > 0 and numero == max_num,
+    }
+
