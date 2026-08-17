@@ -299,29 +299,40 @@ export default function SalidaForm({
     <form onSubmit={submit}>
       {error && <div style={{ color: '#dc2626', marginBottom: 12, fontSize: 'var(--cc-sm)' }}>{error}</div>}
 
-      <AlmacenFieldLabel
-        icon="👤"
-        label="Quién recibe en obra"
-        ayuda="Solo usuarios con rol operativo, contratista o contratista gerencial del contrato."
-      />
-      <ReceptorObraSelector
-        value={receptor}
-        onChange={(v) => { setReceptor(v); clearFieldError('receptor') }}
-        disabled={busy}
-      />
-      {fieldErrors.receptor && (
-        <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.receptor}</div>
-      )}
-
-      <AlmacenFieldLabel icon="🕐" label="Fecha y hora de salida" />
-      <input
-        type="datetime-local"
-        style={{ ...ui.input, marginBottom: 12, ...inputErrorStyle('fecha') }}
-        value={fechaHora}
-        disabled={busy}
-        onChange={(e) => setFechaHora(e.target.value)}
-      />
-
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 12,
+        marginBottom: 12,
+        alignItems: 'flex-start',
+      }}
+      >
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+          <AlmacenFieldLabel
+            icon="👤"
+            label="Quién recibe en obra"
+            ayuda="Solo usuarios con rol operativo, contratista o contratista gerencial del contrato."
+          />
+          <ReceptorObraSelector
+            value={receptor}
+            onChange={(v) => { setReceptor(v); clearFieldError('receptor') }}
+            disabled={busy}
+          />
+          {fieldErrors.receptor && (
+            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>{fieldErrors.receptor}</div>
+          )}
+        </div>
+        <div style={{ flex: '0 1 280px', minWidth: 220, maxWidth: 320 }}>
+          <AlmacenFieldLabel icon="🕐" label="Fecha y hora de salida" />
+          <input
+            type="datetime-local"
+            style={{ ...ui.input, width: '100%', boxSizing: 'border-box', ...inputErrorStyle('fecha') }}
+            value={fechaHora}
+            disabled={busy}
+            onChange={(e) => setFechaHora(e.target.value)}
+          />
+        </div>
+      </div>
       <AlmacenFieldLabel
         icon="📍"
         label="Ubicación (PK-ID)"
@@ -383,32 +394,36 @@ export default function SalidaForm({
             </div>
           ) : (
             <div style={{ marginBottom: 12 }}>
-              <div style={ui.sheetWrap} className="cc-almacen-table-scroll" data-testid="entrada-material-table">
-                <table style={{ ...ui.sheetTable, minWidth: 760, width: '100%' }}>
+              <div style={{ ...ui.sheetWrap, marginTop: 0 }} className="cc-almacen-table-scroll" data-testid="entrada-material-table">
+                <table style={{ ...ui.sheetTable, minWidth: 640, width: '100%', tableLayout: 'fixed' }}>
+                  <colgroup>
+                    {[90, 72, 110, 200, 96, 96, 100].map((w, i) => (
+                      <col key={i} style={{ width: w }} />
+                    ))}
+                  </colgroup>
                   <thead>
                     <tr>
                       {[
-                        { key: 'ent', label: 'Entrada', tip: 'Número de entrada', w: 90 },
-                        { key: 'oc', label: 'OC', tip: 'Orden de compra asociada', w: 80 },
-                        { key: 'cod', label: 'Código', tip: 'Código del insumo', w: 100 },
-                        { key: 'desc', label: 'Descripción', tip: 'Descripción del insumo', w: 180 },
-                        { key: 'ppto', label: 'Ítem ppto.', tip: 'Ítem de presupuesto', w: 120 },
-                        { key: 'rec', label: 'Recibido', tip: 'Cantidad recibida en esta entrada', w: 90 },
-                        { key: 'disp', label: 'Disponible', tip: 'Disponible para salida', w: 90 },
-                        { key: 'oca', label: 'OC autoriza', tip: 'Cantidad autorizada en la OC', w: 90 },
+                        { key: 'ent', abbr: 'ENTRADA', tip: 'Número de entrada' },
+                        { key: 'oc', abbr: 'OC', tip: 'Orden de compra asociada' },
+                        { key: 'cod', abbr: 'CÓDIGO', tip: 'Código del insumo' },
+                        { key: 'desc', abbr: 'DESCRIPCIÓN', tip: 'Descripción del insumo' },
+                        { key: 'rec', abbr: 'RECIBIDO', tip: 'Cantidad recibida en esta entrada' },
+                        { key: 'disp', abbr: 'DISPONIBLE', tip: 'Disponible para salida' },
+                        { key: 'oca', abbr: 'OC AUTORIZA', tip: 'Cantidad autorizada en la OC' },
                       ].map((c) => (
                         <th
                           key={c.key}
                           title={c.tip}
                           style={{
                             ...ui.th,
-                            width: c.w,
                             fontSize: 'var(--cc-xs)',
                             padding: '6px 8px',
+                            height: 32,
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {c.label}
+                          {c.abbr}
                         </th>
                       ))}
                     </tr>
@@ -420,16 +435,21 @@ export default function SalidaForm({
                         op.insumo_codigo,
                         op.material_descripcion,
                       )
-                      const ppto = [op.presupuesto_capitulo, op.presupuesto_item].filter(Boolean).join(' · ') || '—'
                       const und = op.unidad || ''
                       const tdBase = {
                         ...ui.td,
-                        fontSize: 'var(--cc-xs)',
-                        padding: '8px',
+                        padding: '4px 6px',
+                        height: 36,
                         verticalAlign: 'middle',
                         cursor: busy ? 'default' : 'pointer',
-                        background: sel ? ui.accentSoft : undefined,
-                        borderLeft: sel ? `3px solid ${ui.accent}` : undefined,
+                        background: sel ? ui.accentSoft : 'transparent',
+                      }
+                      const tdNum = {
+                        ...ui.tdNum,
+                        padding: '4px 6px',
+                        height: 36,
+                        cursor: busy ? 'default' : 'pointer',
+                        background: sel ? ui.accentSoft : 'transparent',
                       }
                       const selectRow = () => {
                         if (busy) return
@@ -459,11 +479,9 @@ export default function SalidaForm({
                           tabIndex={busy ? -1 : 0}
                           style={{ outline: 'none' }}
                         >
-                          <td style={{ ...tdBase, fontWeight: 700 }}>
+                          <td style={{ ...tdBase, fontWeight: 700 }} title={formatEntradaNumero(op)}>
                             {formatEntradaNumero(op)}
-                            {op.alerta_proximidad_consumo && (
-                              <div style={{ color: '#b45309', fontWeight: 600, marginTop: 2 }}>⚠ Bajo</div>
-                            )}
+                            {op.alerta_proximidad_consumo ? ' ⚠' : ''}
                           </td>
                           <td style={tdBase}>
                             {op.numero_oc != null ? formatNumeroOcDisplay(op.numero_oc) : '—'}
@@ -474,16 +492,12 @@ export default function SalidaForm({
                           <td style={tdBase} title={descripcion || undefined}>
                             {descripcion || '—'}
                           </td>
-                          <td style={tdBase} title={ppto}>{ppto}</td>
-                          <td style={{ ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          <td style={tdNum}>
                             {fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)}
                             {und ? ` ${und}` : ''}
                           </td>
                           <td style={{
-                            ...tdBase,
-                            textAlign: 'right',
-                            fontWeight: 700,
-                            fontVariantNumeric: 'tabular-nums',
+                            ...tdNum,
                             color: Number(op.cantidad_disponible) > 0
                               ? 'var(--cc-color-positive, #059669)'
                               : '#dc2626',
@@ -492,7 +506,7 @@ export default function SalidaForm({
                             {fmtCant(op.cantidad_disponible)}
                             {und ? ` ${und}` : ''}
                           </td>
-                          <td style={{ ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          <td style={tdNum}>
                             {op.cantidad_oc_autorizada != null
                               ? `${fmtCant(op.cantidad_oc_autorizada)}${und ? ` ${und}` : ''}`
                               : '—'}
@@ -517,23 +531,8 @@ export default function SalidaForm({
                 return (
                   <div
                     data-testid="cantidad-despachar-block"
-                    style={{
-                      marginTop: 10,
-                      padding: '12px 12px 10px',
-                      borderRadius: 8,
-                      border: `1px solid ${ui.border}`,
-                      background: ui.card?.background || '#fff',
-                    }}
+                    style={{ marginTop: 10 }}
                   >
-                    <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 8 }}>
-                      Entrada seleccionada:{' '}
-                      <strong style={{ color: ui.text }}>{formatEntradaNumero(entradaSel)}</strong>
-                      {entradaSel.numero_oc != null && (
-                        <> · OC <strong style={{ color: ui.text }}>{formatNumeroOcDisplay(entradaSel.numero_oc)}</strong></>
-                      )}
-                      {' · '}Máximo a despachar:{' '}
-                      <strong style={{ color: ui.text }}>{fmtCant(dispOp)} {und}</strong>
-                    </div>
                     <label
                       htmlFor={`salida-cantidad-${entradaSel.entrada_item_id}`}
                       style={{
