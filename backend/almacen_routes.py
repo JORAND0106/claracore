@@ -1131,8 +1131,8 @@ def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depen
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
-        prev = get_entrada(contrato_id, entrada_id)
-        result = eliminar_entrada(contrato_id, entrada_id)
+        prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+        result = eliminar_entrada(contrato_id, entrada_id, ent_prefetched=prev)
         for it in prev.get("items") or []:
             ei_id = it.get("id")
             if ei_id is None:
@@ -1319,7 +1319,7 @@ def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends
     require_permiso_almacen(current_user, "editar")
     try:
         prev = get_salida(contrato_id, salida_id)
-        result = eliminar_salida(contrato_id, salida_id)
+        result = eliminar_salida(contrato_id, salida_id, sal_prefetched=prev)
         log_almacen(
             current_user, "ELIMINAR", "salida", salida_id,
             {"numero_salida": prev.get("numero_salida")},
@@ -1439,7 +1439,18 @@ def route_eliminar_devolucion(
     require_permiso_almacen(current_user, "editar")
     try:
         prev = get_devolucion(contrato_id, devolucion_id)
-        result = eliminar_devolucion(contrato_id, devolucion_id)
+        salida_id = prev.get("salida_id")
+        # Snapshot de salida ANTES del delete (evita un get_salida extra tras borrar).
+        sal_antes = None
+        if salida_id is not None:
+            try:
+                sal_antes = get_salida(contrato_id, int(salida_id))
+            except ValueError:
+                sal_antes = None
+
+        result = eliminar_devolucion(
+            contrato_id, devolucion_id, dev_prefetched=prev,
+        )
         log_almacen(
             current_user, "ELIMINAR", "devolucion", devolucion_id,
             {
@@ -1450,25 +1461,26 @@ def route_eliminar_devolucion(
             valor_anterior=snapshot_devolucion(prev),
             valor_nuevo={"deleted": True, "id": devolucion_id},
         )
-        salida_id = prev.get("salida_id")
-        if salida_id is not None:
-            try:
-                sal_despues = get_salida(contrato_id, int(salida_id))
-            except ValueError:
-                sal_despues = None
-            if sal_despues is not None:
-                log_almacen(
-                    current_user, "REVERTIR_DEVOLUCION", "salida", salida_id,
-                    {"devolucion_id": devolucion_id, "cantidad": prev.get("cantidad")},
-                    valor_anterior={
-                        **snapshot_salida(sal_despues),
-                        "cantidad_devuelta_antes_delete": (
-                            float(sal_despues.get("cantidad_devuelta") or 0)
-                            + float(prev.get("cantidad") or 0)
-                        ),
-                    },
-                    valor_nuevo=snapshot_salida(sal_despues),
-                )
+        if sal_antes is not None and salida_id is not None:
+            qty = float(prev.get("cantidad") or 0)
+            dev_antes = float(sal_antes.get("cantidad_devuelta") or 0)
+            sal_despues = {
+                **snapshot_salida(sal_antes),
+                "cantidad_devuelta": max(0.0, round(dev_antes - qty, 4)),
+                "cantidad_neta": max(
+                    0.0,
+                    round(float(sal_antes.get("cantidad_salida") or 0) - max(0.0, dev_antes - qty), 4),
+                ),
+            }
+            log_almacen(
+                current_user, "REVERTIR_DEVOLUCION", "salida", salida_id,
+                {"devolucion_id": devolucion_id, "cantidad": prev.get("cantidad")},
+                valor_anterior={
+                    **snapshot_salida(sal_antes),
+                    "cantidad_devuelta_antes_delete": dev_antes,
+                },
+                valor_nuevo=sal_despues,
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc

@@ -226,12 +226,14 @@ def test_enrich_salidas_incluye_devuelta_y_neta(monkeypatch):
 
 
 def test_eliminar_devolucion_revierte_inventario_y_borra(monkeypatch):
+    import time
     from almacen_service import eliminar_devolucion
 
     sb = MagicMock()
     upsert_calls = []
     deleted_mov = []
     deleted_dev = []
+    pdf_calls = []
 
     def table(name):
         q = MagicMock()
@@ -244,9 +246,6 @@ def test_eliminar_devolucion_revierte_inventario_y_borra(monkeypatch):
                 "entrada_item_id": 10,
                 "cantidad": 20.0,
             }]
-            def _del():
-                deleted_dev.append(True)
-                return MagicMock(execute=MagicMock(return_value=MagicMock(data=[])))
             q.delete.return_value.eq.return_value.eq.return_value.execute = lambda: MagicMock(data=[])
             q.delete.return_value.eq.return_value.eq.side_effect = lambda *a, **k: (
                 deleted_dev.append(True) or q.delete.return_value.eq.return_value
@@ -264,9 +263,6 @@ def test_eliminar_devolucion_revierte_inventario_y_borra(monkeypatch):
                 "presupuesto_id": 7,
             }]
         elif name == "almacen_movimiento":
-            def _mov_del(*_a, **_k):
-                deleted_mov.append(True)
-                return q
             q.delete.return_value.eq.return_value.eq.return_value.execute = lambda: MagicMock(data=[])
             q.delete.return_value.eq.side_effect = lambda *a, **k: (
                 deleted_mov.append(a) or q.delete.return_value
@@ -290,15 +286,68 @@ def test_eliminar_devolucion_revierte_inventario_y_borra(monkeypatch):
         lambda *_a, **_k: {"id": 5, "entrada_item_id": 10, "cantidad_salida": 100},
     )
     monkeypatch.setattr("almacen_service._pdf_ctx_for_salida", lambda *_a, **_k: {})
-    monkeypatch.setattr("almacen_service._generar_pdf_salida", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "almacen_service._generar_pdf_salida",
+        lambda *a, **k: pdf_calls.append(a) or time.sleep(0.2),
+    )
 
+    t0 = time.perf_counter()
     out = eliminar_devolucion(1, 9)
+    elapsed = time.perf_counter() - t0
+
     assert out["ok"] is True
     assert out["id"] == 9
     assert out["salida_id"] == 5
     assert out["cantidad"] == 20.0
+    assert out.get("pdf_generando") is True
     assert upsert_calls, "debe revertir inventario"
-    # delta = -qty
     assert upsert_calls[0][4] == -20.0
     assert deleted_mov, "debe borrar movimiento"
     assert deleted_dev, "debe borrar fila devolución"
+    # PDF no debe bloquear la respuesta (antes era sync ~firmas+upload).
+    assert elapsed < 0.15, f"eliminar_devolucion bloqueó {elapsed:.3f}s; PDF debe ir en background"
+
+    # Dar tiempo al hilo daemon a registrar la llamada.
+    deadline = time.time() + 1.0
+    while not pdf_calls and time.time() < deadline:
+        time.sleep(0.02)
+    assert pdf_calls, "PDF debe regenerarse en background"
+
+
+def test_get_devolucion_no_lista_todo_el_contrato(monkeypatch):
+    from almacen_service import get_devolucion
+
+    sb = MagicMock()
+    list_calls = []
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_devolucion":
+            # by-id path
+            q.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
+                "id": 9,
+                "contrato_id": 1,
+                "salida_id": None,
+                "cantidad": 1,
+                "receptor_usuario_id": None,
+                "created_by": None,
+            }]
+            # list path would use order without limit-eq-eq
+            def order(*_a, **_k):
+                list_calls.append("list")
+                return q
+            q.select.return_value.eq.return_value.order.side_effect = order
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr("almacen_service._sb", lambda: sb)
+    monkeypatch.setattr("almacen_service._map_usuario_nombres", lambda *_a, **_k: {})
+    monkeypatch.setattr("almacen_service._enrich_salidas_rows", lambda *_a, **_k: [])
+
+    row = get_devolucion(1, 9)
+    assert row["id"] == 9
+    assert not list_calls, "get_devolucion no debe listar todas las devoluciones"

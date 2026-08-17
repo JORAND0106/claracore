@@ -3537,13 +3537,20 @@ def _rollback_entrada_item_line(sb, contrato_id: int, ent: dict, it: dict) -> No
         )
 
 
-def eliminar_entrada(contrato_id: int, entrada_id: int) -> dict:
+def eliminar_entrada(
+    contrato_id: int,
+    entrada_id: int,
+    *,
+    ent_prefetched: Optional[dict] = None,
+) -> dict:
     """
     Elimina una entrada y revierte inventario / saldo OC.
     El consecutivo solo queda libre si era el máximo (entrada N.º o documento disposición).
     """
     sb = _sb()
-    ent = get_entrada(contrato_id, entrada_id)
+    ent = ent_prefetched if (
+        ent_prefetched and int(ent_prefetched.get("id") or 0) == int(entrada_id)
+    ) else get_entrada(contrato_id, entrada_id)
 
     ei_ids = [int(it["id"]) for it in ent.get("items") or [] if it.get("id")]
     if ei_ids:
@@ -3581,13 +3588,23 @@ def eliminar_entrada(contrato_id: int, entrada_id: int) -> dict:
     if oc_id:
         _actualizar_estado_oc(sb, int(oc_id))
 
-    for path in (ent.get("remision_blob_path"), ent.get("disposicion_pdf_blob_path")):
-        p = (path or "").strip()
-        if p:
+    # Borrado de blobs en background: Azure puede tardar varios segundos y no
+    # afecta la consistencia de saldos (las rutas ya no se referencian en BD).
+    blob_paths = [
+        (ent.get("remision_blob_path") or "").strip(),
+        (ent.get("disposicion_pdf_blob_path") or "").strip(),
+    ]
+    blob_paths = [p for p in blob_paths if p]
+
+    def _blobs_bg() -> None:
+        for p in blob_paths:
             try:
                 delete_blob_private(p)
             except Exception as exc:
                 _log.warning("No se pudo borrar blob entrada %s: %s", entrada_id, exc)
+
+    if blob_paths:
+        threading.Thread(target=_blobs_bg, daemon=True).start()
 
     sb.table("almacen_entrada").delete().eq("id", int(entrada_id)).eq(
         "contrato_id", contrato_id,
@@ -3716,7 +3733,12 @@ def list_entradas(contrato_id: int) -> List[dict]:
     return _enriquecer_entradas_listado(sb, rows)
 
 
-def get_entrada(contrato_id: int, entrada_id: int) -> dict:
+def get_entrada(
+    contrato_id: int,
+    entrada_id: int,
+    *,
+    incluir_movimientos: bool = True,
+) -> dict:
     sb = _sb()
     rows = (
         sb.table("almacen_entrada")
@@ -3739,30 +3761,50 @@ def get_entrada(contrato_id: int, entrada_id: int) -> dict:
         .data
         or []
     )
-    for it in items:
-        oci = (
+    oci_ids = [
+        int(it["orden_compra_item_id"])
+        for it in items
+        if it.get("orden_compra_item_id") is not None
+    ]
+    oci_map: Dict[int, dict] = {}
+    if oci_ids:
+        oci_rows = (
             sb.table("almacen_orden_compra_item")
-            .select("material_descripcion, unidad, cantidad")
-            .eq("id", it.get("orden_compra_item_id"))
-            .limit(1)
+            .select("id, material_descripcion, unidad, cantidad")
+            .in_("id", oci_ids)
             .execute()
             .data
             or []
         )
-        it["almacen_orden_compra_item"] = oci[0] if oci else {}
+        oci_map = {int(x["id"]): x for x in oci_rows}
+    for it in items:
+        oid = it.get("orden_compra_item_id")
+        it["almacen_orden_compra_item"] = (
+            oci_map.get(int(oid)) if oid is not None else None
+        ) or {}
+        oci = it["almacen_orden_compra_item"]
+        if not it.get("material_descripcion"):
+            it["material_descripcion"] = oci.get("material_descripcion")
+        if not it.get("unidad"):
+            it["unidad"] = oci.get("unidad")
     ei_ids = [int(it["id"]) for it in items if it.get("id") is not None]
-    despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
-    mov_map = _movimientos_salida_devolucion_por_entrada_item(sb, ei_ids) if ei_ids else {}
+    if incluir_movimientos:
+        despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
+        mov_map = _movimientos_salida_devolucion_por_entrada_item(sb, ei_ids) if ei_ids else {}
+    else:
+        despacho_map, mov_map = {}, {}
     for it in items:
         ei_id = int(it["id"]) if it.get("id") is not None else None
         recibida = _to_float(it.get("cantidad_recibida"))
         despachada = despacho_map.get(ei_id, 0.0) if ei_id is not None else 0.0
-        saldo = _disponible_entrada_item(recibida, despachada)
-        pct = _porcentaje_saldo_disponible(recibida, saldo)
+        saldo = _disponible_entrada_item(recibida, despachada) if incluir_movimientos else recibida
+        pct = _porcentaje_saldo_disponible(recibida, saldo) if incluir_movimientos else None
         it["cantidad_despachada"] = despachada
         it["saldo_disponible"] = saldo
         it["porcentaje_saldo_disponible"] = pct
-        it["alerta_saldo"] = _alerta_saldo_entrada(pct, recibida)
+        it["alerta_saldo"] = (
+            _alerta_saldo_entrada(pct, recibida) if incluir_movimientos else "normal"
+        )
         it["salidas"] = mov_map.get(ei_id, []) if ei_id is not None else []
     ent["items"] = items
     if not _norm_pk_id(ent.get("pk_id")) and items:
@@ -5285,14 +5327,25 @@ def update_salida_cantidad(contrato_id: int, salida_id: int, cantidad_salida: fl
     }
 
 
-def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
+def eliminar_salida(
+    contrato_id: int,
+    salida_id: int,
+    *,
+    sal_prefetched: Optional[dict] = None,
+) -> dict:
     sb = _sb()
-    sal = get_salida(contrato_id, salida_id)
+    sal = sal_prefetched if (
+        sal_prefetched and int(sal_prefetched.get("id") or 0) == int(salida_id)
+    ) else get_salida(contrato_id, salida_id)
     ei_id = int(sal["entrada_item_id"])
     qty = _to_float(sal.get("cantidad_salida"))
 
-    devs = _sum_devoluciones_por_salida(sb, [int(salida_id)])
-    if _to_float(devs.get(int(salida_id), 0)) > 1e-9:
+    # Si el caller ya trajo cantidad_devuelta enriquecida, evita un round-trip.
+    if sal.get("cantidad_devuelta") is not None:
+        ya_dev = _to_float(sal.get("cantidad_devuelta"))
+    else:
+        ya_dev = _to_float(_sum_devoluciones_por_salida(sb, [int(salida_id)]).get(int(salida_id), 0.0))
+    if ya_dev > 1e-9:
         raise ValueError(
             "No se puede eliminar la salida porque tiene devoluciones registradas. "
             "Elimine primero las devoluciones (clic en la cantidad Devuelto o en "
@@ -5319,10 +5372,13 @@ def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
 
     path = (sal.get("salida_pdf_blob_path") or "").strip()
     if path:
-        try:
-            delete_blob_private(path)
-        except Exception as exc:
-            _log.warning("No se pudo borrar PDF salida %s: %s", salida_id, exc)
+        def _blob_bg() -> None:
+            try:
+                delete_blob_private(path)
+            except Exception as exc:
+                _log.warning("No se pudo borrar PDF salida %s: %s", salida_id, exc)
+
+        threading.Thread(target=_blob_bg, daemon=True).start()
 
     numero = int(sal.get("numero_salida") or 0)
     max_num = _max_consecutivo(contrato_id, "almacen_salida", "numero_salida")
@@ -5603,36 +5659,9 @@ def list_devoluciones(contrato_id: int) -> List[dict]:
 
 
 def get_devolucion(contrato_id: int, devolucion_id: int) -> dict:
-    rows = [
-        r for r in list_devoluciones(contrato_id)
-        if int(r.get("id") or 0) == int(devolucion_id)
-    ]
-    if not rows:
-        # Fallback directo por si list filtró mal.
-        sb = _sb()
-        raw = (
-            sb.table("almacen_devolucion")
-            .select("*")
-            .eq("id", int(devolucion_id))
-            .eq("contrato_id", int(contrato_id))
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not raw:
-            raise ValueError("Devolución no encontrada.")
-        return raw[0]
-    return rows[0]
-
-
-def eliminar_devolucion(contrato_id: int, devolucion_id: int) -> dict:
-    """
-    Elimina una devolución y revierte su efecto en inventario / saldos.
-    Tras esto, la salida asociada puede eliminarse con el flujo normal.
-    """
+    """Carga una devolución por id (sin listar todo el contrato)."""
     sb = _sb()
-    rows = (
+    raw = (
         sb.table("almacen_devolucion")
         .select("*")
         .eq("id", int(devolucion_id))
@@ -5642,9 +5671,74 @@ def eliminar_devolucion(contrato_id: int, devolucion_id: int) -> dict:
         .data
         or []
     )
-    if not rows:
+    if not raw:
         raise ValueError("Devolución no encontrada.")
-    dev = rows[0]
+    r = raw[0]
+    user_ids = []
+    if r.get("receptor_usuario_id"):
+        user_ids.append(int(r["receptor_usuario_id"]))
+    if r.get("created_by"):
+        user_ids.append(int(r["created_by"]))
+    names = _map_usuario_nombres(sb, user_ids) if user_ids else {}
+    r["receptor_nombre"] = names.get(int(r["receptor_usuario_id"])) if r.get("receptor_usuario_id") else None
+    r["registrado_por_nombre"] = names.get(int(r["created_by"])) if r.get("created_by") else None
+
+    sid = int(r["salida_id"]) if r.get("salida_id") else None
+    if sid:
+        sal_rows = (
+            sb.table("almacen_salida")
+            .select("id, numero_salida, codigo, cantidad_salida, entrada_item_id")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if sal_rows:
+            enriched = _enrich_salidas_rows(sb, contrato_id, [{
+                **sal_rows[0],
+                "receptor_usuario_id": None,
+                "created_by": None,
+                "salida_pdf_blob_path": None,
+            }])
+            sal = enriched[0] if enriched else sal_rows[0]
+            r["numero_salida"] = sal.get("numero_salida")
+            r["codigo_salida"] = sal.get("codigo")
+            r["material_descripcion"] = sal.get("material_descripcion")
+            r["unidad"] = sal.get("unidad")
+            r["numero_oc"] = sal.get("numero_oc")
+    return r
+
+
+def eliminar_devolucion(
+    contrato_id: int,
+    devolucion_id: int,
+    *,
+    dev_prefetched: Optional[dict] = None,
+) -> dict:
+    """
+    Elimina una devolución y revierte su efecto en inventario / saldos.
+    Tras esto, la salida asociada puede eliminarse con el flujo normal.
+    La regeneración del PDF de la salida se hace en segundo plano (mismo patrón
+    que create_salida / update_salida_cantidad) para no bloquear la respuesta.
+    """
+    sb = _sb()
+    if dev_prefetched and int(dev_prefetched.get("id") or 0) == int(devolucion_id):
+        dev = dev_prefetched
+    else:
+        rows = (
+            sb.table("almacen_devolucion")
+            .select("*")
+            .eq("id", int(devolucion_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            raise ValueError("Devolución no encontrada.")
+        dev = rows[0]
     qty = _to_float(dev.get("cantidad"))
     salida_id = int(dev["salida_id"]) if dev.get("salida_id") is not None else None
     entrada_item_id = int(dev["entrada_item_id"]) if dev.get("entrada_item_id") is not None else None
@@ -5695,23 +5789,26 @@ def eliminar_devolucion(contrato_id: int, devolucion_id: int) -> dict:
         "id", int(devolucion_id)
     ).eq("contrato_id", int(contrato_id)).execute()
 
-    # Recibo PDF de la salida puede mostrar Devuelto / Cant. neta — regenerar.
+    # PDF en background: firmas HTTP + xhtml2pdf + upload no deben bloquear el DELETE.
     if salida_id is not None:
-        try:
-            sal = get_salida(contrato_id, salida_id)
-            _generar_pdf_salida(
-                contrato_id,
-                salida_id,
-                sal,
-                _pdf_ctx_for_salida(sb, contrato_id, sal),
-            )
-        except Exception as exc:
-            _log.warning(
-                "PDF salida %s no regenerado tras eliminar devolución %s: %s",
-                salida_id,
-                devolucion_id,
-                exc,
-            )
+        def _pdf_regen() -> None:
+            try:
+                sal = get_salida(contrato_id, salida_id)
+                _generar_pdf_salida(
+                    contrato_id,
+                    salida_id,
+                    sal,
+                    _pdf_ctx_for_salida(_sb(), contrato_id, sal),
+                )
+            except Exception as exc:
+                _log.warning(
+                    "PDF salida %s no regenerado tras eliminar devolución %s: %s",
+                    salida_id,
+                    devolucion_id,
+                    exc,
+                )
+
+        threading.Thread(target=_pdf_regen, daemon=True).start()
 
     _invalidar_graficos_inventario(contrato_id)
     return {
@@ -5722,5 +5819,6 @@ def eliminar_devolucion(contrato_id: int, devolucion_id: int) -> dict:
         "entrada_item_id": entrada_item_id,
         "cantidad": qty,
         "consecutivo_liberado": numero > 0 and numero == max_num,
+        "pdf_generando": bool(salida_id),
     }
 
