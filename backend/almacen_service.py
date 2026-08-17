@@ -5215,7 +5215,8 @@ def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
     if _to_float(devs.get(int(salida_id), 0)) > 1e-9:
         raise ValueError(
             "No se puede eliminar la salida porque tiene devoluciones registradas. "
-            "Elimine primero las devoluciones asociadas."
+            "Elimine primero las devoluciones (clic en la cantidad Devuelto o en "
+            "Entradas → Devoluciones) y luego reintente."
         )
 
     ei_rows = sb.table("almacen_entrada_item").select("*").eq("id", ei_id).limit(1).execute().data or []
