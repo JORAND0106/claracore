@@ -10,6 +10,7 @@ import {
   formatEntradaNumero,
   formatEntradaCantidadGrilla,
   formatEntradaSaldoOcDespuesGrilla,
+  fmtCant,
   fmtFechaAlmacenSolo,
   useAlmacenApi,
   useAlmacenTheme,
@@ -18,6 +19,12 @@ import {
 const TIPO_LABEL = {
   disposicion: 'Disposición',
   recibo: 'Recibo',
+}
+
+const ALERTA_SALDO_BG = {
+  rojo: '#fecaca',
+  naranja: '#fed7aa',
+  normal: 'transparent',
 }
 
 export default function EntradasPanel({
@@ -115,7 +122,11 @@ export default function EntradasPanel({
                 <th style={ui.th}>Tipo</th>
                 <th style={ui.th}>Documento</th>
                 <th style={ui.th}>OC</th>
+                <th style={ui.th}>Insumo</th>
                 <th style={ui.th}>Recibido en entrada</th>
+                <th style={ui.th}>Consumido</th>
+                <th style={ui.th}>Saldo por consumir</th>
+                <th style={ui.th}>% saldo</th>
                 <th style={ui.th}>Saldo OC tras entrada</th>
                 <th style={ui.th}>Proveedor</th>
                 <th style={ui.th}>Usuario</th>
@@ -128,32 +139,51 @@ export default function EntradasPanel({
               {lista.map((e) => {
                 const oc = e.almacen_orden_compra || {}
                 const tienePdf = Boolean(e.disposicion_pdf_blob_path)
+                const und = e.unidad || e.cantidad_recibida_unidad || ''
+                const alerta = e.alerta_saldo || 'normal'
+                const bg = ALERTA_SALDO_BG[alerta] || ALERTA_SALDO_BG.normal
+                const pct = Number(e.porcentaje_saldo_disponible)
+                const pctLabel = Number.isFinite(pct)
+                  ? `${pct.toLocaleString('es-CO', { maximumFractionDigits: 2 })}%`
+                  : '—'
+                const rowKey = e.entrada_item_id != null ? `ei-${e.entrada_item_id}` : `ent-${e.id}`
+                const tdAlert = bg !== 'transparent' ? { ...ui.td, background: bg } : ui.td
                 return (
                   <tr
-                    key={e.id}
+                    key={rowKey}
                     style={{ cursor: 'pointer' }}
                     onClick={() => setDetalleId(e.id)}
                     title="Ver resumen"
                   >
-                    <td style={{ ...ui.td, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
-                    <td style={ui.td} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
-                    <td style={ui.td} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
-                    <td style={ui.td} data-label="Documento">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
-                    <td style={ui.td} data-label="OC">#{oc.numero_oc || '—'}</td>
-                    <td style={ui.td} data-label="Recibido en entrada" title={formatEntradaCantidadGrilla(e)}>
+                    <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
+                    <td style={tdAlert} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
+                    <td style={tdAlert} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
+                    <td style={tdAlert} data-label="Documento">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
+                    <td style={tdAlert} data-label="OC">#{oc.numero_oc || '—'}</td>
+                    <td style={tdAlert} data-label="Insumo">{e.material_descripcion || e.insumo_label || '—'}</td>
+                    <td style={tdAlert} data-label="Recibido en entrada" title={formatEntradaCantidadGrilla(e)}>
                       {formatEntradaCantidadGrilla(e)}
                     </td>
-                    <td style={ui.td} data-label="Saldo OC tras entrada" title={formatEntradaSaldoOcDespuesGrilla(e)}>
+                    <td style={{ ...tdAlert, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Consumido">
+                      {`${fmtCant(e.consumido ?? e.cantidad_despachada)} ${und}`.trim()}
+                    </td>
+                    <td style={{ ...tdAlert, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Saldo por consumir">
+                      {`${fmtCant(e.saldo_por_consumir ?? e.saldo_disponible)} ${und}`.trim()}
+                    </td>
+                    <td style={{ ...tdAlert, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} data-label="% saldo">
+                      {pctLabel}
+                    </td>
+                    <td style={tdAlert} data-label="Saldo OC tras entrada" title={formatEntradaSaldoOcDespuesGrilla(e)}>
                       {formatEntradaSaldoOcDespuesGrilla(e)}
                     </td>
-                    <td style={ui.td} data-label="Proveedor">{e.proveedor_nombre || '—'}</td>
-                    <td style={ui.td} data-label="Usuario">{e.usuario_nombre || '—'}</td>
+                    <td style={tdAlert} data-label="Proveedor">{e.proveedor_nombre || '—'}</td>
+                    <td style={tdAlert} data-label="Usuario">{e.usuario_nombre || '—'}</td>
                     {verAlertas && (
-                      <td style={{ ...ui.td, textAlign: 'center', color: '#d97706' }} data-label="Alerta" title={e.alerta_silenciosa_detalle || ''}>
+                      <td style={{ ...tdAlert, textAlign: 'center', color: '#d97706' }} data-label="Alerta" title={e.alerta_silenciosa_detalle || ''}>
                         {e.alerta_silenciosa_detalle ? '⚠' : '—'}
                       </td>
                     )}
-                    <td style={{ ...ui.td, textAlign: 'center' }} data-label="PDF" onClick={(ev) => ev.stopPropagation()}>
+                    <td style={{ ...tdAlert, textAlign: 'center' }} data-label="PDF" onClick={(ev) => ev.stopPropagation()}>
                       {tienePdf ? (
                         <span style={{ display: 'inline-flex', gap: 4 }}>
                           <button
@@ -180,7 +210,7 @@ export default function EntradasPanel({
                       )}
                     </td>
                     {puedeEliminar && (
-                      <td style={{ ...ui.td, textAlign: 'center' }} data-label="Eliminar" onClick={(ev) => ev.stopPropagation()}>
+                      <td style={{ ...tdAlert, textAlign: 'center' }} data-label="Eliminar" onClick={(ev) => ev.stopPropagation()}>
                         <button
                           type="button"
                           title="Eliminar entrada"

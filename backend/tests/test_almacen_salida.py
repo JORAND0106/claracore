@@ -218,19 +218,76 @@ def test_enriquecer_entradas_listado_cantidad_y_saldo(monkeypatch):
                 "cantidad": 235,
                 "cantidad_recibida": 100,
                 "unidad": "M3",
+                "material_descripcion": "Concreto",
             }]
+        elif name == "almacen_salida":
+            q.select.return_value.in_.return_value.execute.return_value.data = [
+                {"entrada_item_id": 10, "cantidad_salida": 40},
+            ]
+        elif name == "almacen_devolucion":
+            q.select.return_value.in_.return_value.execute.return_value.data = [
+                {"entrada_item_id": 10, "cantidad": 10},
+            ]
         else:
             q.select.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
         return q
 
     sb.table.side_effect = table
     monkeypatch.setattr("almacen_service._sb", lambda: sb)
 
+    rows = [{"id": 5, "created_at": "2026-07-13T10:00:00Z", "codigo": "Ent-5"}]
+    out = _enriquecer_entradas_listado(sb, rows)
+    assert len(out) == 1
+    assert out[0]["entrada_item_id"] == 10
+    assert out[0]["material_descripcion"] == "Concreto"
+    assert out[0]["cantidad_recibida"] == 100.0
+    assert out[0]["cantidad_recibida_unidad"] == "M3"
+    assert out[0]["saldo_oc_pendiente_despues"] == 135.0
+    # despacho neto = 40 − 10 = 30
+    assert out[0]["consumido"] == 30.0
+    assert out[0]["cantidad_despachada"] == 30.0
+    assert out[0]["saldo_por_consumir"] == 70.0
+    assert out[0]["porcentaje_saldo_disponible"] == 70.0
+    assert out[0]["alerta_saldo"] == "normal"
+
+
+def test_enriquecer_entradas_listado_multi_linea(monkeypatch):
+    from almacen_service import _enriquecer_entradas_listado
+
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        if name == "almacen_entrada_item":
+            q.select.return_value.in_.return_value.execute.return_value.data = [
+                {"id": 10, "entrada_id": 5, "cantidad_recibida": 100, "orden_compra_item_id": 7},
+                {"id": 11, "entrada_id": 5, "cantidad_recibida": 50, "orden_compra_item_id": 8},
+            ]
+            q.select.return_value.eq.return_value.execute.return_value.data = []
+        elif name == "almacen_orden_compra_item":
+            q.select.return_value.in_.return_value.execute.return_value.data = [
+                {"id": 7, "cantidad": 100, "cantidad_recibida": 100, "unidad": "KG", "material_descripcion": "Cemento"},
+                {"id": 8, "cantidad": 50, "cantidad_recibida": 50, "unidad": "KG", "material_descripcion": "Acero"},
+            ]
+        else:
+            q.select.return_value.execute.return_value.data = []
+            q.select.return_value.in_.return_value.execute.return_value.data = []
+        return q
+
+    sb.table.side_effect = table
+    monkeypatch.setattr(
+        "almacen_service._despacho_neto_por_entrada_item",
+        lambda *_a, **_k: {10: 90.0, 11: 0.0},
+    )
     rows = [{"id": 5, "created_at": "2026-07-13T10:00:00Z"}]
-    _enriquecer_entradas_listado(sb, rows)
-    assert rows[0]["cantidad_recibida_total"] == 100.0
-    assert rows[0]["cantidad_recibida_unidad"] == "M3"
-    assert rows[0]["saldo_oc_pendiente_despues"] == 135.0
+    out = _enriquecer_entradas_listado(sb, rows)
+    assert len(out) == 2
+    assert {r["material_descripcion"] for r in out} == {"Cemento", "Acero"}
+    cemento = next(r for r in out if r["material_descripcion"] == "Cemento")
+    assert cemento["consumido"] == 90.0
+    assert cemento["saldo_por_consumir"] == 10.0
+    assert cemento["alerta_saldo"] == "rojo"  # 10%
 
 
 def test_es_rol_receptor_obra_contratista():
