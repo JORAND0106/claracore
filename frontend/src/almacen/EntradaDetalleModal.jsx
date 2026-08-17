@@ -5,8 +5,6 @@ import {
   AlmacenFieldLabel,
   fmtCant,
   formatEntradaNumero,
-  formatSalidaNumero,
-  fmtFechaAlmacen,
   fmtFechaAlmacenSolo,
   useAlmacenApi,
   useAlmacenCompact,
@@ -210,115 +208,6 @@ export default function EntradaDetalleModal({
                         <td style={{ ...rowTd, textAlign: 'right', fontWeight: 700 }}>{pctLabel}</td>
                       </tr>
                     )
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <AlmacenFieldLabel
-              icon="📤"
-              label="Historial de salidas y devoluciones"
-              ayuda="Cada salida de esta línea con sus devoluciones en negativo y el neto resultante (salida − devoluciones)."
-            />
-            <div style={{ ...ui.sheetWrap, marginBottom: 14 }} className="cc-almacen-table-scroll">
-              <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 640 }}>
-                <thead>
-                  <tr>
-                    <th style={th}>Movimiento</th>
-                    <th style={th}>Documento</th>
-                    <th style={th}>Fecha</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Cantidad</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Neto salida</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.every((it) => !(Array.isArray(it.salidas) && it.salidas.length)) && (
-                    <tr>
-                      <td colSpan={5} style={{ ...td, color: ui.textMuted }}>
-                        Sin salidas registradas contra esta entrada.
-                      </td>
-                    </tr>
-                  )}
-                  {items.flatMap((it) => {
-                    const oci = it.almacen_orden_compra_item || {}
-                    const und = oci.unidad || ent.insumo_unidad || ''
-                    const salidas = Array.isArray(it.salidas) ? it.salidas : []
-                    const lineLabel = oci.material_descripcion
-                      || ent.insumo_label
-                      || `Línea #${it.id}`
-                    return salidas.flatMap((sal) => {
-                      const rows = [
-                        <tr key={`sal-${it.id}-${sal.id}`}>
-                          <td style={td}>
-                            <div style={{ fontWeight: 600 }}>Salida</div>
-                            {items.length > 1 && (
-                              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{lineLabel}</div>
-                            )}
-                          </td>
-                          <td style={td}>{formatSalidaNumero(sal)}</td>
-                          <td style={td}>{fmtFechaAlmacen(sal.fecha_hora_salida) || '—'}</td>
-                          <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                            {`${fmtCant(sal.cantidad_salida)}${und ? ` ${und}` : ''}`}
-                          </td>
-                          <td style={{ ...td, textAlign: 'right', color: ui.textMuted }}>—</td>
-                        </tr>,
-                      ]
-                      for (const dev of (sal.devoluciones || [])) {
-                        const devLabel = dev.codigo
-                          || (dev.numero_devolucion != null ? `Dev-${dev.numero_devolucion}` : `Dev #${dev.id}`)
-                        rows.push(
-                          <tr key={`dev-${dev.id}`}>
-                            <td style={{ ...td, paddingLeft: 20, color: '#b91c1c' }}>
-                              ↳ Devolución
-                            </td>
-                            <td style={{ ...td, color: '#b91c1c' }}>{devLabel}</td>
-                            <td style={td}>{fmtFechaAlmacen(dev.fecha_hora_devolucion) || '—'}</td>
-                            <td style={{
-                              ...td,
-                              textAlign: 'right',
-                              color: '#b91c1c',
-                              fontWeight: 700,
-                              fontVariantNumeric: 'tabular-nums',
-                            }}
-                            >
-                              {`−${fmtCant(dev.cantidad)}${und ? ` ${und}` : ''}`}
-                            </td>
-                            <td style={{ ...td, textAlign: 'right', color: ui.textMuted }}>—</td>
-                          </tr>,
-                        )
-                      }
-                      const netoBg = 'var(--cc-almacen-input-bg, #f8fafc)'
-                      rows.push(
-                        <tr key={`neto-${it.id}-${sal.id}`}>
-                          <td style={{ ...td, fontWeight: 700, background: netoBg }} colSpan={3}>
-                            Neto de {formatSalidaNumero(sal)}
-                            {Number(sal.cantidad_devuelta) > 0
-                              ? ` (${fmtCant(sal.cantidad_salida)} − ${fmtCant(sal.cantidad_devuelta)})`
-                              : ''}
-                          </td>
-                          <td style={{
-                            ...td,
-                            textAlign: 'right',
-                            color: ui.textMuted,
-                            background: netoBg,
-                          }}
-                          >
-                            —
-                          </td>
-                          <td style={{
-                            ...td,
-                            textAlign: 'right',
-                            fontWeight: 800,
-                            background: netoBg,
-                            fontVariantNumeric: 'tabular-nums',
-                          }}
-                          >
-                            {`${fmtCant(sal.cantidad_neta)}${und ? ` ${und}` : ''}`}
-                          </td>
-                        </tr>,
-                      )
-                      return rows
-                    })
                   })}
                 </tbody>
               </table>
