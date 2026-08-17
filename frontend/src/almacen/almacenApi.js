@@ -448,6 +448,21 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         headers: authHeaders(),
       }).then(parseJsonList),
 
+    listSalidasDevolviblesPorPk: (pkId) =>
+      fetch(`${base}/salidas/devolvibles-por-pk?pk_id=${encodeURIComponent(pkId)}`, {
+        headers: authHeaders(),
+      }).then(parseJsonList),
+
+    listDevoluciones: () =>
+      fetch(`${base}/devoluciones`, { headers: authHeaders() }).then(parseJsonList),
+
+    createDevolucion: (body) =>
+      fetch(`${base}/devoluciones`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     salidaPdfDownloadUrl: (salidaId) => `${base}/salidas/${salidaId}/recibo/download`,
 
     async openSalidaPdf(salidaId) {

@@ -3,6 +3,11 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
 import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
 import {
+  invalidateSalidasCache,
+  readSalidasCache,
+  writeSalidasCache,
+} from './salidasListCache'
+import {
   fmtCant,
   fmtFechaAlmacen,
   formatNumeroOcDisplay,
@@ -10,29 +15,6 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
-
-/** Caché en memoria: evita refetch al remount / Ctrl+Tab (mismo patrón que borrador de formulario). */
-const SALIDAS_CACHE_TTL_MS = 5 * 60 * 1000
-const salidasListCache = new Map()
-
-function cacheKey(contratoId) {
-  return String(contratoId || 'x')
-}
-
-function readSalidasCache(contratoId) {
-  const entry = salidasListCache.get(cacheKey(contratoId))
-  if (!entry) return null
-  if (Date.now() - entry.at > SALIDAS_CACHE_TTL_MS) return null
-  return entry.rows
-}
-
-function writeSalidasCache(contratoId, rows) {
-  salidasListCache.set(cacheKey(contratoId), { at: Date.now(), rows: Array.isArray(rows) ? rows : [] })
-}
-
-function invalidateSalidasCache(contratoId) {
-  salidasListCache.delete(cacheKey(contratoId))
-}
 
 function clearSalidaDraft(contratoId) {
   try {

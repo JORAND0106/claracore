@@ -2571,6 +2571,10 @@ def _format_codigo_salida(contrato_id: int, consecutivo: int) -> str:
     return f"Sal-{_contrato_segmento_documento(contrato_id)}-{int(consecutivo):05d}"
 
 
+def _format_codigo_devolucion(contrato_id: int, consecutivo: int) -> str:
+    return f"Dev-{_contrato_segmento_documento(contrato_id)}-{int(consecutivo):05d}"
+
+
 def _asegurar_codigo_entrada(contrato_id: int, row: dict) -> dict:
     if row and not (row.get("codigo") or "").strip() and row.get("numero_entrada"):
         row["codigo"] = _format_codigo_entrada(contrato_id, int(row["numero_entrada"]))
@@ -3903,6 +3907,59 @@ def _sum_salidas_por_entrada_item(sb, entrada_item_ids: List[int]) -> Dict[int, 
     return out
 
 
+def _sum_devoluciones_por_entrada_item(sb, entrada_item_ids: List[int]) -> Dict[int, float]:
+    """Suma cantidades devueltas por línea de entrada (reactiva saldo disponible)."""
+    ids = sorted({int(x) for x in entrada_item_ids if x})
+    if not ids:
+        return {}
+    rows = (
+        sb.table("almacen_devolucion")
+        .select("entrada_item_id, cantidad")
+        .in_("entrada_item_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[int, float] = {}
+    for r in rows:
+        eid = int(r["entrada_item_id"])
+        out[eid] = out.get(eid, 0.0) + _to_float(r.get("cantidad"))
+    return out
+
+
+def _sum_devoluciones_por_salida(sb, salida_ids: List[int]) -> Dict[int, float]:
+    ids = sorted({int(x) for x in salida_ids if x})
+    if not ids:
+        return {}
+    rows = (
+        sb.table("almacen_devolucion")
+        .select("salida_id, cantidad")
+        .in_("salida_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    out: Dict[int, float] = {}
+    for r in rows:
+        sid = int(r["salida_id"])
+        out[sid] = out.get(sid, 0.0) + _to_float(r.get("cantidad"))
+    return out
+
+
+def _despacho_neto_por_entrada_item(sb, entrada_item_ids: List[int]) -> Dict[int, float]:
+    """Despachado neto = salidas − devoluciones (lo que sigue fuera del almacén)."""
+    ids = sorted({int(x) for x in entrada_item_ids if x})
+    if not ids:
+        return {}
+    salidas = _sum_salidas_por_entrada_item(sb, ids)
+    devoluciones = _sum_devoluciones_por_entrada_item(sb, ids)
+    out: Dict[int, float] = {}
+    for eid in ids:
+        neto = salidas.get(eid, 0.0) - devoluciones.get(eid, 0.0)
+        out[eid] = max(0.0, round(neto, 4))
+    return out
+
+
 def _cantidad_recibida_entrada_item(sb, entrada_item_id: int) -> float:
     """Cantidad recibida en un registro de entrada (línea), nunca el total de la OC."""
     rows = (
@@ -4201,7 +4258,7 @@ def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
         return []
 
     ubicacion_map = _ubicacion_efectiva_entrada_items(sb, items, ent_by_id)
-    salidas_map = _sum_salidas_por_entrada_item(sb, [int(it["id"]) for it in items])
+    salidas_map = _despacho_neto_por_entrada_item(sb, [int(it["id"]) for it in items])
     out: List[dict] = []
     for it in items:
         ei_id = int(it["id"])
@@ -4404,7 +4461,7 @@ def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
         raise ValueError("La entrada seleccionada no corresponde al PK-ID indicado.")
     ubic_eff = ubic_map.get(entrada_item_id) or {}
 
-    salidas_map = _sum_salidas_por_entrada_item(sb, [entrada_item_id])
+    salidas_map = _despacho_neto_por_entrada_item(sb, [entrada_item_id])
     recibida = _cantidad_recibida_entrada_item(sb, entrada_item_id)
     despachada = salidas_map.get(entrada_item_id, 0.0)
     disponible = _disponible_entrada_item(recibida, despachada)
@@ -4833,6 +4890,13 @@ def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
     ei_id = int(sal["entrada_item_id"])
     qty = _to_float(sal.get("cantidad_salida"))
 
+    devs = _sum_devoluciones_por_salida(sb, [int(salida_id)])
+    if _to_float(devs.get(int(salida_id), 0)) > 1e-9:
+        raise ValueError(
+            "No se puede eliminar la salida porque tiene devoluciones registradas. "
+            "Elimine primero las devoluciones asociadas."
+        )
+
     ei_rows = sb.table("almacen_entrada_item").select("*").eq("id", ei_id).limit(1).execute().data or []
     if ei_rows:
         ei = ei_rows[0]
@@ -4869,4 +4933,253 @@ def eliminar_salida(contrato_id: int, salida_id: int) -> dict:
         "numero_salida": numero,
         "consecutivo_liberado": numero > 0 and numero == max_num,
     }
+
+
+def salidas_devolvibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
+    """Salidas del PK con saldo pendiente de devolver (> 0)."""
+    sb = _sb()
+    pk_query = _norm_pk_id(pk_id)
+    if not pk_query:
+        raise ValueError("Indique el PK-ID.")
+
+    rows = (
+        sb.table("almacen_salida")
+        .select(
+            "id, contrato_id, numero_salida, codigo, fecha_hora_salida, pk_id, pk_id_id, "
+            "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
+            "receptor_usuario_id, created_by, created_at"
+        )
+        .eq("contrato_id", contrato_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    matched = [r for r in rows if _pk_id_coincide(r.get("pk_id"), pk_query)]
+    if not matched:
+        return []
+
+    enriched = _enrich_salidas_rows(sb, contrato_id, matched)
+    salida_ids = [int(r["id"]) for r in enriched]
+    dev_map = _sum_devoluciones_por_salida(sb, salida_ids)
+    out: List[dict] = []
+    for r in enriched:
+        sid = int(r["id"])
+        despachada = _to_float(r.get("cantidad_salida"))
+        devuelta = _to_float(dev_map.get(sid, 0.0))
+        pendiente = max(0.0, round(despachada - devuelta, 4))
+        if pendiente <= 1e-9:
+            continue
+        out.append({
+            **r,
+            "cantidad_devuelta": devuelta,
+            "cantidad_pendiente_devolver": pendiente,
+        })
+    return out
+
+
+def create_devolucion(contrato_id: int, user_id: int, body: dict) -> dict:
+    """Registra devolución parcial/total contra una salida y reactiva saldo disponible."""
+    sb = _sb()
+    salida_id = body.get("salida_id")
+    if not salida_id:
+        raise ValueError("Seleccione la salida contra la cual registra la devolución.")
+    salida_id = int(salida_id)
+
+    qty = _to_float(body.get("cantidad"))
+    if qty <= 0:
+        raise ValueError("Indique una cantidad a devolver mayor a cero.")
+
+    receptor_id = body.get("receptor_usuario_id")
+    if not receptor_id:
+        raise ValueError("Indique quién realiza la devolución.")
+    receptor = _validar_receptor_obra(sb, contrato_id, int(receptor_id))
+
+    sal_rows = (
+        sb.table("almacen_salida")
+        .select("*")
+        .eq("id", salida_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not sal_rows:
+        raise ValueError("La salida seleccionada no existe.")
+    sal = sal_rows[0]
+    entrada_item_id = int(sal["entrada_item_id"])
+
+    pk_id = _norm_pk_id(body.get("pk_id") or sal.get("pk_id"))
+    if not pk_id:
+        raise ValueError("Seleccione la ubicación (PK-ID) en el mapa.")
+    if not _pk_id_coincide(sal.get("pk_id"), pk_id):
+        raise ValueError("La salida seleccionada no corresponde al PK-ID indicado.")
+
+    despachada = _to_float(sal.get("cantidad_salida"))
+    ya_devuelta = _to_float(_sum_devoluciones_por_salida(sb, [salida_id]).get(salida_id, 0.0))
+    pendiente = max(0.0, round(despachada - ya_devuelta, 4))
+    if qty > pendiente + 1e-9:
+        raise ValueError(
+            f"La cantidad a devolver ({qty}) supera el pendiente de esta salida ({pendiente}). "
+            f"Máximo permitido: {pendiente}."
+        )
+
+    fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
+        (body.get("fecha_hora_devolucion") or "").strip()
+    )
+    numero = _next_consecutivo(contrato_id, "almacen_devolucion", "numero_devolucion")
+    codigo = _format_codigo_devolucion(contrato_id, numero)
+
+    row = {
+        "contrato_id": contrato_id,
+        "numero_devolucion": numero,
+        "codigo": codigo,
+        "salida_id": salida_id,
+        "entrada_item_id": entrada_item_id,
+        "cantidad": qty,
+        "fecha_hora_devolucion": fecha_hora,
+        "receptor_usuario_id": int(receptor_id),
+        "pk_id": pk_id,
+        "pk_id_id": int(body["pk_id_id"]) if body.get("pk_id_id") else sal.get("pk_id_id"),
+        "tramo": (body.get("tramo") or sal.get("tramo") or "").strip() or None,
+        "costado": (body.get("costado") or sal.get("costado") or "").strip() or None,
+        "abscisa_inicial": (body.get("abscisa_inicial") or sal.get("abscisa_inicial") or "").strip() or None,
+        "abscisa_final": (body.get("abscisa_final") or sal.get("abscisa_final") or "").strip() or None,
+        "observaciones": (body.get("observaciones") or "").strip() or None,
+        "created_by": user_id,
+    }
+    ins = sb.table("almacen_devolucion").insert(row).execute().data
+    if not ins:
+        raise ValueError("No se pudo registrar la devolución.")
+    devolucion_id = int(ins[0]["id"])
+
+    material = "—"
+    unidad = "UND"
+    presupuesto_id = None
+    numero_oc = None
+    ei_rows = sb.table("almacen_entrada_item").select("*").eq("id", entrada_item_id).limit(1).execute().data or []
+    if ei_rows:
+        ei = ei_rows[0]
+        presupuesto_id = ei.get("presupuesto_id")
+        oci_id = ei.get("orden_compra_item_id")
+        if oci_id:
+            oci = (
+                sb.table("almacen_orden_compra_item")
+                .select("material_descripcion, unidad, orden_compra_id, presupuesto_id")
+                .eq("id", int(oci_id))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if oci:
+                material = oci[0].get("material_descripcion") or material
+                unidad = oci[0].get("unidad") or unidad
+                presupuesto_id = oci[0].get("presupuesto_id") or presupuesto_id
+                if oci[0].get("orden_compra_id"):
+                    oc_r = (
+                        sb.table("almacen_orden_compra")
+                        .select("numero_oc")
+                        .eq("id", int(oci[0]["orden_compra_id"]))
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if oc_r:
+                        numero_oc = oc_r[0].get("numero_oc")
+
+    if presupuesto_id:
+        sb.table("almacen_movimiento").insert({
+            "contrato_id": contrato_id,
+            "presupuesto_id": int(presupuesto_id),
+            "material_descripcion": material,
+            "unidad": unidad,
+            "tipo": "devolucion",
+            "cantidad": qty,
+            "entrada_item_id": entrada_item_id,
+            "referencia_tipo": "devolucion",
+            "referencia_id": devolucion_id,
+            "created_by": user_id,
+        }).execute()
+        # Reactiva stock (inverso de la salida).
+        _upsert_inventario(contrato_id, int(presupuesto_id), material, unidad, qty, 0)
+
+    recibida = _cantidad_recibida_entrada_item(sb, entrada_item_id)
+    despacho_neto = _despacho_neto_por_entrada_item(sb, [entrada_item_id]).get(entrada_item_id, 0.0)
+    disponible = _disponible_entrada_item(recibida, despacho_neto)
+    pendiente_salida = max(0.0, round(despachada - ya_devuelta - qty, 4))
+
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        **row,
+        "id": devolucion_id,
+        "receptor_nombre": receptor.get("label"),
+        "material_descripcion": material,
+        "unidad": unidad,
+        "numero_oc": numero_oc,
+        "numero_salida": sal.get("numero_salida"),
+        "codigo_salida": sal.get("codigo"),
+        "cantidad_pendiente_devolver": pendiente_salida,
+        "cantidad_disponible_entrada": disponible,
+    }
+
+
+def list_devoluciones(contrato_id: int) -> List[dict]:
+    sb = _sb()
+    rows = (
+        sb.table("almacen_devolucion")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return []
+    user_ids = []
+    salida_ids = []
+    for r in rows:
+        if r.get("receptor_usuario_id"):
+            user_ids.append(int(r["receptor_usuario_id"]))
+        if r.get("created_by"):
+            user_ids.append(int(r["created_by"]))
+        if r.get("salida_id"):
+            salida_ids.append(int(r["salida_id"]))
+    names = _map_usuario_nombres(sb, user_ids)
+    sal_map: Dict[int, dict] = {}
+    if salida_ids:
+        sal_rows = (
+            sb.table("almacen_salida")
+            .select("id, numero_salida, codigo, cantidad_salida, entrada_item_id")
+            .in_("id", salida_ids)
+            .execute()
+            .data
+            or []
+        )
+        # Reutilizar enriquecimiento (material / OC / unidad).
+        enriched = _enrich_salidas_rows(sb, contrato_id, [
+            {
+                **s,
+                "receptor_usuario_id": None,
+                "created_by": None,
+                "salida_pdf_blob_path": None,
+            }
+            for s in sal_rows
+        ])
+        sal_map = {int(s["id"]): s for s in enriched}
+
+    for r in rows:
+        sid = int(r["salida_id"]) if r.get("salida_id") else 0
+        sal = sal_map.get(sid) or {}
+        r["receptor_nombre"] = names.get(int(r["receptor_usuario_id"])) if r.get("receptor_usuario_id") else None
+        r["registrado_por_nombre"] = names.get(int(r["created_by"])) if r.get("created_by") else None
+        r["numero_salida"] = sal.get("numero_salida")
+        r["codigo_salida"] = sal.get("codigo")
+        r["material_descripcion"] = sal.get("material_descripcion")
+        r["unidad"] = sal.get("unidad")
+        r["numero_oc"] = sal.get("numero_oc")
+    return rows
 

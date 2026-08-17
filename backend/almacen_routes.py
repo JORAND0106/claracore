@@ -48,6 +48,7 @@ from almacen_service import (
     contexto_ordenes_compra_por_pk,
     create_entrada,
     create_salida,
+    create_devolucion,
     create_solicitud,
     delete_cotizacion,
     download_disposicion_pdf,
@@ -73,9 +74,11 @@ from almacen_service import (
     list_ordenes_compra,
     list_presupuesto_items,
     list_salidas,
+    list_devoluciones,
     list_solicitudes,
     count_solicitudes,
     list_usuarios_receptor_obra,
+    salidas_devolvibles_por_pk,
     mapear_item_solicitud_gerencial,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
@@ -1095,6 +1098,21 @@ def route_list_salidas(contrato_id: int, current_user=Depends(get_current_user))
     return list_salidas(contrato_id)
 
 
+@router.get("/{contrato_id}/salidas/devolvibles-por-pk")
+def route_salidas_devolvibles_por_pk(
+    contrato_id: int,
+    pk_id: str = Query(..., min_length=1),
+    current_user=Depends(get_current_user),
+):
+    """Debe ir antes de /salidas/{salida_id} para no capturar el path como id."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return salidas_devolvibles_por_pk(contrato_id, pk_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/salidas/{salida_id}")
 def route_get_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -1140,6 +1158,39 @@ def route_download_salida_pdf(contrato_id: int, salida_id: int, current_user=Dep
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+class DevolucionCreateBody(BaseModel):
+    receptor_usuario_id: int
+    fecha_hora_devolucion: Optional[str] = None
+    pk_id: str = Field(..., min_length=1)
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[str] = None
+    abscisa_final: Optional[str] = None
+    salida_id: int
+    cantidad: float = Field(..., gt=0)
+    observaciones: Optional[str] = None
+
+
+@router.get("/{contrato_id}/devoluciones")
+def route_list_devoluciones(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    return list_devoluciones(contrato_id)
+
+
+@router.post("/{contrato_id}/devoluciones")
+def route_create_devolucion(contrato_id: int, body: DevolucionCreateBody, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    try:
+        result = create_devolucion(contrato_id, _uid(current_user), body.dict())
+        registrar_log(current_user, "CREAR", "ALMACEN", "devolucion", result.get("id"), {})
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
