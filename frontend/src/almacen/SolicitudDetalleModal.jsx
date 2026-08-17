@@ -7,6 +7,7 @@ import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
+import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import {
   estadoValidacionItem,
@@ -246,7 +247,19 @@ export default function SolicitudDetalleModal({
                 </div>
               )}
             </div>
-            <button type="button" style={ui.btnSecondary} disabled={busy} onClick={onClose}>✕</button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+              {sol?.id != null && (
+                <AlmacenTrazabilidadButton
+                  token={token}
+                  theme={t || modalTheme}
+                  ui={ui}
+                  entidadTipo="solicitud"
+                  entidadId={sol.id}
+                  titulo={`Almacén · Solicitud #${sol.consecutivo}${tituloDisplay ? ` · ${tituloDisplay}` : ''}`}
+                />
+              )}
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={onClose}>✕</button>
+            </div>
           </div>
 
           <SolicitudTrazabilidadPanel sol={sol} />

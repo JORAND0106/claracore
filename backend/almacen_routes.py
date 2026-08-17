@@ -36,6 +36,14 @@ from almacen_permissions import (
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
+from almacen_audit import (
+    log_almacen,
+    snapshot_devolucion,
+    snapshot_entrada_cabecera,
+    snapshot_entrada_item,
+    snapshot_salida,
+    snapshot_solicitud,
+)
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_service import (
@@ -571,7 +579,13 @@ def route_create_solicitud(contrato_id: int, body: SolicitudCreateBody, current_
     require_permiso_almacen(current_user, "crear")
     try:
         result = create_solicitud(contrato_id, _uid(current_user), body.model_dump())
-        registrar_log(current_user, "CREAR", "ALMACEN", "solicitud", result.get("id"), {})
+        snap = snapshot_solicitud(result)
+        log_almacen(
+            current_user, "CREAR", "solicitud", result.get("id"),
+            {"consecutivo": result.get("consecutivo")},
+            valor_anterior=None,
+            valor_nuevo=snap,
+        )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -587,7 +601,15 @@ def route_update_solicitud(
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
-        return update_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
+        prev = get_solicitud(contrato_id, solicitud_id, ligera=True)
+        result = update_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
+        log_almacen(
+            current_user, "EDITAR", "solicitud", solicitud_id,
+            {"consecutivo": result.get("consecutivo")},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo=snapshot_solicitud(result),
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -597,7 +619,15 @@ def route_enviar_solicitud(contrato_id: int, solicitud_id: int, current_user=Dep
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
-        return enviar_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
+        result = enviar_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        log_almacen(
+            current_user, "ENVIAR", "solicitud", solicitud_id,
+            {"consecutivo": result.get("consecutivo") or prev.get("consecutivo")},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo=snapshot_solicitud(result),
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -612,8 +642,14 @@ def route_aprobar_solicitud(
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
     try:
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = aprobar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
-        registrar_log(current_user, "VALIDAR", "ALMACEN", "solicitud", solicitud_id, {"accion": "aprobar"})
+        log_almacen(
+            current_user, "APROBAR", "solicitud", solicitud_id,
+            {"accion": "aprobar", "consecutivo": prev.get("consecutivo")},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo=snapshot_solicitud(result if isinstance(result, dict) else {**prev, "estado": "aprobada"}),
+        )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -631,13 +667,21 @@ def route_mapear_item_gerencial(
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
     try:
-        return mapear_item_solicitud_gerencial(
+        payload = body.model_dump(exclude_none=True)
+        result = mapear_item_solicitud_gerencial(
             contrato_id,
             solicitud_id,
             item_id,
             _uid(current_user),
-            body.model_dump(exclude_none=True),
+            payload,
         )
+        log_almacen(
+            current_user, "MAPEAR_ITEM", "solicitud", solicitud_id,
+            {"item_id": item_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
+            valor_anterior={"item_id": item_id},
+            valor_nuevo={"item_id": item_id, **(payload or {})},
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -653,7 +697,7 @@ def route_validar_item_solicitud(
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
     try:
-        return validar_item_solicitud(
+        result = validar_item_solicitud(
             contrato_id,
             solicitud_id,
             item_id,
@@ -661,6 +705,18 @@ def route_validar_item_solicitud(
             body.accion,
             body.motivo,
         )
+        accion_log = "APROBAR_ITEM" if (body.accion or "").lower().startswith("aprob") else "RECHAZAR_ITEM"
+        log_almacen(
+            current_user, accion_log, "solicitud", solicitud_id,
+            {"item_id": item_id, "accion": body.accion, "motivo": body.motivo},
+            valor_anterior={"item_id": item_id, "estado_validacion": "pendiente"},
+            valor_nuevo={
+                "item_id": item_id,
+                "estado_validacion": "aprobado" if accion_log == "APROBAR_ITEM" else "rechazado",
+                "motivo": body.motivo,
+            },
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -674,7 +730,14 @@ def route_aprobar_todos_items(
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
     try:
-        return aprobar_todos_items_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        result = aprobar_todos_items_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        log_almacen(
+            current_user, "APROBAR_ITEMS", "solicitud", solicitud_id,
+            {"accion": "aprobar_todos_items"},
+            valor_anterior=None,
+            valor_nuevo={"items_aprobados": True},
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -689,7 +752,15 @@ def route_rechazar_solicitud(
     _check_contrato(current_user, contrato_id)
     require_contratista_gerencial_almacen(current_user)
     try:
-        return rechazar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.motivo)
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
+        result = rechazar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.motivo)
+        log_almacen(
+            current_user, "RECHAZAR", "solicitud", solicitud_id,
+            {"motivo": body.motivo, "consecutivo": prev.get("consecutivo")},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo=snapshot_solicitud(result),
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -712,9 +783,12 @@ def route_anular_solicitud(
         )
     try:
         result = anular_solicitud(contrato_id, solicitud_id, _uid(current_user))
-        registrar_log(
-            current_user, "ANULAR", "ALMACEN", "solicitud", solicitud_id,
+        log_almacen(
+            current_user, "ANULAR", "solicitud", solicitud_id,
             {"estado_previo": sol.get("estado"), "deleted": result.get("deleted", False)},
+            valor_anterior=snapshot_solicitud(sol),
+            valor_nuevo=snapshot_solicitud(result if isinstance(result, dict) and result.get("estado") else None)
+            or {"deleted": True, "id": solicitud_id},
         )
         return result
     except ValueError as exc:
@@ -730,10 +804,13 @@ def route_eliminar_solicitud_desarrollador(
     """Eliminación permanente — solo cargo Desarrollador (limpieza de datos)."""
     _check_contrato(current_user, contrato_id)
     try:
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = eliminar_solicitud_desarrollador(contrato_id, solicitud_id, current_user)
-        registrar_log(
-            current_user, "ELIMINAR_DEV", "ALMACEN", "solicitud", solicitud_id,
+        log_almacen(
+            current_user, "ELIMINAR_DEV", "solicitud", solicitud_id,
             {"deleted": True},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo={"deleted": True, "id": solicitud_id},
         )
         return result
     except ValueError as exc:
@@ -1017,7 +1094,31 @@ async def route_create_entrada(
             contrato_id, _uid(current_user), body,
             remision_data=rem_data, remision_nombre=rem_nombre, remision_mime=rem_mime,
         )
-        registrar_log(current_user, "CREAR", "ALMACEN", "entrada", result.get("id"), {})
+        cab = snapshot_entrada_cabecera(result)
+        items = result.get("items") or []
+        if items:
+            for it in items:
+                ei_id = it.get("id")
+                if ei_id is None:
+                    continue
+                log_almacen(
+                    current_user, "CREAR", "entrada_item", ei_id,
+                    {
+                        "entrada_id": result.get("id"),
+                        "numero_entrada": result.get("numero_entrada"),
+                        "material_descripcion": it.get("material_descripcion"),
+                    },
+                    valor_anterior=None,
+                    valor_nuevo=snapshot_entrada_item(it, result),
+                )
+        else:
+            # Fallback cabecera si no hubo líneas (caso raro).
+            log_almacen(
+                current_user, "CREAR", "entrada", result.get("id"),
+                {"numero_entrada": result.get("numero_entrada")},
+                valor_anterior=None,
+                valor_nuevo=cab,
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1028,8 +1129,18 @@ def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depen
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
+        prev = get_entrada(contrato_id, entrada_id)
         result = eliminar_entrada(contrato_id, entrada_id)
-        registrar_log(current_user, "ELIMINAR", "ALMACEN", "entrada", entrada_id, result)
+        for it in prev.get("items") or []:
+            ei_id = it.get("id")
+            if ei_id is None:
+                continue
+            log_almacen(
+                current_user, "ELIMINAR", "entrada_item", ei_id,
+                {"entrada_id": entrada_id},
+                valor_anterior=snapshot_entrada_item(it, prev),
+                valor_nuevo={"deleted": True, "id": ei_id},
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1135,7 +1246,33 @@ def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=D
     require_permiso_almacen(current_user, "crear")
     try:
         result = create_salida(contrato_id, _uid(current_user), body.dict())
-        registrar_log(current_user, "CREAR", "ALMACEN", "salida", result.get("id"), {})
+        snap = snapshot_salida(result)
+        log_almacen(
+            current_user, "CREAR", "salida", result.get("id"),
+            {
+                "numero_salida": result.get("numero_salida"),
+                "entrada_item_id": result.get("entrada_item_id"),
+            },
+            valor_anterior=None,
+            valor_nuevo=snap,
+        )
+        # Historial por línea de entrada asociada.
+        ei_id = result.get("entrada_item_id")
+        if ei_id is not None:
+            log_almacen(
+                current_user, "DESPACHO", "entrada_item", ei_id,
+                {
+                    "salida_id": result.get("id"),
+                    "numero_salida": result.get("numero_salida"),
+                    "cantidad_salida": result.get("cantidad_salida"),
+                },
+                valor_anterior=None,
+                valor_nuevo={
+                    "salida_id": result.get("id"),
+                    "cantidad_salida": result.get("cantidad_salida"),
+                    "pk_id": result.get("pk_id"),
+                },
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1179,8 +1316,22 @@ def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
+        prev = get_salida(contrato_id, salida_id)
         result = eliminar_salida(contrato_id, salida_id)
-        registrar_log(current_user, "ELIMINAR", "ALMACEN", "salida", salida_id, result)
+        log_almacen(
+            current_user, "ELIMINAR", "salida", salida_id,
+            {"numero_salida": prev.get("numero_salida")},
+            valor_anterior=snapshot_salida(prev),
+            valor_nuevo={"deleted": True, "id": salida_id},
+        )
+        ei_id = prev.get("entrada_item_id")
+        if ei_id is not None:
+            log_almacen(
+                current_user, "REVERTIR_DESPACHO", "entrada_item", ei_id,
+                {"salida_id": salida_id},
+                valor_anterior=snapshot_salida(prev),
+                valor_nuevo={"salida_eliminada": salida_id},
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1227,8 +1378,50 @@ def route_create_devolucion(contrato_id: int, body: DevolucionCreateBody, curren
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "crear")
     try:
+        salida_prev = get_salida(contrato_id, int(body.salida_id))
         result = create_devolucion(contrato_id, _uid(current_user), body.dict())
-        registrar_log(current_user, "CREAR", "ALMACEN", "devolucion", result.get("id"), {})
+        snap_dev = snapshot_devolucion({
+            **result,
+            "entrada_item_id": salida_prev.get("entrada_item_id"),
+        })
+        log_almacen(
+            current_user, "CREAR", "devolucion", result.get("id"),
+            {
+                "salida_id": body.salida_id,
+                "entrada_item_id": salida_prev.get("entrada_item_id"),
+            },
+            valor_anterior=None,
+            valor_nuevo=snap_dev,
+        )
+        # Antes/después en la salida (devuelto / neto).
+        dev_antes = float(salida_prev.get("cantidad_devuelta") or 0)
+        qty = float(result.get("cantidad") or body.cantidad or 0)
+        sal_despues = {
+            **snapshot_salida(salida_prev),
+            "cantidad_devuelta": round(dev_antes + qty, 4),
+            "cantidad_neta": max(
+                0.0,
+                round(float(salida_prev.get("cantidad_salida") or 0) - (dev_antes + qty), 4),
+            ),
+        }
+        log_almacen(
+            current_user, "DEVOLUCION", "salida", body.salida_id,
+            {"devolucion_id": result.get("id"), "cantidad": qty},
+            valor_anterior=snapshot_salida(salida_prev),
+            valor_nuevo=sal_despues,
+        )
+        ei_id = salida_prev.get("entrada_item_id")
+        if ei_id is not None:
+            log_almacen(
+                current_user, "DEVOLUCION", "entrada_item", ei_id,
+                {
+                    "devolucion_id": result.get("id"),
+                    "salida_id": body.salida_id,
+                    "cantidad": qty,
+                },
+                valor_anterior={"cantidad_devuelta_salida": dev_antes},
+                valor_nuevo={"cantidad_devuelta_salida": round(dev_antes + qty, 4), "cantidad": qty},
+            )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc

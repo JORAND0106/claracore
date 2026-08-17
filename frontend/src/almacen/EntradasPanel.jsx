@@ -6,6 +6,7 @@ import DevolucionFormModal from './DevolucionFormModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
+import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   AlmacenHelpIcon,
   formatEntradaNumero,
@@ -210,6 +211,7 @@ export default function EntradasPanel({
                   Usuario
                 </ThHelp>
                 {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center', whiteSpace: 'nowrap' }}>⚠</th>}
+                <th style={{ ...ui.th, width: 44, textAlign: 'center', whiteSpace: 'nowrap' }} title="Trazabilidad">📜</th>
                 <th style={{ ...ui.th, width: 72, textAlign: 'center', whiteSpace: 'nowrap' }}>PDF</th>
                 {puedeEliminar && <th style={{ ...ui.th, width: 44, textAlign: 'center' }}> </th>}
               </tr>
@@ -278,6 +280,25 @@ export default function EntradasPanel({
                         {e.alerta_silenciosa_detalle ? '⚠' : '—'}
                       </td>
                     )}
+                    <td
+                      style={{ ...tdAlert, textAlign: 'center' }}
+                      data-label="Historial"
+                      onClick={(ev) => ev.stopPropagation()}
+                    >
+                      {e.entrada_item_id != null ? (
+                        <AlmacenTrazabilidadButton
+                          token={token}
+                          theme={t}
+                          ui={ui}
+                          compact
+                          entidadTipo="entrada_item"
+                          entidadId={e.entrada_item_id}
+                          titulo={`Almacén · Entrada ${formatEntradaNumero(e)} · ${e.material_descripcion || e.insumo_label || `línea ${e.entrada_item_id}`}`}
+                        />
+                      ) : (
+                        <span style={{ color: ui.textMuted }}>—</span>
+                      )}
+                    </td>
                     <td style={{ ...tdAlert, textAlign: 'center' }} data-label="PDF" onClick={(ev) => ev.stopPropagation()}>
                       {tienePdf ? (
                         <span style={{ display: 'inline-flex', gap: 4 }}>

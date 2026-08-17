@@ -23,6 +23,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 import { puedeEliminarSolicitudDesarrollador } from './almacenPermisos'
+import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 
 export default function SolicitudesPanel({
   permisos, t, token, contratoId, refreshSignal = 0, onDataLoaded,
@@ -202,7 +203,16 @@ export default function SolicitudesPanel({
                     ) : '—'}
                   </td>
                   <td style={ui.td} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <AlmacenTrazabilidadButton
+                        token={token}
+                        theme={t}
+                        ui={ui}
+                        compact
+                        entidadTipo="solicitud"
+                        entidadId={s.id}
+                        titulo={`Almacén · Solicitud #${s.consecutivo}${s.titulo?.trim() ? ` · ${s.titulo.trim()}` : ''}`}
+                      />
                       {solicitudPuedeValidar(s, permisos) && (
                         <button
                           type="button"
