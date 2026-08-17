@@ -207,6 +207,7 @@ export default function SalidasPanel({
                 <th style={ui.th}>PK-ID</th>
                 <th style={ui.th}>Material</th>
                 <th style={ui.th}>Cantidad</th>
+                <th style={ui.th}>Devuelto</th>
                 <th style={ui.th}>OC</th>
                 <th style={ui.th}>Recibe</th>
                 <th style={ui.th}>Despacha</th>
@@ -225,7 +226,32 @@ export default function SalidasPanel({
                     <td style={ui.td} data-label="PK-ID">{s.pk_id || '—'}</td>
                     <td style={ui.td} data-label="Material">{s.material_descripcion || '—'}</td>
                     <td style={ui.td} data-label="Cantidad">
-                      {fmtCant(s.cantidad_salida)} {s.unidad || ''}
+                      {(() => {
+                        const und = s.unidad || ''
+                        const bruto = fmtCant(s.cantidad_salida)
+                        const devuelta = Number(s.cantidad_devuelta) || 0
+                        if (devuelta > 1e-9) {
+                          const neto = fmtCant(s.cantidad_neta ?? (Number(s.cantidad_salida) - devuelta))
+                          return (
+                            <span>
+                              {bruto}{und ? ` ${und}` : ''}
+                              <span style={{ display: 'block', fontSize: 'var(--cc-xs)', color: ui.textMuted, fontWeight: 600 }}>
+                                {`(neto ${neto}${und ? ` ${und}` : ''})`}
+                              </span>
+                            </span>
+                          )
+                        }
+                        return <>{bruto}{und ? ` ${und}` : ''}</>
+                      })()}
+                    </td>
+                    <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Devuelto">
+                      {(Number(s.cantidad_devuelta) || 0) > 1e-9
+                        ? (
+                          <span style={{ color: '#b91c1c', fontWeight: 600 }}>
+                            {fmtCant(s.cantidad_devuelta)}{s.unidad ? ` ${s.unidad}` : ''}
+                          </span>
+                        )
+                        : '—'}
                     </td>
                     <td style={ui.td} data-label="OC">{formatNumeroOcDisplay(s.numero_oc)}</td>
                     <td style={ui.td} data-label="Recibe">{s.receptor_nombre || '—'}</td>
