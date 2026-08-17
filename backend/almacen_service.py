@@ -3640,8 +3640,7 @@ def list_entradas(contrato_id: int) -> List[dict]:
             names = _map_usuario_nombres(sb, [r.get("created_by")])
             r["usuario_nombre"] = names.get(int(r["created_by"]))
         _asegurar_codigo_entrada(contrato_id, r)
-    _enriquecer_entradas_listado(sb, rows)
-    return rows
+    return _enriquecer_entradas_listado(sb, rows)
 
 
 def get_entrada(contrato_id: int, entrada_id: int) -> dict:
@@ -4148,10 +4147,16 @@ def _saldo_oc_pendiente_tras_entrada(
     }
 
 
-def _enriquecer_entradas_listado(sb, rows: List[dict]) -> None:
-    """Agrega cantidad recibida en el registro y saldo OC tras esa entrada."""
+def _enriquecer_entradas_listado(sb, rows: List[dict]) -> List[dict]:
+    """
+    Expande el listado a una fila por línea de entrada (insumo) con consumo/saldo.
+
+    Antes: 1 fila por cabecera con cantidad_recibida_total agregada.
+    Ahora: 1 fila por almacen_entrada_item; conserva campos de cabecera (id, OC, PDF, etc.)
+    para abrir detalle / eliminar / PDF. React key sugerida: entrada_item_id.
+    """
     if not rows:
-        return
+        return []
     entrada_ids = [int(r["id"]) for r in rows]
     ei_rows = (
         sb.table("almacen_entrada_item")
@@ -4170,34 +4175,79 @@ def _enriquecer_entradas_listado(sb, rows: List[dict]) -> None:
         for ei in ei_rows
         if ei.get("orden_compra_item_id")
     })
-    unidad_map: Dict[int, str] = {}
+    oci_map: Dict[int, dict] = {}
     if oci_ids:
         oci_rows = (
             sb.table("almacen_orden_compra_item")
-            .select("id, unidad")
+            .select("id, unidad, material_descripcion")
             .in_("id", oci_ids)
             .execute()
             .data
             or []
         )
         for o in oci_rows:
-            unidad_map[int(o["id"])] = (o.get("unidad") or "").strip()
+            oci_map[int(o["id"])] = o
 
+    ei_ids = [int(ei["id"]) for ei in ei_rows if ei.get("id") is not None]
+    despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
+
+    out: List[dict] = []
     for r in rows:
         eid = int(r["id"])
         items = by_entrada.get(eid, [])
-        qty = round(sum(_to_float(x.get("cantidad_recibida")) for x in items), 4)
-        r["cantidad_recibida_total"] = qty
-        unidades = sorted({
-            unidad_map.get(int(x["orden_compra_item_id"]), "")
-            for x in items
-            if x.get("orden_compra_item_id") and unidad_map.get(int(x["orden_compra_item_id"]))
-        })
-        r["cantidad_recibida_unidad"] = unidades[0] if len(unidades) == 1 else None
-        saldo = _saldo_oc_pendiente_tras_entrada(sb, eid, r.get("created_at"), items)
-        if saldo:
-            r["saldo_oc_pendiente_despues"] = saldo.get("saldo_cantidad")
-            r["saldo_oc_pendiente_despues_unidad"] = saldo.get("saldo_unidad") or r.get("cantidad_recibida_unidad")
+        saldo_doc = _saldo_oc_pendiente_tras_entrada(sb, eid, r.get("created_at"), items)
+        saldo_oc_cant = saldo_doc.get("saldo_cantidad") if saldo_doc else None
+        saldo_oc_und = saldo_doc.get("saldo_unidad") if saldo_doc else None
+
+        if not items:
+            # Entrada sin líneas (caso raro): una fila cabecera sin consumo.
+            out.append({
+                **r,
+                "entrada_item_id": None,
+                "material_descripcion": r.get("insumo_label") or None,
+                "cantidad_recibida": 0.0,
+                "cantidad_recibida_total": 0.0,
+                "cantidad_recibida_unidad": None,
+                "unidad": None,
+                "cantidad_despachada": 0.0,
+                "consumido": 0.0,
+                "saldo_disponible": 0.0,
+                "saldo_por_consumir": 0.0,
+                "porcentaje_saldo_disponible": 0.0,
+                "alerta_saldo": "normal",
+                "saldo_oc_pendiente_despues": saldo_oc_cant,
+                "saldo_oc_pendiente_despues_unidad": saldo_oc_und,
+            })
+            continue
+
+        for ei in items:
+            ei_id = int(ei["id"])
+            oci_id = int(ei["orden_compra_item_id"]) if ei.get("orden_compra_item_id") else None
+            oci = oci_map.get(oci_id, {}) if oci_id else {}
+            und = (oci.get("unidad") or "").strip() or None
+            recibida = _to_float(ei.get("cantidad_recibida"))
+            consumido = despacho_map.get(ei_id, 0.0)
+            saldo = _disponible_entrada_item(recibida, consumido)
+            pct = _porcentaje_saldo_disponible(recibida, saldo)
+            alerta = _alerta_saldo_entrada(pct, recibida)
+            out.append({
+                **r,
+                "entrada_item_id": ei_id,
+                "material_descripcion": oci.get("material_descripcion") or r.get("insumo_label"),
+                "cantidad_recibida": recibida,
+                "cantidad_recibida_total": recibida,
+                "cantidad_recibida_unidad": und,
+                "unidad": und,
+                "cantidad_despachada": consumido,
+                "consumido": consumido,
+                "saldo_disponible": saldo,
+                "saldo_por_consumir": saldo,
+                "porcentaje_saldo_disponible": pct,
+                "alerta_saldo": alerta,
+                "saldo_oc_pendiente_despues": saldo_oc_cant,
+                "saldo_oc_pendiente_despues_unidad": saldo_oc_und or und,
+            })
+    return out
 
 
 def _disponible_entrada_item(cantidad_recibida: float, cantidad_despachada: float) -> float:
