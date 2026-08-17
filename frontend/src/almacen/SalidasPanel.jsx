@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SalidaFormModal from './SalidaFormModal'
 import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
@@ -10,6 +10,29 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
+
+/** Caché en memoria: evita refetch al remount / Ctrl+Tab (mismo patrón que borrador de formulario). */
+const SALIDAS_CACHE_TTL_MS = 5 * 60 * 1000
+const salidasListCache = new Map()
+
+function cacheKey(contratoId) {
+  return String(contratoId || 'x')
+}
+
+function readSalidasCache(contratoId) {
+  const entry = salidasListCache.get(cacheKey(contratoId))
+  if (!entry) return null
+  if (Date.now() - entry.at > SALIDAS_CACHE_TTL_MS) return null
+  return entry.rows
+}
+
+function writeSalidasCache(contratoId, rows) {
+  salidasListCache.set(cacheKey(contratoId), { at: Date.now(), rows: Array.isArray(rows) ? rows : [] })
+}
+
+function invalidateSalidasCache(contratoId) {
+  salidasListCache.delete(cacheKey(contratoId))
+}
 
 function clearSalidaDraft(contratoId) {
   try {
@@ -24,39 +47,103 @@ export default function SalidasPanel({
   const ui = useAlmacenTheme()
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
   const puedeEliminar = Boolean(permisos?.editar)
-  const [lista, setLista] = useState([])
+  const contratoId = permisos?.contratoId
+  const [lista, setLista] = useState(() => readSalidasCache(contratoId) || [])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [eliminarTarget, setEliminarTarget] = useState(null)
   const [pdfBusyId, setPdfBusyId] = useState(null)
-
-  const reload = useCallback(() => api.listSalidas()
-    .then(setLista)
-    .catch((e) => setError(e.message))
-    .finally(() => onDataLoaded?.()), [api, onDataLoaded])
-
-  useEffect(() => { reload() }, [reload])
+  const lastRefreshSignal = useRef(refreshSignal)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
-    // No recargar listado (ni tocar el modal) mientras se diligencia una salida.
-    if (refreshSignal > 0) {
-      if (!creating) reload()
-      else onDataLoaded?.()
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  const applyLista = useCallback((rows) => {
+    const next = Array.isArray(rows) ? rows : []
+    writeSalidasCache(contratoId, next)
+    if (mountedRef.current) setLista(next)
+  }, [contratoId])
+
+  const reload = useCallback((opts = {}) => {
+    const force = Boolean(opts.force)
+    if (!force) {
+      const cached = readSalidasCache(contratoId)
+      if (cached) {
+        setLista(cached)
+        onDataLoaded?.()
+        return Promise.resolve(cached)
+      }
     }
-  }, [refreshSignal, creating, reload, onDataLoaded])
+    return api.listSalidas()
+      .then((rows) => {
+        applyLista(rows)
+        return rows
+      })
+      .catch((e) => {
+        if (mountedRef.current) setError(e.message)
+        return null
+      })
+      .finally(() => onDataLoaded?.())
+  }, [api, applyLista, contratoId, onDataLoaded])
+
+  // Carga inicial: usa caché caliente (Ctrl+Tab / remount) sin red.
+  useEffect(() => {
+    const cached = readSalidasCache(contratoId)
+    if (cached) {
+      setLista(cached)
+      onDataLoaded?.()
+      return undefined
+    }
+    let cancelled = false
+    api.listSalidas()
+      .then((rows) => {
+        if (cancelled) return
+        applyLista(rows)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message)
+      })
+      .finally(() => {
+        if (!cancelled) onDataLoaded?.()
+      })
+    return () => { cancelled = true }
+    // Solo al montar / cambiar contrato — no al renovar token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contratoId, api])
+
+  useEffect(() => {
+    // refreshSignal = Actualizar explícito del módulo (no foco de ventana).
+    if (refreshSignal > 0 && refreshSignal !== lastRefreshSignal.current) {
+      lastRefreshSignal.current = refreshSignal
+      if (!creating) {
+        invalidateSalidasCache(contratoId)
+        reload({ force: true })
+      } else {
+        onDataLoaded?.()
+      }
+    }
+  }, [refreshSignal, creating, reload, onDataLoaded, contratoId])
 
   const cerrarFormulario = () => {
-    clearSalidaDraft(permisos?.contratoId)
+    clearSalidaDraft(contratoId)
     setCreating(false)
   }
 
   const onSaved = async (saved) => {
-    clearSalidaDraft(permisos?.contratoId)
+    clearSalidaDraft(contratoId)
     setCreating(false)
-    await reload()
+    invalidateSalidasCache(contratoId)
+    await reload({ force: true })
     if (saved?.id && saved?.pdf_generando) {
-      setTimeout(() => reload(), 2500)
+      // Una sola revalidación diferida para marcar tiene_pdf_salida (sin doble reload inmediato).
+      setTimeout(() => {
+        invalidateSalidasCache(contratoId)
+        reload({ force: true })
+      }, 2500)
     }
   }
 
@@ -66,6 +153,11 @@ export default function SalidasPanel({
     setError('')
     try {
       await api.openSalidaPdf(salida.id)
+      // Si el PDF se generó en el server, refrescar solo la bandera sin vaciar la grilla.
+      if (!salida.tiene_pdf_salida && !salida.salida_pdf_blob_path) {
+        invalidateSalidasCache(contratoId)
+        reload({ force: true })
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -94,7 +186,8 @@ export default function SalidasPanel({
     try {
       await api.deleteSalida(salida.id)
       setEliminarTarget(null)
-      await reload()
+      invalidateSalidasCache(contratoId)
+      await reload({ force: true })
     } catch (err) {
       setError(err.message)
     } finally {

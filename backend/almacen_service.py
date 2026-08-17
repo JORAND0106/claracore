@@ -4579,63 +4579,22 @@ def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
 
 def list_salidas(contrato_id: int) -> List[dict]:
     sb = _sb()
+    # Columnas necesarias para grilla + PDF flag (evita arrastrar blobs/metadatos pesados).
     rows = (
         sb.table("almacen_salida")
-        .select("*")
+        .select(
+            "id, contrato_id, numero_salida, codigo, fecha_hora_salida, pk_id, pk_id_id, "
+            "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
+            "observaciones, receptor_usuario_id, created_by, created_at, "
+            "salida_pdf_blob_path, salida_pdf_nombre, salida_pdf_mime"
+        )
         .eq("contrato_id", contrato_id)
         .order("created_at", desc=True)
         .execute()
         .data
         or []
     )
-    user_ids = []
-    ei_ids = []
-    for r in rows:
-        if r.get("receptor_usuario_id"):
-            user_ids.append(int(r["receptor_usuario_id"]))
-        if r.get("created_by"):
-            user_ids.append(int(r["created_by"]))
-        if r.get("entrada_item_id"):
-            ei_ids.append(int(r["entrada_item_id"]))
-    names = _map_usuario_nombres(sb, user_ids)
-
-    ei_map: Dict[int, dict] = {}
-    if ei_ids:
-        ei_rows = sb.table("almacen_entrada_item").select("id, orden_compra_item_id, presupuesto_id").in_("id", ei_ids).execute().data or []
-        oci_ids = [int(x["orden_compra_item_id"]) for x in ei_rows if x.get("orden_compra_item_id")]
-        oci_map: Dict[int, dict] = {}
-        if oci_ids:
-            oci_rows = sb.table("almacen_orden_compra_item").select("id, material_descripcion, unidad, orden_compra_id").in_("id", oci_ids).execute().data or []
-            oc_ids = sorted({int(x["orden_compra_id"]) for x in oci_rows if x.get("orden_compra_id")})
-            oc_map: Dict[int, dict] = {}
-            if oc_ids:
-                oc_rows = sb.table("almacen_orden_compra").select("id, numero_oc").in_("id", oc_ids).execute().data or []
-                oc_map = {int(x["id"]): x for x in oc_rows}
-            for o in oci_rows:
-                oid = int(o["id"])
-                oc_id = o.get("orden_compra_id")
-                oci_map[oid] = {
-                    **o,
-                    "numero_oc": oc_map.get(int(oc_id), {}).get("numero_oc") if oc_id else None,
-                }
-        for e in ei_rows:
-            oid = e.get("orden_compra_item_id")
-            ei_map[int(e["id"])] = {
-                **e,
-                "almacen_orden_compra_item": oci_map.get(int(oid), {}) if oid else {},
-            }
-
-    for r in rows:
-        r["receptor_nombre"] = names.get(int(r["receptor_usuario_id"])) if r.get("receptor_usuario_id") else None
-        r["despachador_nombre"] = names.get(int(r["created_by"])) if r.get("created_by") else None
-        ei = ei_map.get(int(r["entrada_item_id"] or 0), {})
-        oci = ei.get("almacen_orden_compra_item") or {}
-        r["material_descripcion"] = oci.get("material_descripcion")
-        r["unidad"] = oci.get("unidad")
-        r["numero_oc"] = oci.get("numero_oc")
-        r["tiene_pdf_salida"] = bool(r.get("salida_pdf_blob_path"))
-        _asegurar_codigo_salida(contrato_id, r)
-    return rows
+    return _enrich_salidas_rows(sb, contrato_id, rows)
 
 
 def get_salida(contrato_id: int, salida_id: int) -> dict:
@@ -4652,10 +4611,92 @@ def get_salida(contrato_id: int, salida_id: int) -> dict:
     )
     if not rows:
         raise ValueError("Salida no encontrada.")
-    r = rows[0]
-    lista = list_salidas(contrato_id)
-    enriched = next((x for x in lista if int(x["id"]) == int(salida_id)), r)
-    return enriched
+    enriched = _enrich_salidas_rows(sb, contrato_id, rows)
+    return enriched[0]
+
+
+def _enrich_salidas_rows(sb, contrato_id: int, rows: List[dict]) -> List[dict]:
+    """Enriquece filas de salida (nombres, material, OC, código) sin N+1 por fila."""
+    if not rows:
+        return rows
+    user_ids = []
+    ei_ids = []
+    for r in rows:
+        if r.get("receptor_usuario_id"):
+            user_ids.append(int(r["receptor_usuario_id"]))
+        if r.get("created_by"):
+            user_ids.append(int(r["created_by"]))
+        if r.get("entrada_item_id"):
+            ei_ids.append(int(r["entrada_item_id"]))
+    names = _map_usuario_nombres(sb, user_ids)
+
+    ei_map: Dict[int, dict] = {}
+    if ei_ids:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("id, orden_compra_item_id, presupuesto_id")
+            .in_("id", ei_ids)
+            .execute()
+            .data
+            or []
+        )
+        oci_ids = [int(x["orden_compra_item_id"]) for x in ei_rows if x.get("orden_compra_item_id")]
+        oci_map: Dict[int, dict] = {}
+        if oci_ids:
+            oci_rows = (
+                sb.table("almacen_orden_compra_item")
+                .select("id, material_descripcion, unidad, orden_compra_id")
+                .in_("id", oci_ids)
+                .execute()
+                .data
+                or []
+            )
+            oc_ids = sorted({int(x["orden_compra_id"]) for x in oci_rows if x.get("orden_compra_id")})
+            oc_map: Dict[int, dict] = {}
+            if oc_ids:
+                oc_rows = (
+                    sb.table("almacen_orden_compra")
+                    .select("id, numero_oc")
+                    .in_("id", oc_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+                oc_map = {int(x["id"]): x for x in oc_rows}
+            for o in oci_rows:
+                oid = int(o["id"])
+                oc_id = o.get("orden_compra_id")
+                oci_map[oid] = {
+                    **o,
+                    "numero_oc": oc_map.get(int(oc_id), {}).get("numero_oc") if oc_id else None,
+                }
+        for e in ei_rows:
+            oid = e.get("orden_compra_item_id")
+            ei_map[int(e["id"])] = {
+                **e,
+                "almacen_orden_compra_item": oci_map.get(int(oid), {}) if oid else {},
+            }
+
+    # Un solo lookup de segmento de contrato por request (códigos legacy sin `codigo`).
+    seg_cache: Dict[str, str] = {}
+
+    def _codigo_salida_cached(numero_salida: int) -> str:
+        if "seg" not in seg_cache:
+            seg_cache["seg"] = _contrato_segmento_documento(contrato_id)
+        return f"Sal-{seg_cache['seg']}-{int(numero_salida):05d}"
+
+    for r in rows:
+        r["receptor_nombre"] = names.get(int(r["receptor_usuario_id"])) if r.get("receptor_usuario_id") else None
+        r["despachador_nombre"] = names.get(int(r["created_by"])) if r.get("created_by") else None
+        ei = ei_map.get(int(r["entrada_item_id"] or 0), {})
+        oci = ei.get("almacen_orden_compra_item") or {}
+        r["material_descripcion"] = oci.get("material_descripcion")
+        r["unidad"] = oci.get("unidad")
+        r["numero_oc"] = oci.get("numero_oc")
+        r["tiene_pdf_salida"] = bool(r.get("salida_pdf_blob_path"))
+        if not (r.get("codigo") or "").strip() and r.get("numero_salida"):
+            r["codigo"] = _codigo_salida_cached(int(r["numero_salida"]))
+    return rows
 
 
 def _pdf_ctx_for_salida(sb, contrato_id: int, sal: dict) -> dict:
@@ -4764,8 +4805,15 @@ def _pdf_ctx_for_salida(sb, contrato_id: int, sal: dict) -> dict:
 
 
 def download_salida_pdf(contrato_id: int, salida_id: int) -> tuple:
-    sb = _sb()
+    """Descarga el recibo PDF. Reutiliza blob existente; solo regenera si falta."""
     sal = get_salida(contrato_id, salida_id)
+    path = (sal.get("salida_pdf_blob_path") or "").strip()
+    if path:
+        data, _mime = download_soporte(path)
+        if data:
+            fname = sal.get("salida_pdf_nombre") or f"salida-{salida_id}.pdf"
+            return data, fname
+    sb = _sb()
     try:
         _generar_pdf_salida(contrato_id, salida_id, sal, _pdf_ctx_for_salida(sb, contrato_id, sal))
         sal = get_salida(contrato_id, salida_id)
