@@ -37,6 +37,11 @@ import {
   PPTO_ENCABEZADO_GRUPO_ENTIDAD,
   PPTO_ENCABEZADO_GRUPO_ROW_HEIGHT,
 } from './pptoTipoEntidad.js'
+import {
+  agruparRegistrosPorCompetencia,
+  debeMostrarDesgloseCompetencia,
+  encabezadoGrupoCompetencia,
+} from './pptoCompetenciaExport.js'
 import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
 import { pptoOrdenarFilasPorCapituloItem } from './pptoFiltroCatalogo.js'
 import {
@@ -374,6 +379,14 @@ function estiloTitulo1Cell(cell, { bold = true, align = 'left', size = 11, wrapT
 function escribirEncabezadoGrupoEntidad(ws, grupoKey, totalCols) {
   const texto = PPTO_ENCABEZADO_GRUPO_ENTIDAD[grupoKey]
   if (!texto) return null
+  return escribirEncabezadoGrupoTitulo1(ws, texto, totalCols)
+}
+
+/**
+ * Encabezado Título 1 genérico (competencia u otros bloques).
+ * @returns {number} número de fila insertada
+ */
+function escribirEncabezadoGrupoTitulo1(ws, texto, totalCols) {
   ws.addRow(new Array(totalCols).fill(''))
   const rowNum = ws.rowCount
   try {
@@ -1293,7 +1306,14 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
     logoLeftSpan: enc.logoLeftSpan || 0,
   })
-  const grupos = agruparRegistrosPorTipoEntidad(regs)
+
+  const bloquesCompetencia = agruparRegistrosPorCompetencia(regs)
+  const mostrarBannerCompetencia = debeMostrarDesgloseCompetencia(bloquesCompetencia)
+  // Capas: Competencia (si aplica) → tipo entidad → subgrupos de gráfico.
+  const bloquesTrabajo = bloquesCompetencia.map((b) => ({
+    ...b,
+    gruposEntidad: agruparRegistrosPorTipoEntidad(b.registros),
+  }))
 
   let firstDataRowGlobal = null
   let lastDataRowGlobal = null
@@ -1303,57 +1323,74 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const filasEncabezadoGrupo = []
   /** Gráficos ya insertados en algún subgrupo (para fallback de residuales). */
   const graficosYaInsertados = new Set()
+  let hayBloquePrevio = false
 
-  grupos.forEach((grupo, gIdx) => {
-    // Separación visual entre subtablas de tipo de entidad (fila en blanco).
-    if (gIdx > 0) {
-      ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-      const sepRow = ws.rowCount
-      ws.getRow(sepRow).height = 10
-      for (let c = 1; c <= TOTAL_COLS_DET; c += 1) {
-        const cell = ws.getCell(sepRow, c)
-        cell.border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
-      }
+  const escribirSeparadorSubtabla = () => {
+    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    const sepRow = ws.rowCount
+    ws.getRow(sepRow).height = 10
+    for (let c = 1; c <= TOTAL_COLS_DET; c += 1) {
+      const cell = ws.getCell(sepRow, c)
+      cell.border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
+    }
+  }
+
+  bloquesTrabajo.forEach((bloqueComp) => {
+    if (mostrarBannerCompetencia) {
+      if (hayBloquePrevio) escribirSeparadorSubtabla()
+      const filaComp = escribirEncabezadoGrupoTitulo1(
+        ws,
+        encabezadoGrupoCompetencia(bloqueComp.label),
+        TOTAL_COLS_DET,
+      )
+      filasEncabezadoGrupo.push(filaComp)
     }
 
-    const filaGrupo = escribirEncabezadoGrupoEntidad(ws, grupo.key, TOTAL_COLS_DET)
-    if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
-
-    const headers = headersDetallePorGrupo(grupo.colLabel)
-    const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosPrep, grupo.key)
-
-    subgrupos.forEach((sub, sIdx) => {
-      if (sIdx > 0) {
-        ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-        ws.getRow(ws.rowCount).height = 6
+    bloqueComp.gruposEntidad.forEach((grupo, gIdx) => {
+      // Sep entre subtablas de entidad; tras banner de competencia no hace falta sep extra.
+      if (hayBloquePrevio && !(mostrarBannerCompetencia && gIdx === 0)) {
+        escribirSeparadorSubtabla()
       }
 
-      ws.addRow(headers)
-      const headerRow = ws.rowCount
-      if (firstHeaderRow == null) firstHeaderRow = headerRow
-      estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
+      const filaGrupo = escribirEncabezadoGrupoEntidad(ws, grupo.key, TOTAL_COLS_DET)
+      if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
 
-      const firstDet = headerRow + 1
-      for (const reg of sub.registros) {
-        escribirFilaRegistroDetalle(ws, reg)
-      }
-      const lastDet = sub.registros.length > 0 ? firstDet + sub.registros.length - 1 : null
-      if (lastDet != null) {
-        if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
-        lastDataRowGlobal = lastDet
-        aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
-        lastTableRow = lastDet
-      } else {
-        lastTableRow = headerRow
-      }
+      const headers = headersDetallePorGrupo(grupo.colLabel)
+      const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosPrep, grupo.key)
 
-      // Gráfico(s) del subgrupo, justo después de sus registros.
-      if (sub.graficos?.length) {
-        ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
-        escribirBloqueGraficosItem(ws, ws.rowCount + 1, sub.graficos)
-        lastTableRow = ws.rowCount
-        for (const g of sub.graficos) graficosYaInsertados.add(g)
-      }
+      subgrupos.forEach((sub, sIdx) => {
+        if (sIdx > 0) {
+          ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+          ws.getRow(ws.rowCount).height = 6
+        }
+
+        ws.addRow(headers)
+        const headerRow = ws.rowCount
+        if (firstHeaderRow == null) firstHeaderRow = headerRow
+        estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
+
+        const firstDet = headerRow + 1
+        for (const reg of sub.registros) {
+          escribirFilaRegistroDetalle(ws, reg)
+        }
+        const lastDet = sub.registros.length > 0 ? firstDet + sub.registros.length - 1 : null
+        if (lastDet != null) {
+          if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
+          lastDataRowGlobal = lastDet
+          aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
+          lastTableRow = lastDet
+        } else {
+          lastTableRow = headerRow
+        }
+
+        if (sub.graficos?.length) {
+          ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+          escribirBloqueGraficosItem(ws, ws.rowCount + 1, sub.graficos)
+          lastTableRow = ws.rowCount
+          for (const g of sub.graficos) graficosYaInsertados.add(g)
+        }
+      })
+      hayBloquePrevio = true
     })
   })
 
@@ -1436,7 +1473,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 }
 
-function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoLegacy, claraLogoImageId, todosRegistros = [], wsExistente = null, logos = null) {
+function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoLegacy, claraLogoImageId, todosRegistros = [], wsExistente = null, logos = null, resumenCompetencias = []) {
   const resumenHeaders = [
     'Capítulo',
     'Ítem',
@@ -1482,8 +1519,9 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   /** Filas de subtotal por capítulo: el total general (fila 5) suma solo estas. */
   const filasSubtotalCap = []
   let chapterItemStart = null
+  let chapterLastItemRow = null
 
-  const plan = planFilasResumenConSubtotales(resumen)
+  const plan = planFilasResumenConSubtotales(resumen, resumenCompetencias)
   for (const entry of plan) {
     if (entry.tipo === 'item') {
       const row = entry.row
@@ -1513,16 +1551,33 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       r.getCell(7).value = costoDirectoResumenFila(row)
       estiloMoneda(r.getCell(7))
       estiloFilaDatos(r, totalColsResumen, rowNum)
+      chapterLastItemRow = rowNum
       rowNum += 1
       continue
     }
 
-    // Subtotal de capítulo: suma Cantidad y Costo directo de las filas del grupo.
-    const itemEnd = rowNum - 1
+    if (entry.tipo === 'competencia') {
+      // Valores absolutos del backend (ítems del resumen no están desglosados por competencia).
+      const label = `COMPETENCIA · ${entry.label || '—'}`.trim()
+      const rComp = wsRes.addRow([label, '', '', '', '', Number(entry.cantidad) || 0, entry.costoDirecto || 0])
+      estiloCantidad(rComp.getCell(6))
+      estiloMoneda(rComp.getCell(7))
+      estiloFilaSubtotalCapitulo(rComp, totalColsResumen)
+      try {
+        wsRes.mergeCells(rowNum, 1, rowNum, 4)
+      } catch {
+        /* merge opcional */
+      }
+      rowNum += 1
+      continue
+    }
+
+    // Subtotal de capítulo: suma Cantidad y Costo directo de las filas de ítem (no de competencias).
+    const itemEnd = chapterLastItemRow
     const itemStart = chapterItemStart
     const label = `SUBTOTAL ${entry.capitulo || '—'}`.trim()
     const rSub = wsRes.addRow([label, '', '', '', '', null, null])
-    if (itemStart != null && itemEnd >= itemStart) {
+    if (itemStart != null && itemEnd != null && itemEnd >= itemStart) {
       rSub.getCell(6).value = {
         formula: `SUM(${colToLetter(6)}${itemStart}:${colToLetter(6)}${itemEnd})`,
       }
@@ -1543,6 +1598,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     }
     filasSubtotalCap.push(rowNum)
     chapterItemStart = null
+    chapterLastItemRow = null
     rowNum += 1
   }
 
@@ -1768,6 +1824,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
     todosRegistros,
     wsResumen,
     logos,
+    Array.isArray(payload?.resumen_competencias) ? payload.resumen_competencias : [],
   )
 
   moverHojaAlInicio(wb, 'Resumen')

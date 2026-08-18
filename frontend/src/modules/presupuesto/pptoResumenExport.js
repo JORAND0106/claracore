@@ -6,7 +6,18 @@
  * - Backend export (resumen[]): agrupa por (capítulo, ítem) con costo_directo = Σ CD.
  * - Excel debe usar ese costo_directo agregado, NO recalcular ROUND(vlr × Σcant),
  *   porque Σ round(cant_i × vlr_i) ≠ round(round(vlr) × Σ cant_i).
+ *
+ * Desglose por competencia (opcional):
+ * - Backend envía resumen_competencias[] agregados por (capítulo, competencia).
+ * - Tras los ítems de cada capítulo se insertan sub-filas COMPETENCIA · … y luego
+ *   el SUBTOTAL de capítulo (suma de ítems = suma de competencias).
  */
+
+import {
+  debeMostrarDesgloseCompetencia,
+  etiquetaCompetencia,
+  indexCompetenciasPorCapitulo,
+} from './pptoCompetenciaExport.js'
 
 /**
  * Costo directo de una fila de resumen (mismo criterio que la plataforma).
@@ -30,22 +41,40 @@ export function costoDirectoResumenFilaRecalcLegacy(row) {
 }
 
 /**
- * Agrupa filas de resumen (ya ordenadas por capítulo) e inserta subtotales.
+ * Agrupa filas de resumen (ya ordenadas por capítulo) e inserta:
+ * 1) sub-filas por competencia (si aplica),
+ * 2) subtotal de capítulo.
  *
  * @param {Array<Record<string, unknown>>} resumen
+ * @param {Array<{ capitulo?: unknown, competencia?: unknown, cantidad?: unknown, costo_directo?: unknown }>} [competencias]
  * @returns {Array<
  *   | { tipo: 'item', row: Record<string, unknown> }
+ *   | { tipo: 'competencia', capitulo: string, competencia: string, label: string, cantidad: number, costoDirecto: number }
  *   | { tipo: 'subtotal', capitulo: string, items: Array<Record<string, unknown>>, costoDirecto: number }
  * >}
  */
-export function planFilasResumenConSubtotales(resumen) {
+export function planFilasResumenConSubtotales(resumen, competencias = []) {
   const list = Array.isArray(resumen) ? resumen : []
+  const byCap = indexCompetenciasPorCapitulo(competencias)
   const out = []
   let capActual = null
   let itemsCap = []
 
   const flush = () => {
     if (capActual == null || !itemsCap.length) return
+    const comps = byCap.get(capActual) || []
+    if (debeMostrarDesgloseCompetencia(comps)) {
+      for (const c of comps) {
+        out.push({
+          tipo: 'competencia',
+          capitulo: capActual,
+          competencia: c.competencia,
+          label: etiquetaCompetencia(c.competencia),
+          cantidad: Number(c.cantidad) || 0,
+          costoDirecto: Math.round(Number(c.costoDirecto) || 0),
+        })
+      }
+    }
     out.push({
       tipo: 'subtotal',
       capitulo: capActual,

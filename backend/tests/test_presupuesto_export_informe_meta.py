@@ -86,3 +86,79 @@ def test_exportar_informe_aplica_overlay_meta_vivo():
     assert by_item["3.10"] == "Otro actualizado"
     mem_by_item = {r["item"]: r["descripcion"] for r in out["items"]}
     assert mem_by_item["3.2"] == "Nombre actualizado listado"
+    assert "competencia" in out["items"][0]["registros"][0]
+    assert "resumen_competencias" in out
+    assert isinstance(out["resumen_competencias"], list)
+
+
+def test_exportar_informe_resumen_competencias_dinamico():
+    """Desglose por competencia en Resumen + campo en registros de memorias."""
+    body = MagicMock()
+    body.formato = "informe"
+    body.modo = "presupuesto_obra"
+    body.tipo_ejecucion = "Presupuesto de Obra"
+    body.version_id = None
+
+    rows = [
+        {
+            "id": 1,
+            "capitulo": "1. CAP",
+            "item": "1.1",
+            "descripcion": "A",
+            "und": "M2",
+            "vlr_unitario": 10,
+            "cant_total": 2,
+            "costo_directo": 20,
+            "competencia": "IDU",
+            "pk_id": "",
+            "infraestructura": "",
+            "tipo_entidad": "Área",
+        },
+        {
+            "id": 2,
+            "capitulo": "1. CAP",
+            "item": "1.1",
+            "descripcion": "A",
+            "und": "M2",
+            "vlr_unitario": 10,
+            "cant_total": 3,
+            "costo_directo": 30,
+            "competencia": "ETB",
+            "pk_id": "",
+            "infraestructura": "",
+            "tipo_entidad": "Área",
+        },
+        {
+            "id": 3,
+            "capitulo": "1. CAP",
+            "item": "1.2",
+            "descripcion": "B",
+            "und": "M",
+            "vlr_unitario": 5,
+            "cant_total": 1,
+            "costo_directo": 5,
+            "competencia": "IDU",
+            "pk_id": "",
+            "infraestructura": "",
+            "tipo_entidad": "Longitud",
+        },
+    ]
+
+    with patch.object(m, "_presupuesto_fetch_export_rows", return_value=rows):
+        with patch.object(m, "_overlay_presupuesto_meta_vivo", side_effect=lambda _cid, rs: rs):
+            with patch.object(m, "_pk_ids_ubicacion_por_codigo", return_value={}):
+                with patch(
+                    "presupuesto_graficos_routes.attach_graficos_a_items_export",
+                    return_value=None,
+                ):
+                    out = m.exportar_presupuesto_informe(9, body, current_user={"id": 1})
+
+    comps = out["resumen_competencias"]
+    assert [(c["competencia"], c["cantidad"], c["costo_directo"]) for c in comps] == [
+        ("ETB", 3.0, 30),
+        ("IDU", 3.0, 25),
+    ]
+    regs = out["items"][0]["registros"]
+    assert {r["competencia"] for r in regs} == {"IDU", "ETB"}
+    # Subtotal capítulo vía resumen ítems = suma competencias
+    assert sum(r["costo_directo"] for r in out["resumen"]) == sum(c["costo_directo"] for c in comps)
