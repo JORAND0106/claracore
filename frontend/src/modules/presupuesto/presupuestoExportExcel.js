@@ -41,6 +41,7 @@ import {
   agruparRegistrosPorCompetencia,
   debeMostrarDesgloseCompetencia,
   encabezadoGrupoCompetencia,
+  filtrarGraficosPorRegistrosBloque,
 } from './pptoCompetenciaExport.js'
 import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
 import { pptoOrdenarFilasPorCapituloItem } from './pptoFiltroCatalogo.js'
@@ -1336,11 +1337,12 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 
   bloquesTrabajo.forEach((bloqueComp) => {
+    const graficosBloque = filtrarGraficosPorRegistrosBloque(graficosPrep, bloqueComp.registros)
     if (mostrarBannerCompetencia) {
       if (hayBloquePrevio) escribirSeparadorSubtabla()
       const filaComp = escribirEncabezadoGrupoTitulo1(
         ws,
-        encabezadoGrupoCompetencia(bloqueComp.label),
+        encabezadoGrupoCompetencia(bloqueComp.label, bloqueComp.registros.length),
         TOTAL_COLS_DET,
       )
       filasEncabezadoGrupo.push(filaComp)
@@ -1356,7 +1358,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
 
       const headers = headersDetallePorGrupo(grupo.colLabel)
-      const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosPrep, grupo.key)
+      const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosBloque, grupo.key)
 
       subgrupos.forEach((sub, sIdx) => {
         if (sIdx > 0) {
@@ -1395,6 +1397,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   })
 
   // Fallback: gráficos del ítem que no coincidieron con ningún subgrupo (p. ej. sin ids).
+  // Solo residuales que no se insertaron; si hubo desglose por competencia ya se filtraron.
   const grafsResidual = (graficosPrep || []).filter((g) => g?.image && !graficosYaInsertados.has(g))
   if (grafsResidual.length) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
@@ -1518,46 +1521,12 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   let rowNum = firstDataRow
   /** Filas de subtotal por capítulo: el total general (fila 5) suma solo estas. */
   const filasSubtotalCap = []
-  let chapterItemStart = null
-  let chapterLastItemRow = null
+  /** Filas de ítem del capítulo actual (no cabeceras COMPETENCIA) para SUM del subtotal. */
+  let filasItemCap = []
 
   const plan = planFilasResumenConSubtotales(resumen, resumenCompetencias)
   for (const entry of plan) {
-    if (entry.tipo === 'item') {
-      const row = entry.row
-      if (chapterItemStart == null) chapterItemStart = rowNum
-      const r = wsRes.addRow([
-        row.capitulo,
-        row.item,
-        row.descripcion,
-        row.und,
-        Math.round(Number(row.vlr_unitario) || 0),
-        null,
-        null,
-      ])
-      estiloMoneda(r.getCell(5))
-
-      const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
-      if (ref?.cantTotalRow) {
-        r.getCell(6).value = {
-          formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
-        }
-      } else {
-        r.getCell(6).value = Number(row.cantidad) || 0
-      }
-      estiloCantidad(r.getCell(6))
-
-      // Congruente con la plataforma: Σ costo_directo (no ROUND(vlr × Σcant)).
-      r.getCell(7).value = costoDirectoResumenFila(row)
-      estiloMoneda(r.getCell(7))
-      estiloFilaDatos(r, totalColsResumen, rowNum)
-      chapterLastItemRow = rowNum
-      rowNum += 1
-      continue
-    }
-
     if (entry.tipo === 'competencia') {
-      // Valores absolutos del backend (ítems del resumen no están desglosados por competencia).
       const label = `COMPETENCIA · ${entry.label || '—'}`.trim()
       const rComp = wsRes.addRow([label, '', '', '', '', Number(entry.cantidad) || 0, entry.costoDirecto || 0])
       estiloCantidad(rComp.getCell(6))
@@ -1572,18 +1541,49 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       continue
     }
 
-    // Subtotal de capítulo: suma Cantidad y Costo directo de las filas de ítem (no de competencias).
-    const itemEnd = chapterLastItemRow
-    const itemStart = chapterItemStart
+    if (entry.tipo === 'item') {
+      const row = entry.row
+      const r = wsRes.addRow([
+        row.capitulo,
+        row.item,
+        row.descripcion,
+        row.und,
+        Math.round(Number(row.vlr_unitario) || 0),
+        null,
+        null,
+      ])
+      estiloMoneda(r.getCell(5))
+
+      // Con desglose por competencia la cantidad es del par (ítem, competencia): valor absoluto.
+      // Sin desglose se puede enlazar al TOTAL CANT. de la memoria del ítem.
+      if (entry.cantidadAbsoluta) {
+        r.getCell(6).value = Number(row.cantidad) || 0
+      } else {
+        const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
+        if (ref?.cantTotalRow) {
+          r.getCell(6).value = {
+            formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
+          }
+        } else {
+          r.getCell(6).value = Number(row.cantidad) || 0
+        }
+      }
+      estiloCantidad(r.getCell(6))
+
+      r.getCell(7).value = costoDirectoResumenFila(row)
+      estiloMoneda(r.getCell(7))
+      estiloFilaDatos(r, totalColsResumen, rowNum)
+      filasItemCap.push(rowNum)
+      rowNum += 1
+      continue
+    }
+
+    // Subtotal de capítulo: suma solo filas de ítem (excluye cabeceras COMPETENCIA).
     const label = `SUBTOTAL ${entry.capitulo || '—'}`.trim()
     const rSub = wsRes.addRow([label, '', '', '', '', null, null])
-    if (itemStart != null && itemEnd != null && itemEnd >= itemStart) {
-      rSub.getCell(6).value = {
-        formula: `SUM(${colToLetter(6)}${itemStart}:${colToLetter(6)}${itemEnd})`,
-      }
-      rSub.getCell(7).value = {
-        formula: `SUM(${colToLetter(7)}${itemStart}:${colToLetter(7)}${itemEnd})`,
-      }
+    if (filasItemCap.length) {
+      rSub.getCell(6).value = { formula: formulaSumaFilas(colToLetter(6), filasItemCap) }
+      rSub.getCell(7).value = { formula: formulaSumaFilas(colToLetter(7), filasItemCap) }
     } else {
       rSub.getCell(6).value = 0
       rSub.getCell(7).value = entry.costoDirecto || 0
@@ -1597,8 +1597,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       /* merge opcional */
     }
     filasSubtotalCap.push(rowNum)
-    chapterItemStart = null
-    chapterLastItemRow = null
+    filasItemCap = []
     rowNum += 1
   }
 

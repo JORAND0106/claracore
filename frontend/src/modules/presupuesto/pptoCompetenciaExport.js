@@ -113,9 +113,39 @@ export function agruparRegistrosPorCompetencia(registros) {
 
 /**
  * Texto Título 1 para bloque de competencia en memorias.
+ * Incluye conteo para verificar que el bloque no es solo una etiqueta.
  * @param {string} label
+ * @param {number} [nRegistros]
  * @returns {string}
  */
-export function encabezadoGrupoCompetencia(label) {
-  return `Competencia: ${label || PPTO_COMPETENCIA_SIN}`
+export function encabezadoGrupoCompetencia(label, nRegistros) {
+  const base = `Competencia: ${label || PPTO_COMPETENCIA_SIN}`
+  const n = Number(nRegistros)
+  if (!Number.isFinite(n) || n < 0) return base
+  const unidad = n === 1 ? 'registro' : 'registros'
+  return `${base} — ${n} ${unidad}`
+}
+
+/**
+ * Filtra gráficos del ítem a los que intersectan con los ids del bloque de competencia.
+ * Si el gráfico no trae presupuesto_ids, se conserva (comportamiento previo).
+ *
+ * @param {Array<object>} graficosPrep
+ * @param {Array<Record<string, unknown>>} registrosBloque
+ * @returns {Array<object>}
+ */
+export function filtrarGraficosPorRegistrosBloque(graficosPrep, registrosBloque) {
+  const ids = new Set()
+  for (const r of registrosBloque || []) {
+    const n = Number(r?.id)
+    if (Number.isFinite(n) && n > 0) ids.add(n)
+  }
+  return (Array.isArray(graficosPrep) ? graficosPrep : []).filter((g) => {
+    const raw = Array.isArray(g?.presupuesto_ids) ? g.presupuesto_ids : null
+    if (!raw || !raw.length) return true
+    return raw.some((v) => {
+      const n = Number(v)
+      return Number.isFinite(n) && ids.has(n)
+    })
+  })
 }
