@@ -11472,7 +11472,7 @@ def get_items_presupuesto(
 _PRESUPUESTO_EXPORT_SELECT = (
     "id, capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
     "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
-    "area_long_nod, ancho, espesor, tipo_entidad, "
+    "area_long_nod, ancho, espesor, tipo_entidad, competencia, "
     "revisado, pre_interv_estado, pre_interv_por, validado_por, "
     "observacion, observacion_externa, tipo_ejecucion"
 )
@@ -11744,6 +11744,8 @@ def exportar_presupuesto_informe(
 
     resumen_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    # (capítulo, competencia) → subtotales para desglose del Resumen Excel
+    competencia_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for r in rows:
         cap = (r.get("capitulo") or "").strip()
@@ -11751,6 +11753,7 @@ def exportar_presupuesto_informe(
         if not cap or not it:
             continue
         k = (cap, it)
+        competencia = (r.get("competencia") or "").strip()
         if k not in resumen_map:
             resumen_map[k] = {
                 "capitulo": cap,
@@ -11772,8 +11775,21 @@ def exportar_presupuesto_informe(
                 agg["vlr_unitario"] = float(vlr)
             except (TypeError, ValueError):
                 pass
-        agg["cantidad"] += float(r.get("cant_total") or 0)
-        agg["costo_directo"] += float(r.get("costo_directo") or 0)
+        cant_row = float(r.get("cant_total") or 0)
+        costo_row = float(r.get("costo_directo") or 0)
+        agg["cantidad"] += cant_row
+        agg["costo_directo"] += costo_row
+
+        kc = (cap, competencia)
+        if kc not in competencia_map:
+            competencia_map[kc] = {
+                "capitulo": cap,
+                "competencia": competencia,
+                "cantidad": 0.0,
+                "costo_directo": 0.0,
+            }
+        competencia_map[kc]["cantidad"] += cant_row
+        competencia_map[kc]["costo_directo"] += costo_row
 
         if k not in items_map:
             items_map[k] = {
@@ -11814,6 +11830,7 @@ def exportar_presupuesto_informe(
             "espesor": r.get("espesor"),
             "cant_total": r.get("cant_total"),
             "tipo_entidad": (r.get("tipo_entidad") or "").strip(),
+            "competencia": competencia,
             "pre_interv_por": (r.get("pre_interv_por") or "").strip(),
             "validado_por": (r.get("validado_por") or "").strip(),
             "observacion": " · ".join(obs_parts),
@@ -11836,6 +11853,22 @@ def exportar_presupuesto_informe(
             "vlr_unitario": vlr,
             "cantidad": cant,
             "costo_directo": costo,
+        })
+
+    resumen_competencias = []
+    for kc in sorted(
+        competencia_map.keys(),
+        key=lambda x: (
+            _orden_capitulo_presupuesto(x[0]),
+            (0, x[1].lower()) if x[1] else (1, ""),
+        ),
+    ):
+        cagg = competencia_map[kc]
+        resumen_competencias.append({
+            "capitulo": cagg["capitulo"],
+            "competencia": cagg["competencia"],
+            "cantidad": round(float(cagg["cantidad"]), 6),
+            "costo_directo": round(float(cagg["costo_directo"]), 0),
         })
 
     items_out = []
@@ -11877,6 +11910,7 @@ def exportar_presupuesto_informe(
         "modo_label": modo_label,
         "version_id": vid,
         "resumen": resumen,
+        "resumen_competencias": resumen_competencias,
         "items": items_out,
         "total_registros": len(rows),
     }

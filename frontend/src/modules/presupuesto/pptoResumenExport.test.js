@@ -72,6 +72,27 @@ describe('planFilasResumenConSubtotales', () => {
     )
   })
 
+  it('con competencias inserta sub-filas antes del subtotal sin alterar el total', () => {
+    const comps = [
+      { capitulo: '1', competencia: 'IDU', cantidad: 5, costo_directo: 351 },
+      { capitulo: '2', competencia: 'ETB', cantidad: 5, costo_directo: 800 },
+      { capitulo: '2', competencia: 'IDU', cantidad: 6.5, costo_directo: 800 },
+    ]
+    const plan = planFilasResumenConSubtotales(resumen, comps)
+    assert.deepEqual(
+      plan.map((p) => {
+        if (p.tipo === 'item') return `item:${p.row.item}`
+        if (p.tipo === 'competencia') return `comp:${p.label}`
+        return `sub:${p.capitulo}`
+      }),
+      [
+        'item:1.1', 'item:1.2', 'comp:IDU', 'sub:1',
+        'item:2.1', 'item:2.2', 'comp:ETB', 'comp:IDU', 'sub:2',
+      ],
+    )
+    assert.equal(totalesDesdeSubtotalesCapitulo(plan).costoDirecto, 1951)
+  })
+
   it('subtotales = Σ costo_directo del capítulo; total general = Σ subtotales', () => {
     const plan = planFilasResumenConSubtotales(resumen)
     const { costoDirecto, porCapitulo } = totalesDesdeSubtotalesCapitulo(plan)
