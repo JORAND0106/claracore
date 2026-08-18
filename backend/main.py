@@ -11742,7 +11742,7 @@ def exportar_presupuesto_informe(
         if not (r.get("infraestructura") or "").strip():
             r["infraestructura"] = (info.get("infraestructura") or "") or ""
 
-    resumen_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    resumen_map: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     # (capítulo, competencia) → subtotales para desglose del Resumen Excel
     competencia_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -11754,17 +11754,20 @@ def exportar_presupuesto_informe(
             continue
         k = (cap, it)
         competencia = (r.get("competencia") or "").strip()
-        if k not in resumen_map:
-            resumen_map[k] = {
+        # Grano real del Resumen: (capítulo, ítem, competencia) — no consolidar ESP+IDU.
+        rk = (cap, it, competencia)
+        if rk not in resumen_map:
+            resumen_map[rk] = {
                 "capitulo": cap,
                 "item": it,
+                "competencia": competencia,
                 "descripcion": (r.get("descripcion") or "").strip(),
                 "und": (r.get("und") or "").strip(),
                 "vlr_unitario": float(r.get("vlr_unitario") or 0),
                 "cantidad": 0.0,
                 "costo_directo": 0.0,
             }
-        agg = resumen_map[k]
+        agg = resumen_map[rk]
         if not agg["descripcion"] and r.get("descripcion"):
             agg["descripcion"] = str(r.get("descripcion")).strip()
         if not agg["und"] and r.get("und"):
@@ -11837,17 +11840,22 @@ def exportar_presupuesto_informe(
         })
 
     resumen = []
-    for k in sorted(
+    for rk in sorted(
         resumen_map.keys(),
-        key=lambda x: (_orden_capitulo_presupuesto(x[0]), _orden_item_presupuesto(x[1])),
+        key=lambda x: (
+            _orden_capitulo_presupuesto(x[0]),
+            (0, x[2].lower()) if x[2] else (1, ""),
+            _orden_item_presupuesto(x[1]),
+        ),
     ):
-        agg = resumen_map[k]
+        agg = resumen_map[rk]
         cant = round(float(agg["cantidad"]), 6)
         vlr = round(float(agg["vlr_unitario"]), 2)
         costo = round(float(agg["costo_directo"]), 0)
         resumen.append({
             "capitulo": agg["capitulo"],
             "item": agg["item"],
+            "competencia": agg["competencia"],
             "descripcion": agg["descripcion"],
             "und": agg["und"],
             "vlr_unitario": vlr,

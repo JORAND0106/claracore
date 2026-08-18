@@ -158,7 +158,16 @@ def test_exportar_informe_resumen_competencias_dinamico():
         ("ETB", 3.0, 30),
         ("IDU", 3.0, 25),
     ]
+    # Resumen ya no consolida: una fila por (ítem, competencia)
+    assert sorted(
+        [(r["item"], r["competencia"], r["cantidad"], r["costo_directo"]) for r in out["resumen"]],
+        key=lambda x: (x[0], x[1]),
+    ) == [
+        ("1.1", "ETB", 3.0, 30),
+        ("1.1", "IDU", 2.0, 20),
+        ("1.2", "IDU", 1.0, 5),
+    ]
     regs = out["items"][0]["registros"]
     assert {r["competencia"] for r in regs} == {"IDU", "ETB"}
-    # Subtotal capítulo vía resumen ítems = suma competencias
+    # Subtotal capítulo vía resumen = suma competencias
     assert sum(r["costo_directo"] for r in out["resumen"]) == sum(c["costo_directo"] for c in comps)

@@ -72,22 +72,23 @@ describe('planFilasResumenConSubtotales', () => {
     )
   })
 
-  it('con competencias inserta sub-filas antes del subtotal sin alterar el total', () => {
-    const comps = [
-      { capitulo: '1', competencia: 'IDU', cantidad: 5, costo_directo: 351 },
-      { capitulo: '2', competencia: 'ETB', cantidad: 5, costo_directo: 800 },
-      { capitulo: '2', competencia: 'IDU', cantidad: 6.5, costo_directo: 800 },
+  it('con competencias en las filas de resumen desdobla ítems bajo cada COMPETENCIA', () => {
+    const conComp = [
+      { capitulo: '1', item: '1.1', competencia: 'IDU', vlr_unitario: 100, cantidad: 2, costo_directo: 200 },
+      { capitulo: '1', item: '1.2', competencia: 'IDU', vlr_unitario: 50.4, cantidad: 3, costo_directo: 151 },
+      { capitulo: '2', item: '2.1', competencia: 'ETB', vlr_unitario: 1000.2, cantidad: 1.5, costo_directo: 1500 },
+      { capitulo: '2', item: '2.2', competencia: 'IDU', vlr_unitario: 10, cantidad: 10, costo_directo: 100 },
     ]
-    const plan = planFilasResumenConSubtotales(resumen, comps)
+    const plan = planFilasResumenConSubtotales(conComp)
     assert.deepEqual(
       plan.map((p) => {
-        if (p.tipo === 'item') return `item:${p.row.item}`
+        if (p.tipo === 'item') return `item:${p.row.item}@${p.row.competencia}`
         if (p.tipo === 'competencia') return `comp:${p.label}`
         return `sub:${p.capitulo}`
       }),
       [
-        'item:1.1', 'item:1.2', 'comp:IDU', 'sub:1',
-        'item:2.1', 'item:2.2', 'comp:ETB', 'comp:IDU', 'sub:2',
+        'comp:IDU', 'item:1.1@IDU', 'item:1.2@IDU', 'sub:1',
+        'comp:ETB', 'item:2.1@ETB', 'comp:IDU', 'item:2.2@IDU', 'sub:2',
       ],
     )
     assert.equal(totalesDesdeSubtotalesCapitulo(plan).costoDirecto, 1951)

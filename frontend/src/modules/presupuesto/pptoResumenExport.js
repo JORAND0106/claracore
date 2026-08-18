@@ -3,20 +3,21 @@
  *
  * Congruencia de Costo directo:
  * - Plataforma: Σ costo_directo por registro (ya redondeado por fila).
- * - Backend export (resumen[]): agrupa por (capítulo, ítem) con costo_directo = Σ CD.
- * - Excel debe usar ese costo_directo agregado, NO recalcular ROUND(vlr × Σcant),
- *   porque Σ round(cant_i × vlr_i) ≠ round(round(vlr) × Σ cant_i).
+ * - Backend export (resumen[]): agrupa por (capítulo, ítem, competencia).
+ * - Excel debe usar ese costo_directo agregado, NO recalcular ROUND(vlr × Σcant).
  *
- * Desglose por competencia (opcional):
- * - Backend envía resumen_competencias[] agregados por (capítulo, competencia).
- * - Tras los ítems de cada capítulo se insertan sub-filas COMPETENCIA · … y luego
- *   el SUBTOTAL de capítulo (suma de ítems = suma de competencias).
+ * Desglose por competencia (funcional, no solo etiqueta):
+ * - Si el capítulo tiene ≥2 competencias (o ≥1 nombrada), el plan emite por cada
+ *   competencia: cabecera COMPETENCIA · … y luego solo los ítems de esa competencia
+ *   (cantidades/costos no consolidados entre ESP/IDU). Luego SUBTOTAL de capítulo.
  */
 
 import {
+  compararCompetenciaAsc,
   debeMostrarDesgloseCompetencia,
   etiquetaCompetencia,
   indexCompetenciasPorCapitulo,
+  normalizarCompetenciaKey,
 } from './pptoCompetenciaExport.js'
 
 /**
@@ -41,40 +42,75 @@ export function costoDirectoResumenFilaRecalcLegacy(row) {
 }
 
 /**
- * Agrupa filas de resumen (ya ordenadas por capítulo) e inserta:
- * 1) sub-filas por competencia (si aplica),
- * 2) subtotal de capítulo.
+ * @param {Array<Record<string, unknown>>} itemsCap
+ * @returns {string[]}
+ */
+function competenciasEnItems(itemsCap) {
+  const keys = new Set()
+  for (const row of itemsCap || []) {
+    keys.add(normalizarCompetenciaKey(row?.competencia))
+  }
+  return [...keys].sort(compararCompetenciaAsc)
+}
+
+/**
+ * Agrupa filas de resumen (ordenadas por capítulo) e inserta desglose real por
+ * competencia + subtotal de capítulo.
  *
- * @param {Array<Record<string, unknown>>} resumen
+ * @param {Array<Record<string, unknown>>} resumen  filas con grano (cap, ítem[, competencia])
  * @param {Array<{ capitulo?: unknown, competencia?: unknown, cantidad?: unknown, costo_directo?: unknown }>} [competencias]
  * @returns {Array<
- *   | { tipo: 'item', row: Record<string, unknown> }
+ *   | { tipo: 'item', row: Record<string, unknown>, cantidadAbsoluta: boolean }
  *   | { tipo: 'competencia', capitulo: string, competencia: string, label: string, cantidad: number, costoDirecto: number }
  *   | { tipo: 'subtotal', capitulo: string, items: Array<Record<string, unknown>>, costoDirecto: number }
  * >}
  */
 export function planFilasResumenConSubtotales(resumen, competencias = []) {
   const list = Array.isArray(resumen) ? resumen : []
-  const byCap = indexCompetenciasPorCapitulo(competencias)
+  const byCapRollup = indexCompetenciasPorCapitulo(competencias)
   const out = []
   let capActual = null
   let itemsCap = []
 
   const flush = () => {
     if (capActual == null || !itemsCap.length) return
-    const comps = byCap.get(capActual) || []
-    if (debeMostrarDesgloseCompetencia(comps)) {
-      for (const c of comps) {
+
+    const compsFromItems = competenciasEnItems(itemsCap)
+    const rollup = byCapRollup.get(capActual) || []
+    const desglose = debeMostrarDesgloseCompetencia(
+      compsFromItems.map((c) => ({ competencia: c })),
+    ) || debeMostrarDesgloseCompetencia(rollup)
+
+    if (desglose) {
+      const ordenComps = compsFromItems.length
+        ? compsFromItems
+        : (rollup.map((c) => c.competencia) || [''])
+      for (const compKey of ordenComps) {
+        const itemsComp = itemsCap.filter(
+          (r) => normalizarCompetenciaKey(r?.competencia) === compKey,
+        )
+        if (!itemsComp.length) continue
+        const cant = itemsComp.reduce((s, r) => s + (Number(r?.cantidad) || 0), 0)
+        const cd = itemsComp.reduce((s, r) => s + costoDirectoResumenFila(r), 0)
         out.push({
           tipo: 'competencia',
           capitulo: capActual,
-          competencia: c.competencia,
-          label: etiquetaCompetencia(c.competencia),
-          cantidad: Number(c.cantidad) || 0,
-          costoDirecto: Math.round(Number(c.costoDirecto) || 0),
+          competencia: compKey,
+          label: etiquetaCompetencia(compKey),
+          cantidad: cant,
+          costoDirecto: cd,
         })
+        for (const row of itemsComp) {
+          // Cantidad del ítem ya es solo de esta competencia: no usar fórmula a memoria completa.
+          out.push({ tipo: 'item', row, cantidadAbsoluta: true })
+        }
+      }
+    } else {
+      for (const row of itemsCap) {
+        out.push({ tipo: 'item', row, cantidadAbsoluta: false })
       }
     }
+
     out.push({
       tipo: 'subtotal',
       capitulo: capActual,
@@ -89,7 +125,6 @@ export function planFilasResumenConSubtotales(resumen, competencias = []) {
     if (capActual != null && cap !== capActual) flush()
     capActual = cap
     itemsCap.push(row)
-    out.push({ tipo: 'item', row })
   }
   flush()
   return out
