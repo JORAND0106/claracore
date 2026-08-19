@@ -11496,6 +11496,139 @@ def _presupuesto_export_tipo_por_modo(modo: str) -> str:
     return "Presupuesto de Obra"
 
 
+def _presupuesto_export_fetch_sicoe_aprobados_items(
+    contrato_id: int,
+    fill_keys: List[Tuple[str, str]],
+) -> List[dict]:
+    """Detalle so_registros Aprobado para (capítulo, ítem) a completar en el Excel."""
+    if not fill_keys:
+        return []
+    by_cap: Dict[str, Set[str]] = defaultdict(set)
+    for ck, ik in fill_keys:
+        by_cap[ck].add(ik)
+
+    select_cols = (
+        "id, numero_registro, capitulo, competencia, item_numero, item_descripcion, unidad, "
+        "vlr_unitario, longitud, ancho, espesor, cantidad, cantidad_total, costo_directo, "
+        "observacion, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
+        f"pk_id_id, pk_ids(pk_id, infraestructura), {SICOE_SELECT_NIVELES_ESTADO}"
+    )
+    out: List[dict] = []
+    for ck, item_set in by_cap.items():
+        # Variantes de item_numero (con/sin punto final) como en export dashboard.
+        item_vars: Set[str] = set()
+        for ik in item_set:
+            if not ik:
+                continue
+            item_vars.add(ik)
+            item_vars.add(f"{ik}.")
+        item_list = sorted(item_vars)
+        off = 0
+        while True:
+            def _fetch(o=off, iv=item_list, cap_key=ck):
+                q = (
+                    supabase.table("so_registros")
+                    .select(select_cols)
+                    .eq("contrato_id", int(contrato_id))
+                )
+                # Filtro capítulo por igualdad normalizada vía scan; PostgREST no tiene norm.
+                if iv:
+                    if len(iv) == 1:
+                        q = q.eq("item_numero", iv[0])
+                    else:
+                        q = q.in_("item_numero", iv[:400])
+                return q.order("id").range(o, o + 999).execute().data
+
+            batch = supabase_execute(_fetch) or []
+            for r in batch:
+                if _dash_norm_capitulo_key_py(r.get("capitulo")) != ck:
+                    continue
+                ik = _dash_norm_item_key_py(r.get("item_numero"))
+                if ik not in item_set:
+                    continue
+                if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
+                    continue
+                out.append(r)
+            if len(batch) < 1000:
+                break
+            off += 1000
+    return out
+
+
+def _presupuesto_export_merge_sicoe_obra(
+    contrato_id: int,
+    body: "ExportarPresupuestoInformeBody",
+    ppto_rows: List[dict],
+    current_user,
+) -> List[dict]:
+    """
+    Completa filas de export Obra Ejecutada con ítems solo cobrados en SICOE Obra.
+    Misma prioridad que Dashboard «Ppto vs Cobro por capítulo».
+    No altera el modo Presupuesto de Obra (no llamar en ese modo).
+    """
+    from presupuesto_export_obra_ejecutada import (
+        ORIGEN_SICOE_OBRA,
+        allow_sets_from_export_body,
+        covered_item_keys,
+        fill_item_keys_from_sicoe_agg,
+        filter_sicoe_regs_by_export_body,
+        map_sicoe_registro_a_fila_export,
+    )
+
+    covered = covered_item_keys(
+        ppto_rows,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
+    allow_caps, allow_items = allow_sets_from_export_body(
+        body,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
+    sicoe_by = _dashboard_scan_sicoe_by_item(int(contrato_id)) or {}
+    fill_keys = fill_item_keys_from_sicoe_agg(
+        sicoe_by,
+        covered,
+        allow_caps=allow_caps,
+        allow_items=allow_items,
+    )
+    if not fill_keys:
+        return ppto_rows
+
+    raw = _presupuesto_export_fetch_sicoe_aprobados_items(int(contrato_id), fill_keys)
+    raw = filter_sicoe_regs_by_export_body(
+        raw,
+        body,
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
+    if not raw:
+        return ppto_rows
+
+    raw = _overlay_sicoe_meta_vivo(int(contrato_id), raw)
+    listado_idx = _listado_precios_vu_by_cap_item(int(contrato_id))
+    mapped: List[dict] = []
+    for reg in raw:
+        ck = _dash_norm_capitulo_key_py(reg.get("capitulo"))
+        ik = _dash_norm_item_key_py(reg.get("item_numero"))
+        meta = listado_idx.get((ck, ik)) or {}
+        vu = _dash_listado_vu_resolved(
+            int(contrato_id), ck, ik, full_listado_idx=listado_idx
+        )
+        row = map_sicoe_registro_a_fila_export(reg, listado_meta=meta, vu_override=vu)
+        # Preferir display del listado / fila SICOE ya enriquecida.
+        if meta.get("descripcion"):
+            row["descripcion"] = str(meta.get("descripcion")).strip()
+        if meta.get("unidad"):
+            row["und"] = str(meta.get("unidad")).strip()
+        assert row.get("_origen_export") == ORIGEN_SICOE_OBRA
+        mapped.append(row)
+
+    if not mapped:
+        return ppto_rows
+    return list(ppto_rows or []) + mapped
+
+
 def _presupuesto_fetch_export_rows_crudo(
     contrato_id: int, body: ExportarPresupuestoInformeBody, current_user
 ) -> List[dict]:
@@ -11742,6 +11875,15 @@ def exportar_presupuesto_informe(
         if not (r.get("infraestructura") or "").strip():
             r["infraestructura"] = (info.get("infraestructura") or "") or ""
 
+    # Obra Ejecutada (informe, no versión histórica): completar ítems solo cobrados
+    # en SICOE Obra — misma prioridad ítem-a-ítem que Dashboard Ppto vs Capítulo.
+    if (
+        not vid
+        and not bool(getattr(body, "papelera", False))
+        and tipo_modo == "Obra Ejecutada"
+    ):
+        rows = _presupuesto_export_merge_sicoe_obra(contrato_id, body, rows, current_user)
+
     resumen_map: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     # (capítulo, competencia) → subtotales para desglose del Resumen Excel
@@ -11754,6 +11896,7 @@ def exportar_presupuesto_informe(
             continue
         k = (cap, it)
         competencia = (r.get("competencia") or "").strip()
+        origen = (r.get("_origen_export") or "presupuesto").strip() or "presupuesto"
         # Grano real del Resumen: (capítulo, ítem, competencia) — no consolidar ESP+IDU.
         rk = (cap, it, competencia)
         if rk not in resumen_map:
@@ -11766,6 +11909,7 @@ def exportar_presupuesto_informe(
                 "vlr_unitario": float(r.get("vlr_unitario") or 0),
                 "cantidad": 0.0,
                 "costo_directo": 0.0,
+                "origen": origen,
             }
         agg = resumen_map[rk]
         if not agg["descripcion"] and r.get("descripcion"):
@@ -11800,6 +11944,7 @@ def exportar_presupuesto_informe(
                 "item": it,
                 "descripcion": (r.get("descripcion") or "").strip(),
                 "und": (r.get("und") or "").strip(),
+                "origen": origen,
                 "registros": [],
             }
         im = items_map[k]
@@ -11837,6 +11982,7 @@ def exportar_presupuesto_informe(
             "pre_interv_por": (r.get("pre_interv_por") or "").strip(),
             "validado_por": (r.get("validado_por") or "").strip(),
             "observacion": " · ".join(obs_parts),
+            "origen": origen,
         })
 
     resumen = []
@@ -11861,6 +12007,7 @@ def exportar_presupuesto_informe(
             "vlr_unitario": vlr,
             "cantidad": cant,
             "costo_directo": costo,
+            "origen": agg.get("origen") or "presupuesto",
         })
 
     resumen_competencias = []

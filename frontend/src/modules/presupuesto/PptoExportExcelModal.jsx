@@ -13,7 +13,8 @@ const cc = {
 const EXPORT_DESC = {
   informe: {
     presupuesto_obra: 'Resumen por ítem con cantidades, soporte y costo directo.',
-    obra_ejecutada: 'Resumen según filtros activos de la grilla.',
+    obra_ejecutada:
+      'Resumen y memorias: ítems de Presupuesto más ítems solo cobrados en SICOE Obra (misma lógica del Dashboard Ppto vs Capítulo).',
   },
   crudo: {
     presupuesto_obra: 'Base completa en una sola pestaña (todas las columnas).',

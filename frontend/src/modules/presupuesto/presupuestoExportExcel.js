@@ -1220,8 +1220,9 @@ const COL_ANCHO = DET_HEADERS_BASE.indexOf('Ancho') + 1
 const COL_ESPESOR = DET_HEADERS_BASE.indexOf('Espesor') + 1
 const COL_CANT_TOTAL = DET_HEADERS_BASE.indexOf('Cant. Total') + 1
 
-function headersDetallePorGrupo(colLabel) {
+function headersDetallePorGrupo(colLabel, { idColLabel = 'ID_POL' } = {}) {
   const headers = DET_HEADERS_BASE.slice()
+  headers[0] = idColLabel || 'ID_POL'
   headers[COL_AREA_LONG - 1] = colLabel || 'Área/Long/Nodo'
   return headers
 }
@@ -1266,6 +1267,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   aplicarPiePaginaClaraCore(ws, claraLogoImageId, meta.numero || meta.contrato, sheetName)
 
   const regs = itemInfo.registros || []
+  // Ítems solo cobrados en SICOE Obra: columna 1 = «Registro» (numero_registro).
+  const idColLabel = itemInfo.origen === 'sicoe_obra' ? 'Registro' : 'ID_POL'
   const enc = escribirEncabezadoCompacto(
     ws,
     TOTAL_COLS_DET,
@@ -1333,7 +1336,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       const filaGrupo = escribirEncabezadoGrupoEntidad(ws, grupo.key, TOTAL_COLS_DET)
       if (filaGrupo != null) filasEncabezadoGrupo.push(filaGrupo)
 
-      const headers = headersDetallePorGrupo(grupo.colLabel)
+      const headers = headersDetallePorGrupo(grupo.colLabel, { idColLabel })
       const subgrupos = subagruparRegistrosPorGrupoGrafico(grupo.registros, graficosBloque, grupo.key)
 
       subgrupos.forEach((sub, sIdx) => {
