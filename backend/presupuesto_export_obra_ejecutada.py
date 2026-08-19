@@ -12,6 +12,8 @@ Mapeo de campos (significado, no nombre literal):
   - Área/Long/Nodo (ppto.area_long_nod) ← so_registros.longitud
   - Cant. Total (ppto.cant_total) ← so_registros.cantidad_total  (NO «cantidad»)
   - Identificador de fila (ppto.id_pol) ← so_registros.numero_registro («Registro»)
+  - Nodos (ppto.no_inicio/no_final) ← so_registros.nodo_ini/nodo_fin
+  - Abscisas ← so_registros.abs_inicio/abs_final
   - Tipo de entidad → vacío (sin subtablas Área/Longitud/Unidad)
   - V.U. / costo → listado de precios (igual que dashboard), fallback vlr_unitario SICOE
 """
@@ -25,6 +27,16 @@ ItemKey = Tuple[str, str]
 
 ORIGEN_SICOE_OBRA = "sicoe_obra"
 ORIGEN_PRESUPUESTO = "presupuesto"
+
+# Columnas reales de so_registros usadas en el fill del Excel Obra Ejecutada.
+# Nodos = nodo_ini/nodo_fin (NO no_inicio/no_final, que son de presupuesto).
+# Abscisas = abs_inicio/abs_final. Cantidad de Excel = cantidad_total.
+SO_REGISTROS_EXPORT_SELECT_BASE = (
+    "id, numero_registro, capitulo, competencia, item_numero, item_descripcion, unidad, "
+    "vlr_unitario, longitud, ancho, espesor, cantidad, cantidad_total, costo_directo, "
+    "observacion, tramo, calzada, abs_inicio, abs_final, nodo_ini, nodo_fin, "
+    "pk_id_id, pk_ids(pk_id, infraestructura)"
+)
 
 
 def covered_item_keys(
@@ -153,8 +165,9 @@ def map_sicoe_registro_a_fila_export(
         "calzada": (reg.get("calzada") or "").strip(),
         "abs_inicio": reg.get("abs_inicio"),
         "abs_final": reg.get("abs_final"),
-        "no_inicio": reg.get("no_inicio") or reg.get("nodo_ini"),
-        "no_final": reg.get("no_final") or reg.get("nodo_fin"),
+        # Nodos SICOE: nodo_ini/nodo_fin → campos no_inicio/no_final del Excel ppto.
+        "no_inicio": reg.get("nodo_ini"),
+        "no_final": reg.get("nodo_fin"),
         # Área/Long/Nodo ← Longitud SICOE
         "area_long_nod": reg.get("longitud"),
         "ancho": reg.get("ancho"),

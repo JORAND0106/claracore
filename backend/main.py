@@ -11503,16 +11503,13 @@ def _presupuesto_export_fetch_sicoe_aprobados_items(
     """Detalle so_registros Aprobado para (capítulo, ítem) a completar en el Excel."""
     if not fill_keys:
         return []
+    from presupuesto_export_obra_ejecutada import SO_REGISTROS_EXPORT_SELECT_BASE
+
     by_cap: Dict[str, Set[str]] = defaultdict(set)
     for ck, ik in fill_keys:
         by_cap[ck].add(ik)
 
-    select_cols = (
-        "id, numero_registro, capitulo, competencia, item_numero, item_descripcion, unidad, "
-        "vlr_unitario, longitud, ancho, espesor, cantidad, cantidad_total, costo_directo, "
-        "observacion, tramo, calzada, abs_inicio, abs_final, no_inicio, no_final, "
-        f"pk_id_id, pk_ids(pk_id, infraestructura), {SICOE_SELECT_NIVELES_ESTADO}"
-    )
+    select_cols = f"{SO_REGISTROS_EXPORT_SELECT_BASE}, {SICOE_SELECT_NIVELES_ESTADO}"
     out: List[dict] = []
     for ck, item_set in by_cap.items():
         # Variantes de item_numero (con/sin punto final) como en export dashboard.

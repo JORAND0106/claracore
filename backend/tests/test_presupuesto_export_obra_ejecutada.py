@@ -59,6 +59,8 @@ def test_map_sicoe_usa_cantidad_total_y_longitud_no_cantidad():
         "tramo": "T1",
         "abs_inicio": "0+000",
         "abs_final": "0+100",
+        "nodo_ini": "N1",
+        "nodo_fin": "N2",
         "observacion": "cobro directo",
         "pk_ids": {"pk_id": "PK-9", "infraestructura": "Calle 1"},
     }
@@ -70,9 +72,41 @@ def test_map_sicoe_usa_cantidad_total_y_longitud_no_cantidad():
     assert row["infraestructura"] == "Calle 1"
     assert row["tipo_entidad"] == ""
     assert row["competencia"] == "IDU"
+    assert row["no_inicio"] == "N1"
+    assert row["no_final"] == "N2"
+    assert row["abs_inicio"] == "0+000"
     assert row["_origen_export"] == ORIGEN_SICOE_OBRA
     assert row["costo_directo"] == 115200.0  # round(115.2 * 1000)
     assert row["vlr_unitario"] == 1000.0
+
+
+def test_so_registros_select_usa_columnas_reales_no_ppto():
+    """Evita repetir el error PostgREST: no_inicio no existe en so_registros."""
+    from presupuesto_export_obra_ejecutada import SO_REGISTROS_EXPORT_SELECT_BASE
+
+    cols = SO_REGISTROS_EXPORT_SELECT_BASE
+    # Fantasmas de presupuesto / tipográficos.
+    assert "no_inicio" not in cols
+    assert "no_final" not in cols
+    assert "id_pol" not in cols
+    assert "area_long_nod" not in cols
+    assert "cant_total" not in cols
+    # Columnas reales de so_registros usadas en el mapeo.
+    for required in (
+        "abs_inicio",
+        "abs_final",
+        "nodo_ini",
+        "nodo_fin",
+        "longitud",
+        "cantidad_total",
+        "numero_registro",
+        "tramo",
+        "calzada",
+        "competencia",
+        "ancho",
+        "espesor",
+    ):
+        assert required in cols, required
 
 
 def test_export_presupuesto_obra_no_llama_merge_sicoe():
