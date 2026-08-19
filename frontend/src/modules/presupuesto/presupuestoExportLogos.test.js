@@ -24,6 +24,8 @@ import {
   LOGO_LEFT_COL_CHARS,
   RESUMEN_COL_B_MAX_CHARS,
   RESUMEN_COL_D_CHARS,
+  RESUMEN_COL_WIDTHS,
+  resolverAnchosPlantillaResumen,
   RESUMEN_HEADER_TITLE_START,
   RESUMEN_HEADER_TITLE_END,
   RESUMEN_HEADER_ENTIDAD_START,
@@ -120,6 +122,36 @@ describe('planLayoutResumenEncabezado', () => {
     assert.equal(layout.entidadEnd, RESUMEN_HEADER_ENTIDAD_END)
     assert.equal(RESUMEN_COL_B_MAX_CHARS, 15)
     assert.equal(RESUMEN_COL_D_CHARS, 15)
+  })
+})
+
+describe('resolverAnchosPlantillaResumen (regla de plataforma)', () => {
+  it('expone plantilla fija de 7 columnas con D=15', () => {
+    assert.equal(RESUMEN_COL_WIDTHS.length, 7)
+    assert.equal(RESUMEN_COL_WIDTHS[3], RESUMEN_COL_D_CHARS)
+    assert.deepEqual(RESUMEN_COL_WIDTHS, [30, 14, 50, 15, 16, 14, 18])
+  })
+
+  it('es idéntico para dos contratos con distinto contenido (mismo layout de logos)', () => {
+    // Simula contrato A (textos cortos) vs B (textos muy largos): el resolver
+    // no recibe contenido; solo colCount + spans de logos.
+    const opts = { logoLeftSpan: 2, logoRightSpan: 2 }
+    const contratoA = resolverAnchosPlantillaResumen(7, opts)
+    const contratoB = resolverAnchosPlantillaResumen(7, opts)
+    assert.deepEqual(contratoA, contratoB)
+    assert.deepEqual(contratoA, [30, 14, 50, 15, 16, 14, 18])
+  })
+
+  it('no varía si se omite layout de logos (sigue plantilla fija)', () => {
+    const sinLogos = resolverAnchosPlantillaResumen(7, { logoLeftSpan: 0, logoRightSpan: 0 })
+    assert.deepEqual(sinLogos, [30, 14, 50, 15, 16, 14, 18])
+  })
+
+  it('con leftSpan≥4 solo aplica mínimos de layout, sin leer celdas', () => {
+    const w = resolverAnchosPlantillaResumen(7, { logoLeftSpan: 4, logoRightSpan: 0 })
+    assert.equal(w[0], 30)
+    assert.equal(w[3], 15)
+    assert.equal(w[4], 28) // mínimo layout logos 4-col
   })
 })
 
