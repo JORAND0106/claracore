@@ -18,6 +18,7 @@ import {
   RESUMEN_HEADER_LEFT_START,
   RESUMEN_HEADER_TITLE_END,
   RESUMEN_HEADER_TITLE_START,
+  resolverAnchosPlantillaResumen,
   anchoNecesarioParLogosPx,
   dimensionesImagenBuffer,
   excelColWidthToPx,
@@ -980,22 +981,10 @@ function estiloFilaDatos(row, colCount, rowNum, { wrapAll = false } = {}) {
   })
 }
 
-function ajustarAnchos(ws, desdeFila, colCount) {
-  for (let c = 1; c <= colCount; c += 1) {
-    let max = 12
-    ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber < desdeFila) return
-      const v = row.getCell(c).value
-      let s = ''
-      if (v && typeof v === 'object' && v.formula) s = '000000000'
-      else if (v != null) s = String(v)
-      if (s.length > max) max = s.length
-    })
-    ws.getColumn(c).width = Math.min(Math.max(max * 1.05 + 2, 12), 44)
-  }
-}
-
-/** Memorias de ítem (13 cols): A–L = 11, M = 45. A–D mín. 14 para logos. */
+/**
+ * Memorias de ítem (13 cols): anchos fijos de plantilla (plataforma).
+ * A–L = 11, M = 45; A–D mín. 14 si hay logos. No dependen del contrato ni del contenido.
+ */
 function ajustarAnchosMemoriaItem(ws, colCount = ITEM_HEADER_COLS, { logoLeftSpan = 0 } = {}) {
   for (let c = 1; c <= colCount; c += 1) {
     ws.getColumn(c).width = c < colCount ? 11 : 45
@@ -1018,28 +1007,15 @@ function aplicarWrapTextRango(ws, fromRow, toRow, colCount) {
   }
 }
 
-/** Resumen: anchos base; con logos C+I reserva 4 cols izq. y entidad a la derecha. */
-function ajustarAnchosResumen(ws, desdeFila, colCount, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
-  ajustarAnchos(ws, desdeFila, colCount)
-  if (logoLeftSpan >= 4) {
-    for (let c = 1; c <= 4; c += 1) {
-      ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 14)
-    }
-    if (colCount >= 5) ws.getColumn(5).width = Math.max(ws.getColumn(5).width || 0, 28)
-  } else if (logoLeftSpan >= 2) {
-    ws.getColumn(1).width = Math.max(ws.getColumn(1).width || 0, 16)
-    if (colCount >= 2) ws.getColumn(2).width = Math.max(ws.getColumn(2).width || 0, 14)
-    if (colCount >= 3) ws.getColumn(3).width = Math.max(ws.getColumn(3).width || 0, 40)
-  } else {
-    ws.getColumn(1).width = 30
-    if (colCount >= 2) ws.getColumn(2).width = 10
-    if (colCount >= 3) ws.getColumn(3).width = 50
+/**
+ * Resumen: anchos fijos de plantilla (plataforma), no por contrato ni por longitud de texto.
+ * Antes se llamaba a un auto-ajuste por contenido que hacía variar los anchos entre contratos.
+ */
+function ajustarAnchosResumen(ws, _desdeFila, colCount, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
+  const widths = resolverAnchosPlantillaResumen(colCount, { logoLeftSpan, logoRightSpan })
+  for (let c = 1; c <= widths.length; c += 1) {
+    ws.getColumn(c).width = widths[c - 1]
   }
-  for (let c = colCount - logoRightSpan + 1; c <= colCount; c += 1) {
-    if (c >= 1) ws.getColumn(c).width = Math.max(ws.getColumn(c).width || 0, 12)
-  }
-  // Columna D (Unidad) fija: no debe variar por subtotales ni auto-ajuste de contenido.
-  if (colCount >= 4) ws.getColumn(4).width = RESUMEN_COL_D_CHARS
 }
 
 function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
@@ -1625,13 +1601,13 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
   escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
-  // Anchos de datos; luego B≤15 y A suficiente para el par C+I en A1:B1.
+  // Anchos fijos de plantilla (plataforma); luego B≤15 y A suficiente para el par C+I en A1:B1.
   ajustarAnchosResumen(wsRes, tableHeaderRow, totalColsResumen, {
     logoLeftSpan: logoLeftSpan || 0,
     logoRightSpan: logoRightSpan || 0,
   })
   aplicarAnchosBloqueLogosResumen(wsRes, logoContratista, logoInterventoria)
-  // Reafirmar D=15 por si algún ajuste de logos/contenido lo movió.
+  // Reafirmar D=15 por si el ajuste de logos expandió A/B.
   wsRes.getColumn(4).width = RESUMEN_COL_D_CHARS
   insertarLogosEncabezadoResumen(wsRes, {
     logoC: logoContratista,

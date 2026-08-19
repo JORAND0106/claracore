@@ -38,6 +38,45 @@ export const RESUMEN_HEADER_ENTIDAD_END = 7
 export const RESUMEN_COL_B_MAX_CHARS = 15
 /** Ancho fijo de la columna D (Unidad) en la pestaña Resumen. */
 export const RESUMEN_COL_D_CHARS = 15
+/**
+ * Anchos fijos de plantilla (chars Excel) para la pestaña Resumen (7 cols).
+ * Regla de plataforma: NO son configuración por contrato ni dependen del
+ * contenido de celdas. Orden: Capítulo, Ítem, Descripción, Unidad, V.U., Cantidad, Costo.
+ */
+export const RESUMEN_COL_WIDTHS = Object.freeze([30, 14, 50, RESUMEN_COL_D_CHARS, 16, 14, 18])
+
+/**
+ * Resuelve anchos definitivos de Resumen (plantilla + mínimos de layout de logos).
+ * Independiente del texto/contenido del contrato.
+ * @param {number} colCount
+ * @param {{ logoLeftSpan?: number, logoRightSpan?: number }} [opts]
+ * @returns {number[]}
+ */
+export function resolverAnchosPlantillaResumen(colCount, { logoLeftSpan = 0, logoRightSpan = 0 } = {}) {
+  const n = Math.max(0, Number(colCount) || 0)
+  const widths = []
+  for (let c = 1; c <= n; c += 1) {
+    widths.push(RESUMEN_COL_WIDTHS[c - 1] ?? 14)
+  }
+  // Mínimos de layout de logos (misma regla de plataforma; no dependen del texto).
+  if (logoLeftSpan >= 4) {
+    for (let c = 1; c <= Math.min(4, n); c += 1) {
+      widths[c - 1] = Math.max(widths[c - 1], 14)
+    }
+    if (n >= 5) widths[4] = Math.max(widths[4], 28)
+  } else if (logoLeftSpan >= 2) {
+    if (n >= 1) widths[0] = Math.max(widths[0], 16)
+    if (n >= 2) widths[1] = Math.max(widths[1], 14)
+    if (n >= 3) widths[2] = Math.max(widths[2], 40)
+  }
+  const right = Math.min(logoRightSpan || 0, n)
+  for (let c = n - right + 1; c <= n; c += 1) {
+    if (c >= 1) widths[c - 1] = Math.max(widths[c - 1], 12)
+  }
+  if (n >= 4) widths[3] = RESUMEN_COL_D_CHARS
+  if (n >= 2) widths[1] = Math.min(widths[1], RESUMEN_COL_B_MAX_CHARS)
+  return widths
+}
 
 /**
  * Encabezado fijo memorias de ítem (13 cols A–M tras eliminar ex-columna M):
