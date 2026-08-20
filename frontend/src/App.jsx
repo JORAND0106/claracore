@@ -83,6 +83,15 @@ import {
 } from './modules/sicoe-obra/sicoeLocalizacionHelpers'
 import { sicoeDatosMapaPortadaPk } from './modules/sicoe-obra/sicoeMapaPortadaPk'
 import {
+  applySicoeBasemapTerrain,
+  createSicoeBasemapStyleControl,
+  guardarVistaBasemap,
+  leerVistaBasemapGuardada,
+  normalizarVistaBasemap,
+  sicoeBasemapLabel,
+  sicoeBasemapStyleUrl,
+} from './modules/sicoe-obra/sicoeMapaBasemap'
+import {
   listaGraficosRegistro,
   parseGraficosHistorial,
   agregarEntradaGraficoHistorial,
@@ -1182,7 +1191,8 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
 
 
 // ─── MAPA PORTADA (localización en consulta/edición de reporte) ───────────────
-// Estilo outdoors: relieve y curvas de nivel; dibuja polígono PK + abscisado del plano.
+// Basemap conmutable: relieve / satélite / plano topográfico (Mapbox).
+// El punto y las coordenadas no dependen de la vista activa.
 function MapaPortada({
   lat, lng, modoEdicion, onCoordsChange, t,
   fallbackBounds = null, pkMapHint = null,
@@ -1193,8 +1203,14 @@ function MapaPortada({
   const markerRef    = useRef(null)
   const absMarkersRef = useRef([])
   const modoRef      = useRef(modoEdicion)
+  const vistaRef     = useRef(leerVistaBasemapGuardada())
+  const repintarRef  = useRef(() => {})
+  const latLngRef    = useRef({ lat, lng })
+  const [vistaBasemap, setVistaBasemap] = useState(() => leerVistaBasemapGuardada())
   const [mapError, setMapError] = useState(null)
   useEffect(() => { modoRef.current = modoEdicion }, [modoEdicion])
+  useEffect(() => { vistaRef.current = vistaBasemap }, [vistaBasemap])
+  useEffect(() => { latLngRef.current = { lat, lng } }, [lat, lng])
 
   const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
   const planoFc = _normalizeContratoPlanoGeojson(planoGeojson)
@@ -1204,10 +1220,12 @@ function MapaPortada({
     if (!containerRef.current) return
     const cLat = hasCoords ? parseFloat(lat) : 4.71
     const cLng = hasCoords ? parseFloat(lng) : -74.07
+    const initialVista = vistaRef.current
     const { map, error } = crearMapboxMapSeguro(containerRef.current, {
-      style: 'mapbox://styles/mapbox/outdoors-v12',
+      style: sicoeBasemapStyleUrl(initialVista),
       center: [cLng, cLat],
       zoom: hasCoords ? 15 : 11,
+      pitch: initialVista === 'relieve' ? 50 : 0,
     })
     if (error || !map) {
       setMapError(error || 'Mapa no disponible')
@@ -1215,8 +1233,25 @@ function MapaPortada({
     }
     setMapError(null)
     const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
+    map.__sicoeBasemapUrl = sicoeBasemapStyleUrl(initialVista)
+    map.__sicoeBasemapMode = initialVista
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.addControl(
+      createSicoeBasemapStyleControl({
+        getMode: () => vistaRef.current,
+        t,
+        onSelect: (v) => {
+          const next = normalizarVistaBasemap(v)
+          setVistaBasemap(next)
+          guardarVistaBasemap(next)
+        },
+      }),
+      'top-right',
+    )
     mapRef.current = map
+    const onLoadTerrain = () => applySicoeBasemapTerrain(map, vistaRef.current)
+    if (map.isStyleLoaded()) onLoadTerrain()
+    else map.once('load', onLoadTerrain)
     if (hasCoords) {
       markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
         .setLngLat([cLng, cLat]).addTo(map)
@@ -1243,6 +1278,52 @@ function MapaPortada({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- mapa se crea una sola vez
   }, [])
+
+  // Cambio de vista: mismo estilo → solo DEM; otro estilo → setStyle y repintar capas (marcador HTML se conserva).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const mode = normalizarVistaBasemap(vistaBasemap)
+    const url = sicoeBasemapStyleUrl(mode)
+    guardarVistaBasemap(mode)
+    const btn = map.getContainer()?.querySelector?.('[data-sicoe-basemap-btn]')
+    if (btn) btn.textContent = sicoeBasemapLabel(mode)
+    map.__sicoeBasemapMode = mode
+    if (map.__sicoeBasemapUrl === url) {
+      applySicoeBasemapTerrain(map, mode)
+      return
+    }
+    const center = map.getCenter()
+    const zoom = map.getZoom()
+    const bearing = map.getBearing()
+    map.__sicoeBasemapUrl = url
+    map.setStyle(url)
+    map.once('style.load', () => {
+      try {
+        map.jumpTo({
+          center,
+          zoom,
+          bearing,
+          pitch: mode === 'relieve' ? 50 : 0,
+        })
+      } catch { /* ignore */ }
+      applySicoeBasemapTerrain(map, mode)
+      try { repintarRef.current?.() } catch { /* ignore */ }
+      const { lat: laRaw, lng: loRaw } = latLngRef.current || {}
+      const la = parseFloat(laRaw)
+      const lo = parseFloat(loRaw)
+      if (!Number.isNaN(la) && !Number.isNaN(lo)) {
+        if (markerRef.current) {
+          try { markerRef.current.setLngLat([lo, la]) } catch { /* ignore */ }
+        } else {
+          try {
+            markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
+              .setLngLat([lo, la]).addTo(map)
+          } catch { /* ignore */ }
+        }
+      }
+    })
+  }, [vistaBasemap])
 
   useEffect(() => {
     if (!mapRef.current) return
@@ -1372,6 +1453,7 @@ function MapaPortada({
       try { map.resize() } catch { /* ignore */ }
     }
 
+    repintarRef.current = pintar
     if (map.isStyleLoaded()) pintar()
     else map.once('load', pintar)
   }, [planoGeojson, extremosAbs, fallbackBounds, lat, lng])
@@ -1441,14 +1523,20 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
   const mapRef = useRef(null)
   const markersRef = useRef([])
   const planoLayerReadyRef = useRef(false)
+  const vistaRef = useRef(leerVistaBasemapGuardada())
+  const repintarRef = useRef(() => {})
+  const [vistaBasemap, setVistaBasemap] = useState(() => leerVistaBasemapGuardada())
   const [mapError, setMapError] = useState(null)
+  useEffect(() => { vistaRef.current = vistaBasemap }, [vistaBasemap])
 
   useEffect(() => {
     if (!containerRef.current) return
+    const initialVista = vistaRef.current
     const { map, error } = crearMapboxMapSeguro(containerRef.current, {
-      style: 'mapbox://styles/mapbox/outdoors-v12',
+      style: sicoeBasemapStyleUrl(initialVista),
       center: [-74.07, 4.71],
       zoom: 11,
+      pitch: initialVista === 'relieve' ? 50 : 0,
     })
     if (error || !map) {
       setMapError(error || 'Mapa no disponible')
@@ -1456,9 +1544,26 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
     }
     setMapError(null)
     const unregAttrib = installMapboxAttributionLinksOpenNewTab(map)
+    map.__sicoeBasemapUrl = sicoeBasemapStyleUrl(initialVista)
+    map.__sicoeBasemapMode = initialVista
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.addControl(
+      createSicoeBasemapStyleControl({
+        getMode: () => vistaRef.current,
+        t,
+        onSelect: (v) => {
+          const next = normalizarVistaBasemap(v)
+          setVistaBasemap(next)
+          guardarVistaBasemap(next)
+        },
+      }),
+      'top-right',
+    )
     mapRef.current = map
     planoLayerReadyRef.current = false
+    const onLoadTerrain = () => applySicoeBasemapTerrain(map, vistaRef.current)
+    if (map.isStyleLoaded()) onLoadTerrain()
+    else map.once('load', onLoadTerrain)
     return () => {
       try { unregAttrib() } catch { /* ignore */ }
       markersRef.current.forEach((m) => { try { m.remove() } catch { /* ignore */ } })
@@ -1467,7 +1572,42 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
       mapRef.current = null
       planoLayerReadyRef.current = false
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mapa se crea una sola vez
   }, [])
+
+  // Cambio de vista: mismo estilo → solo DEM; otro estilo → setStyle y repintar capas/marcadores.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const mode = normalizarVistaBasemap(vistaBasemap)
+    const url = sicoeBasemapStyleUrl(mode)
+    guardarVistaBasemap(mode)
+    const btn = map.getContainer()?.querySelector?.('[data-sicoe-basemap-btn]')
+    if (btn) btn.textContent = sicoeBasemapLabel(mode)
+    map.__sicoeBasemapMode = mode
+    if (map.__sicoeBasemapUrl === url) {
+      applySicoeBasemapTerrain(map, mode)
+      return
+    }
+    const center = map.getCenter()
+    const zoom = map.getZoom()
+    const bearing = map.getBearing()
+    map.__sicoeBasemapUrl = url
+    map.setStyle(url)
+    map.once('style.load', () => {
+      try {
+        map.jumpTo({
+          center,
+          zoom,
+          bearing,
+          pitch: mode === 'relieve' ? 50 : 0,
+        })
+      } catch { /* ignore */ }
+      applySicoeBasemapTerrain(map, mode)
+      planoLayerReadyRef.current = false
+      try { repintarRef.current?.() } catch { /* ignore */ }
+    })
+  }, [vistaBasemap])
 
   useEffect(() => {
     const map = mapRef.current
@@ -1548,6 +1688,7 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
       }
       try { map.resize() } catch { /* ignore */ }
     }
+    repintarRef.current = pintar
     if (map.isStyleLoaded()) pintar()
     else map.once('load', pintar)
   }, [puntos, fallbackBounds, planoGeojson])
