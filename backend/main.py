@@ -30977,7 +30977,7 @@ def _dash_listado_vu_resolved(
 
 def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """(capítulo_norm, ítem_norm) → fila listado_precios (V.U. y metadatos)."""
-    cached = _dash_agg_cache_get("listado_precios_vu_idx_v2", contrato_id)
+    cached = _dash_agg_cache_get("listado_precios_vu_idx_v3", contrato_id)
     if cached is not None:
         return cached
     idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -30987,7 +30987,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         def _b(o=off):
             return (
                 supabase.table("listado_precios")
-                .select("capitulo, item_numero, precio_unitario, unidad, descripcion")
+                .select("capitulo, item_numero, precio_unitario, unidad, descripcion, competencia")
                 .eq("contrato_id", contrato_id)
                 .range(o, o + 999)
                 .execute()
@@ -31003,19 +31003,26 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
             k = (ck, ik)
             if k not in idx:
                 idx[k] = r
+            else:
+                # Preferir ficha con competencia no vacía si la primera llegada venía vacía.
+                prev = idx[k]
+                if not (prev.get("competencia") or "").strip() and (r.get("competencia") or "").strip():
+                    idx[k] = {**prev, "competencia": r.get("competencia")}
         if len(batch) < 1000:
             break
         off += 1000
-    _dash_agg_cache_set("listado_precios_vu_idx_v2", contrato_id, idx)
+    _dash_agg_cache_set("listado_precios_vu_idx_v3", contrato_id, idx)
     return idx
 
 
 def _dash_agg_cache_invalidate_listado(contrato_id: int) -> None:
     """Invalida índices de listado tras editar ficha (ítem/desc/unidad/V.U.)."""
-    key = f"listado_precios_vu_idx_v2:{int(contrato_id)}"
+    key = f"listado_precios_vu_idx_v3:{int(contrato_id)}"
+    key_legacy = f"listado_precios_vu_idx_v2:{int(contrato_id)}"
     key2 = f"listado_precios_tipo_idx:{int(contrato_id)}"
     with _DASH_AGG_CACHE_LOCK:
         _DASH_AGG_CACHE.pop(key, None)
+        _DASH_AGG_CACHE.pop(key_legacy, None)
         _DASH_AGG_CACHE.pop(key2, None)
 
 

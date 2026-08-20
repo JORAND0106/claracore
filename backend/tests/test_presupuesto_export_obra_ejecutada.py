@@ -80,6 +80,51 @@ def test_map_sicoe_usa_cantidad_total_y_longitud_no_cantidad():
     assert row["vlr_unitario"] == 1000.0
 
 
+def test_competencia_desde_so_registros_columna_competencia():
+    """Nombre real en so_registros: competencia (texto)."""
+    from presupuesto_export_obra_ejecutada import competencia_desde_sicoe_reg
+
+    assert competencia_desde_sicoe_reg({"competencia": "  IDU  "}) == "IDU"
+    assert competencia_desde_sicoe_reg({"competencia": ""}) == ""
+    assert competencia_desde_sicoe_reg({}) == ""
+
+
+def test_competencia_fallback_listado_cuando_so_registros_vacia():
+    """Si la fila cobrada no trae competencia, usar listado_precios.competencia."""
+    from presupuesto_export_obra_ejecutada import competencia_desde_sicoe_reg
+
+    assert (
+        competencia_desde_sicoe_reg(
+            {"competencia": None, "item_numero": "1.9"},
+            listado_meta={"competencia": "ETB", "precio_unitario": 10},
+        )
+        == "ETB"
+    )
+    # so_registros prima sobre listado
+    assert (
+        competencia_desde_sicoe_reg(
+            {"competencia": "IDU"},
+            listado_meta={"competencia": "ETB"},
+        )
+        == "IDU"
+    )
+
+
+def test_map_sicoe_competencia_desde_listado_si_falta_en_registro():
+    row = map_sicoe_registro_a_fila_export(
+        {
+            "id": 1,
+            "numero_registro": 3,
+            "capitulo": "1. CAP",
+            "item_numero": "1.9",
+            "cantidad_total": 2,
+            "competencia": "",
+        },
+        listado_meta={"competencia": "Codensa", "precio_unitario": 50, "descripcion": "X", "unidad": "M"},
+    )
+    assert row["competencia"] == "Codensa"
+
+
 def test_so_registros_select_usa_columnas_reales_no_ppto():
     """Evita repetir el error PostgREST: no_inicio no existe en so_registros."""
     from presupuesto_export_obra_ejecutada import SO_REGISTROS_EXPORT_SELECT_BASE
