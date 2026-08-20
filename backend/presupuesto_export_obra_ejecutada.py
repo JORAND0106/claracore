@@ -14,6 +14,7 @@ Mapeo de campos (significado, no nombre literal):
   - Identificador de fila (ppto.id_pol) ← so_registros.numero_registro («Registro»)
   - Nodos (ppto.no_inicio/no_final) ← so_registros.nodo_ini/nodo_fin
   - Abscisas ← so_registros.abs_inicio/abs_final
+  - Competencia ← so_registros.competencia (texto); si vacía, listado_precios.competencia
   - Tipo de entidad → vacío (sin subtablas Área/Longitud/Unidad)
   - V.U. / costo → listado de precios (igual que dashboard), fallback vlr_unitario SICOE
 """
@@ -108,6 +109,30 @@ def _infra_from_sicoe(reg: dict) -> str:
     return (reg.get("infraestructura") or "").strip()
 
 
+def competencia_desde_sicoe_reg(
+    reg: dict,
+    listado_meta: Optional[dict] = None,
+) -> str:
+    """
+    Competencia para export Excel.
+
+    Columna real en so_registros: ``competencia`` (texto; misma que RegistroCreate /
+    asignar-item / UI). Si viene vacía en la fila cobrada, se completa desde la
+    ficha de listado_precios (también ``competencia``) — origen habitual del valor
+    al asignar el ítem.
+    """
+    if not isinstance(reg, dict):
+        reg = {}
+    for key in ("competencia",):
+        v = reg.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    meta = listado_meta if isinstance(listado_meta, dict) else {}
+    v = meta.get("competencia")
+    if v is not None and str(v).strip():
+        return str(v).strip()
+    return ""
+
 def map_sicoe_registro_a_fila_export(
     reg: dict,
     *,
@@ -174,7 +199,7 @@ def map_sicoe_registro_a_fila_export(
         "espesor": reg.get("espesor"),
         # Sin tipo de entidad → residual en memorias (sin subtablas A/L/U).
         "tipo_entidad": "",
-        "competencia": (reg.get("competencia") or "").strip(),
+        "competencia": competencia_desde_sicoe_reg(reg, meta),
         "revisado": "Aprobado",
         "pre_interv_estado": None,
         "pre_interv_por": "",
