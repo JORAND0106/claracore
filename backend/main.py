@@ -7535,6 +7535,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
     {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
     {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
+    {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
 )
 
 

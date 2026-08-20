@@ -880,3 +880,330 @@ def route_firmar_acta(
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+# ── Bitácora de Obra ──────────────────────────────────────────────────────────
+
+from bitacora_permissions import require_permiso_bitacora  # noqa: E402
+from bitacora_service import (  # noqa: E402
+    adjuntar_imagen_entrada,
+    cerrar_diarios_vencidos,
+    cerrar_reporte_diario,
+    crear_reporte_diario,
+    crear_reporte_evento,
+    eliminar_entrada,
+    get_diario_por_fecha,
+    get_entrada,
+    list_entradas,
+    list_equipos,
+    list_galeria,
+    revertir_cierre_diario,
+    update_entrada,
+    upsert_equipo,
+)
+
+
+class BitacoraDiarioBody(BaseModel):
+    fecha: Optional[str] = None
+    hora_inicio_labores: Optional[str] = None
+    clima_codigo: Optional[int] = None
+    clima_temp_c: Optional[float] = None
+    clima_descripcion: Optional[str] = None
+    clima_editado_manual: Optional[bool] = False
+    personal: Optional[List[Dict[str, Any]]] = None
+    equipos_uso: Optional[List[Dict[str, Any]]] = None
+    cuerpo_html: Optional[str] = None
+
+
+class BitacoraEventoBody(BaseModel):
+    fecha: Optional[str] = None
+    evento_tipo: str = Field(..., min_length=1)
+    evento_detalle: Optional[Dict[str, Any]] = None
+    cuerpo_html: Optional[str] = None
+    imagenes: Optional[List[Dict[str, Any]]] = None
+
+
+class BitacoraUpdateBody(BaseModel):
+    hora_inicio_labores: Optional[str] = None
+    clima_codigo: Optional[int] = None
+    clima_temp_c: Optional[float] = None
+    clima_descripcion: Optional[str] = None
+    clima_editado_manual: Optional[bool] = None
+    personal: Optional[List[Dict[str, Any]]] = None
+    equipos_uso: Optional[List[Dict[str, Any]]] = None
+    cuerpo_html: Optional[str] = None
+    evento_tipo: Optional[str] = None
+    evento_detalle: Optional[Dict[str, Any]] = None
+    imagenes: Optional[List[Dict[str, Any]]] = None
+
+
+class BitacoraEquipoBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
+    tipo: Optional[str] = "equipo"
+
+
+class BitacoraImagenBody(BaseModel):
+    nombre: Optional[str] = "foto.png"
+    data_base64: str = Field(..., min_length=1)
+    mime_type: Optional[str] = "image/png"
+    origen: Optional[str] = "archivo"
+
+
+@router.get("/{contrato_id}/bitacora")
+def route_list_bitacora(
+    contrato_id: int,
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    tipo: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return list_entradas(
+            supabase,
+            contrato_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            tipo=tipo,
+            q=q,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/diario")
+def route_get_diario_fecha(
+    contrato_id: int,
+    fecha: str = Query(..., min_length=8),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = get_diario_por_fecha(supabase, contrato_id, fecha)
+        return row or {}
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/equipos")
+def route_list_bitacora_equipos(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_equipos(supabase, contrato_id, q or "")
+
+
+@router.post("/{contrato_id}/bitacora/equipos")
+def route_upsert_bitacora_equipo(
+    contrato_id: int,
+    body: BitacoraEquipoBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return upsert_equipo(
+            supabase,
+            contrato_id,
+            body.nombre,
+            tipo=body.tipo or "equipo",
+            user_id=_uid(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/galeria")
+def route_bitacora_galeria(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_galeria(supabase, contrato_id, q or "")
+
+
+@router.post("/{contrato_id}/bitacora/diario")
+def route_crear_diario(
+    contrato_id: int,
+    body: BitacoraDiarioBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = crear_reporte_diario(
+            supabase,
+            contrato_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
+        registrar_log(
+            current_user, "CREAR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(row.get("id")), {"tipo": "diario", "fecha": row.get("fecha")},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/bitacora/evento")
+def route_crear_evento(
+    contrato_id: int,
+    body: BitacoraEventoBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = crear_reporte_evento(
+            supabase,
+            contrato_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
+        registrar_log(
+            current_user, "CREAR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(row.get("id")), {"tipo": "evento", "evento_tipo": row.get("evento_tipo")},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/{entrada_id}")
+def route_get_bitacora_entrada(
+    contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return get_entrada(supabase, contrato_id, entrada_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.put("/{contrato_id}/bitacora/{entrada_id}")
+def route_update_bitacora(
+    contrato_id: int,
+    entrada_id: int,
+    body: BitacoraUpdateBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = update_entrada(
+            supabase,
+            contrato_id,
+            entrada_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
+        registrar_log(
+            current_user, "EDITAR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(entrada_id), {},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/bitacora/{entrada_id}/cerrar")
+def route_cerrar_diario(
+    contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = cerrar_reporte_diario(
+            supabase, contrato_id, entrada_id, _uid(current_user), current_user=current_user,
+        )
+        registrar_log(
+            current_user, "CERRAR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(entrada_id), {"motivo": "manual"},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/bitacora/{entrada_id}/revertir")
+def route_revertir_diario(
+    contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        row = revertir_cierre_diario(
+            supabase, contrato_id, entrada_id, _uid(current_user), current_user=current_user,
+        )
+        registrar_log(
+            current_user, "REVERTIR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(entrada_id), {},
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/bitacora/{entrada_id}")
+def route_eliminar_bitacora(
+    contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "eliminar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        eliminar_entrada(supabase, contrato_id, entrada_id, current_user=current_user)
+        registrar_log(
+            current_user, "ELIMINAR", "BITACORA", "seguimiento_bitacora_entrada",
+            str(entrada_id), {},
+        )
+        return {"ok": True}
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/bitacora/{entrada_id}/imagen")
+def route_bitacora_imagen(
+    contrato_id: int,
+    entrada_id: int,
+    body: BitacoraImagenBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        return adjuntar_imagen_entrada(
+            supabase,
+            contrato_id,
+            entrada_id,
+            _uid(current_user),
+            body.nombre or "foto.png",
+            body.data_base64,
+            body.mime_type or "image/png",
+            origen=body.origen or "archivo",
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/internal/cron/bitacora-autocierre")
+def route_cron_bitacora_autocierre(
+    x_cron_secret: Optional[str] = Header(None, alias="X-Cron-Secret"),
+    contrato_id: Optional[int] = Query(None),
+):
+    if not _cron_secret_ok(x_cron_secret):
+        raise HTTPException(status_code=403, detail="Cron secret inválido")
+    return cerrar_diarios_vencidos(supabase, contrato_id)
