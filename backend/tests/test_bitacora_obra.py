@@ -1,7 +1,7 @@
 """Tests unitarios Bitácora de Obra (inmutabilidad, autocierre, personal)."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,9 +9,42 @@ import pytest
 import bitacora_service as svc
 
 
+def test_entrada_evento_editable_mismo_dia_creacion(monkeypatch):
+    hoy = svc.hoy_bogota()
+    monkeypatch.setattr(svc, "hoy_bogota", lambda: hoy)
+    # Creado hoy (UTC cerca de medianoche Bogotá) — editable
+    created = datetime(hoy.year, hoy.month, hoy.day, 15, 0, 0, tzinfo=timezone.utc)
+    entrada = {
+        "tipo": "evento",
+        "estado": "cerrado",
+        "fecha": (hoy - timedelta(days=2)).isoformat(),  # fecha del evento puede ser pasada
+        "created_at": created.isoformat().replace("+00:00", "Z"),
+    }
+    svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
+    assert svc.evento_editable_mismo_dia(entrada) is True
+
+
+def test_entrada_evento_inmutable_dia_siguiente(monkeypatch):
+    hoy = svc.hoy_bogota()
+    monkeypatch.setattr(svc, "hoy_bogota", lambda: hoy)
+    ayer = hoy - timedelta(days=1)
+    created = datetime(ayer.year, ayer.month, ayer.day, 18, 0, 0, tzinfo=timezone.utc)
+    entrada = {
+        "tipo": "evento",
+        "estado": "cerrado",
+        "fecha": ayer.isoformat(),
+        "created_at": created.isoformat().replace("+00:00", "Z"),
+    }
+    with pytest.raises(ValueError, match="mismo día"):
+        svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
+    svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
+    assert svc.evento_editable_mismo_dia(entrada) is False
+
+
 def test_entrada_evento_inmutable_salvo_dev():
+    """Compat: evento sin created_at usable no es editable (salvo Dev)."""
     entrada = {"tipo": "evento", "estado": "cerrado", "fecha": "2026-08-20"}
-    with pytest.raises(ValueError, match="inmutable"):
+    with pytest.raises(ValueError, match="inmutable|mismo día"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
 
