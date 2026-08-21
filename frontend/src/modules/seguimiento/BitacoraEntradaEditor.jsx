@@ -5,6 +5,7 @@ import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
 import BitacoraClimaField from './BitacoraClimaField'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
+import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
   CARGOS_PERSONAL,
@@ -887,14 +888,16 @@ export default function BitacoraEntradaEditor({
                             </select>
                           </td>
                           <td style={ui.td}>
-                            <input
+                            <MaterialTipoCatalogSelect
+                              t={t}
+                              api={api}
                               disabled={!editable}
                               value={m.tipo_material}
-                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
-                                i === idx ? { ...r, tipo_material: e.target.value } : r
-                              )))}
-                              style={ui.cellInp}
                               placeholder="Ej. Concreto 3000 PSI"
+                              inputStyle={ui.cellInp}
+                              onChange={(nombre) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, tipo_material: nombre } : r
+                              )))}
                             />
                           </td>
                           <td style={ui.td}>

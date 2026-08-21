@@ -210,6 +210,12 @@ export function createSeguimientoApi(contratoId, token) {
     upsertBitacoraEquipo: (body) => send('POST', `/seguimiento/${cid}/bitacora/equipos`, body),
     listBitacoraCargos: () => get(`/seguimiento/${cid}/bitacora/cargos`),
     upsertBitacoraCargo: (body) => send('POST', `/seguimiento/${cid}/bitacora/cargos`, body),
+    listBitacoraTiposMaterial: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/tipos-material${qs}`)
+    },
+    upsertBitacoraTipoMaterial: (body) =>
+      send('POST', `/seguimiento/${cid}/bitacora/tipos-material`, body),
     plantillaAutocompletarDiario: () => get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar`),
     listBitacoraGaleria: (q = '') => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''
