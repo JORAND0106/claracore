@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { debeRegistrarTipoMaterialNuevo } from './materialTipoCatalogo.js'
 
 /**
  * Catálogo reutilizable de tipo de material por contrato.
- * Patrón: primera vez se registra manualmente, luego se busca y reutiliza
- * (igual que Maquinaria/equipos y contactos externos).
+ * - Al escribir, el valor se propaga al padre (para que Guardar no pierda el texto).
+ * - Al salir del campo con un valor nuevo, se registra automáticamente en el catálogo.
+ * - Si ya existe, se selecciona desde las sugerencias.
  */
 export default function MaterialTipoCatalogSelect({
   t,
@@ -17,8 +19,9 @@ export default function MaterialTipoCatalogSelect({
   const [q, setQ] = useState(value || '')
   const [opts, setOpts] = useState([])
   const [open, setOpen] = useState(false)
-  const [confirmNew, setConfirmNew] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const registeringRef = useRef(false)
 
   const load = useCallback(async (needle) => {
     if (!api?.listBitacoraTiposMaterial) {
@@ -48,48 +51,62 @@ export default function MaterialTipoCatalogSelect({
     onChange?.(nombre)
     setQ(nombre)
     setOpen(false)
-    setConfirmNew(null)
+    setAviso('')
   }
 
   const registrarNuevo = async (nombre) => {
     const n = String(nombre || '').trim()
-    if (!n) return
+    if (!n || !api?.upsertBitacoraTipoMaterial) {
+      onChange?.(n)
+      setQ(n)
+      return
+    }
+    if (registeringRef.current) return
+    registeringRef.current = true
     setBusy(true)
+    setAviso('')
     try {
       const row = await api.upsertBitacoraTipoMaterial({ nombre: n })
       if (row && row.nombre) {
         pick(row)
+        setAviso('Tipo agregado al catálogo del contrato.')
+        void load('')
+      } else if (row && row.ok === false) {
+        // Valor ya queda en el formulario; el catálogo falló (p. ej. migración pendiente).
+        onChange?.(n)
+        setQ(n)
+        setAviso(row.detail || 'No se pudo guardar en el catálogo; el valor quedó en el reporte.')
       } else {
         onChange?.(n)
         setQ(n)
-        setConfirmNew(null)
-        setOpen(false)
       }
+      setOpen(false)
     } catch (e) {
-      setConfirmNew(null)
-      alert(e.message || 'No se pudo registrar el tipo de material')
+      onChange?.(n)
+      setQ(n)
+      setOpen(false)
+      setAviso(e.message || 'No se pudo registrar el tipo en el catálogo')
     } finally {
       setBusy(false)
+      registeringRef.current = false
     }
   }
 
   const onBlurCommit = () => {
     setTimeout(() => {
       setOpen(false)
-      const needle = String(q || '').trim()
-      if (!needle) {
+      const decision = debeRegistrarTipoMaterialNuevo(q, value, opts)
+      if (decision.action === 'clear') {
         onChange?.('')
         return
       }
-      const match = opts.find(
-        (o) => String(o.nombre || '').toLowerCase() === needle.toLowerCase(),
-      )
-      if (match) {
-        pick(match)
+      if (decision.action === 'pick') {
+        pick(decision.row)
         return
       }
-      if (needle === String(value || '').trim()) return
-      setConfirmNew(needle)
+      // Propagar siempre al padre y registrar en catálogo (upsert idempotente).
+      onChange?.(decision.nombre)
+      void registrarNuevo(decision.nombre)
     }, 150)
   }
 
@@ -107,10 +124,17 @@ export default function MaterialTipoCatalogSelect({
   return (
     <div style={{ position: 'relative' }}>
       <input
-        disabled={disabled}
+        disabled={disabled || busy}
         value={q}
         placeholder={placeholder}
-        onChange={(e) => { setQ(e.target.value); setOpen(true) }}
+        onChange={(e) => {
+          const v = e.target.value
+          setQ(v)
+          setOpen(true)
+          setAviso('')
+          // Mantener el padre sincronizado para que Guardar no pierda el texto.
+          onChange?.(v)
+        }}
         onFocus={() => { setOpen(true); void load(q) }}
         onBlur={onBlurCommit}
         style={inp}
@@ -139,43 +163,13 @@ export default function MaterialTipoCatalogSelect({
           ))}
         </div>
       )}
-      {confirmNew && (
+      {aviso ? (
         <div style={{
-          marginTop: 6, padding: 8, borderRadius: 6,
-          border: `1px solid ${t.border}`, background: t.bg,
-          fontSize: 11, color: t.text,
+          marginTop: 4, fontSize: 10, color: t.textMuted, lineHeight: 1.3,
         }}>
-          «{confirmNew}» no está en el catálogo de este contrato.
-          ¿Desea registrarlo para reutilizarlo después?
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void registrarNuevo(confirmNew)}
-              style={{
-                background: t.primary, color: '#fff', border: 'none',
-                borderRadius: 6, padding: '4px 10px', fontWeight: 700, cursor: 'pointer',
-                fontSize: 11,
-              }}
-            >
-              {busy ? '…' : 'Registrar'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setQ(value || '')
-                setConfirmNew(null)
-              }}
-              style={{
-                background: t.bgCard || t.bg, color: t.text, border: `1px solid ${t.border}`,
-                borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11,
-              }}
-            >
-              Cancelar
-            </button>
-          </div>
+          {aviso}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -15,7 +15,8 @@
     "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js",
     "test:ppto-roles": "node --test src/modules/presupuesto/pptoRolesValidacion.test.js",
     "test:bitacora-ubicacion": "node --test src/modules/seguimiento/bitacoraMaterialUbicacion.test.js",
-    "test:bitacora-visitantes": "node --test src/modules/seguimiento/visitantesEvento.test.js"
+    "test:bitacora-visitantes": "node --test src/modules/seguimiento/visitantesEvento.test.js",
+    "test:bitacora-tipo-material": "node --test src/modules/seguimiento/materialTipoCatalogo.test.js"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.21",

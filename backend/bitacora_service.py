@@ -799,7 +799,10 @@ def list_tipos_material(sb, contrato_id: int, q: str = "") -> List[dict]:
             or []
         )
     except Exception as exc:
-        _log.debug("list_tipos_material: %s", exc)
+        _log.warning(
+            "list_tipos_material contrato=%s (¿migración aplicada?): %s",
+            contrato_id, exc,
+        )
         return []
     needle = _norm_nombre_tipo_material(q)
     if not needle:
@@ -830,7 +833,10 @@ def upsert_tipo_material(
             or []
         )
     except Exception as exc:
-        _log.warning("upsert_tipo_material select: %s", exc)
+        _log.warning(
+            "upsert_tipo_material select contrato=%s (¿migración aplicada?): %s",
+            contrato_id, exc,
+        )
         return None
     for row in existentes:
         if row.get("activo"):
@@ -861,7 +867,10 @@ def upsert_tipo_material(
         inserted = sb.table("seguimiento_bitacora_tipo_material").insert(payload).execute().data or []
         return inserted[0] if inserted else None
     except Exception as exc:
-        _log.warning("upsert_tipo_material insert: %s", exc)
+        _log.warning(
+            "upsert_tipo_material insert contrato=%s (¿migración aplicada?): %s",
+            contrato_id, exc,
+        )
         return None
 
 
