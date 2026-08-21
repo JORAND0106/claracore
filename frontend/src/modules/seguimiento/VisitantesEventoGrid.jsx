@@ -1,10 +1,12 @@
+import { useEffect, useState } from 'react'
 import VisitanteCatalogSelect from './VisitanteCatalogSelect'
 import { emptyVisitanteRow } from './visitantesEventoHelpers'
 
-export { emptyVisitanteRow, visitantesFromDetalle } from './visitantesEventoHelpers'
+export { emptyVisitanteRow, visitantesFromDetalle, mergeAsistentesSearch } from './visitantesEventoHelpers'
 
 /**
- * Grilla Nombre | Cargo para visitantes del Reporte de Evento.
+ * Grilla Nombre | Cargo para asistentes del Recorrido de obra.
+ * Combina usuarios de plataforma + catálogo reutilizable.
  */
 export default function VisitantesEventoGrid({
   t,
@@ -16,6 +18,21 @@ export default function VisitantesEventoGrid({
 }) {
   const ui = sheetStyles || {}
   const list = Array.isArray(rows) && rows.length ? rows : [emptyVisitanteRow()]
+  const [usuarios, setUsuarios] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!api?.listUsuarios) return undefined
+    ;(async () => {
+      try {
+        const rowsU = await api.listUsuarios()
+        if (!cancelled) setUsuarios(Array.isArray(rowsU) ? rowsU : [])
+      } catch {
+        if (!cancelled) setUsuarios([])
+      }
+    })()
+    return () => { cancelled = true }
+  }, [api])
 
   const setRow = (idx, patch) => {
     const next = list.map((r, i) => (i === idx ? { ...r, ...patch } : r))
@@ -45,7 +62,7 @@ export default function VisitantesEventoGrid({
         fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted,
         marginBottom: 6,
       }}>
-        Visitantes
+        Asistentes
       </div>
       <table style={ui.sheetTable || { width: '100%', borderCollapse: 'collapse' }}>
         <thead>
@@ -56,59 +73,74 @@ export default function VisitantesEventoGrid({
           </tr>
         </thead>
         <tbody>
-          {list.map((row, idx) => (
-            <tr key={`vis-${idx}`}>
-              <td style={ui.td}>
-                {disabled ? (
-                  <span style={{ fontSize: 'var(--cc-sm)' }}>{row.nombre || '—'}</span>
-                ) : (
-                  <VisitanteCatalogSelect
-                    t={t}
-                    api={api}
-                    value={row.nombre || ''}
-                    cargo={row.cargo || ''}
-                    disabled={disabled}
-                    inputStyle={cellInp}
-                    onChange={(sel) => setRow(idx, {
-                      visitante_id: sel.visitante_id,
-                      nombre: sel.nombre,
-                      cargo: sel.cargo != null && String(sel.cargo).trim() !== ''
-                        ? sel.cargo
-                        : (row.cargo || ''),
-                    })}
-                  />
-                )}
-              </td>
-              <td style={ui.td}>
-                {disabled ? (
-                  <span style={{ fontSize: 'var(--cc-sm)' }}>{row.cargo || '—'}</span>
-                ) : (
-                  <input
-                    value={row.cargo || ''}
-                    disabled={disabled}
-                    placeholder="Cargo"
-                    onChange={(e) => setRow(idx, { cargo: e.target.value })}
-                    style={cellInp}
-                  />
-                )}
-              </td>
-              <td style={{ ...ui.td, textAlign: 'center' }}>
-                {!disabled && (
-                  <button
-                    type="button"
-                    onClick={() => removeRow(idx)}
-                    title="Quitar"
-                    style={{
-                      border: 'none', background: 'transparent', color: '#B91C1C',
-                      cursor: 'pointer', fontWeight: 700, fontSize: 14,
-                    }}
-                  >
-                    ×
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
+          {list.map((row, idx) => {
+            const cargoLocked = Boolean(row.usuario_id) && String(row.cargo || '').trim() !== ''
+            return (
+              <tr key={`vis-${idx}`}>
+                <td style={ui.td}>
+                  {disabled ? (
+                    <span style={{ fontSize: 'var(--cc-sm)' }}>{row.nombre || '—'}</span>
+                  ) : (
+                    <VisitanteCatalogSelect
+                      t={t}
+                      api={api}
+                      value={row.nombre || ''}
+                      cargo={row.cargo || ''}
+                      disabled={disabled}
+                      inputStyle={cellInp}
+                      usuariosContrato={usuarios}
+                      onChange={(sel) => {
+                        const cargoPlat = String(sel.cargo || '').trim()
+                        setRow(idx, {
+                          visitante_id: sel.visitante_id ?? null,
+                          usuario_id: sel.usuario_id ?? null,
+                          nombre: sel.nombre,
+                          origen: sel.origen || null,
+                          // Usuario plataforma: cargo autodiligenciado (no vacío si viene de plataforma).
+                          cargo: sel.origen === 'plataforma'
+                            ? cargoPlat
+                            : (cargoPlat || row.cargo || ''),
+                        })
+                      }}
+                    />
+                  )}
+                </td>
+                <td style={ui.td}>
+                  {disabled ? (
+                    <span style={{ fontSize: 'var(--cc-sm)' }}>{row.cargo || '—'}</span>
+                  ) : (
+                    <input
+                      value={row.cargo || ''}
+                      disabled={disabled || cargoLocked}
+                      placeholder={row.usuario_id ? 'Cargo del usuario' : 'Cargo'}
+                      title={cargoLocked ? 'Cargo tomado del usuario de la plataforma' : undefined}
+                      onChange={(e) => setRow(idx, { cargo: e.target.value })}
+                      style={{
+                        ...cellInp,
+                        opacity: cargoLocked ? 0.85 : 1,
+                        cursor: cargoLocked ? 'default' : 'text',
+                      }}
+                    />
+                  )}
+                </td>
+                <td style={{ ...ui.td, textAlign: 'center' }}>
+                  {!disabled && (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(idx)}
+                      title="Quitar"
+                      style={{
+                        border: 'none', background: 'transparent', color: '#B91C1C',
+                        cursor: 'pointer', fontWeight: 700, fontSize: 14,
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
       {!disabled && (
@@ -127,7 +159,7 @@ export default function VisitantesEventoGrid({
             cursor: 'pointer',
           }}
         >
-          + Agregar visitante
+          + Agregar asistente
         </button>
       )}
     </div>

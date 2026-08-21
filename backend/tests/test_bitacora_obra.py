@@ -375,16 +375,18 @@ def test_normalizar_visitantes_lista_y_texto():
         {"nombre": "Ana", "cargo": "Auditora", "visitante_id": 3},
         {"nombre": "  "},
         {"nombre": "Luis"},
+        {"nombre": "Pedro", "cargo": "Residente", "usuario_id": 42, "origen": "plataforma"},
     ])
-    assert len(lista) == 2
+    assert len(lista) == 3
     assert lista[0]["nombre"] == "Ana" and lista[0]["cargo"] == "Auditora"
     assert lista[0]["visitante_id"] == 3
     assert lista[1]["nombre"] == "Luis"
+    assert lista[2]["usuario_id"] == 42 and lista[2]["origen"] == "plataforma"
 
     legacy = svc._normalizar_visitantes_lista("Ana (Auditora); Luis Gómez")
     assert len(legacy) == 2
     assert legacy[0]["cargo"] == "Auditora"
-    assert svc._fmt_visitantes_texto(lista) == "Ana (Auditora), Luis"
+    assert svc._fmt_visitantes_texto(lista[:2]) == "Ana (Auditora), Luis"
 
 
 def test_sync_visitantes_catalogo_upsert(monkeypatch):
@@ -403,8 +405,44 @@ def test_sync_visitantes_catalogo_upsert(monkeypatch):
     )
     assert calls == [("Ana", "Auditora", 9), ("Luis", "", 9)]
     assert out[0]["visitante_id"] == 1 and out[0]["nombre"] == "Ana"
+    assert out[0]["origen"] == "catalogo"
     assert out[1]["visitante_id"] == 2
 
+
+def test_sync_visitantes_plataforma_no_upsert_catalogo(monkeypatch):
+    calls = []
+
+    def fake_upsert(sb, contrato_id, nombre, *, cargo="", user_id=None):
+        calls.append(nombre)
+        return {"id": 99, "nombre": nombre, "cargo": cargo}
+
+    monkeypatch.setattr(svc, "upsert_visitante", fake_upsert)
+    out = svc.sync_visitantes_catalogo(
+        object(),
+        7,
+        [
+            {"nombre": "Ana Plataforma", "cargo": "Residente", "usuario_id": 15},
+            {"nombre": "Externo", "cargo": "Auditor", "origen": "catalogo"},
+        ],
+        user_id=1,
+    )
+    assert calls == ["Externo"]
+    assert out[0]["usuario_id"] == 15 and out[0]["visitante_id"] is None
+    assert out[0]["origen"] == "plataforma"
+    assert out[1]["origen"] == "catalogo"
+
+    try:
+        svc.sync_visitantes_catalogo(
+            object(), 7,
+            [{"nombre": "Sin Cargo", "cargo": "", "usuario_id": 3}],
+            user_id=1,
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "cargo" in str(exc).lower()
+
+
+def test_consultar_clima_prioridad_manual(monkeypatch):
     import sys
     import types
 
