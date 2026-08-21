@@ -4,7 +4,7 @@
  * para que un F5 normal cargue el bundle nuevo tras un deploy;
  * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
  */
-const CACHE_NAME = 'claracore-shell-v7'
+const CACHE_NAME = 'claracore-shell-v8'
 const TILES_CACHE_NAME = 'claracore-tiles-v1'
 
 self.addEventListener('install', (event) => {
