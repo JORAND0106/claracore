@@ -60,6 +60,58 @@ def test_materiales_muestra_pk_no_placa():
     assert "Placa" not in html
 
 
+def test_cuerpo_diario_materiales_ancho_completo_obs_fotos_mitades():
+    """Materiales full-width; debajo Observaciones (izq) | Registro Fotográfico (der)."""
+    pal = pdf._palette({})
+    html = pdf._html_cuerpo_diario(
+        {
+            "materiales": [{
+                "movimiento": "ingreso",
+                "tipo_material": "Arena",
+                "cantidad": 1,
+                "ubicacion_pk": "PK 1+000",
+            }],
+            "cuerpo_html": "<p>Novedad de obra</p>",
+            "created_by_nombre": "Ana",
+            "imagenes": [],
+        },
+        1,
+        pal,
+    )
+    idx_mat = html.find("Materiales")
+    idx_obs = html.find("Observaciones")
+    idx_foto = html.find("Registro Fotográfico")
+    assert 0 <= idx_mat < idx_obs < idx_foto
+    assert "Elaborado por: Ana" in html
+    assert "Novedad de obra" in html
+    assert "PK 1+000" in html
+    # Mitades 50/50 debajo de Materiales (no columnas 52/48 con materiales a la izquierda).
+    assert 'width="50%"' in html
+    assert 'width="52%"' not in html
+    # Materiales queda fuera de la tabla de mitades.
+    split_idx = html.find('width="50%"')
+    assert split_idx > 0
+    assert html.find("Materiales") < split_idx
+    assert html.find("Observaciones") > split_idx
+
+
+def test_fit_pt_no_deforma_vertical_en_caja_horizontal():
+    """Fotos verticales se ajustan dentro de la caja landscape sin estirar."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    im = Image.new("RGB", (100, 200), (10, 20, 30))
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    w, h = pdf._fit_pt(uri, pdf._FOTO_BOX_W, pdf._FOTO_BOX_H)
+    assert w <= pdf._FOTO_BOX_W + 1e-6
+    assert h <= pdf._FOTO_BOX_H + 1e-6
+    assert abs((w / h) - 0.5) < 0.02
+
+
 def test_omit_pagina_eventos_si_vacia(monkeypatch):
     captured = {}
 
