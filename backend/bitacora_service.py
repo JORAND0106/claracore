@@ -889,6 +889,11 @@ def list_entradas(
     tipo: Optional[str] = None,
     q: Optional[str] = None,
 ) -> List[dict]:
+    """
+    Lista entradas del contrato. Visibilidad: cualquier usuario con permiso
+    «Ver» de Bitácora (o Desarrollador) ve todas las entradas del contrato;
+    no hay filtro adicional por elaborador, asistencia ni asignación.
+    """
     query = (
         sb.table("seguimiento_bitacora_entrada")
         .select("*")

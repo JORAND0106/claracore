@@ -1,7 +1,8 @@
 /**
- * Mapeo bandeja/actas → eventos FullCalendar.
+ * Mapeo bandeja/actas/bitácora → eventos FullCalendar.
  * Diferenciación visual: color de bloque + icono por tipo.
  */
+import { labelEventoTipo } from './bitacoraConstants.js'
 import { fechaVencimientoEfectiva, hoyBogotaDate } from './vencimientoLevels.js'
 import { numeroActaLabel } from './seguimientoTheme.js'
 
@@ -12,6 +13,7 @@ export const CALENDARIO_KIND = {
     icon: '✅',
     color: '#2563eb',
     textColor: '#ffffff',
+    tooltip: 'Tareas personales creadas o asignadas a usted',
   },
   compromiso: {
     id: 'compromiso',
@@ -19,6 +21,7 @@ export const CALENDARIO_KIND = {
     icon: '📋',
     color: '#0f766e',
     textColor: '#ffffff',
+    tooltip: 'Compromisos derivados de actas de reunión',
   },
   acta: {
     id: 'acta',
@@ -26,7 +29,33 @@ export const CALENDARIO_KIND = {
     icon: '📝',
     color: '#d97706',
     textColor: '#ffffff',
+    tooltip: 'Actas o reuniones programadas del contrato',
   },
+  /** Familia tonal violeta: diario más intenso, evento más claro. */
+  bitacora_diario: {
+    id: 'bitacora_diario',
+    label: 'Reporte diario',
+    icon: '📒',
+    color: '#6d28d9',
+    textColor: '#ffffff',
+    tooltip: 'Bitácora de Obra · Reporte Diario del día',
+  },
+  bitacora_evento: {
+    id: 'bitacora_evento',
+    label: 'Reporte de evento',
+    icon: '📎',
+    color: '#a78bfa',
+    textColor: '#1e1b4b',
+    tooltip: 'Bitácora de Obra · Reporte de Evento',
+  },
+}
+
+/** Convención aparte (no es un kind de evento). */
+export const CALENDARIO_VENCIDOS_LEGEND = {
+  id: 'vencidos',
+  label: 'Día con vencidos',
+  color: '#dc2626',
+  tooltip: 'El día tiene al menos una tarea o compromiso vencido',
 }
 
 /** Formatea Date o ISO a YYYY-MM-DD (local calendar day). */
@@ -139,8 +168,47 @@ export function actaToEvent(acta) {
   }
 }
 
-/** Une eventos de bandeja + actas (omite nulos / sin fecha). */
-export function buildCalendarioEvents(bandejaRows = [], actasRows = []) {
+/**
+ * @param {object} entrada fila de listBitacora
+ * @returns {object|null}
+ */
+export function bitacoraToEvent(entrada) {
+  if (!entrada?.id) return null
+  const esEvento = String(entrada.tipo || '') === 'evento'
+  const kind = esEvento ? 'bitacora_evento' : 'bitacora_diario'
+  const meta = CALENDARIO_KIND[kind]
+  const start = buildStart(entrada.fecha, entrada.hora_inicio_labores || null)
+  if (!start) return null
+  const allDay = !entrada.hora_inicio_labores
+  const elaborador = String(entrada.created_by_nombre || '').trim()
+  let texto
+  if (esEvento) {
+    const tipoLabel = labelEventoTipo(entrada.evento_tipo)
+    texto = elaborador ? `${tipoLabel} · ${elaborador}` : tipoLabel
+  } else {
+    texto = elaborador ? `Diario · ${elaborador}` : 'Reporte diario'
+  }
+  return {
+    id: `bitacora-${entrada.id}`,
+    title: titleWithIcon(meta.icon, texto),
+    start,
+    allDay,
+    backgroundColor: meta.color,
+    borderColor: meta.color,
+    textColor: meta.textColor,
+    extendedProps: {
+      kind,
+      sourceId: entrada.id,
+      icon: meta.icon,
+      label: meta.label,
+      elaborador,
+      raw: entrada,
+    },
+  }
+}
+
+/** Une eventos de bandeja + actas + bitácora (omite nulos / sin fecha). */
+export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacoraRows = []) {
   const out = []
   for (const row of bandejaRows || []) {
     const ev = bandejaItemToEvent(row)
@@ -148,6 +216,10 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = []) {
   }
   for (const row of actasRows || []) {
     const ev = actaToEvent(row)
+    if (ev) out.push(ev)
+  }
+  for (const row of bitacoraRows || []) {
+    const ev = bitacoraToEvent(row)
     if (ev) out.push(ev)
   }
   return out
@@ -169,7 +241,13 @@ export function eventsForDate(events, dateStr) {
   return (events || []).filter((ev) => toDateOnly(ev?.start) === d)
 }
 
-const KIND_SORT = { tarea: 0, compromiso: 1, acta: 2 }
+const KIND_SORT = {
+  tarea: 0,
+  compromiso: 1,
+  acta: 2,
+  bitacora_diario: 3,
+  bitacora_evento: 4,
+}
 
 /**
  * Ordena elementos de un día: tipo → hora (si hay) → título.
@@ -205,41 +283,55 @@ export function eventDisplayTime(ev) {
 
 /**
  * Conteos por tipo en un día (vista mes).
- * @returns {{ tareas: number, compromisos: number, actas: number, total: number, label: string }}
+ * @returns {{ tareas, compromisos, actas, diarios, eventosBit, total, label }}
  */
 export function summarizeDayCounts(events, dateStr) {
   let tareas = 0
   let compromisos = 0
   let actas = 0
+  let diarios = 0
+  let eventosBit = 0
   for (const ev of eventsForDate(events, dateStr)) {
     const kind = ev?.extendedProps?.kind
     if (kind === 'tarea') tareas += 1
     else if (kind === 'compromiso') compromisos += 1
     else if (kind === 'acta') actas += 1
+    else if (kind === 'bitacora_diario') diarios += 1
+    else if (kind === 'bitacora_evento') eventosBit += 1
   }
   return {
     tareas,
     compromisos,
     actas,
-    total: tareas + compromisos + actas,
-    label: formatDayCountLabel({ tareas, compromisos, actas }),
+    diarios,
+    eventosBit,
+    total: tareas + compromisos + actas + diarios + eventosBit,
+    label: formatDayCountLabel({ tareas, compromisos, actas, diarios, eventosBit }),
   }
 }
 
-export function formatDayCountLabel({ tareas = 0, compromisos = 0, actas = 0 } = {}) {
+export function formatDayCountLabel({
+  tareas = 0, compromisos = 0, actas = 0, diarios = 0, eventosBit = 0,
+} = {}) {
   const parts = []
   if (tareas > 0) parts.push(`${tareas} tarea${tareas === 1 ? '' : 's'}`)
   if (compromisos > 0) parts.push(`${compromisos} compromiso${compromisos === 1 ? '' : 's'}`)
   if (actas > 0) parts.push(`${actas} acta${actas === 1 ? '' : 's'}`)
+  if (diarios > 0) parts.push(`${diarios} diario${diarios === 1 ? '' : 's'}`)
+  if (eventosBit > 0) parts.push(`${eventosBit} evento${eventosBit === 1 ? '' : 's'}`)
   return parts.join(' · ')
 }
 
 /** Etiqueta corta para widget de inicio (espacio reducido). */
-export function formatDayCountLabelShort({ tareas = 0, compromisos = 0, actas = 0 } = {}) {
+export function formatDayCountLabelShort({
+  tareas = 0, compromisos = 0, actas = 0, diarios = 0, eventosBit = 0,
+} = {}) {
   const parts = []
   if (tareas > 0) parts.push(`${tareas}T`)
   if (compromisos > 0) parts.push(`${compromisos}C`)
   if (actas > 0) parts.push(`${actas}A`)
+  if (diarios > 0) parts.push(`${diarios}D`)
+  if (eventosBit > 0) parts.push(`${eventosBit}E`)
   return parts.join(' · ')
 }
 

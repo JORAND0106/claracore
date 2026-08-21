@@ -12,6 +12,7 @@ import { ACTA_TIPOS, ESTADOS } from './seguimientoTheme'
 import { hoyBogotaDate } from './vencimientoLevels'
 import {
   CALENDARIO_KIND,
+  CALENDARIO_VENCIDOS_LEGEND,
   buildCalendarioEvents,
   dayHasVencidos,
   eventDisplayTime,
@@ -26,12 +27,11 @@ import {
 } from './seguimientoCalendarioUtils'
 
 /**
- * Calendario Seguimiento (FullCalendar): mes/semana/día, filtros, CTAs,
- * contador por día, menú rápido al clic y resaltado pasivo de vencidos.
- * Reutilizable en el módulo Seguimiento y en la página de inicio.
+ * Calendario Seguimiento (FullCalendar): vista única diaria de tareas,
+ * compromisos, actas y bitácora. Filtros colapsables, menú por día y
+ * convenciones de color compactas debajo del grid.
  *
- * `widgetMode`: versión compacta para Inicio (misma fila que el carrete).
- * En mes oculta chips de eventos y muestra solo contadores por día.
+ * `widgetMode`: versión compacta para Inicio (misma lógica de creación por día).
  */
 export default function SeguimientoCalendario({
   t,
@@ -39,10 +39,13 @@ export default function SeguimientoCalendario({
   usuario,
   usuarios = [],
   permisos,
+  permisosBitacora = null,
   viewportCompact = false,
   refreshKey = 0,
   onNuevaActa,
   onAbrirActa,
+  onNuevaBitacora,
+  onAbrirBitacora,
   showFilters = true,
   widgetMode = false,
 }) {
@@ -61,6 +64,8 @@ export default function SeguimientoCalendario({
     incluir_cerrados: false,
     q: '',
   })
+  const [filtersOpen, setFiltersOpen] = useState(true)
+  const [bitacoraSubmenu, setBitacoraSubmenu] = useState(false)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -87,8 +92,11 @@ export default function SeguimientoCalendario({
     setLoading(true)
     setError('')
 
-    const includeBandeja = !filtros.origen || filtros.origen === 'tarea' || filtros.origen === 'compromiso'
-    const includeActas = !filtros.origen || filtros.origen === 'acta'
+    const origen = filtros.origen
+    const includeBandeja = !origen || origen === 'tarea' || origen === 'compromiso'
+    const includeActas = !origen || origen === 'acta'
+    const includeBitacora = (!origen || origen === 'bitacora_diario' || origen === 'bitacora_evento')
+      && (permisosBitacora?.ver !== false)
 
     try {
       const jobs = []
@@ -100,8 +108,8 @@ export default function SeguimientoCalendario({
         }
         if (filtros.q) bandejaParams.q = filtros.q
         if (filtros.estado) bandejaParams.estado = filtros.estado
-        if (filtros.origen === 'tarea' || filtros.origen === 'compromiso') {
-          bandejaParams.origen = filtros.origen
+        if (origen === 'tarea' || origen === 'compromiso') {
+          bandejaParams.origen = origen
         }
         if (filtros.incluir_cerrados) bandejaParams.incluir_cerrados = 'true'
         jobs.push(api.listBandeja(bandejaParams).catch((e) => { throw e }))
@@ -121,14 +129,28 @@ export default function SeguimientoCalendario({
         jobs.push(Promise.resolve([]))
       }
 
-      const [bandejaRows, actasRows] = await Promise.all(jobs)
+      if (includeBitacora && api.listBitacora) {
+        const bitParams = {
+          fecha_desde: range.fecha_desde,
+          fecha_hasta: range.fecha_hasta,
+        }
+        if (filtros.q) bitParams.q = filtros.q
+        if (origen === 'bitacora_diario') bitParams.tipo = 'diario'
+        if (origen === 'bitacora_evento') bitParams.tipo = 'evento'
+        jobs.push(api.listBitacora(bitParams).catch(() => []))
+      } else {
+        jobs.push(Promise.resolve([]))
+      }
+
+      const [bandejaRows, actasRows, bitacoraRows] = await Promise.all(jobs)
       if (gen !== genRef.current) return
 
       let mapped = buildCalendarioEvents(
         Array.isArray(bandejaRows) ? bandejaRows : [],
         Array.isArray(actasRows) ? actasRows : [],
+        Array.isArray(bitacoraRows) ? bitacoraRows : [],
       )
-      if (filtros.origen) mapped = filterEventsByOrigen(mapped, filtros.origen)
+      if (origen) mapped = filterEventsByOrigen(mapped, origen)
       setEvents(mapped)
     } catch (e) {
       if (gen !== genRef.current) return
@@ -137,12 +159,15 @@ export default function SeguimientoCalendario({
     } finally {
       if (gen === genRef.current) setLoading(false)
     }
-  }, [api, filtros])
+  }, [api, filtros, permisosBitacora?.ver])
 
   useEffect(() => { load() }, [load, refreshKey, reloadTick])
 
   useEffect(() => {
-    if (!dayMenu) return undefined
+    if (!dayMenu) {
+      setBitacoraSubmenu(false)
+      return undefined
+    }
     const onDoc = (e) => {
       if (dayMenuRef.current && !dayMenuRef.current.contains(e.target)) {
         setDayMenu(null)
@@ -162,6 +187,11 @@ export default function SeguimientoCalendario({
     setReloadTick((n) => n + 1)
   }, [])
 
+  const openBitacoraEntry = useCallback((sourceId) => {
+    setAccesoMsg('')
+    onAbrirBitacora?.(sourceId)
+  }, [onAbrirBitacora])
+
   const handleEventClick = useCallback((info) => {
     info.jsEvent?.preventDefault?.()
     info.jsEvent?.stopPropagation?.()
@@ -176,8 +206,12 @@ export default function SeguimientoCalendario({
       onAbrirActa?.(sourceId)
       return
     }
+    if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
+      openBitacoraEntry(sourceId)
+      return
+    }
     if (sourceId != null) setDetalleId(sourceId)
-  }, [onAbrirActa])
+  }, [onAbrirActa, openBitacoraEntry])
 
   const handleDateClick = useCallback((info) => {
     info.jsEvent?.preventDefault?.()
@@ -186,6 +220,7 @@ export default function SeguimientoCalendario({
     const rect = info.dayEl?.getBoundingClientRect?.()
     const x = info.jsEvent?.clientX ?? (rect ? rect.left + rect.width / 2 : 80)
     const y = info.jsEvent?.clientY ?? (rect ? rect.top + 28 : 80)
+    setBitacoraSubmenu(false)
     setDayMenu({ dateStr, x, y })
   }, [])
 
@@ -246,8 +281,16 @@ export default function SeguimientoCalendario({
       onAbrirActa?.(sourceId)
       return
     }
+    if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
+      openBitacoraEntry(sourceId)
+      return
+    }
     if (sourceId != null) setDetalleId(sourceId)
-  }, [onAbrirActa])
+  }, [onAbrirActa, openBitacoraEntry])
+
+  const canCreateSeguimiento = Boolean(permisos?.crear)
+  const canCreateBitacora = Boolean(permisosBitacora?.crear)
+  const showDayCreate = canCreateSeguimiento || canCreateBitacora
 
   const rootClass = [
     'cc-seguim-cal',
@@ -270,136 +313,135 @@ export default function SeguimientoCalendario({
             📅 Seguimiento
           </div>
           <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
-            Tareas, compromisos y actas · clic en un día para acciones
+            Tareas, actas y bitácora · clic en un día para crear o abrir
             {loading ? ' · actualizando…' : ''}
           </div>
         </div>
       )}
 
       {filtersVisible && (
-        <div className="cc-seguim-filters" style={{
-          display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
-        }}>
-          <Filter t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
-            <input
-              value={filtros.q}
-              onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
-              onKeyDown={(e) => { if (e.key === 'Enter') setReloadTick((n) => n + 1) }}
-              placeholder="Título, descripción, actas…"
-              style={{ ...inp(t), minWidth: viewportCompact ? 0 : 200, width: '100%' }}
-            />
-          </Filter>
-          <Filter t={t} label="Estado" className="cc-seguim-filter">
-            <select
-              value={filtros.estado}
-              onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
-              style={{ ...inp(t), width: '100%' }}
-              disabled={filtros.origen === 'acta'}
-              title={filtros.origen === 'acta' ? 'El estado de gestión aplica a tareas y compromisos' : undefined}
-            >
-              {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-            </select>
-          </Filter>
-          <Filter t={t} label="Origen" className="cc-seguim-filter">
-            <select
-              value={filtros.origen}
-              onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
-              style={{ ...inp(t), width: '100%' }}
-            >
-              <option value="">Todos</option>
-              <option value="compromiso">Compromisos</option>
-              <option value="tarea">Tareas</option>
-              <option value="acta">Actas</option>
-            </select>
-          </Filter>
-          <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
-            <select
-              value={filtros.tipo_acta}
-              onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
-              style={{ ...inp(t), width: '100%' }}
-              disabled={filtros.origen === 'tarea' || filtros.origen === 'compromiso'}
-            >
-              {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-            </select>
-          </Filter>
-          <Filter t={t} label="Desde" className="cc-seguim-filter">
-            <input
-              type="date"
-              className="cc-seguim-date"
-              value={filtros.fecha_desde}
-              onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
-              style={{ ...inp(t), width: '100%' }}
-            />
-          </Filter>
-          <Filter t={t} label="Hasta" className="cc-seguim-filter">
-            <input
-              type="date"
-              className="cc-seguim-date"
-              value={filtros.fecha_hasta}
-              onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
-              style={{ ...inp(t), width: '100%' }}
-            />
-          </Filter>
-          <label className="cc-seguim-filter cc-seguim-filter--check" style={{
-            display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+            marginBottom: filtersOpen ? 8 : 0,
           }}>
-            <input
-              type="checkbox"
-              checked={!!filtros.incluir_cerrados}
-              onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
-              disabled={filtros.origen === 'acta'}
-            />
-            Incluir cumplidos / cancelados
-          </label>
-          <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
-            {permisos?.crear && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => { setFechaTareaInicial(null); setShowTarea(true) }}
-                  style={primary(t)}
-                >
-                  Crear Tarea
-                </button>
-                <button type="button" onClick={() => onNuevaActa?.()} style={primary(t)}>Crear Acta</button>
-              </>
-            )}
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              style={{
+                ...ghost(t),
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontWeight: 700,
+              }}
+            >
+              <span aria-hidden>{filtersOpen ? '▾' : '▸'}</span>
+              Filtros
+              {!filtersOpen && filtros.q ? (
+                <span style={{ fontWeight: 500, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                  · «{filtros.q.slice(0, 24)}{filtros.q.length > 24 ? '…' : ''}»
+                </span>
+              ) : null}
+            </button>
+            {loading && <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Actualizando…</span>}
           </div>
+
+          {filtersOpen && (
+            <div className="cc-seguim-filters" style={{
+              display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end',
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: `1px solid ${t.border}`,
+              background: `${t.primary}08`,
+            }}>
+              <Filter t={t} label="Buscar" className="cc-seguim-filter cc-seguim-filter--wide">
+                <input
+                  value={filtros.q}
+                  onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setReloadTick((n) => n + 1) }}
+                  placeholder="Buscar en tareas, actas o bitácora…"
+                  style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
+                />
+              </Filter>
+              <Filter t={t} label="Estado" className="cc-seguim-filter">
+                <select
+                  value={filtros.estado}
+                  onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
+                  style={{ ...inp(t), width: '100%' }}
+                  disabled={filtros.origen === 'acta'
+                    || filtros.origen === 'bitacora_diario'
+                    || filtros.origen === 'bitacora_evento'}
+                  title={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')
+                    ? 'El estado de gestión aplica a tareas y compromisos'
+                    : undefined}
+                >
+                  {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+                </select>
+              </Filter>
+              <Filter t={t} label="Origen" className="cc-seguim-filter">
+                <select
+                  value={filtros.origen}
+                  onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
+                  style={{ ...inp(t), width: '100%' }}
+                >
+                  <option value="">Todos</option>
+                  <option value="compromiso">Compromisos</option>
+                  <option value="tarea">Tareas</option>
+                  <option value="acta">Actas</option>
+                  <option value="bitacora_diario">Bitácora · Diario</option>
+                  <option value="bitacora_evento">Bitácora · Evento</option>
+                </select>
+              </Filter>
+              <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
+                <select
+                  value={filtros.tipo_acta}
+                  onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
+                  style={{ ...inp(t), width: '100%' }}
+                  disabled={filtros.origen === 'tarea'
+                    || filtros.origen === 'compromiso'
+                    || String(filtros.origen).startsWith('bitacora')}
+                >
+                  {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+                </select>
+              </Filter>
+              <Filter t={t} label="Desde" className="cc-seguim-filter">
+                <input
+                  type="date"
+                  className="cc-seguim-date"
+                  value={filtros.fecha_desde}
+                  onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
+                  style={{ ...inp(t), width: '100%' }}
+                />
+              </Filter>
+              <Filter t={t} label="Hasta" className="cc-seguim-filter">
+                <input
+                  type="date"
+                  className="cc-seguim-date"
+                  value={filtros.fecha_hasta}
+                  onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
+                  style={{ ...inp(t), width: '100%' }}
+                />
+              </Filter>
+              <label className="cc-seguim-filter cc-seguim-filter--check" style={{
+                display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!!filtros.incluir_cerrados}
+                  onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
+                  disabled={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')}
+                />
+                Incluir cumplidos / cancelados
+              </label>
+              <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
-
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: widgetMode ? 8 : 12,
-        marginBottom: widgetMode ? 6 : 10, alignItems: 'center',
-        fontSize: widgetMode ? 'var(--cc-xs)' : 'var(--cc-sm)',
-        color: t.textMuted,
-        padding: widgetMode ? '0 12px' : 0,
-      }}>
-        {legend.map((k) => (
-          <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span style={{
-              width: widgetMode ? 9 : 12, height: widgetMode ? 9 : 12,
-              borderRadius: 3, background: k.color, display: 'inline-block',
-            }}
-            />
-            <span aria-hidden>{k.icon}</span>
-            {!widgetMode && k.label}
-          </span>
-        ))}
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span style={{
-            width: widgetMode ? 9 : 12, height: widgetMode ? 9 : 12, borderRadius: 3,
-            background: 'color-mix(in srgb, #dc2626 28%, transparent)',
-            border: '1px solid #facc15',
-            display: 'inline-block',
-          }}
-          />
-          {!widgetMode && 'Día con vencidos'}
-          {widgetMode && 'Venc.'}
-        </span>
-        {!widgetMode && loading && <span style={{ marginLeft: 'auto' }}>Actualizando…</span>}
-      </div>
 
       {error && (
         <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
@@ -499,6 +541,70 @@ export default function SeguimientoCalendario({
         />
       </div>
 
+      <div
+        className="cc-seguim-cal-legend"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: widgetMode ? 6 : 8,
+          marginTop: widgetMode ? 6 : 10,
+          alignItems: 'center',
+          padding: widgetMode ? '0 12px 8px' : '0 2px',
+        }}
+        aria-label="Convenciones de color"
+      >
+        {legend.map((k) => (
+          <span
+            key={k.id}
+            title={k.tooltip || k.label}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: widgetMode ? '2px 6px' : '3px 8px',
+              borderRadius: 999,
+              border: `1px solid ${t.border}`,
+              background: `${k.color}18`,
+              fontSize: widgetMode ? 'var(--cc-xs)' : 'var(--cc-sm)',
+              color: t.text,
+              cursor: 'help',
+            }}
+          >
+            <span style={{
+              width: 10, height: 10, borderRadius: 3, background: k.color, display: 'inline-block', flexShrink: 0,
+            }}
+            />
+            {!widgetMode && <span>{k.label}</span>}
+            {widgetMode && <span aria-hidden>{k.icon}</span>}
+          </span>
+        ))}
+        <span
+          title={CALENDARIO_VENCIDOS_LEGEND.tooltip}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: widgetMode ? '2px 6px' : '3px 8px',
+            borderRadius: 999,
+            border: '1px solid #facc15',
+            background: 'color-mix(in srgb, #dc2626 18%, transparent)',
+            fontSize: widgetMode ? 'var(--cc-xs)' : 'var(--cc-sm)',
+            color: t.text,
+            cursor: 'help',
+          }}
+        >
+          <span style={{
+            width: 10, height: 10, borderRadius: 3,
+            background: 'color-mix(in srgb, #dc2626 40%, transparent)',
+            border: '1px solid #facc15',
+            display: 'inline-block',
+          }}
+          />
+          {!widgetMode && CALENDARIO_VENCIDOS_LEGEND.label}
+          {widgetMode && 'Venc.'}
+        </span>
+      </div>
+
       {dayMenu && createPortal(
         <div
           className="cc-seguim-cal-daymodal-overlay"
@@ -563,33 +669,90 @@ export default function SeguimientoCalendario({
               </button>
             </div>
 
-            {permisos?.crear && (
+            {showDayCreate && (
               <div style={{
-                display: 'flex', flexWrap: 'wrap', gap: 8,
+                display: 'flex', flexDirection: 'column', gap: 8,
                 padding: '12px 16px',
                 borderBottom: `1px solid ${t.border}`,
               }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFechaTareaInicial(dayMenu.dateStr)
-                    setShowTarea(true)
-                    setDayMenu(null)
-                  }}
-                  style={primary(t)}
-                >
-                  ✅ Nueva tarea
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onNuevaActa?.(dayMenu.dateStr)
-                    setDayMenu(null)
-                  }}
-                  style={primary(t)}
-                >
-                  📝 Nueva acta
-                </button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {canCreateSeguimiento && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFechaTareaInicial(dayMenu.dateStr)
+                          setShowTarea(true)
+                          setDayMenu(null)
+                        }}
+                        style={primary(t)}
+                      >
+                        ✅ Nueva tarea
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onNuevaActa?.(dayMenu.dateStr)
+                          setDayMenu(null)
+                        }}
+                        style={primary(t)}
+                      >
+                        📝 Nueva acta
+                      </button>
+                    </>
+                  )}
+                  {canCreateBitacora && (
+                    <button
+                      type="button"
+                      onClick={() => setBitacoraSubmenu((v) => !v)}
+                      aria-expanded={bitacoraSubmenu}
+                      style={{
+                        ...primary(t),
+                        background: bitacoraSubmenu ? CALENDARIO_KIND.bitacora_diario.color : t.primary,
+                      }}
+                    >
+                      📒 Bitácora {bitacoraSubmenu ? '▴' : '▾'}
+                    </button>
+                  )}
+                </div>
+                {canCreateBitacora && bitacoraSubmenu && (
+                  <div style={{
+                    display: 'flex', flexWrap: 'wrap', gap: 8,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: `${CALENDARIO_KIND.bitacora_diario.color}12`,
+                  }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNuevaBitacora?.('diario', dayMenu.dateStr)
+                        setDayMenu(null)
+                      }}
+                      style={{
+                        ...ghost(t),
+                        borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_diario.color}`,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Reporte diario
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNuevaBitacora?.('evento', dayMenu.dateStr)
+                        setDayMenu(null)
+                      }}
+                      style={{
+                        ...ghost(t),
+                        borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_evento.color}`,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Reporte de evento
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -605,7 +768,7 @@ export default function SeguimientoCalendario({
                   fontSize: 'var(--cc-sm)',
                   textAlign: 'center',
                 }}>
-                  No hay tareas, compromisos ni actas para este día.
+                  No hay tareas, actas ni bitácora para este día.
                 </div>
               ) : (
                 <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -614,6 +777,7 @@ export default function SeguimientoCalendario({
                     const meta = CALENDARIO_KIND[kind] || CALENDARIO_KIND.tarea
                     const hora = eventDisplayTime(ev)
                     const titulo = eventDisplayTitle(ev)
+                    const elaborador = ev.extendedProps?.elaborador
                     return (
                       <li key={ev.id}>
                         <button
@@ -656,6 +820,16 @@ export default function SeguimientoCalendario({
                             }}>
                               {titulo}
                             </span>
+                            {elaborador ? (
+                              <span style={{
+                                display: 'block',
+                                fontSize: 'var(--cc-xs)',
+                                color: t.textMuted,
+                                marginTop: 2,
+                              }}>
+                                Elaborado por {elaborador}
+                              </span>
+                            ) : null}
                           </span>
                         </button>
                       </li>
@@ -729,7 +903,6 @@ function primary(t) {
 function ghost(t) {
   return {
     border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer',
-    background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)',
+    background: t.bgCard, color: t.text, fontWeight: 600, fontSize: 'var(--cc-sm)',
   }
 }
-
