@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { textoCompromisoCelda } from './compromisoTextoCelda'
+import { esEstadoTerminalCompromiso } from './compromisoEstados'
 import {
   ESTADOS_GESTION,
-  ORIGEN_COLOR,
   fmtFecha,
   numeroActaLabel,
 } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
+import { imagenSrc, openImageInNewTab } from './imagenUtils'
 
 export { textoCompromisoCelda } from './compromisoTextoCelda'
+export { esEstadoTerminalCompromiso } from './compromisoEstados'
 
 function iconSvgProps(size = 16) {
   return {
@@ -73,7 +75,25 @@ function IconNotify() {
   )
 }
 
-function iconBtn(t, { danger = false } = {}) {
+function IconCheck() {
+  return (
+    <svg {...iconSvgProps()}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+    </svg>
+  )
+}
+
+function IconEye() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function iconBtn(t, { accent = false } = {}) {
   return {
     width: 30,
     height: 30,
@@ -84,9 +104,9 @@ function iconBtn(t, { danger = false } = {}) {
     justifyContent: 'center',
     borderRadius: 7,
     cursor: 'pointer',
-    border: `1px solid ${danger ? 'var(--cc-color-danger,#b91c1c)' : t.border}`,
-    background: 'transparent',
-    color: danger ? 'var(--cc-color-danger,#b91c1c)' : t.text,
+    border: `1px solid ${accent ? 'var(--cc-color-positive,#0f766e)' : t.border}`,
+    background: accent ? 'color-mix(in srgb, var(--cc-color-positive,#0f766e) 12%, transparent)' : 'transparent',
+    color: accent ? 'var(--cc-color-positive,#0f766e)' : t.text,
   }
 }
 
@@ -104,9 +124,16 @@ function cellInp(t) {
   }
 }
 
+function rowBg(t, { highlighted } = {}) {
+  if (highlighted) {
+    return `color-mix(in srgb, ${t.primary || '#2563eb'} 12%, ${t.bgCard || '#fff'})`
+  }
+  return t.bgCard || t.bg || 'transparent'
+}
+
 /**
- * Tabla tipo hoja de cálculo de compromisos abiertos (revisión en el acta actual).
- * Edición inline de fecha/estado; PDF y acciones auxiliares bajo demanda.
+ * Tabla tipo hoja de cálculo reutilizable (compromisos abiertos / presentes).
+ * Fondo neutro del tema; ocultación de cumplidos/cancelados con toggle.
  */
 export default function ActaCompromisosAbiertosTable({
   t,
@@ -114,6 +141,7 @@ export default function ActaCompromisosAbiertosTable({
   items = [],
   emptyMessage = 'No hay compromisos abiertos previos de actas del mismo tipo.',
   highlightId = null,
+  showActaOrigen = true,
   usuario,
   usuarios = [],
   permisos,
@@ -122,13 +150,22 @@ export default function ActaCompromisosAbiertosTable({
 }) {
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState('')
-  const [panel, setPanel] = useState(null) // { type, item }
+  const [panel, setPanel] = useState(null)
+  const [incluirCumplidos, setIncluirCumplidos] = useState(false)
   const fileRef = useRef(null)
   const fileTargetIdRef = useRef(null)
   const highlightRowRef = useRef(null)
 
   const puedeEditar = !!permisos?.editar
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
+
+  const visibles = useMemo(() => {
+    const list = Array.isArray(items) ? items : []
+    if (incluirCumplidos) return list
+    return list.filter((c) => !esEstadoTerminalCompromiso(c.estado_gestion))
+  }, [items, incluirCumplidos])
+
+  const ocultosCount = (items || []).length - visibles.length
 
   useEffect(() => {
     if (highlightId == null) return undefined
@@ -138,11 +175,9 @@ export default function ActaCompromisosAbiertosTable({
       } catch { /* ignore */ }
     }, 80)
     return () => clearTimeout(tmr)
-  }, [highlightId, items])
+  }, [highlightId, visibles])
 
-  const refresh = async () => {
-    await onChanged?.()
-  }
+  const refresh = async () => { await onChanged?.() }
 
   const patchFecha = async (row, fecha) => {
     if (!fecha || fecha === String(row.fecha_vencimiento || '').slice(0, 10)) return
@@ -175,19 +210,47 @@ export default function ActaCompromisosAbiertosTable({
     }
   }
 
+  const marcarCumplido = async (row) => {
+    if (!window.confirm('¿Marcar este compromiso como Cumplido? Dejará de mostrarse en la vista activa (sigue en el historial).')) {
+      return
+    }
+    await patchEstado(row, 'cumplido')
+  }
+
   const openPanel = (type, item) => setPanel({ type, item })
   const closePanel = () => setPanel(null)
 
-  if (!items.length) {
-    return (
-      <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-        {emptyMessage}
-      </div>
-    )
-  }
-
   return (
     <div className="cc-seguim-compromisos-abiertos-table">
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 8,
+      }}
+      >
+        <label style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 'var(--cc-xs)',
+          color: t.textMuted,
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+        >
+          <input
+            type="checkbox"
+            checked={incluirCumplidos}
+            onChange={(e) => setIncluirCumplidos(e.target.checked)}
+          />
+          Incluir cumplidos / cancelados
+          {ocultosCount > 0 && !incluirCumplidos ? ` (${ocultosCount} archivados)` : ''}
+        </label>
+      </div>
+
       {error && (
         <div style={{
           marginBottom: 10,
@@ -202,171 +265,188 @@ export default function ActaCompromisosAbiertosTable({
           <button type="button" onClick={() => setError('')} style={{ ...iconBtn(t), marginLeft: 8, width: 24, height: 24 }}>×</button>
         </div>
       )}
-      <div
-        className="cc-seguim-table-scroll"
-        style={{
-          overflowX: 'auto',
-          WebkitOverflowScrolling: 'touch',
-          border: `1px solid ${t.border}`,
-          borderRadius: 10,
-        }}
-      >
-        <table
-          className="cc-seguim-table cc-seguim-table--sheet"
+
+      {!visibles.length ? (
+        <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+          {emptyMessage}
+        </div>
+      ) : (
+        <div
+          className="cc-seguim-table-scroll"
           style={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            fontSize: 'var(--cc-sm)',
-            minWidth: viewportCompact ? 720 : 880,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            border: `1px solid ${t.border}`,
+            borderRadius: 10,
+            background: t.bgCard || t.bg || 'transparent',
           }}
         >
-          <thead>
-            <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
-              <th style={th}>Vence</th>
-              <th style={th}>Estado</th>
-              <th style={{ ...th, minWidth: 160 }}>Compromiso</th>
-              <th style={th}>Notificar a</th>
-              <th style={{ ...th, textAlign: 'center', whiteSpace: 'nowrap' }}>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => {
-              const { short, full } = textoCompromisoCelda(c)
-              const busy = busyId === c.id
-              const fechaVal = String(c.fecha_vencimiento || '').slice(0, 10)
-              const actaLabel = c.acta_numero
-                || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : null)
-              const highlighted = highlightId != null && Number(highlightId) === Number(c.id)
-              return (
-                <tr
-                  key={c.id}
-                  ref={highlighted ? highlightRowRef : undefined}
-                  style={{
-                    borderTop: `1px solid ${t.border}`,
-                    background: highlighted
-                      ? `color-mix(in srgb, ${t.primary} 22%, ${ORIGEN_COLOR.compromiso.bg})`
-                      : ORIGEN_COLOR.compromiso.bg,
-                    outline: highlighted ? `2px solid ${t.primary}` : undefined,
-                    outlineOffset: -2,
-                    opacity: busy ? 0.65 : 1,
-                  }}
-                >
-                  <td data-label="Vence" style={td}>
-                    <input
-                      type="date"
-                      disabled={!puedeEditar || busy}
-                      value={fechaVal}
-                      onChange={(e) => patchFecha(c, e.target.value)}
-                      title={c.hora_vencimiento ? `Hora: ${String(c.hora_vencimiento).slice(0, 5)}` : 'Fecha de vencimiento'}
-                      style={cellInp(t)}
-                    />
-                  </td>
-                  <td data-label="Estado" style={td}>
-                    <select
-                      disabled={!puedeEditar || busy}
-                      value={c.estado_gestion || 'abierto'}
-                      onChange={(e) => patchEstado(c, e.target.value)}
-                      title="Estado de gestión"
-                      style={cellInp(t)}
-                    >
-                      {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
-                        <option key={x.value} value={x.value}>{x.label}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td
-                    data-label="Compromiso"
-                    style={{ ...td, maxWidth: 260, cursor: 'default' }}
-                    title={full || short}
+          <table
+            className="cc-seguim-table cc-seguim-table--sheet"
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: 'var(--cc-sm)',
+              minWidth: viewportCompact ? 720 : 900,
+              background: 'transparent',
+            }}
+          >
+            <thead>
+              <tr style={{ background: t.bg || `${t.primary}08`, color: t.textMuted, textAlign: 'left' }}>
+                <th style={th}>Vence</th>
+                <th style={th}>Estado</th>
+                <th style={{ ...th, minWidth: 160 }}>Compromiso</th>
+                <th style={th}>Notificar a</th>
+                <th style={{ ...th, textAlign: 'center', whiteSpace: 'nowrap' }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibles.map((c) => {
+                const { short, full } = textoCompromisoCelda(c)
+                const busy = busyId === c.id
+                const fechaVal = String(c.fecha_vencimiento || '').slice(0, 10)
+                const actaLabel = showActaOrigen
+                  ? (c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : null))
+                  : null
+                const highlighted = highlightId != null && Number(highlightId) === Number(c.id)
+                const terminal = esEstadoTerminalCompromiso(c.estado_gestion)
+                return (
+                  <tr
+                    key={c.id}
+                    ref={highlighted ? highlightRowRef : undefined}
+                    style={{
+                      borderTop: `1px solid ${t.border}`,
+                      background: rowBg(t, { highlighted }),
+                      outline: highlighted ? `2px solid ${t.primary}` : undefined,
+                      outlineOffset: -2,
+                      opacity: busy ? 0.65 : 1,
+                    }}
                   >
-                    <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{short}</div>
-                    {actaLabel && (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: ORIGEN_COLOR.compromiso.border, marginTop: 2 }}>
-                        {actaLabel}
-                        {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
-                      </div>
-                    )}
-                  </td>
-                  <td data-label="Notificar a" style={td}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                      <span style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        color: t.text,
-                        flex: 1,
-                      }}
-                        title={c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : 'Sin destinatario')}
+                    <td data-label="Vence" style={td}>
+                      <input
+                        type="date"
+                        disabled={!puedeEditar || busy || terminal}
+                        value={fechaVal}
+                        onChange={(e) => patchFecha(c, e.target.value)}
+                        title={c.hora_vencimiento ? `Hora: ${String(c.hora_vencimiento).slice(0, 5)}` : 'Fecha de vencimiento'}
+                        style={cellInp(t)}
+                      />
+                    </td>
+                    <td data-label="Estado" style={td}>
+                      <select
+                        disabled={!puedeEditar || busy}
+                        value={c.estado_gestion || 'abierto'}
+                        onChange={(e) => patchEstado(c, e.target.value)}
+                        title="Estado de gestión"
+                        style={cellInp(t)}
                       >
-                        {c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}
-                      </span>
-                      {(esDev || Number(c.created_by) === Number(usuario?.id) || Number(c.solicitante_id) === Number(usuario?.id)) && puedeEditar && (
+                        {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
+                          <option key={x.value} value={x.value}>{x.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td
+                      data-label="Compromiso"
+                      style={{ ...td, maxWidth: 260, cursor: 'default' }}
+                      title={full || short}
+                    >
+                      <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{short}</div>
+                      {actaLabel && (
+                        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
+                          {actaLabel}
+                          {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
+                        </div>
+                      )}
+                    </td>
+                    <td data-label="Notificar a" style={td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            color: t.text,
+                            flex: 1,
+                          }}
+                          title={c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : 'Sin destinatario')}
+                        >
+                          {c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}
+                        </span>
+                        {(esDev || Number(c.created_by) === Number(usuario?.id) || Number(c.solicitante_id) === Number(usuario?.id)) && puedeEditar && (
+                          <button
+                            type="button"
+                            style={iconBtn(t)}
+                            title="Notificar a (asignar o enviar referencia)"
+                            aria-label="Notificar a"
+                            disabled={busy}
+                            onClick={() => openPanel('notify', c)}
+                          >
+                            <IconNotify />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }}>
+                      <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          style={iconBtn(t, { accent: !terminal })}
+                          title={terminal ? 'Ya está cumplido/cancelado' : 'Marcar como cumplido (archivar de la vista activa)'}
+                          aria-label="Marcar cumplido"
+                          disabled={busy || !puedeEditar || terminal}
+                          onClick={() => marcarCumplido(c)}
+                        >
+                          <IconCheck />
+                        </button>
                         <button
                           type="button"
                           style={iconBtn(t)}
-                          title="Notificar a (asignar o enviar referencia)"
-                          aria-label="Notificar a"
+                          title="Comentarios"
+                          aria-label="Comentarios"
                           disabled={busy}
-                          onClick={() => openPanel('notify', c)}
+                          onClick={() => openPanel('comment', c)}
                         >
-                          <IconNotify />
+                          <IconComment />
                         </button>
-                      )}
-                    </div>
-                  </td>
-                  <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                      <button
-                        type="button"
-                        style={iconBtn(t)}
-                        title="Comentarios"
-                        aria-label="Comentarios"
-                        disabled={busy}
-                        onClick={() => openPanel('comment', c)}
-                      >
-                        <IconComment />
-                      </button>
-                      <button
-                        type="button"
-                        style={iconBtn(t)}
-                        title="Adjuntar archivo / evidencia"
-                        aria-label="Adjuntar archivo"
-                        disabled={busy}
-                        onClick={() => {
-                          fileTargetIdRef.current = c.id
-                          fileRef.current?.click()
-                        }}
-                      >
-                        <IconClip />
-                      </button>
-                      <button
-                        type="button"
-                        style={iconBtn(t)}
-                        title="Solicitar aplazamiento (justificación)"
-                        aria-label="Solicitar aplazamiento"
-                        disabled={busy}
-                        onClick={() => openPanel('postpone', c)}
-                      >
-                        <IconPostpone />
-                      </button>
-                      <button
-                        type="button"
-                        style={iconBtn(t)}
-                        title="Ver PDF del acta de origen (carga bajo demanda)"
-                        aria-label="Ver PDF del acta"
-                        disabled={busy || !c.acta_id}
-                        onClick={() => openPanel('pdf', c)}
-                      >
-                        <IconPdf />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+                        <button
+                          type="button"
+                          style={iconBtn(t)}
+                          title="Ver / adjuntar evidencias"
+                          aria-label="Adjuntos"
+                          disabled={busy}
+                          onClick={() => openPanel('adjuntos', c)}
+                        >
+                          <IconClip />
+                        </button>
+                        <button
+                          type="button"
+                          style={iconBtn(t)}
+                          title="Solicitar aplazamiento (justificación)"
+                          aria-label="Solicitar aplazamiento"
+                          disabled={busy}
+                          onClick={() => openPanel('postpone', c)}
+                        >
+                          <IconPostpone />
+                        </button>
+                        <button
+                          type="button"
+                          style={iconBtn(t)}
+                          title="Ver PDF del acta de origen (carga bajo demanda)"
+                          aria-label="Ver PDF del acta"
+                          disabled={busy || !c.acta_id}
+                          onClick={() => openPanel('pdf', c)}
+                        >
+                          <IconPdf />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <input
         ref={fileRef}
@@ -382,6 +462,10 @@ export default function ActaCompromisosAbiertosTable({
           try {
             await api.uploadEvidencia(id, f)
             await refresh()
+            if (panel?.type === 'adjuntos' && Number(panel.item?.id) === Number(id)) {
+              const d = await api.getItem(id)
+              setPanel({ type: 'adjuntos', item: { ...panel.item, ...d } })
+            }
           } catch (err) {
             setError(err.message || 'No se pudo adjuntar el archivo')
           } finally {
@@ -402,6 +486,10 @@ export default function ActaCompromisosAbiertosTable({
           onClose={closePanel}
           onChanged={refresh}
           setError={setError}
+          onPickFile={(itemId) => {
+            fileTargetIdRef.current = itemId
+            fileRef.current?.click()
+          }}
         />
       )}
     </div>
@@ -412,10 +500,10 @@ const th = { padding: '7px 8px', fontWeight: 700, whiteSpace: 'nowrap', fontSize
 const td = { padding: '6px 8px', verticalAlign: 'middle', color: 'inherit' }
 
 function ActionPanel({
-  t, api, panel, usuario, usuarios, viewportCompact, onClose, onChanged, setError,
+  t, api, panel, usuario, usuarios, viewportCompact, onClose, onChanged, setError, onPickFile,
 }) {
   const { type, item } = panel
-  const [loading, setLoading] = useState(type === 'comment' || type === 'postpone')
+  const [loading, setLoading] = useState(['comment', 'postpone', 'adjuntos'].includes(type))
   const [detail, setDetail] = useState(null)
   const [comentario, setComentario] = useState('')
   const [justForm, setJustForm] = useState({ motivo: '', nueva_fecha_vencimiento: '' })
@@ -428,7 +516,7 @@ function ActionPanel({
 
   useEffect(() => {
     let cancelled = false
-    if (type === 'comment' || type === 'postpone') {
+    if (['comment', 'postpone', 'adjuntos'].includes(type)) {
       setLoading(true)
       api.getItem(item.id).then((d) => {
         if (!cancelled) setDetail(d)
@@ -452,6 +540,7 @@ function ActionPanel({
     postpone: 'Solicitar aplazamiento',
     pdf: 'PDF del acta de origen',
     notify: 'Notificar a',
+    adjuntos: 'Adjuntos / evidencias',
   }[type] || 'Detalle'
 
   const loadPdf = async () => {
@@ -498,8 +587,60 @@ function ActionPanel({
         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 10 }}>
           {(item.titulo || item.descripcion || '').slice(0, 140)}
         </div>
-        {(localErr) && (
+        {localErr && (
           <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>{localErr}</div>
+        )}
+
+        {type === 'adjuntos' && (
+          loading ? <div style={{ color: t.textMuted }}>Cargando…</div> : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                {(detail?.evidencias || []).length === 0 && (
+                  <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin evidencias aún.</div>
+                )}
+                {(detail?.evidencias || []).map((ev) => (
+                  <div
+                    key={ev.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: 8,
+                      borderRadius: 8,
+                      border: `1px solid ${t.border}`,
+                      fontSize: 'var(--cc-sm)',
+                      color: t.text,
+                    }}
+                  >
+                    <IconClip />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ev.nombre_archivo || 'Archivo'}
+                      </div>
+                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>{fmtFecha(ev.created_at)}</div>
+                    </div>
+                    {(ev.url || ev.data_uri || imagenSrc(ev)) && (
+                      <button
+                        type="button"
+                        style={iconBtn(t)}
+                        title="Ver adjunto"
+                        onClick={() => openImageInNewTab(ev)}
+                      >
+                        <IconEye />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                style={primary(t)}
+                onClick={() => onPickFile?.(item.id)}
+              >
+                + Adjuntar archivo
+              </button>
+            </>
+          )
         )}
 
         {type === 'comment' && (
@@ -555,7 +696,7 @@ function ActionPanel({
           loading ? <div style={{ color: t.textMuted }}>Cargando…</div> : (
             <>
               <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4 }}>
-                Solicita una nueva fecha con justificación. Queda pendiente hasta que quien corresponde la apruebe o rechace (mismo flujo de la plataforma).
+                Solicita una nueva fecha con justificación. Queda pendiente hasta que quien corresponde la apruebe o rechace.
               </p>
               {(detail?.justificaciones || []).filter((j) => j.estado === 'pendiente').map((j) => (
                 <div key={j.id} style={{ padding: 10, border: `1px solid ${t.border}`, borderRadius: 8, marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
@@ -638,7 +779,7 @@ function ActionPanel({
         {type === 'pdf' && (
           <>
             <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-              La generación del PDF puede tardar varios segundos; no bloquea la tabla de compromisos.
+              La generación del PDF puede tardar varios segundos; no bloquea la tabla.
             </p>
             <button
               type="button"

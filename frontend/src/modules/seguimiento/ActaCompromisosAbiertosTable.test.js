@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { textoCompromisoCelda } from './compromisoTextoCelda.js'
+import { esEstadoTerminalCompromiso } from './compromisoEstados.js'
 
 describe('textoCompromisoCelda', () => {
   it('devuelve guión si no hay texto', () => {
@@ -27,10 +28,14 @@ describe('textoCompromisoCelda', () => {
   })
 })
 
-/**
- * Contrato de carga: abrir detalle NO debe esperar pdfActaBlob.
- * El PDF se dispara solo vía acción explícita (botón / icono).
- */
+describe('esEstadoTerminalCompromiso', () => {
+  it('marca cumplido y cancelado como terminales', () => {
+    assert.equal(esEstadoTerminalCompromiso('cumplido'), true)
+    assert.equal(esEstadoTerminalCompromiso('Cancelado'), true)
+    assert.equal(esEstadoTerminalCompromiso('abierto'), false)
+  })
+})
+
 describe('pdf on-demand contract', () => {
   it('reload de detalle no incluye paso de PDF', async () => {
     const steps = []
