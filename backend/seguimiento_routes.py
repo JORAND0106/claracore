@@ -1077,7 +1077,18 @@ def route_upsert_bitacora_tipo_material(
     row = upsert_tipo_material(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
     )
-    return row or {"ok": False, "detail": "Tipo de material no registrado (vacío)"}
+    if row:
+        return row
+    nombre = str(body.nombre or "").strip()
+    if not nombre:
+        return {"ok": False, "detail": "Tipo de material no registrado (vacío)"}
+    return {
+        "ok": False,
+        "detail": (
+            "No se pudo guardar el tipo de material en el catálogo. "
+            "Verifique que la migración seguimiento_bitacora_tipo_material esté aplicada."
+        ),
+    }
 
 
 @router.get("/{contrato_id}/bitacora/visitantes")
