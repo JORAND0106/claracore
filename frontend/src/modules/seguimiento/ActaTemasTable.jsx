@@ -111,7 +111,7 @@ export default function ActaTemasTable({
               width: '100%',
               borderCollapse: 'collapse',
               fontSize: 'var(--cc-sm)',
-              minWidth: viewportCompact ? 640 : 760,
+              minWidth: viewportCompact ? 640 : 860,
               background: 'transparent',
             }}
           >
@@ -119,7 +119,7 @@ export default function ActaTemasTable({
               <tr style={{ background: t.bg || `${t.primary}08`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>#</th>
                 <th style={th}>Interviniente</th>
-                <th style={{ ...th, minWidth: 180 }}>Tema</th>
+                <th style={{ ...th, minWidth: 220 }}>Tema</th>
                 <th style={{ ...th, textAlign: 'center' }}>Adjuntos</th>
                 <th style={{ ...th, textAlign: 'center' }}>Acciones</th>
               </tr>
@@ -149,7 +149,7 @@ export default function ActaTemasTable({
                         {String(idea.quien_dijo || '').trim() || '—'}
                       </span>
                     </td>
-                    <td data-label="Tema" style={{ ...td, maxWidth: 280 }} title={plano || titulo}>
+                    <td data-label="Tema" style={{ ...td, maxWidth: 340 }} title={plano || titulo}>
                       <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{preview}</div>
                       {titulo && plano && plano !== titulo && (
                         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>

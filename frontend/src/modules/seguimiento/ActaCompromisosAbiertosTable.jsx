@@ -3,13 +3,17 @@ import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { textoCompromisoCelda } from './compromisoTextoCelda'
 import { esCompromisoArchivadoRevision } from './compromisoEstados'
+import { destinatarioLabel } from './tareaAsignaciones'
+import { calcularAvanceTarea, labelAvance } from './tareaAvance'
 import {
   ESTADOS_GESTION,
+  ORIGEN_COLOR,
   fmtFecha,
   numeroActaLabel,
 } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
+import { fechaVencimientoEfectiva, sortByProximidadVencimiento } from './vencimientoLevels'
 
 export { textoCompromisoCelda } from './compromisoTextoCelda'
 export { esCompromisoArchivadoRevision, esEstadoTerminalCompromiso } from './compromisoEstados'
@@ -131,10 +135,15 @@ function rowBg(t, { highlighted } = {}) {
   return t.bgCard || t.bg || 'transparent'
 }
 
+function itemTieneChecklist(item) {
+  const ck = item?.campos_libres?.checklist
+  return Array.isArray(ck) && ck.length > 0
+}
+
 /**
- * Tabla tipo hoja de cálculo reutilizable (compromisos abiertos / presentes).
- * Fondo neutro del tema. Ocultación solo por archivado_revision (botón en Compromisos abiertos),
- * no por el valor del selector de estado de gestión.
+ * Tabla tipo hoja de cálculo compartida: compromisos (acta) y tareas/compromisos (Bandeja).
+ * Orden por defecto: fecha de vencimiento ascendente (más próxima primero).
+ * Ocultación por archivado_revision solo cuando filtrarArchivados está activo.
  */
 export default function ActaCompromisosAbiertosTable({
   t,
@@ -145,6 +154,14 @@ export default function ActaCompromisosAbiertosTable({
   showActaOrigen = true,
   /** Solo en pestaña Compromisos abiertos: botón que archiva y oculta de la vista activa. */
   permitirArchivar = false,
+  /** null = filtrar archivados solo si permitirArchivar; en Bandeja suele ser false. */
+  filtrarArchivados = null,
+  /** Etiqueta de la columna de texto (Compromiso / Tema). */
+  textoColumnaLabel = 'Compromiso',
+  /** Muestra chip Compromiso/Tarea (Bandeja mixta). */
+  showOrigenBadge = false,
+  /** Abre detalle completo (checklist multi-destinatario, etc.) sin sustituir la tabla. */
+  onOpenDetalle = null,
   usuario,
   usuarios = [],
   permisos,
@@ -161,14 +178,19 @@ export default function ActaCompromisosAbiertosTable({
 
   const puedeEditar = !!permisos?.editar
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
+  const doFilterArchivados = filtrarArchivados == null ? !!permitirArchivar : !!filtrarArchivados
 
   const visibles = useMemo(() => {
-    const list = Array.isArray(items) ? items : []
-    if (incluirArchivados) return list
-    return list.filter((c) => !esCompromisoArchivadoRevision(c))
-  }, [items, incluirArchivados])
+    let list = Array.isArray(items) ? items : []
+    if (doFilterArchivados && !incluirArchivados) {
+      list = list.filter((c) => !esCompromisoArchivadoRevision(c))
+    }
+    return sortByProximidadVencimiento(list)
+  }, [items, incluirArchivados, doFilterArchivados])
 
-  const ocultosCount = (items || []).filter((c) => esCompromisoArchivadoRevision(c)).length
+  const ocultosCount = doFilterArchivados
+    ? (items || []).filter((c) => esCompromisoArchivadoRevision(c)).length
+    : 0
 
   useEffect(() => {
     if (highlightId == null) return undefined
@@ -183,14 +205,23 @@ export default function ActaCompromisosAbiertosTable({
   const refresh = async () => { await onChanged?.() }
 
   const patchFecha = async (row, fecha) => {
-    if (!fecha || fecha === String(row.fecha_vencimiento || '').slice(0, 10)) return
+    const due = fechaVencimientoEfectiva(row)
+    const actual = String(due.fecha || row.fecha_vencimiento || '').slice(0, 10)
+    if (!fecha || fecha === actual) return
     setBusyId(row.id)
     setError('')
     try {
-      await api.patchFechaCompromiso(row.id, {
-        fecha_vencimiento: fecha,
-        hora_vencimiento: row.hora_vencimiento || null,
-      })
+      if (String(row.origen || '').toLowerCase() === 'tarea') {
+        await api.updateTarea(row.id, {
+          fecha_vencimiento: fecha,
+          hora_vencimiento: row.hora_vencimiento || null,
+        })
+      } else {
+        await api.patchFechaCompromiso(row.id, {
+          fecha_vencimiento: fecha,
+          hora_vencimiento: row.hora_vencimiento || null,
+        })
+      }
       await refresh()
     } catch (e) {
       setError(e.message || 'No se pudo actualizar la fecha')
@@ -225,7 +256,7 @@ export default function ActaCompromisosAbiertosTable({
 
   return (
     <div className="cc-seguim-compromisos-abiertos-table">
-      {permitirArchivar && (
+      {doFilterArchivados && (
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
@@ -292,7 +323,7 @@ export default function ActaCompromisosAbiertosTable({
               width: '100%',
               borderCollapse: 'collapse',
               fontSize: 'var(--cc-sm)',
-              minWidth: viewportCompact ? 720 : 900,
+              minWidth: viewportCompact ? 720 : 980,
               background: 'transparent',
             }}
           >
@@ -300,7 +331,7 @@ export default function ActaCompromisosAbiertosTable({
               <tr style={{ background: t.bg || `${t.primary}08`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>Vence</th>
                 <th style={th}>Estado</th>
-                <th style={{ ...th, minWidth: 160 }}>Compromiso</th>
+                <th style={{ ...th, minWidth: 220 }}>{textoColumnaLabel}</th>
                 <th style={th}>Notificar a</th>
                 <th style={{ ...th, textAlign: 'center', whiteSpace: 'nowrap' }}>Acciones</th>
               </tr>
@@ -309,12 +340,19 @@ export default function ActaCompromisosAbiertosTable({
               {visibles.map((c) => {
                 const { short, full } = textoCompromisoCelda(c)
                 const busy = busyId === c.id
-                const fechaVal = String(c.fecha_vencimiento || '').slice(0, 10)
-                const actaLabel = showActaOrigen
+                const due = fechaVencimientoEfectiva(c)
+                const fechaVal = String(due.fecha || c.fecha_vencimiento || '').slice(0, 10)
+                const esTarea = String(c.origen || '').toLowerCase() === 'tarea'
+                const conChecklist = esTarea && itemTieneChecklist(c)
+                const avance = esTarea ? calcularAvanceTarea(c) : null
+                const destLabel = destinatarioLabel(c)
+                const origenMeta = ORIGEN_COLOR[c.origen] || ORIGEN_COLOR.tarea
+                const actaLabel = showActaOrigen && !esTarea
                   ? (c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : null))
                   : null
                 const highlighted = highlightId != null && Number(highlightId) === Number(c.id)
                 const archivado = esCompromisoArchivadoRevision(c)
+                const estadoDisabled = !puedeEditar || busy || archivado || conChecklist
                 return (
                   <tr
                     key={c.id}
@@ -330,31 +368,57 @@ export default function ActaCompromisosAbiertosTable({
                     <td data-label="Vence" style={td}>
                       <input
                         type="date"
-                        disabled={!puedeEditar || busy || archivado}
+                        disabled={!puedeEditar || busy || archivado || conChecklist}
                         value={fechaVal}
                         onChange={(e) => patchFecha(c, e.target.value)}
-                        title={c.hora_vencimiento ? `Hora: ${String(c.hora_vencimiento).slice(0, 5)}` : 'Fecha de vencimiento'}
+                        title={
+                          conChecklist
+                            ? 'La fecha se deriva del checklist (abrir detalle)'
+                            : (c.hora_vencimiento || due.hora
+                              ? `Hora: ${String(c.hora_vencimiento || due.hora).slice(0, 5)}`
+                              : 'Fecha de vencimiento')
+                        }
                         style={cellInp(t)}
                       />
                     </td>
                     <td data-label="Estado" style={td}>
-                      <select
-                        disabled={!puedeEditar || busy || archivado}
-                        value={c.estado_gestion || 'abierto'}
-                        onChange={(e) => patchEstado(c, e.target.value)}
-                        title="Estado de gestión (informativo; no archiva ni oculta)"
-                        style={cellInp(t)}
-                      >
-                        {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
-                          <option key={x.value} value={x.value}>{x.label}</option>
-                        ))}
-                      </select>
+                      {conChecklist ? (
+                        <div
+                          style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}
+                          title="El estado se calcula según el avance del checklist"
+                        >
+                          {avance?.pct === 100 ? 'Cumplido' : (labelAvance(avance) || c.estado_gestion || '—')}
+                        </div>
+                      ) : (
+                        <select
+                          disabled={estadoDisabled}
+                          value={c.estado_gestion || 'abierto'}
+                          onChange={(e) => patchEstado(c, e.target.value)}
+                          title="Estado de gestión (informativo; no archiva ni oculta)"
+                          style={cellInp(t)}
+                        >
+                          {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
+                            <option key={x.value} value={x.value}>{x.label}</option>
+                          ))}
+                        </select>
+                      )}
                     </td>
                     <td
-                      data-label="Compromiso"
-                      style={{ ...td, maxWidth: 260, cursor: 'default' }}
+                      data-label={textoColumnaLabel}
+                      style={{ ...td, maxWidth: 360, cursor: 'default' }}
                       title={full || short}
                     >
+                      {showOrigenBadge && (
+                        <span style={{
+                          fontSize: 'var(--cc-xs)',
+                          fontWeight: 700,
+                          color: origenMeta.border,
+                          marginRight: 6,
+                        }}
+                        >
+                          {origenMeta.label}
+                        </span>
+                      )}
                       <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{short}</div>
                       {actaLabel && (
                         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
@@ -373,9 +437,9 @@ export default function ActaCompromisosAbiertosTable({
                             color: t.text,
                             flex: 1,
                           }}
-                          title={c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : 'Sin destinatario')}
+                          title={destLabel}
                         >
-                          {c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}
+                          {destLabel}
                         </span>
                         {(esDev || Number(c.created_by) === Number(usuario?.id) || Number(c.solicitante_id) === Number(usuario?.id)) && puedeEditar && (
                           <button
@@ -403,6 +467,18 @@ export default function ActaCompromisosAbiertosTable({
                             onClick={() => marcarCumplido(c)}
                           >
                             <IconCheck />
+                          </button>
+                        )}
+                        {typeof onOpenDetalle === 'function' && (
+                          <button
+                            type="button"
+                            style={iconBtn(t)}
+                            title={esTarea ? 'Detalle / checklist' : 'Ver detalle'}
+                            aria-label="Detalle"
+                            disabled={busy}
+                            onClick={() => onOpenDetalle(c)}
+                          >
+                            <IconEye />
                           </button>
                         )}
                         <button
@@ -435,16 +511,18 @@ export default function ActaCompromisosAbiertosTable({
                         >
                           <IconPostpone />
                         </button>
-                        <button
-                          type="button"
-                          style={iconBtn(t)}
-                          title="Ver PDF del acta de origen (carga bajo demanda)"
-                          aria-label="Ver PDF del acta"
-                          disabled={busy || !c.acta_id}
-                          onClick={() => openPanel('pdf', c)}
-                        >
-                          <IconPdf />
-                        </button>
+                        {!esTarea && (
+                          <button
+                            type="button"
+                            style={iconBtn(t)}
+                            title="Ver PDF del acta de origen (carga bajo demanda)"
+                            aria-label="Ver PDF del acta"
+                            disabled={busy || !c.acta_id}
+                            onClick={() => openPanel('pdf', c)}
+                          >
+                            <IconPdf />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

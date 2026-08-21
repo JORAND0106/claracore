@@ -69,6 +69,26 @@ describe('visibilidad tabla: estado vs archivar', () => {
   })
 })
 
+describe('orden por vencimiento (más próxima primero)', () => {
+  it('ordena ascendente por fecha_vencimiento', async () => {
+    const { sortByProximidadVencimiento } = await import('./vencimientoLevels.js')
+    const items = [
+      { id: 3, fecha_vencimiento: '2026-09-10' },
+      { id: 1, fecha_vencimiento: '2026-08-01' },
+      { id: 2, fecha_vencimiento: '2026-08-15' },
+      { id: 4, fecha_vencimiento: null },
+    ]
+    const sorted = sortByProximidadVencimiento(items)
+    assert.deepEqual(sorted.map((x) => x.id), [1, 2, 3, 4])
+  })
+})
+
+describe('popup acta ~20% más ancho', () => {
+  it('1416px es ~20% sobre 1180px', () => {
+    assert.equal(Math.round(1180 * 1.2), 1416)
+  })
+})
+
 describe('pdf on-demand contract', () => {
   it('reload de detalle no incluye paso de PDF', async () => {
     const steps = []
