@@ -12,8 +12,9 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimient
 export default function ItemDetalleModal({
   t, api, itemId, usuario, usuarios = [], permisos, onClose, onChanged,
   viewportCompact: viewportCompactProp,
-  allowEstadoGestion = null, // null = auto (solo tareas); true/false fuerza
+  allowEstadoGestion = null, // null = auto; true/false fuerza
   revisionEnActa = false, // revisión de compromisos en el siguiente comité
+  overlayZIndex = null, // p.ej. 12100 cuando se anida bajo ActaEditor modal
 }) {
   const viewportCompactHook = useSeguimientoCompact()
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
@@ -84,7 +85,7 @@ export default function ItemDetalleModal({
 
   if (loading || !item) {
     return (
-      <Overlay t={t} onClose={onClose} wide={false} viewportCompact={viewportCompact}>
+      <Overlay t={t} onClose={onClose} wide={false} viewportCompact={viewportCompact} zIndex={overlayZIndex}>
         <div style={{ color: t.textMuted }}>{error || 'Cargando…'}</div>
       </Overlay>
     )
@@ -107,9 +108,14 @@ export default function ItemDetalleModal({
     String(item.acta?.estado || '').toLowerCase(),
   )
   const puedeEditarFechaCompromiso = esCompromiso && (soyElaboradorActa || esDev) && !actaSellada && permisos?.editar
-  const puedeComentarCompromiso = esCompromiso
-    && Number(item.asignado_a_id) === Number(usuario?.id)
-    && Number(item.asignado_a_id) > 0
+  // Asignado deja observaciones; elaborador/Dev también al revisar (p.ej. cumplimiento anticipado).
+  const puedeComentarCompromiso = esCompromiso && (
+    (Number(item.asignado_a_id) === Number(usuario?.id) && Number(item.asignado_a_id) > 0)
+    || soyElaboradorActa
+    || esDev
+    || revisionEnActa === true
+    || allowEstadoGestion === true
+  )
   const puedeComentar = esTarea || puedeComentarCompromiso
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
@@ -128,7 +134,11 @@ export default function ItemDetalleModal({
     if (esTarea && tieneChecklist) return false
     // Multi sin checklist: cada asignado marca su parte vía panel dedicado
     if (esTarea && multiAsignacion && !tieneChecklist) return false
-    return esTarea
+    if (esTarea) return true
+    // Compromisos: elaborador del acta o Dev gestionan estado (cumplimiento anticipado, etc.).
+    // El asignado no se autocalifica desde bandeja/calendario.
+    if (esCompromiso) return !!(soyElaboradorActa || esDev)
+    return false
   })()
 
   const patchMiEstado = async (estado, checklistId = null) => {
@@ -222,7 +232,7 @@ export default function ItemDetalleModal({
   }
 
   return (
-    <Overlay t={t} onClose={onClose} wide={wide} viewportCompact={viewportCompact}>
+    <Overlay t={t} onClose={onClose} wide={wide} viewportCompact={viewportCompact} zIndex={overlayZIndex}>
       <div className={viewportCompact ? 'cc-seguim-item-detalle cc-seguim-item-detalle--compact' : 'cc-seguim-item-detalle'}>
       <div style={{
         borderLeft: `5px solid ${origen.border}`,
@@ -480,7 +490,8 @@ export default function ItemDetalleModal({
           fontSize: 'var(--cc-sm)', color: t.textMuted,
         }}>
           Estado actual: <b style={{ color: t.text }}>{item.estado_gestion}</b>.
-          La calificación de compromisos de acta se define en la revisión del siguiente comité, no desde la bandeja.
+          La calificación del compromiso la define el elaborador del acta (o Desarrollador)
+          en la revisión de comité o desde el detalle; el asignado no se autocalifica.
         </div>
       )}
 
@@ -563,7 +574,7 @@ export default function ItemDetalleModal({
         <h4 style={h4(t)}>Comentarios</h4>
         {esCompromiso && (
           <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-            En compromisos de acta, solo el asignado puede dejar observaciones al elaborador.
+            En compromisos de acta pueden comentar el asignado y el elaborador (p. ej. motivo de cumplimiento anticipado).
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflow: 'auto', marginBottom: 8 }}>
@@ -583,7 +594,7 @@ export default function ItemDetalleModal({
             <input
               value={comentario}
               onChange={(e) => setComentario(e.target.value)}
-              placeholder={esCompromiso ? 'Observación para el elaborador…' : 'Escriba un comentario…'}
+              placeholder={esCompromiso ? 'Observación / motivo (p. ej. cumplimiento anticipado)…' : 'Escriba un comentario…'}
               style={{ ...inp(t), flex: 1 }}
             />
             <button
@@ -606,7 +617,7 @@ export default function ItemDetalleModal({
           </div>
         ) : esCompromiso ? (
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            No puede comentar este compromiso (solo el usuario asignado).
+            No puede comentar este compromiso (solo el asignado o el elaborador del acta).
           </div>
         ) : null}
       </section>
@@ -709,13 +720,17 @@ export default function ItemDetalleModal({
   )
 }
 
-function Overlay({ t, onClose, children, wide = false, viewportCompact = false }) {
+function Overlay({ t, onClose, children, wide = false, viewportCompact = false, zIndex = null }) {
+  const overlayStyle = {
+    ...seguimientoModalOverlayStyle(viewportCompact),
+    ...(zIndex != null ? { zIndex } : null),
+  }
   return (
     <div
       role="dialog"
       aria-modal="true"
       className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
-      style={seguimientoModalOverlayStyle(viewportCompact)}
+      style={overlayStyle}
     >
       <div
         className={viewportCompact ? 'cc-seguim-modal-sheet' : 'cc-seguim-modal-sheet--desktop'}

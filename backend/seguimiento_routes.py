@@ -418,7 +418,9 @@ def route_eliminar_item(item_id: int, current_user=Depends(get_current_user)):
 def route_comentario(item_id: int, body: ComentarioBody, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "ver")
     try:
-        return agregar_comentario(supabase, item_id, body.mensaje, _uid(current_user))
+        return agregar_comentario(
+            supabase, item_id, body.mensaje, _uid(current_user), current_user=current_user,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
