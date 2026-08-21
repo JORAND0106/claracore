@@ -497,11 +497,71 @@ export default function BitacoraEntradaEditor({
             origen: im.origen || 'archivo',
           })),
       })
-      setOkMsg('Reporte de Evento registrado (inmutable).')
+      setOkMsg('Reporte de Evento registrado. Editable durante el día de creación.')
       onSaved?.(row)
       onClose?.()
     } catch (e) {
       setError(e.message || 'No se pudo crear el evento')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const guardarEvento = async () => {
+    if (localId == null) return
+    setBusy(true)
+    setError('')
+    setOkMsg('')
+    try {
+      if (isRichTextEmpty(cuerpoHtml) && eventoTipo === 'reporte_actividades') {
+        throw new Error('Describa las actividades del día en el texto libre')
+      }
+      const detallePayload = { ...eventoDetalle }
+      if (eventoTipo === 'visita_terceros') {
+        const lista = (eventoDetalle.visitantes_lista || [])
+          .filter((v) => v && String(v.nombre || '').trim())
+          .map((v) => ({
+            visitante_id: v.visitante_id ?? null,
+            usuario_id: v.usuario_id ?? null,
+            nombre: String(v.nombre).trim(),
+            cargo: String(v.cargo || '').trim(),
+            origen: v.origen || (v.usuario_id ? 'plataforma' : 'catalogo'),
+          }))
+        detallePayload.visitantes_lista = lista
+        detallePayload.visitantes = lista
+          .map((v) => (v.cargo ? `${v.nombre} (${v.cargo})` : v.nombre))
+          .join(', ')
+      }
+      let row = await api.updateBitacoraEntrada(localId, {
+        evento_tipo: eventoTipo,
+        evento_detalle: detallePayload,
+        dirigido_a: eventoTieneDestinatario(eventoTipo) ? dirigidoA : '',
+        cuerpo_html: cuerpoHtml,
+        imagenes: (imagenes || [])
+          .filter((im) => im.data_uri || im.data_base64 || im.blob_path || im.url)
+          .map((im) => ({
+            nombre: im.nombre || `foto-${Date.now()}.png`,
+            data_uri: im.data_uri || im.data_base64 || undefined,
+            blob_path: im.blob_path || undefined,
+            url: im.url || undefined,
+            content_hash: im.content_hash || undefined,
+            mime_type: im.mime_type || 'image/png',
+            origen: im.origen || 'archivo',
+          })),
+      })
+      const pending = (imagenes || []).filter((im) => im.pending && im.data_uri)
+      for (const im of pending) {
+        row = await api.pegarImagenBitacora(row.id, {
+          nombre: im.nombre || `foto-${Date.now()}.png`,
+          data_base64: im.data_uri,
+          mime_type: im.mime_type || 'image/png',
+          origen: im.origen || 'archivo',
+        })
+      }
+      setOkMsg('Reporte de Evento guardado.')
+      onSaved?.(row)
+    } catch (e) {
+      setError(e.message || 'No se pudo guardar el evento')
     } finally {
       setBusy(false)
     }
@@ -1248,6 +1308,11 @@ export default function BitacoraEntradaEditor({
             )}
             {tipo === 'diario' && editable && (
               <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
+                Guardar
+              </button>
+            )}
+            {tipo === 'evento' && !esNuevo && editable && (
+              <button type="button" disabled={busy} onClick={() => void guardarEvento()} style={btnPrimary}>
                 Guardar
               </button>
             )}

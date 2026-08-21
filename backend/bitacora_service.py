@@ -578,23 +578,58 @@ def asegurar_autocierre_entrada(sb, entrada: dict, *, user_id: Optional[int] = N
     return {**entrada, **closed}
 
 
+def _fecha_creacion_bogota(entrada: dict) -> Optional[date]:
+    """Día calendario (Bogotá) de creación del reporte; fallback a cerrado_en."""
+    raw = entrada.get("created_at") or entrada.get("cerrado_en")
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, datetime):
+            dt = raw
+        else:
+            s = str(raw).strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(BOGOTA).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def evento_editable_mismo_dia(
+    entrada: dict,
+    *,
+    hoy: Optional[date] = None,
+) -> bool:
+    """True si el Evento aún es del día calendario de su creación (Bogotá)."""
+    if str(entrada.get("tipo") or "") != "evento":
+        return False
+    creacion = _fecha_creacion_bogota(entrada)
+    if creacion is None:
+        return False
+    return creacion == (hoy or hoy_bogota())
+
+
 def assert_puede_editar_entrada(
     entrada: dict,
     current_user: Optional[dict] = None,
 ) -> None:
     """
     Diario abierto: editable con permiso Editar (caller).
-    Diario cerrado o Evento: inmutable salvo Desarrollador.
+    Diario cerrado: inmutable salvo Desarrollador.
+    Evento: editable el mismo día calendario de creación (Bogotá); luego inmutable
+    salvo Desarrollador.
     """
     es_dev = es_desarrollador_bitacora(current_user)
     tipo = str(entrada.get("tipo") or "")
     if tipo == "evento":
-        if not es_dev:
-            raise ValueError(
-                "El Reporte de Evento es inmutable desde su creación. "
-                "Solo el rol Desarrollador puede modificarlo."
-            )
-        return
+        if es_dev or evento_editable_mismo_dia(entrada):
+            return
+        raise ValueError(
+            "El Reporte de Evento solo puede editarse el mismo día de su creación. "
+            "A partir del día siguiente queda inmutable. "
+            "Solo el rol Desarrollador puede modificarlo."
+        )
     # diario
     if _debe_autocerrar(entrada) and not es_dev:
         raise ValueError(
@@ -1349,7 +1384,14 @@ def _enrich_entrada(
             _enrich_imagen_preview(x) or x for x in _normalizar_adjuntos_flex(pre)
         ]
     out["equipos_uso"] = usos_list
-    out["inmutable"] = entrada_esta_cerrada(out) or str(out.get("tipo") or "") == "evento"
+    tipo_e = str(out.get("tipo") or "")
+    if tipo_e == "evento":
+        editable_hoy = evento_editable_mismo_dia(out)
+        out["evento_editable_hoy"] = editable_hoy
+        out["inmutable"] = not editable_hoy
+    else:
+        out["evento_editable_hoy"] = False
+        out["inmutable"] = entrada_esta_cerrada(out)
     out["puede_autocerrar"] = _debe_autocerrar(out)
     if out.get("clima_codigo") is not None and not out.get("clima_descripcion"):
         out["clima_descripcion"] = clima_label(out.get("clima_codigo"))
@@ -1683,7 +1725,7 @@ def crear_reporte_evento(
         raise ValueError("No se pudo crear el Reporte de Evento")
     entrada_id = int(inserted[0]["id"])
 
-    # Adjuntar imágenes en el mismo acto de creación (el evento queda inmutable después).
+    # Adjuntar imágenes en el mismo acto de creación (editable el resto del día).
     pending_imgs = data.get("imagenes") if isinstance(data.get("imagenes"), list) else []
     stored_imgs: List[dict] = []
     for im in pending_imgs[:MAX_IMAGENES_BITACORA]:
@@ -1820,15 +1862,42 @@ def update_entrada(
                 else:
                     usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
     else:
-        # evento — solo Dev llega aquí
-        if "evento_detalle" in data and isinstance(data.get("evento_detalle"), dict):
-            patch["evento_detalle"] = data["evento_detalle"]
+        # evento — editable el mismo día de creación (o Desarrollador)
         if "evento_tipo" in data:
             et = str(data.get("evento_tipo") or "").strip()
             if et in EVENTO_TIPOS:
                 patch["evento_tipo"] = et
         if "dirigido_a" in data:
             patch["dirigido_a"] = str(data.get("dirigido_a") or "").strip() or None
+        if "evento_detalle" in data and isinstance(data.get("evento_detalle"), dict):
+            detalle = dict(data["evento_detalle"])
+            et = str(patch.get("evento_tipo") or entrada.get("evento_tipo") or "").strip()
+            if et == "visita_terceros":
+                lista_in = detalle.get("visitantes_lista")
+                if lista_in is None and detalle.get("visitantes") is not None:
+                    lista_in = detalle.get("visitantes")
+                lista = _normalizar_visitantes_lista(lista_in)
+                synced = sync_visitantes_catalogo(
+                    sb, contrato_id, lista, user_id=user_id,
+                )
+                detalle = {
+                    "visitantes_lista": synced,
+                    "visitantes": _fmt_visitantes_texto(synced) or str(
+                        detalle.get("visitantes") or ""
+                    ).strip(),
+                    "entidad": str(detalle.get("entidad") or "").strip(),
+                    "motivo": str(detalle.get("motivo") or "").strip(),
+                }
+            elif isinstance(detalle.get("visitantes_lista"), list):
+                lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
+                synced = sync_visitantes_catalogo(
+                    sb, contrato_id, lista, user_id=user_id,
+                )
+                detalle["visitantes_lista"] = synced
+                detalle["visitantes"] = _fmt_visitantes_texto(synced) or str(
+                    detalle.get("visitantes") or ""
+                ).strip()
+            patch["evento_detalle"] = detalle
 
     if "imagenes" in data:
         imgs = _normalizar_imagenes(data.get("imagenes"))

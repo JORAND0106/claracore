@@ -2,6 +2,7 @@
  * Permisos Bitácora de Obra — fila «Bitácora» en Control de accesos.
  */
 import { esDesarrolladorUsuario, tienePermisoFlag } from '../../utils/permisosContrato.js'
+import { hoyISOBogota } from './bitacoraConstants.js'
 
 export const BITACORA_FUNCION = 'bitácora'
 export const BITACORA_FUNCION_ALT = 'bitacora'
@@ -40,13 +41,37 @@ export function accesoBitacora(usuario, contratoId) {
   }
 }
 
-/** Diario abierto → editar; cerrado/evento → solo Dev. */
+/** Día calendario Bogotá de created_at (o cerrado_en). */
+export function fechaCreacionBogotaISO(entrada) {
+  const raw = entrada?.created_at || entrada?.cerrado_en
+  if (!raw) return null
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(raw))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Diario abierto → editar; Evento → editable el día de creación (Bogotá);
+ * cerrado / evento de otro día → solo Desarrollador.
+ */
 export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!entrada) return false
   if (permisos?.esDesarrollador) return Boolean(permisos?.editar)
   if (!permisos?.editar) return false
   const tipo = String(entrada.tipo || '')
-  if (tipo === 'evento') return false
+  if (tipo === 'evento') {
+    if (entrada.evento_editable_hoy === true) return true
+    if (entrada.evento_editable_hoy === false) return false
+    const creacion = fechaCreacionBogotaISO(entrada)
+    return creacion != null && creacion === hoyISOBogota()
+  }
   if (String(entrada.estado || '') === 'cerrado') return false
   if (entrada.puede_autocerrar) return false
   return true
