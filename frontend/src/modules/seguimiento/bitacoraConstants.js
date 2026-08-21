@@ -9,14 +9,22 @@ export const CARGOS_PERSONAL = [
   'Cadenero',
   'Topógrafo',
   'Conductor',
+  'Boal',
+  'Tráficos',
+  'Insp. SST',
+  'Insp. Tráfico',
+  'Ing. Obra',
+  'Ing. SST',
+  'Ing. Ambiental',
   'Otro',
 ]
 
+/** Tipos de evento; `conDestinatario` controla el campo «a quién se dirige». */
 export const EVENTO_TIPOS = [
-  { value: 'visita_terceros', label: 'Visita de terceros' },
-  { value: 'incidente_sst', label: 'Incidente de seguridad (SST)' },
-  { value: 'reporte_actividades', label: 'Reporte de actividades' },
-  { value: 'novedades', label: 'Novedades/Observaciones generales' },
+  { value: 'visita_terceros', label: 'Visita de terceros', conDestinatario: true },
+  { value: 'incidente_sst', label: 'Incidente de seguridad (SST)', conDestinatario: true },
+  { value: 'reporte_actividades', label: 'Reporte de actividades', conDestinatario: false },
+  { value: 'novedades', label: 'Novedades/Observaciones generales', conDestinatario: true },
 ]
 
 export const WMO_LABELS = {
@@ -36,6 +44,11 @@ export const WMO_LABELS = {
 
 export function labelEventoTipo(value) {
   return EVENTO_TIPOS.find((x) => x.value === value)?.label || value || 'Evento'
+}
+
+export function eventoTieneDestinatario(value) {
+  const row = EVENTO_TIPOS.find((x) => x.value === value)
+  return row ? Boolean(row.conDestinatario) : true
 }
 
 export function labelClima(code) {
@@ -78,4 +91,14 @@ export function personalPlantillaVacia() {
     cantidad: 0,
     cargo_otro: '',
   }))
+}
+
+/** Particiona cargos en 3 columnas para la grilla Excel. */
+export function personalEnColumnas(rows) {
+  const list = Array.isArray(rows) ? rows : personalPlantillaVacia()
+  const cols = [[], [], []]
+  list.forEach((row, i) => {
+    cols[i % 3].push(row)
+  })
+  return cols
 }

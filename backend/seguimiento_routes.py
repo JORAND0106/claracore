@@ -917,6 +917,7 @@ class BitacoraDiarioBody(BaseModel):
     clima_editado_manual: Optional[bool] = False
     personal: Optional[List[Dict[str, Any]]] = None
     equipos_uso: Optional[List[Dict[str, Any]]] = None
+    materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
 
 
@@ -924,6 +925,7 @@ class BitacoraEventoBody(BaseModel):
     fecha: Optional[str] = None
     evento_tipo: str = Field(..., min_length=1)
     evento_detalle: Optional[Dict[str, Any]] = None
+    dirigido_a: Optional[str] = None
     cuerpo_html: Optional[str] = None
     imagenes: Optional[List[Dict[str, Any]]] = None
 
@@ -936,9 +938,11 @@ class BitacoraUpdateBody(BaseModel):
     clima_editado_manual: Optional[bool] = None
     personal: Optional[List[Dict[str, Any]]] = None
     equipos_uso: Optional[List[Dict[str, Any]]] = None
+    materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
     evento_tipo: Optional[str] = None
     evento_detalle: Optional[Dict[str, Any]] = None
+    dirigido_a: Optional[str] = None
     imagenes: Optional[List[Dict[str, Any]]] = None
 
 
