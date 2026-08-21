@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
+import ActaTemasTable, { TemaAdjuntosPanel } from './ActaTemasTable'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
-import ItemDetalleModal from './ItemDetalleModal'
-import QuienDijoAutocomplete from './QuienDijoAutocomplete'
+import TemaEditorModal from './TemaEditorModal'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
-import TemaRichEditor from './TemaRichEditor'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import {
@@ -16,12 +15,7 @@ import {
   labelTipoActa,
   numeroActaLabel,
 } from './seguimientoTheme'
-import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
-
-/** Verde institucional solo para compromiso cumplido. */
-const COLOR_CUMPLIDO = 'var(--cc-color-positive, #0f766e)'
-const BG_CUMPLIDO = 'color-mix(in srgb, var(--cc-color-positive, #0f766e) 12%, transparent)'
 
 const TABS_ACTA = [
   { id: 'encabezado', label: 'Encabezado' },
@@ -346,14 +340,13 @@ export default function ActaEditor({
   const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
   const [compromisoCtx, setCompromisoCtx] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
-  const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
   const [actaCompromisos, setActaCompromisos] = useState([])
-  /** Resalta una fila al saltar desde Temas → pestaña Compromisos abiertos. */
+  /** Resalta una fila en la tabla de compromisos presentes (Temas y Compromisos). */
   const [highlightCompromisoId, setHighlightCompromisoId] = useState(null)
-  /** Acordeón: una sola idea expandida (clave = _key o id). null = todas colapsadas. */
-  const [ideaExpandidaKey, setIdeaExpandidaKey] = useState(null)
-  const [dragIdeaIdx, setDragIdeaIdx] = useState(null)
-  const [dragOverIdeaIdx, setDragOverIdeaIdx] = useState(null)
+  /** Índice del tema abierto en TemaEditorModal. */
+  const [temaEditIdx, setTemaEditIdx] = useState(null)
+  /** Índice del tema cuya galería de adjuntos está abierta. */
+  const [temaAdjuntosIdx, setTemaAdjuntosIdx] = useState(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
@@ -803,10 +796,7 @@ export default function ActaEditor({
   }
 
   const abrirCompromiso = async (ideaIdx, texto) => {
-    const idea = form.ideas[ideaIdx]
-    if (idea) {
-      setIdeaExpandidaKey(idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${ideaIdx}`))
-    }
+    setTemaEditIdx(null)
     setSaving(true)
     setError('')
     try {
@@ -1280,566 +1270,58 @@ export default function ActaEditor({
 
       {tab === 'ideas' && (
       <section style={card(t)}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <h3 style={h3(t)}>Ideas centrales</h3>
-          {!soloLectura && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {permisos?.crear && (
-                <button
-                  type="button"
-                  style={ghost(t)}
-                  disabled={saving}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => abrirCompromisoLibre()}
-                  title="Registrar un compromiso puntual sin convertir todo un tema en un solo compromiso"
-                >
-                  + Agregar compromiso
-                </button>
-              )}
-              <button
-                type="button"
-                style={primary(t)}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  const neu = emptyIdea()
-                  patchList('ideas', (list) => [...list, neu].map((row, i) => ({ ...row, orden: i })))
-                  // Nueva idea: expandir solo esa para redactar; el resto sigue colapsado.
-                  setIdeaExpandidaKey(neu._key)
-                }}
-              >
-                + Agregar idea
-              </button>
-            </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          <h3 style={{ ...h3(t), margin: 0 }}>Temas</h3>
+          {!soloLectura && permisos?.crear && (
+            <button
+              type="button"
+              style={ghost(t)}
+              disabled={saving}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => abrirCompromisoLibre()}
+              title="Registrar un compromiso puntual sin ligarlo a un tema completo"
+            >
+              + Agregar compromiso
+            </button>
           )}
         </div>
-        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 4 }}>
-          {soloLectura
-            ? 'Pulse una idea para expandirla. Solo una permanece abierta a la vez.'
-            : 'Pulse para expandir. Reordene con ⠿ (arrastre) o ↑↓. Tema 1, 2… sigue el orden; el título lo genera Clara al redactar o guardar.'}
-        </div>
-        {form.ideas.map((idea, idx) => {
-          const ideaKey = idea._key || (idea.id != null ? `idea-id-${idea.id}` : `idea-${idx}`)
-          const expanded = ideaExpandidaKey === ideaKey
-          const compsIdea = (actaCompromisos || []).filter(
-            (c) => idea.id != null && Number(c.idea_id) === Number(idea.id),
-          )
-          const tieneCompromiso = compsIdea.length > 0
-          const compromisoCumplido = tieneCompromiso
-            && compsIdea.every((c) => String(c.estado_gestion || '').toLowerCase() === 'cumplido')
-          const interviniente = String(idea.quien_dijo || '').trim()
-          const consecutivoIdea = (idea.orden != null && idea.orden !== ''
-            ? Number(idea.orden)
-            : idx) + 1
-          const tituloTema = String(idea.titulo || '').trim()
-          const headLine = [
-            tituloTema ? `Tema ${consecutivoIdea}: ${tituloTema}` : `Tema ${consecutivoIdea}`,
-            interviniente || null,
-          ].filter(Boolean).join(' · ')
-          // Institucional (primary) si hay compromiso; verde solo si está Cumplido.
-          const accent = compromisoCumplido
-            ? COLOR_CUMPLIDO
-            : (tieneCompromiso ? t.primary : t.border)
-          const bgColor = compromisoCumplido
-            ? BG_CUMPLIDO
-            : (expanded
-              ? `${t.primary}08`
-              : (tieneCompromiso ? `${t.primary}12` : (t.bgCard || 'transparent')))
-          const isDragOver = dragOverIdeaIdx === idx && dragIdeaIdx != null && dragIdeaIdx !== idx
-          return (
-            <div
-              key={ideaKey}
-              className={[
-                'cc-seguim-idea-accordion',
-                expanded ? 'cc-seguim-idea-accordion--open' : '',
-                tieneCompromiso ? 'cc-seguim-idea-accordion--con-compromiso' : '',
-                compromisoCumplido ? 'cc-seguim-idea-accordion--cumplido' : '',
-                isDragOver ? 'cc-seguim-idea-accordion--drag-over' : '',
-              ].filter(Boolean).join(' ')}
-              onDragOver={(e) => {
-                if (soloLectura || dragIdeaIdx == null) return
-                e.preventDefault()
-                try { e.dataTransfer.dropEffect = 'move' } catch { /* ignore */ }
-                if (dragOverIdeaIdx !== idx) setDragOverIdeaIdx(idx)
-              }}
-              onDrop={(e) => {
-                if (soloLectura) return
-                e.preventDefault()
-                let from = dragIdeaIdx
-                try {
-                  const raw = e.dataTransfer.getData('text/plain')
-                  if (raw !== '' && raw != null) from = Number(raw)
-                } catch { /* ignore */ }
-                setDragIdeaIdx(null)
-                setDragOverIdeaIdx(null)
-                if (Number.isFinite(from)) reorderIdeas(from, idx)
-              }}
-              style={{
-                marginTop: 8,
-                borderRadius: 8,
-                border: `1px solid ${expanded ? t.primary : accent}`,
-                borderLeft: tieneCompromiso ? `3px solid ${accent}` : `1px solid ${expanded ? t.primary : accent}`,
-                background: bgColor,
-                overflow: 'hidden',
-                opacity: dragIdeaIdx === idx ? 0.55 : 1,
-                outline: isDragOver ? `2px dashed ${t.primary}` : 'none',
-                outlineOffset: 1,
-              }}
-            >
-              <div
-                className="cc-seguim-idea-accordion__head"
-                style={{
-                  display: 'flex',
-                  width: '100%',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '8px 10px',
-                  minHeight: 36,
-                  color: t.text,
-                }}
-              >
-                {!soloLectura && (
-                  <span style={{ display: 'inline-flex', flexShrink: 0, alignItems: 'center', gap: 2 }}>
-                    <span
-                      title="Arrastrar para reordenar"
-                      aria-label="Arrastrar para reordenar"
-                      draggable
-                      onDragStart={(e) => {
-                        setDragIdeaIdx(idx)
-                        try {
-                          e.dataTransfer.effectAllowed = 'move'
-                          e.dataTransfer.setData('text/plain', String(idx))
-                        } catch { /* ignore */ }
-                        e.stopPropagation()
-                      }}
-                      onDragEnd={() => {
-                        setDragIdeaIdx(null)
-                        setDragOverIdeaIdx(null)
-                      }}
-                      style={{
-                        cursor: 'grab',
-                        color: t.textMuted,
-                        fontSize: 14,
-                        lineHeight: 1,
-                        padding: '2px 4px',
-                        userSelect: 'none',
-                        touchAction: 'none',
-                      }}
-                    >
-                      ⠿
-                    </span>
-                    <button
-                      type="button"
-                      title="Subir"
-                      disabled={idx === 0}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => reorderIdeas(idx, idx - 1)}
-                      style={{
-                        ...ghost(t),
-                        padding: '0 5px',
-                        minHeight: 24,
-                        fontSize: 11,
-                        opacity: idx === 0 ? 0.35 : 1,
-                      }}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      title="Bajar"
-                      disabled={idx >= form.ideas.length - 1}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => reorderIdeas(idx, idx + 1)}
-                      style={{
-                        ...ghost(t),
-                        padding: '0 5px',
-                        minHeight: 24,
-                        fontSize: 11,
-                        opacity: idx >= form.ideas.length - 1 ? 0.35 : 1,
-                      }}
-                    >
-                      ↓
-                    </button>
-                  </span>
-                )}
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  onClick={() => setIdeaExpandidaKey(expanded ? null : ideaKey)}
-                  style={{
-                    display: 'flex',
-                    flex: 1,
-                    minWidth: 0,
-                    alignItems: 'center',
-                    gap: 8,
-                    textAlign: 'left',
-                    border: 'none',
-                    background: 'transparent',
-                    padding: 0,
-                    cursor: 'pointer',
-                    color: t.text,
-                  }}
-                >
-                  <span style={{
-                    flexShrink: 0,
-                    width: 18,
-                    height: 18,
-                    borderRadius: 4,
-                    border: `1px solid ${t.border}`,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 11,
-                    color: t.primary,
-                    fontWeight: 700,
-                  }}
-                  >
-                    {expanded ? '▾' : '▸'}
-                  </span>
-                  <span style={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: 'var(--cc-sm)',
-                    fontWeight: 700,
-                    color: t.primary,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  >
-                    {headLine}
-                    {!interviniente ? (
-                      <span style={{ fontWeight: 500, color: t.textMuted }}> · sin interviniente</span>
-                    ) : null}
-                  </span>
-                  {tieneCompromiso && (
-                    <span style={{
-                      flexShrink: 0,
-                      fontSize: 'var(--cc-xs)',
-                      fontWeight: 600,
-                      color: accent,
-                      padding: '1px 6px',
-                      borderRadius: 4,
-                      border: `1px solid ${accent}`,
-                      background: 'transparent',
-                    }}
-                    >
-                      {compromisoCumplido
-                        ? 'Cumplido'
-                        : (compsIdea.length === 1 ? 'Compromiso' : `${compsIdea.length} comp.`)}
-                    </span>
-                  )}
-                </button>
-              </div>
-              {expanded && (
-                <div
-                  className="cc-seguim-idea-accordion__body"
-                  style={{ padding: '0 12px 12px' }}
-                  onPaste={(e) => handleIdeaPaste(idx, e)}
-                >
-                  <Field t={t} label="Interviniente">
-                    <QuienDijoAutocomplete
-                      t={t}
-                      disabled={soloLectura}
-                      value={idea.quien_dijo || ''}
-                      options={asistenteOpciones}
-                      placeholder={asistenteOpciones.length
-                        ? 'Seleccione un asistente o digite el nombre…'
-                        : 'Registre asistentes o digite el nombre…'}
-                      style={inp(t)}
-                      onChange={(quien_dijo) => {
-                        patchList('ideas', (list) => list.map((row, i) => (
-                          i === idx ? { ...row, quien_dijo } : row
-                        )))
-                      }}
-                    />
-                  </Field>
-                  <TemaRichEditor
-                    t={t}
-                    value={idea.texto || ''}
-                    editable={!soloLectura}
-                    placeholder=""
-                    onChange={(html) => {
-                      patchList('ideas', (list) => list.map((row, i) => (
-                        i === idx ? { ...row, texto: html } : row
-                      )))
-                    }}
-                    onPasteImage={(file) => {
-                      if (soloLectura || !file) return
-                      const named = new File(
-                        [file],
-                        file.name || `captura-${Date.now()}.png`,
-                        { type: file.type || 'image/png' },
-                      )
-                      addIdeaImagen(idx, named)
-                    }}
-                  />
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted }}>
-                        Esquemas y gráficos
-                      </div>
-                      {!soloLectura && normalizeIdeaImagenes(idea.imagenes).length < 8 && (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          <label style={{ ...ghost(t), display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
-                            + Adjuntar
-                            <input
-                              type="file"
-                              accept="image/*"
-                              style={{ display: 'none' }}
-                              onChange={(e) => {
-                                const f = e.target.files?.[0]
-                                if (f) addIdeaImagen(idx, f)
-                                e.target.value = ''
-                              }}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            style={ghost(t)}
-                            title="Abrir editor de esquema (misma herramienta de tareas / SICOE obra)"
-                            onClick={() => setEsquemaIdeaIdx(idx)}
-                          >
-                            Dibujar esquema
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    {normalizeIdeaImagenes(idea.imagenes).length === 0 ? (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                        Opcional: adjuntar archivo, pegar captura (Ctrl+V) o dibujar. Tamaño estándar en el PDF.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {normalizeIdeaImagenes(idea.imagenes).map((im, imgIdx) => {
-                          const src = imagenSrc(im)
-                          return (
-                            <div
-                              key={`${im.blob_path || im.nombre || 'img'}-${imgIdx}`}
-                              style={{
-                                width: 88,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 4,
-                                alignItems: 'center',
-                              }}
-                            >
-                              <button
-                                type="button"
-                                title={im.nombre || 'Ver imagen'}
-                                onClick={() => openImageInNewTab(im)}
-                                style={{
-                                  width: 88,
-                                  height: 72,
-                                  padding: 0,
-                                  border: `1px solid ${t.border}`,
-                                  borderRadius: 8,
-                                  background: t.bg || '#fff',
-                                  overflow: 'hidden',
-                                  cursor: src ? 'pointer' : 'default',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                {src ? (
-                                  <img
-                                    src={src}
-                                    alt={im.nombre || 'Esquema'}
-                                    style={{
-                                      width: '100%',
-                                      height: '100%',
-                                      objectFit: 'contain',
-                                      display: 'block',
-                                    }}
-                                  />
-                                ) : (
-                                  <span style={{ fontSize: 10, color: t.textMuted, padding: 4 }}>Sin vista</span>
-                                )}
-                              </button>
-                              <div style={{
-                                fontSize: 10,
-                                color: t.textMuted,
-                                maxWidth: 88,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                              >
-                                {im.pending ? 'Pendiente' : (im.nombre || 'Esquema')}
-                              </div>
-                              {!soloLectura && (
-                                <button
-                                  type="button"
-                                  style={{ ...ghost(t), padding: '2px 8px', fontSize: 11 }}
-                                  onClick={() => removeIdeaImagen(idx, imgIdx)}
-                                >
-                                  Quitar
-                                </button>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  {compsIdea.length > 0 && (
-                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 2 }}>
-                        Pulse un compromiso para gestionarlo en la pestaña «Compromisos abiertos» (tabla editable).
-                      </div>
-                      {compsIdea.map((c) => {
-                        const cump = String(c.estado_gestion || '').toLowerCase() === 'cumplido'
-                        const cAccent = cump ? COLOR_CUMPLIDO : t.primary
-                        return (
-                          <div
-                            key={c.id}
-                            role="button"
-                            tabIndex={0}
-                            title="Abrir en tabla Compromisos abiertos"
-                            onClick={() => {
-                              setHighlightCompromisoId(c.id)
-                              setTab('compromisos')
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                setHighlightCompromisoId(c.id)
-                                setTab('compromisos')
-                              }
-                            }}
-                            style={{
-                              padding: '8px 10px',
-                              borderRadius: 8,
-                              border: `1px solid ${cAccent}`,
-                              background: cump ? BG_CUMPLIDO : `${t.primary}12`,
-                              fontSize: 'var(--cc-sm)',
-                              color: t.text,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
-                              Compromiso generado
-                              {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
-                              {cump ? ' · Cumplido' : ''}
-                            </div>
-                            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                              Vence {fmtFecha(c.fecha_vencimiento)}
-                              {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
-                            </div>
-                            <div style={{ marginTop: 2 }}>
-                              Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                  {!soloLectura && (
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                      <button type="button" style={ghost(t)} onClick={() => setClaraIdx(idx)}>Redactar con Clara</button>
-                      {permisos?.crear && (
-                        <button
-                          type="button"
-                          style={ghost(t)}
-                          disabled={saving || isRichTextEmpty(idea.texto)}
-                          onClick={() => abrirCompromiso(idx, idea.texto)}
-                        >
-                          Generar compromiso
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        style={ghost(t)}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => {
-                          patchList('ideas', (list) => list
-                            .filter((_, i) => i !== idx)
-                            .map((row, i) => ({ ...row, orden: i })))
-                          setIdeaExpandidaKey(null)
-                        }}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-        {(() => {
-          const libres = (actaCompromisos || []).filter((c) => c.idea_id == null || c.idea_id === '')
-          if (!libres.length) return null
-          return (
-            <div style={{ marginTop: 16 }}>
-              <h4 style={{ ...h3(t), fontSize: 'var(--cc-body)', marginBottom: 8 }}>
-                Compromisos independientes de esta acta
-              </h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {libres.map((c) => {
-                  const cump = String(c.estado_gestion || '').toLowerCase() === 'cumplido'
-                  const cAccent = cump ? COLOR_CUMPLIDO : t.primary
-                  return (
-                    <div
-                      key={c.id}
-                      role="button"
-                      tabIndex={0}
-                      title="Abrir en tabla Compromisos abiertos"
-                      onClick={() => {
-                        setHighlightCompromisoId(c.id)
-                        setTab('compromisos')
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          setHighlightCompromisoId(c.id)
-                          setTab('compromisos')
-                        }
-                      }}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        border: `1px solid ${cAccent}`,
-                        background: cump ? BG_CUMPLIDO : `${t.primary}12`,
-                        fontSize: 'var(--cc-sm)',
-                        color: t.text,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
-                        Compromiso
-                        {c.consecutivo != null ? ` · #${c.consecutivo}` : ''}
-                        {cump ? ' · Cumplido' : ''}
-                      </div>
-                      <div style={{ marginTop: 2 }}>{c.titulo || c.descripcion || '—'}</div>
-                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
-                        Vence {fmtFecha(c.fecha_vencimiento)}
-                        {c.hora_vencimiento ? ` · ${String(c.hora_vencimiento).slice(0, 5)}` : ''}
-                        {' · '}Asignado: <b>{c.asignado_a_nombre || (c.asignado_a_id ? `#${c.asignado_a_id}` : '—')}</b>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })()}
-      </section>
-      )}
+        <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+          Tabla compacta de temas. Pulse una fila o el icono de redacción para el editor completo
+          (interviniente, Clara, viñetas/numeración, esquema/gráfico y generar compromiso).
+        </p>
+        <ActaTemasTable
+          t={t}
+          ideas={form.ideas}
+          soloLectura={soloLectura}
+          canCrearCompromiso={!!permisos?.crear}
+          saving={saving}
+          viewportCompact={viewportCompact}
+          onOpenTema={(idx) => setTemaEditIdx(idx)}
+          onAgregarTema={() => {
+            const neu = emptyIdea()
+            let newIdx = 0
+            patchList('ideas', (list) => {
+              const next = [...list, neu].map((row, i) => ({ ...row, orden: i }))
+              newIdx = next.length - 1
+              return next
+            })
+            setTemaEditIdx(newIdx)
+          }}
+          onGenerarCompromiso={(idx) => abrirCompromiso(idx, form.ideas[idx]?.texto)}
+          onVerAdjuntos={(idx) => setTemaAdjuntosIdx(idx)}
+        />
 
-      {tab === 'compromisos' && (
-      <section style={card(t)}>
-        <h3 style={h3(t)}>Compromisos de esta acta</h3>
-        <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Tabla editable tipo hoja de cálculo: cambie fecha y estado en línea.
-          Use los iconos para comentario, adjunto, aplazamiento y PDF del acta (solo bajo demanda; no bloquea la tabla).
+        <h3 style={{ ...h3(t), marginTop: 22 }}>Compromisos presentes (esta acta)</h3>
+        <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+          Solo compromisos generados en esta acta. Los de actas anteriores están en la pestaña «Compromisos abiertos».
         </p>
         <ActaCompromisosAbiertosTable
           t={t}
           api={api}
           items={actaCompromisos}
-          emptyMessage="Aún no hay compromisos generados en esta acta. Cree uno desde Temas y Compromisos."
+          emptyMessage="Aún no hay compromisos en esta acta. Genere uno desde un tema o con «+ Agregar compromiso»."
           highlightId={highlightCompromisoId}
+          showActaOrigen={false}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -1853,18 +1335,24 @@ export default function ActaEditor({
             } catch { /* ignore */ }
           }}
         />
+      </section>
+      )}
 
-        <h3 style={{ ...h3(t), marginTop: 22 }}>
+      {tab === 'compromisos' && (
+      <section style={card(t)}>
+        <h3 style={h3(t)}>
           Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
         </h3>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Revisión de compromisos pendientes de comités previos del mismo tipo. Misma tabla e iconos.
+          Exclusivamente compromisos arrastrados de actas anteriores del mismo tipo.
+          Los compromisos de esta acta se gestionan en «Temas y Compromisos».
         </p>
         <ActaCompromisosAbiertosTable
           t={t}
           api={api}
           items={previos}
           emptyMessage={`No hay compromisos abiertos previos de actas ${form.tipo_acta === 'externa' ? 'externas' : 'internas'}.`}
+          showActaOrigen
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -2113,6 +1601,50 @@ export default function ActaEditor({
       </section>
       )}
 
+      {temaEditIdx != null && form.ideas[temaEditIdx] && (
+        <TemaEditorModal
+          t={t}
+          idea={form.ideas[temaEditIdx]}
+          ideaIdx={temaEditIdx}
+          soloLectura={soloLectura}
+          canCrearCompromiso={!!permisos?.crear}
+          saving={saving}
+          asistenteOpciones={asistenteOpciones}
+          viewportCompact={viewportCompact}
+          onClose={() => setTemaEditIdx(null)}
+          onPatch={(patch) => {
+            const idx = temaEditIdx
+            patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, ...patch } : row)))
+          }}
+          onAddImagen={(file) => addIdeaImagen(temaEditIdx, file)}
+          onRemoveImagen={(imgIdx) => removeIdeaImagen(temaEditIdx, imgIdx)}
+          onPasteImage={(e) => handleIdeaPaste(temaEditIdx, e)}
+          onOpenClara={() => setClaraIdx(temaEditIdx)}
+          onOpenEsquema={() => setEsquemaIdeaIdx(temaEditIdx)}
+          onGenerarCompromiso={() => {
+            const idx = temaEditIdx
+            setTemaEditIdx(null)
+            abrirCompromiso(idx, form.ideas[idx]?.texto)
+          }}
+          onQuitar={() => {
+            const idx = temaEditIdx
+            patchList('ideas', (list) => list
+              .filter((_, i) => i !== idx)
+              .map((row, i) => ({ ...row, orden: i })))
+            setTemaEditIdx(null)
+          }}
+        />
+      )}
+
+      {temaAdjuntosIdx != null && form.ideas[temaAdjuntosIdx] && (
+        <TemaAdjuntosPanel
+          t={t}
+          imagenes={normalizeIdeaImagenes(form.ideas[temaAdjuntosIdx].imagenes)}
+          viewportCompact={viewportCompact}
+          onClose={() => setTemaAdjuntosIdx(null)}
+        />
+      )}
+
       {claraIdx != null && (
         <IdeaClaraModal
           t={t}
@@ -2224,8 +1756,8 @@ export default function ActaEditor({
             }
             setCompromisoCtx(null)
             setError('')
-            setOkMsg('Compromiso incorporado. Gestione fecha, estado e iconos en Compromisos abiertos.')
-            setTab('compromisos')
+            setOkMsg('Compromiso incorporado. Gestione fecha, estado e iconos en Temas y Compromisos.')
+            setTab('ideas')
             try {
               const abiertos = await api.compromisosAbiertos(
                 localActaId || undefined,
@@ -2237,8 +1769,7 @@ export default function ActaEditor({
         />
       )}
 
-      {/* El detalle angosto ItemDetalleModal ya no se usa desde el acta:
-          la gestión ocurre en ActaCompromisosAbiertosTable (pestaña Compromisos abiertos). */}
+      {/* Gestión de compromisos: tablas en Compromisos abiertos (previos) y Temas y Compromisos (presentes). */}
     </div>
   )
 
