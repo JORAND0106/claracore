@@ -21885,11 +21885,70 @@ def filtros_tramos_costados(contrato_id: int, current_user=Depends(get_current_u
     }
 
 
+def _sicoe_resolver_nombres_creador_modificador_reporte(r: dict) -> None:
+    """Resuelve in-place nombre_creador / nombre_modificador (1 lookup batch; barato).
+
+    Se usa también con ligero=1: la carpeta abre en modo ligero y el encabezado
+    muestra estos nombres junto a created_at / updated_at.
+    """
+    if not isinstance(r, dict):
+        return
+    id_a_key = []
+    creado_por = r.get("creado_por")
+    modificado_por = r.get("modificado_por")
+    if creado_por is not None:
+        try:
+            id_a_key.append((int(creado_por), "nombre_creador"))
+        except (TypeError, ValueError):
+            r["nombre_creador"] = None
+    else:
+        r["nombre_creador"] = None
+    if modificado_por is not None:
+        try:
+            id_a_key.append((int(modificado_por), "nombre_modificador"))
+        except (TypeError, ValueError):
+            r["nombre_modificador"] = None
+    else:
+        r["nombre_modificador"] = None
+    if not id_a_key:
+        return
+    ids = list({uid for uid, _ in id_a_key})
+
+    def _q():
+        return (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos")
+            .in_("id", ids)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(_q) or []
+    except Exception:
+        for _, key in id_a_key:
+            r[key] = None
+        return
+    by_id = {}
+    for u in rows:
+        if not isinstance(u, dict) or u.get("id") is None:
+            continue
+        try:
+            by_id[int(u["id"])] = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip() or None
+        except (TypeError, ValueError):
+            continue
+    for uid, key in id_a_key:
+        r[key] = by_id.get(uid)
+
+
 @app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def obtener_reporte(
     contrato_id: int,
     reporte_id: int,
-    ligero: bool = Query(False, description="Omite enriquecimiento pesado (comentarios, nombres aux.) para abrir carpeta más rápido"),
+    ligero: bool = Query(
+        False,
+        description="Omite enriquecimiento pesado (comentarios, inspector, acta…); aún resuelve nombre_creador/modificador",
+    ),
     aplicar_filtros_busqueda: bool = Query(False),
     numero_reporte: Optional[int] = Query(None),
     numero_registro: Optional[int] = None,
@@ -22089,43 +22148,14 @@ def obtener_reporte(
     if aplicar_filtros_busqueda:
         r["registros_vista_filtrada"] = True
 
+    # Cabecera UI: fecha + creador / modificador (también con ligero=1).
+    _sicoe_resolver_nombres_creador_modificador_reporte(r)
+
     if ligero:
-        r.setdefault("nombre_modificador", None)
-        r.setdefault("nombre_creador", None)
         r.setdefault("inspector_nombre", None)
         r.setdefault("acta_rpo_numero", None)
         r.setdefault("corte_numero", None)
         return r
-
-    # Resolver nombre del modificador
-    modificado_por = r.get("modificado_por")
-    if modificado_por:
-        def _modif():
-            return supabase.table("usuarios")\
-                .select("nombre, apellidos")\
-                .eq("id", modificado_por).single().execute().data
-        try:
-            modif = supabase_execute(_modif)
-            r["nombre_modificador"] = f"{modif.get('nombre','')} {modif.get('apellidos','')}".strip() if modif else None
-        except:
-            r["nombre_modificador"] = None
-    else:
-        r["nombre_modificador"] = None
-
-    # Resolver nombre del creador
-    creado_por = r.get("creado_por")
-    if creado_por:
-        def _creador():
-            return supabase.table("usuarios")\
-                .select("nombre, apellidos")\
-                .eq("id", creado_por).single().execute().data
-        try:
-            creador = supabase_execute(_creador)
-            r["nombre_creador"] = f"{creador.get('nombre','')} {creador.get('apellidos','')}".strip() if creador else None
-        except:
-            r["nombre_creador"] = None
-    else:
-        r["nombre_creador"] = None
 
     # Resolver nombre del inspector
     inspector_id = r.get("inspector_id")

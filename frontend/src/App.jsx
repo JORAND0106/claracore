@@ -4429,6 +4429,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   className="cc-sicoe-media-tap"
                   role="button"
                   tabIndex={0}
+                  title="Clic para ampliar · clic derecho para guardar, copiar o abrir"
                   onClick={() => {
                     const items = [{ url: fotoVista, label: 'Foto' }]
                     for (const g of graficosLista) {
@@ -4534,6 +4535,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     className="cc-sicoe-media-tap"
                     role="button"
                     tabIndex={0}
+                    title="Clic para ampliar · clic derecho para guardar, copiar o abrir"
                     onClick={() => {
                       const items = []
                       if (fotoVista) items.push({ url: fotoVista, label: 'Foto' })
@@ -6587,7 +6589,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 const fc = pF(reporte.created_at), fm = pF(reporte.updated_at)
                 return (
                   <div style={{ marginTop:'4px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
-                    {fc && <span style={{ fontSize:'var(--cc-sm)', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
+                    {fc && (
+                      <span style={{ fontSize:'var(--cc-sm)', color:'#ffffffCC' }} title={reporte.nombre_creador ? `Creado por ${reporte.nombre_creador}` : 'Fecha de creación'}>
+                        📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}
+                      </span>
+                    )}
                     {fm && reporte.nombre_modificador && <span style={{ fontSize:'var(--cc-sm)', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
                   </div>
                 )
