@@ -6,6 +6,7 @@ import {
 } from './bitacoraPermisos.js'
 import {
   eventoTieneDestinatario,
+  labelEventoTipo,
   personalEnColumnas,
   personalPlantillaVacia,
 } from './bitacoraConstants.js'
@@ -71,5 +72,9 @@ describe('bitacoraConstants excel redesign', () => {
   it('eventoTieneDestinatario según tipo', () => {
     assert.equal(eventoTieneDestinatario('visita_terceros'), true)
     assert.equal(eventoTieneDestinatario('reporte_actividades'), false)
+  })
+
+  it('visita_terceros se muestra como Recorrido de obra', () => {
+    assert.equal(labelEventoTipo('visita_terceros'), 'Recorrido de obra')
   })
 })
