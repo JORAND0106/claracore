@@ -193,6 +193,22 @@ def _normalizar_personal(raw) -> List[dict]:
     return out
 
 
+def _expandir_personal_otro(personal: List[dict]) -> List[dict]:
+    """Convierte filas «Otro + cargo_otro» en el nombre custom definitivo."""
+    out = []
+    for item in personal or []:
+        if not isinstance(item, dict):
+            continue
+        cargo = str(item.get("cargo") or "").strip()
+        otro = str(item.get("cargo_otro") or "").strip()
+        if cargo.lower().startswith("otro") and otro:
+            out.append({"cargo": otro, "cantidad": item.get("cantidad") or 0})
+        else:
+            row = {"cargo": cargo, "cantidad": item.get("cantidad") or 0}
+            out.append(row)
+    return out
+
+
 def _normalizar_adjuntos_flex(raw, *, max_n: int = 20) -> List[dict]:
     """Adjuntos genéricos (vales, preoperacionales) sin tope de fotos de bitácora."""
     if not isinstance(raw, list):
@@ -208,23 +224,70 @@ def _normalizar_adjuntos_flex(raw, *, max_n: int = 20) -> List[dict]:
 
 
 def _normalizar_materiales(raw) -> List[dict]:
+    """
+    Materiales de obra (ingreso/salida).
+    Shape:
+      movimiento: ingreso|salida
+      tipo_material, proveedor, cantidad, placa
+      numeros_vale: texto libre (números de vale del día)
+      adjuntos: máx. 2 (foto remisión / soporte)
+    Compat: si vienen `vales` como lista de adjuntos (diseño anterior), se migran a adjuntos.
+    """
     if not isinstance(raw, list):
         return []
     out = []
     for item in raw:
         if not isinstance(item, dict):
             continue
+        mov = str(item.get("movimiento") or item.get("tipo_movimiento") or "ingreso").strip().lower()
+        if mov not in ("ingreso", "salida"):
+            mov = "ingreso"
         tipo = str(item.get("tipo_material") or item.get("tipo") or "").strip()
         proveedor = str(item.get("proveedor") or "").strip()
-        vales = _normalizar_adjuntos_flex(item.get("vales") or [])
-        if not tipo and not proveedor and not vales:
+        placa = str(item.get("placa") or item.get("placa_vehiculo") or "").strip()
+        numeros_vale = str(item.get("numeros_vale") or item.get("numero_vale") or "").strip()
+        try:
+            cantidad = float(item.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cantidad = 0.0
+        if cantidad < 0:
+            cantidad = 0.0
+
+        # Adjuntos nuevos; legacy: vales como lista de dicts con data_uri/blob_path
+        adjuntos_raw = item.get("adjuntos")
+        if not isinstance(adjuntos_raw, list):
+            legacy = item.get("vales")
+            if isinstance(legacy, list) and legacy and isinstance(legacy[0], dict):
+                adjuntos_raw = legacy
+            else:
+                adjuntos_raw = []
+        # Si vales era string en algún payload, úsalo como números
+        if not numeros_vale and isinstance(item.get("vales"), str):
+            numeros_vale = str(item.get("vales") or "").strip()
+
+        adjuntos = _normalizar_adjuntos_flex(adjuntos_raw, max_n=2)
+        if not any([tipo, proveedor, placa, numeros_vale, adjuntos, cantidad]):
             continue
         out.append({
+            "movimiento": mov,
             "tipo_material": tipo,
             "proveedor": proveedor,
-            "vales": vales,
+            "cantidad": cantidad,
+            "placa": placa,
+            "numeros_vale": numeros_vale,
+            "adjuntos": adjuntos,
         })
     return out
+
+
+def _persist_materiales(mats: List[dict]) -> List[dict]:
+    return [
+        {
+            **{k: v for k, v in m.items() if k != "adjuntos"},
+            "adjuntos": _persist_adjuntos_sin_data_uri(m.get("adjuntos") or []),
+        }
+        for m in mats
+    ]
 
 
 def _persist_adjuntos_sin_data_uri(refs: List[dict]) -> List[dict]:
@@ -432,6 +495,212 @@ def assert_puede_editar_entrada(
         )
 
 
+# ── Catálogo de cargos personalizados ─────────────────────────────────────────
+
+def _norm_nombre_cargo(nombre: str) -> str:
+    s = str(nombre or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def list_cargos_custom(sb, contrato_id: int) -> List[dict]:
+    try:
+        return (
+            sb.table("seguimiento_bitacora_cargo")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.debug("list_cargos_custom: %s", exc)
+        return []
+
+
+def upsert_cargo_custom(
+    sb,
+    contrato_id: int,
+    nombre: str,
+    *,
+    user_id: Optional[int] = None,
+) -> Optional[dict]:
+    nombre_limpio = str(nombre or "").strip()
+    if not nombre_limpio:
+        return None
+    # No duplicar plantilla fija
+    plantilla_norm = {_norm_nombre_cargo(c) for c in CARGOS_PERSONAL_PLANTILLA if c != "Otro"}
+    nombre_norm = _norm_nombre_cargo(nombre_limpio)
+    if nombre_norm in plantilla_norm or nombre_norm == "otro":
+        return None
+    try:
+        existentes = (
+            sb.table("seguimiento_bitacora_cargo")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("nombre_norm", nombre_norm)
+            .limit(5)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("upsert_cargo_custom select: %s", exc)
+        return None
+    for row in existentes:
+        if row.get("activo"):
+            return row
+        updated = (
+            sb.table("seguimiento_bitacora_cargo")
+            .update({
+                "activo": True,
+                "nombre": nombre_limpio,
+                "updated_at": _now_utc().isoformat(),
+            })
+            .eq("id", int(row["id"]))
+            .execute()
+            .data
+            or []
+        )
+        return updated[0] if updated else {**row, "activo": True, "nombre": nombre_limpio}
+    payload = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre_limpio,
+        "nombre_norm": nombre_norm,
+        "activo": True,
+        "created_by": int(user_id) if user_id is not None else None,
+        "created_at": _now_utc().isoformat(),
+        "updated_at": _now_utc().isoformat(),
+    }
+    try:
+        inserted = sb.table("seguimiento_bitacora_cargo").insert(payload).execute().data or []
+        return inserted[0] if inserted else None
+    except Exception as exc:
+        _log.warning("upsert_cargo_custom insert: %s", exc)
+        return None
+
+
+def sync_cargos_desde_personal(
+    sb,
+    contrato_id: int,
+    personal: List[dict],
+    *,
+    user_id: Optional[int] = None,
+) -> None:
+    """Persiste cargos escritos en «Otro: ¿Cuál?» al catálogo del contrato."""
+    for item in personal or []:
+        if not isinstance(item, dict):
+            continue
+        cargo = str(item.get("cargo") or "").strip()
+        otro = str(item.get("cargo_otro") or "").strip()
+        if cargo.lower().startswith("otro") and otro:
+            upsert_cargo_custom(sb, contrato_id, otro, user_id=user_id)
+        elif cargo and _norm_nombre_cargo(cargo) not in {
+            _norm_nombre_cargo(c) for c in CARGOS_PERSONAL_PLANTILLA
+        }:
+            # Cargo ya persistido como fila propia (no plantilla)
+            upsert_cargo_custom(sb, contrato_id, cargo, user_id=user_id)
+
+
+def plantilla_personal_contrato(sb, contrato_id: int) -> List[dict]:
+    """Plantilla fija + cargos custom del contrato (sin «Otro» al final de los custom)."""
+    base = list(CARGOS_PERSONAL_PLANTILLA)
+    # Insertar custom antes de «Otro»
+    custom = list_cargos_custom(sb, contrato_id)
+    nombres_base = {_norm_nombre_cargo(c) for c in base}
+    extras = []
+    for row in custom:
+        n = str(row.get("nombre") or "").strip()
+        if n and _norm_nombre_cargo(n) not in nombres_base:
+            extras.append(n)
+            nombres_base.add(_norm_nombre_cargo(n))
+    if "Otro" in base:
+        idx = base.index("Otro")
+        merged = base[:idx] + extras + base[idx:]
+    else:
+        merged = base + extras
+    return [{"cargo": c, "cantidad": 0, "cargo_otro": ""} for c in merged]
+
+
+def _strip_para_autocompletar(entrada: dict) -> dict:
+    """Personal + maquinaria + materiales sin adjuntos ni números de vale."""
+    personal = _normalizar_personal(entrada.get("personal"))
+    usos = []
+    for u in entrada.get("equipos_uso") or []:
+        if not isinstance(u, dict):
+            continue
+        nombre = str(u.get("equipo_nombre") or "").strip()
+        if not nombre:
+            continue
+        usos.append({
+            "equipo_id": u.get("equipo_id"),
+            "equipo_nombre": nombre,
+            "operador": str(u.get("operador") or "").strip() or None,
+            "cantidad": u.get("cantidad") if u.get("cantidad") is not None else 1,
+            "hora_inicio": u.get("hora_inicio"),
+            "hora_fin": u.get("hora_fin"),
+            "horas_intermedias": _normalizar_horas_intermedias(u.get("horas_intermedias")),
+            "preoperacionales": [],  # no arrastrar escáneres
+            "orden": u.get("orden"),
+        })
+    materiales = []
+    for m in _normalizar_materiales(entrada.get("materiales")):
+        materiales.append({
+            "movimiento": m.get("movimiento") or "ingreso",
+            "tipo_material": m.get("tipo_material") or "",
+            "proveedor": m.get("proveedor") or "",
+            "cantidad": m.get("cantidad") or 0,
+            "placa": m.get("placa") or "",
+            "numeros_vale": "",  # no arrastrar vales del día anterior
+            "adjuntos": [],  # no arrastrar remisiones
+        })
+    return {
+        "fuente_id": entrada.get("id"),
+        "fuente_fecha": entrada.get("fecha"),
+        "personal": personal,
+        "equipos_uso": usos,
+        "materiales": materiales,
+    }
+
+
+def plantilla_autocompletar_diario(sb, contrato_id: int) -> Optional[dict]:
+    """
+    Último Reporte Diario del contrato (preferir cerrado; si no, el más reciente).
+    No incluye fecha/hora/clima.
+    """
+    # Preferir cerrado más reciente
+    rows = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .eq("estado", "cerrado")
+        .order("fecha", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        rows = (
+            sb.table("seguimiento_bitacora_entrada")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("tipo", "diario")
+            .order("fecha", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    if not rows:
+        return None
+    enriched = _enrich_entrada(sb, rows[0])
+    return _strip_para_autocompletar(enriched)
+
+
 # ── Catálogo de equipos ───────────────────────────────────────────────────────
 
 def list_equipos(sb, contrato_id: int, q: str = "") -> List[dict]:
@@ -601,7 +870,7 @@ def _enrich_entrada(sb, row: dict) -> dict:
     ]
     mats = _normalizar_materiales(out.get("materiales"))
     for m in mats:
-        m["vales"] = [_enrich_imagen_preview(v) or v for v in (m.get("vales") or [])]
+        m["adjuntos"] = [_enrich_imagen_preview(v) or v for v in (m.get("adjuntos") or [])]
     out["materiales"] = mats
     out["dirigido_a"] = str(out.get("dirigido_a") or "").strip()
     if not isinstance(out.get("evento_detalle"), dict):
@@ -755,13 +1024,7 @@ def crear_reporte_diario(
         "clima_descripcion": clima_desc or None,
         "clima_editado_manual": bool(data.get("clima_editado_manual")),
         "personal": _normalizar_personal(data.get("personal")),
-        "materiales": [
-            {
-                **m,
-                "vales": _persist_adjuntos_sin_data_uri(m.get("vales") or []),
-            }
-            for m in _normalizar_materiales(data.get("materiales"))
-        ],
+        "materiales": _persist_materiales(_normalizar_materiales(data.get("materiales"))),
         "cuerpo_html": str(data.get("cuerpo_html") or ""),
         "imagenes": [],
         "created_by": int(user_id),
@@ -770,6 +1033,9 @@ def crear_reporte_diario(
         "created_at": _now_utc().isoformat(),
         "updated_at": _now_utc().isoformat(),
     }
+    # Expandir «Otro» → nombre custom en el payload guardado
+    payload["personal"] = _expandir_personal_otro(payload["personal"])
+    sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
     try:
         inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
     except Exception:
@@ -958,13 +1224,11 @@ def update_entrada(
         if "clima_editado_manual" in data:
             patch["clima_editado_manual"] = bool(data.get("clima_editado_manual"))
         if "personal" in data:
-            patch["personal"] = _normalizar_personal(data.get("personal"))
+            pers = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
+            patch["personal"] = pers
+            sync_cargos_desde_personal(sb, contrato_id, pers, user_id=user_id)
         if "materiales" in data:
-            mats = _normalizar_materiales(data.get("materiales"))
-            patch["materiales"] = [
-                {**m, "vales": _persist_adjuntos_sin_data_uri(m.get("vales") or [])}
-                for m in mats
-            ]
+            patch["materiales"] = _persist_materiales(_normalizar_materiales(data.get("materiales")))
         if "equipos_uso" in data or "maquinaria" in data:
             usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
             _sync_usos(sb, contrato_id, entrada_id, usos or [], user_id=user_id)
