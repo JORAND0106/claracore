@@ -108,3 +108,35 @@ def test_compromisos_abiertos_legacy_sin_tipo_es_interna():
     sb = _FakeSB(ITEMS[:2], actas)
     out = compromisos_abiertos_contrato(sb, 10, tipo_acta="interna")
     assert [r["id"] for r in out] == [1]
+
+
+def test_compromisos_abiertos_incluye_cumplido_si_no_archivado():
+    """Regresión: estado_gestion=cumplido es informativo y no debe ocultar por sí solo."""
+    items = ITEMS + [
+        {
+            "id": 4,
+            "contrato_id": 10,
+            "origen": "compromiso",
+            "estado_gestion": "cumplido",
+            "acta_id": 100,
+            "titulo": "Cumplido sin archivar",
+            "fecha_vencimiento": "2026-08-04",
+            "campos_libres": {},
+        },
+        {
+            "id": 5,
+            "contrato_id": 10,
+            "origen": "compromiso",
+            "estado_gestion": "cumplido",
+            "acta_id": 101,
+            "titulo": "Archivado con botón",
+            "fecha_vencimiento": "2026-08-05",
+            "campos_libres": {"archivado_revision": True},
+        },
+    ]
+    sb = _FakeSB(items, ACTAS)
+    out = compromisos_abiertos_contrato(sb, 10, tipo_acta="interna")
+    ids = [r["id"] for r in out]
+    assert 4 in ids
+    assert 5 not in ids
+    assert 1 in ids
