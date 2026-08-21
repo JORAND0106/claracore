@@ -1,6 +1,7 @@
 """
 PDF Bitácora de Obra — landscape compacto con paleta del contrato.
-Hoja Diario: encabezado + panel 3 cols + materiales/obs | fotos 2×2.
+Hoja Diario: encabezado + panel 3 cols + Materiales (ancho completo)
+  + Observaciones | Registro Fotográfico (dos mitades, fotos 2×2).
 Hoja Eventos (solo si hay): cada evento con fotos inmediatamente después.
 """
 from __future__ import annotations
@@ -415,14 +416,17 @@ def _fotos_diario(diario: Optional[dict]) -> List[dict]:
     return out
 
 
-def _html_mitad_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> str:
-    left = _html_materiales(diario, pal) + _html_observaciones(diario, pal)
+def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> str:
+    """Materiales a ancho completo; debajo, Observaciones | Registro Fotográfico."""
+    mats = _html_materiales(diario, pal)
+    left = _html_observaciones(diario, pal)
     right = _html_registro_fotografico(_fotos_diario(diario), contrato_id, pal)
     return f"""
+<div style="margin-top:3pt;">{mats}</div>
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3pt;">
   <tr>
-    <td width="52%" style="vertical-align:top;padding-right:4pt;">{left}</td>
-    <td width="48%" style="vertical-align:top;">{right}</td>
+    <td width="50%" style="vertical-align:top;padding-right:4pt;">{left}</td>
+    <td width="50%" style="vertical-align:top;">{right}</td>
   </tr>
 </table>
 """
@@ -498,7 +502,7 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
     hoja1 = (
         hdr
         + _html_panel_superior(diario, slots, pal)
-        + _html_mitad_diario(diario, int(contrato_id), pal)
+        + _html_cuerpo_diario(diario, int(contrato_id), pal)
     )
 
     body_parts = [hoja1]
