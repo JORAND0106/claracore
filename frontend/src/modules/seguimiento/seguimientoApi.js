@@ -216,6 +216,12 @@ export function createSeguimientoApi(contratoId, token) {
     },
     upsertBitacoraTipoMaterial: (body) =>
       send('POST', `/seguimiento/${cid}/bitacora/tipos-material`, body),
+    listBitacoraVisitantes: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/visitantes${qs}`)
+    },
+    upsertBitacoraVisitante: (body) =>
+      send('POST', `/seguimiento/${cid}/bitacora/visitantes`, body),
     plantillaAutocompletarDiario: () => get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar`),
     listBitacoraGaleria: (q = '') => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''

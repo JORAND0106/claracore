@@ -904,6 +904,7 @@ from bitacora_service import (  # noqa: E402
     list_equipos,
     list_galeria,
     list_tipos_material,
+    list_visitantes,
     plantilla_autocompletar_diario,
     plantilla_personal_contrato,
     revertir_cierre_diario,
@@ -911,6 +912,7 @@ from bitacora_service import (  # noqa: E402
     upsert_cargo_custom,
     upsert_equipo,
     upsert_tipo_material,
+    upsert_visitante,
 )
 from bitacora_pdf import generar_pdf_bitacora_dia  # noqa: E402
 from bitacora_permissions import require_permiso_bitacora  # noqa: E402
@@ -965,6 +967,11 @@ class BitacoraCargoBody(BaseModel):
 
 class BitacoraTipoMaterialBody(BaseModel):
     nombre: str = Field(..., min_length=1)
+
+
+class BitacoraVisitanteBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
+    cargo: Optional[str] = None
 
 
 class BitacoraImagenBody(BaseModel):
@@ -1071,6 +1078,35 @@ def route_upsert_bitacora_tipo_material(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
     )
     return row or {"ok": False, "detail": "Tipo de material no registrado (vacío)"}
+
+
+@router.get("/{contrato_id}/bitacora/visitantes")
+def route_list_bitacora_visitantes(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_visitantes(supabase, contrato_id, q or "")
+
+
+@router.post("/{contrato_id}/bitacora/visitantes")
+def route_upsert_bitacora_visitante(
+    contrato_id: int,
+    body: BitacoraVisitanteBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    row = upsert_visitante(
+        supabase,
+        contrato_id,
+        body.nombre,
+        cargo=body.cargo or "",
+        user_id=_uid(current_user),
+    )
+    return row or {"ok": False, "detail": "Visitante no registrado (nombre vacío)"}
 
 
 @router.get("/{contrato_id}/bitacora/plantilla-autocompletar")

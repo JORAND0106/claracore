@@ -745,6 +745,12 @@ def _norm_nombre_tipo_material(nombre: str) -> str:
     return s
 
 
+def _norm_nombre_visitante(nombre: str) -> str:
+    s = str(nombre or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 def list_tipos_material(sb, contrato_id: int, q: str = "") -> List[dict]:
     try:
         rows = (
@@ -838,6 +844,176 @@ def sync_tipos_material_desde_materiales(
         tipo = str(item.get("tipo_material") or item.get("tipo") or "").strip()
         if tipo:
             upsert_tipo_material(sb, contrato_id, tipo, user_id=user_id)
+
+
+def list_visitantes(sb, contrato_id: int, q: str = "") -> List[dict]:
+    try:
+        rows = (
+            sb.table("seguimiento_bitacora_visitante")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.debug("list_visitantes: %s", exc)
+        return []
+    needle = _norm_nombre_visitante(q)
+    if not needle:
+        return rows
+    return [
+        r for r in rows
+        if needle in _norm_nombre_visitante(r.get("nombre") or "")
+        or needle in _norm_nombre_visitante(r.get("cargo") or "")
+    ]
+
+
+def upsert_visitante(
+    sb,
+    contrato_id: int,
+    nombre: str,
+    *,
+    cargo: str = "",
+    user_id: Optional[int] = None,
+) -> Optional[dict]:
+    nombre_limpio = str(nombre or "").strip()
+    if not nombre_limpio:
+        return None
+    nombre_norm = _norm_nombre_visitante(nombre_limpio)
+    cargo_limpio = str(cargo or "").strip()
+    try:
+        existentes = (
+            sb.table("seguimiento_bitacora_visitante")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("nombre_norm", nombre_norm)
+            .limit(5)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("upsert_visitante select: %s", exc)
+        return None
+    for row in existentes:
+        patch = {
+            "activo": True,
+            "nombre": nombre_limpio,
+            "updated_at": _now_utc().isoformat(),
+        }
+        if cargo_limpio:
+            patch["cargo"] = cargo_limpio
+        if row.get("activo") and (
+            not cargo_limpio or str(row.get("cargo") or "").strip() == cargo_limpio
+        ) and str(row.get("nombre") or "") == nombre_limpio:
+            return row
+        try:
+            updated = (
+                sb.table("seguimiento_bitacora_visitante")
+                .update(patch)
+                .eq("id", int(row["id"]))
+                .execute()
+                .data
+                or []
+            )
+            return updated[0] if updated else {**row, **patch}
+        except Exception as exc:
+            _log.warning("upsert_visitante update: %s", exc)
+            return {**row, **patch}
+    payload = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre_limpio,
+        "nombre_norm": nombre_norm,
+        "cargo": cargo_limpio,
+        "activo": True,
+        "created_by": int(user_id) if user_id is not None else None,
+        "created_at": _now_utc().isoformat(),
+        "updated_at": _now_utc().isoformat(),
+    }
+    try:
+        inserted = sb.table("seguimiento_bitacora_visitante").insert(payload).execute().data or []
+        return inserted[0] if inserted else None
+    except Exception as exc:
+        _log.warning("upsert_visitante insert: %s", exc)
+        return None
+
+
+def _normalizar_visitantes_lista(raw) -> List[dict]:
+    out: List[dict] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            nombre = str(item.get("nombre") or "").strip()
+            if not nombre:
+                continue
+            cargo = str(item.get("cargo") or "").strip()
+            vid = item.get("visitante_id") or item.get("id")
+            try:
+                vid_i = int(vid) if vid is not None and vid != "" else None
+            except (TypeError, ValueError):
+                vid_i = None
+            out.append({
+                "visitante_id": vid_i,
+                "nombre": nombre,
+                "cargo": cargo,
+            })
+        return out
+    # Legacy: texto libre "Ana (Auditora), Luis"
+    texto = str(raw or "").strip()
+    if not texto:
+        return out
+    for part in re.split(r"[,;\n]+", texto):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"^(.+?)\s*\(([^)]*)\)\s*$", part)
+        if m:
+            out.append({"visitante_id": None, "nombre": m.group(1).strip(), "cargo": m.group(2).strip()})
+        else:
+            out.append({"visitante_id": None, "nombre": part, "cargo": ""})
+    return out
+
+
+def _fmt_visitantes_texto(lista: List[dict]) -> str:
+    parts = []
+    for v in lista or []:
+        nombre = str(v.get("nombre") or "").strip()
+        if not nombre:
+            continue
+        cargo = str(v.get("cargo") or "").strip()
+        parts.append(f"{nombre} ({cargo})" if cargo else nombre)
+    return ", ".join(parts)
+
+
+def sync_visitantes_catalogo(
+    sb,
+    contrato_id: int,
+    visitantes: List[dict],
+    *,
+    user_id: Optional[int] = None,
+) -> List[dict]:
+    """Upsert catálogo y devuelve snapshot inmutable para evento_detalle."""
+    synced: List[dict] = []
+    for item in visitantes or []:
+        if not isinstance(item, dict):
+            continue
+        nombre = str(item.get("nombre") or "").strip()
+        if not nombre:
+            continue
+        cargo = str(item.get("cargo") or "").strip()
+        cat = upsert_visitante(
+            sb, contrato_id, nombre, cargo=cargo, user_id=user_id,
+        )
+        synced.append({
+            "visitante_id": int(cat["id"]) if cat and cat.get("id") is not None else item.get("visitante_id"),
+            "nombre": str((cat or {}).get("nombre") or nombre),
+            "cargo": cargo or str((cat or {}).get("cargo") or "").strip(),
+        })
+    return synced
 
 
 def _strip_para_autocompletar(entrada: dict) -> dict:
@@ -1406,13 +1582,33 @@ def crear_reporte_evento(
             "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
         }
     elif evento_tipo == "visita_terceros":
+        lista_in = detalle.get("visitantes_lista")
+        if lista_in is None and detalle.get("visitantes") is not None:
+            lista_in = detalle.get("visitantes")
+        lista = _normalizar_visitantes_lista(lista_in)
+        synced = sync_visitantes_catalogo(
+            sb, contrato_id, lista, user_id=user_id,
+        )
         detalle = {
-            "visitantes": str(detalle.get("visitantes") or "").strip(),
+            "visitantes_lista": synced,
+            "visitantes": _fmt_visitantes_texto(synced) or str(detalle.get("visitantes") or "").strip(),
             "entidad": str(detalle.get("entidad") or "").strip(),
             "motivo": str(detalle.get("motivo") or "").strip(),
         }
     else:
-        detalle = {k: v for k, v in detalle.items() if v is not None}
+        # Permitir visitantes_lista en cualquier evento si el cliente lo envía.
+        if isinstance(detalle.get("visitantes_lista"), list):
+            lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
+            synced = sync_visitantes_catalogo(
+                sb, contrato_id, lista, user_id=user_id,
+            )
+            detalle = {k: v for k, v in detalle.items() if v is not None}
+            detalle["visitantes_lista"] = synced
+            detalle["visitantes"] = _fmt_visitantes_texto(synced) or str(
+                detalle.get("visitantes") or ""
+            ).strip()
+        else:
+            detalle = {k: v for k, v in detalle.items() if v is not None}
 
     u = _usuario_row(sb, user_id)
     payload = {
