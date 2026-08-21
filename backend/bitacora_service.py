@@ -84,6 +84,15 @@ def hoy_bogota() -> date:
     return datetime.now(BOGOTA).date()
 
 
+def ahora_bogota() -> datetime:
+    return datetime.now(BOGOTA)
+
+
+def momento_cierre_diario(fecha: date) -> datetime:
+    """Cierre automático exacto: 23:59:59 (America/Bogota) de la fecha del reporte."""
+    return datetime(fecha.year, fecha.month, fecha.day, 23, 59, 59, tzinfo=BOGOTA)
+
+
 def es_desarrollador_bitacora(current_user: Optional[dict] = None) -> bool:
     if not current_user:
         return False
@@ -486,7 +495,8 @@ def entrada_esta_cerrada(entrada: Optional[dict]) -> bool:
     return str(entrada.get("estado") or "").strip().lower() == "cerrado"
 
 
-def _debe_autocerrar(entrada: dict, hoy: Optional[date] = None) -> bool:
+def _debe_autocerrar(entrada: dict, ahora: Optional[datetime] = None) -> bool:
+    """True cuando ya llegó (o pasó) las 23:59:59 de la fecha del Reporte Diario."""
     if str(entrada.get("tipo") or "") != "diario":
         return False
     if entrada_esta_cerrada(entrada):
@@ -495,7 +505,10 @@ def _debe_autocerrar(entrada: dict, hoy: Optional[date] = None) -> bool:
         f = _parse_fecha(entrada.get("fecha"))
     except ValueError:
         return False
-    return f < (hoy or hoy_bogota())
+    now = ahora or ahora_bogota()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BOGOTA)
+    return now >= momento_cierre_diario(f)
 
 
 def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) -> dict:
@@ -521,7 +534,7 @@ def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) ->
 
 
 def asegurar_autocierre_entrada(sb, entrada: dict, *, user_id: Optional[int] = None) -> dict:
-    """Si el Reporte Diario quedó abierto al cambiar el día, lo cierra automáticamente."""
+    """Cierra el Reporte Diario al llegar a las 23:59:59 de su fecha (lazy ensure)."""
     if not _debe_autocerrar(entrada):
         return entrada
     closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, "automatico_dia")
@@ -548,8 +561,8 @@ def assert_puede_editar_entrada(
     # diario
     if _debe_autocerrar(entrada) and not es_dev:
         raise ValueError(
-            "El Reporte Diario quedó bloqueado automáticamente al cambiar el día. "
-            "Solo el rol Desarrollador puede modificarlo."
+            "El Reporte Diario se cerró automáticamente a las 23:59:59 de su fecha "
+            "y es inmutable. Solo el rol Desarrollador puede modificarlo."
         )
     if entrada_esta_cerrada(entrada) and not es_dev:
         raise ValueError(
@@ -685,6 +698,109 @@ def plantilla_personal_contrato(sb, contrato_id: int) -> List[dict]:
     else:
         merged = base + extras
     return [{"cargo": c, "cantidad": 0, "cargo_otro": ""} for c in merged]
+
+
+# ── Catálogo de tipo de material ──────────────────────────────────────────────
+
+def _norm_nombre_tipo_material(nombre: str) -> str:
+    s = str(nombre or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def list_tipos_material(sb, contrato_id: int, q: str = "") -> List[dict]:
+    try:
+        rows = (
+            sb.table("seguimiento_bitacora_tipo_material")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.debug("list_tipos_material: %s", exc)
+        return []
+    needle = _norm_nombre_tipo_material(q)
+    if not needle:
+        return rows
+    return [r for r in rows if needle in _norm_nombre_tipo_material(r.get("nombre") or "")]
+
+
+def upsert_tipo_material(
+    sb,
+    contrato_id: int,
+    nombre: str,
+    *,
+    user_id: Optional[int] = None,
+) -> Optional[dict]:
+    nombre_limpio = str(nombre or "").strip()
+    if not nombre_limpio:
+        return None
+    nombre_norm = _norm_nombre_tipo_material(nombre_limpio)
+    try:
+        existentes = (
+            sb.table("seguimiento_bitacora_tipo_material")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("nombre_norm", nombre_norm)
+            .limit(5)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("upsert_tipo_material select: %s", exc)
+        return None
+    for row in existentes:
+        if row.get("activo"):
+            return row
+        updated = (
+            sb.table("seguimiento_bitacora_tipo_material")
+            .update({
+                "activo": True,
+                "nombre": nombre_limpio,
+                "updated_at": _now_utc().isoformat(),
+            })
+            .eq("id", int(row["id"]))
+            .execute()
+            .data
+            or []
+        )
+        return updated[0] if updated else {**row, "activo": True, "nombre": nombre_limpio}
+    payload = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre_limpio,
+        "nombre_norm": nombre_norm,
+        "activo": True,
+        "created_by": int(user_id) if user_id is not None else None,
+        "created_at": _now_utc().isoformat(),
+        "updated_at": _now_utc().isoformat(),
+    }
+    try:
+        inserted = sb.table("seguimiento_bitacora_tipo_material").insert(payload).execute().data or []
+        return inserted[0] if inserted else None
+    except Exception as exc:
+        _log.warning("upsert_tipo_material insert: %s", exc)
+        return None
+
+
+def sync_tipos_material_desde_materiales(
+    sb,
+    contrato_id: int,
+    materiales: List[dict],
+    *,
+    user_id: Optional[int] = None,
+) -> None:
+    """Persiste tipos nuevos escritos en Materiales al catálogo del contrato."""
+    for item in materiales or []:
+        if not isinstance(item, dict):
+            continue
+        tipo = str(item.get("tipo_material") or item.get("tipo") or "").strip()
+        if tipo:
+            upsert_tipo_material(sb, contrato_id, tipo, user_id=user_id)
 
 
 def _strip_para_autocompletar(entrada: dict) -> dict:
@@ -1123,13 +1239,23 @@ def crear_reporte_diario(
 
     with _stage_timer(stages, "validar_fecha"):
         fecha = _parse_fecha(data.get("fecha") or hoy_bogota().isoformat())
-        hoy = hoy_bogota()
+        ahora = ahora_bogota()
+        hoy = ahora.date()
         if fecha > hoy:
             raise ValueError("No se puede crear un Reporte Diario con fecha futura")
         if fecha < hoy and not es_desarrollador_bitacora(current_user):
             raise ValueError(
                 "No se puede crear un Reporte Diario para una fecha ya pasada; "
-                "quedaría bloqueado automáticamente."
+                "el cierre automático a las 23:59:59 ya aplica."
+            )
+        if (
+            fecha == hoy
+            and ahora >= momento_cierre_diario(fecha)
+            and not es_desarrollador_bitacora(current_user)
+        ):
+            raise ValueError(
+                "El día del Reporte Diario ya cerró a las 23:59:59. "
+                "Solo puede iniciarse el Reporte Diario de una fecha nueva."
             )
         if _diario_existe_fecha(sb, contrato_id, fecha.isoformat()):
             raise ValueError(
@@ -1179,6 +1305,11 @@ def crear_reporte_diario(
 
     with _stage_timer(stages, "sync_cargos"):
         sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
+
+    with _stage_timer(stages, "sync_tipos_material"):
+        sync_tipos_material_desde_materiales(
+            sb, contrato_id, payload.get("materiales") or [], user_id=user_id,
+        )
 
     with _stage_timer(stages, "insert_db"):
         try:
@@ -1395,7 +1526,12 @@ def update_entrada(
                 patch["personal"] = pers
                 sync_cargos_desde_personal(sb, contrato_id, pers, user_id=user_id)
         if "materiales" in data:
-            patch["materiales"] = _persist_materiales(_normalizar_materiales(data.get("materiales")))
+            mats = _persist_materiales(_normalizar_materiales(data.get("materiales")))
+            patch["materiales"] = mats
+            with _stage_timer(stages, "sync_tipos_material"):
+                sync_tipos_material_desde_materiales(
+                    sb, contrato_id, mats, user_id=user_id,
+                )
         if "equipos_uso" in data or "maquinaria" in data:
             with _stage_timer(stages, "sync_usos"):
                 usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
@@ -1477,14 +1613,12 @@ def cerrar_reporte_diario(
     *,
     current_user: Optional[dict] = None,
 ) -> dict:
-    entrada = get_entrada(sb, contrato_id, entrada_id)
-    if str(entrada.get("tipo") or "") != "diario":
-        raise ValueError("Solo un Reporte Diario puede cerrarse con esta acción")
-    if entrada_esta_cerrada(entrada):
-        return entrada
-    assert_puede_editar_entrada(entrada, current_user)
-    _aplicar_cierre(sb, entrada_id, user_id, "manual")
-    return get_entrada(sb, contrato_id, entrada_id)
+    """Cierre manual deshabilitado: solo aplica el cierre automático a las 23:59:59."""
+    raise ValueError(
+        "El cierre manual del Reporte Diario fue deshabilitado. "
+        "El reporte permanece editable hasta las 23:59:59 de su fecha, "
+        "momento en el que se cierra automáticamente de forma permanente."
+    )
 
 
 def revertir_cierre_diario(
@@ -1681,26 +1815,35 @@ def list_galeria(sb, contrato_id: int, q: str = "") -> List[dict]:
 
 
 def cerrar_diarios_vencidos(sb, contrato_id: Optional[int] = None) -> dict:
-    """Cierre automático por cambio de día (cron o lazy batch)."""
-    hoy = hoy_bogota().isoformat()
+    """Cierre automático a las 23:59:59 de la fecha del reporte (cron o lazy batch)."""
+    ahora = ahora_bogota()
+    hoy = ahora.date().isoformat()
     query = (
         sb.table("seguimiento_bitacora_entrada")
         .select("id, contrato_id, fecha, estado, tipo")
         .eq("tipo", "diario")
         .eq("estado", "abierto")
-        .lt("fecha", hoy)
+        .lte("fecha", hoy)
     )
     if contrato_id is not None:
         query = query.eq("contrato_id", int(contrato_id))
     rows = query.execute().data or []
     cerrados = 0
     for row in rows:
+        if not _debe_autocerrar(row, ahora=ahora):
+            continue
         try:
             _aplicar_cierre(sb, int(row["id"]), None, "automatico_dia")
             cerrados += 1
         except Exception as exc:
             _log.warning("autocierre bitacora %s: %s", row.get("id"), exc)
-    return {"cerrados": cerrados, "revisados": len(rows), "fecha_corte": hoy}
+    return {
+        "cerrados": cerrados,
+        "revisados": len(rows),
+        "fecha_corte": hoy,
+        "cierre_hora": "23:59:59",
+        "ahora": ahora.isoformat(),
+    }
 
 
 # ── Exportación PDF / clima histórico ─────────────────────────────────────────

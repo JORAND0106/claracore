@@ -29,13 +29,47 @@ def test_diario_abierto_hoy_editable():
     svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
 
 
-def test_debe_autocerrar_cuando_cambia_dia():
-    ayer = (svc.hoy_bogota() - timedelta(days=1)).isoformat()
-    entrada = {"tipo": "diario", "estado": "abierto", "fecha": ayer}
-    assert svc._debe_autocerrar(entrada) is True
-    hoy = svc.hoy_bogota().isoformat()
-    assert svc._debe_autocerrar({"tipo": "diario", "estado": "abierto", "fecha": hoy}) is False
-    assert svc._debe_autocerrar({"tipo": "evento", "estado": "cerrado", "fecha": ayer}) is False
+def test_debe_autocerrar_a_las_235959():
+    hoy = svc.hoy_bogota()
+    ayer = hoy - timedelta(days=1)
+    entrada_ayer = {"tipo": "diario", "estado": "abierto", "fecha": ayer.isoformat()}
+    assert svc._debe_autocerrar(entrada_ayer) is True
+
+    entrada_hoy = {"tipo": "diario", "estado": "abierto", "fecha": hoy.isoformat()}
+    antes = svc.momento_cierre_diario(hoy).replace(hour=23, minute=59, second=58)
+    assert svc._debe_autocerrar(entrada_hoy, ahora=antes) is False
+    justo = svc.momento_cierre_diario(hoy)
+    assert svc._debe_autocerrar(entrada_hoy, ahora=justo) is True
+    manana = justo + timedelta(seconds=1)
+    assert svc._debe_autocerrar(entrada_hoy, ahora=manana) is True
+    assert svc._debe_autocerrar(
+        {"tipo": "evento", "estado": "cerrado", "fecha": ayer.isoformat()},
+    ) is False
+
+
+def test_cerrar_manual_deshabilitado():
+    with pytest.raises(ValueError, match="cierre manual"):
+        svc.cerrar_reporte_diario(
+            MagicMock(), 1, 9, 1, current_user={"rol_nombre": "Contratista"},
+        )
+
+
+def test_sync_tipos_material_desde_materiales(monkeypatch):
+    called = []
+
+    def fake_upsert(sb, cid, nombre, user_id=None):
+        called.append((cid, nombre, user_id))
+        return {"id": len(called), "nombre": nombre}
+
+    monkeypatch.setattr(svc, "upsert_tipo_material", fake_upsert)
+    svc.sync_tipos_material_desde_materiales(
+        MagicMock(),
+        7,
+        [{"tipo_material": "Grava"}, {"tipo_material": ""}, {"tipo_material": "Arena"}],
+        user_id=3,
+    )
+    assert called == [(7, "Grava", 3), (7, "Arena", 3)]
+    assert svc._norm_nombre_tipo_material("  Concreto   3000 ") == "concreto 3000"
 
 
 def test_diario_vencido_bloquea_edicion_no_dev():
