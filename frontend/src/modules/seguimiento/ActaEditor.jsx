@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import ItemDetalleModal from './ItemDetalleModal'
@@ -10,8 +11,6 @@ import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import {
   ACTA_ESTADOS,
-  ESTADOS,
-  ORIGEN_COLOR,
   fmtFecha,
   labelEstadoActa,
   labelTipoActa,
@@ -1821,53 +1820,27 @@ export default function ActaEditor({
           Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
         </h3>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Solo se listan compromisos pendientes del mismo tipo de acta. Pulse una fila para revisar o actualizar su estado.
+          Tabla compacta para revisión en este comité: edite fecha y estado en línea.
+          Comentarios, adjuntos, aplazamiento y PDF del acta de origen se abren con los iconos (el PDF solo se genera bajo demanda).
         </p>
-        {previos.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-            No hay compromisos abiertos previos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'}.
-          </div>
-        ) : (
-          <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-            <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 640 }}>
-              <thead>
-                <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Acta origen</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Compromiso</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Asignado</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Vence</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 700 }}>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {previos.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => setDetalleCompromisoId(c.id)}
-                    style={{
-                      cursor: 'pointer',
-                      borderTop: `1px solid ${t.border}`,
-                      background: ORIGEN_COLOR.compromiso.bg,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
-                  >
-                    <td data-label="Acta origen" style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: ORIGEN_COLOR.compromiso.border }}>
-                      {c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : '—')}
-                      {c.acta_fecha ? ` · ${fmtFecha(c.acta_fecha)}` : ''}
-                    </td>
-                    <td data-label="Compromiso" style={{ padding: '8px 10px', fontWeight: 600, color: t.text, maxWidth: 280 }}>{c.titulo}</td>
-                    <td data-label="Asignado" style={{ padding: '8px 10px', color: t.text }}>{c.asignado_a_nombre || '—'}</td>
-                    <td data-label="Vence" style={{ padding: '8px 10px', color: t.text }}>{fmtFecha(c.fecha_vencimiento)}</td>
-                    <td data-label="Estado" style={{ padding: '8px 10px', color: t.textMuted }}>
-                      {ESTADOS.find((x) => x.value === c.estado_gestion)?.label || c.estado_gestion}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <ActaCompromisosAbiertosTable
+          t={t}
+          api={api}
+          items={previos}
+          usuario={usuario}
+          usuarios={usuariosContrato}
+          permisos={permisos}
+          viewportCompact={viewportCompact}
+          onChanged={async () => {
+            try {
+              const abiertos = await api.compromisosAbiertos(
+                localActaId || undefined,
+                form.tipo_acta || 'interna',
+              )
+              setPrevios(abiertos || [])
+            } catch { /* ignore */ }
+          }}
+        />
       </section>
       )}
 

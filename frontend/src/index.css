@@ -2624,6 +2624,40 @@ select.cc-dashboard-acta-select--light option {
   content: none;
 }
 
+/* Compromisos abiertos (acta): hoja tipo Excel — scroll horizontal en móvil, no tarjetas apiladas */
+.cc-seguim-acta-editor--compact .cc-seguim-compromisos-abiertos-table .cc-seguim-table-scroll {
+  overflow-x: auto !important;
+  WebkitOverflowScrolling: touch;
+  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 22%, transparent) !important;
+  border-radius: 10px !important;
+  background: inherit !important;
+}
+.cc-seguim-acta-editor--compact .cc-seguim-compromisos-abiertos-table .cc-seguim-table thead {
+  display: table-header-group;
+}
+.cc-seguim-acta-editor--compact .cc-seguim-compromisos-abiertos-table .cc-seguim-table tbody tr {
+  display: table-row;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: inherit;
+}
+.cc-seguim-acta-editor--compact .cc-seguim-compromisos-abiertos-table .cc-seguim-table td {
+  display: table-cell;
+  justify-content: initial;
+  align-items: initial;
+  gap: 0;
+  padding: 6px 8px !important;
+  border: none;
+  max-width: none;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.cc-seguim-acta-editor--compact .cc-seguim-compromisos-abiertos-table .cc-seguim-table td::before {
+  content: none !important;
+}
+
 /* Editor de acta */
 .cc-seguim-acta-editor--compact .cc-seguim-form-grid {
   grid-template-columns: 1fr !important;
