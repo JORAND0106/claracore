@@ -267,3 +267,78 @@ def test_list_usos_batch_agrupa():
     assert len(out[1]) == 2
     assert len(out[2]) == 1
     assert out[3] == []
+
+
+def test_normalizar_materiales_ubicacion():
+    out = svc._normalizar_materiales([{
+        "movimiento": "ingreso",
+        "tipo_material": "Grava",
+        "cantidad": 2,
+        "ubicacion_lat": "4.7110001",
+        "ubicacion_lng": "-74.0720002",
+    }])
+    assert len(out) == 1
+    assert out[0]["ubicacion_lat"] == 4.7110001
+    assert out[0]["ubicacion_lng"] == -74.0720002
+
+
+def test_slot_3h_desde_hora():
+    assert svc._slot_3h_desde_hora("07:30") == 6
+    assert svc._slot_3h_desde_hora("12:00") == 12
+    assert svc._slot_3h_desde_hora("23:10") == 21
+    assert svc._slot_3h_desde_hora(None) == 12
+
+
+def test_consultar_clima_prioridad_manual(monkeypatch):
+    import sys
+    import types
+
+    def fake_get(url, params=None):
+        class R:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "hourly": {
+                        "time": [f"2026-08-20T{h:02d}:00" for h in range(0, 24)],
+                        "temperature_2m": [20.0] * 24,
+                        "weather_code": [0] * 24,
+                    }
+                }
+        return R()
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None):
+            return fake_get(url, params)
+
+    fake_httpx = types.ModuleType("httpx")
+    fake_httpx.Client = FakeClient
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    slots = svc.consultar_clima_slots_3h(
+        4.7, -74.0, "2026-08-20",
+        manual={
+            "clima_editado_manual": True,
+            "hora_inicio_labores": "07:15",
+            "clima_codigo": 61,
+            "clima_temp_c": 18.5,
+            "clima_descripcion": "Lluvia ligera (obra)",
+        },
+    )
+    assert len(slots) == 8
+    slot6 = next(s for s in slots if s["hora_num"] == 6)
+    assert slot6["manual"] is True
+    assert slot6["clima_codigo"] == 61
+    assert "Lluvia" in slot6["clima_descripcion"]
+    slot0 = next(s for s in slots if s["hora_num"] == 0)
+    assert slot0["manual"] is False
+    assert slot0["clima_codigo"] == 0

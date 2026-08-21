@@ -75,6 +75,7 @@ export default function SeguimientoCalendario({
   const [fechaTareaInicial, setFechaTareaInicial] = useState(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [dayMenu, setDayMenu] = useState(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
 
   const load = useCallback(async () => {
     const { start, end } = rangeRef.current
@@ -290,7 +291,28 @@ export default function SeguimientoCalendario({
 
   const canCreateSeguimiento = Boolean(permisos?.crear)
   const canCreateBitacora = Boolean(permisosBitacora?.crear)
-  const showDayCreate = canCreateSeguimiento || canCreateBitacora
+  const canExportBitacora = Boolean(permisosBitacora?.exportar)
+  const showDayCreate = canCreateSeguimiento || canCreateBitacora || canExportBitacora
+
+  const exportPdfDia = async (dateStr) => {
+    if (!api?.exportBitacoraPdfBlob || !dateStr) return
+    setPdfBusy(true)
+    setError('')
+    try {
+      const blob = await api.exportBitacoraPdfBlob(dateStr)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `bitacora_${dateStr}.pdf`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 4000)
+      setDayMenu(null)
+    } catch (e) {
+      setError(e.message || 'No se pudo exportar el PDF de bitácora')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
 
   const rootClass = [
     'cc-seguim-cal',
@@ -712,6 +734,17 @@ export default function SeguimientoCalendario({
                       }}
                     >
                       📒 Bitácora {bitacoraSubmenu ? '▴' : '▾'}
+                    </button>
+                  )}
+                  {canExportBitacora && (
+                    <button
+                      type="button"
+                      disabled={pdfBusy}
+                      onClick={() => void exportPdfDia(dayMenu.dateStr)}
+                      style={{ ...ghost(t), opacity: pdfBusy ? 0.6 : 1 }}
+                      title="PDF del día: Diario, Eventos y fotografías"
+                    >
+                      {pdfBusy ? 'Generando PDF…' : '📄 Exportar PDF'}
                     </button>
                   )}
                 </div>

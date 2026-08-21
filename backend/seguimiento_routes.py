@@ -889,7 +889,6 @@ def route_firmar_acta(
 
 # ── Bitácora de Obra ──────────────────────────────────────────────────────────
 
-from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 from bitacora_service import (  # noqa: E402
     adjuntar_imagen_entrada,
     cerrar_diarios_vencidos,
@@ -911,6 +910,8 @@ from bitacora_service import (  # noqa: E402
     upsert_cargo_custom,
     upsert_equipo,
 )
+from bitacora_pdf import generar_pdf_bitacora_dia  # noqa: E402
+from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 
 
 class BitacoraDiarioBody(BaseModel):
@@ -1098,6 +1099,33 @@ def route_bitacora_media(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/pdf")
+def route_bitacora_export_pdf(
+    contrato_id: int,
+    fecha: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    current_user=Depends(get_current_user),
+):
+    """PDF landscape del día: Diario + Eventos + fotografías (encabezado 3 logos)."""
+    require_permiso_bitacora(current_user, "exportar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        pdf = generar_pdf_bitacora_dia(supabase, contrato_id, fecha)
+        fname = f"bitacora_{contrato_id}_{str(fecha)[:10]}.pdf"
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.bitacora").exception("export pdf bitácora: %s", exc)
+        raise HTTPException(status_code=500, detail="No se pudo generar el PDF de bitácora") from exc
 
 
 @router.post("/{contrato_id}/bitacora/diario")
