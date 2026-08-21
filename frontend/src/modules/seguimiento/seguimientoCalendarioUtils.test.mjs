@@ -5,6 +5,7 @@
 import {
   actaToEvent,
   bandejaItemToEvent,
+  bitacoraToEvent,
   buildCalendarioEvents,
   dayHasVencidos,
   filterEventsByOrigen,
@@ -92,28 +93,60 @@ assert(acta.backgroundColor === CALENDARIO_KIND.acta.color, 'color acta')
 assert(acta.title.includes('Acta Nº 12'), 'número acta')
 assert(acta.title.startsWith('📝'), 'icono acta')
 
+const diario = bitacoraToEvent({
+  id: 40,
+  tipo: 'diario',
+  fecha: '2026-08-14',
+  hora_inicio_labores: '07:00',
+  created_by_nombre: 'Ana Pérez',
+})
+assert(diario.id === 'bitacora-40', 'id bitácora diario')
+assert(diario.start === '2026-08-14T07:00:00', 'start diario con hora')
+assert(diario.extendedProps.kind === 'bitacora_diario', 'kind diario')
+assert(diario.backgroundColor === CALENDARIO_KIND.bitacora_diario.color, 'color diario')
+assert(diario.title.includes('Ana Pérez'), 'elaborador en título diario')
+assert(diario.extendedProps.elaborador === 'Ana Pérez', 'elaborador prop')
+
+const eventoBit = bitacoraToEvent({
+  id: 41,
+  tipo: 'evento',
+  fecha: '2026-08-14',
+  evento_tipo: 'visita_terceros',
+  created_by_nombre: 'Luis Gómez',
+})
+assert(eventoBit.extendedProps.kind === 'bitacora_evento', 'kind evento')
+assert(eventoBit.backgroundColor === CALENDARIO_KIND.bitacora_evento.color, 'color evento')
+assert(eventoBit.backgroundColor !== CALENDARIO_KIND.bitacora_diario.color, 'colores bitácora distintos')
+assert(eventoBit.title.includes('Luis Gómez'), 'elaborador en título evento')
+
+assert(CALENDARIO_KIND.bitacora_diario.tooltip, 'tooltip diario')
+assert(CALENDARIO_KIND.bitacora_evento.tooltip, 'tooltip evento')
+
 const events = buildCalendarioEvents(
   [
     { id: 1, origen: 'tarea', titulo: 'T', fecha_vencimiento: '2026-08-01' },
     { id: 2, origen: 'compromiso', titulo: 'C', fecha_vencimiento: '2026-08-02' },
   ],
   [{ id: 9, consecutivo: 1, fecha_reunion: '2026-08-03' }],
+  [{ id: 7, tipo: 'diario', fecha: '2026-08-04', created_by_nombre: 'X' }],
 )
-assert(events.length === 3, 'build une tipos')
+assert(events.length === 4, 'build une bandeja+actas+bitácora')
 assert(filterEventsByOrigen(events, 'acta').length === 1, 'filtro origen acta')
 assert(filterEventsByOrigen(events, 'tarea').length === 1, 'filtro origen tarea')
-assert(filterEventsByOrigen(events, '').length === 3, 'sin filtro → todos')
+assert(filterEventsByOrigen(events, 'bitacora_diario').length === 1, 'filtro bitácora diario')
+assert(filterEventsByOrigen(events, '').length === 4, 'sin filtro → todos')
 
 const daySum = summarizeDayCounts([
   { start: '2026-08-10', extendedProps: { kind: 'tarea' } },
   { start: '2026-08-10T09:00:00', extendedProps: { kind: 'tarea' } },
   { start: '2026-08-10', extendedProps: { kind: 'acta' } },
+  { start: '2026-08-10', extendedProps: { kind: 'bitacora_diario' } },
   { start: '2026-08-11', extendedProps: { kind: 'compromiso' } },
 ], '2026-08-10')
-assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.total === 3, 'conteo día')
-assert(daySum.label === '2 tareas · 1 acta', 'label día')
+assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.diarios === 1 && daySum.total === 4, 'conteo día')
+assert(daySum.label === '2 tareas · 1 acta · 1 diario', 'label día')
 assert(formatDayCountLabel({ compromisos: 1 }) === '1 compromiso', 'label singular')
-assert(formatDayCountLabelShort({ tareas: 2, actas: 1 }) === '2T · 1A', 'label corto widget')
+assert(formatDayCountLabelShort({ tareas: 2, actas: 1, diarios: 1 }) === '2T · 1A · 1D', 'label corto widget')
 
 const hoy = new Date(2026, 7, 20) // 20-ago-2026 local
 const evVenc = {
@@ -140,8 +173,9 @@ const sorted = sortDayEvents([
   { id: 'c', title: '✅ Mañana', start: '2026-08-10T09:00:00', extendedProps: { kind: 'tarea' } },
   { id: 'd', title: '📋 Comp', start: '2026-08-10', extendedProps: { kind: 'compromiso' } },
   { id: 'e', title: '✅ Sin hora', start: '2026-08-10', extendedProps: { kind: 'tarea' } },
+  { id: 'f', title: '📒 Diario', start: '2026-08-10', extendedProps: { kind: 'bitacora_diario' } },
 ])
-assert(sorted.map((x) => x.id).join(',') === 'c,b,e,d,a', 'orden tipo→hora→sin hora')
+assert(sorted.map((x) => x.id).join(',') === 'c,b,e,d,a,f', 'orden tipo→hora→sin hora')
 assert(eventDisplayTitle({ title: '✅ Revisar planos' }) === 'Revisar planos', 'título sin icono')
 assert(eventDisplayTime({ start: '2026-08-10T09:30:00' }) === '09:30', 'hora timed')
 assert(eventDisplayTime({ start: '2026-08-10' }) === null, 'sin hora → null')

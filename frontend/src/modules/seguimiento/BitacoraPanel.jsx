@@ -181,7 +181,7 @@ export default function BitacoraPanel({
                         <th style={{ ...ui.th, width: '10%' }}>Hora</th>
                         <th style={{ ...ui.th, width: '14%' }}>Estado</th>
                         <th style={{ ...ui.th, width: '22%' }}>Clima</th>
-                        <th style={{ ...ui.th, width: '22%' }}>Autor</th>
+                        <th style={{ ...ui.th, width: '22%' }}>Elaborado por</th>
                         <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Fotos</th>
                         <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>📎</th>
                       </tr>
@@ -250,10 +250,11 @@ export default function BitacoraPanel({
                     <thead>
                       <tr>
                         <th style={{ ...ui.th, width: '12%' }}>Fecha</th>
-                        <th style={{ ...ui.th, width: '22%' }}>Tipo de reporte</th>
-                        <th style={{ ...ui.th, width: '36%' }}>Descripción</th>
-                        <th style={{ ...ui.th, width: '20%' }}>A quién se dirige</th>
-                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>📎</th>
+                        <th style={{ ...ui.th, width: '20%' }}>Tipo de reporte</th>
+                        <th style={{ ...ui.th, width: '28%' }}>Descripción</th>
+                        <th style={{ ...ui.th, width: '18%' }}>A quién se dirige</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Elaborado por</th>
+                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>📎</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -280,6 +281,10 @@ export default function BitacoraPanel({
                             </td>
                             <td style={ui.td}>
                               {showDest ? (row.dirigido_a || '—') : '—'}
+                            </td>
+                            <td style={ui.td}>
+                              {row.created_by_nombre || '—'}
+                              {row.created_by_rol ? ` · ${row.created_by_rol}` : ''}
                             </td>
                             <td style={{ ...ui.td, textAlign: 'center', color: nAdj ? (t.primary || '#2563eb') : t.textMuted }}>
                               {nAdj > 0 ? `📎 ${nAdj}` : '—'}

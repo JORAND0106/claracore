@@ -137,6 +137,8 @@ export default function BitacoraEntradaEditor({
   permisos,
   modo,
   entrada = null,
+  /** Fecha YYYY-MM-DD al crear desde el calendario (día seleccionado). */
+  fechaInicial = null,
   onClose,
   onSaved,
 }) {
@@ -148,7 +150,9 @@ export default function BitacoraEntradaEditor({
     return puedeEditarEntradaBitacora(entrada, permisos)
   }, [esNuevo, entrada, permisos])
 
-  const [fecha, setFecha] = useState(entrada?.fecha || hoyISOBogota())
+  const [fecha, setFecha] = useState(
+    entrada?.fecha || (fechaInicial ? String(fechaInicial).slice(0, 10) : '') || hoyISOBogota(),
+  )
   const [horaInicio, setHoraInicio] = useState(
     String(entrada?.hora_inicio_labores || '').slice(0, 5) || horaActualBogota(),
   )
@@ -493,13 +497,21 @@ export default function BitacoraEntradaEditor({
                 compact
               />
             )}
-            {entrada?.created_by_nombre && (
+            {(entrada?.created_by_nombre || usuario) && (
               <div style={{
-                ...ui.sheetWrap, flex: '1 1 160px', display: 'flex',
-                alignItems: 'center', padding: '0 8px', fontSize: 12, color: t.textMuted,
+                ...ui.sheetWrap, flex: '1 1 180px', display: 'flex', flexDirection: 'column',
+                justifyContent: 'center', padding: '6px 10px', fontSize: 12, color: t.textMuted,
+                gap: 2,
               }}>
-                {entrada.created_by_nombre}
-                {entrada.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                  Elaborado por
+                </span>
+                <span style={{ color: t.text, fontWeight: 600 }}>
+                  {entrada?.created_by_nombre
+                    || [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ')
+                    || '—'}
+                  {entrada?.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
+                </span>
               </div>
             )}
           </div>
