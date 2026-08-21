@@ -296,13 +296,25 @@ export default function PptoFiltroMapaPk({
             const manejarTapPlano = (e) => {
               const f = e.features?.[0]
               if (!f) return
-              const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
+              const props = f.properties && typeof f.properties === 'object' ? { ...f.properties } : null
+              const v = featurePkId(f) || String(props?.Layer ?? props?.PK_ID ?? props?.pk_id ?? '').trim()
               if (!v) return
-              const meta = e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : null
+              const meta = {
+                ...(e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : {}),
+                properties: props,
+              }
               togglePk(v, meta)
-              if (meta) {
+              if (e.lngLat) {
                 capturarVistaPlano(e.lngLat).then((screenshot) => {
-                  if (screenshot) onPickRef.current?.(v, { ...meta, screenshot, screenshotOnly: true })
+                  if (screenshot) {
+                    onPickRef.current?.(v, {
+                      lng: e.lngLat.lng,
+                      lat: e.lngLat.lat,
+                      properties: props,
+                      screenshot,
+                      screenshotOnly: true,
+                    })
+                  }
                 })
               }
             }
@@ -412,7 +424,19 @@ export default function PptoFiltroMapaPk({
           markerEls.push({ el, pk: pkv })
           el.addEventListener('click', (ev) => {
             ev.stopPropagation()
-            togglePk(pkv, { lng: ll[0], lat: ll[1] })
+            togglePk(pkv, {
+              lng: ll[0],
+              lat: ll[1],
+              properties: {
+                pk_id: row?.pk_id,
+                CIV: row?.civ,
+                civ: row?.civ,
+                tramo: row?.tramo,
+                infraestructura: row?.infraestructura,
+                calzada: row?.calzada,
+                costado: row?.calzada || row?.costado,
+              },
+            })
           })
         })
         try {

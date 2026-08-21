@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import PptoFiltroMapaPk from '../presupuesto/PptoFiltroMapaPk'
 import { API_BASE } from '../../apiBase'
-import { buscarPkMaestroPorValorPlano } from '../sicoe-obra/sicoePkResolver'
+import { identificarUbicacionMaterial } from './bitacoraMaterialUbicacion'
+
+export { identificarUbicacionMaterial }
 
 async function fetchPkMaestro(contratoId, token) {
   const t = token
@@ -25,6 +27,9 @@ export default function BitacoraMaterialUbicacionModal({
   contratoId,
   pkId = '',
   pkLabel = '',
+  tramo = '',
+  costado = '',
+  infraestructura = '',
   readOnly = false,
   onConfirm,
   onClose,
@@ -34,6 +39,9 @@ export default function BitacoraMaterialUbicacionModal({
   const [aviso, setAviso] = useState('')
   const [selPkId, setSelPkId] = useState(pkId ? String(pkId) : '')
   const [selLabel, setSelLabel] = useState(pkLabel || '')
+  const [selTramo, setSelTramo] = useState(tramo || '')
+  const [selCostado, setSelCostado] = useState(costado || '')
+  const [selInfra, setSelInfra] = useState(infraestructura || '')
   const [coords, setCoords] = useState({ lat: null, lng: null })
 
   const cargar = useCallback(async () => {
@@ -58,18 +66,28 @@ export default function BitacoraMaterialUbicacionModal({
     || (selPkId && pkList.find((p) => String(p.id) === String(selPkId))?.pk_id)
     || ''
 
+  const limpiarSeleccion = () => {
+    setSelPkId('')
+    setSelLabel('')
+    setSelTramo('')
+    setSelCostado('')
+    setSelInfra('')
+    setCoords({ lat: null, lng: null })
+  }
+
   const onPkPick = (pkVal, meta) => {
     if (readOnly || meta?.screenshotOnly) return
-    const v = String(pkVal || '').trim()
-    if (!v) return
-    const row = buscarPkMaestroPorValorPlano(v, pkList)
-    if (row?.id == null) {
-      setAviso(`No se encontró «${v}» en el maestro PK del contrato.`)
+    const identified = identificarUbicacionMaterial(pkVal, pkList, meta?.properties)
+    if (!identified.ok) {
+      setAviso(identified.error || 'No se pudo identificar el PK del plano.')
       return
     }
     setAviso('')
-    setSelPkId(String(row.id))
-    setSelLabel(String(row.pk_id || row.civ || v))
+    setSelPkId(String(identified.ubicacion_pk_id))
+    setSelLabel(String(identified.ubicacion_pk || ''))
+    setSelTramo(identified.ubicacion_tramo || '')
+    setSelCostado(identified.ubicacion_costado || '')
+    setSelInfra(identified.ubicacion_infraestructura || '')
     setCoords({
       lat: meta?.lat != null ? Number(meta.lat) : null,
       lng: meta?.lng != null ? Number(meta.lng) : null,
@@ -80,6 +98,13 @@ export default function BitacoraMaterialUbicacionModal({
     border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer',
     fontWeight: 700, fontSize: 'var(--cc-sm)',
   }
+
+  const detalleSel = [
+    display ? `PK: ${display}` : null,
+    selTramo ? `Tramo: ${selTramo}` : null,
+    selCostado ? `Costado: ${selCostado}` : null,
+    selInfra ? `Infra: ${selInfra}` : null,
+  ].filter(Boolean).join(' · ')
 
   return (
     <div
@@ -140,11 +165,7 @@ export default function BitacoraMaterialUbicacionModal({
               contratoId={contratoId}
               onPkPick={onPkPick}
               selectedPk={display}
-              onClearSelection={() => {
-                setSelPkId('')
-                setSelLabel('')
-                setCoords({ lat: null, lng: null })
-              }}
+              onClearSelection={limpiarSeleccion}
               height="100%"
               hideCaption
               showBasemapToggle
@@ -156,8 +177,8 @@ export default function BitacoraMaterialUbicacionModal({
           padding: '10px 14px', borderTop: `1px solid ${t.border}`,
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700 }}>
-            {display ? `PK: ${display}` : 'Sin PK seleccionado'}
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700, maxWidth: '62%', lineHeight: 1.35 }}>
+            {detalleSel || 'Sin PK seleccionado'}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {!readOnly && (display || pkLabel) && (
@@ -166,6 +187,9 @@ export default function BitacoraMaterialUbicacionModal({
                 onClick={() => onConfirm?.({
                   ubicacion_pk: null,
                   ubicacion_pk_id: null,
+                  ubicacion_tramo: null,
+                  ubicacion_costado: null,
+                  ubicacion_infraestructura: null,
                   ubicacion_lat: null,
                   ubicacion_lng: null,
                 })}
@@ -181,6 +205,9 @@ export default function BitacoraMaterialUbicacionModal({
                 onClick={() => onConfirm?.({
                   ubicacion_pk: selLabel || display || null,
                   ubicacion_pk_id: selPkId || null,
+                  ubicacion_tramo: selTramo || null,
+                  ubicacion_costado: selCostado || null,
+                  ubicacion_infraestructura: selInfra || null,
                   ubicacion_lat: coords.lat,
                   ubicacion_lng: coords.lng,
                 })}

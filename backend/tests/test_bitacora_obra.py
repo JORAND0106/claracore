@@ -323,12 +323,44 @@ def test_normalizar_materiales_ubicacion_pk():
         "cantidad": 1,
         "ubicacion_pk": "PK 2+050",
         "ubicacion_pk_id": "42",
+        "ubicacion_tramo": "Tramo Norte",
+        "ubicacion_costado": "Derecho",
+        "ubicacion_infraestructura": "Calzada",
         "ubicacion_lat": 4.7,
         "ubicacion_lng": -74.0,
     }])
     assert out[0]["ubicacion_pk"] == "PK 2+050"
     assert out[0]["ubicacion_pk_id"] == 42
+    assert out[0]["ubicacion_tramo"] == "Tramo Norte"
+    assert out[0]["ubicacion_costado"] == "Derecho"
+    assert out[0]["ubicacion_infraestructura"] == "Calzada"
     assert out[0]["ubicacion_lat"] == 4.7
+
+    out2 = svc._normalizar_materiales([{
+        "movimiento": "ingreso",
+        "tipo_material": "Arena",
+        "cantidad": 1,
+        "ubicacion_pk": "   ",
+    }])
+    assert "ubicacion_pk" not in out2[0]
+    assert "ubicacion_tramo" not in out2[0]
+    assert "ubicacion_costado" not in out2[0]
+    assert "ubicacion_infraestructura" not in out2[0]
+
+
+def test_ubicacion_material_pdf_incluye_tramo_costado_infra():
+    from bitacora_pdf import _ubicacion_material
+
+    assert _ubicacion_material({"ubicacion_pk": "12+000"}) == "PK 12+000"
+    assert (
+        _ubicacion_material({
+            "ubicacion_pk": "12+000",
+            "ubicacion_tramo": "Norte",
+            "ubicacion_costado": "Izquierdo",
+            "ubicacion_infraestructura": "Berma",
+        })
+        == "PK 12+000 · Norte · Izquierdo · Berma"
+    )
 
 
 def test_slot_3h_desde_hora():

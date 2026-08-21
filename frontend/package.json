@@ -13,7 +13,8 @@
     "test:informes-pdf": "node --test src/informesVistaPreviaPdf.test.js",
     "test:sicoe-mapa-portada": "node --test src/modules/sicoe-obra/sicoeMapaPortadaPk.test.js",
     "test:sicoe-filtro-item": "node --test src/modules/sicoe-obra/sicoeFiltroItemIndependiente.test.js",
-    "test:ppto-roles": "node --test src/modules/presupuesto/pptoRolesValidacion.test.js"
+    "test:ppto-roles": "node --test src/modules/presupuesto/pptoRolesValidacion.test.js",
+    "test:bitacora-ubicacion": "node --test src/modules/seguimiento/bitacoraMaterialUbicacion.test.js"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.21",

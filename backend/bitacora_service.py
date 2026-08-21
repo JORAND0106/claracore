@@ -300,6 +300,16 @@ def _normalizar_materiales(raw) -> List[dict]:
         else:
             ubicacion_pk_id = None
 
+        ubicacion_tramo = str(
+            item.get("ubicacion_tramo") or item.get("tramo") or ""
+        ).strip() or None
+        ubicacion_costado = str(
+            item.get("ubicacion_costado") or item.get("costado") or item.get("calzada") or ""
+        ).strip() or None
+        ubicacion_infraestructura = str(
+            item.get("ubicacion_infraestructura") or item.get("infraestructura") or ""
+        ).strip() or None
+
         ubicacion_lat = None
         ubicacion_lng = None
         for key_lat, key_lng in (
@@ -327,6 +337,7 @@ def _normalizar_materiales(raw) -> List[dict]:
         if not any([
             tipo, proveedor, placa, numeros_vale, adjuntos, cantidad,
             ubicacion_pk, ubicacion_pk_id is not None, ubicacion_lat is not None,
+            ubicacion_tramo, ubicacion_costado, ubicacion_infraestructura,
         ]):
             continue
         row = {
@@ -342,6 +353,12 @@ def _normalizar_materiales(raw) -> List[dict]:
             row["ubicacion_pk"] = ubicacion_pk
         if ubicacion_pk_id is not None:
             row["ubicacion_pk_id"] = ubicacion_pk_id
+        if ubicacion_tramo:
+            row["ubicacion_tramo"] = ubicacion_tramo
+        if ubicacion_costado:
+            row["ubicacion_costado"] = ubicacion_costado
+        if ubicacion_infraestructura:
+            row["ubicacion_infraestructura"] = ubicacion_infraestructura
         if ubicacion_lat is not None and ubicacion_lng is not None:
             row["ubicacion_lat"] = round(ubicacion_lat, 7)
             row["ubicacion_lng"] = round(ubicacion_lng, 7)
