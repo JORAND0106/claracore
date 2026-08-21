@@ -951,15 +951,28 @@ def _normalizar_visitantes_lista(raw) -> List[dict]:
             if not nombre:
                 continue
             cargo = str(item.get("cargo") or "").strip()
-            vid = item.get("visitante_id") or item.get("id")
+            vid = item.get("visitante_id")
+            uid = item.get("usuario_id")
             try:
                 vid_i = int(vid) if vid is not None and vid != "" else None
             except (TypeError, ValueError):
                 vid_i = None
+            try:
+                uid_i = int(uid) if uid is not None and uid != "" else None
+            except (TypeError, ValueError):
+                uid_i = None
+            # Ids de usuario de plataforma son positivos; no confundir con visitante_id.
+            if uid_i is not None and uid_i <= 0:
+                uid_i = None
+            origen = str(item.get("origen") or "").strip() or (
+                "plataforma" if uid_i is not None else ("catalogo" if vid_i is not None else None)
+            )
             out.append({
                 "visitante_id": vid_i,
+                "usuario_id": uid_i,
                 "nombre": nombre,
                 "cargo": cargo,
+                "origen": origen,
             })
         return out
     # Legacy: texto libre "Ana (Auditora), Luis"
@@ -972,9 +985,16 @@ def _normalizar_visitantes_lista(raw) -> List[dict]:
             continue
         m = re.match(r"^(.+?)\s*\(([^)]*)\)\s*$", part)
         if m:
-            out.append({"visitante_id": None, "nombre": m.group(1).strip(), "cargo": m.group(2).strip()})
+            out.append({
+                "visitante_id": None, "usuario_id": None,
+                "nombre": m.group(1).strip(), "cargo": m.group(2).strip(),
+                "origen": None,
+            })
         else:
-            out.append({"visitante_id": None, "nombre": part, "cargo": ""})
+            out.append({
+                "visitante_id": None, "usuario_id": None,
+                "nombre": part, "cargo": "", "origen": None,
+            })
     return out
 
 
@@ -996,7 +1016,7 @@ def sync_visitantes_catalogo(
     *,
     user_id: Optional[int] = None,
 ) -> List[dict]:
-    """Upsert catálogo y devuelve snapshot inmutable para evento_detalle."""
+    """Upsert catálogo (solo no-plataforma) y snapshot inmutable para evento_detalle."""
     synced: List[dict] = []
     for item in visitantes or []:
         if not isinstance(item, dict):
@@ -1005,13 +1025,34 @@ def sync_visitantes_catalogo(
         if not nombre:
             continue
         cargo = str(item.get("cargo") or "").strip()
+        uid = item.get("usuario_id")
+        try:
+            uid_i = int(uid) if uid is not None and uid != "" else None
+        except (TypeError, ValueError):
+            uid_i = None
+        if uid_i is not None and uid_i > 0:
+            # Usuario ClaraCore: no se duplica en catálogo de visitantes.
+            if not cargo:
+                raise ValueError(
+                    f"El asistente «{nombre}» es usuario de la plataforma y requiere cargo."
+                )
+            synced.append({
+                "usuario_id": uid_i,
+                "visitante_id": None,
+                "nombre": nombre,
+                "cargo": cargo,
+                "origen": "plataforma",
+            })
+            continue
         cat = upsert_visitante(
             sb, contrato_id, nombre, cargo=cargo, user_id=user_id,
         )
         synced.append({
             "visitante_id": int(cat["id"]) if cat and cat.get("id") is not None else item.get("visitante_id"),
+            "usuario_id": None,
             "nombre": str((cat or {}).get("nombre") or nombre),
             "cargo": cargo or str((cat or {}).get("cargo") or "").strip(),
+            "origen": "catalogo",
         })
     return synced
 

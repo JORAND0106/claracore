@@ -469,8 +469,10 @@ export default function BitacoraEntradaEditor({
           .filter((v) => v && String(v.nombre || '').trim())
           .map((v) => ({
             visitante_id: v.visitante_id ?? null,
+            usuario_id: v.usuario_id ?? null,
             nombre: String(v.nombre).trim(),
             cargo: String(v.cargo || '').trim(),
+            origen: v.origen || (v.usuario_id ? 'plataforma' : 'catalogo'),
           }))
         detallePayload.visitantes_lista = lista
         detallePayload.visitantes = lista
