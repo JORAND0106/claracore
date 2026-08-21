@@ -255,6 +255,7 @@ export default function BitacoraEntradaEditor({
     setBusy(true)
     setError('')
     setOkMsg('')
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
       const personalPayload = personal
         .filter((p) => Number(p.cantidad) > 0)
@@ -287,12 +288,14 @@ export default function BitacoraEntradaEditor({
         cuerpo_html: cuerpoHtml,
       }
       let row
+      const tNet0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
       if (localId == null) {
         row = await api.createBitacoraDiario(payload)
         setLocalId(row.id)
       } else {
         row = await api.updateBitacoraEntrada(localId, payload)
       }
+      const tNet1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
       const pending = (imagenes || []).filter((im) => im.pending && im.data_uri)
       for (const im of pending) {
         row = await api.pegarImagenBitacora(row.id, {
@@ -306,10 +309,20 @@ export default function BitacoraEntradaEditor({
         row = await api.cerrarBitacoraDiario(row.id)
         setOkMsg('Reporte Diario cerrado. Queda inmutable.')
       } else {
-        setOkMsg('Reporte Diario guardado.')
+        const ms = Math.round(tNet1 - tNet0)
+        const total = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+        const server = row?._perf_ms?.total
+        setOkMsg(
+          server != null
+            ? `Reporte Diario guardado (${ms} ms red · ${Math.round(server)} ms servidor).`
+            : `Reporte Diario guardado (${total} ms).`,
+        )
       }
-      setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
-      onSaved?.(row)
+      // No propagar métricas internas al estado de imágenes
+      const { _perf_ms: _omit, ...rowClean } = row || {}
+      void _omit
+      setImagenes(Array.isArray(rowClean.imagenes) ? rowClean.imagenes : [])
+      onSaved?.(rowClean)
       if (cerrar) onClose?.()
     } catch (e) {
       setError(e.message || 'No se pudo guardar')

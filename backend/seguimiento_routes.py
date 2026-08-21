@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, registrar_log, supabase
@@ -899,6 +899,7 @@ from bitacora_service import (  # noqa: E402
     eliminar_entrada,
     get_diario_por_fecha,
     get_entrada,
+    leer_media_bitacora,
     list_cargos_custom,
     list_entradas,
     list_equipos,
@@ -1077,6 +1078,26 @@ def route_bitacora_galeria(
     require_permiso_bitacora(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     return list_galeria(supabase, contrato_id, q or "")
+
+
+@router.get("/{contrato_id}/bitacora/media")
+def route_bitacora_media(
+    contrato_id: int,
+    path: str = Query(..., min_length=8, description="blob_path privado de bitácora"),
+    current_user=Depends(get_current_user),
+):
+    """Sirve un adjunto de bitácora bajo demanda (auth Bearer). Evita embeber data_uri en list/save."""
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    try:
+        data, mime = leer_media_bitacora(contrato_id, path)
+        return Response(
+            content=data,
+            media_type=mime,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.post("/{contrato_id}/bitacora/diario")

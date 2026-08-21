@@ -164,3 +164,106 @@ def test_asegurar_autocierre_llama_cierre(monkeypatch):
     assert called["eid"] == 9
     assert called["motivo"] == "automatico_dia"
     assert out["estado"] == "cerrado"
+
+
+def test_enrich_imagen_no_descarga_azure():
+    """Regresión perf: preview no embebe data_uri ni toca Azure."""
+    out = svc._enrich_imagen_preview({
+        "nombre": "f.png",
+        "blob_path": "seguimiento-bitacora/1/x.png",
+        "mime_type": "image/png",
+    })
+    assert out["blob_path"].endswith("x.png")
+    assert "data_uri" not in out
+
+
+def test_assert_blob_path_contrato():
+    assert svc.assert_blob_path_del_contrato(5, "seguimiento-bitacora/5/a.png").endswith("a.png")
+    with pytest.raises(ValueError):
+        svc.assert_blob_path_del_contrato(5, "seguimiento-bitacora/9/a.png")
+    with pytest.raises(ValueError):
+        svc.assert_blob_path_del_contrato(5, "../etc/passwd")
+
+
+def test_crear_diario_no_relee_ni_descarga(monkeypatch):
+    """Crear diario: respuesta desde insert + usos, sin get_entrada."""
+    hoy = svc.hoy_bogota().isoformat()
+
+    class FakeTable:
+        def __init__(self, name):
+            self.name = name
+            self._payload = None
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def insert(self, payload):
+            self._payload = payload
+            return self
+
+        def execute(self):
+            if self.name == "seguimiento_bitacora_entrada" and self._payload:
+                row = {"id": 77, **self._payload}
+                return MagicMock(data=[row])
+            return MagicMock(data=[])
+
+    class FakeSb:
+        def table(self, name):
+            return FakeTable(name)
+
+    monkeypatch.setattr(svc, "_usuario_row", lambda *_a, **_k: {"nombre": "Ana", "apellidos": "P"})
+    monkeypatch.setattr(svc, "_rol_nombre", lambda *_a, **_k: "Residente")
+    monkeypatch.setattr(svc, "sync_cargos_desde_personal", lambda *_a, **_k: None)
+    monkeypatch.setattr(svc, "_diario_existe_fecha", lambda *_a, **_k: False)
+
+    def no_get(*_a, **_k):
+        raise AssertionError("crear no debe llamar get_entrada")
+
+    monkeypatch.setattr(svc, "get_entrada", no_get)
+
+    out = svc.crear_reporte_diario(
+        FakeSb(),
+        1,
+        {"fecha": hoy, "hora_inicio_labores": "07:00", "personal": [], "materiales": [], "cuerpo_html": ""},
+        10,
+        current_user={"nombre": "Ana", "rol_nombre": "Residente"},
+    )
+    assert out["id"] == 77
+    assert out["tipo"] == "diario"
+    assert isinstance(out.get("_perf_ms"), dict)
+    assert out["_perf_ms"].get("total", 99999) < 5000
+    assert "insert_db" in out["_perf_ms"]
+
+
+def test_list_usos_batch_agrupa():
+    class FakeTable:
+        def select(self, *_a, **_k):
+            return self
+
+        def in_(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return MagicMock(data=[
+                {"entrada_id": 1, "equipo_nombre": "A", "orden": 0},
+                {"entrada_id": 2, "equipo_nombre": "B", "orden": 0},
+                {"entrada_id": 1, "equipo_nombre": "C", "orden": 1},
+            ])
+
+    class FakeSb:
+        def table(self, _name):
+            return FakeTable()
+
+    out = svc._list_usos_batch(FakeSb(), [1, 2, 3])
+    assert len(out[1]) == 2
+    assert len(out[2]) == 1
+    assert out[3] == []
