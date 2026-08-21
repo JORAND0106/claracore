@@ -3934,6 +3934,18 @@ def _sicoe_registro_tiene_item_asignado(row: Optional[dict]) -> bool:
     return bool(str(row.get("item_numero") or "").strip())
 
 
+def _sicoe_raise_si_sin_item_para_validar(row: Optional[dict]) -> None:
+    """Bloquea validación N1–N6 sobre registros sin ítem asignado."""
+    if not _sicoe_registro_tiene_item_asignado(row):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No se puede validar un registro sin ítem asignado. "
+                "Asigne un ítem de presupuesto antes de validar."
+            ),
+        )
+
+
 def _sicoe_reporte_ids_con_lineas_sin_item(
     contrato_id: int,
     restrict_to: Optional[Iterable[int]] = None,
@@ -4748,7 +4760,7 @@ def _filtrar_registros_validacion_por_campo(
         if _es_validacion_avanzada(fld) and not alinea_dash:
             if not (reg.get("item_numero") or "").strip():
                 continue
-        if fld == "nivel1_estado" and ev in ("No Revisado", "No Revisados"):
+        if fld == "nivel1_estado":
             if not (reg.get("item_numero") or "").strip():
                 continue
         if prereq and reg.get(prereq[0]) != prereq[1]:
@@ -20631,7 +20643,8 @@ def _sicoe_registro_cumple_capa_matriz(reg: dict, capa: dict, contrato_id: int) 
         if not (reg.get("item_numero") or "").strip():
             return False
 
-    if fld == "nivel1_estado" and ev in ("No Revisado", "No Revisados"):
+    # N1: cola de validación solo sobre cantidades con ítem (cualquier estado de capa).
+    if fld == "nivel1_estado":
         if not (reg.get("item_numero") or "").strip():
             return False
 
@@ -25843,7 +25856,7 @@ def _put_validar_nivel_sicoe_alto(
         def _get():
             return (
                 supabase.table("so_registros")
-                .select(f"{prev_f},{campo}")
+                .select(f"item_numero,{prev_f},{campo}")
                 .eq("id", registro_id)
                 .eq("contrato_id", contrato_id)
                 .limit(1)
@@ -25855,6 +25868,7 @@ def _put_validar_nivel_sicoe_alto(
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
         r0 = rows[0]
+        _sicoe_raise_si_sin_item_para_validar(r0)
         if (r0.get(campo) or "") == "Aprobado" and body.estado != "Aprobado":
             raise HTTPException(
                 status_code=400,
@@ -26102,11 +26116,12 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 1, contrato_id)
         def _get_n3():
             return supabase.table("so_registros").select(
-                f"contrato_id,{SICOE_SELECT_NIVELES_ESTADO},reporte_id"
+                f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id"
             ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
         n3rows = supabase_execute(_get_n3)
         if not n3rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        _sicoe_raise_si_sin_item_para_validar(n3rows[0])
         if _registro_nivel_max_aprobado(n3rows[0], contrato_id):
             raise HTTPException(
                 status_code=400,
@@ -26254,11 +26269,12 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
-                .select(f"contrato_id,{SICOE_SELECT_NIVELES_ESTADO},reporte_id").eq("id", registro_id)\
+                .select(f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        _sicoe_raise_si_sin_item_para_validar(rows[0])
         if _registro_nivel_max_aprobado(rows[0], contrato_id):
             raise HTTPException(
                 status_code=400,
@@ -26475,6 +26491,10 @@ def validar_nivel_masivo_por_filtro(
         actualizados = 0
         omitidos_precondicion = 0
         omitidos_topografia = 0
+
+        _n_cand = len(candidatos)
+        candidatos = [r for r in candidatos if _sicoe_registro_tiene_item_asignado(r)]
+        omitidos_precondicion = _n_cand - len(candidatos)
 
         if nivel == 1:
             activos_uno = _get_niveles_activos_contrato(contrato_id)
@@ -33713,7 +33733,7 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
             def _get(rid=reg_id):
                 return (
                     supabase.table("so_registros")
-                    .select(f"reporte_id, nivel1_estado, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")
+                    .select(f"reporte_id, item_numero, nivel1_estado, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")
                     .eq("id", rid)
                     .eq("contrato_id", contrato_id)
                     .limit(1)
@@ -33731,6 +33751,9 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
             except (TypeError, ValueError):
                 rp = None
             if rp is None or int(rp) != int(reporte_id):
+                omitidos_precondicion += 1
+                continue
+            if not _sicoe_registro_tiene_item_asignado(row0):
                 omitidos_precondicion += 1
                 continue
             if _registro_nivel_max_aprobado(row0, contrato_id):
