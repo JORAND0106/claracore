@@ -348,6 +348,8 @@ export default function ActaEditor({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [detalleCompromisoId, setDetalleCompromisoId] = useState(null)
   const [actaCompromisos, setActaCompromisos] = useState([])
+  /** Resalta una fila al saltar desde Temas → pestaña Compromisos abiertos. */
+  const [highlightCompromisoId, setHighlightCompromisoId] = useState(null)
   /** Acordeón: una sola idea expandida (clave = _key o id). null = todas colapsadas. */
   const [ideaExpandidaKey, setIdeaExpandidaKey] = useState(null)
   const [dragIdeaIdx, setDragIdeaIdx] = useState(null)
@@ -1682,6 +1684,9 @@ export default function ActaEditor({
                   </div>
                   {compsIdea.length > 0 && (
                     <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 2 }}>
+                        Pulse un compromiso para gestionarlo en la pestaña «Compromisos abiertos» (tabla editable).
+                      </div>
                       {compsIdea.map((c) => {
                         const cump = String(c.estado_gestion || '').toLowerCase() === 'cumplido'
                         const cAccent = cump ? COLOR_CUMPLIDO : t.primary
@@ -1690,12 +1695,16 @@ export default function ActaEditor({
                             key={c.id}
                             role="button"
                             tabIndex={0}
-                            title="Abrir compromiso para ver detalle, comentar o actualizar estado"
-                            onClick={() => setDetalleCompromisoId(c.id)}
+                            title="Abrir en tabla Compromisos abiertos"
+                            onClick={() => {
+                              setHighlightCompromisoId(c.id)
+                              setTab('compromisos')
+                            }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault()
-                                setDetalleCompromisoId(c.id)
+                                setHighlightCompromisoId(c.id)
+                                setTab('compromisos')
                               }
                             }}
                             style={{
@@ -1775,12 +1784,16 @@ export default function ActaEditor({
                       key={c.id}
                       role="button"
                       tabIndex={0}
-                      title="Abrir compromiso para ver detalle, comentar o actualizar estado"
-                      onClick={() => setDetalleCompromisoId(c.id)}
+                      title="Abrir en tabla Compromisos abiertos"
+                      onClick={() => {
+                        setHighlightCompromisoId(c.id)
+                        setTab('compromisos')
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          setDetalleCompromisoId(c.id)
+                          setHighlightCompromisoId(c.id)
+                          setTab('compromisos')
                         }
                       }}
                       style={{
@@ -1816,17 +1829,42 @@ export default function ActaEditor({
 
       {tab === 'compromisos' && (
       <section style={card(t)}>
-        <h3 style={h3(t)}>
+        <h3 style={h3(t)}>Compromisos de esta acta</h3>
+        <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+          Tabla editable tipo hoja de cálculo: cambie fecha y estado en línea.
+          Use los iconos para comentario, adjunto, aplazamiento y PDF del acta (solo bajo demanda; no bloquea la tabla).
+        </p>
+        <ActaCompromisosAbiertosTable
+          t={t}
+          api={api}
+          items={actaCompromisos}
+          emptyMessage="Aún no hay compromisos generados en esta acta. Cree uno desde Temas y Compromisos."
+          highlightId={highlightCompromisoId}
+          usuario={usuario}
+          usuarios={usuariosContrato}
+          permisos={permisos}
+          viewportCompact={viewportCompact}
+          onChanged={async () => {
+            const aid = localActaId
+            if (!aid) return
+            try {
+              const a = await api.getActa(aid)
+              setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+            } catch { /* ignore */ }
+          }}
+        />
+
+        <h3 style={{ ...h3(t), marginTop: 22 }}>
           Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
         </h3>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Tabla compacta para revisión en este comité: edite fecha y estado en línea.
-          Comentarios, adjuntos, aplazamiento y PDF del acta de origen se abren con los iconos (el PDF solo se genera bajo demanda).
+          Revisión de compromisos pendientes de comités previos del mismo tipo. Misma tabla e iconos.
         </p>
         <ActaCompromisosAbiertosTable
           t={t}
           api={api}
           items={previos}
+          emptyMessage={`No hay compromisos abiertos previos de actas ${form.tipo_acta === 'externa' ? 'externas' : 'internas'}.`}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -2177,6 +2215,7 @@ export default function ActaEditor({
                 })
                 return next
               })
+              setHighlightCompromisoId(items[0].id)
             } else if (localActaId || compromisoCtx.actaId) {
               try {
                 const a = await api.getActa(localActaId || compromisoCtx.actaId)
@@ -2185,7 +2224,8 @@ export default function ActaEditor({
             }
             setCompromisoCtx(null)
             setError('')
-            setOkMsg('Compromiso incorporado a la bandeja.')
+            setOkMsg('Compromiso incorporado. Gestione fecha, estado e iconos en Compromisos abiertos.')
+            setTab('compromisos')
             try {
               const abiertos = await api.compromisosAbiertos(
                 localActaId || undefined,
@@ -2197,37 +2237,8 @@ export default function ActaEditor({
         />
       )}
 
-      {detalleCompromisoId != null && (
-        <ItemDetalleModal
-          t={t}
-          api={api}
-          itemId={detalleCompromisoId}
-          usuario={usuario}
-          usuarios={usuariosContrato}
-          permisos={permisos}
-          allowEstadoGestion
-          revisionEnActa
-          overlayZIndex={12100}
-          viewportCompact={viewportCompact}
-          onClose={() => setDetalleCompromisoId(null)}
-          onChanged={async () => {
-            try {
-              const abiertos = await api.compromisosAbiertos(
-                localActaId || undefined,
-                form.tipo_acta || 'interna',
-              )
-              setPrevios(abiertos || [])
-            } catch { /* ignore */ }
-            const aid = localActaId || compromisoCtx?.actaId
-            if (aid) {
-              try {
-                const a = await api.getActa(aid)
-                setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
-              } catch { /* ignore */ }
-            }
-          }}
-        />
-      )}
+      {/* El detalle angosto ItemDetalleModal ya no se usa desde el acta:
+          la gestión ocurre en ActaCompromisosAbiertosTable (pestaña Compromisos abiertos). */}
     </div>
   )
 

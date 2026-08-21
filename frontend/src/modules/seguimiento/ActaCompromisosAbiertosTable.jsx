@@ -112,6 +112,8 @@ export default function ActaCompromisosAbiertosTable({
   t,
   api,
   items = [],
+  emptyMessage = 'No hay compromisos abiertos previos de actas del mismo tipo.',
+  highlightId = null,
   usuario,
   usuarios = [],
   permisos,
@@ -123,9 +125,20 @@ export default function ActaCompromisosAbiertosTable({
   const [panel, setPanel] = useState(null) // { type, item }
   const fileRef = useRef(null)
   const fileTargetIdRef = useRef(null)
+  const highlightRowRef = useRef(null)
 
   const puedeEditar = !!permisos?.editar
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
+
+  useEffect(() => {
+    if (highlightId == null) return undefined
+    const tmr = setTimeout(() => {
+      try {
+        highlightRowRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+      } catch { /* ignore */ }
+    }, 80)
+    return () => clearTimeout(tmr)
+  }, [highlightId, items])
 
   const refresh = async () => {
     await onChanged?.()
@@ -168,7 +181,7 @@ export default function ActaCompromisosAbiertosTable({
   if (!items.length) {
     return (
       <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-        No hay compromisos abiertos previos de actas del mismo tipo.
+        {emptyMessage}
       </div>
     )
   }
@@ -223,12 +236,18 @@ export default function ActaCompromisosAbiertosTable({
               const fechaVal = String(c.fecha_vencimiento || '').slice(0, 10)
               const actaLabel = c.acta_numero
                 || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : null)
+              const highlighted = highlightId != null && Number(highlightId) === Number(c.id)
               return (
                 <tr
                   key={c.id}
+                  ref={highlighted ? highlightRowRef : undefined}
                   style={{
                     borderTop: `1px solid ${t.border}`,
-                    background: ORIGEN_COLOR.compromiso.bg,
+                    background: highlighted
+                      ? `color-mix(in srgb, ${t.primary} 22%, ${ORIGEN_COLOR.compromiso.bg})`
+                      : ORIGEN_COLOR.compromiso.bg,
+                    outline: highlighted ? `2px solid ${t.primary}` : undefined,
+                    outlineOffset: -2,
                     opacity: busy ? 0.65 : 1,
                   }}
                 >
