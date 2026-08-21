@@ -1,21 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
 import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
-import VencimientoIcon from './VencimientoIcon'
 import BandejaResumenLinea from './BandejaResumenLinea'
-import { ESTADOS, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
-import { destinatarioLabel } from './tareaAsignaciones'
-import { calcularAvanceTarea, labelAvance } from './tareaAvance'
+import { ESTADOS } from './seguimientoTheme'
 import {
-  fechaVencimientoEfectiva,
-  nivelVencimientoItem,
-  origenRemitenteLabel,
   resumenVencimientoBandeja,
   sortByProximidadVencimiento,
-  tipoLaborLabel,
-  truncateTema,
 } from './vencimientoLevels'
 
+/**
+ * Bandeja: misma tabla sheet que compromisos (inline), sin abrir detalle al clic de fila.
+ * El detalle completo (checklist, multi-asignación) queda en el icono ojo.
+ */
 export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos, compact = false, viewportCompact = false }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -59,14 +56,14 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
 
   const sorted = useMemo(() => sortByProximidadVencimiento(rows), [rows])
   const resumen = useMemo(() => resumenVencimientoBandeja(sorted), [sorted])
-  const uid = usuario?.id
 
   return (
     <div className={viewportCompact ? 'cc-seguim-bandeja cc-seguim-bandeja--compact' : 'cc-seguim-bandeja'}>
       {!compact && (
         <div className="cc-seguim-filters" style={{
           display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'flex-end',
-        }}>
+        }}
+        >
           <Filter t={t} label="Palabras clave" className="cc-seguim-filter cc-seguim-filter--wide">
             <input
               value={filtros.q}
@@ -141,7 +138,8 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
         border: `1px solid ${t.border}`,
         borderRadius: 10,
         overflow: 'hidden',
-      }}>
+      }}
+      >
         <BandejaResumenLinea
           t={t}
           resumen={resumen}
@@ -155,73 +153,24 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
           <div style={{ padding: '0 10px 10px' }}>
             {loading ? (
               <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>Cargando bandeja…</div>
-            ) : sorted.length === 0 ? (
-              <div style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>No hay ítems en la bandeja.</div>
             ) : (
-              <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
-                <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 900 }}>
-                  <thead>
-                    <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
-                      <th style={th}>#</th>
-                      <th style={th}>Creación</th>
-                      <th style={th}>Vencimiento</th>
-                      <th style={th}>Nivel</th>
-                      <th style={th}>Estado / avance</th>
-                      <th style={th}>Tema</th>
-                      <th style={th}>Destinatario</th>
-                      <th style={th}>Origen / remitente</th>
-                      <th style={th}>Tipo de labor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sorted.map((r) => {
-                      const nivel = nivelVencimientoItem(r)
-                      const due = fechaVencimientoEfectiva(r)
-                      const o = ORIGEN_COLOR[r.origen] || ORIGEN_COLOR.tarea
-                      const dest = destinatarioLabel(r)
-                      const avance = r.origen === 'tarea' ? calcularAvanceTarea(r) : null
-                      const estadoLabel = r.origen === 'tarea' && avance?.pct != null
-                        ? (avance.pct === 100 ? 'Cumplido' : `${labelAvance(avance)}`)
-                        : (ESTADOS.find((x) => x.value === r.estado_gestion)?.label || r.estado_gestion || '—')
-                      return (
-                        <tr
-                          key={r.id}
-                          onClick={() => setDetalleId(r.id)}
-                          style={{ cursor: 'pointer', borderTop: `1px solid ${t.border}`, background: o.bg }}
-                          onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(0.98)' }}
-                          onMouseLeave={(e) => { e.currentTarget.style.filter = 'none' }}
-                        >
-                          <td data-label="#" style={td}>{r.consecutivo ?? r.id}</td>
-                          <td data-label="Creación" style={td}>{fmtFecha(r.created_at)}</td>
-                          <td data-label="Vencimiento" style={td}>{fmtFechaHora(due.fecha || r.fecha_vencimiento, due.hora || r.hora_vencimiento)}</td>
-                          <td data-label="Nivel" style={td}><VencimientoIcon nivel={nivel} t={t} /></td>
-                          <td
-                            data-label="Estado / avance"
-                            style={{
-                            ...td,
-                            fontWeight: 700,
-                            color: (r.origen === 'tarea' ? avance?.pct === 100 : r.estado_gestion === 'cumplido')
-                              ? 'var(--cc-color-positive,#0f766e)'
-                              : t.text,
-                          }}
-                          >
-                            {estadoLabel}
-                          </td>
-                          <td data-label="Tema" style={{ ...td, fontWeight: 600, color: t.text, maxWidth: 220 }}>
-                            <span style={{ color: o.border, fontSize: 'var(--cc-xs)', marginRight: 6 }}>{o.label}</span>
-                            <span className="cc-seguim-tema-trunc" title={r.titulo || ''}>
-                              {truncateTema(r.titulo)}
-                            </span>
-                          </td>
-                          <td data-label="Destinatario" style={td}>{dest}</td>
-                          <td data-label="Origen / remitente" style={td}>{origenRemitenteLabel(r, uid)}</td>
-                          <td data-label="Tipo de labor" style={td}>{tipoLaborLabel(r, uid)}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <ActaCompromisosAbiertosTable
+                t={t}
+                api={api}
+                items={sorted}
+                emptyMessage="No hay ítems en la bandeja."
+                showActaOrigen
+                showOrigenBadge
+                textoColumnaLabel="Tema"
+                permitirArchivar={false}
+                filtrarArchivados={false}
+                usuario={usuario}
+                usuarios={usuarios}
+                permisos={permisos}
+                viewportCompact={viewportCompact}
+                onOpenDetalle={(item) => setDetalleId(item.id)}
+                onChanged={load}
+              />
             )}
           </div>
         )}
@@ -254,9 +203,6 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     </div>
   )
 }
-
-const th = { padding: '10px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
-const td = { padding: '10px 8px', verticalAlign: 'middle', color: 'inherit' }
 
 function Filter({ t, label, children, className = '' }) {
   return (

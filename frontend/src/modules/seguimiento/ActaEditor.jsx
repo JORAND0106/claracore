@@ -1790,7 +1790,7 @@ export default function ActaEditor({
             background: t.bgCard,
             border: viewportCompact ? 'none' : `1px solid ${t.border}`,
             boxShadow: t.shadow,
-            width: viewportCompact ? '100%' : 'min(1180px, 98vw)',
+            width: viewportCompact ? '100%' : 'min(1416px, 98vw)',
           }}
         >
           {body}
