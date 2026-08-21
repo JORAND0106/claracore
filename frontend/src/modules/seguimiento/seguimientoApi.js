@@ -215,5 +215,26 @@ export function createSeguimientoApi(contratoId, token) {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''
       return get(`/seguimiento/${cid}/bitacora/galeria${qs}`)
     },
+    /** Descarga bytes de un adjunto privado (preview bajo demanda). */
+    getBitacoraMediaBlob: async (blobPath) => {
+      const path = String(blobPath || '').trim()
+      if (!path) throw new Error('Ruta de archivo vacía')
+      const sig = apiFetchSignal(30000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/bitacora/media?path=${encodeURIComponent(path)}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) {
+          await parseOrThrow(res)
+        }
+        return res.blob()
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
   }
 }

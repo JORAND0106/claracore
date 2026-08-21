@@ -8,8 +8,10 @@ import base64
 import hashlib
 import logging
 import re
-from datetime import date, datetime, time, timezone
-from typing import Any, Dict, List, Optional
+import time
+from contextlib import contextmanager
+from datetime import date, datetime, time as dt_time, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 BOGOTA = ZoneInfo("America/Bogota")
@@ -38,6 +40,16 @@ EVENTO_TIPOS = frozenset({
 })
 
 _log = logging.getLogger("claracore.bitacora")
+
+
+@contextmanager
+def _stage_timer(stages: Dict[str, float], name: str):
+    """Registra duración ms de una etapa del flujo de guardado."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        stages[name] = round((time.perf_counter() - t0) * 1000.0, 1)
 
 WMO_LABELS = {
     0: "Despejado",
@@ -133,7 +145,7 @@ def _parse_fecha(val) -> date:
 def _parse_hora(val) -> Optional[str]:
     if val is None or val == "":
         return None
-    if isinstance(val, time):
+    if isinstance(val, dt_time):
         return val.strftime("%H:%M:%S")
     s = str(val).strip()
     if not s:
@@ -370,25 +382,47 @@ def _normalizar_imagenes(raw) -> List[dict]:
 
 
 def _enrich_imagen_preview(ref: dict) -> Optional[dict]:
+    """
+    Metadatos de imagen para la API.
+
+    No descarga blobs de Azure ni embebe data_uri: eso multiplicaba segundos
+    (o decenas de segundos) en cada get/list/guardado. La UI obtiene bytes
+    bajo demanda vía GET .../bitacora/media?path=...
+    """
     if not isinstance(ref, dict):
         return None
-    out = dict(ref)
-    if out.get("data_uri") or out.get("url"):
-        return out
-    path = (out.get("blob_path") or "").strip()
-    if not path:
-        return out
-    try:
-        from azure_blob_storage import download_blob_bytes_private
+    return dict(ref)
 
-        data = download_blob_bytes_private(path)
-        if data:
-            mime = out.get("mime_type") or "image/png"
-            b64 = base64.b64encode(data).decode("ascii")
-            out["data_uri"] = f"data:{mime};base64,{b64}"
-    except Exception as exc:
-        _log.debug("bitacora imagen preview %s: %s", path, exc)
-    return out
+
+def assert_blob_path_del_contrato(contrato_id: int, blob_path: str) -> str:
+    """Valida que el path pertenezca al prefijo de bitácora del contrato."""
+    path = str(blob_path or "").strip().lstrip("/")
+    if not path or ".." in path or path.startswith("/"):
+        raise ValueError("Ruta de archivo no válida")
+    prefix = f"seguimiento-bitacora/{int(contrato_id)}/"
+    if not path.startswith(prefix):
+        raise ValueError("Ruta de archivo no válida para este contrato")
+    return path
+
+
+def leer_media_bitacora(contrato_id: int, blob_path: str) -> Tuple[bytes, str]:
+    """Lee bytes de un adjunto privado de bitácora (auth en la ruta HTTP)."""
+    path = assert_blob_path_del_contrato(contrato_id, blob_path)
+    from azure_blob_storage import download_blob_bytes_private
+
+    data = download_blob_bytes_private(path)
+    if not data:
+        raise ValueError("Archivo no encontrado")
+    lower = path.lower()
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        mime = "image/jpeg"
+    elif lower.endswith(".webp"):
+        mime = "image/webp"
+    elif lower.endswith(".gif"):
+        mime = "image/gif"
+    else:
+        mime = "image/png"
+    return data, mime
 
 
 def _store_imagen_bytes(entrada_id: int, nombre: str, content: bytes, mime: str, prefix: str) -> dict:
@@ -782,6 +816,32 @@ def _list_usos(sb, entrada_id: int) -> List[dict]:
     )
 
 
+def _list_usos_batch(sb, entrada_ids: List[int]) -> Dict[int, List[dict]]:
+    """Una sola query para usos de muchas entradas (evita N+1 en listados)."""
+    ids = sorted({int(x) for x in entrada_ids if x is not None})
+    out: Dict[int, List[dict]] = {i: [] for i in ids}
+    if not ids:
+        return out
+    # PostgREST .in_ con listas grandes: trocear por seguridad
+    chunk = 80
+    for i in range(0, len(ids), chunk):
+        part = ids[i : i + chunk]
+        rows = (
+            sb.table("seguimiento_bitacora_equipo_uso")
+            .select("*")
+            .in_("entrada_id", part)
+            .order("orden")
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            eid = int(r.get("entrada_id") or 0)
+            if eid in out:
+                out[eid].append(r)
+    return out
+
+
 def _sync_usos(
     sb,
     contrato_id: int,
@@ -850,7 +910,18 @@ def _sync_usos(
     return rows_out
 
 
-def _enrich_entrada(sb, row: dict) -> dict:
+def _enrich_entrada(
+    sb,
+    row: dict,
+    *,
+    usos: Optional[List[dict]] = None,
+    include_usos: bool = True,
+) -> dict:
+    """
+    Normaliza JSON embebido y adjunta usos de equipo.
+
+    No descarga blobs: las miniaturas van por endpoint /bitacora/media.
+    """
     out = dict(row)
     out["personal"] = _normalizar_personal(out.get("personal"))
     out["imagenes"] = [
@@ -864,13 +935,21 @@ def _enrich_entrada(sb, row: dict) -> dict:
     out["dirigido_a"] = str(out.get("dirigido_a") or "").strip()
     if not isinstance(out.get("evento_detalle"), dict):
         out["evento_detalle"] = {}
-    usos = _list_usos(sb, int(out["id"])) if out.get("id") is not None else []
-    for u in usos:
+    if include_usos:
+        if usos is not None:
+            usos_list = list(usos)
+        elif out.get("id") is not None:
+            usos_list = _list_usos(sb, int(out["id"]))
+        else:
+            usos_list = []
+    else:
+        usos_list = []
+    for u in usos_list:
         pre = u.get("preoperacionales") if isinstance(u.get("preoperacionales"), list) else []
         u["preoperacionales"] = [
             _enrich_imagen_preview(x) or x for x in _normalizar_adjuntos_flex(pre)
         ]
-    out["equipos_uso"] = usos
+    out["equipos_uso"] = usos_list
     out["inmutable"] = entrada_esta_cerrada(out) or str(out.get("tipo") or "") == "evento"
     out["puede_autocerrar"] = _debe_autocerrar(out)
     if out.get("clima_codigo") is not None and not out.get("clima_descripcion"):
@@ -894,6 +973,7 @@ def list_entradas(
     «Ver» de Bitácora (o Desarrollador) ve todas las entradas del contrato;
     no hay filtro adicional por elaborador, asistencia ni asignación.
     """
+    t0 = time.perf_counter()
     query = (
         sb.table("seguimiento_bitacora_entrada")
         .select("*")
@@ -909,10 +989,23 @@ def list_entradas(
         query = query.eq("tipo", tipo)
     rows = query.execute().data or []
 
-    out = []
+    # Autocierre lazy + batch de usos (evita N+1 round-trips a PostgREST)
+    closed_rows = []
     for row in rows:
-        row = asegurar_autocierre_entrada(sb, row)
-        enriched = _enrich_entrada(sb, row)
+        closed_rows.append(asegurar_autocierre_entrada(sb, row))
+    usos_map = _list_usos_batch(
+        sb,
+        [int(r["id"]) for r in closed_rows if r.get("id") is not None],
+    )
+
+    out = []
+    for row in closed_rows:
+        eid = int(row["id"]) if row.get("id") is not None else None
+        enriched = _enrich_entrada(
+            sb,
+            row,
+            usos=usos_map.get(eid, []) if eid is not None else [],
+        )
         if q:
             needle = str(q).strip().lower()
             blob = " ".join([
@@ -925,10 +1018,15 @@ def list_entradas(
             if needle and needle not in blob:
                 continue
         out.append(enriched)
+    _log.info(
+        "bitacora.list contrato=%s rows=%s ms=%.1f",
+        contrato_id, len(out), (time.perf_counter() - t0) * 1000.0,
+    )
     return out
 
 
-def get_entrada(sb, contrato_id: int, entrada_id: int) -> dict:
+def _fetch_entrada_row(sb, contrato_id: int, entrada_id: int) -> dict:
+    """SELECT + autocierre, sin enriquecer usos/media."""
     rows = (
         sb.table("seguimiento_bitacora_entrada")
         .select("*")
@@ -941,8 +1039,27 @@ def get_entrada(sb, contrato_id: int, entrada_id: int) -> dict:
     )
     if not rows:
         raise ValueError("Entrada de bitácora no encontrada")
-    row = asegurar_autocierre_entrada(sb, rows[0])
+    return asegurar_autocierre_entrada(sb, rows[0])
+
+
+def get_entrada(sb, contrato_id: int, entrada_id: int) -> dict:
+    row = _fetch_entrada_row(sb, contrato_id, entrada_id)
     return _enrich_entrada(sb, row)
+
+
+def _diario_existe_fecha(sb, contrato_id: int, fecha_iso: str) -> bool:
+    rows = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .eq("fecha", str(fecha_iso)[:10])
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return bool(rows)
 
 
 def get_diario_por_fecha(sb, contrato_id: int, fecha: str) -> Optional[dict]:
@@ -972,76 +1089,97 @@ def crear_reporte_diario(
     *,
     current_user: Optional[dict] = None,
 ) -> dict:
-    fecha = _parse_fecha(data.get("fecha") or hoy_bogota().isoformat())
-    hoy = hoy_bogota()
-    if fecha > hoy:
-        raise ValueError("No se puede crear un Reporte Diario con fecha futura")
-    if fecha < hoy and not es_desarrollador_bitacora(current_user):
-        raise ValueError(
-            "No se puede crear un Reporte Diario para una fecha ya pasada; "
-            "quedaría bloqueado automáticamente."
-        )
+    stages: Dict[str, float] = {}
+    t_all = time.perf_counter()
 
-    existing = get_diario_por_fecha(sb, contrato_id, fecha.isoformat())
-    if existing:
-        raise ValueError(
-            f"Ya existe un Reporte Diario para el {fecha.isoformat()}. "
-            "Ábralo para complementar mientras esté abierto."
-        )
+    with _stage_timer(stages, "validar_fecha"):
+        fecha = _parse_fecha(data.get("fecha") or hoy_bogota().isoformat())
+        hoy = hoy_bogota()
+        if fecha > hoy:
+            raise ValueError("No se puede crear un Reporte Diario con fecha futura")
+        if fecha < hoy and not es_desarrollador_bitacora(current_user):
+            raise ValueError(
+                "No se puede crear un Reporte Diario para una fecha ya pasada; "
+                "quedaría bloqueado automáticamente."
+            )
+        if _diario_existe_fecha(sb, contrato_id, fecha.isoformat()):
+            raise ValueError(
+                f"Ya existe un Reporte Diario para el {fecha.isoformat()}. "
+                "Ábralo para complementar mientras esté abierto."
+            )
 
-    u = _usuario_row(sb, user_id)
-    hora_inicio = _parse_hora(data.get("hora_inicio_labores"))
-    if not hora_inicio:
-        # default: now Bogotá
-        hora_inicio = datetime.now(BOGOTA).strftime("%H:%M:%S")
+    with _stage_timer(stages, "usuario_meta"):
+        u = _usuario_row(sb, user_id)
+        hora_inicio = _parse_hora(data.get("hora_inicio_labores"))
+        if not hora_inicio:
+            hora_inicio = datetime.now(BOGOTA).strftime("%H:%M:%S")
 
-    clima_codigo = data.get("clima_codigo")
-    try:
-        clima_codigo = int(clima_codigo) if clima_codigo is not None and clima_codigo != "" else None
-    except (TypeError, ValueError):
-        clima_codigo = None
-    clima_temp = data.get("clima_temp_c")
-    try:
-        clima_temp = float(clima_temp) if clima_temp is not None and clima_temp != "" else None
-    except (TypeError, ValueError):
-        clima_temp = None
-    clima_desc = str(data.get("clima_descripcion") or "").strip() or clima_label(clima_codigo)
+        clima_codigo = data.get("clima_codigo")
+        try:
+            clima_codigo = int(clima_codigo) if clima_codigo is not None and clima_codigo != "" else None
+        except (TypeError, ValueError):
+            clima_codigo = None
+        clima_temp = data.get("clima_temp_c")
+        try:
+            clima_temp = float(clima_temp) if clima_temp is not None and clima_temp != "" else None
+        except (TypeError, ValueError):
+            clima_temp = None
+        clima_desc = str(data.get("clima_descripcion") or "").strip() or clima_label(clima_codigo)
 
-    payload = {
-        "contrato_id": int(contrato_id),
-        "tipo": "diario",
-        "fecha": fecha.isoformat(),
-        "estado": "abierto",
-        "hora_inicio_labores": hora_inicio,
-        "clima_codigo": clima_codigo,
-        "clima_temp_c": clima_temp,
-        "clima_descripcion": clima_desc or None,
-        "clima_editado_manual": bool(data.get("clima_editado_manual")),
-        "personal": _normalizar_personal(data.get("personal")),
-        "materiales": _persist_materiales(_normalizar_materiales(data.get("materiales"))),
-        "cuerpo_html": str(data.get("cuerpo_html") or ""),
-        "imagenes": [],
-        "created_by": int(user_id),
-        "created_by_nombre": _nombre_usuario(u) or str(current_user.get("nombre") or "") if current_user else _nombre_usuario(u),
-        "created_by_rol": _rol_nombre(sb, u, current_user),
-        "created_at": _now_utc().isoformat(),
-        "updated_at": _now_utc().isoformat(),
-    }
-    # Expandir «Otro» → nombre custom en el payload guardado
-    payload["personal"] = _expandir_personal_otro(payload["personal"])
-    sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
-    try:
-        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
-    except Exception:
-        payload.pop("materiales", None)
-        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
-    if not inserted:
-        raise ValueError("No se pudo crear el Reporte Diario")
-    entrada = inserted[0]
-    usos = data.get("equipos_uso") or data.get("maquinaria") or []
-    if usos:
-        _sync_usos(sb, contrato_id, int(entrada["id"]), usos, user_id=user_id)
-    return get_entrada(sb, contrato_id, int(entrada["id"]))
+        payload = {
+            "contrato_id": int(contrato_id),
+            "tipo": "diario",
+            "fecha": fecha.isoformat(),
+            "estado": "abierto",
+            "hora_inicio_labores": hora_inicio,
+            "clima_codigo": clima_codigo,
+            "clima_temp_c": clima_temp,
+            "clima_descripcion": clima_desc or None,
+            "clima_editado_manual": bool(data.get("clima_editado_manual")),
+            "personal": _normalizar_personal(data.get("personal")),
+            "materiales": _persist_materiales(_normalizar_materiales(data.get("materiales"))),
+            "cuerpo_html": str(data.get("cuerpo_html") or ""),
+            "imagenes": [],
+            "created_by": int(user_id),
+            "created_by_nombre": _nombre_usuario(u) or str(current_user.get("nombre") or "") if current_user else _nombre_usuario(u),
+            "created_by_rol": _rol_nombre(sb, u, current_user),
+            "created_at": _now_utc().isoformat(),
+            "updated_at": _now_utc().isoformat(),
+        }
+        payload["personal"] = _expandir_personal_otro(payload["personal"])
+
+    with _stage_timer(stages, "sync_cargos"):
+        sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
+
+    with _stage_timer(stages, "insert_db"):
+        try:
+            inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+        except Exception as exc:
+            # Columna materiales ausente en esquemas antiguos: un reintento sin ella.
+            _log.warning("bitacora.crear_diario insert con materiales falló: %s", exc)
+            payload.pop("materiales", None)
+            inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+        if not inserted:
+            raise ValueError("No se pudo crear el Reporte Diario")
+        entrada = inserted[0]
+
+    with _stage_timer(stages, "sync_usos"):
+        usos = data.get("equipos_uso") or data.get("maquinaria") or []
+        usos_rows: List[dict] = []
+        if usos:
+            usos_rows = _sync_usos(sb, contrato_id, int(entrada["id"]), usos, user_id=user_id)
+
+    with _stage_timer(stages, "enrich_respuesta"):
+        # Respuesta desde la fila insertada + usos ya sincronizados (sin re-SELECT ni Azure).
+        out = _enrich_entrada(sb, entrada, usos=usos_rows)
+
+    stages["total"] = round((time.perf_counter() - t_all) * 1000.0, 1)
+    _log.info(
+        "bitacora.crear_diario contrato=%s id=%s stages_ms=%s",
+        contrato_id, out.get("id"), stages,
+    )
+    out["_perf_ms"] = stages
+    return out
 
 
 def crear_reporte_evento(
@@ -1182,12 +1320,17 @@ def update_entrada(
     *,
     current_user: Optional[dict] = None,
 ) -> dict:
-    entrada = get_entrada(sb, contrato_id, entrada_id)
-    # Autocierre may have just applied inside get_entrada
-    assert_puede_editar_entrada(entrada, current_user)
+    stages: Dict[str, float] = {}
+    t_all = time.perf_counter()
+
+    with _stage_timer(stages, "cargar_entrada"):
+        # Sin re-enrich de media/Azure: solo fila + autocierre.
+        entrada = _fetch_entrada_row(sb, contrato_id, entrada_id)
+        assert_puede_editar_entrada(entrada, current_user)
 
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
     tipo = str(entrada.get("tipo") or "")
+    usos_rows: Optional[List[dict]] = None
 
     if "cuerpo_html" in data:
         patch["cuerpo_html"] = str(data.get("cuerpo_html") or "")
@@ -1218,14 +1361,25 @@ def update_entrada(
         if "clima_editado_manual" in data:
             patch["clima_editado_manual"] = bool(data.get("clima_editado_manual"))
         if "personal" in data:
-            pers = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
-            patch["personal"] = pers
-            sync_cargos_desde_personal(sb, contrato_id, pers, user_id=user_id)
+            with _stage_timer(stages, "sync_cargos"):
+                pers = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
+                patch["personal"] = pers
+                sync_cargos_desde_personal(sb, contrato_id, pers, user_id=user_id)
         if "materiales" in data:
             patch["materiales"] = _persist_materiales(_normalizar_materiales(data.get("materiales")))
         if "equipos_uso" in data or "maquinaria" in data:
-            usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
-            _sync_usos(sb, contrato_id, entrada_id, usos or [], user_id=user_id)
+            with _stage_timer(stages, "sync_usos"):
+                usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
+                usos_list = usos or []
+                # Evitar DELETE+vacío cuando no hay usos nuevos ni existentes.
+                if not usos_list:
+                    existentes = _list_usos(sb, entrada_id)
+                    if existentes:
+                        usos_rows = _sync_usos(sb, contrato_id, entrada_id, [], user_id=user_id)
+                    else:
+                        usos_rows = []
+                else:
+                    usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
     else:
         # evento — solo Dev llega aquí
         if "evento_detalle" in data and isinstance(data.get("evento_detalle"), dict):
@@ -1241,7 +1395,6 @@ def update_entrada(
         imgs = _normalizar_imagenes(data.get("imagenes"))
         if len(imgs) > MAX_IMAGENES_BITACORA:
             raise ValueError(f"Máximo {MAX_IMAGENES_BITACORA} fotografías por entrada de bitácora")
-        # Persist without heavy data_uri when blob_path exists
         store = []
         for im in imgs:
             row = {
@@ -1261,8 +1414,30 @@ def update_entrada(
             store.append(row)
         patch["imagenes"] = store
 
-    sb.table("seguimiento_bitacora_entrada").update(patch).eq("id", int(entrada_id)).execute()
-    return get_entrada(sb, contrato_id, entrada_id)
+    with _stage_timer(stages, "update_db"):
+        updated = (
+            sb.table("seguimiento_bitacora_entrada")
+            .update(patch)
+            .eq("id", int(entrada_id))
+            .execute()
+            .data
+            or []
+        )
+        row_out = updated[0] if updated else {**entrada, **patch}
+
+    with _stage_timer(stages, "enrich_respuesta"):
+        if usos_rows is None:
+            out = _enrich_entrada(sb, row_out)
+        else:
+            out = _enrich_entrada(sb, row_out, usos=usos_rows)
+
+    stages["total"] = round((time.perf_counter() - t_all) * 1000.0, 1)
+    _log.info(
+        "bitacora.update_entrada contrato=%s id=%s stages_ms=%s",
+        contrato_id, entrada_id, stages,
+    )
+    out["_perf_ms"] = stages
+    return out
 
 
 def cerrar_reporte_diario(
@@ -1335,7 +1510,7 @@ def adjuntar_imagen_entrada(
     current_user: Optional[dict] = None,
     force_during_create: bool = False,
 ) -> dict:
-    entrada = get_entrada(sb, contrato_id, entrada_id)
+    entrada = _fetch_entrada_row(sb, contrato_id, entrada_id)
     if not force_during_create:
         assert_puede_editar_entrada(entrada, current_user)
 
@@ -1405,13 +1580,20 @@ def adjuntar_imagen_entrada(
     if len(nuevos) > MAX_IMAGENES_BITACORA:
         raise ValueError(f"Máximo {MAX_IMAGENES_BITACORA} fotografías por entrada de bitácora")
 
-    sb.table("seguimiento_bitacora_entrada").update({
-        "imagenes": [
-            {k: v for k, v in im.items() if k != "data_uri" or not im.get("blob_path")}
-            for im in nuevos
-        ],
-        "updated_at": _now_utc().isoformat(),
-    }).eq("id", int(entrada_id)).execute()
+    updated = (
+        sb.table("seguimiento_bitacora_entrada")
+        .update({
+            "imagenes": [
+                {k: v for k, v in im.items() if k != "data_uri" or not im.get("blob_path")}
+                for im in nuevos
+            ],
+            "updated_at": _now_utc().isoformat(),
+        })
+        .eq("id", int(entrada_id))
+        .execute()
+        .data
+        or []
+    )
 
     try:
         sb.table("seguimiento_bitacora_foto_hash").insert({
@@ -1424,8 +1606,9 @@ def adjuntar_imagen_entrada(
     except Exception as exc:
         _log.debug("bitacora foto hash insert: %s", exc)
 
-    out = get_entrada(sb, contrato_id, entrada_id)
-    # Ensure immediate preview of last image
+    row_out = updated[0] if updated else {**entrada, "imagenes": nuevos}
+    out = _enrich_entrada(sb, row_out)
+    # Preview inmediata de la última subida (ya en memoria; sin re-descargar Azure).
     if ref.get("data_uri") and out.get("imagenes"):
         last = out["imagenes"][-1]
         if isinstance(last, dict) and not last.get("data_uri"):
@@ -1452,6 +1635,7 @@ def list_galeria(sb, contrato_id: int, q: str = "") -> List[dict]:
         for im in imgs:
             if not isinstance(im, dict):
                 continue
+            # Sin descarga Azure: solo metadatos + blob_path (preview bajo demanda).
             enriched = _enrich_imagen_preview(im) or im
             item = {
                 **enriched,

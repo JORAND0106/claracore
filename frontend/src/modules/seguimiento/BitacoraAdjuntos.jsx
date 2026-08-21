@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
-import { imagenSrc, openImageInNewTab } from './imagenUtils'
+import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { MAX_FOTOS_BITACORA } from './bitacoraConstants'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 
@@ -170,9 +170,7 @@ export default function BitacoraAdjuntos({
             {iconBtn('✎', 'Dibujar esquema', () => setEsquemaOpen(true))}
           </>
         )}
-        {list.map((im, idx) => {
-          const src = imagenSrc(im)
-          return (
+        {list.map((im, idx) => (
             <div
               key={`${im.blob_path || im.nombre || 'im'}-${idx}`}
               style={{
@@ -185,17 +183,7 @@ export default function BitacoraAdjuntos({
                 flexShrink: 0,
               }}
             >
-              {src ? (
-                <button
-                  type="button"
-                  onClick={() => openImageInNewTab(im)}
-                  style={{ display: 'block', width: '100%', height: '100%', padding: 0, border: 'none', cursor: 'zoom-in' }}
-                >
-                  <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                </button>
-              ) : (
-                <div style={{ fontSize: 9, color: t.textMuted, display: 'grid', placeItems: 'center', height: '100%' }}>—</div>
-              )}
+              <BitacoraAuthThumb api={api} im={im} width={36} height={28} />
               {!disabled && (
                 <button
                   type="button"
@@ -212,8 +200,7 @@ export default function BitacoraAdjuntos({
                 </button>
               )}
             </div>
-          )
-        })}
+        ))}
         <input
           ref={fileRef}
           type="file"
@@ -294,9 +281,7 @@ export default function BitacoraAdjuntos({
               }}>Buscar</button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 8 }}>
-              {galeriaItems.map((it, i) => {
-                const src = imagenSrc(it)
-                return (
+              {galeriaItems.map((it, i) => (
                   <button
                     key={`${it.blob_path || i}`}
                     type="button"
@@ -322,12 +307,15 @@ export default function BitacoraAdjuntos({
                       background: t.bg, cursor: 'pointer', overflow: 'hidden',
                     }}
                   >
-                    {src
-                      ? <img src={src} alt="" style={{ width: '100%', height: 72, objectFit: 'cover', display: 'block' }} />
-                      : <div style={{ height: 72 }} />}
+                    <BitacoraAuthThumb
+                      api={api}
+                      im={it}
+                      width="100%"
+                      height={72}
+                      interactive={false}
+                    />
                   </button>
-                )
-              })}
+              ))}
             </div>
           </div>
         </div>
