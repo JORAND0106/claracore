@@ -46,6 +46,9 @@ function emptyMaterial() {
     adjuntos: [],
     ubicacion_pk: '',
     ubicacion_pk_id: null,
+    ubicacion_tramo: '',
+    ubicacion_costado: '',
+    ubicacion_infraestructura: '',
     ubicacion_lat: null,
     ubicacion_lng: null,
   }
@@ -65,6 +68,9 @@ function materialFromApi(m) {
       : (Array.isArray(m.vales) && m.vales[0] && typeof m.vales[0] === 'object' ? m.vales : []),
     ubicacion_pk: m.ubicacion_pk || m.pk_label || '',
     ubicacion_pk_id: m.ubicacion_pk_id != null ? m.ubicacion_pk_id : (m.pk_id_id != null ? m.pk_id_id : null),
+    ubicacion_tramo: m.ubicacion_tramo || m.tramo || '',
+    ubicacion_costado: m.ubicacion_costado || m.costado || m.calzada || '',
+    ubicacion_infraestructura: m.ubicacion_infraestructura || m.infraestructura || '',
     ubicacion_lat: m.ubicacion_lat != null && m.ubicacion_lat !== '' ? Number(m.ubicacion_lat) : null,
     ubicacion_lng: m.ubicacion_lng != null && m.ubicacion_lng !== '' ? Number(m.ubicacion_lng) : null,
   }
@@ -341,6 +347,7 @@ export default function BitacoraEntradaEditor({
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
           || Number(m.cantidad) > 0 || (m.adjuntos || []).length
           || m.ubicacion_pk || m.ubicacion_pk_id != null
+          || m.ubicacion_tramo || m.ubicacion_costado || m.ubicacion_infraestructura
           || (m.ubicacion_lat != null && m.ubicacion_lng != null)
         ))
         .map((m) => ({
@@ -353,6 +360,9 @@ export default function BitacoraEntradaEditor({
           adjuntos: (m.adjuntos || []).slice(0, 2),
           ...(m.ubicacion_pk ? { ubicacion_pk: m.ubicacion_pk } : {}),
           ...(m.ubicacion_pk_id != null ? { ubicacion_pk_id: m.ubicacion_pk_id } : {}),
+          ...(m.ubicacion_tramo ? { ubicacion_tramo: m.ubicacion_tramo } : {}),
+          ...(m.ubicacion_costado ? { ubicacion_costado: m.ubicacion_costado } : {}),
+          ...(m.ubicacion_infraestructura ? { ubicacion_infraestructura: m.ubicacion_infraestructura } : {}),
           ...(m.ubicacion_lat != null && m.ubicacion_lng != null
             ? { ubicacion_lat: Number(m.ubicacion_lat), ubicacion_lng: Number(m.ubicacion_lng) }
             : {}),
@@ -951,7 +961,12 @@ export default function BitacoraEntradaEditor({
                             <button
                               type="button"
                               title={m.ubicacion_pk
-                                ? `PK: ${m.ubicacion_pk}`
+                                ? [
+                                  `PK: ${m.ubicacion_pk}`,
+                                  m.ubicacion_tramo ? `Tramo: ${m.ubicacion_tramo}` : null,
+                                  m.ubicacion_costado ? `Costado: ${m.ubicacion_costado}` : null,
+                                  m.ubicacion_infraestructura ? `Infra: ${m.ubicacion_infraestructura}` : null,
+                                ].filter(Boolean).join(' · ')
                                 : 'Seleccionar PK en mapa'}
                               onClick={() => setMapIdx(idx)}
                               style={{
@@ -1253,6 +1268,9 @@ export default function BitacoraEntradaEditor({
           contratoId={contratoId}
           pkId={materiales[mapIdx].ubicacion_pk_id}
           pkLabel={materiales[mapIdx].ubicacion_pk}
+          tramo={materiales[mapIdx].ubicacion_tramo}
+          costado={materiales[mapIdx].ubicacion_costado}
+          infraestructura={materiales[mapIdx].ubicacion_infraestructura}
           readOnly={!editable}
           onClose={() => setMapIdx(null)}
           onConfirm={(loc) => {
@@ -1262,6 +1280,9 @@ export default function BitacoraEntradaEditor({
                   ...r,
                   ubicacion_pk: loc.ubicacion_pk || '',
                   ubicacion_pk_id: loc.ubicacion_pk_id,
+                  ubicacion_tramo: loc.ubicacion_tramo || '',
+                  ubicacion_costado: loc.ubicacion_costado || '',
+                  ubicacion_infraestructura: loc.ubicacion_infraestructura || '',
                   ubicacion_lat: loc.ubicacion_lat,
                   ubicacion_lng: loc.ubicacion_lng,
                 }

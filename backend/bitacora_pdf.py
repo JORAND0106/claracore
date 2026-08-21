@@ -293,9 +293,20 @@ def _html_panel_superior(diario: Optional[dict], slots: List[dict], pal: dict) -
 
 
 def _ubicacion_material(m: dict) -> str:
-    pk = m.get("ubicacion_pk") or m.get("pk_label") or m.get("pk")
+    """Ubicación de material: PK + tramo/costado/infra; lat/lng solo como respaldo."""
+    pk = str(m.get("ubicacion_pk") or m.get("pk_label") or m.get("pk") or "").strip()
     if pk:
-        return str(pk)
+        partes = [f"PK {pk}" if not pk.upper().startswith("PK ") else pk]
+        tramo = str(m.get("ubicacion_tramo") or "").strip()
+        costado = str(m.get("ubicacion_costado") or "").strip()
+        infra = str(m.get("ubicacion_infraestructura") or "").strip()
+        if tramo:
+            partes.append(tramo)
+        if costado:
+            partes.append(costado)
+        if infra:
+            partes.append(infra)
+        return " · ".join(partes)
     lat, lng = m.get("ubicacion_lat"), m.get("ubicacion_lng")
     if lat is not None and lng is not None:
         return f"{lat}, {lng}"
