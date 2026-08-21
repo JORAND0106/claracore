@@ -81,16 +81,73 @@ def test_clima_label_conocido():
 def test_normalizar_materiales_con_vales():
     raw = [
         {
+            "movimiento": "salida",
             "tipo_material": "Acero",
             "proveedor": "Acerías",
-            "vales": [{"nombre": "vale1.pdf", "data_uri": "data:application/pdf;base64,xx"}],
+            "cantidad": 12,
+            "placa": "ABC123",
+            "numeros_vale": "10, 11",
+            "adjuntos": [{"nombre": "rem.png", "data_uri": "data:image/png;base64,xx"}],
         },
-        {"tipo_material": "", "proveedor": "", "vales": []},
+        {"tipo_material": "", "proveedor": "", "numeros_vale": ""},
     ]
     out = svc._normalizar_materiales(raw)
     assert len(out) == 1
-    assert out[0]["tipo_material"] == "Acero"
-    assert len(out[0]["vales"]) == 1
+    assert out[0]["movimiento"] == "salida"
+    assert out[0]["placa"] == "ABC123"
+    assert out[0]["numeros_vale"] == "10, 11"
+    assert len(out[0]["adjuntos"]) == 1
+
+
+def test_normalizar_materiales_legacy_vales_adjuntos():
+    raw = [{
+        "tipo_material": "Arena",
+        "proveedor": "X",
+        "vales": [{"nombre": "v1.png", "data_uri": "data:image/png;base64,aa"}],
+    }]
+    out = svc._normalizar_materiales(raw)
+    assert len(out) == 1
+    assert out[0]["numeros_vale"] == ""
+    assert len(out[0]["adjuntos"]) == 1
+
+
+def test_expandir_personal_otro():
+    out = svc._expandir_personal_otro([
+        {"cargo": "Oficial", "cantidad": 2},
+        {"cargo": "Otro", "cantidad": 1, "cargo_otro": "Soldador"},
+    ])
+    assert out[1]["cargo"] == "Soldador"
+    assert "cargo_otro" not in out[1]
+
+
+def test_strip_autocompletar_limpia_vales_y_adjuntos():
+    entrada = {
+        "id": 3,
+        "fecha": "2026-08-20",
+        "personal": [{"cargo": "Oficial", "cantidad": 4}],
+        "equipos_uso": [{
+            "equipo_nombre": "Retro",
+            "operador": "Juan",
+            "cantidad": 1,
+            "preoperacionales": [{"nombre": "p.png", "data_uri": "data:x"}],
+        }],
+        "materiales": [{
+            "movimiento": "ingreso",
+            "tipo_material": "Grava",
+            "proveedor": "Y",
+            "cantidad": 5,
+            "placa": "XYZ99",
+            "numeros_vale": "55",
+            "adjuntos": [{"nombre": "r.png", "data_uri": "data:x"}],
+        }],
+    }
+    out = svc._strip_para_autocompletar(entrada)
+    assert out["personal"][0]["cantidad"] == 4
+    assert out["equipos_uso"][0]["preoperacionales"] == []
+    assert out["materiales"][0]["numeros_vale"] == ""
+    assert out["materiales"][0]["adjuntos"] == []
+    assert out["materiales"][0]["placa"] == "XYZ99"
+    assert "fecha" not in out or out.get("fuente_fecha") == "2026-08-20"
 
 
 def test_asegurar_autocierre_llama_cierre(monkeypatch):

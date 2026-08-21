@@ -34,7 +34,64 @@ function emptyUso() {
 }
 
 function emptyMaterial() {
-  return { tipo_material: '', proveedor: '', vales: [] }
+  return {
+    movimiento: 'ingreso',
+    tipo_material: '',
+    proveedor: '',
+    cantidad: '',
+    placa: '',
+    numeros_vale: '',
+    adjuntos: [],
+  }
+}
+
+function materialFromApi(m) {
+  return {
+    ...emptyMaterial(),
+    movimiento: m.movimiento === 'salida' ? 'salida' : 'ingreso',
+    tipo_material: m.tipo_material || '',
+    proveedor: m.proveedor || '',
+    cantidad: m.cantidad != null && m.cantidad !== '' ? m.cantidad : '',
+    placa: m.placa || '',
+    numeros_vale: m.numeros_vale || '',
+    adjuntos: Array.isArray(m.adjuntos)
+      ? m.adjuntos
+      : (Array.isArray(m.vales) && m.vales[0] && typeof m.vales[0] === 'object' ? m.vales : []),
+  }
+}
+
+function mergePersonalPlantilla(plantillaRows, prevPersonal) {
+  const base = Array.isArray(plantillaRows) && plantillaRows.length
+    ? plantillaRows.map((r) => ({ cargo: r.cargo, cantidad: 0, cargo_otro: '' }))
+    : personalPlantillaVacia()
+  const prev = Array.isArray(prevPersonal) ? prevPersonal : []
+  const byNorm = new Map()
+  prev.forEach((p) => {
+    const key = String(p.cargo || '').trim().toLowerCase()
+    if (key) byNorm.set(key, p)
+  })
+  const merged = base.map((row) => {
+    const found = byNorm.get(String(row.cargo).toLowerCase())
+    if (!found) return row
+    return {
+      ...row,
+      cantidad: found.cantidad || 0,
+      cargo_otro: found.cargo_otro || '',
+    }
+  })
+  // Cargos del reporte que aún no están en plantilla (históricos)
+  const known = new Set(merged.map((r) => String(r.cargo).toLowerCase()))
+  prev.forEach((p) => {
+    const c = String(p.cargo || '').trim()
+    if (!c || known.has(c.toLowerCase()) || c.toLowerCase() === 'otro') return
+    // Insertar antes de Otro
+    const idx = merged.findIndex((r) => r.cargo === 'Otro')
+    const row = { cargo: c, cantidad: p.cantidad || 0, cargo_otro: '' }
+    if (idx >= 0) merged.splice(idx, 0, row)
+    else merged.push(row)
+    known.add(c.toLowerCase())
+  })
+  return merged
 }
 
 function emptyEventoDetalle(tipo) {
@@ -102,14 +159,8 @@ export default function BitacoraEntradaEditor({
     clima_editado_manual: Boolean(entrada?.clima_editado_manual),
   })
   const [personal, setPersonal] = useState(() => {
-    const base = personalPlantillaVacia()
     const prev = Array.isArray(entrada?.personal) ? entrada.personal : []
-    return base.map((row) => {
-      const found = prev.find((p) => String(p.cargo).toLowerCase() === row.cargo.toLowerCase())
-      return found
-        ? { ...row, cantidad: found.cantidad || 0, cargo_otro: found.cargo_otro || '' }
-        : row
-    })
+    return mergePersonalPlantilla(personalPlantillaVacia(), prev)
   })
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
@@ -118,11 +169,7 @@ export default function BitacoraEntradaEditor({
   )
   const [materiales, setMateriales] = useState(
     Array.isArray(entrada?.materiales) && entrada.materiales.length
-      ? entrada.materiales.map((m) => ({
-        tipo_material: m.tipo_material || '',
-        proveedor: m.proveedor || '',
-        vales: Array.isArray(m.vales) ? m.vales : [],
-      }))
+      ? entrada.materiales.map(materialFromApi)
       : [emptyMaterial()],
   )
   const [eventoTipo, setEventoTipo] = useState(entrada?.evento_tipo || 'reporte_actividades')
@@ -139,6 +186,22 @@ export default function BitacoraEntradaEditor({
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
   const [claraOpen, setClaraOpen] = useState(false)
+  const [autoBusy, setAutoBusy] = useState(false)
+
+  // Cargar plantilla de cargos (fijos + custom del contrato)
+  useEffect(() => {
+    if (tipo !== 'diario' || !api?.listBitacoraCargos) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await api.listBitacoraCargos()
+        if (cancelled) return
+        const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
+        setPersonal((prev) => mergePersonalPlantilla(plantilla, prev))
+      } catch { /* ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [api, tipo])
 
   useEffect(() => {
     setEventoDetalle((d) => ({ ...emptyEventoDetalle(eventoTipo), ...d }))
@@ -197,11 +260,18 @@ export default function BitacoraEntradaEditor({
           ...(p.cargo === 'Otro' && p.cargo_otro ? { cargo_otro: p.cargo_otro } : {}),
         }))
       const materialesPayload = materiales
-        .filter((m) => m.tipo_material || m.proveedor || (m.vales || []).length)
+        .filter((m) => (
+          m.tipo_material || m.proveedor || m.placa || m.numeros_vale
+          || Number(m.cantidad) > 0 || (m.adjuntos || []).length
+        ))
         .map((m) => ({
+          movimiento: m.movimiento === 'salida' ? 'salida' : 'ingreso',
           tipo_material: m.tipo_material || '',
           proveedor: m.proveedor || '',
-          vales: m.vales || [],
+          cantidad: Number(m.cantidad) || 0,
+          placa: m.placa || '',
+          numeros_vale: m.numeros_vale || '',
+          adjuntos: (m.adjuntos || []).slice(0, 2),
         }))
       const payload = {
         fecha,
@@ -241,6 +311,36 @@ export default function BitacoraEntradaEditor({
       setError(e.message || 'No se pudo guardar')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const autocompletarDesdeAnterior = async () => {
+    if (!esNuevo || tipo !== 'diario' || !editable) return
+    setAutoBusy(true)
+    setError('')
+    setOkMsg('')
+    try {
+      const data = await api.plantillaAutocompletarDiario()
+      if (!data || (!data.personal && !data.equipos_uso && !data.materiales)) {
+        setError('No hay un Reporte Diario anterior para autocompletar.')
+        return
+      }
+      // No tocar fecha / hora / clima
+      if (Array.isArray(data.personal)) {
+        setPersonal((prev) => mergePersonalPlantilla(prev, data.personal))
+      }
+      if (Array.isArray(data.equipos_uso) && data.equipos_uso.length) {
+        setUsos(data.equipos_uso.map(usoFromApi))
+      }
+      if (Array.isArray(data.materiales) && data.materiales.length) {
+        setMateriales(data.materiales.map(materialFromApi))
+      }
+      const fuente = data.fuente_fecha ? ` (${data.fuente_fecha})` : ''
+      setOkMsg(`Datos cargados desde el reporte anterior${fuente}. Fecha, hora y clima no se modificaron. Puede editar libremente.`)
+    } catch (e) {
+      setError(e.message || 'No se pudo autocompletar')
+    } finally {
+      setAutoBusy(false)
     }
   }
 
@@ -317,7 +417,20 @@ export default function BitacoraEntradaEditor({
                 : 'Inmutable desde su creación'}
             </div>
           </div>
-          <button type="button" onClick={onClose} style={btnGhost}>Cerrar</button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {tipo === 'diario' && esNuevo && editable && (
+              <button
+                type="button"
+                disabled={autoBusy || busy}
+                onClick={() => void autocompletarDesdeAnterior()}
+                style={btnGhost}
+                title="Carga personal, maquinaria y materiales del último reporte (sin vales ni adjuntos). No modifica fecha, hora ni clima."
+              >
+                {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
+              </button>
+            )}
+            <button type="button" onClick={onClose} style={btnGhost}>Cerrar</button>
+          </div>
         </div>
 
         <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -336,7 +449,7 @@ export default function BitacoraEntradaEditor({
 
           {/* Panel superior: fecha | hora | clima */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'stretch' }}>
-            <div style={{ ...ui.sheetWrap, width: 118, flexShrink: 0 }}>
+            <div style={{ ...ui.sheetWrap, width: 168, minWidth: 168, flexShrink: 0 }}>
               <table style={ui.sheetTable}>
                 <thead>
                   <tr><th style={ui.th}>Fecha</th></tr>
@@ -345,7 +458,7 @@ export default function BitacoraEntradaEditor({
                   <tr>
                     <td style={ui.td}>
                       {fechaRo ? (
-                        <div style={ui.cellRo}>{fecha}</div>
+                        <div style={{ ...ui.cellRo, whiteSpace: 'nowrap', letterSpacing: '0.02em' }}>{fecha}</div>
                       ) : (
                         <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={ui.cellInp} />
                       )}
@@ -441,6 +554,29 @@ export default function BitacoraEntradaEditor({
                                         onChange={(e) => setPersonal((rows) => rows.map((r) => (
                                           r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
                                         )))}
+                                        onBlur={async (e) => {
+                                          const nombre = String(e.target.value || '').trim()
+                                          if (!nombre || !api?.upsertBitacoraCargo) return
+                                          try {
+                                            await api.upsertBitacoraCargo({ nombre })
+                                            const data = await api.listBitacoraCargos()
+                                            const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
+                                            setPersonal((prev) => {
+                                              const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
+                                              const merged = mergePersonalPlantilla(plantilla, prev)
+                                              // Trasladar cantidad de Otro al nuevo cargo si aplica
+                                              return merged.map((r) => {
+                                                if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
+                                                  return { ...r, cantidad: qtyOtro }
+                                                }
+                                                if (r.cargo === 'Otro') {
+                                                  return { ...r, cantidad: 0, cargo_otro: '' }
+                                                }
+                                                return r
+                                              })
+                                            })
+                                          } catch { /* ignore */ }
+                                        }}
                                         style={ui.cellInp}
                                       />
                                     </div>
@@ -600,13 +736,13 @@ export default function BitacoraEntradaEditor({
                 </div>
               </div>
 
-              {/* Materiales Excel */}
+              {/* Materiales Excel — ingreso/salida */}
               <div>
                 <div style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   marginBottom: 6, gap: 8,
                 }}>
-                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Llegada de materiales de obra</div>
+                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Materiales de obra (ingreso / salida)</div>
                   {editable && (
                     <button type="button" onClick={() => setMateriales((m) => [...m, emptyMaterial()])} style={btnGhost}>
                       + Fila
@@ -617,15 +753,32 @@ export default function BitacoraEntradaEditor({
                   <table style={ui.sheetTable}>
                     <thead>
                       <tr>
-                        <th style={{ ...ui.th, width: '40%' }}>Tipo de material</th>
-                        <th style={{ ...ui.th, width: '35%' }}>Proveedor</th>
-                        <th style={{ ...ui.th, width: '18%', textAlign: 'center' }}>Nº / vales</th>
-                        {editable && <th style={{ ...ui.th, width: '7%' }} />}
+                        <th style={{ ...ui.th, width: '10%' }}>Movimiento</th>
+                        <th style={{ ...ui.th, width: '18%' }}>Tipo de material</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Proveedor</th>
+                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '10%' }}>Placa</th>
+                        <th style={{ ...ui.th, width: '16%' }}>Nº vale(s)</th>
+                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>Remisión</th>
+                        {editable && <th style={{ ...ui.th, width: '6%' }} />}
                       </tr>
                     </thead>
                     <tbody>
                       {materiales.map((m, idx) => (
                         <tr key={`mat-${idx}`}>
+                          <td style={ui.td}>
+                            <select
+                              disabled={!editable}
+                              value={m.movimiento || 'ingreso'}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, movimiento: e.target.value } : r
+                              )))}
+                              style={{ ...ui.cellInp, height: 28 }}
+                            >
+                              <option value="ingreso">Ingreso</option>
+                              <option value="salida">Salida</option>
+                            </select>
+                          </td>
                           <td style={ui.td}>
                             <input
                               disabled={!editable}
@@ -647,14 +800,51 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
+                          <td style={ui.td}>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              disabled={!editable}
+                              value={m.cantidad}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, cantidad: e.target.value } : r
+                              )))}
+                              style={{ ...ui.cellInp, textAlign: 'center' }}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable}
+                              value={m.placa}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, placa: e.target.value.toUpperCase() } : r
+                              )))}
+                              style={{ ...ui.cellInp, textTransform: 'uppercase' }}
+                              placeholder="ABC123"
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable}
+                              value={m.numeros_vale}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, numeros_vale: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                              placeholder="Ej. 101, 102"
+                              title="Números de vale (texto)"
+                            />
+                          </td>
                           <td style={{ ...ui.td, textAlign: 'center' }}>
                             <BitacoraClipAdjuntos
                               t={t}
-                              files={m.vales || []}
+                              files={(m.adjuntos || []).slice(0, 2)}
                               disabled={!editable}
-                              title="Adjuntar vales (múltiples)"
+                              title="Foto remisión / soporte (máx. 2)"
+                              accept="image/*,application/pdf"
                               onChange={(files) => setMateriales((rows) => rows.map((r, i) => (
-                                i === idx ? { ...r, vales: files } : r
+                                i === idx ? { ...r, adjuntos: (files || []).slice(0, 2) } : r
                               )))}
                             />
                           </td>
@@ -675,6 +865,9 @@ export default function BitacoraEntradaEditor({
                       ))}
                     </tbody>
                   </table>
+                </div>
+                <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
+                  Nº vale(s) es texto. Remisión: máximo 2 archivos por fila.
                 </div>
               </div>
             </>

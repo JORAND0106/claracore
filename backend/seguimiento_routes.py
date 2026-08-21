@@ -899,11 +899,15 @@ from bitacora_service import (  # noqa: E402
     eliminar_entrada,
     get_diario_por_fecha,
     get_entrada,
+    list_cargos_custom,
     list_entradas,
     list_equipos,
     list_galeria,
+    plantilla_autocompletar_diario,
+    plantilla_personal_contrato,
     revertir_cierre_diario,
     update_entrada,
+    upsert_cargo_custom,
     upsert_equipo,
 )
 
@@ -949,6 +953,10 @@ class BitacoraUpdateBody(BaseModel):
 class BitacoraEquipoBody(BaseModel):
     nombre: str = Field(..., min_length=1)
     tipo: Optional[str] = "equipo"
+
+
+class BitacoraCargoBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
 
 
 class BitacoraImagenBody(BaseModel):
@@ -1006,6 +1014,38 @@ def route_list_bitacora_equipos(
     require_permiso_bitacora(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     return list_equipos(supabase, contrato_id, q or "")
+
+
+@router.get("/{contrato_id}/bitacora/cargos")
+def route_list_bitacora_cargos(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return {
+        "plantilla": plantilla_personal_contrato(supabase, contrato_id),
+        "custom": list_cargos_custom(supabase, contrato_id),
+    }
+
+
+@router.post("/{contrato_id}/bitacora/cargos")
+def route_upsert_bitacora_cargo(
+    contrato_id: int,
+    body: BitacoraCargoBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    row = upsert_cargo_custom(
+        supabase, contrato_id, body.nombre, user_id=_uid(current_user),
+    )
+    return row or {"ok": False, "detail": "Cargo no registrado (vacío o ya en plantilla)"}
+
+
+@router.get("/{contrato_id}/bitacora/plantilla-autocompletar")
+def route_plantilla_autocompletar(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    data = plantilla_autocompletar_diario(supabase, contrato_id)
+    return data or {}
 
 
 @router.post("/{contrato_id}/bitacora/equipos")
