@@ -5,6 +5,7 @@ import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
 import BitacoraClimaField from './BitacoraClimaField'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
+import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
   CARGOS_PERSONAL,
@@ -303,7 +304,7 @@ export default function BitacoraEntradaEditor({
       }
     })
 
-  const guardarDiario = async ({ cerrar = false } = {}) => {
+  const guardarDiario = async () => {
     setBusy(true)
     setError('')
     setOkMsg('')
@@ -361,25 +362,19 @@ export default function BitacoraEntradaEditor({
           origen: im.origen || 'archivo',
         })
       }
-      if (cerrar) {
-        row = await api.cerrarBitacoraDiario(row.id)
-        setOkMsg('Reporte Diario cerrado. Queda inmutable.')
-      } else {
-        const ms = Math.round(tNet1 - tNet0)
-        const total = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
-        const server = row?._perf_ms?.total
-        setOkMsg(
-          server != null
-            ? `Reporte Diario guardado (${ms} ms red · ${Math.round(server)} ms servidor).`
-            : `Reporte Diario guardado (${total} ms).`,
-        )
-      }
+      const ms = Math.round(tNet1 - tNet0)
+      const total = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      const server = row?._perf_ms?.total
+      setOkMsg(
+        server != null
+          ? `Reporte Diario guardado (${ms} ms red · ${Math.round(server)} ms servidor).`
+          : `Reporte Diario guardado (${total} ms).`,
+      )
       // No propagar métricas internas al estado de imágenes
       const { _perf_ms: _omit, ...rowClean } = row || {}
       void _omit
       setImagenes(Array.isArray(rowClean.imagenes) ? rowClean.imagenes : [])
       onSaved?.(rowClean)
-      if (cerrar) onClose?.()
     } catch (e) {
       setError(e.message || 'No se pudo guardar')
     } finally {
@@ -485,7 +480,7 @@ export default function BitacoraEntradaEditor({
             <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-title)' }}>{titulo}</div>
             <div style={{ fontSize: 11, color: t.textMuted }}>
               {tipo === 'diario'
-                ? (editable ? 'Abierto — complementable hasta cerrar' : 'Cerrado / bloqueado — solo lectura')
+                ? (editable ? 'Abierto — editable hasta las 23:59:59' : 'Cerrado / bloqueado — solo lectura')
                 : 'Inmutable desde su creación'}
             </div>
           </div>
@@ -861,14 +856,16 @@ export default function BitacoraEntradaEditor({
                             </select>
                           </td>
                           <td style={ui.td}>
-                            <input
+                            <MaterialTipoCatalogSelect
+                              t={t}
+                              api={api}
                               disabled={!editable}
                               value={m.tipo_material}
-                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
-                                i === idx ? { ...r, tipo_material: e.target.value } : r
-                              )))}
-                              style={ui.cellInp}
                               placeholder="Ej. Concreto 3000 PSI"
+                              inputStyle={ui.cellInp}
+                              onChange={(nombre) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, tipo_material: nombre } : r
+                              )))}
                             />
                           </td>
                           <td style={ui.td}>
@@ -1157,22 +1154,9 @@ export default function BitacoraEntradaEditor({
               </button>
             )}
             {tipo === 'diario' && editable && (
-              <>
-                <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
-                  Guardar
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || localId == null}
-                  onClick={() => {
-                    if (!window.confirm('¿Cerrar el Reporte Diario? Quedará inmutable.')) return
-                    void guardarDiario({ cerrar: true })
-                  }}
-                  style={{ ...btnPrimary, background: '#0F766E' }}
-                >
-                  Cerrar reporte
-                </button>
-              </>
+              <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
+                Guardar
+              </button>
             )}
             {tipo === 'diario' && !editable && permisos?.esDesarrollador && entrada?.estado === 'cerrado' && (
               <button

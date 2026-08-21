@@ -903,12 +903,14 @@ from bitacora_service import (  # noqa: E402
     list_entradas,
     list_equipos,
     list_galeria,
+    list_tipos_material,
     plantilla_autocompletar_diario,
     plantilla_personal_contrato,
     revertir_cierre_diario,
     update_entrada,
     upsert_cargo_custom,
     upsert_equipo,
+    upsert_tipo_material,
 )
 from bitacora_pdf import generar_pdf_bitacora_dia  # noqa: E402
 from bitacora_permissions import require_permiso_bitacora  # noqa: E402
@@ -958,6 +960,10 @@ class BitacoraEquipoBody(BaseModel):
 
 
 class BitacoraCargoBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
+
+
+class BitacoraTipoMaterialBody(BaseModel):
     nombre: str = Field(..., min_length=1)
 
 
@@ -1040,6 +1046,31 @@ def route_upsert_bitacora_cargo(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
     )
     return row or {"ok": False, "detail": "Cargo no registrado (vacío o ya en plantilla)"}
+
+
+@router.get("/{contrato_id}/bitacora/tipos-material")
+def route_list_bitacora_tipos_material(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return list_tipos_material(supabase, contrato_id, q or "")
+
+
+@router.post("/{contrato_id}/bitacora/tipos-material")
+def route_upsert_bitacora_tipo_material(
+    contrato_id: int,
+    body: BitacoraTipoMaterialBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    row = upsert_tipo_material(
+        supabase, contrato_id, body.nombre, user_id=_uid(current_user),
+    )
+    return row or {"ok": False, "detail": "Tipo de material no registrado (vacío)"}
 
 
 @router.get("/{contrato_id}/bitacora/plantilla-autocompletar")
