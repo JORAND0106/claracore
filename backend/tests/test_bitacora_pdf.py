@@ -113,6 +113,7 @@ def test_fit_pt_no_deforma_vertical_en_caja_horizontal():
 
 
 def test_omit_pagina_eventos_si_vacia(monkeypatch):
+    pdf.clear_pdf_caches_for_tests()
     captured = {}
 
     def fake_pdf(doc, landscape=True):
@@ -162,6 +163,7 @@ def test_omit_pagina_eventos_si_vacia(monkeypatch):
 
 
 def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
+    pdf.clear_pdf_caches_for_tests()
     captured = {}
 
     def fake_pdf(doc, landscape=True):
@@ -210,3 +212,54 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
     assert "Registro Fotográfico" in doc
     assert "Fotografías del día" not in doc
     assert "K12" in doc
+
+
+def test_pdf_cache_reusa_bytes_sin_regenerar(monkeypatch):
+    pdf.clear_pdf_caches_for_tests()
+    renders = {"n": 0}
+
+    def fake_pdf(doc, landscape=True):
+        renders["n"] += 1
+        return b"%PDF-1.4 cached-mock"
+
+    monkeypatch.setattr(pdf, "contrato_meta_bitacora", lambda *_a, **_k: {
+        "id": 1, "numero": "X", "objeto": "O", "contratista": "C",
+        "interventoria": "I", "entidad": "E", "geo_lat": 4.7, "geo_lng": -74.0,
+        "logo_entidad": None, "logo_contratista": None, "logo_interventoria": None,
+        "export_palette": {},
+    })
+    monkeypatch.setattr(pdf, "list_entradas_del_dia", lambda *_a, **_k: {
+        "fecha": "2026-08-20",
+        "diario": {
+            "id": 9, "updated_at": "2026-08-20T12:00:00Z",
+            "fecha": "2026-08-20", "hora_inicio_labores": "07:00",
+            "personal": [], "equipos_uso": [], "materiales": [],
+            "cuerpo_html": "", "imagenes": [],
+        },
+        "eventos": [],
+    })
+    monkeypatch.setattr(pdf, "consultar_clima_slots_3h", lambda *_a, **_k: [])
+    monkeypatch.setattr(pdf, "to_pdf_bytes", fake_pdf)
+    a = pdf.generar_pdf_bitacora_dia(MagicMock(), 1, "2026-08-20")
+    b = pdf.generar_pdf_bitacora_dia(MagicMock(), 1, "2026-08-20")
+    assert a == b == b"%PDF-1.4 cached-mock"
+    assert renders["n"] == 1
+
+
+def test_bytes_to_pdf_data_uri_reduce_vertical_grande():
+    import base64
+    import io
+
+    from PIL import Image
+
+    im = Image.new("RGB", (800, 1600), (30, 40, 50))
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    uri = pdf._bytes_to_pdf_data_uri(buf.getvalue(), pdf._FOTO_MAX_PX_W, pdf._FOTO_MAX_PX_H)
+    assert uri.startswith("data:image/")
+    m = __import__("re").match(r"data:image/[^;]+;base64,(.+)$", uri)
+    raw = base64.b64decode(m.group(1))
+    out = Image.open(io.BytesIO(raw))
+    assert out.size[0] <= pdf._FOTO_MAX_PX_W
+    assert out.size[1] <= pdf._FOTO_MAX_PX_H
+    assert abs((out.size[0] / out.size[1]) - 0.5) < 0.05
