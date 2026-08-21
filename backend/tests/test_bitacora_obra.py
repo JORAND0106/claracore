@@ -374,6 +374,8 @@ def test_consultar_clima_prioridad_manual(monkeypatch):
     import sys
     import types
 
+    svc.clear_clima_slots_cache_for_tests()
+
     def fake_get(url, params=None):
         class R:
             status_code = 200
@@ -403,6 +405,7 @@ def test_consultar_clima_prioridad_manual(monkeypatch):
 
     fake_httpx = types.ModuleType("httpx")
     fake_httpx.Client = FakeClient
+    fake_httpx.Timeout = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
 
     slots = svc.consultar_clima_slots_3h(
@@ -423,3 +426,52 @@ def test_consultar_clima_prioridad_manual(monkeypatch):
     slot0 = next(s for s in slots if s["hora_num"] == 0)
     assert slot0["manual"] is False
     assert slot0["clima_codigo"] == 0
+
+
+def test_consultar_clima_usa_cache(monkeypatch):
+    import sys
+    import types
+
+    svc.clear_clima_slots_cache_for_tests()
+    calls = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None):
+            calls["n"] += 1
+
+            class R:
+                status_code = 200
+
+                def json(self):
+                    return {
+                        "hourly": {
+                            "time": [f"2026-08-19T{h:02d}:00" for h in (0, 3, 6, 9, 12, 15, 18, 21)],
+                            "temperature_2m": [21.0] * 8,
+                            "weather_code": [1] * 8,
+                        }
+                    }
+            return R()
+
+    fake_httpx = types.ModuleType("httpx")
+    fake_httpx.Client = FakeClient
+    fake_httpx.Timeout = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    a = svc.consultar_clima_slots_3h(4.71, -74.01, "2026-08-19")
+    b = svc.consultar_clima_slots_3h(4.71, -74.01, "2026-08-19")
+    assert calls["n"] == 1
+    assert a[0]["clima_temp_c"] == b[0]["clima_temp_c"] == 21.0
+    # Mutar resultado no contamina caché
+    a[0]["clima_temp_c"] = 99.0
+    c = svc.consultar_clima_slots_3h(4.71, -74.01, "2026-08-19")
+    assert c[0]["clima_temp_c"] == 21.0
+    assert calls["n"] == 1

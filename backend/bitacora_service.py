@@ -8,6 +8,7 @@ import base64
 import hashlib
 import logging
 import re
+import threading
 import time
 from contextlib import contextmanager
 from datetime import date, datetime, time as dt_time, timezone
@@ -1885,6 +1886,10 @@ def cerrar_diarios_vencidos(sb, contrato_id: Optional[int] = None) -> dict:
 # ── Exportación PDF / clima histórico ─────────────────────────────────────────
 
 CLIMA_SLOTS_3H = (0, 3, 6, 9, 12, 15, 18, 21)
+_CLIMA_SLOTS_CACHE: Dict[tuple, Tuple[float, List[dict]]] = {}
+_CLIMA_SLOTS_CACHE_LOCK = threading.Lock()
+_CLIMA_SLOTS_CACHE_TTL = 3600.0
+_CLIMA_HTTP_TIMEOUT = 5.0
 
 
 def _centroide_desde_geojson(geo) -> Optional[Tuple[float, float]]:
@@ -2056,85 +2061,118 @@ def consultar_clima_slots_3h(
     Tabla de clima cada 3 h desde Open-Meteo (ubicación del contrato).
     Si `manual` trae clima_editado_manual + codigo/temp, sobrescribe el slot
     de hora_inicio_labores.
+
+    Cache in-process por (lat, lng, fecha) para que vista previa / export PDF
+    no reconsulten Open-Meteo en cada click (~segundos → milisegundos).
     """
+    import copy
     import httpx
 
     fecha = str(fecha_iso)[:10]
-    params = {
-        "latitude": str(lat),
-        "longitude": str(lng),
-        "start_date": fecha,
-        "end_date": fecha,
-        "hourly": "temperature_2m,weather_code",
-        "timezone": "America/Bogota",
-    }
-    hourly: dict = {}
-    # Hoy / reciente: forecast; pasado: archive
-    hoy = hoy_bogota().isoformat()
-    urls = []
-    if fecha >= hoy:
-        urls.append("https://api.open-meteo.com/v1/forecast")
-        urls.append("https://archive-api.open-meteo.com/v1/archive")
-    else:
-        urls.append("https://archive-api.open-meteo.com/v1/archive")
-        urls.append("https://api.open-meteo.com/v1/forecast")
+    cache_key = (round(float(lat), 4), round(float(lng), 4), fecha)
 
-    for url in urls:
+    with _CLIMA_SLOTS_CACHE_LOCK:
+        hit = _CLIMA_SLOTS_CACHE.get(cache_key)
+        if hit is not None:
+            exp, cached_slots = hit
+            if exp > time.time():
+                slots = copy.deepcopy(cached_slots)
+            else:
+                _CLIMA_SLOTS_CACHE.pop(cache_key, None)
+                slots = None
+        else:
+            slots = None
+
+    if slots is None:
+        params = {
+            "latitude": str(lat),
+            "longitude": str(lng),
+            "start_date": fecha,
+            "end_date": fecha,
+            "hourly": "temperature_2m,weather_code",
+            "timezone": "America/Bogota",
+        }
+        hourly: dict = {}
+        hoy = hoy_bogota().isoformat()
+        urls = []
+        if fecha >= hoy:
+            urls.append("https://api.open-meteo.com/v1/forecast")
+            urls.append("https://archive-api.open-meteo.com/v1/archive")
+        else:
+            urls.append("https://archive-api.open-meteo.com/v1/archive")
+            urls.append("https://api.open-meteo.com/v1/forecast")
+
+        timeout = httpx.Timeout(_CLIMA_HTTP_TIMEOUT, connect=min(3.0, _CLIMA_HTTP_TIMEOUT))
         try:
-            with httpx.Client(timeout=20.0) as client:
-                res = client.get(url, params=params)
-                if res.status_code >= 400:
-                    continue
-                data = res.json() or {}
-                hourly = data.get("hourly") or {}
-                if hourly.get("time"):
-                    break
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                for url in urls:
+                    try:
+                        res = client.get(url, params=params)
+                        if res.status_code >= 400:
+                            continue
+                        data = res.json() or {}
+                        hourly = data.get("hourly") or {}
+                        if hourly.get("time"):
+                            break
+                    except Exception as exc:
+                        _log.warning("open-meteo clima bitácora %s: %s", url, exc)
         except Exception as exc:
-            _log.warning("open-meteo clima bitácora %s: %s", url, exc)
+            _log.warning("open-meteo cliente bitácora: %s", exc)
 
-    by_hour: Dict[int, dict] = {}
-    times = hourly.get("time") or []
-    temps = hourly.get("temperature_2m") or []
-    codes = hourly.get("weather_code") or []
-    for i, ts in enumerate(times):
-        try:
-            hh = int(str(ts)[11:13])
-        except (TypeError, ValueError):
-            continue
-        if hh not in CLIMA_SLOTS_3H:
-            continue
-        code = codes[i] if i < len(codes) else None
-        temp = temps[i] if i < len(temps) else None
-        try:
-            code_i = int(code) if code is not None and code != "" else None
-        except (TypeError, ValueError):
-            code_i = None
-        try:
-            temp_f = float(temp) if temp is not None and temp != "" else None
-        except (TypeError, ValueError):
-            temp_f = None
-        by_hour[hh] = {
-            "hora": f"{hh:02d}:00",
-            "hora_num": hh,
-            "clima_codigo": code_i,
-            "clima_temp_c": temp_f,
-            "clima_descripcion": clima_label(code_i) if code_i is not None else "",
-            "fuente": "open-meteo",
-            "manual": False,
-        }
+        by_hour: Dict[int, dict] = {}
+        times = hourly.get("time") or []
+        temps = hourly.get("temperature_2m") or []
+        codes = hourly.get("weather_code") or []
+        for i, ts in enumerate(times):
+            try:
+                hh = int(str(ts)[11:13])
+            except (TypeError, ValueError):
+                continue
+            if hh not in CLIMA_SLOTS_3H:
+                continue
+            code = codes[i] if i < len(codes) else None
+            temp = temps[i] if i < len(temps) else None
+            try:
+                code_i = int(code) if code is not None and code != "" else None
+            except (TypeError, ValueError):
+                code_i = None
+            try:
+                temp_f = float(temp) if temp is not None and temp != "" else None
+            except (TypeError, ValueError):
+                temp_f = None
+            by_hour[hh] = {
+                "hora": f"{hh:02d}:00",
+                "hora_num": hh,
+                "clima_codigo": code_i,
+                "clima_temp_c": temp_f,
+                "clima_descripcion": clima_label(code_i) if code_i is not None else "",
+                "fuente": "open-meteo",
+                "manual": False,
+            }
 
-    slots = []
-    for hh in CLIMA_SLOTS_3H:
-        row = by_hour.get(hh) or {
-            "hora": f"{hh:02d}:00",
-            "hora_num": hh,
-            "clima_codigo": None,
-            "clima_temp_c": None,
-            "clima_descripcion": "—",
-            "fuente": "sin-dato",
-            "manual": False,
-        }
-        slots.append(row)
+        slots = []
+        for hh in CLIMA_SLOTS_3H:
+            row = by_hour.get(hh) or {
+                "hora": f"{hh:02d}:00",
+                "hora_num": hh,
+                "clima_codigo": None,
+                "clima_temp_c": None,
+                "clima_descripcion": "—",
+                "fuente": "sin-dato",
+                "manual": False,
+            }
+            slots.append(row)
+
+        with _CLIMA_SLOTS_CACHE_LOCK:
+            _CLIMA_SLOTS_CACHE[cache_key] = (
+                time.time() + _CLIMA_SLOTS_CACHE_TTL,
+                copy.deepcopy(slots),
+            )
+            if len(_CLIMA_SLOTS_CACHE) > 256:
+                now = time.time()
+                dead = [k for k, (e, _) in _CLIMA_SLOTS_CACHE.items() if e < now]
+                for k in dead:
+                    _CLIMA_SLOTS_CACHE.pop(k, None)
 
     if manual and bool(manual.get("clima_editado_manual")):
         slot_h = _slot_3h_desde_hora(manual.get("hora_inicio_labores"))
@@ -2168,6 +2206,12 @@ def consultar_clima_slots_3h(
                 })
                 break
     return slots
+
+
+def clear_clima_slots_cache_for_tests() -> None:
+    """Limpia caché de clima (solo tests)."""
+    with _CLIMA_SLOTS_CACHE_LOCK:
+        _CLIMA_SLOTS_CACHE.clear()
 
 
 def list_entradas_del_dia(sb, contrato_id: int, fecha: str) -> Dict[str, Any]:

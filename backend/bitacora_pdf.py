@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import base64
 import html
+import logging
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
-from almacen_firma_pdf import firma_url_a_data_uri
 from bitacora_service import (
     consultar_clima_slots_3h,
     contrato_meta_bitacora,
@@ -20,12 +23,29 @@ from bitacora_service import (
 )
 from topografia_utils import to_pdf_bytes
 
+_log = logging.getLogger("claracore.bitacora.pdf")
+
 # Compactación: ~40% menos altura de logos vs. 36pt previos.
 _LOGO_H = 22
 _LOGO_W = 72.0
 _FOTO_BOX_W = 118.0
 _FOTO_BOX_H = 78.0
 _FOTO_MAX_DIARIO = 4
+# ~2× resolución de caja landscape para nitidez sin embutir MB en xhtml2pdf.
+_FOTO_MAX_PX_W = 360
+_FOTO_MAX_PX_H = 240
+_LOGO_MAX_PX_W = 220
+_LOGO_MAX_PX_H = 80
+
+_LOGO_URI_CACHE: Dict[str, Tuple[float, str]] = {}
+_LOGO_URI_CACHE_LOCK = threading.Lock()
+_LOGO_URI_CACHE_TTL = 600.0
+_HTTP_IMG_TIMEOUT = 5.0
+_PDF_ASSET_WORKERS = 6
+_PDF_BYTES_CACHE: Dict[tuple, Tuple[float, bytes]] = {}
+_PDF_BYTES_CACHE_LOCK = threading.Lock()
+_PDF_BYTES_CACHE_TTL = 90.0
+_PDF_BYTES_CACHE_MAX = 24
 
 _EVENTO_LABELS = {
     "visita_terceros": "Visita de terceros",
@@ -82,10 +102,74 @@ def _palette(contrato: dict) -> dict:
 def _logo_uri(url: Optional[str]) -> str:
     if not url or not str(url).strip():
         return ""
+    key = str(url).strip()
+    now = time.time()
+    with _LOGO_URI_CACHE_LOCK:
+        hit = _LOGO_URI_CACHE.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
     try:
-        return firma_url_a_data_uri(str(url).strip()) or ""
+        uri = _http_or_data_to_uri(key, _LOGO_MAX_PX_W, _LOGO_MAX_PX_H) or ""
+    except Exception:
+        uri = ""
+    if uri:
+        with _LOGO_URI_CACHE_LOCK:
+            _LOGO_URI_CACHE[key] = (now + _LOGO_URI_CACHE_TTL, uri)
+            if len(_LOGO_URI_CACHE) > 128:
+                dead = [k for k, (e, _) in _LOGO_URI_CACHE.items() if e < now]
+                for k in dead:
+                    _LOGO_URI_CACHE.pop(k, None)
+    return uri
+
+
+def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
+    """URL/data-URI → data-URI opaco, opcionalmente redimensionado."""
+    u = str(src or "").strip()
+    if not u:
+        return ""
+    if u.startswith("data:image"):
+        m = re.match(r"data:image/[^;]+;base64,(.+)$", u, re.I | re.S)
+        if not m:
+            return u
+        try:
+            raw = base64.b64decode(m.group(1))
+        except Exception:
+            return u
+        return _bytes_to_pdf_data_uri(raw, max_px_w, max_px_h)
+    try:
+        import httpx
+
+        timeout = httpx.Timeout(_HTTP_IMG_TIMEOUT, connect=min(3.0, _HTTP_IMG_TIMEOUT))
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            r = client.get(u)
+            r.raise_for_status()
+            return _bytes_to_pdf_data_uri(r.content, max_px_w, max_px_h)
     except Exception:
         return ""
+
+
+def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
+    """Aplana alpha y reduce a tamaño de render PDF (una sola pasada PIL)."""
+    try:
+        from PIL import Image
+        import io
+        from almacen_firma_pdf import _flatten_image_bytes_on_white
+
+        flat, mime = _flatten_image_bytes_on_white(raw)
+        im = Image.open(io.BytesIO(flat))
+        im.load()
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        px_w, px_h = im.size
+        if px_w > max_px_w or px_h > max_px_h:
+            im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
+            out = io.BytesIO()
+            im.save(out, format="JPEG", quality=82, optimize=True)
+            return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
+        return f"data:{mime or 'image/png'};base64,{base64.b64encode(flat).decode('ascii')}"
+    except Exception:
+        from almacen_firma_pdf import _data_uri_from_bytes
+        return _data_uri_from_bytes(raw)
 
 
 def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
@@ -109,14 +193,14 @@ def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
         return round(max_w * 0.55, 2), round(max_h, 2)
 
 
-def _logo_cell(url: Optional[str], placeholder: str, pal: dict) -> str:
-    uri = _logo_uri(url)
+def _logo_cell(url: Optional[str], placeholder: str, pal: dict, *, uri: Optional[str] = None) -> str:
+    resolved = uri if uri is not None else _logo_uri(url)
     muted = pal["titulo_2"]["text"]
-    if uri:
-        w, h = _fit_pt(uri, _LOGO_W, float(_LOGO_H))
+    if resolved:
+        w, h = _fit_pt(resolved, _LOGO_W, float(_LOGO_H))
         return (
             f'<div style="text-align:center;line-height:0;">'
-            f'<img src="{uri}" style="width:{w}pt;height:{h}pt;border:0;"/>'
+            f'<img src="{resolved}" style="width:{w}pt;height:{h}pt;border:0;"/>'
             f"</div>"
         )
     return (
@@ -126,31 +210,63 @@ def _logo_cell(url: Optional[str], placeholder: str, pal: dict) -> str:
 
 
 def _resolve_img_uri(im: dict, contrato_id: int) -> str:
+    prepared = _prepare_img_asset(im, contrato_id)
+    return prepared[0] if prepared else ""
+
+
+def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float, float]]:
+    """Resuelve imagen a data-URI redimensionada + tamaño en pt (una pasada)."""
     if not isinstance(im, dict):
-        return ""
-    uri = str(im.get("data_uri") or "").strip()
-    if uri.startswith("data:image"):
-        try:
-            return firma_url_a_data_uri(uri) or uri
-        except Exception:
-            return uri
-    url = str(im.get("url") or "").strip()
-    if url:
-        try:
-            return firma_url_a_data_uri(url) or ""
-        except Exception:
-            pass
-    path = str(im.get("blob_path") or "").strip()
-    if not path:
-        return ""
-    try:
-        data, mime = leer_media_bitacora(contrato_id, path)
-        if not data or len(data) > 6_000_000:
-            return ""
-        from almacen_firma_pdf import _data_uri_from_bytes
-        return _data_uri_from_bytes(data, mime or "image/png")
-    except Exception:
-        return ""
+        return None
+    uri = ""
+    raw_data_uri = str(im.get("data_uri") or "").strip()
+    if raw_data_uri.startswith("data:image"):
+        uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+    if not uri:
+        url = str(im.get("url") or "").strip()
+        if url:
+            uri = _http_or_data_to_uri(url, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+    if not uri:
+        path = str(im.get("blob_path") or "").strip()
+        if path:
+            try:
+                data, _mime = leer_media_bitacora(contrato_id, path)
+                if data and len(data) <= 6_000_000:
+                    uri = _bytes_to_pdf_data_uri(data, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+            except Exception:
+                uri = ""
+    if not uri:
+        return None
+    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
+    return uri, w, h
+
+
+def _prefetch_logos(contrato: dict) -> Dict[str, str]:
+    keys = ("logo_contratista", "logo_interventoria", "logo_entidad")
+    urls = {k: str(contrato.get(k) or "").strip() for k in keys}
+    out: Dict[str, str] = {k: "" for k in keys}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = {pool.submit(_logo_uri, urls[k] or None): k for k in keys if urls[k]}
+        for fut in as_completed(futs):
+            out[futs[fut]] = fut.result() or ""
+    return out
+
+
+def _prefetch_fotos(fotos: List[dict], contrato_id: int) -> Dict[int, Tuple[str, float, float]]:
+    out: Dict[int, Tuple[str, float, float]] = {}
+    if not fotos:
+        return out
+    with ThreadPoolExecutor(max_workers=min(_PDF_ASSET_WORKERS, max(1, len(fotos)))) as pool:
+        futs = {
+            pool.submit(_prepare_img_asset, im, contrato_id): i
+            for i, im in enumerate(fotos)
+            if isinstance(im, dict)
+        }
+        for fut in as_completed(futs):
+            prepared = fut.result()
+            if prepared:
+                out[futs[fut]] = prepared
+    return out
 
 
 def _section_title(text: str, pal: dict) -> str:
@@ -202,7 +318,14 @@ def _mini_table(
     )
 
 
-def _encabezado(contrato: dict, fecha: Optional[str], pal: dict, *, mostrar_fecha: bool = True) -> str:
+def _encabezado(
+    contrato: dict,
+    fecha: Optional[str],
+    pal: dict,
+    *,
+    mostrar_fecha: bool = True,
+    logo_uris: Optional[Dict[str, str]] = None,
+) -> str:
     """Encabezado institucional compacto (~40% menos altura)."""
     enc = pal["encabezado"]
     t1 = pal["titulo_1"]
@@ -210,15 +333,16 @@ def _encabezado(contrato: dict, fecha: Optional[str], pal: dict, *, mostrar_fech
     titulo = "Bitácora de Obra"
     if mostrar_fecha and fecha:
         titulo = f"Bitácora de Obra · {_esc(fecha)}"
+    uris = logo_uris or {}
     return f"""
 <table width="100%" cellspacing="0" cellpadding="0"
   style="border-collapse:collapse;border:0.6pt solid {enc['text']};margin:0 0 3pt;background:{enc['bg']};">
   <tr>
     <td width="16%" style="padding:2pt;border-right:0.3pt solid {t1['bg']};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_contratista"), "Contratista", pal)}
+      {_logo_cell(contrato.get("logo_contratista"), "Contratista", pal, uri=uris.get("logo_contratista"))}
     </td>
     <td width="16%" style="padding:2pt;border-right:0.3pt solid {t1['bg']};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_interventoria"), "Interventoría", pal)}
+      {_logo_cell(contrato.get("logo_interventoria"), "Interventoría", pal, uri=uris.get("logo_interventoria"))}
     </td>
     <td width="52%" style="padding:2pt 5pt;vertical-align:middle;background:{t1['bg']};">
       <div style="font-size:8pt;font-weight:bold;color:{enc['text']};line-height:1.15;">{titulo}</div>
@@ -231,7 +355,7 @@ def _encabezado(contrato: dict, fecha: Optional[str], pal: dict, *, mostrar_fech
       </div>
     </td>
     <td width="16%" style="padding:2pt;border-left:0.3pt solid {t1['bg']};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_entidad"), "Entidad", pal)}
+      {_logo_cell(contrato.get("logo_entidad"), "Entidad", pal, uri=uris.get("logo_entidad"))}
     </td>
   </tr>
 </table>
@@ -352,10 +476,17 @@ def _html_observaciones(diario: Optional[dict], pal: dict) -> str:
     )
 
 
-def _foto_cell(im: dict, contrato_id: int, pie: str, pal: dict) -> str:
-    uri = _resolve_img_uri(im, contrato_id)
+def _foto_cell(
+    im: dict,
+    contrato_id: int,
+    pie: str,
+    pal: dict,
+    *,
+    prepared: Optional[Tuple[str, float, float]] = None,
+) -> str:
+    asset = prepared if prepared is not None else _prepare_img_asset(im, contrato_id)
     t2 = pal["titulo_2"]
-    if not uri:
+    if not asset:
         return (
             f'<td width="50%" style="padding:2pt;vertical-align:top;">'
             f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.25pt dashed {t2["bg"]};'
@@ -363,7 +494,7 @@ def _foto_cell(im: dict, contrato_id: int, pie: str, pal: dict) -> str:
             f'<div style="font-size:5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie)}</div>'
             f"</td>"
         )
-    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
+    uri, w, h = asset
     return (
         f'<td width="50%" style="padding:2pt;vertical-align:top;page-break-inside:avoid;">'
         f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.25pt solid {t2["bg"]};'
@@ -375,16 +506,32 @@ def _foto_cell(im: dict, contrato_id: int, pie: str, pal: dict) -> str:
     )
 
 
-def _html_registro_fotografico(fotos: List[dict], contrato_id: int, pal: dict, max_n: int = _FOTO_MAX_DIARIO) -> str:
+def _html_registro_fotografico(
+    fotos: List[dict],
+    contrato_id: int,
+    pal: dict,
+    max_n: int = _FOTO_MAX_DIARIO,
+    *,
+    prepared_map: Optional[Dict[int, Tuple[str, float, float]]] = None,
+) -> str:
     seleccion = [f for f in (fotos or []) if isinstance(f, dict)][:max_n]
     title = _section_title("Registro Fotográfico", pal)
     if not seleccion:
         t2 = pal["titulo_2"]
         return title + f'<div style="font-size:6pt;color:{t2["text"]};padding:4pt;">Sin fotografías.</div>'
-    cells = [_foto_cell(im, contrato_id, im.get("_pie") or "Reporte Diario", pal) for im in seleccion]
-    while len(cells) < 4 and len(seleccion) > 0:
-        # completar grilla 2×2 solo con huecos vacíos si hay <4
-        break
+    assets = prepared_map
+    if assets is None:
+        assets = _prefetch_fotos(seleccion, contrato_id)
+    cells = [
+        _foto_cell(
+            im,
+            contrato_id,
+            im.get("_pie") or "Reporte Diario",
+            pal,
+            prepared=assets.get(i),
+        )
+        for i, im in enumerate(seleccion)
+    ]
     rows_html = []
     for i in range(0, max(len(cells), 1), 2):
         pair = cells[i:i + 2]
@@ -420,7 +567,11 @@ def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> 
     """Materiales a ancho completo; debajo, Observaciones | Registro Fotográfico."""
     mats = _html_materiales(diario, pal)
     left = _html_observaciones(diario, pal)
-    right = _html_registro_fotografico(_fotos_diario(diario), contrato_id, pal)
+    fotos = _fotos_diario(diario)
+    prepared = _prefetch_fotos(fotos[:_FOTO_MAX_DIARIO], contrato_id)
+    right = _html_registro_fotografico(
+        fotos, contrato_id, pal, prepared_map=prepared,
+    )
     return f"""
 <div style="margin-top:3pt;">{mats}</div>
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3pt;">
@@ -454,9 +605,13 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
         )
         imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)]
         if imgs:
+            prepared = _prefetch_fotos(imgs[:4], contrato_id)
             cells = [
-                _foto_cell(im, contrato_id, "Reporte de Evento", pal)
-                for im in imgs[:4]
+                _foto_cell(
+                    im, contrato_id, "Reporte de Evento", pal,
+                    prepared=prepared.get(i),
+                )
+                for i, im in enumerate(imgs[:4])
             ]
             rows_html = []
             for i in range(0, len(cells), 2):
@@ -473,14 +628,64 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
     return "".join(parts)
 
 
+def _fingerprint_dia(dia: dict) -> str:
+    parts: List[str] = []
+    d = dia.get("diario") if isinstance(dia.get("diario"), dict) else {}
+    parts.append(f"d:{d.get('id')}:{d.get('updated_at')}:{len(d.get('imagenes') or [])}")
+    for e in dia.get("eventos") or []:
+        if isinstance(e, dict):
+            parts.append(f"e:{e.get('id')}:{e.get('updated_at')}:{len(e.get('imagenes') or [])}")
+    return "|".join(parts)
+
+
+def _pdf_cache_get(key: tuple) -> Optional[bytes]:
+    now = time.time()
+    with _PDF_BYTES_CACHE_LOCK:
+        hit = _PDF_BYTES_CACHE.get(key)
+        if not hit:
+            return None
+        exp, data = hit
+        if exp < now:
+            _PDF_BYTES_CACHE.pop(key, None)
+            return None
+        return data
+
+
+def _pdf_cache_set(key: tuple, data: bytes) -> None:
+    with _PDF_BYTES_CACHE_LOCK:
+        _PDF_BYTES_CACHE[key] = (time.time() + _PDF_BYTES_CACHE_TTL, data)
+        if len(_PDF_BYTES_CACHE) > _PDF_BYTES_CACHE_MAX:
+            oldest = sorted(_PDF_BYTES_CACHE.items(), key=lambda kv: kv[1][0])
+            for k, _ in oldest[: max(1, len(oldest) // 4)]:
+                _PDF_BYTES_CACHE.pop(k, None)
+
+
+def clear_pdf_caches_for_tests() -> None:
+    with _LOGO_URI_CACHE_LOCK:
+        _LOGO_URI_CACHE.clear()
+    with _PDF_BYTES_CACHE_LOCK:
+        _PDF_BYTES_CACHE.clear()
+
+
 def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
     """Genera PDF landscape del día de bitácora para el contrato."""
+    t0 = time.perf_counter()
     contrato = contrato_meta_bitacora(sb, contrato_id)
     pal = _palette(contrato)
     dia = list_entradas_del_dia(sb, contrato_id, fecha)
     diario = dia.get("diario")
     eventos = [e for e in (dia.get("eventos") or []) if isinstance(e, dict)]
     fecha_iso = dia.get("fecha") or str(fecha)[:10]
+    t_data = time.perf_counter()
+
+    cache_key = (int(contrato_id), fecha_iso, _fingerprint_dia(dia))
+    cached = _pdf_cache_get(cache_key)
+    if cached:
+        _log.info(
+            "bitacora pdf cache-hit contrato=%s fecha=%s bytes=%s ms=%.0f",
+            contrato_id, fecha_iso, len(cached), (time.perf_counter() - t0) * 1000,
+        )
+        return cached
 
     manual = None
     if diario and diario.get("clima_editado_manual"):
@@ -491,14 +696,22 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
             "clima_descripcion": diario.get("clima_descripcion"),
             "hora_inicio_labores": diario.get("hora_inicio_labores"),
         }
-    slots = consultar_clima_slots_3h(
-        float(contrato["geo_lat"]),
-        float(contrato["geo_lng"]),
-        fecha_iso,
-        manual=manual,
-    )
 
-    hdr = _encabezado(contrato, fecha_iso, pal, mostrar_fecha=True)
+    # Clima + logos en paralelo (cuellos de red independientes).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_clima = pool.submit(
+            consultar_clima_slots_3h,
+            float(contrato["geo_lat"]),
+            float(contrato["geo_lng"]),
+            fecha_iso,
+            manual=manual,
+        )
+        fut_logos = pool.submit(_prefetch_logos, contrato)
+        slots = fut_clima.result()
+        logo_uris = fut_logos.result()
+    t_assets = time.perf_counter()
+
+    hdr = _encabezado(contrato, fecha_iso, pal, mostrar_fecha=True, logo_uris=logo_uris)
     hoja1 = (
         hdr
         + _html_panel_superior(diario, slots, pal)
@@ -507,9 +720,10 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
 
     body_parts = [hoja1]
     if eventos:
-        hdr_ev = _encabezado(contrato, None, pal, mostrar_fecha=False)
+        hdr_ev = _encabezado(contrato, None, pal, mostrar_fecha=False, logo_uris=logo_uris)
         body_parts.append('<div class="break"></div>')
         body_parts.append(hdr_ev + _html_eventos_con_fotos(eventos, int(contrato_id), pal))
+    t_html = time.perf_counter()
 
     text_color = pal["linea_principal"]["text"]
     doc = f"""<!DOCTYPE html>
@@ -523,4 +737,18 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
 </head><body>
 {''.join(body_parts)}
 </body></html>"""
-    return to_pdf_bytes(doc, landscape=True)
+    pdf = to_pdf_bytes(doc, landscape=True)
+    t_end = time.perf_counter()
+    _pdf_cache_set(cache_key, pdf)
+    _log.info(
+        "bitacora pdf contrato=%s fecha=%s bytes=%s data_ms=%.0f assets_ms=%.0f html_ms=%.0f pisa_ms=%.0f total_ms=%.0f",
+        contrato_id,
+        fecha_iso,
+        len(pdf or b""),
+        (t_data - t0) * 1000,
+        (t_assets - t_data) * 1000,
+        (t_html - t_assets) * 1000,
+        (t_end - t_html) * 1000,
+        (t_end - t0) * 1000,
+    )
+    return pdf

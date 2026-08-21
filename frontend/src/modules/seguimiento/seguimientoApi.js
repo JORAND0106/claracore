@@ -246,7 +246,7 @@ export function createSeguimientoApi(contratoId, token) {
     exportBitacoraPdfBlob: async (fecha) => {
       const f = String(fecha || '').slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) throw new Error('Fecha inválida para exportar')
-      const sig = apiFetchSignal(120000)
+      const sig = apiFetchSignal(45000)
       try {
         const res = await fetch(
           `${API_BASE}/seguimiento/${cid}/bitacora/export/pdf?fecha=${encodeURIComponent(f)}`,
