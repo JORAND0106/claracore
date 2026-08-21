@@ -249,7 +249,7 @@ export default function SicoeMediaLightbox({
               src={actual.url}
               alt={actual.label || 'Imagen'}
               referrerPolicy="no-referrer"
-              draggable={false}
+              title="Clic derecho para guardar, copiar o abrir en una pestaña nueva"
               style={{
                 transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
                 transformOrigin: 'center center',

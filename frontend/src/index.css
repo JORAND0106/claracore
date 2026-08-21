@@ -1395,7 +1395,11 @@ select.cc-dashboard-acta-select--light option {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  pointer-events: none;
+  /* pointer-events habilitados: menú contextual nativo (guardar / copiar / abrir). */
+  pointer-events: auto;
+  -webkit-user-drag: auto;
+  user-select: auto;
+  -webkit-user-select: auto;
 }
 
 .cc-sicoe-lightbox-close {
