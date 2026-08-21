@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import IdeaClaraModal from './IdeaClaraModal'
 import { nombreUser } from './UserSearchSelect'
 import { numeroActaLabel } from './seguimientoTheme'
@@ -35,6 +35,8 @@ export default function CompromisoFormModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [claraOpen, setClaraOpen] = useState(false)
+  /** Candado síncrono: `disabled={busy}` no bloquea el 2.º clic antes del re-render. */
+  const submittingRef = useRef(false)
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -150,17 +152,22 @@ export default function CompromisoFormModal({
   }
 
   const guardar = async () => {
+    if (submittingRef.current || busy) return
     if (!asignadosKeys.length || !form.fecha_vencimiento || !form.redaccion.trim()) {
       setError('Seleccione al menos un asignado, vencimiento y redacción.')
       return
     }
+    submittingRef.current = true
     setBusy(true)
     setError('')
     try {
+      // Deduplicar claves por si el estado local quedó con repeticiones.
+      const keysUnicos = [...new Set(asignadosKeys)]
+      const asignadosUnicos = pool.filter((u) => keysUnicos.includes(u._key))
       await onSubmit({
         solicitante_id: usuario?.id || null,
         solicitante_nombre: origenLabel,
-        asignados: asignados.map((u) => {
+        asignados: asignadosUnicos.map((u) => {
           if (u.es_externo) {
             return {
               asignado_a_id: null,
@@ -184,12 +191,12 @@ export default function CompromisoFormModal({
         titulo: form.redaccion.trim().slice(0, 200),
         descripcion: form.redaccion.trim(),
       })
+      // Éxito: el padre cierra el modal; mantener candado para no reenviar.
     } catch (e) {
       setError(e.message || 'No se pudo crear')
+      submittingRef.current = false
       setBusy(false)
-      return
     }
-    setBusy(false)
   }
 
   return (

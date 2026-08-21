@@ -1689,6 +1689,16 @@ export default function ActaEditor({
                         return (
                           <div
                             key={c.id}
+                            role="button"
+                            tabIndex={0}
+                            title="Abrir compromiso para ver detalle, comentar o actualizar estado"
+                            onClick={() => setDetalleCompromisoId(c.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                setDetalleCompromisoId(c.id)
+                              }
+                            }}
                             style={{
                               padding: '8px 10px',
                               borderRadius: 8,
@@ -1696,6 +1706,7 @@ export default function ActaEditor({
                               background: cump ? BG_CUMPLIDO : `${t.primary}12`,
                               fontSize: 'var(--cc-sm)',
                               color: t.text,
+                              cursor: 'pointer',
                             }}
                           >
                             <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
@@ -1763,6 +1774,16 @@ export default function ActaEditor({
                   return (
                     <div
                       key={c.id}
+                      role="button"
+                      tabIndex={0}
+                      title="Abrir compromiso para ver detalle, comentar o actualizar estado"
+                      onClick={() => setDetalleCompromisoId(c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setDetalleCompromisoId(c.id)
+                        }
+                      }}
                       style={{
                         padding: '8px 10px',
                         borderRadius: 8,
@@ -1770,6 +1791,7 @@ export default function ActaEditor({
                         background: cump ? BG_CUMPLIDO : `${t.primary}12`,
                         fontSize: 'var(--cc-sm)',
                         color: t.text,
+                        cursor: 'pointer',
                       }}
                     >
                       <div style={{ fontWeight: 700, color: cAccent, marginBottom: 4 }}>
@@ -2212,6 +2234,7 @@ export default function ActaEditor({
           permisos={permisos}
           allowEstadoGestion
           revisionEnActa
+          overlayZIndex={12100}
           viewportCompact={viewportCompact}
           onClose={() => setDetalleCompromisoId(null)}
           onChanged={async () => {
@@ -2222,6 +2245,13 @@ export default function ActaEditor({
               )
               setPrevios(abiertos || [])
             } catch { /* ignore */ }
+            const aid = localActaId || compromisoCtx?.actaId
+            if (aid) {
+              try {
+                const a = await api.getActa(aid)
+                setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+              } catch { /* ignore */ }
+            }
           }}
         />
       )}

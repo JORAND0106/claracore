@@ -2164,6 +2164,39 @@ def _norm_hora(raw) -> Optional[str]:
     return None
 
 
+def _dedupe_asignados_compromiso(asignados: list) -> list:
+    """Evita crear dos filas por el mismo destinatario si el payload trae duplicados."""
+    seen: Set[tuple] = set()
+    out: List[dict] = []
+    for a in asignados or []:
+        if not isinstance(a, dict):
+            continue
+        uid = a.get("asignado_a_id")
+        eid = a.get("asignado_externo_id")
+        try:
+            uid_i = int(uid) if uid is not None and str(uid).strip() != "" else 0
+        except (TypeError, ValueError):
+            uid_i = 0
+        try:
+            eid_i = int(eid) if eid is not None and str(eid).strip() != "" else 0
+        except (TypeError, ValueError):
+            eid_i = 0
+        if uid_i > 0:
+            key = ("u", uid_i)
+        elif eid_i > 0:
+            key = ("e", eid_i)
+        else:
+            nombre = (a.get("asignado_a_nombre") or "").strip().lower()
+            if not nombre:
+                continue
+            key = ("n", nombre)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+    return out
+
+
 def crear_compromiso_desde_idea(
     sb,
     contrato_id: int,
@@ -2182,6 +2215,7 @@ def crear_compromiso_desde_idea(
             "asignado_a_id": data["asignado_a_id"],
             "asignado_a_nombre": data.get("asignado_a_nombre"),
         }]
+    asignados = _dedupe_asignados_compromiso(asignados)
     if not asignados:
         raise ValueError("Debe indicar al menos un asignado")
     created = []
@@ -2208,6 +2242,7 @@ def crear_compromiso_libre(
             "asignado_a_id": data["asignado_a_id"],
             "asignado_a_nombre": data.get("asignado_a_nombre"),
         }]
+    asignados = _dedupe_asignados_compromiso(asignados)
     if not asignados:
         raise ValueError("Debe indicar al menos un asignado")
     created = []
@@ -3722,7 +3757,13 @@ def list_usuarios_contrato_enriquecidos(sb, contrato_id: int) -> List[dict]:
     return out
 
 
-def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
+def agregar_comentario(
+    sb,
+    item_id: int,
+    mensaje: str,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> dict:
     msg = (mensaje or "").strip()
     if not msg:
         raise ValueError("Mensaje vacío")
@@ -3730,11 +3771,8 @@ def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
     u = _usuario_row(sb, user_id)
     dest = None
     if item.get("origen") == "compromiso":
-        # Solo el asignado de plataforma puede comentar (dirigido al elaborador del acta).
-        if int(item.get("asignado_a_id") or 0) != int(user_id):
-            raise ValueError(
-                "Solo puede comentar en compromisos que le fueron asignados a usted"
-            )
+        # Asignado de plataforma → elaborador; elaborador/Dev pueden dejar motivo (p.ej. anticipado).
+        es_asignado = int(item.get("asignado_a_id") or 0) == int(user_id)
         acta_elab = None
         if item.get("acta_id"):
             try:
@@ -3742,7 +3780,16 @@ def agregar_comentario(sb, item_id: int, mensaje: str, user_id: int) -> dict:
                 acta_elab = acta.get("elaborador_id")
             except Exception:
                 acta_elab = None
-        dest = acta_elab or item.get("solicitante_id") or item.get("created_by")
+        es_elaborador = acta_elab is not None and int(acta_elab) == int(user_id)
+        es_dev = es_desarrollador_seguimiento(current_user)
+        if not (es_asignado or es_elaborador or es_dev):
+            raise ValueError(
+                "Solo puede comentar el asignado del compromiso o el elaborador del acta"
+            )
+        if es_asignado:
+            dest = acta_elab or item.get("solicitante_id") or item.get("created_by")
+        elif es_elaborador or es_dev:
+            dest = item.get("asignado_a_id")
     else:
         # Tareas: notificar contraparte (asignado ↔ solicitante/creador)
         if int(item.get("asignado_a_id") or 0) == int(user_id):
