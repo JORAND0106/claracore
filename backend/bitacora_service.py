@@ -625,7 +625,7 @@ def plantilla_personal_contrato(sb, contrato_id: int) -> List[dict]:
 
 
 def _strip_para_autocompletar(entrada: dict) -> dict:
-    """Personal + maquinaria + materiales sin adjuntos ni números de vale."""
+    """Personal + maquinaria del día anterior. Materiales nunca se autocompletan."""
     personal = _normalizar_personal(entrada.get("personal"))
     usos = []
     for u in entrada.get("equipos_uso") or []:
@@ -645,23 +645,12 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
             "preoperacionales": [],  # no arrastrar escáneres
             "orden": u.get("orden"),
         })
-    materiales = []
-    for m in _normalizar_materiales(entrada.get("materiales")):
-        materiales.append({
-            "movimiento": m.get("movimiento") or "ingreso",
-            "tipo_material": m.get("tipo_material") or "",
-            "proveedor": m.get("proveedor") or "",
-            "cantidad": m.get("cantidad") or 0,
-            "placa": m.get("placa") or "",
-            "numeros_vale": "",  # no arrastrar vales del día anterior
-            "adjuntos": [],  # no arrastrar remisiones
-        })
     return {
         "fuente_id": entrada.get("id"),
         "fuente_fecha": entrada.get("fecha"),
         "personal": personal,
         "equipos_uso": usos,
-        "materiales": materiales,
+        "materiales": [],  # siempre vacío: movimientos son del día
     }
 
 
