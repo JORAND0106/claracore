@@ -6,6 +6,7 @@ import BitacoraClimaField from './BitacoraClimaField'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
+import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
   CARGOS_PERSONAL,
@@ -122,7 +123,7 @@ function emptyEventoDetalle(tipo) {
     }
   }
   if (tipo === 'visita_terceros') {
-    return { visitantes: '', entidad: '', motivo: '' }
+    return { visitantes: '', visitantes_lista: [emptyVisitanteRow()], entidad: '', motivo: '' }
   }
   return {}
 }
@@ -194,11 +195,16 @@ export default function BitacoraEntradaEditor({
   )
   const [eventoTipo, setEventoTipo] = useState(entrada?.evento_tipo || 'reporte_actividades')
   const [dirigidoA, setDirigidoA] = useState(entrada?.dirigido_a || '')
-  const [eventoDetalle, setEventoDetalle] = useState(
-    entrada?.evento_detalle && typeof entrada.evento_detalle === 'object'
-      ? { ...emptyEventoDetalle(entrada.evento_tipo), ...entrada.evento_detalle }
-      : emptyEventoDetalle('reporte_actividades'),
-  )
+  const [eventoDetalle, setEventoDetalle] = useState(() => {
+    const tipoIni = entrada?.evento_tipo || 'reporte_actividades'
+    const base = entrada?.evento_detalle && typeof entrada.evento_detalle === 'object'
+      ? { ...emptyEventoDetalle(tipoIni), ...entrada.evento_detalle }
+      : emptyEventoDetalle(tipoIni)
+    if (tipoIni === 'visita_terceros' || Array.isArray(base.visitantes_lista) || base.visitantes) {
+      return { ...base, visitantes_lista: visitantesFromDetalle(base) }
+    }
+    return base
+  })
   const [cuerpoHtml, setCuerpoHtml] = useState(entrada?.cuerpo_html || '')
   const [imagenes, setImagenes] = useState(Array.isArray(entrada?.imagenes) ? entrada.imagenes : [])
   const [localId, setLocalId] = useState(entrada?.id ?? null)
@@ -286,7 +292,13 @@ export default function BitacoraEntradaEditor({
   }, [pdfUrl])
 
   useEffect(() => {
-    setEventoDetalle((d) => ({ ...emptyEventoDetalle(eventoTipo), ...d }))
+    setEventoDetalle((d) => {
+      const next = { ...emptyEventoDetalle(eventoTipo), ...d }
+      if (eventoTipo === 'visita_terceros') {
+        next.visitantes_lista = visitantesFromDetalle(next)
+      }
+      return next
+    })
   }, [eventoTipo])
 
   const btnPrimary = {
@@ -451,10 +463,24 @@ export default function BitacoraEntradaEditor({
       if (isRichTextEmpty(cuerpoHtml) && eventoTipo === 'reporte_actividades') {
         throw new Error('Describa las actividades del día en el texto libre')
       }
+      const detallePayload = { ...eventoDetalle }
+      if (eventoTipo === 'visita_terceros') {
+        const lista = (eventoDetalle.visitantes_lista || [])
+          .filter((v) => v && String(v.nombre || '').trim())
+          .map((v) => ({
+            visitante_id: v.visitante_id ?? null,
+            nombre: String(v.nombre).trim(),
+            cargo: String(v.cargo || '').trim(),
+          }))
+        detallePayload.visitantes_lista = lista
+        detallePayload.visitantes = lista
+          .map((v) => (v.cargo ? `${v.nombre} (${v.cargo})` : v.nombre))
+          .join(', ')
+      }
       const row = await api.createBitacoraEvento({
         fecha,
         evento_tipo: eventoTipo,
-        evento_detalle: eventoDetalle,
+        evento_detalle: detallePayload,
         dirigido_a: eventoTieneDestinatario(eventoTipo) ? dirigidoA : '',
         cuerpo_html: cuerpoHtml,
         imagenes: (imagenes || [])
@@ -1111,10 +1137,24 @@ export default function BitacoraEntradaEditor({
 
               {eventoTipo === 'visita_terceros' && (
                 <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
+                  <VisitantesEventoGrid
+                    t={t}
+                    api={api}
+                    rows={eventoDetalle.visitantes_lista || [emptyVisitanteRow()]}
+                    disabled={!editable && !esNuevo}
+                    sheetStyles={ui}
+                    onChange={(lista) => setEventoDetalle((d) => ({
+                      ...d,
+                      visitantes_lista: lista,
+                      visitantes: (lista || [])
+                        .filter((v) => v && String(v.nombre || '').trim())
+                        .map((v) => (v.cargo ? `${v.nombre} (${v.cargo})` : v.nombre))
+                        .join(', '),
+                    }))}
+                  />
+                  <table style={{ ...ui.sheetTable, marginTop: 10 }}>
                     <tbody>
                       {[
-                        ['visitantes', 'Visitantes'],
                         ['entidad', 'Entidad'],
                         ['motivo', 'Motivo'],
                       ].map(([key, lab]) => (

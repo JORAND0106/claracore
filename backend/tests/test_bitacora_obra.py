@@ -370,7 +370,41 @@ def test_slot_3h_desde_hora():
     assert svc._slot_3h_desde_hora(None) == 12
 
 
-def test_consultar_clima_prioridad_manual(monkeypatch):
+def test_normalizar_visitantes_lista_y_texto():
+    lista = svc._normalizar_visitantes_lista([
+        {"nombre": "Ana", "cargo": "Auditora", "visitante_id": 3},
+        {"nombre": "  "},
+        {"nombre": "Luis"},
+    ])
+    assert len(lista) == 2
+    assert lista[0]["nombre"] == "Ana" and lista[0]["cargo"] == "Auditora"
+    assert lista[0]["visitante_id"] == 3
+    assert lista[1]["nombre"] == "Luis"
+
+    legacy = svc._normalizar_visitantes_lista("Ana (Auditora); Luis Gómez")
+    assert len(legacy) == 2
+    assert legacy[0]["cargo"] == "Auditora"
+    assert svc._fmt_visitantes_texto(lista) == "Ana (Auditora), Luis"
+
+
+def test_sync_visitantes_catalogo_upsert(monkeypatch):
+    calls = []
+
+    def fake_upsert(sb, contrato_id, nombre, *, cargo="", user_id=None):
+        calls.append((nombre, cargo, user_id))
+        return {"id": len(calls), "nombre": nombre, "cargo": cargo}
+
+    monkeypatch.setattr(svc, "upsert_visitante", fake_upsert)
+    out = svc.sync_visitantes_catalogo(
+        object(),
+        7,
+        [{"nombre": "Ana", "cargo": "Auditora"}, {"nombre": "Luis", "cargo": ""}],
+        user_id=9,
+    )
+    assert calls == [("Ana", "Auditora", 9), ("Luis", "", 9)]
+    assert out[0]["visitante_id"] == 1 and out[0]["nombre"] == "Ana"
+    assert out[1]["visitante_id"] == 2
+
     import sys
     import types
 
