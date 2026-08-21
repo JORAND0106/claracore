@@ -3,6 +3,7 @@ import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
 import BitacoraClimaField from './BitacoraClimaField'
+import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
@@ -42,6 +43,8 @@ function emptyMaterial() {
     placa: '',
     numeros_vale: '',
     adjuntos: [],
+    ubicacion_lat: null,
+    ubicacion_lng: null,
   }
 }
 
@@ -57,6 +60,8 @@ function materialFromApi(m) {
     adjuntos: Array.isArray(m.adjuntos)
       ? m.adjuntos
       : (Array.isArray(m.vales) && m.vales[0] && typeof m.vales[0] === 'object' ? m.vales : []),
+    ubicacion_lat: m.ubicacion_lat != null && m.ubicacion_lat !== '' ? Number(m.ubicacion_lat) : null,
+    ubicacion_lng: m.ubicacion_lng != null && m.ubicacion_lng !== '' ? Number(m.ubicacion_lng) : null,
   }
 }
 
@@ -191,6 +196,9 @@ export default function BitacoraEntradaEditor({
   const [okMsg, setOkMsg] = useState('')
   const [claraOpen, setClaraOpen] = useState(false)
   const [autoBusy, setAutoBusy] = useState(false)
+  const [mapIdx, setMapIdx] = useState(null)
+  const [contratoCentro, setContratoCentro] = useState({ lat: 4.711, lng: -74.0721 })
+  const [pdfBusy, setPdfBusy] = useState(false)
 
   // Cargar plantilla de cargos (fijos + custom del contrato)
   useEffect(() => {
@@ -206,6 +214,50 @@ export default function BitacoraEntradaEditor({
     })()
     return () => { cancelled = true }
   }, [api, tipo])
+
+  useEffect(() => {
+    if (!contratoId || !token) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { API_BASE } = await import('../../apiBase')
+        const res = await fetch(`${API_BASE}/contratos/${contratoId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        let lat = data?.centro_lat != null ? Number(data.centro_lat) : null
+        let lng = data?.centro_lng != null ? Number(data.centro_lng) : null
+        if ((lat == null || lng == null) && data?.plano_geojson) {
+          // fallback simple: no parsear geojson completo aquí
+        }
+        if (lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+          setContratoCentro({ lat, lng })
+        }
+      } catch { /* ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  const exportarPdfDia = async () => {
+    if (!api?.exportBitacoraPdfBlob || !fecha) return
+    setPdfBusy(true)
+    setError('')
+    try {
+      const blob = await api.exportBitacoraPdfBlob(fecha)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `bitacora_${fecha}.pdf`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 4000)
+      setOkMsg('PDF de bitácora del día descargado.')
+    } catch (e) {
+      setError(e.message || 'No se pudo exportar el PDF')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
 
   useEffect(() => {
     setEventoDetalle((d) => ({ ...emptyEventoDetalle(eventoTipo), ...d }))
@@ -268,6 +320,7 @@ export default function BitacoraEntradaEditor({
         .filter((m) => (
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
           || Number(m.cantidad) > 0 || (m.adjuntos || []).length
+          || (m.ubicacion_lat != null && m.ubicacion_lng != null)
         ))
         .map((m) => ({
           movimiento: m.movimiento === 'salida' ? 'salida' : 'ingreso',
@@ -277,6 +330,9 @@ export default function BitacoraEntradaEditor({
           placa: m.placa || '',
           numeros_vale: m.numeros_vale || '',
           adjuntos: (m.adjuntos || []).slice(0, 2),
+          ...(m.ubicacion_lat != null && m.ubicacion_lng != null
+            ? { ubicacion_lat: Number(m.ubicacion_lat), ubicacion_lng: Number(m.ubicacion_lng) }
+            : {}),
         }))
       const payload = {
         fecha,
@@ -777,14 +833,15 @@ export default function BitacoraEntradaEditor({
                   <table style={ui.sheetTable}>
                     <thead>
                       <tr>
-                        <th style={{ ...ui.th, width: '10%' }}>Movimiento</th>
-                        <th style={{ ...ui.th, width: '18%' }}>Tipo de material</th>
-                        <th style={{ ...ui.th, width: '14%' }}>Proveedor</th>
-                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
-                        <th style={{ ...ui.th, width: '10%' }}>Placa</th>
-                        <th style={{ ...ui.th, width: '16%' }}>Nº vale(s)</th>
-                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>Remisión</th>
-                        {editable && <th style={{ ...ui.th, width: '6%' }} />}
+                        <th style={{ ...ui.th, width: '9%' }}>Movimiento</th>
+                        <th style={{ ...ui.th, width: '16%' }}>Tipo de material</th>
+                        <th style={{ ...ui.th, width: '12%' }}>Proveedor</th>
+                        <th style={{ ...ui.th, width: '7%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '9%' }}>Placa</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Nº vale(s)</th>
+                        <th style={{ ...ui.th, width: '9%', textAlign: 'center' }}>Remisión</th>
+                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Ubicación</th>
+                        {editable && <th style={{ ...ui.th, width: '5%' }} />}
                       </tr>
                     </thead>
                     <tbody>
@@ -872,6 +929,22 @@ export default function BitacoraEntradaEditor({
                               )))}
                             />
                           </td>
+                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              title={m.ubicacion_lat != null
+                                ? `Ubicación: ${m.ubicacion_lat}, ${m.ubicacion_lng}`
+                                : 'Indicar ubicación en el mapa'}
+                              onClick={() => setMapIdx(idx)}
+                              style={{
+                                ...ui.clipBtn,
+                                color: m.ubicacion_lat != null ? (t.primary || '#0f766e') : t.textMuted,
+                                fontWeight: 800,
+                              }}
+                            >
+                              🗺
+                            </button>
+                          </td>
                           {editable && (
                             <td style={{ ...ui.td, textAlign: 'center' }}>
                               {materiales.length > 1 && (
@@ -891,7 +964,7 @@ export default function BitacoraEntradaEditor({
                   </table>
                 </div>
                 <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
-                  Nº vale(s) es texto. Remisión: máximo 2 archivos por fila.
+                  Nº vale(s) es texto. Remisión: máximo 2 archivos. Ubicación: ícono de mapa (vista satélite disponible).
                 </div>
               </div>
             </>
@@ -1072,6 +1145,17 @@ export default function BitacoraEntradaEditor({
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
             borderTop: `1px solid ${t.border}`, paddingTop: 10,
           }}>
+            {tipo === 'diario' && permisos?.exportar && (
+              <button
+                type="button"
+                disabled={pdfBusy || busy}
+                onClick={() => void exportarPdfDia()}
+                style={{ ...btnGhost, marginRight: 'auto' }}
+                title="Exportar PDF del día (Diario + Eventos + fotos)"
+              >
+                {pdfBusy ? 'Generando PDF…' : '📄 Exportar PDF del día'}
+              </button>
+            )}
             {tipo === 'diario' && editable && (
               <>
                 <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
@@ -1141,6 +1225,24 @@ export default function BitacoraEntradaEditor({
           </div>
         </div>
       </div>
+
+      {mapIdx != null && materiales[mapIdx] && (
+        <BitacoraMaterialUbicacionModal
+          t={t}
+          lat={materiales[mapIdx].ubicacion_lat}
+          lng={materiales[mapIdx].ubicacion_lng}
+          centroLat={contratoCentro.lat}
+          centroLng={contratoCentro.lng}
+          readOnly={!editable}
+          onClose={() => setMapIdx(null)}
+          onConfirm={({ ubicacion_lat, ubicacion_lng }) => {
+            setMateriales((rows) => rows.map((r, i) => (
+              i === mapIdx ? { ...r, ubicacion_lat, ubicacion_lng } : r
+            )))
+            setMapIdx(null)
+          }}
+        />
+      )}
 
       {claraOpen && (
         <IdeaClaraModal

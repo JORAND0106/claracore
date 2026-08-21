@@ -236,5 +236,28 @@ export function createSeguimientoApi(contratoId, token) {
         throw mapNetworkError(e)
       }
     },
+    /** PDF landscape del día (Diario + Eventos + fotos). */
+    exportBitacoraPdfBlob: async (fecha) => {
+      const f = String(fecha || '').slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) throw new Error('Fecha inválida para exportar')
+      const sig = apiFetchSignal(120000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/bitacora/export/pdf?fecha=${encodeURIComponent(f)}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) {
+          await parseOrThrow(res)
+        }
+        const buf = await res.arrayBuffer()
+        if (!buf || buf.byteLength < 20) throw new Error('El PDF generado está vacío')
+        return new Blob([buf], { type: 'application/pdf' })
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
   }
 }

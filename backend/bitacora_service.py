@@ -278,9 +278,34 @@ def _normalizar_materiales(raw) -> List[dict]:
             numeros_vale = str(item.get("vales") or "").strip()
 
         adjuntos = _normalizar_adjuntos_flex(adjuntos_raw, max_n=2)
-        if not any([tipo, proveedor, placa, numeros_vale, adjuntos, cantidad]):
+
+        ubicacion_lat = None
+        ubicacion_lng = None
+        for key_lat, key_lng in (
+            ("ubicacion_lat", "ubicacion_lng"),
+            ("lat", "lng"),
+            ("coord_lat", "coord_lng"),
+        ):
+            raw_lat = item.get(key_lat)
+            raw_lng = item.get(key_lng)
+            if raw_lat is None or raw_lng is None or raw_lat == "" or raw_lng == "":
+                continue
+            try:
+                ubicacion_lat = float(raw_lat)
+                ubicacion_lng = float(raw_lng)
+            except (TypeError, ValueError):
+                ubicacion_lat = None
+                ubicacion_lng = None
+                continue
+            if not (-90.0 <= ubicacion_lat <= 90.0 and -180.0 <= ubicacion_lng <= 180.0):
+                ubicacion_lat = None
+                ubicacion_lng = None
+                continue
+            break
+
+        if not any([tipo, proveedor, placa, numeros_vale, adjuntos, cantidad, ubicacion_lat is not None]):
             continue
-        out.append({
+        row = {
             "movimiento": mov,
             "tipo_material": tipo,
             "proveedor": proveedor,
@@ -288,7 +313,11 @@ def _normalizar_materiales(raw) -> List[dict]:
             "placa": placa,
             "numeros_vale": numeros_vale,
             "adjuntos": adjuntos,
-        })
+        }
+        if ubicacion_lat is not None and ubicacion_lng is not None:
+            row["ubicacion_lat"] = round(ubicacion_lat, 7)
+            row["ubicacion_lng"] = round(ubicacion_lng, 7)
+        out.append(row)
     return out
 
 
@@ -1672,3 +1701,227 @@ def cerrar_diarios_vencidos(sb, contrato_id: Optional[int] = None) -> dict:
         except Exception as exc:
             _log.warning("autocierre bitacora %s: %s", row.get("id"), exc)
     return {"cerrados": cerrados, "revisados": len(rows), "fecha_corte": hoy}
+
+
+# ── Exportación PDF / clima histórico ─────────────────────────────────────────
+
+CLIMA_SLOTS_3H = (0, 3, 6, 9, 12, 15, 18, 21)
+
+
+def _centroide_desde_geojson(geo) -> Optional[Tuple[float, float]]:
+    try:
+        import json
+
+        g = json.loads(geo) if isinstance(geo, str) else geo
+    except Exception:
+        return None
+    if not isinstance(g, dict):
+        return None
+    coords: List[Tuple[float, float]] = []
+
+    def walk(obj):
+        if obj is None:
+            return
+        if isinstance(obj, (list, tuple)) and len(obj) >= 2 and all(
+            isinstance(x, (int, float)) for x in obj[:2]
+        ):
+            coords.append((float(obj[0]), float(obj[1])))
+            return
+        if isinstance(obj, list):
+            for x in obj:
+                walk(x)
+        elif isinstance(obj, dict):
+            if "coordinates" in obj:
+                walk(obj["coordinates"])
+            if "features" in obj:
+                walk(obj["features"])
+            if "geometry" in obj:
+                walk(obj["geometry"])
+
+    walk(g)
+    if not coords:
+        return None
+    lng = sum(c[0] for c in coords) / len(coords)
+    lat = sum(c[1] for c in coords) / len(coords)
+    return lat, lng
+
+
+def contrato_meta_bitacora(sb, contrato_id: int) -> dict:
+    """Metadatos de contrato + logos + centroide para PDF/clima."""
+    rows = (
+        sb.table("contratos")
+        .select(
+            "id, numero, objeto, contratista, interventoria, entidad, entidad_otra, "
+            "logo_entidad, logo_contratista, logo_interventoria, "
+            "centro_lat, centro_lng, plano_geojson, numero_interventoria"
+        )
+        .eq("id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Contrato no encontrado")
+    c = dict(rows[0])
+    lat = c.get("centro_lat")
+    lng = c.get("centro_lng")
+    try:
+        lat_f = float(lat) if lat is not None and lat != "" else None
+        lng_f = float(lng) if lng is not None and lng != "" else None
+    except (TypeError, ValueError):
+        lat_f, lng_f = None, None
+    if lat_f is None or lng_f is None:
+        centro = _centroide_desde_geojson(c.get("plano_geojson"))
+        if centro:
+            lat_f, lng_f = centro
+    if lat_f is None or lng_f is None:
+        # Bogotá por defecto (mismo fallback del widget de clima)
+        lat_f, lng_f = 4.711, -74.0721
+    c["geo_lat"] = lat_f
+    c["geo_lng"] = lng_f
+    return c
+
+
+def _slot_3h_desde_hora(hora_val) -> int:
+    """Tramo de 3 h (0,3,…,21) que contiene la hora dada."""
+    parsed = _parse_hora(hora_val)
+    if not parsed:
+        return 12
+    hh = int(parsed.split(":")[0])
+    return max(0, min(21, (hh // 3) * 3))
+
+
+def consultar_clima_slots_3h(
+    lat: float,
+    lng: float,
+    fecha_iso: str,
+    *,
+    manual: Optional[dict] = None,
+) -> List[dict]:
+    """
+    Tabla de clima cada 3 h desde Open-Meteo (ubicación del contrato).
+    Si `manual` trae clima_editado_manual + codigo/temp, sobrescribe el slot
+    de hora_inicio_labores.
+    """
+    import httpx
+
+    fecha = str(fecha_iso)[:10]
+    params = {
+        "latitude": str(lat),
+        "longitude": str(lng),
+        "start_date": fecha,
+        "end_date": fecha,
+        "hourly": "temperature_2m,weather_code",
+        "timezone": "America/Bogota",
+    }
+    hourly: dict = {}
+    # Hoy / reciente: forecast; pasado: archive
+    hoy = hoy_bogota().isoformat()
+    urls = []
+    if fecha >= hoy:
+        urls.append("https://api.open-meteo.com/v1/forecast")
+        urls.append("https://archive-api.open-meteo.com/v1/archive")
+    else:
+        urls.append("https://archive-api.open-meteo.com/v1/archive")
+        urls.append("https://api.open-meteo.com/v1/forecast")
+
+    for url in urls:
+        try:
+            with httpx.Client(timeout=20.0) as client:
+                res = client.get(url, params=params)
+                if res.status_code >= 400:
+                    continue
+                data = res.json() or {}
+                hourly = data.get("hourly") or {}
+                if hourly.get("time"):
+                    break
+        except Exception as exc:
+            _log.warning("open-meteo clima bitácora %s: %s", url, exc)
+
+    by_hour: Dict[int, dict] = {}
+    times = hourly.get("time") or []
+    temps = hourly.get("temperature_2m") or []
+    codes = hourly.get("weather_code") or []
+    for i, ts in enumerate(times):
+        try:
+            hh = int(str(ts)[11:13])
+        except (TypeError, ValueError):
+            continue
+        if hh not in CLIMA_SLOTS_3H:
+            continue
+        code = codes[i] if i < len(codes) else None
+        temp = temps[i] if i < len(temps) else None
+        try:
+            code_i = int(code) if code is not None and code != "" else None
+        except (TypeError, ValueError):
+            code_i = None
+        try:
+            temp_f = float(temp) if temp is not None and temp != "" else None
+        except (TypeError, ValueError):
+            temp_f = None
+        by_hour[hh] = {
+            "hora": f"{hh:02d}:00",
+            "hora_num": hh,
+            "clima_codigo": code_i,
+            "clima_temp_c": temp_f,
+            "clima_descripcion": clima_label(code_i) if code_i is not None else "",
+            "fuente": "open-meteo",
+            "manual": False,
+        }
+
+    slots = []
+    for hh in CLIMA_SLOTS_3H:
+        row = by_hour.get(hh) or {
+            "hora": f"{hh:02d}:00",
+            "hora_num": hh,
+            "clima_codigo": None,
+            "clima_temp_c": None,
+            "clima_descripcion": "—",
+            "fuente": "sin-dato",
+            "manual": False,
+        }
+        slots.append(row)
+
+    if manual and bool(manual.get("clima_editado_manual")):
+        slot_h = _slot_3h_desde_hora(manual.get("hora_inicio_labores"))
+        try:
+            code_m = (
+                int(manual["clima_codigo"])
+                if manual.get("clima_codigo") is not None and manual.get("clima_codigo") != ""
+                else None
+            )
+        except (TypeError, ValueError):
+            code_m = None
+        try:
+            temp_m = (
+                float(manual["clima_temp_c"])
+                if manual.get("clima_temp_c") is not None and manual.get("clima_temp_c") != ""
+                else None
+            )
+        except (TypeError, ValueError):
+            temp_m = None
+        desc_m = str(manual.get("clima_descripcion") or "").strip() or (
+            clima_label(code_m) if code_m is not None else ""
+        )
+        for row in slots:
+            if row["hora_num"] == slot_h:
+                row.update({
+                    "clima_codigo": code_m if code_m is not None else row.get("clima_codigo"),
+                    "clima_temp_c": temp_m if temp_m is not None else row.get("clima_temp_c"),
+                    "clima_descripcion": desc_m or row.get("clima_descripcion") or "—",
+                    "fuente": "manual",
+                    "manual": True,
+                })
+                break
+    return slots
+
+
+def list_entradas_del_dia(sb, contrato_id: int, fecha: str) -> Dict[str, Any]:
+    """Diario + eventos del día (enriquecidos) para exportación PDF."""
+    f = _parse_fecha(fecha).isoformat()
+    rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f)
+    diario = next((r for r in rows if str(r.get("tipo") or "") == "diario"), None)
+    eventos = [r for r in rows if str(r.get("tipo") or "") == "evento"]
+    return {"fecha": f, "diario": diario, "eventos": eventos, "todas": rows}
+
