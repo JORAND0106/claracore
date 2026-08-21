@@ -284,7 +284,7 @@ export default function PptoFiltroMapaPk({
               paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
             })
           }
-          if (!map.getLayer('ppto-labels-abscisa')) {
+          if (!map.getLayer('ppto-labels-abscisa-1km')) {
             addMapboxAbscisaLabelLayers(map, {
               idPrefix: 'ppto-labels-abscisa',
               source: 'ppto-plano',
