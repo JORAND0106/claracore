@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+import CieloClimaCanvas from '../../components/inicio/CieloClimaCanvas'
 import { labelClima } from './bitacoraConstants'
+import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 
 const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
 
@@ -37,8 +39,7 @@ function centroideDesdePlano(data) {
 }
 
 /**
- * Autocompleta clima desde Open-Meteo (mismo origen que el widget de inicio),
- * permitiendo edición manual si el clima real difiere del pronóstico.
+ * Clima compacto en línea con fecha/hora: celda animada + temp + descripción editable.
  */
 export default function BitacoraClimaField({
   t,
@@ -47,7 +48,9 @@ export default function BitacoraClimaField({
   value,
   onChange,
   disabled = false,
+  compact = true,
 }) {
+  const ui = bitacoraSheetStyles(t)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -103,94 +106,61 @@ export default function BitacoraClimaField({
     ) {
       void cargar()
     }
-    // solo al montar / cuando aún no hay clima
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contratoId])
 
-  const inp = {
-    background: t.bg,
-    color: t.text,
-    border: `1px solid ${t.border}`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    fontSize: 'var(--cc-sm)',
-    width: '100%',
-    boxSizing: 'border-box',
-  }
-
-  return (
-    <div style={{
-      border: `1px solid ${t.border}`,
-      borderRadius: 10,
-      padding: 12,
-      background: t.bgCard,
-    }}>
+  if (compact) {
+    return (
       <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 8,
-        alignItems: 'center', justifyContent: 'space-between', marginBottom: 10,
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: 0,
+        border: `1px solid ${ui.border}`,
+        borderRadius: 4,
+        overflow: 'hidden',
+        minHeight: 36,
+        flex: '1 1 220px',
+        background: t.bgCard,
       }}>
-        <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-body)' }}>
-          Clima del día
+        <div style={{
+          position: 'relative',
+          width: 72,
+          minHeight: 36,
+          flexShrink: 0,
+          overflow: 'hidden',
+        }}>
+          <CieloClimaCanvas
+            wmoCode={value?.clima_codigo ?? 0}
+            style={{ position: 'absolute', inset: 0 }}
+          />
         </div>
-        {!disabled && (
-          <button
-            type="button"
-            onClick={() => void cargar()}
-            disabled={loading}
-            style={{
-              background: t.bg,
-              color: t.text,
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              padding: '6px 10px',
-              fontWeight: 600,
-              fontSize: 'var(--cc-sm)',
-              cursor: loading ? 'wait' : 'pointer',
-            }}
-          >
-            {loading ? 'Consultando…' : 'Actualizar desde clima en vivo'}
-          </button>
-        )}
-      </div>
-      {error && (
-        <div style={{ color: '#B91C1C', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>{error}</div>
-      )}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          Temperatura (°C)
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '2px 6px',
+          flex: 1,
+          minWidth: 0,
+        }}>
           <input
             type="number"
             step="0.1"
             disabled={disabled}
+            title="Temperatura °C"
             value={value?.clima_temp_c ?? ''}
             onChange={(e) => onChange?.({
               ...value,
               clima_temp_c: e.target.value === '' ? null : Number(e.target.value),
               clima_editado_manual: true,
             })}
-            style={inp}
-          />
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          Código WMO
-          <input
-            type="number"
-            disabled={disabled}
-            value={value?.clima_codigo ?? ''}
-            onChange={(e) => {
-              const code = e.target.value === '' ? null : Number(e.target.value)
-              onChange?.({
-                ...value,
-                clima_codigo: code,
-                clima_descripcion: labelClima(code) || value?.clima_descripcion,
-                clima_editado_manual: true,
-              })
+            style={{
+              ...ui.cellInp,
+              width: 52,
+              fontWeight: 800,
+              fontVariantNumeric: 'tabular-nums',
             }}
-            style={inp}
           />
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.textMuted, gridColumn: '1 / -1' }}>
-          Descripción
+          <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 700 }}>°C</span>
           <input
             disabled={disabled}
             value={value?.clima_descripcion || ''}
@@ -199,16 +169,31 @@ export default function BitacoraClimaField({
               clima_descripcion: e.target.value,
               clima_editado_manual: true,
             })}
-            placeholder="Ej. Parcialmente nublado"
-            style={inp}
+            placeholder="Clima"
+            style={{ ...ui.cellInp, flex: 1, minWidth: 0 }}
           />
-        </label>
-      </div>
-      {value?.clima_editado_manual && (
-        <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          Clima editado manualmente (diferente al pronóstico en vivo).
+          {!disabled && (
+            <button
+              type="button"
+              title="Actualizar desde clima en vivo"
+              onClick={() => void cargar()}
+              disabled={loading}
+              style={{ ...ui.clipBtn, opacity: loading ? 0.5 : 1 }}
+            >
+              {loading ? '…' : '↻'}
+            </button>
+          )}
         </div>
-      )}
-    </div>
-  )
+        {error && (
+          <div style={{
+            position: 'absolute', bottom: -18, left: 0,
+            fontSize: 10, color: '#B91C1C',
+          }}>{error}</div>
+        )}
+      </div>
+    )
+  }
+
+  // fallback no compact (unused)
+  return null
 }

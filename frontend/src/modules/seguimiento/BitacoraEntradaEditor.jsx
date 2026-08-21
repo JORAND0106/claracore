@@ -1,18 +1,21 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, Fragment } from 'react'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
-import BitacoraAdjuntos from './BitacoraAdjuntos'
+import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
 import BitacoraClimaField from './BitacoraClimaField'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
   CARGOS_PERSONAL,
   EVENTO_TIPOS,
+  eventoTieneDestinatario,
   horaActualBogota,
   hoyISOBogota,
   labelEventoTipo,
+  personalEnColumnas,
   personalPlantillaVacia,
 } from './bitacoraConstants'
+import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 
 function emptyUso() {
@@ -24,8 +27,14 @@ function emptyUso() {
     cantidad: 1,
     hora_inicio: '',
     hora_fin: '',
+    hora_intermedia: '',
     horas_intermedias: [],
+    preoperacionales: [],
   }
+}
+
+function emptyMaterial() {
+  return { tipo_material: '', proveedor: '', vales: [] }
 }
 
 function emptyEventoDetalle(tipo) {
@@ -45,8 +54,22 @@ function emptyEventoDetalle(tipo) {
   return {}
 }
 
+function usoFromApi(u) {
+  const horas = Array.isArray(u.horas_intermedias) ? u.horas_intermedias : []
+  const primera = horas[0]?.hora ? String(horas[0].hora).slice(0, 5) : ''
+  return {
+    ...emptyUso(),
+    ...u,
+    hora_inicio: String(u.hora_inicio || '').slice(0, 5),
+    hora_fin: String(u.hora_fin || '').slice(0, 5),
+    hora_intermedia: primera,
+    horas_intermedias: horas,
+    preoperacionales: Array.isArray(u.preoperacionales) ? u.preoperacionales : [],
+  }
+}
+
 /**
- * Editor modal: crear/editar Reporte Diario o crear Reporte de Evento.
+ * Editor modal Excel-like: Reporte Diario / Reporte de Evento.
  */
 export default function BitacoraEntradaEditor({
   t,
@@ -55,11 +78,12 @@ export default function BitacoraEntradaEditor({
   token,
   contratoId,
   permisos,
-  modo, // 'diario' | 'evento' | 'ver'
+  modo,
   entrada = null,
   onClose,
   onSaved,
 }) {
+  const ui = bitacoraSheetStyles(t)
   const esNuevo = !entrada?.id
   const tipo = entrada?.tipo || (modo === 'evento' ? 'evento' : 'diario')
   const editable = useMemo(() => {
@@ -89,21 +113,20 @@ export default function BitacoraEntradaEditor({
   })
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
-      ? entrada.equipos_uso.map((u) => ({
-        ...emptyUso(),
-        ...u,
-        hora_inicio: String(u.hora_inicio || '').slice(0, 5),
-        hora_fin: String(u.hora_fin || '').slice(0, 5),
-        horas_intermedias: Array.isArray(u.horas_intermedias)
-          ? u.horas_intermedias.map((h) => ({
-            hora: String(h.hora || '').slice(0, 5),
-            nota: h.nota || '',
-          }))
-          : [],
-      }))
+      ? entrada.equipos_uso.map(usoFromApi)
       : [emptyUso()],
   )
+  const [materiales, setMateriales] = useState(
+    Array.isArray(entrada?.materiales) && entrada.materiales.length
+      ? entrada.materiales.map((m) => ({
+        tipo_material: m.tipo_material || '',
+        proveedor: m.proveedor || '',
+        vales: Array.isArray(m.vales) ? m.vales : [],
+      }))
+      : [emptyMaterial()],
+  )
   const [eventoTipo, setEventoTipo] = useState(entrada?.evento_tipo || 'reporte_actividades')
+  const [dirigidoA, setDirigidoA] = useState(entrada?.dirigido_a || '')
   const [eventoDetalle, setEventoDetalle] = useState(
     entrada?.evento_detalle && typeof entrada.evento_detalle === 'object'
       ? { ...emptyEventoDetalle(entrada.evento_tipo), ...entrada.evento_detalle }
@@ -121,31 +144,45 @@ export default function BitacoraEntradaEditor({
     setEventoDetalle((d) => ({ ...emptyEventoDetalle(eventoTipo), ...d }))
   }, [eventoTipo])
 
-  const inp = {
-    background: t.bg,
-    color: t.text,
-    border: `1px solid ${t.border}`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    fontSize: 'var(--cc-sm)',
-    width: '100%',
-    boxSizing: 'border-box',
-  }
-  const label = { fontSize: 'var(--cc-sm)', color: t.textMuted, display: 'flex', flexDirection: 'column', gap: 4 }
   const btnPrimary = {
-    background: t.primary, color: '#fff', border: 'none', borderRadius: 8,
-    padding: '8px 14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1,
+    background: t.primary, color: '#fff', border: 'none', borderRadius: 6,
+    padding: '7px 12px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
+    opacity: busy ? 0.7 : 1, fontSize: 'var(--cc-sm)',
   }
   const btnGhost = {
-    background: t.bg, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8,
-    padding: '8px 14px', fontWeight: 600, cursor: 'pointer',
+    background: t.bg, color: t.text, border: `1px solid ${t.border}`, borderRadius: 6,
+    padding: '7px 12px', fontWeight: 600, cursor: 'pointer', fontSize: 'var(--cc-sm)',
   }
+
+  const personalCols = personalEnColumnas(personal)
+  const maxRowsPersonal = Math.max(...personalCols.map((c) => c.length), 0)
 
   const setPersonalCantidad = (cargo, cantidad) => {
     setPersonal((rows) => rows.map((r) => (
       r.cargo === cargo ? { ...r, cantidad: Number(cantidad) || 0 } : r
     )))
   }
+
+  const buildUsosPayload = () => usos
+    .filter((u) => String(u.equipo_nombre || '').trim())
+    .map((u, i) => {
+      const inter = String(u.hora_intermedia || '').trim()
+      const horas = inter
+        ? [{ hora: inter, ...(u.horas_intermedias?.[0]?.nota ? { nota: u.horas_intermedias[0].nota } : {}) }]
+        : []
+      return {
+        equipo_id: u.equipo_id,
+        equipo_nombre: u.equipo_nombre,
+        tipo: u.tipo || 'equipo',
+        operador: u.operador || '',
+        cantidad: Number(u.cantidad) || 1,
+        hora_inicio: u.hora_inicio || null,
+        hora_fin: u.hora_fin || null,
+        horas_intermedias: horas,
+        preoperacionales: u.preoperacionales || [],
+        orden: i,
+      }
+    })
 
   const guardarDiario = async ({ cerrar = false } = {}) => {
     setBusy(true)
@@ -159,25 +196,20 @@ export default function BitacoraEntradaEditor({
           cantidad: Number(p.cantidad) || 0,
           ...(p.cargo === 'Otro' && p.cargo_otro ? { cargo_otro: p.cargo_otro } : {}),
         }))
-      const usosPayload = usos
-        .filter((u) => String(u.equipo_nombre || '').trim())
-        .map((u, i) => ({
-          equipo_id: u.equipo_id,
-          equipo_nombre: u.equipo_nombre,
-          tipo: u.tipo || 'equipo',
-          operador: u.operador || '',
-          cantidad: Number(u.cantidad) || 1,
-          hora_inicio: u.hora_inicio || null,
-          hora_fin: u.hora_fin || null,
-          horas_intermedias: (u.horas_intermedias || []).filter((h) => h.hora),
-          orden: i,
+      const materialesPayload = materiales
+        .filter((m) => m.tipo_material || m.proveedor || (m.vales || []).length)
+        .map((m) => ({
+          tipo_material: m.tipo_material || '',
+          proveedor: m.proveedor || '',
+          vales: m.vales || [],
         }))
       const payload = {
         fecha,
         hora_inicio_labores: horaInicio || null,
         ...clima,
         personal: personalPayload,
-        equipos_uso: usosPayload,
+        equipos_uso: buildUsosPayload(),
+        materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
       }
       let row
@@ -187,7 +219,6 @@ export default function BitacoraEntradaEditor({
       } else {
         row = await api.updateBitacoraEntrada(localId, payload)
       }
-      // Subir pendientes
       const pending = (imagenes || []).filter((im) => im.pending && im.data_uri)
       for (const im of pending) {
         row = await api.pegarImagenBitacora(row.id, {
@@ -221,10 +252,11 @@ export default function BitacoraEntradaEditor({
       if (isRichTextEmpty(cuerpoHtml) && eventoTipo === 'reporte_actividades') {
         throw new Error('Describa las actividades del día en el texto libre')
       }
-      let row = await api.createBitacoraEvento({
+      const row = await api.createBitacoraEvento({
         fecha,
         evento_tipo: eventoTipo,
         evento_detalle: eventoDetalle,
+        dirigido_a: eventoTieneDestinatario(eventoTipo) ? dirigidoA : '',
         cuerpo_html: cuerpoHtml,
         imagenes: (imagenes || [])
           .filter((im) => im.data_uri || im.data_base64 || im.blob_path || im.url)
@@ -252,88 +284,93 @@ export default function BitacoraEntradaEditor({
     ? (esNuevo ? 'Nuevo Reporte de Evento' : `Evento · ${labelEventoTipo(entrada?.evento_tipo)}`)
     : (esNuevo ? 'Nuevo Reporte Diario' : `Reporte Diario · ${entrada?.fecha || fecha}`)
 
+  const fechaRo = tipo === 'diario' || !esNuevo
+
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 11000,
       background: 'rgba(15,23,42,0.45)',
-      display: 'grid', placeItems: 'center', padding: 12,
+      display: 'grid', placeItems: 'center', padding: 10,
     }}>
       <div style={{
-        width: 'min(920px, 100%)', maxHeight: '92vh', overflow: 'auto',
-        background: t.bgCard, borderRadius: 14, border: `1px solid ${t.border}`,
+        width: 'min(1180px, 100%)',
+        maxHeight: '94vh',
+        overflow: 'auto',
+        background: t.bgCard,
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
         boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
       }}>
         <div style={{
-          position: 'sticky', top: 0, zIndex: 2,
-          display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
+          position: 'sticky', top: 0, zIndex: 3,
+          display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '14px 16px',
+          padding: '10px 12px',
           borderBottom: `1px solid ${t.border}`,
           background: t.bgCard,
         }}>
           <div>
-            <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-h2)' }}>{titulo}</div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+            <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-title)' }}>{titulo}</div>
+            <div style={{ fontSize: 11, color: t.textMuted }}>
               {tipo === 'diario'
-                ? (editable
-                  ? 'Puede complementar mientras esté abierto. Al cerrar queda inmutable.'
-                  : 'Cerrado / bloqueado — solo lectura (excepto Desarrollador).')
-                : 'Inmutable desde su creación.'}
+                ? (editable ? 'Abierto — complementable hasta cerrar' : 'Cerrado / bloqueado — solo lectura')
+                : 'Inmutable desde su creación'}
             </div>
           </div>
           <button type="button" onClick={onClose} style={btnGhost}>Cerrar</button>
         </div>
 
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {error && (
             <div style={{
               background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA',
-              borderRadius: 8, padding: '8px 10px', fontSize: 'var(--cc-sm)',
+              borderRadius: 6, padding: '6px 8px', fontSize: 12,
             }}>{error}</div>
           )}
           {okMsg && (
             <div style={{
               background: '#ECFDF5', color: '#065F46', border: '1px solid #A7F3D0',
-              borderRadius: 8, padding: '8px 10px', fontSize: 'var(--cc-sm)',
+              borderRadius: 6, padding: '6px 8px', fontSize: 12,
             }}>{okMsg}</div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-            <label style={label}>
-              Fecha
-              <input
-                type="date"
-                disabled={!editable || (tipo === 'diario' && localId != null)}
-                value={fecha}
-                onChange={(e) => setFecha(e.target.value)}
-                style={inp}
-              />
-            </label>
+          {/* Panel superior: fecha | hora | clima */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'stretch' }}>
+            <div style={{ ...ui.sheetWrap, width: 118, flexShrink: 0 }}>
+              <table style={ui.sheetTable}>
+                <thead>
+                  <tr><th style={ui.th}>Fecha</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={ui.td}>
+                      {fechaRo ? (
+                        <div style={ui.cellRo}>{fecha}</div>
+                      ) : (
+                        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={ui.cellInp} />
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             {tipo === 'diario' && (
-              <label style={label}>
-                Hora inicio de labores
-                <input
-                  type="time"
-                  disabled={!editable}
-                  value={horaInicio}
-                  onChange={(e) => setHoraInicio(e.target.value)}
-                  style={inp}
-                />
-              </label>
+              <div style={{ ...ui.sheetWrap, width: 90, flexShrink: 0 }}>
+                <table style={ui.sheetTable}>
+                  <thead>
+                    <tr><th style={ui.th}>Hora</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={ui.td}>
+                        <div style={ui.cellRo}>{horaInicio || '—'}</div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             )}
-            {entrada?.created_by_nombre && (
-              <label style={label}>
-                Registrado por
-                <div style={{ ...inp, background: t.bgCard }}>
-                  {entrada.created_by_nombre}
-                  {entrada.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
-                </div>
-              </label>
-            )}
-          </div>
-
-          {tipo === 'diario' && (
-            <>
+            {tipo === 'diario' && (
               <BitacoraClimaField
                 t={t}
                 contratoId={contratoId}
@@ -341,360 +378,482 @@ export default function BitacoraEntradaEditor({
                 value={clima}
                 onChange={setClima}
                 disabled={!editable}
+                compact
               />
-
+            )}
+            {entrada?.created_by_nombre && (
               <div style={{
-                border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, background: t.bg,
+                ...ui.sheetWrap, flex: '1 1 160px', display: 'flex',
+                alignItems: 'center', padding: '0 8px', fontSize: 12, color: t.textMuted,
               }}>
-                <div style={{ fontWeight: 700, color: t.text, marginBottom: 10 }}>Personal en obra (por cantidad)</div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  {personal.map((row) => (
-                    <div key={row.cargo} style={{
-                      display: 'grid',
-                      gridTemplateColumns: row.cargo === 'Otro' ? '1fr 1fr 100px' : '1fr 100px',
-                      gap: 8, alignItems: 'center',
-                    }}>
-                      <div style={{ color: t.text, fontSize: 'var(--cc-sm)', fontWeight: 600 }}>{row.cargo}</div>
-                      {row.cargo === 'Otro' && (
-                        <input
-                          disabled={!editable}
-                          placeholder="¿Cuál?"
-                          value={row.cargo_otro || ''}
-                          onChange={(e) => setPersonal((rows) => rows.map((r) => (
-                            r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
-                          )))}
-                          style={inp}
-                        />
-                      )}
-                      <input
-                        type="number"
-                        min={0}
-                        disabled={!editable}
-                        value={row.cantidad}
-                        onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
-                        style={inp}
-                      />
-                    </div>
-                  ))}
+                {entrada.created_by_nombre}
+                {entrada.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
+              </div>
+            )}
+          </div>
+
+          {tipo === 'diario' && (
+            <>
+              {/* Personal 3 columnas Excel */}
+              <div>
+                <div style={ui.sectionTitle}>Personal en obra</div>
+                <div style={ui.sheetWrap}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr>
+                        {[0, 1, 2].map((c) => (
+                          <th key={`h${c}`} colSpan={2} style={{ ...ui.th, textAlign: 'center' }}>
+                            Col. {c + 1}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {[0, 1, 2].map((c) => (
+                          <Fragment key={`hh${c}`}>
+                            <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
+                            <th style={{ ...ui.th, width: '7%', textAlign: 'center' }}>Cant.</th>
+                          </Fragment>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: maxRowsPersonal }).map((_, ri) => (
+                        <tr key={`pr${ri}`}>
+                          {[0, 1, 2].map((ci) => {
+                            const row = personalCols[ci][ri]
+                            if (!row) {
+                              return (
+                                <Fragment key={`e${ci}-${ri}`}>
+                                  <td style={ui.td} />
+                                  <td style={ui.td} />
+                                </Fragment>
+                              )
+                            }
+                            return (
+                              <Fragment key={`${row.cargo}-${ri}`}>
+                                <td style={ui.td}>
+                                  {row.cargo === 'Otro' && editable ? (
+                                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                      <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
+                                      <input
+                                        value={row.cargo_otro || ''}
+                                        placeholder="¿Cuál?"
+                                        onChange={(e) => setPersonal((rows) => rows.map((r) => (
+                                          r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
+                                        )))}
+                                        style={ui.cellInp}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
+                                  )}
+                                </td>
+                                <td style={{ ...ui.td, textAlign: 'center' }}>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    disabled={!editable}
+                                    value={row.cantidad}
+                                    onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
+                                    style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
+                                  />
+                                </td>
+                              </Fragment>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                  Cargos: {CARGOS_PERSONAL.join(', ')}. Sin identificación individual por nombre.
+                <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
+                  {CARGOS_PERSONAL.length} cargos · registro solo por cantidad
                 </div>
               </div>
 
-              <div style={{
-                border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, background: t.bg,
-              }}>
+              {/* Maquinaria Excel */}
+              <div>
                 <div style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: 10, gap: 8, flexWrap: 'wrap',
+                  marginBottom: 6, gap: 8,
                 }}>
-                  <div style={{ fontWeight: 700, color: t.text }}>Maquinaria, equipos y volquetas</div>
+                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Maquinaria, equipos y volquetas</div>
                   {editable && (
                     <button type="button" onClick={() => setUsos((u) => [...u, emptyUso()])} style={btnGhost}>
-                      + Agregar equipo
+                      + Fila
                     </button>
                   )}
                 </div>
-                {usos.map((u, idx) => (
-                  <div key={idx} style={{
-                    border: `1px solid ${t.border}`, borderRadius: 10, padding: 10,
-                    marginBottom: 10, background: t.bgCard,
-                  }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-                      <label style={label}>
-                        Equipo / máquina
-                        <EquipoCatalogSelect
-                          t={t}
-                          api={api}
-                          disabled={!editable}
-                          value={u.equipo_nombre}
-                          equipoId={u.equipo_id}
-                          onChange={(sel) => setUsos((rows) => rows.map((r, i) => (
-                            i === idx ? { ...r, ...sel } : r
-                          )))}
-                        />
-                      </label>
-                      <label style={label}>
-                        Operador
-                        <input
-                          disabled={!editable}
-                          value={u.operador || ''}
-                          onChange={(e) => setUsos((rows) => rows.map((r, i) => (
-                            i === idx ? { ...r, operador: e.target.value } : r
-                          )))}
-                          style={inp}
-                        />
-                      </label>
-                      <label style={label}>
-                        Cantidad
-                        <input
-                          type="number"
-                          min={0.1}
-                          step={0.1}
-                          disabled={!editable}
-                          value={u.cantidad}
-                          onChange={(e) => setUsos((rows) => rows.map((r, i) => (
-                            i === idx ? { ...r, cantidad: e.target.value } : r
-                          )))}
-                          style={inp}
-                        />
-                      </label>
-                      <label style={label}>
-                        Hora inicio
-                        <input
-                          type="time"
-                          disabled={!editable}
-                          value={u.hora_inicio || ''}
-                          onChange={(e) => setUsos((rows) => rows.map((r, i) => (
-                            i === idx ? { ...r, hora_inicio: e.target.value } : r
-                          )))}
-                          style={inp}
-                        />
-                      </label>
-                      <label style={label}>
-                        Hora fin
-                        <input
-                          type="time"
-                          disabled={!editable}
-                          value={u.hora_fin || ''}
-                          onChange={(e) => setUsos((rows) => rows.map((r, i) => (
-                            i === idx ? { ...r, hora_fin: e.target.value } : r
-                          )))}
-                          style={inp}
-                        />
-                      </label>
-                    </div>
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 6 }}>
-                        Horas intermedias (paradas durante la jornada)
-                      </div>
-                      {(u.horas_intermedias || []).map((h, hi) => (
-                        <div key={hi} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                          <input
-                            type="time"
-                            disabled={!editable}
-                            value={h.hora || ''}
-                            onChange={(e) => setUsos((rows) => rows.map((r, i) => {
-                              if (i !== idx) return r
-                              const horas = [...(r.horas_intermedias || [])]
-                              horas[hi] = { ...horas[hi], hora: e.target.value }
-                              return { ...r, horas_intermedias: horas }
-                            }))}
-                            style={{ ...inp, maxWidth: 140 }}
-                          />
-                          <input
-                            disabled={!editable}
-                            placeholder="Nota (opcional)"
-                            value={h.nota || ''}
-                            onChange={(e) => setUsos((rows) => rows.map((r, i) => {
-                              if (i !== idx) return r
-                              const horas = [...(r.horas_intermedias || [])]
-                              horas[hi] = { ...horas[hi], nota: e.target.value }
-                              return { ...r, horas_intermedias: horas }
-                            }))}
-                            style={inp}
-                          />
+                <div style={ui.sheetWrap}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...ui.th, width: '22%' }}>Equipo / máquina</th>
+                        <th style={{ ...ui.th, width: '16%' }}>Operador</th>
+                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '10%' }}>Hora inicio</th>
+                        <th style={{ ...ui.th, width: '10%' }}>Hora fin</th>
+                        <th style={{ ...ui.th, width: '10%' }}>Hora interm.</th>
+                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Preop.</th>
+                        {editable && <th style={{ ...ui.th, width: '6%' }} />}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {usos.map((u, idx) => (
+                        <tr key={`uso-${idx}`}>
+                          <td style={ui.td}>
+                            <EquipoCatalogSelect
+                              t={t}
+                              api={api}
+                              disabled={!editable}
+                              value={u.equipo_nombre}
+                              equipoId={u.equipo_id}
+                              onChange={(sel) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, ...sel } : r
+                              )))}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable}
+                              value={u.operador || ''}
+                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, operador: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              type="number"
+                              min={0.1}
+                              step={0.1}
+                              disabled={!editable}
+                              value={u.cantidad}
+                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, cantidad: e.target.value } : r
+                              )))}
+                              style={{ ...ui.cellInp, textAlign: 'center' }}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              type="time"
+                              disabled={!editable}
+                              value={u.hora_inicio || ''}
+                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, hora_inicio: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              type="time"
+                              disabled={!editable}
+                              value={u.hora_fin || ''}
+                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, hora_fin: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              type="time"
+                              disabled={!editable}
+                              value={u.hora_intermedia || ''}
+                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, hora_intermedia: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                            <BitacoraClipAdjuntos
+                              t={t}
+                              files={u.preoperacionales || []}
+                              disabled={!editable}
+                              title="Escáner preoperacionales"
+                              onChange={(files) => setUsos((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, preoperacionales: files } : r
+                              )))}
+                            />
+                          </td>
                           {editable && (
-                            <button
-                              type="button"
-                              onClick={() => setUsos((rows) => rows.map((r, i) => {
-                                if (i !== idx) return r
-                                return {
-                                  ...r,
-                                  horas_intermedias: (r.horas_intermedias || []).filter((_, j) => j !== hi),
-                                }
-                              }))}
-                              style={btnGhost}
-                            >
-                              Quitar
-                            </button>
+                            <td style={{ ...ui.td, textAlign: 'center' }}>
+                              {usos.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setUsos((rows) => rows.filter((_, i) => i !== idx))}
+                                  style={{ ...ui.clipBtn, color: '#B91C1C' }}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </td>
                           )}
-                        </div>
+                        </tr>
                       ))}
-                      {editable && (
-                        <button
-                          type="button"
-                          onClick={() => setUsos((rows) => rows.map((r, i) => (
-                            i === idx
-                              ? { ...r, horas_intermedias: [...(r.horas_intermedias || []), { hora: '', nota: '' }] }
-                              : r
-                          )))}
-                          style={btnGhost}
-                        >
-                          + Hora intermedia
-                        </button>
-                      )}
-                    </div>
-                    {editable && usos.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setUsos((rows) => rows.filter((_, i) => i !== idx))}
-                        style={{ ...btnGhost, marginTop: 8, color: '#B91C1C' }}
-                      >
-                        Quitar equipo
-                      </button>
-                    )}
-                  </div>
-                ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Materiales Excel */}
+              <div>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  marginBottom: 6, gap: 8,
+                }}>
+                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Llegada de materiales de obra</div>
+                  {editable && (
+                    <button type="button" onClick={() => setMateriales((m) => [...m, emptyMaterial()])} style={btnGhost}>
+                      + Fila
+                    </button>
+                  )}
+                </div>
+                <div style={ui.sheetWrap}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...ui.th, width: '40%' }}>Tipo de material</th>
+                        <th style={{ ...ui.th, width: '35%' }}>Proveedor</th>
+                        <th style={{ ...ui.th, width: '18%', textAlign: 'center' }}>Nº / vales</th>
+                        {editable && <th style={{ ...ui.th, width: '7%' }} />}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {materiales.map((m, idx) => (
+                        <tr key={`mat-${idx}`}>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable}
+                              value={m.tipo_material}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, tipo_material: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                              placeholder="Ej. Concreto 3000 PSI"
+                            />
+                          </td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable}
+                              value={m.proveedor}
+                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, proveedor: e.target.value } : r
+                              )))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                            <BitacoraClipAdjuntos
+                              t={t}
+                              files={m.vales || []}
+                              disabled={!editable}
+                              title="Adjuntar vales (múltiples)"
+                              onChange={(files) => setMateriales((rows) => rows.map((r, i) => (
+                                i === idx ? { ...r, vales: files } : r
+                              )))}
+                            />
+                          </td>
+                          {editable && (
+                            <td style={{ ...ui.td, textAlign: 'center' }}>
+                              {materiales.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setMateriales((rows) => rows.filter((_, i) => i !== idx))}
+                                  style={{ ...ui.clipBtn, color: '#B91C1C' }}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </>
           )}
 
           {tipo === 'evento' && (
             <>
-              <label style={label}>
-                Tipo de evento
-                <select
-                  disabled={!esNuevo}
-                  value={eventoTipo}
-                  onChange={(e) => {
-                    setEventoTipo(e.target.value)
-                    setEventoDetalle(emptyEventoDetalle(e.target.value))
-                  }}
-                  style={inp}
-                >
-                  {EVENTO_TIPOS.map((x) => (
-                    <option key={x.value} value={x.value}>{x.label}</option>
-                  ))}
-                </select>
-              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ ...ui.sheetWrap, flex: '1 1 240px' }}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr><th style={ui.th}>Tipo de evento</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style={ui.td}>
+                          <select
+                            disabled={!esNuevo}
+                            value={eventoTipo}
+                            onChange={(e) => {
+                              setEventoTipo(e.target.value)
+                              setEventoDetalle(emptyEventoDetalle(e.target.value))
+                            }}
+                            style={{ ...ui.cellInp, height: 30 }}
+                          >
+                            {EVENTO_TIPOS.map((x) => (
+                              <option key={x.value} value={x.value}>{x.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                {eventoTieneDestinatario(eventoTipo) && (
+                  <div style={{ ...ui.sheetWrap, flex: '1 1 240px' }}>
+                    <table style={ui.sheetTable}>
+                      <thead>
+                        <tr><th style={ui.th}>A quién se dirige</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable && !esNuevo}
+                              value={dirigidoA}
+                              onChange={(e) => setDirigidoA(e.target.value)}
+                              placeholder="Destinatario…"
+                              style={ui.cellInp}
+                            />
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
               {eventoTipo === 'incidente_sst' && (
-                <div style={{
-                  border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, background: t.bg,
-                  display: 'grid', gap: 8,
-                }}>
-                  <div style={{ fontWeight: 700, color: t.text }}>
-                    Incidente de seguridad (SST)
-                    <span style={{ fontWeight: 500, color: t.textMuted, marginLeft: 8, fontSize: 'var(--cc-sm)' }}>
-                      Independiente del módulo Auditor SST (IA)
-                    </span>
-                  </div>
-                  {[
-                    ['descripcion_incidente', 'Descripción del incidente'],
-                    ['lugar', 'Lugar'],
-                    ['personas_involucradas', 'Personas involucradas'],
-                    ['acciones_inmediatas', 'Acciones inmediatas'],
-                  ].map(([key, lab]) => (
-                    <label key={key} style={label}>
-                      {lab}
-                      <textarea
-                        disabled={!editable && !esNuevo}
-                        rows={key === 'descripcion_incidente' || key === 'acciones_inmediatas' ? 3 : 2}
-                        value={eventoDetalle[key] || ''}
-                        onChange={(e) => setEventoDetalle((d) => ({ ...d, [key]: e.target.value }))}
-                        style={{ ...inp, resize: 'vertical' }}
-                      />
-                    </label>
-                  ))}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    <label style={label}>
-                      Gravedad
-                      <select
-                        disabled={!editable && !esNuevo}
-                        value={eventoDetalle.gravedad || 'leve'}
-                        onChange={(e) => setEventoDetalle((d) => ({ ...d, gravedad: e.target.value }))}
-                        style={inp}
-                      >
-                        <option value="leve">Leve</option>
-                        <option value="moderada">Moderada</option>
-                        <option value="grave">Grave</option>
-                      </select>
-                    </label>
-                    <label style={{
-                      ...label, flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 22,
-                    }}>
-                      <input
-                        type="checkbox"
-                        disabled={!editable && !esNuevo}
-                        checked={Boolean(eventoDetalle.requiere_seguimiento)}
-                        onChange={(e) => setEventoDetalle((d) => ({
-                          ...d, requiere_seguimiento: e.target.checked,
-                        }))}
-                      />
-                      Requiere seguimiento
-                    </label>
-                  </div>
+                <div style={ui.sheetWrap}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th} colSpan={2}>Incidente SST (independiente de Auditor SST IA)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        ['descripcion_incidente', 'Descripción'],
+                        ['lugar', 'Lugar'],
+                        ['personas_involucradas', 'Personas involucradas'],
+                        ['acciones_inmediatas', 'Acciones inmediatas'],
+                      ].map(([key, lab]) => (
+                        <tr key={key}>
+                          <td style={{ ...ui.td, width: '22%', fontWeight: 600, fontSize: 12 }}>{lab}</td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable && !esNuevo}
+                              value={eventoDetalle[key] || ''}
+                              onChange={(e) => setEventoDetalle((d) => ({ ...d, [key]: e.target.value }))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td style={{ ...ui.td, fontWeight: 600, fontSize: 12 }}>Gravedad</td>
+                        <td style={ui.td}>
+                          <select
+                            disabled={!editable && !esNuevo}
+                            value={eventoDetalle.gravedad || 'leve'}
+                            onChange={(e) => setEventoDetalle((d) => ({ ...d, gravedad: e.target.value }))}
+                            style={{ ...ui.cellInp, height: 30 }}
+                          >
+                            <option value="leve">Leve</option>
+                            <option value="moderada">Moderada</option>
+                            <option value="grave">Grave</option>
+                          </select>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               )}
 
               {eventoTipo === 'visita_terceros' && (
-                <div style={{
-                  border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, background: t.bg,
-                  display: 'grid', gap: 8,
-                }}>
-                  {[
-                    ['visitantes', 'Visitantes'],
-                    ['entidad', 'Entidad / empresa'],
-                    ['motivo', 'Motivo de la visita'],
-                  ].map(([key, lab]) => (
-                    <label key={key} style={label}>
-                      {lab}
-                      <input
-                        disabled={!editable && !esNuevo}
-                        value={eventoDetalle[key] || ''}
-                        onChange={(e) => setEventoDetalle((d) => ({ ...d, [key]: e.target.value }))}
-                        style={inp}
-                      />
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              {eventoTipo === 'reporte_actividades' && (
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                  Texto libre de lo ejecutado en obra. Sin relación con cantidades ni SicoeObra.
+                <div style={ui.sheetWrap}>
+                  <table style={ui.sheetTable}>
+                    <tbody>
+                      {[
+                        ['visitantes', 'Visitantes'],
+                        ['entidad', 'Entidad'],
+                        ['motivo', 'Motivo'],
+                      ].map(([key, lab]) => (
+                        <tr key={key}>
+                          <td style={{ ...ui.td, width: '22%', fontWeight: 600, fontSize: 12 }}>{lab}</td>
+                          <td style={ui.td}>
+                            <input
+                              disabled={!editable && !esNuevo}
+                              value={eventoDetalle[key] || ''}
+                              onChange={(e) => setEventoDetalle((d) => ({ ...d, [key]: e.target.value }))}
+                              style={ui.cellInp}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </>
           )}
 
+          {/* Observaciones + adjuntos en una línea */}
           <div>
             <div style={{
               display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-              justifyContent: 'space-between', marginBottom: 8,
+              justifyContent: 'space-between', marginBottom: 6,
             }}>
-              <div style={{ fontWeight: 700, color: t.text }}>
-                {tipo === 'evento' ? 'Texto del reporte' : 'Observaciones / notas del día'}
+              <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
+                {tipo === 'evento' ? 'Texto del reporte' : 'Observaciones'}
               </div>
-              {(editable || esNuevo) && (
-                <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
-                  Redactar con Clara
-                </button>
-              )}
+              <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
+                {(editable || esNuevo) && (
+                  <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
+                    Redactar con Clara
+                  </button>
+                )}
+              </div>
             </div>
             <TemaRichEditor
               t={t}
               value={cuerpoHtml}
               onChange={setCuerpoHtml}
               editable={editable || esNuevo}
-              minHeight={140}
-              placeholder={
-                tipo === 'evento'
-                  ? 'Describa el evento…'
-                  : 'Notas adicionales del reporte diario (opcional)…'
-              }
+              minHeight={110}
+              placeholder={tipo === 'evento' ? 'Describa el evento…' : 'Notas del día (opcional)…'}
             />
+            <div style={{ marginTop: 8 }}>
+              <BitacoraAdjuntos
+                t={t}
+                api={api}
+                imagenes={imagenes}
+                onChange={setImagenes}
+                disabled={!(editable || esNuevo)}
+                entradaId={localId}
+                singleLine
+                onUploadPersisted={localId != null ? async (body) => {
+                  const row = await api.pegarImagenBitacora(localId, body)
+                  setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
+                  onSaved?.(row)
+                } : undefined}
+              />
+            </div>
           </div>
-
-          <BitacoraAdjuntos
-            t={t}
-            api={api}
-            imagenes={imagenes}
-            onChange={setImagenes}
-            disabled={!(editable || esNuevo)}
-            entradaId={localId}
-            onUploadPersisted={localId != null ? async (body) => {
-              const row = await api.pegarImagenBitacora(localId, body)
-              setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
-              onSaved?.(row)
-            } : undefined}
-          />
 
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
-            borderTop: `1px solid ${t.border}`, paddingTop: 12,
+            borderTop: `1px solid ${t.border}`, paddingTop: 10,
           }}>
             {tipo === 'diario' && editable && (
               <>
@@ -705,11 +864,10 @@ export default function BitacoraEntradaEditor({
                   type="button"
                   disabled={busy || localId == null}
                   onClick={() => {
-                    if (!window.confirm('¿Cerrar el Reporte Diario? Quedará inmutable de forma permanente.')) return
+                    if (!window.confirm('¿Cerrar el Reporte Diario? Quedará inmutable.')) return
                     void guardarDiario({ cerrar: true })
                   }}
                   style={{ ...btnPrimary, background: '#0F766E' }}
-                  title={localId == null ? 'Guarde primero el reporte' : 'Equivalente a Marcar como Realizada'}
                 >
                   Cerrar reporte
                 </button>

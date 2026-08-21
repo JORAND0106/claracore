@@ -21,6 +21,13 @@ CARGOS_PERSONAL_PLANTILLA = (
     "Cadenero",
     "Topógrafo",
     "Conductor",
+    "Boal",
+    "Tráficos",
+    "Insp. SST",
+    "Insp. Tráfico",
+    "Ing. Obra",
+    "Ing. SST",
+    "Ing. Ambiental",
     "Otro",
 )
 EVENTO_TIPOS = frozenset({
@@ -184,6 +191,63 @@ def _normalizar_personal(raw) -> List[dict]:
             row["cargo_otro"] = otro
         out.append(row)
     return out
+
+
+def _normalizar_adjuntos_flex(raw, *, max_n: int = 20) -> List[dict]:
+    """Adjuntos genéricos (vales, preoperacionales) sin tope de fotos de bitácora."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        ref = _normalizar_imagen_ref(item) if isinstance(item, dict) else None
+        if ref:
+            out.append(ref)
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def _normalizar_materiales(raw) -> List[dict]:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        tipo = str(item.get("tipo_material") or item.get("tipo") or "").strip()
+        proveedor = str(item.get("proveedor") or "").strip()
+        vales = _normalizar_adjuntos_flex(item.get("vales") or [])
+        if not tipo and not proveedor and not vales:
+            continue
+        out.append({
+            "tipo_material": tipo,
+            "proveedor": proveedor,
+            "vales": vales,
+        })
+    return out
+
+
+def _persist_adjuntos_sin_data_uri(refs: List[dict]) -> List[dict]:
+    store = []
+    for im in refs:
+        if not isinstance(im, dict):
+            continue
+        row = {
+            "nombre": im.get("nombre"),
+            "blob_path": im.get("blob_path"),
+            "mime_type": im.get("mime_type"),
+            "created_at": im.get("created_at"),
+            "origen": im.get("origen"),
+            "kind": im.get("kind") or "adjunto",
+        }
+        if im.get("content_hash"):
+            row["content_hash"] = im["content_hash"]
+        if not row.get("blob_path") and im.get("data_uri"):
+            row["data_uri"] = im["data_uri"]
+        if im.get("url") and not row.get("blob_path"):
+            row["url"] = im["url"]
+        store.append(row)
+    return store
 
 
 def _normalizar_horas_intermedias(raw) -> List[dict]:
@@ -511,10 +575,18 @@ def _sync_usos(
             "hora_inicio": _parse_hora(item.get("hora_inicio")),
             "hora_fin": _parse_hora(item.get("hora_fin")),
             "horas_intermedias": _normalizar_horas_intermedias(item.get("horas_intermedias")),
+            "preoperacionales": _persist_adjuntos_sin_data_uri(
+                _normalizar_adjuntos_flex(item.get("preoperacionales") or [])
+            ),
             "orden": int(item.get("orden") if item.get("orden") is not None else i),
             "created_at": _now_utc().isoformat(),
         }
-        inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
+        try:
+            inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
+        except Exception:
+            # Columna preoperacionales puede no existir aún
+            payload.pop("preoperacionales", None)
+            inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
         if inserted:
             rows_out.append(inserted[0])
     return rows_out
@@ -527,9 +599,20 @@ def _enrich_entrada(sb, row: dict) -> dict:
         _enrich_imagen_preview(x) or x
         for x in _normalizar_imagenes(out.get("imagenes"))
     ]
+    mats = _normalizar_materiales(out.get("materiales"))
+    for m in mats:
+        m["vales"] = [_enrich_imagen_preview(v) or v for v in (m.get("vales") or [])]
+    out["materiales"] = mats
+    out["dirigido_a"] = str(out.get("dirigido_a") or "").strip()
     if not isinstance(out.get("evento_detalle"), dict):
         out["evento_detalle"] = {}
-    out["equipos_uso"] = _list_usos(sb, int(out["id"])) if out.get("id") is not None else []
+    usos = _list_usos(sb, int(out["id"])) if out.get("id") is not None else []
+    for u in usos:
+        pre = u.get("preoperacionales") if isinstance(u.get("preoperacionales"), list) else []
+        u["preoperacionales"] = [
+            _enrich_imagen_preview(x) or x for x in _normalizar_adjuntos_flex(pre)
+        ]
+    out["equipos_uso"] = usos
     out["inmutable"] = entrada_esta_cerrada(out) or str(out.get("tipo") or "") == "evento"
     out["puede_autocerrar"] = _debe_autocerrar(out)
     if out.get("clima_codigo") is not None and not out.get("clima_descripcion"):
@@ -574,6 +657,7 @@ def list_entradas(
                 str(enriched.get("evento_tipo") or ""),
                 str(enriched.get("created_by_nombre") or ""),
                 str(enriched.get("clima_descripcion") or ""),
+                str(enriched.get("dirigido_a") or ""),
             ]).lower()
             if needle and needle not in blob:
                 continue
@@ -671,6 +755,13 @@ def crear_reporte_diario(
         "clima_descripcion": clima_desc or None,
         "clima_editado_manual": bool(data.get("clima_editado_manual")),
         "personal": _normalizar_personal(data.get("personal")),
+        "materiales": [
+            {
+                **m,
+                "vales": _persist_adjuntos_sin_data_uri(m.get("vales") or []),
+            }
+            for m in _normalizar_materiales(data.get("materiales"))
+        ],
         "cuerpo_html": str(data.get("cuerpo_html") or ""),
         "imagenes": [],
         "created_by": int(user_id),
@@ -679,7 +770,11 @@ def crear_reporte_diario(
         "created_at": _now_utc().isoformat(),
         "updated_at": _now_utc().isoformat(),
     }
-    inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+    try:
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+    except Exception:
+        payload.pop("materiales", None)
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
     if not inserted:
         raise ValueError("No se pudo crear el Reporte Diario")
     entrada = inserted[0]
@@ -735,6 +830,7 @@ def crear_reporte_evento(
         "cierre_motivo": "creacion_evento",
         "evento_tipo": evento_tipo,
         "evento_detalle": detalle,
+        "dirigido_a": str(data.get("dirigido_a") or "").strip() or None,
         "cuerpo_html": str(data.get("cuerpo_html") or ""),
         "imagenes": [],
         "personal": [],
@@ -746,7 +842,11 @@ def crear_reporte_evento(
         "created_at": _now_utc().isoformat(),
         "updated_at": _now_utc().isoformat(),
     }
-    inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+    try:
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+    except Exception:
+        payload.pop("dirigido_a", None)
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
     if not inserted:
         raise ValueError("No se pudo crear el Reporte de Evento")
     entrada_id = int(inserted[0]["id"])
@@ -859,6 +959,12 @@ def update_entrada(
             patch["clima_editado_manual"] = bool(data.get("clima_editado_manual"))
         if "personal" in data:
             patch["personal"] = _normalizar_personal(data.get("personal"))
+        if "materiales" in data:
+            mats = _normalizar_materiales(data.get("materiales"))
+            patch["materiales"] = [
+                {**m, "vales": _persist_adjuntos_sin_data_uri(m.get("vales") or [])}
+                for m in mats
+            ]
         if "equipos_uso" in data or "maquinaria" in data:
             usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
             _sync_usos(sb, contrato_id, entrada_id, usos or [], user_id=user_id)
@@ -870,6 +976,8 @@ def update_entrada(
             et = str(data.get("evento_tipo") or "").strip()
             if et in EVENTO_TIPOS:
                 patch["evento_tipo"] = et
+        if "dirigido_a" in data:
+            patch["dirigido_a"] = str(data.get("dirigido_a") or "").strip() or None
 
     if "imagenes" in data:
         imgs = _normalizar_imagenes(data.get("imagenes"))

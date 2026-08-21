@@ -4,6 +4,11 @@ import {
   accesoBitacora,
   puedeEditarEntradaBitacora,
 } from './bitacoraPermisos.js'
+import {
+  eventoTieneDestinatario,
+  personalEnColumnas,
+  personalPlantillaVacia,
+} from './bitacoraConstants.js'
 
 describe('bitacoraPermisos', () => {
   it('desarrollador tiene todos los permisos', () => {
@@ -50,5 +55,21 @@ describe('bitacoraPermisos', () => {
       { tipo: 'diario', estado: 'cerrado' },
       { editar: true, esDesarrollador: true },
     ), true)
+  })
+})
+
+describe('bitacoraConstants excel redesign', () => {
+  it('incluye cargos nuevos en plantilla', () => {
+    const rows = personalPlantillaVacia()
+    const cargos = rows.map((r) => r.cargo)
+    for (const c of ['Boal', 'Tráficos', 'Insp. SST', 'Insp. Tráfico', 'Ing. Obra', 'Ing. SST', 'Ing. Ambiental']) {
+      assert.ok(cargos.includes(c), `falta cargo ${c}`)
+    }
+    assert.equal(personalEnColumnas(rows).length, 3)
+  })
+
+  it('eventoTieneDestinatario según tipo', () => {
+    assert.equal(eventoTieneDestinatario('visita_terceros'), true)
+    assert.equal(eventoTieneDestinatario('reporte_actividades'), false)
   })
 })
