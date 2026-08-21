@@ -24,6 +24,8 @@ export default function ItemDetalleModal({
   const [comentario, setComentario] = useState('')
   const [justForm, setJustForm] = useState({ motivo: '', nueva_fecha_vencimiento: '' })
   const [pdfUrl, setPdfUrl] = useState(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfError, setPdfError] = useState('')
   const [busy, setBusy] = useState(false)
   const [estadoSel, setEstadoSel] = useState('')
   const [fechaReprog, setFechaReprog] = useState('')
@@ -55,23 +57,44 @@ export default function ItemDetalleModal({
       const d = await api.getItem(itemId)
       applyItem(d)
       setEstadoSel('')
-      const puedeVerActa = d.puede_ver_acta !== false
-        && d.acta?.puede_abrir !== false
-        && d.acta?.acceso_restringido !== true
-      if (d.origen === 'compromiso' && d.acta_id && puedeVerActa) {
-        try {
-          const blob = await api.pdfActaBlob(d.acta_id)
-          if (pdfUrl) URL.revokeObjectURL(pdfUrl)
-          setPdfUrl(URL.createObjectURL(blob))
-        } catch { /* preview opcional */ }
-      } else if (pdfUrl) {
-        URL.revokeObjectURL(pdfUrl)
-        setPdfUrl(null)
-      }
+      // PDF del acta: NO se carga aquí (cuello de botella ~15s). Solo bajo demanda.
+      setPdfUrl((prev) => {
+        if (prev) {
+          try { URL.revokeObjectURL(prev) } catch { /* ignore */ }
+        }
+        return null
+      })
+      setPdfError('')
     } catch (e) {
       setError(e.message || 'Error')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const cargarPdfActa = async () => {
+    if (!item?.acta_id || pdfBusy) return
+    const puedeVerActa = item.puede_ver_acta !== false
+      && item.acta?.puede_abrir !== false
+      && item.acta?.acceso_restringido !== true
+    if (!puedeVerActa) {
+      setPdfError('No tiene permiso para ver el PDF de esta acta.')
+      return
+    }
+    setPdfBusy(true)
+    setPdfError('')
+    try {
+      const blob = await api.pdfActaBlob(item.acta_id)
+      setPdfUrl((prev) => {
+        if (prev) {
+          try { URL.revokeObjectURL(prev) } catch { /* ignore */ }
+        }
+        return URL.createObjectURL(blob)
+      })
+    } catch (e) {
+      setPdfError(e.message || 'No se pudo generar el PDF del acta')
+    } finally {
+      setPdfBusy(false)
     }
   }
 
@@ -497,7 +520,7 @@ export default function ItemDetalleModal({
 
       {(soyCreador || esDev) && permisos?.editar && (
         <section style={{ marginTop: 12 }}>
-          <h4 style={h4(t)}>Asignar o enviar referencia</h4>
+          <h4 style={h4(t)}>Notificar a</h4>
           <UserSearchSelect
             t={t}
             usuarios={usuarios}
@@ -516,7 +539,7 @@ export default function ItemDetalleModal({
               fontSize: 'var(--cc-sm)', color: t.text,
             }}>
               <div style={{ marginBottom: 8 }}>
-                ¿Cómo desea enviar «{item.titulo}» a {nombreUser(destCtx.user)}?
+                ¿Cómo desea notificar «{item.titulo}» a {nombreUser(destCtx.user)}?
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <button type="button" disabled={busy} style={primary(t)} onClick={() => confirmarDestino('asignacion')}>
@@ -544,11 +567,6 @@ export default function ItemDetalleModal({
             const puedeVerActa = item.puede_ver_acta !== false
               && item.acta?.puede_abrir !== false
               && item.acta?.acceso_restringido !== true
-            if (pdfUrl && puedeVerActa) {
-              return (
-                <iframe title="Acta" src={pdfUrl} style={{ width: '100%', height: 280, border: `1px solid ${t.border}`, borderRadius: 8 }} />
-              )
-            }
             const num = item.acta?.consecutivo != null
               ? `Acta Nº ${item.acta.consecutivo}`
               : (item.acta_id ? `Acta #${item.acta_id}` : null)
@@ -562,8 +580,51 @@ export default function ItemDetalleModal({
               )
             }
             return (
-              <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-                {num || 'Sin vista previa de acta'}
+              <div>
+                <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
+                  {num || 'Sin acta vinculada'}
+                </div>
+                {item.acta_id && puedeVerActa && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      disabled={pdfBusy}
+                      onClick={cargarPdfActa}
+                      style={{ ...primary(t), opacity: pdfBusy ? 0.6 : 1 }}
+                      title="Genera la vista previa del PDF solo al pulsar (no al abrir el detalle)"
+                    >
+                      {pdfBusy ? 'Generando PDF…' : (pdfUrl ? 'Actualizar PDF del acta' : 'Ver PDF del acta')}
+                    </button>
+                    {pdfUrl && (
+                      <a
+                        href={pdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary }}
+                      >
+                        Abrir en pestaña
+                      </a>
+                    )}
+                  </div>
+                )}
+                {pdfError && (
+                  <div style={{ marginTop: 8, color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)' }}>
+                    {pdfError}
+                  </div>
+                )}
+                {pdfUrl && (
+                  <iframe
+                    title="Acta"
+                    src={pdfUrl}
+                    style={{
+                      width: '100%',
+                      height: 280,
+                      border: `1px solid ${t.border}`,
+                      borderRadius: 8,
+                      marginTop: 10,
+                    }}
+                  />
+                )}
               </div>
             )
           })()}
