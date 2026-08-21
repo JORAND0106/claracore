@@ -120,7 +120,7 @@ def test_expandir_personal_otro():
     assert "cargo_otro" not in out[1]
 
 
-def test_strip_autocompletar_limpia_vales_y_adjuntos():
+def test_strip_autocompletar_excluye_materiales():
     entrada = {
         "id": 3,
         "fecha": "2026-08-20",
@@ -144,10 +144,9 @@ def test_strip_autocompletar_limpia_vales_y_adjuntos():
     out = svc._strip_para_autocompletar(entrada)
     assert out["personal"][0]["cantidad"] == 4
     assert out["equipos_uso"][0]["preoperacionales"] == []
-    assert out["materiales"][0]["numeros_vale"] == ""
-    assert out["materiales"][0]["adjuntos"] == []
-    assert out["materiales"][0]["placa"] == "XYZ99"
-    assert "fecha" not in out or out.get("fuente_fecha") == "2026-08-20"
+    assert out["equipos_uso"][0]["equipo_nombre"] == "Retro"
+    assert out["materiales"] == []
+    assert out.get("fuente_fecha") == "2026-08-20"
 
 
 def test_asegurar_autocierre_llama_cierre(monkeypatch):

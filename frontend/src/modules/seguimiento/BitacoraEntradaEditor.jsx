@@ -321,22 +321,21 @@ export default function BitacoraEntradaEditor({
     setOkMsg('')
     try {
       const data = await api.plantillaAutocompletarDiario()
-      if (!data || (!data.personal && !data.equipos_uso && !data.materiales)) {
+      if (!data || (!data.personal?.length && !data.equipos_uso?.length)) {
         setError('No hay un Reporte Diario anterior para autocompletar.')
         return
       }
-      // No tocar fecha / hora / clima
+      // No tocar fecha / hora / clima ni materiales
       if (Array.isArray(data.personal)) {
         setPersonal((prev) => mergePersonalPlantilla(prev, data.personal))
       }
       if (Array.isArray(data.equipos_uso) && data.equipos_uso.length) {
         setUsos(data.equipos_uso.map(usoFromApi))
       }
-      if (Array.isArray(data.materiales) && data.materiales.length) {
-        setMateriales(data.materiales.map(materialFromApi))
-      }
+      // Materiales siempre vacíos al autocompletar (movimientos del día)
+      setMateriales([emptyMaterial()])
       const fuente = data.fuente_fecha ? ` (${data.fuente_fecha})` : ''
-      setOkMsg(`Datos cargados desde el reporte anterior${fuente}. Fecha, hora y clima no se modificaron. Puede editar libremente.`)
+      setOkMsg(`Personal y maquinaria cargados desde el reporte anterior${fuente}. Materiales quedan vacíos. Fecha, hora y clima no se modificaron.`)
     } catch (e) {
       setError(e.message || 'No se pudo autocompletar')
     } finally {
@@ -424,7 +423,7 @@ export default function BitacoraEntradaEditor({
                 disabled={autoBusy || busy}
                 onClick={() => void autocompletarDesdeAnterior()}
                 style={btnGhost}
-                title="Carga personal, maquinaria y materiales del último reporte (sin vales ni adjuntos). No modifica fecha, hora ni clima."
+                title="Carga personal y maquinaria del último reporte. Materiales no se autocompletan. No modifica fecha, hora ni clima."
               >
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
