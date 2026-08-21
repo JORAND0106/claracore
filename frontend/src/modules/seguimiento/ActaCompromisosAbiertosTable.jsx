@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { textoCompromisoCelda } from './compromisoTextoCelda'
-import { esEstadoTerminalCompromiso } from './compromisoEstados'
+import { esCompromisoArchivadoRevision } from './compromisoEstados'
 import {
   ESTADOS_GESTION,
   fmtFecha,
@@ -12,7 +12,7 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './segu
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 
 export { textoCompromisoCelda } from './compromisoTextoCelda'
-export { esEstadoTerminalCompromiso } from './compromisoEstados'
+export { esCompromisoArchivadoRevision, esEstadoTerminalCompromiso } from './compromisoEstados'
 
 function iconSvgProps(size = 16) {
   return {
@@ -133,7 +133,8 @@ function rowBg(t, { highlighted } = {}) {
 
 /**
  * Tabla tipo hoja de cálculo reutilizable (compromisos abiertos / presentes).
- * Fondo neutro del tema; ocultación de cumplidos/cancelados con toggle.
+ * Fondo neutro del tema. Ocultación solo por archivado_revision (botón en Compromisos abiertos),
+ * no por el valor del selector de estado de gestión.
  */
 export default function ActaCompromisosAbiertosTable({
   t,
@@ -142,6 +143,8 @@ export default function ActaCompromisosAbiertosTable({
   emptyMessage = 'No hay compromisos abiertos previos de actas del mismo tipo.',
   highlightId = null,
   showActaOrigen = true,
+  /** Solo en pestaña Compromisos abiertos: botón que archiva y oculta de la vista activa. */
+  permitirArchivar = false,
   usuario,
   usuarios = [],
   permisos,
@@ -151,7 +154,7 @@ export default function ActaCompromisosAbiertosTable({
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState('')
   const [panel, setPanel] = useState(null)
-  const [incluirCumplidos, setIncluirCumplidos] = useState(false)
+  const [incluirArchivados, setIncluirArchivados] = useState(false)
   const fileRef = useRef(null)
   const fileTargetIdRef = useRef(null)
   const highlightRowRef = useRef(null)
@@ -161,11 +164,11 @@ export default function ActaCompromisosAbiertosTable({
 
   const visibles = useMemo(() => {
     const list = Array.isArray(items) ? items : []
-    if (incluirCumplidos) return list
-    return list.filter((c) => !esEstadoTerminalCompromiso(c.estado_gestion))
-  }, [items, incluirCumplidos])
+    if (incluirArchivados) return list
+    return list.filter((c) => !esCompromisoArchivadoRevision(c))
+  }, [items, incluirArchivados])
 
-  const ocultosCount = (items || []).length - visibles.length
+  const ocultosCount = (items || []).filter((c) => esCompromisoArchivadoRevision(c)).length
 
   useEffect(() => {
     if (highlightId == null) return undefined
@@ -196,12 +199,12 @@ export default function ActaCompromisosAbiertosTable({
     }
   }
 
-  const patchEstado = async (row, estado) => {
-    if (!estado || estado === row.estado_gestion) return
+  const patchEstado = async (row, estado, extra = {}) => {
+    if (!estado || (estado === row.estado_gestion && !extra.archivar)) return
     setBusyId(row.id)
     setError('')
     try {
-      await api.patchEstado(row.id, estado)
+      await api.patchEstado(row.id, estado, extra)
       await refresh()
     } catch (e) {
       setError(e.message || 'No se pudo actualizar el estado')
@@ -214,7 +217,7 @@ export default function ActaCompromisosAbiertosTable({
     if (!window.confirm('¿Marcar este compromiso como Cumplido? Dejará de mostrarse en la vista activa (sigue en el historial).')) {
       return
     }
-    await patchEstado(row, 'cumplido')
+    await patchEstado(row, 'cumplido', { archivar: true })
   }
 
   const openPanel = (type, item) => setPanel({ type, item })
@@ -222,34 +225,36 @@ export default function ActaCompromisosAbiertosTable({
 
   return (
     <div className="cc-seguim-compromisos-abiertos-table">
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 10,
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-      }}
-      >
-        <label style={{
-          display: 'inline-flex',
+      {permitirArchivar && (
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
           alignItems: 'center',
-          gap: 6,
-          fontSize: 'var(--cc-xs)',
-          color: t.textMuted,
-          cursor: 'pointer',
-          userSelect: 'none',
+          justifyContent: 'space-between',
+          marginBottom: 8,
         }}
         >
-          <input
-            type="checkbox"
-            checked={incluirCumplidos}
-            onChange={(e) => setIncluirCumplidos(e.target.checked)}
-          />
-          Incluir cumplidos / cancelados
-          {ocultosCount > 0 && !incluirCumplidos ? ` (${ocultosCount} archivados)` : ''}
-        </label>
-      </div>
+          <label style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 'var(--cc-xs)',
+            color: t.textMuted,
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+          >
+            <input
+              type="checkbox"
+              checked={incluirArchivados}
+              onChange={(e) => setIncluirArchivados(e.target.checked)}
+            />
+            Incluir archivados
+            {ocultosCount > 0 && !incluirArchivados ? ` (${ocultosCount} ocultos)` : ''}
+          </label>
+        </div>
+      )}
 
       {error && (
         <div style={{
@@ -309,7 +314,7 @@ export default function ActaCompromisosAbiertosTable({
                   ? (c.acta_numero || (c.acta_consecutivo != null ? numeroActaLabel(c.acta_consecutivo) : null))
                   : null
                 const highlighted = highlightId != null && Number(highlightId) === Number(c.id)
-                const terminal = esEstadoTerminalCompromiso(c.estado_gestion)
+                const archivado = esCompromisoArchivadoRevision(c)
                 return (
                   <tr
                     key={c.id}
@@ -325,7 +330,7 @@ export default function ActaCompromisosAbiertosTable({
                     <td data-label="Vence" style={td}>
                       <input
                         type="date"
-                        disabled={!puedeEditar || busy || terminal}
+                        disabled={!puedeEditar || busy || archivado}
                         value={fechaVal}
                         onChange={(e) => patchFecha(c, e.target.value)}
                         title={c.hora_vencimiento ? `Hora: ${String(c.hora_vencimiento).slice(0, 5)}` : 'Fecha de vencimiento'}
@@ -334,10 +339,10 @@ export default function ActaCompromisosAbiertosTable({
                     </td>
                     <td data-label="Estado" style={td}>
                       <select
-                        disabled={!puedeEditar || busy}
+                        disabled={!puedeEditar || busy || archivado}
                         value={c.estado_gestion || 'abierto'}
                         onChange={(e) => patchEstado(c, e.target.value)}
-                        title="Estado de gestión"
+                        title="Estado de gestión (informativo; no archiva ni oculta)"
                         style={cellInp(t)}
                       >
                         {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
@@ -388,16 +393,18 @@ export default function ActaCompromisosAbiertosTable({
                     </td>
                     <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          style={iconBtn(t, { accent: !terminal })}
-                          title={terminal ? 'Ya está cumplido/cancelado' : 'Marcar como cumplido (archivar de la vista activa)'}
-                          aria-label="Marcar cumplido"
-                          disabled={busy || !puedeEditar || terminal}
-                          onClick={() => marcarCumplido(c)}
-                        >
-                          <IconCheck />
-                        </button>
+                        {permitirArchivar && (
+                          <button
+                            type="button"
+                            style={iconBtn(t, { accent: !archivado })}
+                            title={archivado ? 'Ya archivado de la vista activa' : 'Marcar como cumplido (archivar de la vista activa)'}
+                            aria-label="Marcar cumplido"
+                            disabled={busy || !puedeEditar || archivado}
+                            onClick={() => marcarCumplido(c)}
+                          >
+                            <IconCheck />
+                          </button>
+                        )}
                         <button
                           type="button"
                           style={iconBtn(t)}

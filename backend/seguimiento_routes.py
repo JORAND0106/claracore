@@ -189,6 +189,8 @@ class EstadoGestionBody(BaseModel):
     estado_gestion: str = Field(..., min_length=3)
     nueva_fecha_vencimiento: Optional[str] = None
     hora_vencimiento: Optional[str] = None
+    # Solo el botón «marcar cumplido» en Compromisos abiertos; no confundir con estado_gestion=cumplido.
+    archivar: Optional[bool] = None
 
 
 class DestinarBody(BaseModel):
@@ -364,6 +366,7 @@ def route_estado_item(item_id: int, body: EstadoGestionBody, current_user=Depend
             _uid(current_user),
             nueva_fecha_vencimiento=body.nueva_fecha_vencimiento,
             hora_vencimiento=body.hora_vencimiento,
+            archivar=body.archivar,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

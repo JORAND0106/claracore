@@ -1545,12 +1545,17 @@ def compromisos_abiertos_contrato(
     Interna y externa no se mezclan: si se pide tipo_acta, solo se incluyen
     compromisos cuya acta de origen sea del mismo tipo (legacy sin tipo → interna).
     """
+    # Incluye cumplido/cancelado: el estado de gestión es informativo.
+    # Solo se excluyen los archivados vía botón «marcar cumplido» (campos_libres.archivado_revision).
     q = (
         sb.table("seguimiento_item")
         .select("*")
         .eq("contrato_id", int(contrato_id))
         .eq("origen", "compromiso")
-        .in_("estado_gestion", ["abierto", "en_progreso", "parcial", "vencido", "reprogramado"])
+        .in_(
+            "estado_gestion",
+            ["abierto", "en_progreso", "parcial", "vencido", "reprogramado", "cumplido", "cancelado"],
+        )
         .order("fecha_vencimiento")
     )
     rows = q.execute().data or []
@@ -1587,6 +1592,9 @@ def compromisos_abiertos_contrato(
             want_tipo = None
     out: List[dict] = []
     for r in rows:
+        libres = r.get("campos_libres") if isinstance(r.get("campos_libres"), dict) else {}
+        if libres.get("archivado_revision") is True or libres.get("archivado_revision") == "true":
+            continue
         a = actas_map.get(int(r["acta_id"])) if r.get("acta_id") else None
         origen_tipo = _norm_tipo_acta((a or {}).get("tipo_acta") or "interna")
         if want_tipo and origen_tipo != want_tipo:
@@ -2417,6 +2425,7 @@ def actualizar_estado_gestion(
     contrato_id: Optional[int] = None,
     nueva_fecha_vencimiento: Optional[str] = None,
     hora_vencimiento: Optional[str] = None,
+    archivar: Optional[bool] = None,
 ) -> dict:
     if estado not in ITEM_ESTADOS:
         raise ValueError("Estado de gestión no válido")
@@ -2472,6 +2481,10 @@ def actualizar_estado_gestion(
         return get_item(sb, item_id)
 
     patch = {"estado_gestion": estado, "updated_at": _now_utc().isoformat()}
+    if archivar is True:
+        libres = dict(item.get("campos_libres") or {})
+        libres["archivado_revision"] = True
+        patch["campos_libres"] = libres
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
     tipo = {
         "cumplido": "cumplimiento_a_tiempo" if not item.get("vencido_at") else "cumplimiento_con_demora",
@@ -2481,7 +2494,10 @@ def actualizar_estado_gestion(
         "en_progreso": "en_progreso",
         "abierto": "reabierto",
     }.get(estado, "cambio_estado")
-    _registrar_evento(sb, item_id, tipo, user_id, {"estado": estado})
+    evento_detalle = {"estado": estado}
+    if archivar is True:
+        evento_detalle["archivado_revision"] = True
+    _registrar_evento(sb, item_id, tipo, user_id, evento_detalle)
     _notificar_delegante_tarea_cumplida(
         sb,
         item,

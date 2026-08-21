@@ -1,7 +1,10 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { textoCompromisoCelda } from './compromisoTextoCelda.js'
-import { esEstadoTerminalCompromiso } from './compromisoEstados.js'
+import {
+  esCompromisoArchivadoRevision,
+  esEstadoTerminalCompromiso,
+} from './compromisoEstados.js'
 
 describe('textoCompromisoCelda', () => {
   it('devuelve guión si no hay texto', () => {
@@ -29,10 +32,40 @@ describe('textoCompromisoCelda', () => {
 })
 
 describe('esEstadoTerminalCompromiso', () => {
-  it('marca cumplido y cancelado como terminales', () => {
+  it('marca cumplido y cancelado como terminales (etiqueta; no implica ocultar)', () => {
     assert.equal(esEstadoTerminalCompromiso('cumplido'), true)
     assert.equal(esEstadoTerminalCompromiso('Cancelado'), true)
     assert.equal(esEstadoTerminalCompromiso('abierto'), false)
+  })
+})
+
+describe('esCompromisoArchivadoRevision', () => {
+  it('estado cumplido solo no archiva', () => {
+    assert.equal(esCompromisoArchivadoRevision({ estado_gestion: 'cumplido' }), false)
+    assert.equal(esCompromisoArchivadoRevision({ estado_gestion: 'cumplido', campos_libres: {} }), false)
+  })
+
+  it('archivado_revision sí oculta de la vista activa', () => {
+    assert.equal(
+      esCompromisoArchivadoRevision({
+        estado_gestion: 'cumplido',
+        campos_libres: { archivado_revision: true },
+      }),
+      true,
+    )
+  })
+})
+
+describe('visibilidad tabla: estado vs archivar', () => {
+  it('filtra solo archivados, no por estado Cumplido', () => {
+    const items = [
+      { id: 1, estado_gestion: 'cumplido' },
+      { id: 2, estado_gestion: 'abierto' },
+      { id: 3, estado_gestion: 'cumplido', campos_libres: { archivado_revision: true } },
+      { id: 4, estado_gestion: 'cancelado' },
+    ]
+    const visibles = items.filter((c) => !esCompromisoArchivadoRevision(c))
+    assert.deepEqual(visibles.map((x) => x.id), [1, 2, 4])
   })
 })
 

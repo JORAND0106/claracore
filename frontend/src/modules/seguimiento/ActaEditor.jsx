@@ -1322,6 +1322,7 @@ export default function ActaEditor({
           emptyMessage="Aún no hay compromisos en esta acta. Genere uno desde un tema o con «+ Agregar compromiso»."
           highlightId={highlightCompromisoId}
           showActaOrigen={false}
+          permitirArchivar={false}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -1353,6 +1354,7 @@ export default function ActaEditor({
           items={previos}
           emptyMessage={`No hay compromisos abiertos previos de actas ${form.tipo_acta === 'externa' ? 'externas' : 'internas'}.`}
           showActaOrigen
+          permitirArchivar
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
