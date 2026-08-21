@@ -240,9 +240,11 @@ def _normalizar_materiales(raw) -> List[dict]:
     Materiales de obra (ingreso/salida).
     Shape:
       movimiento: ingreso|salida
-      tipo_material, proveedor, cantidad, placa
+      tipo_material, proveedor, cantidad, placa (legacy; UI oculta placa)
       numeros_vale: texto libre (números de vale del día)
       adjuntos: máx. 2 (foto remisión / soporte)
+      ubicacion_pk / ubicacion_pk_id: PK del plano (Cantidades/Presupuesto)
+      ubicacion_lat / ubicacion_lng: opcional (meta del clic en mapa)
     Compat: si vienen `vales` como lista de adjuntos (diseño anterior), se migran a adjuntos.
     """
     if not isinstance(raw, list):
@@ -265,7 +267,6 @@ def _normalizar_materiales(raw) -> List[dict]:
         if cantidad < 0:
             cantidad = 0.0
 
-        # Adjuntos nuevos; legacy: vales como lista de dicts con data_uri/blob_path
         adjuntos_raw = item.get("adjuntos")
         if not isinstance(adjuntos_raw, list):
             legacy = item.get("vales")
@@ -273,11 +274,22 @@ def _normalizar_materiales(raw) -> List[dict]:
                 adjuntos_raw = legacy
             else:
                 adjuntos_raw = []
-        # Si vales era string en algún payload, úsalo como números
         if not numeros_vale and isinstance(item.get("vales"), str):
             numeros_vale = str(item.get("vales") or "").strip()
 
         adjuntos = _normalizar_adjuntos_flex(adjuntos_raw, max_n=2)
+
+        ubicacion_pk = str(
+            item.get("ubicacion_pk") or item.get("pk_label") or item.get("pk") or ""
+        ).strip() or None
+        ubicacion_pk_id = item.get("ubicacion_pk_id") or item.get("pk_id_id") or item.get("pk_id")
+        if ubicacion_pk_id is not None and ubicacion_pk_id != "":
+            try:
+                ubicacion_pk_id = int(ubicacion_pk_id)
+            except (TypeError, ValueError):
+                ubicacion_pk_id = str(ubicacion_pk_id).strip() or None
+        else:
+            ubicacion_pk_id = None
 
         ubicacion_lat = None
         ubicacion_lng = None
@@ -303,7 +315,10 @@ def _normalizar_materiales(raw) -> List[dict]:
                 continue
             break
 
-        if not any([tipo, proveedor, placa, numeros_vale, adjuntos, cantidad, ubicacion_lat is not None]):
+        if not any([
+            tipo, proveedor, placa, numeros_vale, adjuntos, cantidad,
+            ubicacion_pk, ubicacion_pk_id is not None, ubicacion_lat is not None,
+        ]):
             continue
         row = {
             "movimiento": mov,
@@ -314,6 +329,10 @@ def _normalizar_materiales(raw) -> List[dict]:
             "numeros_vale": numeros_vale,
             "adjuntos": adjuntos,
         }
+        if ubicacion_pk:
+            row["ubicacion_pk"] = ubicacion_pk
+        if ubicacion_pk_id is not None:
+            row["ubicacion_pk_id"] = ubicacion_pk_id
         if ubicacion_lat is not None and ubicacion_lng is not None:
             row["ubicacion_lat"] = round(ubicacion_lat, 7)
             row["ubicacion_lng"] = round(ubicacion_lng, 7)
@@ -1747,20 +1766,40 @@ def _centroide_desde_geojson(geo) -> Optional[Tuple[float, float]]:
 
 
 def contrato_meta_bitacora(sb, contrato_id: int) -> dict:
-    """Metadatos de contrato + logos + centroide para PDF/clima."""
-    rows = (
-        sb.table("contratos")
-        .select(
-            "id, numero, objeto, contratista, interventoria, entidad, entidad_otra, "
-            "logo_entidad, logo_contratista, logo_interventoria, "
-            "centro_lat, centro_lng, plano_geojson, numero_interventoria"
-        )
-        .eq("id", int(contrato_id))
-        .limit(1)
-        .execute()
-        .data
-        or []
+    """Metadatos de contrato + logos + paleta + centroide para PDF/clima."""
+    select_full = (
+        "id, numero, objeto, contratista, interventoria, entidad, entidad_otra, "
+        "logo_entidad, logo_contratista, logo_interventoria, "
+        "centro_lat, centro_lng, plano_geojson, numero_interventoria, "
+        "export_palette, ccd_firma_config"
     )
+    select_basic = (
+        "id, numero, objeto, contratista, interventoria, entidad, entidad_otra, "
+        "logo_entidad, logo_contratista, logo_interventoria, "
+        "centro_lat, centro_lng, plano_geojson, numero_interventoria"
+    )
+    rows = []
+    try:
+        rows = (
+            sb.table("contratos")
+            .select(select_full)
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.debug("contrato_meta_bitacora palette select: %s", exc)
+        rows = (
+            sb.table("contratos")
+            .select(select_basic)
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
     if not rows:
         raise ValueError("Contrato no encontrado")
     c = dict(rows[0])
@@ -1776,11 +1815,65 @@ def contrato_meta_bitacora(sb, contrato_id: int) -> dict:
         if centro:
             lat_f, lng_f = centro
     if lat_f is None or lng_f is None:
-        # Bogotá por defecto (mismo fallback del widget de clima)
         lat_f, lng_f = 4.711, -74.0721
     c["geo_lat"] = lat_f
     c["geo_lng"] = lng_f
+    c["export_palette"] = _export_palette_contrato(c)
     return c
+
+
+def _export_palette_contrato(row: dict) -> dict:
+    """Paleta de exportación del contrato (misma forma que Contratos / Excel)."""
+    defaults = {
+        "encabezado": {"bg": "#DDEFF8", "text": "#0F2942"},
+        "titulo_1": {"bg": "#EEF7FB", "text": "#0F2942"},
+        "titulo_2": {"bg": "#E5F4FA", "text": "#1F4E70"},
+        "linea_principal": {"bg": "#FFFFFF", "text": "#0F2942"},
+        "linea_secundaria": {"bg": "#F8FAFC", "text": "#0F2942"},
+    }
+
+    def _hex(v) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
+        if not s.startswith("#"):
+            s = f"#{s}"
+        if re.match(r"^#[0-9A-Fa-f]{6}$", s):
+            return s.upper()
+        return None
+
+    raw: dict = {}
+    if isinstance(row.get("export_palette"), dict):
+        raw = row["export_palette"]
+    else:
+        cfg = row.get("ccd_firma_config")
+        if isinstance(cfg, dict) and isinstance(cfg.get("export_palette"), dict):
+            raw = cfg["export_palette"]
+
+    out = {}
+    legacy_bg = {
+        "encabezado": "encabezado",
+        "titulo_1": "subtitulos",
+        "titulo_2": "cuerpo_principal",
+        "linea_principal": "cuerpo_principal",
+        "linea_secundaria": "cuerpo_secundario",
+    }
+    for tier, def_t in defaults.items():
+        block = raw.get(tier) if isinstance(raw, dict) else None
+        bg = text = None
+        if isinstance(block, dict):
+            bg = _hex(block.get("bg"))
+            text = _hex(block.get("text"))
+        elif isinstance(block, str):
+            bg = _hex(block)
+        if not bg:
+            bg = _hex(raw.get(legacy_bg.get(tier, "")))
+        if not text:
+            text = _hex(raw.get(f"{tier}_text"))
+        out[tier] = {"bg": bg or def_t["bg"], "text": text or def_t["text"]}
+    return out
 
 
 def _slot_3h_desde_hora(hora_val) -> int:

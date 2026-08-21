@@ -294,21 +294,26 @@ export default function SeguimientoCalendario({
   const canExportBitacora = Boolean(permisosBitacora?.exportar)
   const showDayCreate = canCreateSeguimiento || canCreateBitacora || canExportBitacora
 
-  const exportPdfDia = async (dateStr) => {
+  const exportPdfDia = async (dateStr, { preview = false } = {}) => {
     if (!api?.exportBitacoraPdfBlob || !dateStr) return
     setPdfBusy(true)
     setError('')
     try {
       const blob = await api.exportBitacoraPdfBlob(dateStr)
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `bitacora_${dateStr}.pdf`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 4000)
+      if (preview) {
+        window.open(url, '_blank', 'noopener,noreferrer')
+        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      } else {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `bitacora_${dateStr}.pdf`
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(url), 4000)
+      }
       setDayMenu(null)
     } catch (e) {
-      setError(e.message || 'No se pudo exportar el PDF de bitácora')
+      setError(e.message || 'No se pudo generar el PDF')
     } finally {
       setPdfBusy(false)
     }
@@ -737,15 +742,24 @@ export default function SeguimientoCalendario({
                     </button>
                   )}
                   {canExportBitacora && (
-                    <button
-                      type="button"
-                      disabled={pdfBusy}
-                      onClick={() => void exportPdfDia(dayMenu.dateStr)}
-                      style={{ ...ghost(t), opacity: pdfBusy ? 0.6 : 1 }}
-                      title="PDF del día: Diario, Eventos y fotografías"
-                    >
-                      {pdfBusy ? 'Generando PDF…' : '📄 Exportar PDF'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={pdfBusy}
+                        onClick={() => void exportPdfDia(dayMenu.dateStr, { preview: true })}
+                        style={{ ...ghost(t), opacity: pdfBusy ? 0.6 : 1 }}
+                      >
+                        {pdfBusy ? '…' : 'Vista previa'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pdfBusy}
+                        onClick={() => void exportPdfDia(dayMenu.dateStr, { preview: false })}
+                        style={{ ...ghost(t), opacity: pdfBusy ? 0.6 : 1 }}
+                      >
+                        {pdfBusy ? '…' : 'Descargar'}
+                      </button>
+                    </>
                   )}
                 </div>
                 {canCreateBitacora && bitacoraSubmenu && (
