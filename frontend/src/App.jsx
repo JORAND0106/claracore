@@ -3594,6 +3594,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const ejecutarValidacion = (estado) => {
+    const tieneItem = !!String(registro?.item_numero || itemSel?.item_numero || '').trim()
+    if (!tieneItem) {
+      alert('No puedes validar un registro sin ítem asignado. Asigna un ítem de presupuesto primero.')
+      return
+    }
     const nvEj = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
     if (exigeTopoAprobarN2 && nvEj === 2 && estado === 'Aprobado' && !(reporte.puntos || []).length) {
       alert(
@@ -3643,6 +3648,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
     if (!nivel) {
       setMostrarPopupValidacion(false)
+      return
+    }
+    const tieneItem = !!String(registro?.item_numero || itemSel?.item_numero || '').trim()
+    if (!tieneItem) {
+      setMostrarPopupValidacion(false)
+      alert('No puedes validar un registro sin ítem asignado. Asigna un ítem de presupuesto primero.')
       return
     }
     if (exigeTopoAprobarN2 && nivel === 2 && estadoValidando === 'Aprobado' && !(reporte.puntos || []).length) {
@@ -4700,6 +4711,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const nv = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
         if (nv == null) return null
         const bloqueado = !!registro.bloqueado
+        const sinItemAsignado = !String(registro?.item_numero || itemSel?.item_numero || '').trim()
+        const validacionDeshabilitada = bloqueado || sinItemAsignado
         const campoNv = sicoeCampoEstadoNivel(nv)
         const estadoActual = campoNv ? (registro[campoNv] || 'No Revisado') : 'No Revisado'
         const titNv = encPorNivelHojaReg[nv] || `Nivel ${nv}`
@@ -4728,16 +4741,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
               🚦 Validación · {titNv}
               {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
+              {sinItemAsignado && !bloqueado && (
+                <span style={{ marginLeft:'8px', background:'#d9770615', color:'#d97706', border:'1px solid #d9770633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>
+                  Sin ítem — no validable
+                </span>
+              )}
             </div>
+            {sinItemAsignado && (
+              <div style={{ marginBottom:'10px', fontSize:'var(--cc-sm)', color:t.textMuted }}>
+                Asigna un ítem de presupuesto a este registro antes de poder validar (Aprobado / Pendiente / Rechazado).
+              </div>
+            )}
             <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               {BTNS.map(({ estado, icon, color }) => {
                 const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
                 return (
-                  <button key={estado} type="button" disabled={bloqueado}
+                  <button key={estado} type="button" disabled={validacionDeshabilitada}
+                    title={sinItemAsignado ? 'Asigna un ítem antes de validar' : (bloqueado ? 'Registro bloqueado' : undefined)}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
                       padding: '8px 16px', borderRadius: '8px', fontSize: 'var(--cc-sm)', fontWeight: '700',
-                      cursor: bloqueado ? 'not-allowed' : 'pointer', opacity: bloqueado ? 0.5 : 1,
+                      cursor: validacionDeshabilitada ? 'not-allowed' : 'pointer', opacity: validacionDeshabilitada ? 0.5 : 1,
                       background: activo ? `${color}22` : 'transparent',
                       color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
                       transition: 'all 0.15s',
@@ -4751,11 +4775,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <div style={{ marginTop:'12px', display:'flex', alignItems:'center', gap:'8px' }}>
                 <input type="checkbox" id={`obj-pago-sub-${registro.id}`}
                   checked={!!registro.nivel2_objeto_pago_sub}
-                  disabled={bloqueado}
+                  disabled={bloqueado || sinItemAsignado}
                   onChange={e => actualizarObjetoPagoSub(e.target.checked)}
-                  style={{ width:'16px', height:'16px', accentColor:'#8B5CF6', cursor: bloqueado ? 'not-allowed' : 'pointer' }} />
+                  style={{ width:'16px', height:'16px', accentColor:'#8B5CF6', cursor: (bloqueado || sinItemAsignado) ? 'not-allowed' : 'pointer' }} />
                 <label htmlFor={`obj-pago-sub-${registro.id}`}
-                  style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor: bloqueado ? 'not-allowed' : 'pointer' }}>
+                  style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor: (bloqueado || sinItemAsignado) ? 'not-allowed' : 'pointer' }}>
                   Objeto de pago al subcontratista
                 </label>
               </div>
@@ -9010,7 +9034,10 @@ function ModuloSicoeObra({
     setCargandoAnalisis(false)
   }, [contrato_id])
 
-  /** Validador: si tiene nivel 1–6 → capa No Revisado (sin auto-buscar; el usuario pulsa Buscar). */
+  /**
+   * Validador con permiso «validar»: al entrar, capa No Revisado de su nivel + auto-búsqueda.
+   * (Regresión 977039b9/7e75c146: se dejó en false y el filtro no se aplicaba hasta pulsar Buscar.)
+   */
   useEffect(() => {
     if (!contrato_id) return
     if (
@@ -9030,18 +9057,16 @@ function ModuloSicoeObra({
       return
     }
 
-    // Nivel directo: el que ya usa la UI, o rol/cargo del usuario
+    // Preferir nivel ya resuelto por la UI; fallback a rol/cargo + mapa del contrato.
     const nInfo = Number(nivelInfo.nivelValidacion)
-    const nCom = Number(nivelInfo.nivelValidacionComentario)
-    const nRol = sicoeNivelParaFiltroAutomatico(usuario)
+    const nRol = sicoeNivelParaFiltroAutomatico(usuario, nivelesContrato)
     let n = null
-    if (Number.isFinite(nInfo) && nInfo >= 1 && nInfo <= 6) n = nInfo
-    else if (Number.isFinite(nCom) && nCom >= 1 && nCom <= 6) n = nCom
-    else if (nRol != null) n = Number(nRol)
+    if (nivelInfo.puedeValidar && Number.isFinite(nInfo) && nInfo >= 1 && nInfo <= 6) n = nInfo
+    else if (nivelInfo.puedeValidar && nRol != null) n = Number(nRol)
 
     const activos = sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos)
     const capasIni =
-      n != null && activos.includes(n)
+      n != null && Number.isFinite(n) && activos.includes(n)
         ? [{ nivel: n, estado: 'No Revisado' }]
         : []
 
@@ -9080,7 +9105,7 @@ function ModuloSicoeObra({
         panelCapitulos: [],
         panelActasRpo: [],
       })
-      aplicarSicoeFiltroBundle(snap, false)
+      aplicarSicoeFiltroBundle(snap, true)
       return
     }
 
@@ -9097,8 +9122,8 @@ function ModuloSicoeObra({
     contrato_id,
     nivelesContrato,
     usuario,
+    nivelInfo.puedeValidar,
     nivelInfo.nivelValidacion,
-    nivelInfo.nivelValidacionComentario,
     aplicarSicoeFiltroBundle,
     restaurarSicoeDesdeEntrada,
     limpiarChecksPanelSicoe,
