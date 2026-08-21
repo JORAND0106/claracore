@@ -179,5 +179,38 @@ export function createSeguimientoApi(contratoId, token) {
     updateTarea: (itemId, body) => send('PUT', `/seguimiento/tareas/${itemId}`, body),
     pegarImagenTarea: (itemId, body) => send('POST', `/seguimiento/tareas/${itemId}/imagen`, body),
     redaccionClara: (body) => send('POST', '/seguimiento/redaccion-clara', body, 120000),
+
+    // ── Bitácora de Obra ────────────────────────────────────────────────────
+    listBitacora: (params = {}) => {
+      const q = new URLSearchParams()
+      Object.entries(params).forEach(([k, v]) => {
+        if (v != null && v !== '') q.set(k, String(v))
+      })
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`)
+    },
+    getBitacoraEntrada: (entradaId) => get(`/seguimiento/${cid}/bitacora/${entradaId}`),
+    getBitacoraDiario: (fecha) => get(`/seguimiento/${cid}/bitacora/diario?fecha=${encodeURIComponent(fecha)}`),
+    createBitacoraDiario: (body) => send('POST', `/seguimiento/${cid}/bitacora/diario`, body),
+    createBitacoraEvento: (body) => send('POST', `/seguimiento/${cid}/bitacora/evento`, body),
+    updateBitacoraEntrada: (entradaId, body) =>
+      send('PUT', `/seguimiento/${cid}/bitacora/${entradaId}`, body),
+    cerrarBitacoraDiario: (entradaId) =>
+      send('POST', `/seguimiento/${cid}/bitacora/${entradaId}/cerrar`, {}),
+    revertirBitacoraDiario: (entradaId) =>
+      send('POST', `/seguimiento/${cid}/bitacora/${entradaId}/revertir`, {}),
+    deleteBitacoraEntrada: (entradaId) =>
+      send('DELETE', `/seguimiento/${cid}/bitacora/${entradaId}`),
+    pegarImagenBitacora: (entradaId, body) =>
+      send('POST', `/seguimiento/${cid}/bitacora/${entradaId}/imagen`, body),
+    listBitacoraEquipos: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/equipos${qs}`)
+    },
+    upsertBitacoraEquipo: (body) => send('POST', `/seguimiento/${cid}/bitacora/equipos`, body),
+    listBitacoraGaleria: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/galeria${qs}`)
+    },
   }
 }
