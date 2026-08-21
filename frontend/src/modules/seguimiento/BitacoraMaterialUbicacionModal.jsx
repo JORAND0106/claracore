@@ -110,7 +110,7 @@ export default function BitacoraMaterialUbicacionModal({
               Ubicación por PK
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
-              Seleccione el polígono del plano.
+              Seleccione el polígono del plano. Puede cambiar Calle / Relieve / Satélite sin perder el PK.
             </div>
           </div>
           <button type="button" onClick={onClose} style={{ ...btn, background: t.bg, color: t.text, border: `1px solid ${t.border}` }}>
@@ -146,6 +146,8 @@ export default function BitacoraMaterialUbicacionModal({
                 setCoords({ lat: null, lng: null })
               }}
               height="100%"
+              hideCaption
+              showBasemapToggle
             />
           )}
         </div>
