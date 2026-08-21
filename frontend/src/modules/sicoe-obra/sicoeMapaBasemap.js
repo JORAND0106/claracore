@@ -1,6 +1,7 @@
 /**
  * Vistas de basemap Mapbox para el mapa de localización (reporte de cantidades SicoeObra).
  *
+ * - calle: calles estándar Mapbox (streets)
  * - topografico: outdoors (curvas / plano topográfico plano)
  * - relieve: outdoors + DEM 3D (elevación del terreno)
  * - satelite: imagen satelital + calles
@@ -9,9 +10,12 @@
  */
 
 export const SICOE_MAPA_VISTAS = Object.freeze(['topografico', 'relieve', 'satelite'])
+/** Vistas usadas en Bitácora materiales (calle / relieve / satélite). */
+export const SICOE_MAPA_VISTAS_CALLE = Object.freeze(['calle', 'relieve', 'satelite'])
 
 export const SICOE_MAPA_VISTA_DEFAULT = 'topografico'
 
+export const SICOE_MAPA_STYLE_STREETS = 'mapbox://styles/mapbox/streets-v12'
 export const SICOE_MAPA_STYLE_OUTDOORS = 'mapbox://styles/mapbox/outdoors-v12'
 export const SICOE_MAPA_STYLE_SATELLITE = 'mapbox://styles/mapbox/satellite-streets-v12'
 
@@ -19,7 +23,7 @@ const STORAGE_KEY = 'sicoe.mapaPortada.basemapVista'
 
 /**
  * @param {unknown} raw
- * @returns {'topografico'|'relieve'|'satelite'}
+ * @returns {'calle'|'topografico'|'relieve'|'satelite'}
  */
 export function normalizarVistaBasemap(raw) {
   const s = String(raw || '')
@@ -27,10 +31,11 @@ export function normalizarVistaBasemap(raw) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+  if (s === 'calle' || s === 'street' || s === 'calles' || s === 'estandar' || s === 'standard') return 'calle'
   if (s === 'relieve' || s === 'terrain' || s === 'elevation') return 'relieve'
   if (s === 'satelite' || s === 'satellite' || s === 'sat') return 'satelite'
   if (s === 'topografico' || s === 'topo' || s === 'plano') return 'topografico'
-  // alias español completo
+  if (s.includes('calle') || s.includes('street')) return 'calle'
   if (s.includes('topograf')) return 'topografico'
   if (s.includes('satel')) return 'satelite'
   if (s.includes('relieve')) return 'relieve'
@@ -38,24 +43,26 @@ export function normalizarVistaBasemap(raw) {
 }
 
 /**
- * @param {'topografico'|'relieve'|'satelite'} mode
+ * @param {'calle'|'topografico'|'relieve'|'satelite'} mode
  * @returns {string} Mapbox style URL
  */
 export function sicoeBasemapStyleUrl(mode) {
   const m = normalizarVistaBasemap(mode)
   if (m === 'satelite') return SICOE_MAPA_STYLE_SATELLITE
+  if (m === 'calle') return SICOE_MAPA_STYLE_STREETS
   // relieve y topográfico comparten outdoors; el relieve añade DEM.
   return SICOE_MAPA_STYLE_OUTDOORS
 }
 
 /**
- * @param {'topografico'|'relieve'|'satelite'} mode
+ * @param {'calle'|'topografico'|'relieve'|'satelite'} mode
  * @returns {string}
  */
 export function sicoeBasemapLabel(mode) {
   const m = normalizarVistaBasemap(mode)
   if (m === 'relieve') return 'Relieve'
   if (m === 'satelite') return 'Satélite'
+  if (m === 'calle') return 'Calle'
   return 'Topográfico'
 }
 
@@ -149,13 +156,28 @@ export function applySicoeBasemapTerrain(map, mode) {
 }
 
 /**
- * Control Mapbox: selector Relieve / Satélite / Topográfico.
- * @param {{ getMode: () => string, t?: Record<string, string>, onSelect: (mode: string) => void }} opts
+ * Control Mapbox: selector de capas (por defecto Relieve / Satélite / Topográfico).
+ * @param {{
+ *   getMode: () => string,
+ *   t?: Record<string, string>,
+ *   onSelect: (mode: string) => void,
+ *   vistas?: string[],
+ * }} opts
  */
-export function createSicoeBasemapStyleControl({ getMode, t = {}, onSelect }) {
+export function createSicoeBasemapStyleControl({
+  getMode,
+  t = {},
+  onSelect,
+  vistas = null,
+}) {
   let container
   let menu
   let mainBtn
+
+  const opciones = (Array.isArray(vistas) && vistas.length
+    ? vistas
+    : ['relieve', 'satelite', 'topografico']
+  ).map((v) => normalizarVistaBasemap(v))
 
   const closeMenu = () => {
     if (menu) menu.style.display = 'none'
@@ -205,9 +227,10 @@ export function createSicoeBasemapStyleControl({ getMode, t = {}, onSelect }) {
   const rebuildMenu = () => {
     if (!menu) return
     menu.innerHTML = ''
-    menu.appendChild(mkOpt('relieve', 'Relieve'))
-    menu.appendChild(mkOpt('satelite', 'Satélite'))
-    menu.appendChild(mkOpt('topografico', 'Plano topográfico'))
+    opciones.forEach((value) => {
+      const label = value === 'topografico' ? 'Plano topográfico' : sicoeBasemapLabel(value)
+      menu.appendChild(mkOpt(value, label))
+    })
   }
 
   return {
@@ -220,7 +243,7 @@ export function createSicoeBasemapStyleControl({ getMode, t = {}, onSelect }) {
       mainBtn.type = 'button'
       mainBtn.setAttribute('data-sicoe-basemap-btn', '1')
       mainBtn.textContent = sicoeBasemapLabel(getMode())
-      mainBtn.title = 'Vista del mapa (relieve / satélite / topográfico)'
+      mainBtn.title = 'Vista del mapa (calle / relieve / satélite)'
       mainBtn.setAttribute('aria-label', 'Cambiar vista del mapa')
       mainBtn.style.cssText = [
         'font-size:11px',

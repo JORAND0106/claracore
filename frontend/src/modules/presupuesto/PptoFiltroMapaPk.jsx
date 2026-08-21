@@ -11,6 +11,15 @@ import {
   addMapboxAbscisaLabelLayers,
 } from '../../mapboxPlanoLabels'
 import { crearMapboxMapSeguro } from '../../mapboxSafe'
+import {
+  SICOE_MAPA_VISTAS_CALLE,
+  applySicoeBasemapTerrain,
+  createSicoeBasemapStyleControl,
+  guardarVistaBasemap,
+  leerVistaBasemapGuardada,
+  normalizarVistaBasemap,
+  sicoeBasemapStyleUrl,
+} from '../sicoe-obra/sicoeMapaBasemap'
 
 /** [lng, lat] WGS84 si el maestro trae coordenadas; si no, null. */
 function pickLngLat(row) {
@@ -54,6 +63,7 @@ function boundsFromFC(fc) {
 /**
  * Mapa PK en panel/drawer. Sin refresco automático.
  * `selectedPk`: PK activo (sincronizado con chip). Persiste vía estado del padre entre aperturas.
+ * `showBasemapToggle`: opcional (Bitácora materiales). No altera Cantidades/Presupuesto por defecto.
  */
 export default function PptoFiltroMapaPk({
   t,
@@ -66,6 +76,7 @@ export default function PptoFiltroMapaPk({
   height = 220,
   zoomToSelected = false,
   hideCaption = false,
+  showBasemapToggle = false,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -161,8 +172,19 @@ export default function PptoFiltroMapaPk({
       const center0 =
         contrato?.centro_lat != null && contrato?.centro_lng != null ? [contrato.centro_lng, contrato.centro_lat] : [-74.0817, 4.6097]
       const isDark = typeof t?.bg === 'string' && (t.bg === '#0A1628' || t.bg.toLowerCase() === '#0a1628')
+      let basemapMode = showBasemapToggle
+        ? normalizarVistaBasemap(leerVistaBasemapGuardada())
+        : null
+      if (showBasemapToggle) {
+        // Preferir Calle / Relieve / Satélite en Bitácora; migrar topográfico → calle.
+        if (basemapMode === 'topografico') basemapMode = 'calle'
+        if (!SICOE_MAPA_VISTAS_CALLE.includes(basemapMode)) basemapMode = 'calle'
+      }
+      const initialStyle = showBasemapToggle
+        ? sicoeBasemapStyleUrl(basemapMode)
+        : (isDark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11')
       const { map, error: mapErr } = crearMapboxMapSeguro(mapEl, {
-        style: isDark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
+        style: initialStyle,
         center: center0,
         zoom: 12,
         bearing: NORTH_RIGHT_BEARING,
@@ -182,6 +204,9 @@ export default function PptoFiltroMapaPk({
       let withCoords = 0
       const toFit = []
       const markerEls = []
+      /** @type {{ type: string, features: any[] } | null} */
+      let planoDataCache = null
+      let capasPkListas = false
 
       const esperarMapaIdle = () =>
         new Promise((resolve) => {
@@ -209,6 +234,14 @@ export default function PptoFiltroMapaPk({
         }
       }
 
+      const syncMarkerStyles = () => {
+        markerEls.forEach(({ el, pk }) => {
+          const on = String(pk).trim().toLowerCase() === String(selectedRef.current || '').trim().toLowerCase()
+          el.style.background = on ? '#F59E0B' : isFiltered ? '#0D9488' : '#0077B6'
+          el.style.transform = on ? 'scale(1.15)' : 'scale(1)'
+        })
+      }
+
       const togglePk = (pkv, meta = null) => {
         const v = String(pkv || '').trim()
         if (!v) return
@@ -221,17 +254,116 @@ export default function PptoFiltroMapaPk({
           onPickRef.current(v, meta)
         }
         applySelectionStyle(map)
-        markerEls.forEach(({ el, pk }) => {
-          const on = String(pk).trim().toLowerCase() === String(selectedRef.current || '').trim().toLowerCase()
-          el.style.background = on ? '#F59E0B' : isFiltered ? '#0D9488' : '#0077B6'
-          el.style.transform = on ? 'scale(1.15)' : 'scale(1)'
-        })
+        syncMarkerStyles()
+      }
+
+      const asegurarCapasPlano = () => {
+        if (!planoDataCache) return
+        try {
+          if (map.getSource('ppto-plano')) {
+            map.getSource('ppto-plano').setData(planoDataCache)
+          } else {
+            map.addSource('ppto-plano', { type: 'geojson', data: planoDataCache })
+          }
+          if (!map.getLayer('ppto-plano-fill')) {
+            map.addLayer({
+              id: 'ppto-plano-fill',
+              type: 'fill',
+              source: 'ppto-plano',
+              paint: {
+                'fill-color': isFiltered ? '#0D9488' : '#0077B6',
+                'fill-opacity': isFiltered ? 0.38 : 0.3,
+              },
+            })
+          }
+          if (!map.getLayer('ppto-plano-line')) {
+            map.addLayer({
+              id: 'ppto-plano-line',
+              type: 'line',
+              source: 'ppto-plano',
+              paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
+            })
+          }
+          if (!map.getLayer('ppto-labels-abscisa')) {
+            addMapboxAbscisaLabelLayers(map, {
+              idPrefix: 'ppto-labels-abscisa',
+              source: 'ppto-plano',
+              layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+              paint: MAPBOX_PLANO_PAINT_LABELS,
+            })
+          }
+          if (!capasPkListas) {
+            const manejarTapPlano = (e) => {
+              const f = e.features?.[0]
+              if (!f) return
+              const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
+              if (!v) return
+              const meta = e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : null
+              togglePk(v, meta)
+              if (meta) {
+                capturarVistaPlano(e.lngLat).then((screenshot) => {
+                  if (screenshot) onPickRef.current?.(v, { ...meta, screenshot, screenshotOnly: true })
+                })
+              }
+            }
+            map.on('click', 'ppto-plano-fill', manejarTapPlano)
+            map.on('mouseenter', 'ppto-plano-fill', () => {
+              map.getCanvas().style.cursor = 'pointer'
+            })
+            map.on('mouseleave', 'ppto-plano-fill', () => {
+              map.getCanvas().style.cursor = ''
+            })
+            capasPkListas = true
+          }
+          applySelectionStyle(map)
+        } catch {
+          /* estilo aún cargando */
+        }
+      }
+
+      if (showBasemapToggle) {
+        map.__sicoeBasemapUrl = initialStyle
+        map.__sicoeBasemapMode = basemapMode
+        map.addControl(createSicoeBasemapStyleControl({
+          getMode: () => map.__sicoeBasemapMode || 'calle',
+          t,
+          vistas: [...SICOE_MAPA_VISTAS_CALLE],
+          onSelect: (modeRaw) => {
+            const mode = normalizarVistaBasemap(modeRaw)
+            const url = sicoeBasemapStyleUrl(mode)
+            guardarVistaBasemap(mode)
+            map.__sicoeBasemapMode = mode
+            // Mismo estilo (p. ej. no aplica aquí) → solo DEM; otro → setStyle y repintar.
+            if (map.__sicoeBasemapUrl === url) {
+              applySicoeBasemapTerrain(map, mode)
+              applySelectionStyle(map)
+              return
+            }
+            const cam = {
+              center: map.getCenter(),
+              zoom: map.getZoom(),
+              bearing: map.getBearing(),
+              pitch: map.getPitch(),
+            }
+            map.__sicoeBasemapUrl = url
+            map.once('style.load', () => {
+              try {
+                map.jumpTo(cam)
+              } catch { /* ignore */ }
+              capasPkListas = false
+              asegurarCapasPlano()
+              applySicoeBasemapTerrain(map, mode)
+              applySelectionStyle(map)
+              syncMarkerStyles()
+            })
+            map.setStyle(url)
+          },
+        }), 'top-left')
       }
 
       map.on('load', () => {
         if (cancelled) return
 
-        let planoData = null
         const planoFc = sanitizePlanoFeatureCollection(
           plano && plano.type === 'FeatureCollection' ? plano : { type: 'FeatureCollection', features: [] },
         )
@@ -243,7 +375,6 @@ export default function PptoFiltroMapaPk({
             ? { ...f, properties: { ...f.properties, pk_id: f.properties?.pk_id || pkid } }
             : f
         })
-        // Puntos de abscisa (etiqueta K+M): necesarios para capas symbol; no mezclar con fill de PK.
         const puntosAbscisa = (planoFc.features || []).filter((f) => {
           const gt = f?.geometry?.type
           if (gt !== 'Point' && gt !== 'MultiPoint') return false
@@ -258,54 +389,11 @@ export default function PptoFiltroMapaPk({
             })
             if (matched.length > 0) polys = matched
           }
-          planoData = { type: 'FeatureCollection', features: [...polys, ...puntosAbscisa] }
+          planoDataCache = { type: 'FeatureCollection', features: [...polys, ...puntosAbscisa] }
         }
 
-        if (planoData) {
-          map.addSource('ppto-plano', { type: 'geojson', data: planoData })
-          map.addLayer({
-            id: 'ppto-plano-fill',
-            type: 'fill',
-            source: 'ppto-plano',
-            paint: {
-              'fill-color': isFiltered ? '#0D9488' : '#0077B6',
-              'fill-opacity': isFiltered ? 0.38 : 0.3,
-            },
-          })
-          map.addLayer({
-            id: 'ppto-plano-line',
-            type: 'line',
-            source: 'ppto-plano',
-            paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
-          })
-          addMapboxAbscisaLabelLayers(map, {
-            idPrefix: 'ppto-labels-abscisa',
-            source: 'ppto-plano',
-            layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
-            paint: MAPBOX_PLANO_PAINT_LABELS,
-          })
-          const manejarTapPlano = (e) => {
-            const f = e.features?.[0]
-            if (!f) return
-            const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
-            if (!v) return
-            const meta = e.lngLat ? { lng: e.lngLat.lng, lat: e.lngLat.lat } : null
-            togglePk(v, meta)
-            if (meta) {
-              capturarVistaPlano(e.lngLat).then((screenshot) => {
-                if (screenshot) onPickRef.current?.(v, { ...meta, screenshot, screenshotOnly: true })
-              })
-            }
-          }
-          map.on('click', 'ppto-plano-fill', manejarTapPlano)
-          map.on('mouseenter', 'ppto-plano-fill', () => {
-            map.getCanvas().style.cursor = 'pointer'
-          })
-          map.on('mouseleave', 'ppto-plano-fill', () => {
-            map.getCanvas().style.cursor = ''
-          })
-          applySelectionStyle(map)
-        }
+        asegurarCapasPlano()
+        if (showBasemapToggle) applySicoeBasemapTerrain(map, map.__sicoeBasemapMode || 'calle')
 
         const dot = isFiltered ? 14 : 12
         const col = isFiltered ? '#0D9488' : '#0077B6'
@@ -328,7 +416,7 @@ export default function PptoFiltroMapaPk({
           })
         })
         try {
-          const bPlano = planoData ? boundsFromFC(planoData) : null
+          const bPlano = planoDataCache ? boundsFromFC(planoDataCache) : null
           const bProyecto = !isFiltered && plano && plano.type === 'FeatureCollection' ? boundsFromFC(plano) : null
           const selPkNorm = String(selectedRef.current || '').trim().toLowerCase()
 
@@ -418,7 +506,7 @@ export default function PptoFiltroMapaPk({
       }
       mapRef.current = null
     }
-  }, [contratoId, filtroKey, selKey, height, zoomToSelected])
+  }, [contratoId, filtroKey, selKey, height, zoomToSelected, showBasemapToggle])
 
   return (
     <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column' }}>
