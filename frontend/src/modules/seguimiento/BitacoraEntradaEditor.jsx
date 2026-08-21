@@ -44,6 +44,8 @@ function emptyMaterial() {
     placa: '',
     numeros_vale: '',
     adjuntos: [],
+    ubicacion_pk: '',
+    ubicacion_pk_id: null,
     ubicacion_lat: null,
     ubicacion_lng: null,
   }
@@ -61,6 +63,8 @@ function materialFromApi(m) {
     adjuntos: Array.isArray(m.adjuntos)
       ? m.adjuntos
       : (Array.isArray(m.vales) && m.vales[0] && typeof m.vales[0] === 'object' ? m.vales : []),
+    ubicacion_pk: m.ubicacion_pk || m.pk_label || '',
+    ubicacion_pk_id: m.ubicacion_pk_id != null ? m.ubicacion_pk_id : (m.pk_id_id != null ? m.pk_id_id : null),
     ubicacion_lat: m.ubicacion_lat != null && m.ubicacion_lat !== '' ? Number(m.ubicacion_lat) : null,
     ubicacion_lng: m.ubicacion_lng != null && m.ubicacion_lng !== '' ? Number(m.ubicacion_lng) : null,
   }
@@ -200,6 +204,8 @@ export default function BitacoraEntradaEditor({
   const [mapIdx, setMapIdx] = useState(null)
   const [contratoCentro, setContratoCentro] = useState({ lat: 4.711, lng: -74.0721 })
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfUrl, setPdfUrl] = useState(null)
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
 
   // Cargar plantilla de cargos (fijos + custom del contrato)
   useEffect(() => {
@@ -240,25 +246,38 @@ export default function BitacoraEntradaEditor({
     return () => { cancelled = true }
   }, [contratoId, token])
 
-  const exportarPdfDia = async () => {
+  const exportarPdfDia = async ({ preview = false } = {}) => {
     if (!api?.exportBitacoraPdfBlob || !fecha) return
     setPdfBusy(true)
     setError('')
     try {
       const blob = await api.exportBitacoraPdfBlob(fecha)
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl)
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `bitacora_${fecha}.pdf`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 4000)
-      setOkMsg('PDF de bitácora del día descargado.')
+      setPdfUrl(url)
+      if (preview) {
+        setPdfPreviewOpen(true)
+        setOkMsg('Vista previa lista.')
+      } else {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `bitacora_${fecha}.pdf`
+        a.rel = 'noopener'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setOkMsg('PDF descargado.')
+      }
     } catch (e) {
-      setError(e.message || 'No se pudo exportar el PDF')
+      setError(e.message || 'No se pudo generar el PDF')
     } finally {
       setPdfBusy(false)
     }
   }
+
+  useEffect(() => () => {
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl)
+  }, [pdfUrl])
 
   useEffect(() => {
     setEventoDetalle((d) => ({ ...emptyEventoDetalle(eventoTipo), ...d }))
@@ -321,6 +340,7 @@ export default function BitacoraEntradaEditor({
         .filter((m) => (
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
           || Number(m.cantidad) > 0 || (m.adjuntos || []).length
+          || m.ubicacion_pk || m.ubicacion_pk_id != null
           || (m.ubicacion_lat != null && m.ubicacion_lng != null)
         ))
         .map((m) => ({
@@ -331,6 +351,8 @@ export default function BitacoraEntradaEditor({
           placa: m.placa || '',
           numeros_vale: m.numeros_vale || '',
           adjuntos: (m.adjuntos || []).slice(0, 2),
+          ...(m.ubicacion_pk ? { ubicacion_pk: m.ubicacion_pk } : {}),
+          ...(m.ubicacion_pk_id != null ? { ubicacion_pk_id: m.ubicacion_pk_id } : {}),
           ...(m.ubicacion_lat != null && m.ubicacion_lng != null
             ? { ubicacion_lat: Number(m.ubicacion_lat), ubicacion_lng: Number(m.ubicacion_lng) }
             : {}),
@@ -535,15 +557,26 @@ export default function BitacoraEntradaEditor({
               </table>
             </div>
             {tipo === 'diario' && (
-              <div style={{ ...ui.sheetWrap, width: 90, flexShrink: 0 }}>
+              <div style={{ ...ui.sheetWrap, width: 110, flexShrink: 0 }}>
                 <table style={ui.sheetTable}>
                   <thead>
-                    <tr><th style={ui.th}>Hora</th></tr>
+                    <tr><th style={ui.th}>Hora inicio</th></tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td style={ui.td}>
-                        <div style={ui.cellRo}>{horaInicio || '—'}</div>
+                        {editable ? (
+                          <input
+                            type="time"
+                            step={1}
+                            value={(horaInicio || '').slice(0, 8)}
+                            onChange={(e) => setHoraInicio(e.target.value)}
+                            style={ui.cellInp}
+                            title="Editable mientras el reporte esté abierto"
+                          />
+                        ) : (
+                          <div style={ui.cellRo}>{horaInicio || '—'}</div>
+                        )}
                       </td>
                     </tr>
                   </tbody>
@@ -828,14 +861,13 @@ export default function BitacoraEntradaEditor({
                   <table style={ui.sheetTable}>
                     <thead>
                       <tr>
-                        <th style={{ ...ui.th, width: '9%' }}>Movimiento</th>
-                        <th style={{ ...ui.th, width: '16%' }}>Tipo de material</th>
-                        <th style={{ ...ui.th, width: '12%' }}>Proveedor</th>
-                        <th style={{ ...ui.th, width: '7%' }}>Cant.</th>
-                        <th style={{ ...ui.th, width: '9%' }}>Placa</th>
-                        <th style={{ ...ui.th, width: '14%' }}>Nº vale(s)</th>
-                        <th style={{ ...ui.th, width: '9%', textAlign: 'center' }}>Remisión</th>
-                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Ubicación</th>
+                        <th style={{ ...ui.th, width: '10%' }}>Movimiento</th>
+                        <th style={{ ...ui.th, width: '20%' }}>Tipo de material</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Proveedor</th>
+                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '16%' }}>Nº vale(s)</th>
+                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>Remisión</th>
+                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>PK</th>
                         {editable && <th style={{ ...ui.th, width: '5%' }} />}
                       </tr>
                     </thead>
@@ -894,24 +926,13 @@ export default function BitacoraEntradaEditor({
                           <td style={ui.td}>
                             <input
                               disabled={!editable}
-                              value={m.placa}
-                              onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
-                                i === idx ? { ...r, placa: e.target.value.toUpperCase() } : r
-                              )))}
-                              style={{ ...ui.cellInp, textTransform: 'uppercase' }}
-                              placeholder="ABC123"
-                            />
-                          </td>
-                          <td style={ui.td}>
-                            <input
-                              disabled={!editable}
                               value={m.numeros_vale}
                               onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
                                 i === idx ? { ...r, numeros_vale: e.target.value } : r
                               )))}
                               style={ui.cellInp}
                               placeholder="Ej. 101, 102"
-                              title="Números de vale (texto)"
+                              title="Número(s) de vale"
                             />
                           </td>
                           <td style={{ ...ui.td, textAlign: 'center' }}>
@@ -929,17 +950,23 @@ export default function BitacoraEntradaEditor({
                           <td style={{ ...ui.td, textAlign: 'center' }}>
                             <button
                               type="button"
-                              title={m.ubicacion_lat != null
-                                ? `Ubicación: ${m.ubicacion_lat}, ${m.ubicacion_lng}`
-                                : 'Indicar ubicación en el mapa'}
+                              title={m.ubicacion_pk
+                                ? `PK: ${m.ubicacion_pk}`
+                                : 'Seleccionar PK en mapa'}
                               onClick={() => setMapIdx(idx)}
                               style={{
                                 ...ui.clipBtn,
-                                color: m.ubicacion_lat != null ? (t.primary || '#0f766e') : t.textMuted,
+                                color: m.ubicacion_pk || m.ubicacion_pk_id
+                                  ? (t.primary || '#0f766e')
+                                  : t.textMuted,
                                 fontWeight: 800,
+                                fontSize: 11,
+                                maxWidth: 72,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
                               }}
                             >
-                              🗺
+                              {m.ubicacion_pk ? `PK ${m.ubicacion_pk}` : '🗺 PK'}
                             </button>
                           </td>
                           {editable && (
@@ -961,7 +988,7 @@ export default function BitacoraEntradaEditor({
                   </table>
                 </div>
                 <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
-                  Nº vale(s) es texto. Remisión: máximo 2 archivos. Ubicación: ícono de mapa (vista satélite disponible).
+                  El número de vale es el dato de correlación. Ubicación: PK del plano.
                 </div>
               </div>
             </>
@@ -1143,15 +1170,24 @@ export default function BitacoraEntradaEditor({
             borderTop: `1px solid ${t.border}`, paddingTop: 10,
           }}>
             {tipo === 'diario' && permisos?.exportar && (
-              <button
-                type="button"
-                disabled={pdfBusy || busy}
-                onClick={() => void exportarPdfDia()}
-                style={{ ...btnGhost, marginRight: 'auto' }}
-                title="Exportar PDF del día (Diario + Eventos + fotos)"
-              >
-                {pdfBusy ? 'Generando PDF…' : '📄 Exportar PDF del día'}
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginRight: 'auto', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  disabled={pdfBusy || busy}
+                  onClick={() => void exportarPdfDia({ preview: true })}
+                  style={btnGhost}
+                >
+                  {pdfBusy ? '…' : 'Vista previa'}
+                </button>
+                <button
+                  type="button"
+                  disabled={pdfBusy || busy}
+                  onClick={() => void exportarPdfDia({ preview: false })}
+                  style={btnGhost}
+                >
+                  {pdfBusy ? '…' : 'Descargar'}
+                </button>
+              </div>
             )}
             {tipo === 'diario' && editable && (
               <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
@@ -1213,19 +1249,78 @@ export default function BitacoraEntradaEditor({
       {mapIdx != null && materiales[mapIdx] && (
         <BitacoraMaterialUbicacionModal
           t={t}
-          lat={materiales[mapIdx].ubicacion_lat}
-          lng={materiales[mapIdx].ubicacion_lng}
-          centroLat={contratoCentro.lat}
-          centroLng={contratoCentro.lng}
+          token={token}
+          contratoId={contratoId}
+          pkId={materiales[mapIdx].ubicacion_pk_id}
+          pkLabel={materiales[mapIdx].ubicacion_pk}
           readOnly={!editable}
           onClose={() => setMapIdx(null)}
-          onConfirm={({ ubicacion_lat, ubicacion_lng }) => {
+          onConfirm={(loc) => {
             setMateriales((rows) => rows.map((r, i) => (
-              i === mapIdx ? { ...r, ubicacion_lat, ubicacion_lng } : r
+              i === mapIdx
+                ? {
+                  ...r,
+                  ubicacion_pk: loc.ubicacion_pk || '',
+                  ubicacion_pk_id: loc.ubicacion_pk_id,
+                  ubicacion_lat: loc.ubicacion_lat,
+                  ubicacion_lng: loc.ubicacion_lng,
+                }
+                : r
             )))
             setMapIdx(null)
           }}
         />
+      )}
+
+      {pdfPreviewOpen && pdfUrl && (
+        <div
+          role="presentation"
+          onClick={() => setPdfPreviewOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 5700, background: 'rgba(15,23,42,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+        >
+          <div
+            role="dialog"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(960px, 96vw)', height: 'min(860px, 92vh)',
+              background: t.bgCard || '#fff', borderRadius: 12,
+              border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '10px 14px', borderBottom: `1px solid ${t.border}`, gap: 8,
+            }}>
+              <div style={{ fontWeight: 800, color: t.text }}>Vista previa</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const a = document.createElement('a')
+                    a.href = pdfUrl
+                    a.download = `bitacora_${fecha}.pdf`
+                    a.click()
+                  }}
+                  style={btnPrimary}
+                >
+                  Descargar
+                </button>
+                <button type="button" onClick={() => setPdfPreviewOpen(false)} style={btnGhost}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
+            <iframe
+              title="Vista previa PDF bitácora"
+              src={pdfUrl}
+              style={{ flex: 1, width: '100%', border: 'none', background: '#525659' }}
+            />
+          </div>
+        </div>
       )}
 
       {claraOpen && (

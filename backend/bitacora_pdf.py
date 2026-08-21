@@ -1,7 +1,7 @@
 """
-PDF Bitácora de Obra — exportación del día (landscape, compacto).
-Hoja 1: Reporte Diario · Hoja 2: Eventos · Hoja 3+: Fotografías.
-Encabezado institucional con 3 logos (entidad, contratista, interventoría).
+PDF Bitácora de Obra — landscape compacto con paleta del contrato.
+Hoja Diario: encabezado + panel 3 cols + materiales/obs | fotos 2×2.
+Hoja Eventos (solo si hay): cada evento con fotos inmediatamente después.
 """
 from __future__ import annotations
 
@@ -19,24 +19,26 @@ from bitacora_service import (
 )
 from topografia_utils import to_pdf_bytes
 
-_COLOR = "#0f172a"
-_BORDE = "#334155"
-_BORDE_SUAVE = "#94a3b8"
-_BG_H = "#1e293b"
-_FG_H = "#ffffff"
-_MUTED = "#64748b"
-
-# Cajas horizontales para fotos (contain, sin deformar).
-_FOTO_BOX_W = 220.0
-_FOTO_BOX_H = 130.0
-_LOGO_H = 36
-_LOGO_W = 100.0
+# Compactación: ~40% menos altura de logos vs. 36pt previos.
+_LOGO_H = 22
+_LOGO_W = 72.0
+_FOTO_BOX_W = 118.0
+_FOTO_BOX_H = 78.0
+_FOTO_MAX_DIARIO = 4
 
 _EVENTO_LABELS = {
     "visita_terceros": "Visita de terceros",
-    "incidente_sst": "Incidente de seguridad (SST)",
+    "incidente_sst": "Incidente de seguridad SST",
     "reporte_actividades": "Reporte de actividades",
-    "novedades": "Novedades/Observaciones generales",
+    "novedades": "Novedades",
+}
+
+_DEFAULT_PALETTE = {
+    "encabezado": {"bg": "#DDEFF8", "text": "#0F2942"},
+    "titulo_1": {"bg": "#EEF7FB", "text": "#0F2942"},
+    "titulo_2": {"bg": "#E5F4FA", "text": "#1F4E70"},
+    "linea_principal": {"bg": "#FFFFFF", "text": "#0F2942"},
+    "linea_secundaria": {"bg": "#F8FAFC", "text": "#0F2942"},
 }
 
 
@@ -59,6 +61,23 @@ def _plain_from_html(raw) -> str:
     return s.strip()
 
 
+def _palette(contrato: dict) -> dict:
+    raw = contrato.get("export_palette") if isinstance(contrato, dict) else None
+    if not isinstance(raw, dict):
+        return {k: dict(v) for k, v in _DEFAULT_PALETTE.items()}
+    out = {}
+    for key, def_t in _DEFAULT_PALETTE.items():
+        block = raw.get(key)
+        if isinstance(block, dict):
+            out[key] = {
+                "bg": str(block.get("bg") or def_t["bg"]),
+                "text": str(block.get("text") or def_t["text"]),
+            }
+        else:
+            out[key] = dict(def_t)
+    return out
+
+
 def _logo_uri(url: Optional[str]) -> str:
     if not url or not str(url).strip():
         return ""
@@ -69,7 +88,6 @@ def _logo_uri(url: Optional[str]) -> str:
 
 
 def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
-    """Escala contain sin deformar (misma idea que seguimiento_pdf)."""
     try:
         from PIL import Image
         import io
@@ -90,8 +108,9 @@ def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
         return round(max_w * 0.55, 2), round(max_h, 2)
 
 
-def _logo_cell(url: Optional[str], placeholder: str) -> str:
+def _logo_cell(url: Optional[str], placeholder: str, pal: dict) -> str:
     uri = _logo_uri(url)
+    muted = pal["titulo_2"]["text"]
     if uri:
         w, h = _fit_pt(uri, _LOGO_W, float(_LOGO_H))
         return (
@@ -100,8 +119,8 @@ def _logo_cell(url: Optional[str], placeholder: str) -> str:
             f"</div>"
         )
     return (
-        f'<div style="border:0.4pt dashed {_BORDE_SUAVE};min-height:{_LOGO_H}pt;'
-        f'text-align:center;padding:2pt;font-size:5pt;color:#94a3b8;">{_esc(placeholder)}</div>'
+        f'<div style="border:0.3pt dashed {muted};min-height:{_LOGO_H}pt;'
+        f'text-align:center;padding:1pt;font-size:4.5pt;color:{muted};">{_esc(placeholder)}</div>'
     )
 
 
@@ -110,7 +129,10 @@ def _resolve_img_uri(im: dict, contrato_id: int) -> str:
         return ""
     uri = str(im.get("data_uri") or "").strip()
     if uri.startswith("data:image"):
-        return uri
+        try:
+            return firma_url_a_data_uri(uri) or uri
+        except Exception:
+            return uri
     url = str(im.get("url") or "").strip()
     if url:
         try:
@@ -124,40 +146,54 @@ def _resolve_img_uri(im: dict, contrato_id: int) -> str:
         data, mime = leer_media_bitacora(contrato_id, path)
         if not data or len(data) > 6_000_000:
             return ""
-        return f"data:{mime or 'image/png'};base64,{base64.b64encode(data).decode('ascii')}"
+        from almacen_firma_pdf import _data_uri_from_bytes
+        return _data_uri_from_bytes(data, mime or "image/png")
     except Exception:
         return ""
 
 
-def _section_title(text: str) -> str:
+def _section_title(text: str, pal: dict) -> str:
+    t2 = pal["titulo_2"]
     return (
-        f'<div style="background:{_BG_H};color:{_FG_H};font-size:8pt;font-weight:bold;'
-        f'padding:3pt 6pt;margin:6pt 0 3pt;">{_esc(text)}</div>'
+        f'<div style="background:{t2["bg"]};color:{t2["text"]};font-size:7pt;font-weight:bold;'
+        f'padding:2pt 5pt;margin:3pt 0 2pt;">{_esc(text)}</div>'
     )
 
 
-def _mini_table(headers: List[str], rows: List[List[str]], col_widths: Optional[List[str]] = None) -> str:
+def _mini_table(
+    headers: List[str],
+    rows: List[List[str]],
+    pal: dict,
+    col_widths: Optional[List[str]] = None,
+    compact: bool = False,
+) -> str:
+    t2 = pal["titulo_2"]
+    lp = pal["linea_principal"]
+    ls = pal["linea_secundaria"]
+    pad = "1pt 2pt" if compact else "1.5pt 2.5pt"
+    fs = "5.5pt" if compact else "6pt"
     ths = []
     for i, h in enumerate(headers):
         w = f' width="{col_widths[i]}"' if col_widths and i < len(col_widths) else ""
         ths.append(
-            f'<th{w} style="background:{_BG_H};color:{_FG_H};font-size:6.5pt;padding:2pt 3pt;'
-            f'border:0.3pt solid {_BORDE};text-align:left;">{_esc(h)}</th>'
+            f'<th{w} style="background:{t2["bg"]};color:{t2["text"]};font-size:{fs};padding:{pad};'
+            f'border:0.25pt solid {t2["text"]};text-align:left;">{_esc(h)}</th>'
         )
     body = []
-    for r in rows:
+    for ri, r in enumerate(rows):
+        tier = ls if ri % 2 else lp
         tds = []
         for i, cell in enumerate(r):
             w = f' width="{col_widths[i]}"' if col_widths and i < len(col_widths) else ""
             tds.append(
-                f'<td{w} style="font-size:6.5pt;padding:2pt 3pt;border:0.3pt solid {_BORDE_SUAVE};'
-                f'color:{_COLOR};vertical-align:top;">{cell}</td>'
+                f'<td{w} style="font-size:{fs};padding:{pad};border:0.2pt solid {t2["bg"]};'
+                f'color:{tier["text"]};background:{tier["bg"]};vertical-align:top;">{cell}</td>'
             )
         body.append(f"<tr>{''.join(tds)}</tr>")
     if not body:
         body.append(
-            f'<tr><td colspan="{len(headers)}" style="font-size:6.5pt;padding:4pt;color:{_MUTED};'
-            f'border:0.3pt solid {_BORDE_SUAVE};">Sin registros</td></tr>'
+            f'<tr><td colspan="{len(headers)}" style="font-size:{fs};padding:3pt;color:{t2["text"]};'
+            f'border:0.2pt solid {t2["bg"]};">Sin registros</td></tr>'
         )
     return (
         f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
@@ -165,45 +201,60 @@ def _mini_table(headers: List[str], rows: List[List[str]], col_widths: Optional[
     )
 
 
-def _encabezado(contrato: dict, fecha: str) -> str:
+def _encabezado(contrato: dict, fecha: Optional[str], pal: dict, *, mostrar_fecha: bool = True) -> str:
+    """Encabezado institucional compacto (~40% menos altura)."""
+    enc = pal["encabezado"]
+    t1 = pal["titulo_1"]
     entidad = contrato.get("entidad_otra") or contrato.get("entidad") or "Entidad"
+    titulo = "Bitácora de Obra"
+    if mostrar_fecha and fecha:
+        titulo = f"Bitácora de Obra · {_esc(fecha)}"
     return f"""
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1pt solid {_BORDE};margin:0 0 4pt;">
+<table width="100%" cellspacing="0" cellpadding="0"
+  style="border-collapse:collapse;border:0.6pt solid {enc['text']};margin:0 0 3pt;background:{enc['bg']};">
   <tr>
-    <td width="18%" style="padding:3pt;border-right:0.4pt solid {_BORDE_SUAVE};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_contratista"), "Logo contratista")}
+    <td width="16%" style="padding:2pt;border-right:0.3pt solid {t1['bg']};vertical-align:middle;">
+      {_logo_cell(contrato.get("logo_contratista"), "Contratista", pal)}
     </td>
-    <td width="18%" style="padding:3pt;border-right:0.4pt solid {_BORDE_SUAVE};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_interventoria"), "Logo interventoría")}
+    <td width="16%" style="padding:2pt;border-right:0.3pt solid {t1['bg']};vertical-align:middle;">
+      {_logo_cell(contrato.get("logo_interventoria"), "Interventoría", pal)}
     </td>
-    <td width="46%" style="padding:3pt 6pt;vertical-align:middle;">
-      <div style="font-size:9pt;font-weight:bold;color:{_COLOR};">Bitácora de Obra · {_esc(fecha)}</div>
-      <div style="font-size:6.5pt;color:{_MUTED};margin-top:2pt;">
+    <td width="52%" style="padding:2pt 5pt;vertical-align:middle;background:{t1['bg']};">
+      <div style="font-size:8pt;font-weight:bold;color:{enc['text']};line-height:1.15;">{titulo}</div>
+      <div style="font-size:5.5pt;color:{t1['text']};margin-top:1pt;line-height:1.2;">
         Contrato {_esc(contrato.get("numero"))}
-        {(" · Interventoría " + _esc(contrato.get("numero_interventoria"))) if contrato.get("numero_interventoria") else ""}
+        {(" · " + _esc(contrato.get("numero_interventoria"))) if contrato.get("numero_interventoria") else ""}
       </div>
-      <div style="font-size:6pt;color:{_MUTED};margin-top:1pt;">{_esc((contrato.get("objeto") or "")[:160])}</div>
-      <div style="font-size:6pt;color:{_MUTED};margin-top:1pt;">
-        Contratista: {_esc(contrato.get("contratista") or "—")} ·
-        Interventoría: {_esc(contrato.get("interventoria") or "—")} ·
-        {_esc(entidad)}
+      <div style="font-size:5pt;color:{t1['text']};margin-top:0.5pt;line-height:1.15;">
+        {_esc(contrato.get("contratista") or "—")} · {_esc(contrato.get("interventoria") or "—")} · {_esc(entidad)}
       </div>
     </td>
-    <td width="18%" style="padding:3pt;border-left:0.4pt solid {_BORDE_SUAVE};vertical-align:middle;">
-      {_logo_cell(contrato.get("logo_entidad"), "Logo entidad")}
+    <td width="16%" style="padding:2pt;border-left:0.3pt solid {t1['bg']};vertical-align:middle;">
+      {_logo_cell(contrato.get("logo_entidad"), "Entidad", pal)}
     </td>
   </tr>
 </table>
 """
 
 
-def _html_personal_y_preop(diario: Optional[dict]) -> str:
+def _html_panel_superior(diario: Optional[dict], slots: List[dict], pal: dict) -> str:
+    """Clima | Personal | Maquinaria en 3 columnas; filas ~30% más compactas."""
+    clima_rows = []
+    for s in slots:
+        marca = " ★" if s.get("manual") else ""
+        temp = s.get("clima_temp_c")
+        temp_s = f"{temp:.0f}°" if isinstance(temp, (int, float)) else "—"
+        clima_rows.append([
+            _esc(s.get("hora")),
+            _esc((s.get("clima_descripcion") or "—") + marca),
+            _esc(temp_s),
+        ])
     personal = (diario or {}).get("personal") or []
-    usos = (diario or {}).get("equipos_uso") or []
     pers_rows = [
         [_esc(p.get("cargo")), _esc(p.get("cantidad"))]
         for p in personal if isinstance(p, dict) and (p.get("cantidad") or 0)
     ]
+    usos = (diario or {}).get("equipos_uso") or []
     uso_rows = []
     for u in usos:
         if not isinstance(u, dict):
@@ -212,194 +263,208 @@ def _html_personal_y_preop(diario: Optional[dict]) -> str:
         uso_rows.append([
             _esc(u.get("equipo_nombre")),
             _esc(u.get("operador") or "—"),
-            _esc(u.get("hora_inicio") or "—")[:5],
-            _esc(u.get("hora_fin") or "—")[:5],
-            _esc(f"{n_pre} adj." if n_pre else "—"),
+            _esc(f"{n_pre}" if n_pre else "—"),
         ])
-    left = (
-        _section_title("Personal en obra")
-        + _mini_table(["Cargo", "Cant."], pers_rows, ["75%", "25%"])
+    left = _section_title("Clima", pal) + _mini_table(
+        ["Hora", "Condición", "T"], clima_rows, pal, ["22%", "58%", "20%"], compact=True,
     )
-    right = (
-        _section_title("Maquinaria / equipos · Preoperacional")
-        + _mini_table(
-            ["Equipo", "Operador", "Inicio", "Fin", "Preop."],
-            uso_rows,
-            ["34%", "22%", "14%", "14%", "16%"],
-        )
+    mid = _section_title("Personal", pal) + _mini_table(
+        ["Cargo", "Cant."], pers_rows, pal, ["75%", "25%"], compact=True,
     )
+    right = _section_title("Maquinaria", pal) + _mini_table(
+        ["Equipo", "Operador", "Pre."], uso_rows, pal, ["48%", "36%", "16%"], compact=True,
+    )
+    t1 = pal["titulo_1"]
+    hora = ""
+    if diario and diario.get("hora_inicio_labores"):
+        hora = f" · Inicio {_esc(str(diario.get('hora_inicio_labores') or '')[:5])}"
     return f"""
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<div style="font-size:6pt;color:{t1['text']};margin:0 0 2pt;">
+  <b>Reporte Diario</b>{hora}
+</div>
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:0.4pt solid {t1['bg']};">
   <tr>
-    <td width="38%" style="vertical-align:top;padding-right:4pt;">{left}</td>
-    <td width="62%" style="vertical-align:top;">{right}</td>
+    <td width="34%" style="vertical-align:top;padding:2pt;border-right:0.3pt solid {t1['bg']};">{left}</td>
+    <td width="28%" style="vertical-align:top;padding:2pt;border-right:0.3pt solid {t1['bg']};">{mid}</td>
+    <td width="38%" style="vertical-align:top;padding:2pt;">{right}</td>
   </tr>
 </table>
 """
 
 
-def _html_materiales(diario: Optional[dict]) -> str:
+def _ubicacion_material(m: dict) -> str:
+    pk = m.get("ubicacion_pk") or m.get("pk_label") or m.get("pk")
+    if pk:
+        return str(pk)
+    lat, lng = m.get("ubicacion_lat"), m.get("ubicacion_lng")
+    if lat is not None and lng is not None:
+        return f"{lat}, {lng}"
+    return "—"
+
+
+def _html_materiales(diario: Optional[dict], pal: dict) -> str:
     mats = (diario or {}).get("materiales") or []
     rows = []
     for m in mats:
         if not isinstance(m, dict):
             continue
-        lat, lng = m.get("ubicacion_lat"), m.get("ubicacion_lng")
-        ubic = "—"
-        if lat is not None and lng is not None:
-            ubic = f"{lat}, {lng}"
         n_adj = len(m.get("adjuntos") or []) if isinstance(m.get("adjuntos"), list) else 0
         rows.append([
             _esc((m.get("movimiento") or "").capitalize()),
             _esc(m.get("tipo_material")),
             _esc(m.get("proveedor") or "—"),
             _esc(m.get("cantidad")),
-            _esc(m.get("placa") or "—"),
             _esc(m.get("numeros_vale") or "—"),
-            _esc(ubic),
+            _esc(_ubicacion_material(m)),
             _esc(str(n_adj) if n_adj else "—"),
         ])
-    return _section_title("Materiales (ingreso / salida)") + _mini_table(
-        ["Mov.", "Tipo", "Proveedor", "Cant.", "Placa", "Vale(s)", "Ubicación", "Adj."],
+    return _section_title("Materiales", pal) + _mini_table(
+        ["Mov.", "Tipo", "Proveedor", "Cant.", "Vale(s)", "PK", "Adj."],
         rows,
-        ["8%", "18%", "14%", "8%", "10%", "14%", "20%", "8%"],
+        pal,
+        ["8%", "20%", "16%", "8%", "18%", "18%", "7%"],
+        compact=True,
     )
 
 
-def _html_clima(slots: List[dict]) -> str:
-    rows = []
-    for s in slots:
-        marca = " ★" if s.get("manual") else ""
-        temp = s.get("clima_temp_c")
-        temp_s = f"{temp:.1f} °C" if isinstance(temp, (int, float)) else "—"
-        rows.append([
-            _esc(s.get("hora")),
-            _esc((s.get("clima_descripcion") or "—") + marca),
-            _esc(temp_s),
-            _esc("Manual" if s.get("manual") else "Open-Meteo"),
-        ])
-    return (
-        _section_title("Estado del clima cada 3 horas (ubicación del contrato)")
-        + _mini_table(["Hora", "Condición", "Temp.", "Fuente"], rows, ["12%", "48%", "15%", "25%"])
-        + f'<div style="font-size:5.5pt;color:{_MUTED};margin-top:2pt;">'
-        f"★ Valor manual del Reporte Diario tiene prioridad en su tramo horario.</div>"
-    )
-
-
-def _html_observaciones(diario: Optional[dict]) -> str:
+def _html_observaciones(diario: Optional[dict], pal: dict) -> str:
     txt = _plain_from_html((diario or {}).get("cuerpo_html"))
     elaborador = (diario or {}).get("created_by_nombre") or "—"
+    lp = pal["linea_principal"]
+    t2 = pal["titulo_2"]
     return (
-        _section_title("Observaciones y novedades del Reporte Diario")
-        + f'<div style="font-size:7pt;color:{_COLOR};white-space:pre-wrap;border:0.3pt solid {_BORDE_SUAVE};'
-        f'padding:4pt 6pt;min-height:40pt;">{_esc(txt or "—")}</div>'
-        + f'<div style="font-size:6pt;color:{_MUTED};margin-top:2pt;">Elaborado por: {_esc(elaborador)}</div>'
+        _section_title("Observaciones", pal)
+        + f'<div style="font-size:6pt;color:{lp["text"]};white-space:pre-wrap;border:0.25pt solid {t2["bg"]};'
+        f'padding:3pt 4pt;min-height:28pt;background:{lp["bg"]};">{_esc(txt or "—")}</div>'
+        + f'<div style="font-size:5pt;color:{t2["text"]};margin-top:1pt;">Elaborado por: {_esc(elaborador)}</div>'
     )
 
 
-def _html_eventos(eventos: List[dict]) -> str:
-    rows = []
-    for ev in eventos:
-        if not isinstance(ev, dict):
-            continue
-        tipo = _label_evento(ev.get("evento_tipo"))
-        desc = _plain_from_html(ev.get("cuerpo_html"))[:280]
-        dest = ev.get("dirigido_a") or "—"
-        elab = ev.get("created_by_nombre") or "—"
-        n_img = len(ev.get("imagenes") or []) if isinstance(ev.get("imagenes"), list) else 0
-        rows.append([
-            _esc(ev.get("fecha")),
-            _esc(tipo),
-            _esc(desc or "—"),
-            _esc(dest),
-            _esc(elab),
-            _esc(str(n_img) if n_img else "—"),
-        ])
-    return (
-        _section_title("Reportes de Evento del día")
-        + _mini_table(
-            ["Fecha", "Tipo", "Descripción", "Dirigido a", "Elaborado por", "Fotos"],
-            rows,
-            ["10%", "18%", "34%", "14%", "16%", "8%"],
-        )
-    )
-
-
-def _collect_fotos(diario: Optional[dict], eventos: List[dict]) -> List[dict]:
-    out: List[dict] = []
-    if diario:
-        for im in diario.get("imagenes") or []:
-            if isinstance(im, dict):
-                out.append({**im, "_origen": "Diario"})
-        for m in diario.get("materiales") or []:
-            if not isinstance(m, dict):
-                continue
-            for im in m.get("adjuntos") or []:
-                if isinstance(im, dict):
-                    out.append({**im, "_origen": f"Material · {m.get('tipo_material') or 'remisión'}"})
-        for u in diario.get("equipos_uso") or []:
-            if not isinstance(u, dict):
-                continue
-            for im in u.get("preoperacionales") or []:
-                if isinstance(im, dict):
-                    out.append({**im, "_origen": f"Preop. · {u.get('equipo_nombre') or 'equipo'}"})
-    for ev in eventos or []:
-        if not isinstance(ev, dict):
-            continue
-        label = _label_evento(ev.get("evento_tipo"))
-        for im in ev.get("imagenes") or []:
-            if isinstance(im, dict):
-                out.append({**im, "_origen": f"Evento · {label}"})
-    return out
-
-
-def _html_fotos(fotos: List[dict], contrato_id: int) -> str:
-    if not fotos:
+def _foto_cell(im: dict, contrato_id: int, pie: str, pal: dict) -> str:
+    uri = _resolve_img_uri(im, contrato_id)
+    t2 = pal["titulo_2"]
+    if not uri:
         return (
-            _section_title("Fotografías del día")
-            + f'<div style="font-size:7pt;color:{_MUTED};padding:6pt;">Sin fotografías registradas.</div>'
-        )
-    cells = []
-    for im in fotos:
-        uri = _resolve_img_uri(im, contrato_id)
-        if not uri:
-            continue
-        w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
-        caption = _esc(im.get("_origen") or im.get("nombre") or "Foto")
-        cells.append(
-            f'<td width="50%" style="padding:4pt;vertical-align:top;page-break-inside:avoid;">'
-            f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.3pt solid {_BORDE_SUAVE};'
-            f'margin:0 auto;text-align:center;line-height:{_FOTO_BOX_H}pt;overflow:hidden;">'
-            f'<img src="{uri}" style="width:{w}pt;height:{h}pt;border:0;vertical-align:middle;"/>'
-            f'</div>'
-            f'<div style="font-size:6pt;color:{_MUTED};text-align:center;margin-top:2pt;">{caption}</div>'
+            f'<td width="50%" style="padding:2pt;vertical-align:top;">'
+            f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.25pt dashed {t2["bg"]};'
+            f'margin:0 auto;"></div>'
+            f'<div style="font-size:5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie)}</div>'
             f"</td>"
         )
-    if not cells:
-        return (
-            _section_title("Fotografías del día")
-            + f'<div style="font-size:7pt;color:{_MUTED};padding:6pt;">Sin fotografías disponibles.</div>'
-        )
-    # Pares en filas de 2 (horizontal)
+    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
+    return (
+        f'<td width="50%" style="padding:2pt;vertical-align:top;page-break-inside:avoid;">'
+        f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.25pt solid {t2["bg"]};'
+        f'margin:0 auto;text-align:center;line-height:{_FOTO_BOX_H}pt;overflow:hidden;">'
+        f'<img src="{uri}" style="width:{w}pt;height:{h}pt;border:0;vertical-align:middle;"/>'
+        f"</div>"
+        f'<div style="font-size:5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie)}</div>'
+        f"</td>"
+    )
+
+
+def _html_registro_fotografico(fotos: List[dict], contrato_id: int, pal: dict, max_n: int = _FOTO_MAX_DIARIO) -> str:
+    seleccion = [f for f in (fotos or []) if isinstance(f, dict)][:max_n]
+    title = _section_title("Registro Fotográfico", pal)
+    if not seleccion:
+        t2 = pal["titulo_2"]
+        return title + f'<div style="font-size:6pt;color:{t2["text"]};padding:4pt;">Sin fotografías.</div>'
+    cells = [_foto_cell(im, contrato_id, im.get("_pie") or "Reporte Diario", pal) for im in seleccion]
+    while len(cells) < 4 and len(seleccion) > 0:
+        # completar grilla 2×2 solo con huecos vacíos si hay <4
+        break
     rows_html = []
-    for i in range(0, len(cells), 2):
+    for i in range(0, max(len(cells), 1), 2):
         pair = cells[i:i + 2]
         if len(pair) == 1:
             pair.append('<td width="50%"></td>')
         rows_html.append(f"<tr>{''.join(pair)}</tr>")
-    return (
-        _section_title("Fotografías del día (formato horizontal · verticales ajustadas sin deformar)")
-        + f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
-    )
+    return title + f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
+
+
+def _fotos_diario(diario: Optional[dict]) -> List[dict]:
+    out: List[dict] = []
+    if not diario:
+        return out
+    for im in diario.get("imagenes") or []:
+        if isinstance(im, dict):
+            out.append({**im, "_pie": "Reporte Diario"})
+    for m in diario.get("materiales") or []:
+        if not isinstance(m, dict):
+            continue
+        for im in m.get("adjuntos") or []:
+            if isinstance(im, dict):
+                out.append({**im, "_pie": "Reporte Diario"})
+    for u in diario.get("equipos_uso") or []:
+        if not isinstance(u, dict):
+            continue
+        for im in u.get("preoperacionales") or []:
+            if isinstance(im, dict):
+                out.append({**im, "_pie": "Reporte Diario"})
+    return out
+
+
+def _html_mitad_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> str:
+    left = _html_materiales(diario, pal) + _html_observaciones(diario, pal)
+    right = _html_registro_fotografico(_fotos_diario(diario), contrato_id, pal)
+    return f"""
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3pt;">
+  <tr>
+    <td width="52%" style="vertical-align:top;padding-right:4pt;">{left}</td>
+    <td width="48%" style="vertical-align:top;">{right}</td>
+  </tr>
+</table>
+"""
+
+
+def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) -> str:
+    parts = [_section_title("Reportes de Evento", pal)]
+    t2 = pal["titulo_2"]
+    lp = pal["linea_principal"]
+    for ev in eventos or []:
+        if not isinstance(ev, dict):
+            continue
+        tipo = _label_evento(ev.get("evento_tipo"))
+        desc = _plain_from_html(ev.get("cuerpo_html"))
+        dest = ev.get("dirigido_a") or "—"
+        elab = ev.get("created_by_nombre") or "—"
+        parts.append(
+            f'<div style="border:0.3pt solid {t2["bg"]};padding:3pt 4pt;margin:3pt 0;page-break-inside:avoid;">'
+            f'<div style="font-size:7pt;font-weight:bold;color:{t2["text"]};">{_esc(tipo)}</div>'
+            f'<div style="font-size:5.5pt;color:{lp["text"]};margin-top:1pt;">'
+            f'{_esc(ev.get("fecha") or "")} · {_esc(elab)} · Dirigido a: {_esc(dest)}</div>'
+            f'<div style="font-size:6pt;color:{lp["text"]};margin-top:2pt;white-space:pre-wrap;">'
+            f'{_esc(desc or "—")}</div>'
+            f"</div>"
+        )
+        imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)]
+        if imgs:
+            cells = [
+                _foto_cell(im, contrato_id, "Reporte de Evento", pal)
+                for im in imgs[:4]
+            ]
+            rows_html = []
+            for i in range(0, len(cells), 2):
+                pair = cells[i:i + 2]
+                if len(pair) == 1:
+                    pair.append('<td width="50%"></td>')
+                rows_html.append(f"<tr>{''.join(pair)}</tr>")
+            parts.append(
+                f'<div style="margin:0 0 4pt 8pt;">'
+                f'{_section_title("Registro Fotográfico", pal)}'
+                f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
+                f"</div>"
+            )
+    return "".join(parts)
 
 
 def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
     """Genera PDF landscape del día de bitácora para el contrato."""
-    # Evitar import circular: label helper local si no existe en service
     contrato = contrato_meta_bitacora(sb, contrato_id)
+    pal = _palette(contrato)
     dia = list_entradas_del_dia(sb, contrato_id, fecha)
     diario = dia.get("diario")
-    eventos = dia.get("eventos") or []
+    eventos = [e for e in (dia.get("eventos") or []) if isinstance(e, dict)]
     fecha_iso = dia.get("fecha") or str(fecha)[:10]
 
     manual = None
@@ -418,37 +483,29 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
         manual=manual,
     )
 
-    hdr = _encabezado(contrato, fecha_iso)
+    hdr = _encabezado(contrato, fecha_iso, pal, mostrar_fecha=True)
     hoja1 = (
         hdr
-        + f'<div style="font-size:7pt;margin:2pt 0 4pt;color:{_COLOR};">'
-        f"<b>Fecha del reporte:</b> {_esc(fecha_iso)}"
-        + (
-            f" · Hora inicio labores: {_esc(str(diario.get('hora_inicio_labores') or '')[:5])}"
-            if diario else " · Sin Reporte Diario registrado"
-        )
-        + "</div>"
-        + _html_clima(slots)
-        + _html_personal_y_preop(diario)
-        + _html_materiales(diario)
-        + _html_observaciones(diario)
+        + _html_panel_superior(diario, slots, pal)
+        + _html_mitad_diario(diario, int(contrato_id), pal)
     )
-    hoja2 = hdr + _html_eventos(eventos)
-    hoja3 = hdr + _html_fotos(_collect_fotos(diario, eventos), int(contrato_id))
 
+    body_parts = [hoja1]
+    if eventos:
+        hdr_ev = _encabezado(contrato, None, pal, mostrar_fecha=False)
+        body_parts.append('<div class="break"></div>')
+        body_parts.append(hdr_ev + _html_eventos_con_fotos(eventos, int(contrato_id), pal))
+
+    text_color = pal["linea_principal"]["text"]
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <title>Bitácora {_esc(fecha_iso)}</title>
 <style>
-  @page {{ size: letter landscape; margin: 8mm 8mm; }}
-  body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 8pt; }}
+  @page {{ size: letter landscape; margin: 7mm 7mm; }}
+  body {{ font-family: Helvetica, Arial, sans-serif; color: {text_color}; font-size: 7pt; }}
   .break {{ page-break-before: always; }}
 </style>
 </head><body>
-{hoja1}
-<div class="break"></div>
-{hoja2}
-<div class="break"></div>
-{hoja3}
+{''.join(body_parts)}
 </body></html>"""
     return to_pdf_bytes(doc, landscape=True)

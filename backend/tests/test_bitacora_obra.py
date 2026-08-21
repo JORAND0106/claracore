@@ -316,6 +316,21 @@ def test_normalizar_materiales_ubicacion():
     assert out[0]["ubicacion_lng"] == -74.0720002
 
 
+def test_normalizar_materiales_ubicacion_pk():
+    out = svc._normalizar_materiales([{
+        "movimiento": "salida",
+        "tipo_material": "Asfalto",
+        "cantidad": 1,
+        "ubicacion_pk": "PK 2+050",
+        "ubicacion_pk_id": "42",
+        "ubicacion_lat": 4.7,
+        "ubicacion_lng": -74.0,
+    }])
+    assert out[0]["ubicacion_pk"] == "PK 2+050"
+    assert out[0]["ubicacion_pk_id"] == 42
+    assert out[0]["ubicacion_lat"] == 4.7
+
+
 def test_slot_3h_desde_hora():
     assert svc._slot_3h_desde_hora("07:30") == 6
     assert svc._slot_3h_desde_hora("12:00") == 12

@@ -6,9 +6,28 @@ from almacen_orden_compra_pdf import _html_firma_oc_celda, generar_pdf_orden_com
 from almacen_service import _usuario_firma_url, aprobar_solicitud, eliminar_solicitud_desarrollador
 
 
-def test_firma_url_a_data_uri_passthrough():
-    uri = "data:image/png;base64,abc"
-    assert firma_url_a_data_uri(uri) == uri
+def test_firma_url_data_uri_invalido_no_rompe():
+    uri = "data:image/png;base64,@@@not-valid@@@"
+    out = firma_url_a_data_uri(uri)
+    assert out.startswith("data:image/")
+
+
+def test_firma_url_aplana_png_transparente():
+    """PNG con alpha se aplana sobre blanco (evita fondo negro en xhtml2pdf)."""
+    import base64
+    import io
+    from PIL import Image
+
+    im = Image.new("RGBA", (8, 8), (0, 128, 255, 0))  # totalmente transparente
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    out = firma_url_a_data_uri(uri)
+    assert out.startswith("data:image/png;base64,")
+    raw = base64.b64decode(out.split(",", 1)[1])
+    flat = Image.open(io.BytesIO(raw))
+    assert flat.mode == "RGB"
+    assert flat.getpixel((0, 0)) == (255, 255, 255)
 
 
 def test_html_firma_oc_celda_incluye_imagen():

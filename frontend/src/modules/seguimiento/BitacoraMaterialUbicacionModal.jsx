@@ -1,134 +1,80 @@
-import { useEffect, useRef, useState } from 'react'
-import mapboxgl from 'mapbox-gl'
-import { crearMapboxMapSeguro } from '../../mapboxSafe'
-import {
-  applySicoeBasemapTerrain,
-  createSicoeBasemapStyleControl,
-  guardarVistaBasemap,
-  leerVistaBasemapGuardada,
-  normalizarVistaBasemap,
-  sicoeBasemapStyleUrl,
-} from '../sicoe-obra/sicoeMapaBasemap'
+import { useCallback, useEffect, useState } from 'react'
+import PptoFiltroMapaPk from '../presupuesto/PptoFiltroMapaPk'
+import { API_BASE } from '../../apiBase'
+import { buscarPkMaestroPorValorPlano } from '../sicoe-obra/sicoePkResolver'
+
+async function fetchPkMaestro(contratoId, token) {
+  const t = token
+    || (typeof localStorage !== 'undefined' && localStorage.getItem('cc_token'))
+    || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('cc_token'))
+    || ''
+  const r = await fetch(`${API_BASE}/sicoe-obra/${contratoId}/pk-ids`, {
+    headers: t ? { Authorization: `Bearer ${t}` } : {},
+  })
+  if (!r.ok) throw new Error('No se pudo cargar el maestro PK del contrato.')
+  const data = await r.json()
+  return Array.isArray(data) ? data : []
+}
 
 /**
- * Modal Mapbox para ubicar ingreso/salida de material (satélite disponible).
- * Reutiliza el control de basemap de SicoeObra.
+ * Ubicación de material por PK (mismo mapa de polígonos que Cantidades/Presupuesto).
  */
 export default function BitacoraMaterialUbicacionModal({
   t,
-  lat = null,
-  lng = null,
-  centroLat = 4.711,
-  centroLng = -74.0721,
+  token,
+  contratoId,
+  pkId = '',
+  pkLabel = '',
+  readOnly = false,
   onConfirm,
   onClose,
-  readOnly = false,
 }) {
-  const containerRef = useRef(null)
-  const mapRef = useRef(null)
-  const markerRef = useRef(null)
-  const [vista, setVista] = useState(() => leerVistaBasemapGuardada())
-  const [coords, setCoords] = useState(() => ({
-    lat: lat != null && lat !== '' ? String(lat) : '',
-    lng: lng != null && lng !== '' ? String(lng) : '',
-  }))
-  const [mapError, setMapError] = useState(null)
-  const modoRef = useRef(!readOnly)
-  const vistaRef = useRef(vista)
+  const [pkList, setPkList] = useState([])
+  const [pkLoading, setPkLoading] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const [selPkId, setSelPkId] = useState(pkId ? String(pkId) : '')
+  const [selLabel, setSelLabel] = useState(pkLabel || '')
+  const [coords, setCoords] = useState({ lat: null, lng: null })
 
-  useEffect(() => { modoRef.current = !readOnly }, [readOnly])
-  useEffect(() => { vistaRef.current = vista }, [vista])
+  const cargar = useCallback(async () => {
+    if (!contratoId) return
+    setPkLoading(true)
+    setAviso('')
+    try {
+      const rows = await fetchPkMaestro(contratoId, token)
+      setPkList(rows)
+      if (!rows.length) setAviso('No hay PK registrados para este contrato.')
+    } catch (e) {
+      setPkList([])
+      setAviso(e.message || 'Error al cargar maestro PK.')
+    } finally {
+      setPkLoading(false)
+    }
+  }, [contratoId, token])
 
-  useEffect(() => {
-    if (!containerRef.current) return undefined
-    const has = coords.lat && coords.lng
-      && !Number.isNaN(parseFloat(coords.lat))
-      && !Number.isNaN(parseFloat(coords.lng))
-    const cLat = has ? parseFloat(coords.lat) : Number(centroLat) || 4.711
-    const cLng = has ? parseFloat(coords.lng) : Number(centroLng) || -74.0721
-    const initial = normalizarVistaBasemap(vistaRef.current)
-    const { map, error } = crearMapboxMapSeguro(containerRef.current, {
-      style: sicoeBasemapStyleUrl(initial),
-      center: [cLng, cLat],
-      zoom: has ? 15 : 12,
-    })
-    if (error || !map) {
-      setMapError(error || 'Mapa no disponible')
-      return undefined
-    }
-    setMapError(null)
-    map.__sicoeBasemapUrl = sicoeBasemapStyleUrl(initial)
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    map.addControl(
-      createSicoeBasemapStyleControl({
-        getMode: () => vistaRef.current,
-        t,
-        onSelect: (v) => {
-          const next = normalizarVistaBasemap(v)
-          setVista(next)
-          guardarVistaBasemap(next)
-        },
-      }),
-      'top-right',
-    )
-    mapRef.current = map
-    const onLoad = () => applySicoeBasemapTerrain(map, vistaRef.current)
-    if (map.isStyleLoaded()) onLoad()
-    else map.once('load', onLoad)
-    if (has) {
-      markerRef.current = new mapboxgl.Marker({ color: '#0f766e' })
-        .setLngLat([cLng, cLat]).addTo(map)
-    }
-    map.on('click', (e) => {
-      if (!modoRef.current) return
-      const nLat = e.lngLat.lat.toFixed(7)
-      const nLng = e.lngLat.lng.toFixed(7)
-      if (markerRef.current) {
-        markerRef.current.setLngLat([parseFloat(nLng), parseFloat(nLat)])
-      } else {
-        markerRef.current = new mapboxgl.Marker({ color: '#0f766e' })
-          .setLngLat([parseFloat(nLng), parseFloat(nLat)]).addTo(map)
-      }
-      setCoords({ lat: nLat, lng: nLng })
-    })
-    return () => {
-      try { map.remove() } catch { /* ignore */ }
-      mapRef.current = null
-      markerRef.current = null
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useEffect(() => { void cargar() }, [cargar])
 
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    const mode = normalizarVistaBasemap(vista)
-    const url = sicoeBasemapStyleUrl(mode)
-    if (map.__sicoeBasemapUrl === url) {
-      applySicoeBasemapTerrain(map, mode)
+  const display = selLabel
+    || (selPkId && pkList.find((p) => String(p.id) === String(selPkId))?.pk_id)
+    || ''
+
+  const onPkPick = (pkVal, meta) => {
+    if (readOnly || meta?.screenshotOnly) return
+    const v = String(pkVal || '').trim()
+    if (!v) return
+    const row = buscarPkMaestroPorValorPlano(v, pkList)
+    if (row?.id == null) {
+      setAviso(`No se encontró «${v}» en el maestro PK del contrato.`)
       return
     }
-    const center = map.getCenter()
-    const zoom = map.getZoom()
-    map.__sicoeBasemapUrl = url
-    map.setStyle(url)
-    map.once('style.load', () => {
-      try { map.jumpTo({ center, zoom }) } catch { /* ignore */ }
-      applySicoeBasemapTerrain(map, mode)
-      const la = parseFloat(coords.lat)
-      const lo = parseFloat(coords.lng)
-      if (!Number.isNaN(la) && !Number.isNaN(lo)) {
-        if (markerRef.current) {
-          try { markerRef.current.setLngLat([lo, la]) } catch { /* ignore */ }
-        } else {
-          try {
-            markerRef.current = new mapboxgl.Marker({ color: '#0f766e' })
-              .setLngLat([lo, la]).addTo(map)
-          } catch { /* ignore */ }
-        }
-      }
+    setAviso('')
+    setSelPkId(String(row.id))
+    setSelLabel(String(row.pk_id || row.civ || v))
+    setCoords({
+      lat: meta?.lat != null ? Number(meta.lat) : null,
+      lng: meta?.lng != null ? Number(meta.lng) : null,
     })
-  }, [vista, coords.lat, coords.lng])
+  }
 
   const btn = {
     border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer',
@@ -146,54 +92,81 @@ export default function BitacoraMaterialUbicacionModal({
     >
       <div
         role="dialog"
-        aria-modal="true"
-        aria-label="Ubicación del material"
+        aria-label="Ubicación por PK"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(720px, 96vw)', background: t.bgCard, border: `1px solid ${t.border}`,
-          borderRadius: 12, overflow: 'hidden', boxShadow: '0 16px 40px rgba(15,23,42,0.25)',
+          width: 'min(560px, 96vw)', height: 'min(720px, 92vh)',
+          background: t.bgCard || '#fff', borderRadius: 12,
+          border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
         }}
       >
         <div style={{
-          padding: '12px 16px', borderBottom: `1px solid ${t.border}`,
-          display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
         }}>
           <div>
             <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>
-              Ubicación del material
+              Ubicación por PK
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
-              {readOnly ? 'Solo consulta' : 'Clic en el mapa para marcar · vista satélite disponible'}
+              Seleccione el polígono del plano.
             </div>
           </div>
           <button type="button" onClick={onClose} style={{ ...btn, background: t.bg, color: t.text, border: `1px solid ${t.border}` }}>
             Cerrar
           </button>
         </div>
-        {mapError ? (
-          <div style={{ padding: 24, color: t.textMuted, fontSize: 'var(--cc-sm)' }}>{mapError}</div>
-        ) : (
-          <div ref={containerRef} style={{ width: '100%', height: 360 }} />
-        )}
+
+        {aviso ? (
+          <div style={{
+            margin: '8px 12px 0', padding: '8px 10px', borderRadius: 8,
+            background: '#FEF2F2', border: '1px solid #FECACA',
+            fontSize: 'var(--cc-caption)', color: '#B91C1C',
+          }}>
+            {aviso}
+          </div>
+        ) : null}
+
+        <div style={{ flex: 1, minHeight: 0, padding: 12 }}>
+          {pkLoading ? (
+            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.textMuted }}>
+              Cargando maestro PK…
+            </div>
+          ) : (
+            <PptoFiltroMapaPk
+              t={t}
+              token={token}
+              contratoId={contratoId}
+              onPkPick={onPkPick}
+              selectedPk={display}
+              onClearSelection={() => {
+                setSelPkId('')
+                setSelLabel('')
+                setCoords({ lat: null, lng: null })
+              }}
+              height="100%"
+            />
+          )}
+        </div>
+
         <div style={{
-          padding: '10px 16px', borderTop: `1px solid ${t.border}`,
+          padding: '10px 14px', borderTop: `1px solid ${t.border}`,
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontVariantNumeric: 'tabular-nums' }}>
-            {coords.lat && coords.lng
-              ? `${coords.lat}, ${coords.lng}`
-              : 'Sin coordenadas'}
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700 }}>
+            {display ? `PK: ${display}` : 'Sin PK seleccionado'}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            {!readOnly && (coords.lat || lat != null) && (
+            {!readOnly && (display || pkLabel) && (
               <button
                 type="button"
-                onClick={() => {
-                  setCoords({ lat: '', lng: '' })
-                  try { markerRef.current?.remove() } catch { /* ignore */ }
-                  markerRef.current = null
-                  onConfirm?.({ ubicacion_lat: null, ubicacion_lng: null })
-                }}
+                onClick={() => onConfirm?.({
+                  ubicacion_pk: null,
+                  ubicacion_pk_id: null,
+                  ubicacion_lat: null,
+                  ubicacion_lng: null,
+                })}
                 style={{ ...btn, background: t.bg, color: t.text, border: `1px solid ${t.border}` }}
               >
                 Quitar
@@ -202,17 +175,19 @@ export default function BitacoraMaterialUbicacionModal({
             {!readOnly && (
               <button
                 type="button"
-                disabled={!coords.lat || !coords.lng}
+                disabled={!selPkId && !selLabel}
                 onClick={() => onConfirm?.({
-                  ubicacion_lat: parseFloat(coords.lat),
-                  ubicacion_lng: parseFloat(coords.lng),
+                  ubicacion_pk: selLabel || display || null,
+                  ubicacion_pk_id: selPkId || null,
+                  ubicacion_lat: coords.lat,
+                  ubicacion_lng: coords.lng,
                 })}
                 style={{
                   ...btn, background: t.primary, color: '#fff',
-                  opacity: (!coords.lat || !coords.lng) ? 0.5 : 1,
+                  opacity: (!selPkId && !selLabel) ? 0.5 : 1,
                 }}
               >
-                Guardar ubicación
+                Guardar
               </button>
             )}
           </div>
