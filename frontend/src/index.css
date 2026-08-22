@@ -2701,35 +2701,17 @@ select.cc-dashboard-acta-select--light option {
   height: min(360px, 55vh) !important;
 }
 
-/* Checklist de tareas */
-.cc-seguim-root--compact .cc-seguim-checklist-title-row input,
-.cc-seguim-modal-sheet .cc-seguim-checklist-title-row input {
-  flex: 1 1 100% !important;
-  min-width: 0 !important;
+/* Checklist de tareas — grilla Excel */
+.cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
+.cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table {
+  min-width: 640px;
 }
 
-.cc-seguim-root--compact .cc-seguim-checklist-estados,
-.cc-seguim-modal-sheet .cc-seguim-checklist-estados {
-  width: 100%;
-}
-
-.cc-seguim-root--compact .cc-seguim-checklist-actions,
-.cc-seguim-modal-sheet .cc-seguim-checklist-actions {
-  margin-left: 0 !important;
-  width: 100%;
-  justify-content: flex-start;
-}
-
-.cc-seguim-root--compact .cc-seguim-checklist-meta-row label,
-.cc-seguim-modal-sheet .cc-seguim-checklist-meta-row label {
-  flex: 1 1 calc(50% - 6px);
-  min-width: 0;
-}
-
-.cc-seguim-root--compact .cc-seguim-checklist-meta-row label input,
-.cc-seguim-modal-sheet .cc-seguim-checklist-meta-row label input {
-  width: 100% !important;
-  min-width: 0 !important;
+.cc-seguim-root--compact .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
+.cc-seguim-modal-sheet .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
+.cc-seguim-root--compact .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table,
+.cc-seguim-modal-sheet .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table {
+  min-width: 520px;
 }
 
 .cc-seguim-root--compact .cc-seguim-checklist-comment-row,

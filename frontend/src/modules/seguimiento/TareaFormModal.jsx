@@ -1,12 +1,14 @@
 import { useState } from 'react'
-import TareaChecklistEditor, { newChecklistItem } from './TareaChecklistEditor'
+import TareaExcelLayout from './TareaExcelLayout'
+import { newChecklistItem } from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
+import { calcularAvanceTarea } from './tareaAvance'
 import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
 /**
- * Formulario de nueva tarea:
+ * Formulario de nueva tarea (misma grilla Excel de dos niveles que la vista/edición):
  * - Personal o delegada a uno/varios usuarios (asignación formal colectiva).
  * - Referencia sigue siendo un solo destinatario (fuera del multi-cumplimiento).
  */
@@ -35,6 +37,7 @@ export default function TareaFormModal({
       fechaCreacion: new Date().toISOString().slice(0, 10),
     })
     : null
+  const avance = calcularAvanceTarea(checklist)
 
   const uploadPendientes = async (rowId, items) => {
     for (const it of items) {
@@ -146,6 +149,101 @@ export default function TareaFormModal({
 
   const multi = destUsers.length > 1
   const nombresDest = destUsers.map((u) => nombreUser(u)).join(', ')
+  const cumplimientoPreview = destinoTipo === 'personal'
+    ? 'Personal'
+    : (multi ? 'Colectivo (pendiente)' : 'Asignación (pendiente)')
+
+  const destinatariosNode = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      <div
+        role="radiogroup"
+        aria-label="Destino de la tarea"
+        style={{
+          display: 'inline-flex',
+          flexShrink: 0,
+          border: `1px solid ${t.border}`,
+          borderRadius: 6,
+          overflow: 'hidden',
+          background: t.bg || t.bgCard,
+          alignSelf: 'flex-start',
+        }}
+      >
+        <button
+          type="button"
+          role="radio"
+          aria-checked={destinoTipo === 'personal'}
+          onClick={elegirPersonal}
+          style={segBtn(t, destinoTipo === 'personal')}
+        >
+          Personal
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={destinoTipo === 'delegar'}
+          onClick={elegirDelegar}
+          style={{
+            ...segBtn(t, destinoTipo === 'delegar'),
+            borderLeft: `1px solid ${t.border}`,
+          }}
+        >
+          Delegar
+        </button>
+      </div>
+      {destinoTipo === 'delegar' ? (
+        <>
+          <UserSearchSelect
+            key={`dest-search-${destUsers.map((u) => u.id).join('-') || 'empty'}`}
+            t={t}
+            usuarios={usuarios.filter((u) => !destUsers.some((d) => Number(d.id) === Number(u.id)))}
+            valueId={null}
+            valueNombre=""
+            mode="strict"
+            placeholder={destUsers.length ? 'Agregar otro…' : 'Buscar destinatario(s)…'}
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              fontSize: 'var(--cc-xs)',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: `1px solid ${t.border}`,
+              background: t.bg || t.bgCard,
+              color: t.text,
+              marginBottom: 0,
+            }}
+            onSelect={(u) => addDest(u)}
+          />
+          {destUsers.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {destUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => removeDest(u.id)}
+                  title="Quitar"
+                  style={{
+                    border: `1px solid ${t.primary}`,
+                    borderRadius: 6,
+                    padding: '2px 6px',
+                    background: `${t.primary}18`,
+                    color: t.text,
+                    cursor: 'pointer',
+                    fontSize: 10,
+                  }}
+                >
+                  {nombreUser(u)} ✕
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <span style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.3 }}>
+          Queda en su bandeja
+        </span>
+      )}
+    </div>
+  )
 
   return (
     <div
@@ -167,190 +265,96 @@ export default function TareaFormModal({
         }}
       >
         <div className={viewportCompact ? 'cc-seguim-tarea-form cc-seguim-tarea-form--compact' : 'cc-seguim-tarea-form'}>
-        <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text, marginBottom: 6 }}>
-          Nueva tarea
-        </div>
-        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 20, lineHeight: 1.45 }}>
-          Puede crear la tarea solo con el título y, cuando quiera, agregar sub-ítems con imagen,
-          esquema, notas y enlace propios de cada uno.
-        </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text, marginBottom: 4 }}>
+                Nueva tarea
+              </div>
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
+                Fila de tarea + checklist en grilla. Puede guardar solo con el título.
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                Vence {duePreview.fecha || '—'}{duePreview.hora ? ` ${duePreview.hora}` : ''}
+              </span>
+              <VencimientoIcon nivel={nivelPreview} showLabel t={t} />
+            </div>
+          </div>
 
-        <label style={lbl(t)}>Título</label>
-        <input
-          value={titulo}
-          onChange={(e) => setTitulo(e.target.value)}
-          style={{ ...inp(t), marginBottom: 14 }}
-          placeholder="¿Qué hay que hacer?"
-          autoComplete="off"
-        />
+          <TareaExcelLayout
+            t={t}
+            mode="create"
+            defaultExpanded
+            titulo={titulo}
+            onTituloChange={setTitulo}
+            destinatariosNode={destinatariosNode}
+            cumplimientoLabel={cumplimientoPreview}
+            avance={avance}
+            checklist={checklist}
+            onChecklistChange={setChecklist}
+            checklistUsuario={usuario}
+            footerBeforeChecklist={
+              destinoTipo === 'delegar' ? (
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 8, lineHeight: 1.4 }}>
+                  {multi
+                    ? 'Con varios destinatarios la tarea solo queda Cumplida cuando todos confirmen su parte (asignación formal).'
+                    : 'Al guardar se preguntará si es asignación formal o solo referencia.'}
+                </div>
+              ) : null
+            }
+          />
 
-        {/* Personal | Delegar en una sola línea; destinatarios solo si Delegar */}
-        <div style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: 8,
-        }}
-        >
-          <div
-            role="radiogroup"
-            aria-label="Destino de la tarea"
-            style={{
-              display: 'inline-flex',
-              flexShrink: 0,
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              overflow: 'hidden',
-              background: t.bg || t.bgCard,
+          {askModo && destUsers.length > 0 && destinoTipo === 'delegar' && (
+            <div style={{
+              marginTop: 14, marginBottom: 8, padding: 12, borderRadius: 8,
+              border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+              fontSize: 'var(--cc-sm)', color: t.text,
             }}
-          >
-            <button
-              type="button"
-              role="radio"
-              aria-checked={destinoTipo === 'personal'}
-              onClick={elegirPersonal}
-              style={segBtn(t, destinoTipo === 'personal')}
             >
-              Personal
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={destinoTipo === 'delegar'}
-              onClick={elegirDelegar}
-              style={{
-                ...segBtn(t, destinoTipo === 'delegar'),
-                borderLeft: `1px solid ${t.border}`,
-              }}
-            >
-              Delegar
-            </button>
-          </div>
-          {destinoTipo === 'delegar' ? (
-            <div style={{ flex: '1 1 240px', minWidth: 200, maxWidth: '100%' }}>
-              <UserSearchSelect
-                key={`dest-search-${destUsers.map((u) => u.id).join('-') || 'empty'}`}
-                t={t}
-                usuarios={usuarios.filter((u) => !destUsers.some((d) => Number(d.id) === Number(u.id)))}
-                valueId={null}
-                valueNombre=""
-                mode="strict"
-                placeholder={destUsers.length ? 'Agregar otro destinatario…' : 'Buscar destinatario(s)…'}
-                style={{ ...inp(t), marginBottom: 0 }}
-                onSelect={(u) => addDest(u)}
-              />
-            </div>
-          ) : (
-            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.35 }}>
-              Queda en su bandeja. Elija Delegar para asignar a uno o varios usuarios.
-            </span>
-          )}
-        </div>
-        {destinoTipo === 'delegar' && destUsers.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-            {destUsers.map((u) => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => removeDest(u.id)}
-                title="Quitar"
-                style={{
-                  border: `1px solid ${t.primary}`,
-                  borderRadius: 8,
-                  padding: '4px 8px',
-                  background: `${t.primary}18`,
-                  color: t.text,
-                  cursor: 'pointer',
-                  fontSize: 'var(--cc-xs)',
-                }}
-              >
-                {nombreUser(u)} ✕
-              </button>
-            ))}
-          </div>
-        )}
-        {destinoTipo === 'delegar' && (
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 14, lineHeight: 1.4 }}>
-            {multi
-              ? 'Con varios destinatarios la tarea solo queda Cumplida cuando todos confirmen su parte (asignación formal).'
-              : 'Al guardar se preguntará si es asignación formal o solo referencia.'}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ ...lbl(t), marginBottom: 0 }}>Checklist</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-              Vence {duePreview.fecha || '—'}{duePreview.hora ? ` ${duePreview.hora}` : ''}
-            </span>
-            <VencimientoIcon nivel={nivelPreview} showLabel t={t} />
-          </div>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <TareaChecklistEditor t={t} value={checklist} onChange={setChecklist} usuario={usuario} />
-        </div>
-
-        {askModo && destUsers.length > 0 && destinoTipo === 'delegar' && (
-          <div style={{
-            marginBottom: 14, padding: 12, borderRadius: 8,
-            border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
-            fontSize: 'var(--cc-sm)', color: t.text,
-          }}
-          >
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>
-              {multi
-                ? `¿Asignar formalmente a ${destUsers.length} destinatarios (${nombresDest})?`
-                : `¿Asignar formalmente a ${nombresDest} o solo enviarla como referencia?`}
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              <button type="button" disabled={busy} style={primary(t)} onClick={() => crearConModo('asignacion')}>
-                Asignación formal{multi ? ' (cumplimiento colectivo)' : ''}
-              </button>
-              {!multi && (
-                <button type="button" disabled={busy} style={ghost(t)} onClick={() => crearConModo('referencia')}>
-                  Solo referencia
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                {multi
+                  ? `¿Asignar formalmente a ${destUsers.length} destinatarios (${nombresDest})?`
+                  : `¿Asignar formalmente a ${nombresDest} o solo enviarla como referencia?`}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button type="button" disabled={busy} style={primary(t)} onClick={() => crearConModo('asignacion')}>
+                  Asignación formal{multi ? ' (cumplimiento colectivo)' : ''}
                 </button>
-              )}
-              <button type="button" style={ghost(t)} onClick={() => setAskModo(false)}>Cancelar</button>
+                {!multi && (
+                  <button type="button" disabled={busy} style={ghost(t)} onClick={() => crearConModo('referencia')}>
+                    Solo referencia
+                  </button>
+                )}
+                <button type="button" style={ghost(t)} onClick={() => setAskModo(false)}>Cancelar</button>
+              </div>
             </div>
+          )}
+
+          {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginTop: 8, fontSize: 'var(--cc-sm)' }}>{error}</div>}
+
+          <div className="cc-seguim-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+            <button type="button" onClick={onClose} style={ghost(t)}>Cancelar</button>
+            <button type="button" disabled={busy} onClick={guardar} style={primary(t)}>
+              {busy ? 'Guardando…' : 'Crear tarea'}
+            </button>
           </div>
-        )}
-
-        {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginTop: 4, fontSize: 'var(--cc-sm)' }}>{error}</div>}
-
-        <div className="cc-seguim-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
-          <button type="button" onClick={onClose} style={ghost(t)}>Cancelar</button>
-          <button type="button" disabled={busy} onClick={guardar} style={primary(t)}>
-            {busy ? 'Guardando…' : 'Crear tarea'}
-          </button>
-        </div>
         </div>
       </div>
     </div>
   )
 }
 
-function lbl(t) {
-  return { display: 'block', fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600, marginBottom: 6 }
-}
 function segBtn(t, active) {
   return {
     border: 'none',
-    padding: '8px 14px',
+    padding: '6px 10px',
     cursor: 'pointer',
-    fontSize: 'var(--cc-sm)',
+    fontSize: 11,
     fontWeight: active ? 700 : 600,
     background: active ? `${t.primary}22` : 'transparent',
     color: active ? t.primary : t.text,
-    minHeight: 36,
-  }
-}
-function inp(t) {
-  return {
-    width: '100%', boxSizing: 'border-box', fontSize: 'var(--cc-input)',
-    padding: '10px 12px', borderRadius: 8, border: `1px solid ${t.border}`,
-    background: t.bg || t.bgCard, color: t.text,
+    minHeight: 28,
   }
 }
 function primary(t) {
