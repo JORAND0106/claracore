@@ -81,7 +81,7 @@ export default function TareaExcelLayout({
               style={{ cursor: canExpand ? 'pointer' : 'default' }}
               title={canExpand ? (expanded ? 'Ocultar checklist' : 'Ver checklist') : undefined}
             >
-              <td style={ui.td} onClick={(e) => e.stopPropagation()}>
+              <td style={ui.tdTarea} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button
                     type="button"
@@ -123,12 +123,12 @@ export default function TareaExcelLayout({
                   )}
                 </div>
               </td>
-              <td style={{ ...ui.td, height: 'auto', padding: 4 }} onClick={(e) => e.stopPropagation()}>
+              <td style={{ ...ui.tdTarea, height: 'auto', padding: 4 }} onClick={(e) => e.stopPropagation()}>
                 {destinatariosNode || (
                   <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>—</span>
                 )}
               </td>
-              <td style={ui.td} onClick={(e) => e.stopPropagation()}>
+              <td style={ui.tdTarea} onClick={(e) => e.stopPropagation()}>
                 <span style={{
                   fontSize: 'var(--cc-sm)',
                   fontWeight: 700,
@@ -140,7 +140,7 @@ export default function TareaExcelLayout({
                   {cumplimientoLabel}
                 </span>
               </td>
-              <td style={ui.tdCenter} onClick={(e) => e.stopPropagation()}>
+              <td style={ui.tdTareaCenter} onClick={(e) => e.stopPropagation()}>
                 <span style={{
                   fontWeight: 800,
                   fontVariantNumeric: 'tabular-nums',

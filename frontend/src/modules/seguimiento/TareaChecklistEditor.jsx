@@ -272,7 +272,7 @@ export default function TareaChecklistEditor({
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)', height: 36 }}>
+                <td colSpan={8} style={{ ...ui.tdSubitem, color: t.textMuted, fontSize: 'var(--cc-xs)', height: 36 }}>
                   Sin sub-ítems. Use «+ Agregar sub-ítem» para crear la checklist.
                 </td>
               </tr>
@@ -293,7 +293,7 @@ export default function TareaChecklistEditor({
               return (
                 <Fragment key={it.id}>
                   <tr>
-                    <td style={ui.td}>
+                    <td style={ui.tdSubitem}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         <input
                           disabled={disabled}
@@ -319,7 +319,7 @@ export default function TareaChecklistEditor({
                         )}
                       </div>
                     </td>
-                    <td style={ui.td}>
+                    <td style={ui.tdSubitem}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <input
                           type="date"
@@ -337,7 +337,7 @@ export default function TareaChecklistEditor({
                         />
                       </div>
                     </td>
-                    <td style={ui.td}>
+                    <td style={ui.tdSubitem}>
                       {multi ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <span style={{ fontSize: 10, color: t.textMuted, fontWeight: 700 }}>
@@ -380,7 +380,7 @@ export default function TareaChecklistEditor({
                         </select>
                       )}
                     </td>
-                    <td style={ui.td}>
+                    <td style={ui.tdSubitem}>
                       <input
                         disabled={disabled}
                         value={it.notas || ''}
@@ -390,7 +390,7 @@ export default function TareaChecklistEditor({
                         title={it.notas || ''}
                       />
                     </td>
-                    <td style={ui.td}>
+                    <td style={ui.tdSubitem}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                         <input
                           type="url"
@@ -413,7 +413,7 @@ export default function TareaChecklistEditor({
                         )}
                       </div>
                     </td>
-                    <td style={{ ...ui.td, height: 'auto', padding: 4 }} onClick={(e) => e.stopPropagation()}>
+                    <td style={{ ...ui.tdSubitem, height: 'auto', padding: 4 }} onClick={(e) => e.stopPropagation()}>
                       {canNotificar && !disabled ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
                           {notificar && (
@@ -516,7 +516,7 @@ export default function TareaChecklistEditor({
                         </span>
                       )}
                     </td>
-                    <td style={ui.tdCenter}>
+                    <td style={ui.tdSubitemCenter}>
                       <button
                         type="button"
                         style={comentarios.length || commentsOpen ? ui.iconBtnActive : ui.iconBtn}
@@ -527,7 +527,7 @@ export default function TareaChecklistEditor({
                         ☁{comentarios.length ? ` ${comentarios.length}` : ''}
                       </button>
                     </td>
-                    <td style={ui.tdCenter}>
+                    <td style={ui.tdSubitemCenter}>
                       <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center' }}>
                         <input
                           ref={(el) => { fileRefs.current[it.id] = el }}
@@ -593,7 +593,7 @@ export default function TareaChecklistEditor({
                   </tr>
                   {commentsOpen && (
                     <tr>
-                      <td colSpan={8} style={{ ...ui.td, background: t.bg || `${t.primary}06`, height: 'auto', padding: 8 }}>
+                      <td colSpan={8} style={{ ...ui.tdSubitem, height: 'auto', padding: 8 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: t.text, marginBottom: 6 }}>
                           Comentarios del sub-ítem
                         </div>
