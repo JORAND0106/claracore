@@ -144,7 +144,7 @@ export default function ItemDetalleModal({
     || revisionEnActa === true
     || allowEstadoGestion === true
   )
-  const puedeComentar = esTarea || puedeComentarCompromiso
+  const puedeComentar = puedeComentarCompromiso
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
   const avance = esTarea ? calcularAvanceTarea(checklist.length ? checklist : item) : null
