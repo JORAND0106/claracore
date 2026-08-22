@@ -1,18 +1,19 @@
-import { useRef, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
 import { calcularAvanceTarea, estadoEfectivoSubitem, normEstadoSubitem } from './tareaAvance'
 import { miEstadoEnAsignaciones } from './tareaAsignaciones'
+import { tareaSheetStyles } from './tareaSheetStyles'
 
 const ESTADO_SHORT = {
   abierto: 'Abierto',
   en_progreso: 'Progreso',
   parcial: 'Parcial',
-  reprogramado: 'Reprog.',
+  reprogramado: 'Reprogramado',
   cumplido: 'Cumplido',
   vencido: 'Vencido',
-  cancelado: 'Cancel.',
+  cancelado: 'Cancelado',
 }
 
 function normalizeComentarios(raw) {
@@ -90,6 +91,10 @@ export function seedChecklistFromItem(item) {
   return []
 }
 
+/**
+ * Checklist de sub-ítems en grilla tipo Excel.
+ * Columnas: Sub-ítem · Fecha/Hora · Estado · Notas · Enlace · Comentarios (nube) · Adjuntos.
+ */
 export default function TareaChecklistEditor({
   t,
   value = [],
@@ -102,11 +107,10 @@ export default function TareaChecklistEditor({
   miEstadoBusy = false,
 }) {
   const items = Array.isArray(value) ? value : []
+  const ui = tareaSheetStyles(t)
   const fileRefs = useRef({})
   const [esquemaIdx, setEsquemaIdx] = useState(null)
-  const [reprogIdx, setReprogIdx] = useState(null)
-  const [reprogFecha, setReprogFecha] = useState('')
-  const [reprogHora, setReprogHora] = useState('')
+  const [commentsOpenIdx, setCommentsOpenIdx] = useState(null)
   const [draftComments, setDraftComments] = useState({})
   const avance = calcularAvanceTarea(items)
 
@@ -129,6 +133,7 @@ export default function TareaChecklistEditor({
 
   const removeAt = (idx) => {
     onChange?.(items.filter((_, i) => i !== idx))
+    if (commentsOpenIdx === idx) setCommentsOpenIdx(null)
   }
 
   const add = () => {
@@ -173,263 +178,191 @@ export default function TareaChecklistEditor({
     setAt(idx, { comentarios: normalizeComentarios(it.comentarios).filter((c) => c.id !== commentId) })
   }
 
-  const aplicarReprogramacion = (idx) => {
-    if (!reprogFecha) return
-    setAt(idx, {
-      fecha: reprogFecha,
-      hora: reprogHora || '',
-      estado_gestion: 'reprogramado',
-    })
-    setReprogIdx(null)
-    setReprogFecha('')
-    setReprogHora('')
-  }
-
   return (
-    <div className="cc-seguim-checklist" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="cc-seguim-checklist cc-seguim-checklist--sheet">
       {items.length > 0 && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          padding: '8px 12px', borderRadius: 8, border: `1px solid ${t.border}`,
-          background: t.bgCard || t.bg, fontSize: 'var(--cc-sm)', color: t.text,
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          marginBottom: 6, fontSize: 'var(--cc-xs)', color: t.textMuted,
         }}>
-          <b>Avance de la tarea:</b>
-          <span style={{ fontWeight: 700, color: avance.pct === 100 ? 'var(--cc-color-positive,#0f766e)' : t.primary }}>
-            {avance.pct == null ? '—' : `${avance.pct}%`}
+          <span>
+            Avance checklist:{' '}
+            <b style={{ color: avance.pct === 100 ? 'var(--cc-color-positive,#0f766e)' : t.primary }}>
+              {avance.pct == null ? '—' : `${avance.pct}%`}
+            </b>
+            {' · '}{avance.cumplidos}/{avance.validos} cumplidos
           </span>
-          <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-            {avance.cumplidos}/{avance.validos} sub-ítems cumplidos
-            {avance.pct === 100 ? ' · Cumplida' : ''}
-            {' · '}cancelados excluidos del %
-          </span>
-          <div style={{
-            flex: '1 1 120px', height: 8, borderRadius: 999, background: `${t.border}`,
-            overflow: 'hidden', minWidth: 80,
-          }}>
-            <div style={{
-              width: `${avance.pct || 0}%`, height: '100%',
-              background: avance.pct === 100 ? 'var(--cc-color-positive,#0f766e)' : t.primary,
-            }}
-            />
-          </div>
         </div>
       )}
 
-      {items.length === 0 && (
-        <div style={{
-          padding: 14, borderRadius: 10, border: `1px dashed ${t.border}`,
-          color: t.textMuted, fontSize: 'var(--cc-sm)',
-        }}>
-          Sin sub-ítems aún. Puede guardar solo con el título y agregar la checklist después.
-        </div>
-      )}
-
-      {items.map((it, idx) => {
-        const srcImg = imagenSrc(it.imagen)
-        const srcEsquema = imagenSrc(it.esquema)
-        const asigns = Array.isArray(it.asignaciones) ? it.asignaciones : []
-        const multi = multiCumplimiento && asigns.length > 0
-        const est = multi
-          ? estadoEfectivoSubitem(it)
-          : normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
-        const miEst = multi ? miEstadoEnAsignaciones(asigns, usuario?.id) : null
-        const comentarios = normalizeComentarios(it.comentarios)
-        return (
-          <div
-            key={it.id}
-            style={{
-              border: `1px solid ${t.border}`,
-              borderRadius: 10,
-              padding: 12,
-              background: t.bg || `${t.primary}06`,
-            }}
-          >
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {/* Título + estado radio compacto en la misma línea */}
-                <div className="cc-seguim-checklist-title-row" style={{
-                  display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8,
-                }}
-                >
-                  <input
-                    disabled={disabled}
-                    value={it.texto}
-                    onChange={(e) => setAt(idx, { texto: e.target.value })}
-                    placeholder={`Título del sub-ítem ${idx + 1}`}
-                    style={{
-                      ...inp(t),
-                      flex: '1 1 180px',
-                      minWidth: 140,
-                      fontWeight: 600,
-                      textDecoration: est === 'cumplido' ? 'line-through' : 'none',
-                      opacity: est === 'cumplido' ? 0.75 : 1,
-                    }}
-                  />
-                  {multi ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                      <div style={{ fontSize: 11, color: t.textMuted }}>
-                        Colectivo: <b style={{ color: t.text }}>{ESTADO_SHORT[est] || est}</b>
-                      </div>
-                      {miEst != null && typeof onMiEstado === 'function' && (
-                        <div
-                          role="radiogroup"
-                          aria-label="Mi estado en este sub-ítem"
-                          className="cc-seguim-checklist-estados"
-                          style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
-                        >
-                          <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Mi parte:</span>
-                          {ESTADOS_GESTION.map((x) => {
-                            const active = miEst === x.value
-                            return (
-                              <button
-                                key={x.value}
-                                type="button"
-                                role="radio"
-                                aria-checked={active}
-                                disabled={miEstadoBusy}
-                                title={x.label}
-                                onClick={() => onMiEstado(it.id, x.value)}
-                                style={{
-                                  border: `1px solid ${active ? t.primary : t.border}`,
-                                  background: active ? `${t.primary}18` : 'transparent',
-                                  color: active ? t.primary : t.textMuted,
-                                  borderRadius: 6,
-                                  padding: '3px 7px',
-                                  fontSize: 11,
-                                  fontWeight: active ? 700 : 500,
-                                  cursor: miEstadoBusy ? 'wait' : 'pointer',
-                                  lineHeight: 1.2,
-                                }}
-                              >
-                                {ESTADO_SHORT[x.value] || x.label}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {asigns.map((a) => (
-                          <span
-                            key={a.usuario_id}
-                            style={{
-                              fontSize: 10,
-                              padding: '2px 6px',
-                              borderRadius: 6,
-                              border: `1px solid ${t.border}`,
-                              color: t.textMuted,
-                              background: String(a.estado_gestion).toLowerCase() === 'cumplido'
-                                ? 'rgba(15,118,110,0.12)'
-                                : 'transparent',
-                            }}
-                          >
-                            {(a.nombre || `#${a.usuario_id}`).split(' ')[0]}: {ESTADO_SHORT[a.estado_gestion] || a.estado_gestion}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      role="radiogroup"
-                      aria-label="Estado de gestión"
-                      className="cc-seguim-checklist-estados"
-                      style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}
-                    >
-                      {ESTADOS_GESTION.map((x) => {
-                        const active = est === x.value
-                        return (
+      <div style={ui.sheetWrap}>
+        <table style={ui.sheetTable} className="cc-seguim-tarea-checklist-table">
+          <thead>
+            <tr>
+              <th style={{ ...ui.th, width: '22%' }}>Sub-ítem</th>
+              <th style={{ ...ui.th, width: '14%' }}>Fecha / Hora</th>
+              <th style={{ ...ui.th, width: '12%' }}>Estado</th>
+              <th style={{ ...ui.th, width: '18%' }}>Notas</th>
+              <th style={{ ...ui.th, width: '14%' }}>Enlace</th>
+              <th style={{ ...ui.thCenter, width: '6%' }} title="Comentarios">☁</th>
+              <th style={{ ...ui.thCenter, width: '14%' }}>Adjuntos</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={7} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)', height: 36 }}>
+                  Sin sub-ítems. Use «+ Agregar sub-ítem» para crear la checklist.
+                </td>
+              </tr>
+            )}
+            {items.map((it, idx) => {
+              const srcImg = imagenSrc(it.imagen)
+              const srcEsquema = imagenSrc(it.esquema)
+              const asigns = Array.isArray(it.asignaciones) ? it.asignaciones : []
+              const multi = multiCumplimiento && asigns.length > 0
+              const est = multi
+                ? estadoEfectivoSubitem(it)
+                : normEstadoSubitem(it.estado_gestion, { hecho: !!it.hecho })
+              const miEst = multi ? miEstadoEnAsignaciones(asigns, usuario?.id) : null
+              const comentarios = normalizeComentarios(it.comentarios)
+              const commentsOpen = commentsOpenIdx === idx
+              return (
+                <Fragment key={it.id}>
+                  <tr>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <input
+                          disabled={disabled}
+                          value={it.texto}
+                          onChange={(e) => setAt(idx, { texto: e.target.value })}
+                          placeholder={`Sub-ítem ${idx + 1}`}
+                          style={{
+                            ...ui.cellInp,
+                            fontWeight: 600,
+                            textDecoration: est === 'cumplido' ? 'line-through' : 'none',
+                            opacity: est === 'cumplido' ? 0.75 : 1,
+                          }}
+                        />
+                        {!disabled && (
                           <button
-                            key={x.value}
                             type="button"
-                            role="radio"
-                            aria-checked={active}
-                            disabled={disabled}
-                            title={x.label}
-                            onClick={() => setAt(idx, { estado_gestion: x.value })}
-                            style={{
-                              border: `1px solid ${active ? t.primary : t.border}`,
-                              background: active ? `${t.primary}18` : 'transparent',
-                              color: active ? t.primary : t.textMuted,
-                              borderRadius: 6,
-                              padding: '3px 7px',
-                              fontSize: 11,
-                              fontWeight: active ? 700 : 500,
-                              cursor: disabled ? 'default' : 'pointer',
-                              lineHeight: 1.2,
-                            }}
+                            style={ui.iconBtn}
+                            title="Quitar sub-ítem"
+                            onClick={() => removeAt(idx)}
                           >
-                            {ESTADO_SHORT[x.value] || x.label}
+                            ✕
                           </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                  {!disabled && (
-                    <button type="button" style={ghostTiny(t)} title="Quitar sub-ítem" onClick={() => removeAt(idx)}>✕</button>
-                  )}
-                </div>
-
-                {/* Fecha/hora (+ reprogramación en la misma línea) y acciones compactas */}
-                <div className="cc-seguim-checklist-meta-row" style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  alignItems: 'center',
-                }}>
-                  <label style={{ ...lblInline(t), gap: 4 }}>
-                    <span>Fecha</span>
-                    <input
-                      type="date"
-                      disabled={disabled}
-                      value={it.fecha || ''}
-                      onChange={(e) => setAt(idx, { fecha: e.target.value })}
-                      style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
-                    />
-                  </label>
-                  <label style={{ ...lblInline(t), gap: 4 }}>
-                    <span>Hora</span>
-                    <input
-                      type="time"
-                      disabled={disabled}
-                      value={it.hora || ''}
-                      onChange={(e) => setAt(idx, { hora: e.target.value })}
-                      style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
-                    />
-                  </label>
-
-                  {reprogIdx === idx && !disabled && (
-                    <>
-                      <label style={{ ...lblInline(t), gap: 4 }}>
-                        <span>Reprog.</span>
+                        )}
+                      </div>
+                    </td>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <input
                           type="date"
-                          value={reprogFecha}
-                          onChange={(e) => setReprogFecha(e.target.value)}
-                          style={{ ...inp(t), width: 'auto', minWidth: 132, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
+                          disabled={disabled}
+                          value={it.fecha || ''}
+                          onChange={(e) => setAt(idx, { fecha: e.target.value })}
+                          style={{ ...ui.cellInp, height: 24, padding: '1px 2px', fontSize: 11 }}
                         />
-                      </label>
+                        <input
+                          type="time"
+                          disabled={disabled}
+                          value={it.hora || ''}
+                          onChange={(e) => setAt(idx, { hora: e.target.value })}
+                          style={{ ...ui.cellInp, height: 24, padding: '1px 2px', fontSize: 11 }}
+                        />
+                      </div>
+                    </td>
+                    <td style={ui.td}>
+                      {multi ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: 10, color: t.textMuted, fontWeight: 700 }}>
+                            {ESTADO_SHORT[est] || est}
+                          </span>
+                          {miEst != null && typeof onMiEstado === 'function' ? (
+                            <select
+                              disabled={miEstadoBusy}
+                              value={miEst}
+                              aria-label="Mi estado en este sub-ítem"
+                              onChange={(e) => onMiEstado(it.id, e.target.value)}
+                              style={ui.cellSelect}
+                              title="Mi parte"
+                            >
+                              {ESTADOS_GESTION.map((x) => (
+                                <option key={x.value} value={x.value}>
+                                  {ESTADO_SHORT[x.value] || x.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 10, color: t.textMuted }}>
+                              {asigns.map((a) => `${(a.nombre || '').split(' ')[0]}:${ESTADO_SHORT[a.estado_gestion] || a.estado_gestion}`).join(' · ')}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <select
+                          disabled={disabled}
+                          value={est}
+                          aria-label="Estado de gestión"
+                          onChange={(e) => setAt(idx, { estado_gestion: e.target.value })}
+                          style={ui.cellSelect}
+                        >
+                          {ESTADOS_GESTION.map((x) => (
+                            <option key={x.value} value={x.value}>
+                              {ESTADO_SHORT[x.value] || x.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </td>
+                    <td style={ui.td}>
                       <input
-                        type="time"
-                        value={reprogHora}
-                        onChange={(e) => setReprogHora(e.target.value)}
-                        style={{ ...inp(t), width: 'auto', minWidth: 96, padding: '5px 7px', fontSize: 'var(--cc-xs)' }}
+                        disabled={disabled}
+                        value={it.notas || ''}
+                        onChange={(e) => setAt(idx, { notas: e.target.value })}
+                        placeholder="Notas…"
+                        style={ui.cellInp}
+                        title={it.notas || ''}
                       />
+                    </td>
+                    <td style={ui.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <input
+                          type="url"
+                          disabled={disabled}
+                          value={it.enlace || ''}
+                          onChange={(e) => setAt(idx, { enlace: e.target.value })}
+                          placeholder="https://…"
+                          style={ui.cellInp}
+                        />
+                        {!!(it.enlace || '').trim() && (
+                          <a
+                            href={(it.enlace || '').trim()}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ ...ui.iconBtnActive, textDecoration: 'none' }}
+                            title="Abrir enlace"
+                          >
+                            ↗
+                          </a>
+                        )}
+                      </div>
+                    </td>
+                    <td style={ui.tdCenter}>
                       <button
                         type="button"
-                        disabled={!reprogFecha}
-                        style={{ ...chip(t, true), opacity: reprogFecha ? 1 : 0.45 }}
-                        onClick={() => aplicarReprogramacion(idx)}
+                        style={comentarios.length || commentsOpen ? ui.iconBtnActive : ui.iconBtn}
+                        title={comentarios.length ? `${comentarios.length} comentario(s)` : 'Comentarios'}
+                        aria-label="Comentarios del sub-ítem"
+                        onClick={() => setCommentsOpenIdx(commentsOpen ? null : idx)}
                       >
-                        Aplicar
+                        ☁{comentarios.length ? ` ${comentarios.length}` : ''}
                       </button>
-                      <button type="button" style={chip(t)} onClick={() => setReprogIdx(null)}>Cancelar</button>
-                    </>
-                  )}
-
-                  <div className="cc-seguim-checklist-actions" style={{
-                    marginLeft: 'auto', display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center',
-                  }}>
-                    {!disabled && (
-                      <>
+                    </td>
+                    <td style={ui.tdCenter}>
+                      <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center' }}>
                         <input
                           ref={(el) => { fileRefs.current[it.id] = el }}
                           type="file"
@@ -441,159 +374,165 @@ export default function TareaChecklistEditor({
                             e.target.value = ''
                           }}
                         />
-                        <button type="button" style={chip(t)} onClick={() => fileRefs.current[it.id]?.click()}>
-                          {srcImg ? 'Cambiar img' : 'Imagen'}
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      style={{ ...chip(t), opacity: srcImg ? 1 : 0.4 }}
-                      disabled={!srcImg}
-                      title={srcImg ? 'Abrir imagen de soporte' : 'Sin imagen'}
-                      onClick={() => {
-                        if (!openImageInNewTab(it.imagen)) {
-                          window.alert('No se pudo abrir la imagen.')
-                        }
-                      }}
-                    >
-                      Ver imagen
-                    </button>
-                    {!disabled && (
-                      <button type="button" style={chip(t, true)} onClick={() => setEsquemaIdx(idx)}>
-                        Esquema
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      style={{ ...chip(t), opacity: srcEsquema ? 1 : 0.4 }}
-                      disabled={!srcEsquema}
-                      title={srcEsquema ? 'Abrir esquema' : 'Sin esquema'}
-                      onClick={() => {
-                        if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
-                      }}
-                    >
-                      Ver esquema
-                    </button>
-                    {!disabled && (
-                      <button
-                        type="button"
-                        style={chip(t)}
-                        title="Reprogramar este sub-ítem"
-                        onClick={() => {
-                          setReprogIdx(reprogIdx === idx ? null : idx)
-                          setReprogFecha(it.fecha || '')
-                          setReprogHora(it.hora || '')
-                        }}
-                      >
-                        Reprogramar
-                      </button>
-                    )}
-                    {!disabled && srcImg && (
-                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { imagen: null })}>Quitar img</button>
-                    )}
-                    {!disabled && srcEsquema && (
-                      <button type="button" style={chip(t)} onClick={() => setAt(idx, { esquema: null })}>Quitar esquema</button>
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <label style={lbl(t)}>Notas</label>
-                  <textarea
-                    rows={2}
-                    disabled={disabled}
-                    value={it.notas || ''}
-                    onChange={(e) => setAt(idx, { notas: e.target.value })}
-                    placeholder="Notas propias de este sub-ítem…"
-                    style={{ ...inp(t), resize: 'vertical' }}
-                  />
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <label style={lbl(t)}>Enlace</label>
-                  <input
-                    type="url"
-                    disabled={disabled}
-                    value={it.enlace || ''}
-                    onChange={(e) => setAt(idx, { enlace: e.target.value })}
-                    placeholder="https://…"
-                    style={inp(t)}
-                  />
-                  {!!(it.enlace || '').trim() && (
-                    <a
-                      href={(it.enlace || '').trim()}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: 'var(--cc-xs)', color: t.primary, display: 'inline-block', marginTop: 4 }}
-                    >
-                      Abrir enlace
-                    </a>
-                  )}
-                </div>
-
-                {/* Comentarios individuales del sub-ítem */}
-                <div style={{ marginTop: 10 }}>
-                  <label style={lbl(t)}>Comentarios del sub-ítem</label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {comentarios.length === 0 && (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>Sin comentarios aún.</div>
-                    )}
-                    {comentarios.map((c) => (
-                      <div
-                        key={c.id}
-                        style={{
-                          border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 8px',
-                          background: t.bgCard || '#fff', fontSize: 'var(--cc-xs)', color: t.text,
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
-                          <span style={{ fontWeight: 700 }}>{c.autor_nombre || 'Usuario'}</span>
-                          <span style={{ color: t.textMuted }}>
-                            {c.created_at ? String(c.created_at).slice(0, 16).replace('T', ' ') : ''}
-                            {!disabled && (
-                              <button
-                                type="button"
-                                style={{ ...ghostTiny(t), marginLeft: 6 }}
-                                title="Eliminar comentario"
-                                onClick={() => removeComentario(idx, c.id)}
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </span>
-                        </div>
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{c.mensaje}</div>
-                      </div>
-                    ))}
-                    {!disabled && (
-                      <div className="cc-seguim-checklist-comment-row" style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-                        <textarea
-                          rows={2}
-                          value={draftComments[idx] || ''}
-                          onChange={(e) => setDraftComments((d) => ({ ...d, [idx]: e.target.value }))}
-                          placeholder="Escribir comentario de este sub-ítem…"
-                          style={{ ...inp(t), resize: 'vertical', flex: 1 }}
-                        />
+                        {!disabled && (
+                          <button
+                            type="button"
+                            style={srcImg ? ui.iconBtnActive : ui.iconBtn}
+                            title={srcImg ? 'Cambiar imagen' : 'Adjuntar imagen'}
+                            onClick={() => fileRefs.current[it.id]?.click()}
+                          >
+                            🖼
+                          </button>
+                        )}
                         <button
                           type="button"
-                          style={chip(t, true)}
-                          disabled={!(draftComments[idx] || '').trim()}
-                          onClick={() => addComentario(idx)}
+                          style={{ ...(srcImg ? ui.iconBtnActive : ui.iconBtn), opacity: srcImg ? 1 : 0.35 }}
+                          disabled={!srcImg}
+                          title={srcImg ? 'Ver imagen' : 'Sin imagen'}
+                          onClick={() => {
+                            if (!openImageInNewTab(it.imagen)) window.alert('No se pudo abrir la imagen.')
+                          }}
                         >
-                          Comentar
+                          👁
                         </button>
+                        {!disabled && (
+                          <button
+                            type="button"
+                            style={srcEsquema ? ui.iconBtnActive : ui.iconBtn}
+                            title="Esquema"
+                            onClick={() => setEsquemaIdx(idx)}
+                          >
+                            ✎
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          style={{ ...(srcEsquema ? ui.iconBtnActive : ui.iconBtn), opacity: srcEsquema ? 1 : 0.35 }}
+                          disabled={!srcEsquema}
+                          title={srcEsquema ? 'Ver esquema' : 'Sin esquema'}
+                          onClick={() => {
+                            if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
+                          }}
+                        >
+                          ▤
+                        </button>
+                        {!disabled && srcImg && (
+                          <button type="button" style={ui.iconBtn} title="Quitar imagen" onClick={() => setAt(idx, { imagen: null })}>⌫i</button>
+                        )}
+                        {!disabled && srcEsquema && (
+                          <button type="button" style={ui.iconBtn} title="Quitar esquema" onClick={() => setAt(idx, { esquema: null })}>⌫e</button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      })}
+                    </td>
+                  </tr>
+                  {commentsOpen && (
+                    <tr>
+                      <td colSpan={7} style={{ ...ui.td, background: t.bg || `${t.primary}06`, height: 'auto', padding: 8 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: t.text, marginBottom: 6 }}>
+                          Comentarios del sub-ítem
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                          {comentarios.length === 0 && (
+                            <div style={{ fontSize: 11, color: t.textMuted }}>Sin comentarios aún.</div>
+                          )}
+                          {comentarios.map((c) => (
+                            <div
+                              key={c.id}
+                              style={{
+                                border: `1px solid ${t.border}`,
+                                borderRadius: 4,
+                                padding: '4px 8px',
+                                background: t.bgCard || '#fff',
+                                fontSize: 11,
+                                color: t.text,
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                <b>{c.autor_nombre || 'Usuario'}</b>
+                                <span style={{ color: t.textMuted }}>
+                                  {c.created_at ? String(c.created_at).slice(0, 16).replace('T', ' ') : ''}
+                                  {!disabled && (
+                                    <button
+                                      type="button"
+                                      style={{ ...ui.iconBtn, marginLeft: 4 }}
+                                      title="Eliminar"
+                                      onClick={() => removeComentario(idx, c.id)}
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                </span>
+                              </div>
+                              <div style={{ whiteSpace: 'pre-wrap' }}>{c.mensaje}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {!disabled && (
+                          <div className="cc-seguim-checklist-comment-row" style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                            <textarea
+                              rows={2}
+                              value={draftComments[idx] || ''}
+                              onChange={(e) => setDraftComments((d) => ({ ...d, [idx]: e.target.value }))}
+                              placeholder="Escribir comentario…"
+                              style={{
+                                flex: 1,
+                                boxSizing: 'border-box',
+                                border: `1px solid ${t.border}`,
+                                borderRadius: 4,
+                                padding: 6,
+                                fontSize: 12,
+                                background: t.bgCard || '#fff',
+                                color: t.text,
+                                resize: 'vertical',
+                                fontFamily: 'inherit',
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={!(draftComments[idx] || '').trim()}
+                              onClick={() => addComentario(idx)}
+                              style={{
+                                border: 'none',
+                                borderRadius: 6,
+                                padding: '6px 10px',
+                                background: t.primary,
+                                color: '#fff',
+                                fontWeight: 700,
+                                fontSize: 11,
+                                cursor: 'pointer',
+                                opacity: (draftComments[idx] || '').trim() ? 1 : 0.45,
+                              }}
+                            >
+                              Comentar
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
 
       {!disabled && (
-        <button type="button" style={{ ...primary(t), alignSelf: 'flex-start' }} onClick={add}>
+        <button
+          type="button"
+          style={{
+            marginTop: 8,
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 12px',
+            cursor: 'pointer',
+            background: t.primary,
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: 'var(--cc-sm)',
+          }}
+          onClick={add}
+        >
           + Agregar sub-ítem
         </button>
       )}
@@ -621,47 +560,4 @@ export default function TareaChecklistEditor({
       )}
     </div>
   )
-}
-
-function lbl(t) {
-  return { display: 'block', fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600, marginBottom: 4 }
-}
-function lblInline(t) {
-  return {
-    display: 'inline-flex', alignItems: 'center',
-    fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600, margin: 0,
-  }
-}
-function inp(t) {
-  return {
-    width: '100%', boxSizing: 'border-box', fontSize: 'var(--cc-input)',
-    padding: '8px 10px', borderRadius: 8, border: `1px solid ${t.border}`,
-    background: t.bgCard || t.bg || '#fff', color: t.text,
-  }
-}
-function chip(t, primaryTone = false) {
-  return {
-    border: `1px solid ${primaryTone ? t.primary : t.border}`,
-    borderRadius: 6,
-    padding: '4px 8px',
-    cursor: 'pointer',
-    background: primaryTone ? `${t.primary}14` : 'transparent',
-    color: primaryTone ? t.primary : t.text,
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: 'nowrap',
-    lineHeight: 1.2,
-  }
-}
-function ghostTiny(t) {
-  return {
-    border: 'none', background: 'transparent', cursor: 'pointer',
-    color: t.textMuted, fontSize: 12, padding: '2px 4px',
-  }
-}
-function primary(t) {
-  return {
-    border: 'none', borderRadius: 8, padding: '8px 12px',
-    cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
-  }
 }

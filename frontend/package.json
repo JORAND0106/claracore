@@ -16,7 +16,8 @@
     "test:ppto-roles": "node --test src/modules/presupuesto/pptoRolesValidacion.test.js",
     "test:bitacora-ubicacion": "node --test src/modules/seguimiento/bitacoraMaterialUbicacion.test.js",
     "test:bitacora-visitantes": "node --test src/modules/seguimiento/visitantesEvento.test.js",
-    "test:bitacora-tipo-material": "node --test src/modules/seguimiento/materialTipoCatalogo.test.js"
+    "test:bitacora-tipo-material": "node --test src/modules/seguimiento/materialTipoCatalogo.test.js",
+    "test:tarea-excel": "node --test src/modules/seguimiento/tareaExcelLayout.test.js src/modules/seguimiento/tareaAvance.test.mjs"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.21",

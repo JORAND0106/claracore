@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
-import TareaChecklistEditor, { seedChecklistFromItem } from './TareaChecklistEditor'
+import { seedChecklistFromItem } from './TareaChecklistEditor'
+import TareaExcelLayout from './TareaExcelLayout'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import { asignacionesDe, destinatarioLabel, esAsignadoFormal, miEstadoEnAsignaciones } from './tareaAsignaciones'
-import { calcularAvanceTarea, labelAvance } from './tareaAvance'
+import { calcularAvanceTarea } from './tareaAvance'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
@@ -267,92 +268,100 @@ export default function ItemDetalleModal({
           <span>#{item.consecutivo ?? item.id} · {item.titulo}</span>
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-          {destinatarioLabel(item)}
-          {item.referido_a_nombre ? ` · ref: ${item.referido_a_nombre}` : ''}
-          {' · '}vence {fmtFechaHora(due.fecha || item.fecha_vencimiento, due.hora || item.hora_vencimiento)}
-          {' · '}{esTarea && avance ? `avance ${labelAvance(avance)}` : item.estado_gestion}
-          {esTarea && avance?.pct === 100 ? ' · Cumplida' : ''}
-          {' · '}{tipoLaborLabel(item, usuario?.id)}
+          {esTarea ? (
+            <>
+              #{item.consecutivo ?? item.id}
+              {' · '}vence {fmtFechaHora(due.fecha || item.fecha_vencimiento, due.hora || item.hora_vencimiento)}
+              {' · '}{tipoLaborLabel(item, usuario?.id)}
+            </>
+          ) : (
+            <>
+              {destinatarioLabel(item)}
+              {item.referido_a_nombre ? ` · ref: ${item.referido_a_nombre}` : ''}
+              {' · '}vence {fmtFechaHora(due.fecha || item.fecha_vencimiento, due.hora || item.hora_vencimiento)}
+              {' · '}{item.estado_gestion}
+              {' · '}{tipoLaborLabel(item, usuario?.id)}
+            </>
+          )}
         </div>
       </div>
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginBottom: 8 }}>{error}</div>}
 
-      {esTarea && multiAsignacion && (
-        <div style={{
-          margin: '8px 0 12px', padding: '10px 12px', borderRadius: 8,
-          border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
-          fontSize: 'var(--cc-sm)', color: t.text,
-        }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Destinatarios y cumplimiento</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-            {asigns.map((a) => (
-              <span
-                key={a.usuario_id}
-                style={{
-                  fontSize: 'var(--cc-xs)',
-                  padding: '4px 8px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: a.estado_gestion === 'cumplido' ? 'rgba(15,118,110,0.12)' : 'transparent',
-                  color: t.text,
-                }}
-              >
-                {a.nombre || `#${a.usuario_id}`}: {a.estado_gestion}
-              </span>
-            ))}
-          </div>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-            Estado colectivo: <b style={{ color: t.text }}>{item.estado_gestion}</b>.
-            Solo pasa a Cumplida cuando todos confirman su parte.
-          </div>
-          {!tieneChecklist && esAsignadoFormal(item, usuario?.id) && permisos?.editar && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
-                Mi cumplimiento (actual: {miEstadoEnAsignaciones(asigns, usuario?.id) || '—'})
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
-                  <button
-                    key={x.value}
-                    type="button"
-                    disabled={busy}
-                    style={{
-                      ...ghost(t),
-                      padding: '6px 10px',
-                      borderColor: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? t.primary : t.border,
-                      background: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? `${t.primary}18` : 'transparent',
-                    }}
-                    onClick={() => patchMiEstado(x.value)}
-                  >
-                    {x.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {esTarea ? (
         <section style={{ marginTop: 4 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <h4 style={h4(t)}>Checklist</h4>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
             {puedeEditarTarea && checklistDirty && (
               <button type="button" disabled={busy} style={primary(t)} onClick={guardarChecklist}>
                 {busy ? 'Guardando…' : 'Guardar checklist'}
               </button>
             )}
           </div>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-            Todo el contenido (imagen, esquema, notas y enlace) vive en cada sub-ítem. Puede agregar tantos como necesite.
-          </div>
-          <TareaChecklistEditor
+          <TareaExcelLayout
             t={t}
-            value={checklist}
-            disabled={!puedeEditarTarea}
-            usuario={usuario}
+            mode="view"
+            defaultExpanded={tieneChecklist}
+            titulo={item.titulo || ''}
+            tituloReadOnly
+            destinatariosNode={(
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--cc-xs)', color: t.text, fontWeight: 600, lineHeight: 1.3 }}>
+                  {destinatarioLabel(item)}
+                  {item.referido_a_nombre && item.relacion_destinatario === 'referencia'
+                    ? ` · ref: ${item.referido_a_nombre}`
+                    : ''}
+                </span>
+                {multiAsignacion && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                    {asigns.map((a) => (
+                      <span
+                        key={a.usuario_id}
+                        style={{
+                          fontSize: 10,
+                          padding: '2px 5px',
+                          borderRadius: 4,
+                          border: `1px solid ${t.border}`,
+                          background: a.estado_gestion === 'cumplido' ? 'rgba(15,118,110,0.12)' : 'transparent',
+                          color: t.textMuted,
+                        }}
+                      >
+                        {(a.nombre || `#${a.usuario_id}`).split(' ')[0]}: {a.estado_gestion}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {!tieneChecklist && multiAsignacion && esAsignadoFormal(item, usuario?.id) && permisos?.editar && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                    {ESTADOS_GESTION.filter((x) => x.value !== 'reprogramado').map((x) => (
+                      <button
+                        key={x.value}
+                        type="button"
+                        disabled={busy}
+                        style={{
+                          ...ghost(t),
+                          padding: '3px 6px',
+                          fontSize: 10,
+                          borderColor: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? t.primary : t.border,
+                          background: miEstadoEnAsignaciones(asigns, usuario?.id) === x.value ? `${t.primary}18` : 'transparent',
+                        }}
+                        onClick={() => patchMiEstado(x.value)}
+                      >
+                        {x.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            cumplimientoLabel={
+              multiAsignacion
+                ? `Colectivo: ${item.estado_gestion || '—'}`
+                : (avance?.estadoTarea || item.estado_gestion || '—')
+            }
+            avance={avance}
+            checklist={checklist}
+            checklistDisabled={!puedeEditarTarea}
+            checklistUsuario={usuario}
             multiCumplimiento={multiAsignacion}
             miEstadoBusy={busy}
             onMiEstado={
@@ -360,26 +369,25 @@ export default function ItemDetalleModal({
                 ? (checklistId, estado) => patchMiEstado(estado, checklistId)
                 : undefined
             }
-            onChange={(next) => { setChecklist(next); setChecklistDirty(true) }}
+            onChecklistChange={(next) => { setChecklist(next); setChecklistDirty(true) }}
+            footerBeforeChecklist={
+              multiAsignacion ? (
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+                  Solo pasa a Cumplida cuando todos confirman su parte.
+                  {tieneChecklist ? ' Estado y reprogramación se gestionan en cada sub-ítem.' : ''}
+                </div>
+              ) : (tieneChecklist ? (
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+                  Se marca Cumplida en bandeja solo al 100% (cancelados excluidos). Estado por sub-ítem.
+                </div>
+              ) : null)
+            }
           />
         </section>
       ) : (
         <p style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--cc-body)', color: t.text }}>
           {item.descripcion || 'Sin descripción'}
         </p>
-      )}
-
-      {esTarea && tieneChecklist && (
-        <div style={{
-          margin: '12px 0', padding: '8px 10px', borderRadius: 8,
-          border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
-          fontSize: 'var(--cc-sm)', color: t.textMuted,
-        }}>
-          Estado de la tarea: <b style={{ color: t.text }}>{avance?.estadoTarea || item.estado_gestion}</b>
-          {' · '}avance {labelAvance(avance)}.
-          Se marca Cumplida en bandeja solo al 100% (cancelados excluidos del cálculo).
-          Estado y reprogramación se gestionan en cada sub-ítem.
-        </div>
       )}
 
       {puedeEditarEstado && (
