@@ -88,6 +88,16 @@ export default function TareaFormModal({
         notas: it.notas || '',
         enlace: it.enlace || '',
         comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
+        ...(it.notificar_a_id ? {
+          notificar_a_id: it.notificar_a_id,
+          notificar_a_nombre: it.notificar_a_nombre || '',
+          relacion_notificacion: it.relacion_notificacion || 'referencia',
+          notificar_a: it.notificar_a || {
+            id: it.notificar_a_id,
+            nombre: it.notificar_a_nombre || '',
+            relacion: it.relacion_notificacion || 'referencia',
+          },
+        } : {}),
       }))
       const payload = {
         titulo: titulo.trim(),
@@ -107,6 +117,18 @@ export default function TareaFormModal({
       }
       const row = await api.crearTarea(payload)
       await uploadPendientes(row.id, checklist)
+      // Notificaciones por sub-ítem (columna Notificar a) tras crear la tarea
+      for (const it of checklist) {
+        if (!it.notificar_a_id || !it.relacion_notificacion) continue
+        try {
+          await api.destinarItem(row.id, {
+            destinatario_id: it.notificar_a_id,
+            destinatario_nombre: it.notificar_a_nombre || '',
+            relacion_destinatario: it.relacion_notificacion,
+            checklist_id: it.id,
+          })
+        } catch { /* ignore per-item notify failures */ }
+      }
       onCreated?.(row)
       onClose?.()
     } catch (e) {
@@ -294,6 +316,8 @@ export default function TareaFormModal({
             checklist={checklist}
             onChecklistChange={setChecklist}
             checklistUsuario={usuario}
+            checklistUsuarios={usuarios}
+            canNotificar
             footerBeforeChecklist={
               destinoTipo === 'delegar' ? (
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 8, lineHeight: 1.4 }}>

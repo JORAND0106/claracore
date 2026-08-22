@@ -26,6 +26,10 @@ export default function TareaExcelLayout({
   multiCumplimiento = false,
   onMiEstado,
   miEstadoBusy = false,
+  checklistUsuarios = [],
+  canNotificar = false,
+  onNotificarSubitem = null,
+  notificarBusy = false,
   /** Forzar checklist visible (p. ej. al crear, o tras «Agregar»). */
   defaultExpanded = null,
   headerExtra = null,
@@ -173,6 +177,10 @@ export default function TareaExcelLayout({
             multiCumplimiento={multiCumplimiento}
             onMiEstado={onMiEstado}
             miEstadoBusy={miEstadoBusy}
+            usuarios={checklistUsuarios}
+            canNotificar={canNotificar}
+            onNotificarSubitem={onNotificarSubitem}
+            notificarBusy={notificarBusy}
           />
         </div>
       )}

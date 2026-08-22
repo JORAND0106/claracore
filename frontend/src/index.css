@@ -2704,14 +2704,14 @@ select.cc-dashboard-acta-select--light option {
 /* Checklist de tareas — grilla Excel */
 .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
 .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table {
-  min-width: 640px;
+  min-width: 720px;
 }
 
 .cc-seguim-root--compact .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
 .cc-seguim-modal-sheet .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
 .cc-seguim-root--compact .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table,
 .cc-seguim-modal-sheet .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table {
-  min-width: 520px;
+  min-width: 560px;
 }
 
 .cc-seguim-root--compact .cc-seguim-checklist-comment-row,

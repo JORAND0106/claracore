@@ -198,6 +198,7 @@ class DestinarBody(BaseModel):
     destinatario_nombre: Optional[str] = None
     relacion_destinatario: str = Field(..., description="asignacion | referencia")
     modo: Optional[str] = None
+    checklist_id: Optional[str] = None
 
 
 class AsignacionEstadoBody(BaseModel):

@@ -4,6 +4,11 @@ import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
 import { calcularAvanceTarea, estadoEfectivoSubitem, normEstadoSubitem } from './tareaAvance'
 import { miEstadoEnAsignaciones } from './tareaAsignaciones'
+import {
+  normalizeComentariosSubitem,
+  normalizeNotificarSubitem,
+} from './tareaChecklistMigracion'
+import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { tareaSheetStyles } from './tareaSheetStyles'
 
 const ESTADO_SHORT = {
@@ -17,17 +22,25 @@ const ESTADO_SHORT = {
 }
 
 function normalizeComentarios(raw) {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((c) => c && typeof c === 'object')
-    .map((c) => ({
-      id: String(c.id || `cm${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`),
-      mensaje: String(c.mensaje || c.texto || '').slice(0, 4000),
-      autor_nombre: String(c.autor_nombre || c.autor || '').slice(0, 200),
-      autor_id: c.autor_id != null ? Number(c.autor_id) : null,
-      created_at: c.created_at || new Date().toISOString(),
-    }))
-    .filter((c) => c.mensaje.trim())
+  return normalizeComentariosSubitem(raw)
+}
+
+function patchNotificar(user, relacion) {
+  if (!user?.id) {
+    return {
+      notificar_a_id: null,
+      notificar_a_nombre: '',
+      relacion_notificacion: null,
+      notificar_a: null,
+    }
+  }
+  const nombre = nombreUser(user) || String(user.nombre || '')
+  return {
+    notificar_a_id: Number(user.id),
+    notificar_a_nombre: nombre,
+    relacion_notificacion: relacion,
+    notificar_a: { id: Number(user.id), nombre, relacion },
+  }
 }
 
 /** Editor de checklist: único contenedor de contenido de la tarea personal. */
@@ -42,6 +55,7 @@ export function newChecklistItem(partial = {}) {
       updated_at: a.updated_at || null,
     }))
     : []
+  const notificar = normalizeNotificarSubitem(partial)
   return {
     id,
     texto: partial.texto || '',
@@ -56,6 +70,17 @@ export function newChecklistItem(partial = {}) {
     comentarios: normalizeComentarios(partial.comentarios),
     orden: partial.orden ?? 0,
     ...(asignaciones.length ? { asignaciones } : {}),
+    ...(notificar ? {
+      notificar_a_id: notificar.id,
+      notificar_a_nombre: notificar.nombre,
+      relacion_notificacion: notificar.relacion,
+      notificar_a: notificar,
+    } : {
+      notificar_a_id: null,
+      notificar_a_nombre: '',
+      relacion_notificacion: null,
+      notificar_a: null,
+    }),
   }
 }
 
@@ -77,6 +102,10 @@ export function seedChecklistFromItem(item) {
       comentarios: it.comentarios || [],
       orden: it.orden ?? i,
       asignaciones: it.asignaciones,
+      notificar_a: it.notificar_a,
+      notificar_a_id: it.notificar_a_id,
+      notificar_a_nombre: it.notificar_a_nombre,
+      relacion_notificacion: it.relacion_notificacion,
     }))
   }
   if ((item?.descripcion || '').trim()) {
@@ -93,7 +122,7 @@ export function seedChecklistFromItem(item) {
 
 /**
  * Checklist de sub-ítems en grilla tipo Excel.
- * Columnas: Sub-ítem · Fecha/Hora · Estado · Notas · Enlace · Comentarios (nube) · Adjuntos.
+ * Columnas: Sub-ítem · Fecha/Hora · Estado · Notas · Enlace · Notificar a · Comentarios · Adjuntos.
  */
 export default function TareaChecklistEditor({
   t,
@@ -105,6 +134,12 @@ export default function TareaChecklistEditor({
   multiCumplimiento = false,
   onMiEstado,
   miEstadoBusy = false,
+  usuarios = [],
+  /** Permite buscar y notificar destinatario por sub-ítem. */
+  canNotificar = false,
+  /** async (checklistId, { user, relacion }) => void — si hay item persistido. */
+  onNotificarSubitem = null,
+  notificarBusy = false,
 }) {
   const items = Array.isArray(value) ? value : []
   const ui = tareaSheetStyles(t)
@@ -112,6 +147,7 @@ export default function TareaChecklistEditor({
   const [esquemaIdx, setEsquemaIdx] = useState(null)
   const [commentsOpenIdx, setCommentsOpenIdx] = useState(null)
   const [draftComments, setDraftComments] = useState({})
+  const [notifyPick, setNotifyPick] = useState({}) // idx -> user
   const avance = calcularAvanceTarea(items)
 
   const setAt = (idx, patch) => {
@@ -178,6 +214,30 @@ export default function TareaChecklistEditor({
     setAt(idx, { comentarios: normalizeComentarios(it.comentarios).filter((c) => c.id !== commentId) })
   }
 
+  const aplicarNotificar = async (idx, relacion) => {
+    const u = notifyPick[idx]
+    if (!u) return
+    const patch = patchNotificar(u, relacion)
+    setAt(idx, patch)
+    setNotifyPick((d) => {
+      const next = { ...d }
+      delete next[idx]
+      return next
+    })
+    if (typeof onNotificarSubitem === 'function') {
+      await onNotificarSubitem(items[idx]?.id, { user: u, relacion })
+    }
+  }
+
+  const quitarNotificar = (idx) => {
+    setAt(idx, patchNotificar(null))
+    setNotifyPick((d) => {
+      const next = { ...d }
+      delete next[idx]
+      return next
+    })
+  }
+
   return (
     <div className="cc-seguim-checklist cc-seguim-checklist--sheet">
       {items.length > 0 && (
@@ -199,19 +259,20 @@ export default function TareaChecklistEditor({
         <table style={ui.sheetTable} className="cc-seguim-tarea-checklist-table">
           <thead>
             <tr>
-              <th style={{ ...ui.th, width: '22%' }}>Sub-ítem</th>
-              <th style={{ ...ui.th, width: '14%' }}>Fecha / Hora</th>
-              <th style={{ ...ui.th, width: '12%' }}>Estado</th>
-              <th style={{ ...ui.th, width: '18%' }}>Notas</th>
-              <th style={{ ...ui.th, width: '14%' }}>Enlace</th>
-              <th style={{ ...ui.thCenter, width: '6%' }} title="Comentarios">☁</th>
-              <th style={{ ...ui.thCenter, width: '14%' }}>Adjuntos</th>
+              <th style={{ ...ui.th, width: '18%' }}>Sub-ítem</th>
+              <th style={{ ...ui.th, width: '12%' }}>Fecha / Hora</th>
+              <th style={{ ...ui.th, width: '10%' }}>Estado</th>
+              <th style={{ ...ui.th, width: '14%' }}>Notas</th>
+              <th style={{ ...ui.th, width: '12%' }}>Enlace</th>
+              <th style={{ ...ui.th, width: '14%' }}>Notificar a</th>
+              <th style={{ ...ui.thCenter, width: '5%' }} title="Comentarios">☁</th>
+              <th style={{ ...ui.thCenter, width: '15%' }}>Adjuntos</th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)', height: 36 }}>
+                <td colSpan={8} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)', height: 36 }}>
                   Sin sub-ítems. Use «+ Agregar sub-ítem» para crear la checklist.
                 </td>
               </tr>
@@ -227,6 +288,8 @@ export default function TareaChecklistEditor({
               const miEst = multi ? miEstadoEnAsignaciones(asigns, usuario?.id) : null
               const comentarios = normalizeComentarios(it.comentarios)
               const commentsOpen = commentsOpenIdx === idx
+              const notificar = normalizeNotificarSubitem(it)
+              const pick = notifyPick[idx]
               return (
                 <Fragment key={it.id}>
                   <tr>
@@ -350,6 +413,109 @@ export default function TareaChecklistEditor({
                         )}
                       </div>
                     </td>
+                    <td style={{ ...ui.td, height: 'auto', padding: 4 }} onClick={(e) => e.stopPropagation()}>
+                      {canNotificar && !disabled ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                          {notificar && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                              <span style={{
+                                fontSize: 10,
+                                padding: '2px 5px',
+                                borderRadius: 4,
+                                border: `1px solid ${t.primary}`,
+                                background: `${t.primary}14`,
+                                color: t.text,
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                                title={`${notificar.nombre} · ${notificar.relacion}`}
+                              >
+                                {notificar.nombre}
+                                <span style={{ color: t.textMuted }}> · {notificar.relacion === 'asignacion' ? 'asig.' : 'ref.'}</span>
+                              </span>
+                              <button type="button" style={ui.iconBtn} title="Quitar" onClick={() => quitarNotificar(idx)}>✕</button>
+                            </div>
+                          )}
+                          <UserSearchSelect
+                            key={`notif-${it.id}-${notificar?.id || 'empty'}`}
+                            t={t}
+                            usuarios={usuarios}
+                            valueId={null}
+                            valueNombre=""
+                            mode="strict"
+                            placeholder={notificar ? 'Cambiar…' : 'Buscar…'}
+                            style={{
+                              width: '100%',
+                              boxSizing: 'border-box',
+                              fontSize: 11,
+                              padding: '4px 6px',
+                              borderRadius: 4,
+                              border: `1px solid ${t.border}`,
+                              background: t.bg || t.bgCard,
+                              color: t.text,
+                              marginBottom: 0,
+                            }}
+                            onSelect={(u) => setNotifyPick((d) => ({ ...d, [idx]: u }))}
+                          />
+                          {pick && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              <button
+                                type="button"
+                                disabled={notificarBusy}
+                                style={{
+                                  border: 'none',
+                                  borderRadius: 4,
+                                  padding: '3px 6px',
+                                  background: t.primary,
+                                  color: '#fff',
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                }}
+                                onClick={() => aplicarNotificar(idx, 'asignacion')}
+                              >
+                                Asignar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={notificarBusy}
+                                style={{
+                                  border: `1px solid ${t.border}`,
+                                  borderRadius: 4,
+                                  padding: '3px 6px',
+                                  background: 'transparent',
+                                  color: t.text,
+                                  fontSize: 10,
+                                  cursor: 'pointer',
+                                }}
+                                onClick={() => aplicarNotificar(idx, 'referencia')}
+                              >
+                                Referencia
+                              </button>
+                              <button
+                                type="button"
+                                style={ui.iconBtn}
+                                onClick={() => setNotifyPick((d) => {
+                                  const next = { ...d }
+                                  delete next[idx]
+                                  return next
+                                })}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: 10, color: t.textMuted }}>
+                          {notificar
+                            ? `${notificar.nombre} · ${notificar.relacion === 'asignacion' ? 'asig.' : 'ref.'}`
+                            : '—'}
+                        </span>
+                      )}
+                    </td>
                     <td style={ui.tdCenter}>
                       <button
                         type="button"
@@ -427,7 +593,7 @@ export default function TareaChecklistEditor({
                   </tr>
                   {commentsOpen && (
                     <tr>
-                      <td colSpan={7} style={{ ...ui.td, background: t.bg || `${t.primary}06`, height: 'auto', padding: 8 }}>
+                      <td colSpan={8} style={{ ...ui.td, background: t.bg || `${t.primary}06`, height: 'auto', padding: 8 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: t.text, marginBottom: 6 }}>
                           Comentarios del sub-ítem
                         </div>
