@@ -29,10 +29,24 @@ def test_normaliza_tabla_y_comentarios_subitem():
     assert it["comentarios"][1]["autor_nombre"] == "Luis"
 
 
-def test_tabla_invalida_queda_null():
+def test_normaliza_notificar_a_subitem():
     out = _normalizar_checklist_tarea([{
-        "texto": "Sin tabla",
-        "tabla": {"rows": 2},
+        "id": "c1",
+        "texto": "Sub",
+        "notificar_a_id": 12,
+        "notificar_a_nombre": "Ana",
+        "relacion_notificacion": "referencia",
     }])
-    assert out[0]["tabla"] is None
-    assert out[0]["comentarios"] == []
+    assert out[0]["notificar_a_id"] == 12
+    assert out[0]["notificar_a_nombre"] == "Ana"
+    assert out[0]["relacion_notificacion"] == "referencia"
+    assert out[0]["notificar_a"]["id"] == 12
+
+
+def test_notificar_a_objeto_anidado():
+    out = _normalizar_checklist_tarea([{
+        "texto": "X",
+        "notificar_a": {"id": 5, "nombre": "Luis", "relacion": "asignacion"},
+    }])
+    assert out[0]["notificar_a_id"] == 5
+    assert out[0]["relacion_notificacion"] == "asignacion"

@@ -7,6 +7,7 @@ import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import { asignacionesDe, destinatarioLabel, esAsignadoFormal, miEstadoEnAsignaciones } from './tareaAsignaciones'
 import { calcularAvanceTarea } from './tareaAvance'
+import { aplicarMigracionLegadoChecklist } from './tareaChecklistMigracion'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
@@ -42,8 +43,11 @@ export default function ItemDetalleModal({
   const applyItem = (d) => {
     setItem(d)
     if (d?.origen === 'tarea') {
-      setChecklist(seedChecklistFromItem(d))
-      setChecklistDirty(false)
+      const seeded = seedChecklistFromItem(d)
+      const migrated = aplicarMigracionLegadoChecklist(seeded, d)
+      setChecklist(migrated)
+      const dirty = JSON.stringify(seeded) !== JSON.stringify(migrated)
+      setChecklistDirty(dirty)
     }
     if (d?.origen === 'compromiso') {
       setFechaEdit(String(d.fecha_vencimiento || '').slice(0, 10))
@@ -203,6 +207,27 @@ export default function ItemDetalleModal({
     }
   }
 
+  const notificarSubitem = async (checklistId, { user, relacion }) => {
+    if (!checklistId || !user?.id) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.destinarItem(item.id, {
+        destinatario_id: user.id,
+        destinatario_nombre: nombreUser(user),
+        relacion_destinatario: relacion,
+        checklist_id: checklistId,
+      })
+      await reload()
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'No se pudo notificar')
+      setChecklistDirty(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const guardarChecklist = async () => {
     setBusy(true)
     setError('')
@@ -221,6 +246,16 @@ export default function ItemDetalleModal({
         imagen: it.imagen?.pending ? null : (it.imagen || null),
         esquema: it.esquema?.pending ? null : (it.esquema || null),
         ...(Array.isArray(it.asignaciones) ? { asignaciones: it.asignaciones } : {}),
+        ...(it.notificar_a_id ? {
+          notificar_a_id: it.notificar_a_id,
+          notificar_a_nombre: it.notificar_a_nombre || '',
+          relacion_notificacion: it.relacion_notificacion || 'referencia',
+          notificar_a: it.notificar_a || {
+            id: it.notificar_a_id,
+            nombre: it.notificar_a_nombre || '',
+            relacion: it.relacion_notificacion || 'referencia',
+          },
+        } : {}),
       }))
       const updated = await api.updateTarea(item.id, {
         campos_libres: { checklist: checklistPayload },
@@ -364,6 +399,14 @@ export default function ItemDetalleModal({
             checklistUsuario={usuario}
             multiCumplimiento={multiAsignacion}
             miEstadoBusy={busy}
+            checklistUsuarios={usuarios}
+            canNotificar={(soyCreador || esDev) && !!permisos?.editar}
+            notificarBusy={busy}
+            onNotificarSubitem={
+              (soyCreador || esDev) && permisos?.editar
+                ? notificarSubitem
+                : undefined
+            }
             onMiEstado={
               multiAsignacion && esAsignadoFormal(item, usuario?.id) && permisos?.editar
                 ? (checklistId, estado) => patchMiEstado(estado, checklistId)
@@ -526,7 +569,8 @@ export default function ItemDetalleModal({
         </div>
       )}
 
-      {(soyCreador || esDev) && permisos?.editar && (
+      {/* Notificar a (solo compromisos): en tareas vive en la columna del sub-ítem */}
+      {esCompromiso && (soyCreador || esDev) && permisos?.editar && (
         <section style={{ marginTop: 12 }}>
           <h4 style={h4(t)}>Notificar a</h4>
           <UserSearchSelect
@@ -639,13 +683,13 @@ export default function ItemDetalleModal({
         </section>
       )}
 
+      {/* Comentarios generales: solo compromisos. En tareas se usan comentarios por sub-ítem (☁). */}
+      {esCompromiso && (
       <section style={{ marginTop: 16 }}>
         <h4 style={h4(t)}>Comentarios</h4>
-        {esCompromiso && (
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-            En compromisos de acta pueden comentar el asignado y el elaborador (p. ej. motivo de cumplimiento anticipado).
-          </div>
-        )}
+        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+          En compromisos de acta pueden comentar el asignado y el elaborador (p. ej. motivo de cumplimiento anticipado).
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflow: 'auto', marginBottom: 8 }}>
           {(item.comentarios || []).map((c) => (
             <div key={c.id} style={{ padding: 8, borderRadius: 8, background: t.bg || 'rgba(0,0,0,0.03)', fontSize: 'var(--cc-sm)' }}>
@@ -663,7 +707,7 @@ export default function ItemDetalleModal({
             <input
               value={comentario}
               onChange={(e) => setComentario(e.target.value)}
-              placeholder={esCompromiso ? 'Observación / motivo (p. ej. cumplimiento anticipado)…' : 'Escriba un comentario…'}
+              placeholder="Observación / motivo (p. ej. cumplimiento anticipado)…"
               style={{ ...inp(t), flex: 1 }}
             />
             <button
@@ -684,12 +728,13 @@ export default function ItemDetalleModal({
               Enviar
             </button>
           </div>
-        ) : esCompromiso ? (
+        ) : (
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
             No puede comentar este compromiso (solo el asignado o el elaborador del acta).
           </div>
-        ) : null}
+        )}
       </section>
+      )}
 
       {esCompromiso && soyResponsable && (
         <section style={{ marginTop: 16 }}>

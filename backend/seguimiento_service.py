@@ -2605,6 +2605,35 @@ def _normalizar_tabla_subitem(raw) -> Optional[dict]:
     return {"rows": rows, "cols": cols, "cells": cells}
 
 
+def _normalizar_notificar_subitem(it: dict) -> Optional[dict]:
+    """Destinatario a notificar por sub-ítem (columna Notificar a)."""
+    if not isinstance(it, dict):
+        return None
+    raw = it.get("notificar_a") if isinstance(it.get("notificar_a"), dict) else None
+    dest_id = it.get("notificar_a_id")
+    dest_nombre = it.get("notificar_a_nombre")
+    relacion = it.get("relacion_notificacion") or it.get("relacion_destinatario")
+    if raw:
+        dest_id = dest_id if dest_id is not None else raw.get("id") or raw.get("usuario_id")
+        dest_nombre = dest_nombre or raw.get("nombre") or raw.get("destinatario_nombre")
+        relacion = relacion or raw.get("relacion") or raw.get("relacion_destinatario")
+    try:
+        dest_id = int(dest_id) if dest_id is not None else None
+    except Exception:
+        dest_id = None
+    if not dest_id:
+        return None
+    relacion = str(relacion or "referencia").strip().lower()
+    if relacion not in ("asignacion", "referencia"):
+        relacion = "referencia"
+    nombre = (str(dest_nombre or "").strip() or f"#{dest_id}")[:200]
+    return {
+        "id": dest_id,
+        "nombre": nombre,
+        "relacion": relacion,
+    }
+
+
 def _normalizar_comentarios_subitem(raw) -> List[dict]:
     """Comentarios independientes por sub-ítem (no son los comentarios del ítem bandeja)."""
     if not isinstance(raw, list):
@@ -2641,7 +2670,7 @@ def _normalizar_comentarios_subitem(raw) -> List[dict]:
 
 
 def _normalizar_checklist_tarea(raw) -> List[dict]:
-    """Sub-ítems: texto, estado, fecha/hora, imagen, esquema, tabla, notas, enlace y comentarios."""
+    """Sub-ítems: texto, estado, fecha/hora, imagen, esquema, tabla, notas, enlace, comentarios y notificar_a."""
     if not isinstance(raw, list):
         return []
     out: List[dict] = []
@@ -2673,6 +2702,7 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
         if asignaciones_item:
             estado = _agregar_estados_asignados([a.get("estado_gestion") for a in asignaciones_item])
             hecho = estado == "cumplido"
+        notificar = _normalizar_notificar_subitem(it)
         out_row = {
             "id": str(cid)[:40],
             "texto": texto[:2000],
@@ -2690,6 +2720,11 @@ def _normalizar_checklist_tarea(raw) -> List[dict]:
         }
         if asignaciones_item:
             out_row["asignaciones"] = asignaciones_item
+        if notificar:
+            out_row["notificar_a_id"] = notificar["id"]
+            out_row["notificar_a_nombre"] = notificar["nombre"]
+            out_row["relacion_notificacion"] = notificar["relacion"]
+            out_row["notificar_a"] = notificar
         out.append(out_row)
     out.sort(key=lambda x: x.get("orden") or 0)
     for i, it in enumerate(out):
@@ -3622,7 +3657,11 @@ def list_bandeja(
 
 
 def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict) -> dict:
-    """Asignación formal o envío por referencia a un destinatario."""
+    """Asignación formal o envío por referencia a un destinatario.
+
+    Si se indica checklist_id en una tarea, la notificación queda anclada al sub-ítem
+    (columna Notificar a) y no altera destinatarios/cumplimiento del nivel Tarea.
+    """
     item = get_item(sb, item_id)
     es_dev = es_desarrollador_seguimiento(current_user)
     if (
@@ -3639,6 +3678,44 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
     if not dest:
         raise ValueError("Destinatario no encontrado")
     nombre = data.get("destinatario_nombre") or _nombre_usuario(dest)
+    checklist_id = (data.get("checklist_id") or "").strip() or None
+
+    # Tarea + sub-ítem: persistir en checklist y notificar sin tocar nivel 1.
+    if checklist_id and item.get("origen") == "tarea":
+        libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+        checklist = _normalizar_checklist_tarea(libres.get("checklist") or [])
+        hit = next((c for c in checklist if str(c.get("id")) == str(checklist_id)), None)
+        if not hit:
+            raise ValueError("Sub-ítem no encontrado en la checklist")
+        hit["notificar_a_id"] = dest_id
+        hit["notificar_a_nombre"] = nombre
+        hit["relacion_notificacion"] = modo
+        hit["notificar_a"] = {"id": dest_id, "nombre": nombre, "relacion": modo}
+        new_libres = {**libres, "checklist": checklist}
+        sb.table("seguimiento_item").update({
+            "campos_libres": new_libres,
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(item_id)).execute()
+        _registrar_evento(
+            sb, item_id, f"destinar_subitem_{modo}", user_id,
+            {"destinatario_id": dest_id, "checklist_id": checklist_id},
+        )
+        sub_txt = (hit.get("texto") or "").strip() or "sub-ítem"
+        _notificar(
+            sb,
+            destinatario_id=dest_id,
+            remitente_id=user_id,
+            asunto=f"{'Asignación' if modo == 'asignacion' else 'Referencia'} (sub-ítem): {item.get('titulo')}",
+            mensaje=(
+                f"Se le {'asignó formalmente' if modo == 'asignacion' else 'compartió como referencia'} "
+                f"el sub-ítem «{sub_txt}» de la tarea «{item.get('titulo')}»."
+            ),
+            contrato_id=item.get("contrato_id"),
+            entidad_tipo="seguimiento_item",
+            entidad_id=str(item_id),
+        )
+        return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
+
     prev_asignado = int(item.get("asignado_a_id") or 0)
     patch: Dict[str, Any] = {
         "relacion_destinatario": modo,
