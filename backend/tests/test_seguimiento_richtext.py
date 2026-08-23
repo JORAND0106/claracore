@@ -53,3 +53,27 @@ def test_render_pdf_bullets():
     out = render_tema_html_for_pdf("<ul><li><p>A</p></li><li><p>B</p></li></ul>")
     assert "<ul" in out
     assert "A" in out and "B" in out
+
+
+def test_sanitize_preserves_table_and_colwidth():
+    raw = (
+        '<table><tr>'
+        '<th colspan="1" colwidth="120">A</th>'
+        '<td colwidth="80">B</td>'
+        '</tr></table>'
+        '<script>x()</script>'
+    )
+    out = sanitize_tema_html(raw)
+    assert "<table" in out
+    assert "<th" in out and "<td" in out
+    assert 'colwidth="120"' in out
+    assert "<script>" not in out
+    pdf = render_tema_html_for_pdf(raw)
+    assert "<table" in pdf
+    assert "A" in pdf and "B" in pdf
+    assert "width:120px" in pdf or "colwidth" in pdf
+
+
+def test_html_to_plain_text_tables():
+    plain = html_to_plain_text("<table><tr><td>Uno</td><td>Dos</td></tr></table>")
+    assert "Uno" in plain and "Dos" in plain
