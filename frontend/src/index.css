@@ -3218,6 +3218,46 @@ select.cc-dashboard-acta-select--light option {
    Seguimiento — Libro digital (Actas / Bitácora, solo lectura)
    ═══════════════════════════════════════════════════════════ */
 
+.cc-seguim-libro-btn {
+  position: relative;
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+  animation: ccSeguimLibroBtnIn 520ms ease-out both;
+}
+
+.cc-seguim-libro-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.cc-seguim-libro-btn:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.cc-seguim-libro-btn::after {
+  content: 'Nuevo';
+  position: absolute;
+  top: -8px;
+  right: -10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--cc-libro-btn-accent, #0077B6);
+  border: 1px solid color-mix(in srgb, var(--cc-libro-btn-accent, #0077B6) 45%, #bae6fd);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  box-shadow: 0 4px 10px rgba(10, 22, 40, 0.12);
+  pointer-events: none;
+}
+
+@keyframes ccSeguimLibroBtnIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .cc-libro-overlay {
   position: fixed;
   inset: 0;
