@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
+import TopoErrorModal from './TopoErrorModal'
 import PoligonalCalculoTable from './PoligonalCalculoTable'
 import PoligonalCierrePanel from './PoligonalCierrePanel'
 import PoligonalGrafico from './PoligonalGrafico'
@@ -203,6 +204,7 @@ export default function PoligonalModal({
   const formRef = useRef(null)
   const [armadaForm, setArmadaForm] = useState({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
   const [mostrarCambioArmada, setMostrarCambioArmada] = useState(false)
+  const prevOpenRef = useRef(false)
 
   const showError = useCallback((err) => {
     const parsed = parseApiError(err?.message || String(err))
@@ -295,10 +297,15 @@ export default function PoligonalModal({
   }
 
   useEffect(() => {
+    if (!open) {
+      prevOpenRef.current = false
+      return
+    }
+    const justOpened = !prevOpenRef.current
+    prevOpenRef.current = true
     if (open) setModo(modoInicial || 'editar')
-    if (!open) return
     setResultado(null)
-    setErrorModal(null)
+    if (justOpened) setErrorModal(null)
     api('/operadores')
       .then((rows) => setOperadores(Array.isArray(rows) ? rows : []))
       .catch(() => setOperadores([]))
@@ -310,7 +317,9 @@ export default function PoligonalModal({
       } else {
         cargarDetalle(initialPoligonalId).catch(showError)
       }
-    } else {
+    } else if (justOpened) {
+      // Solo reiniciar al abrir «Nueva»: no borrar la libreta si `api`/`cargarDetalle`
+      // cambian de identidad a mitad de la creación (p. ej. contexto offline).
       setStep('chooseTipo')
       setPoligonalId(null)
       setDetalle(null)

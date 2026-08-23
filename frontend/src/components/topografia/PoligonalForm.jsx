@@ -389,11 +389,9 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
         onClose={() => setModalOpen(false)}
 
         onSaved={(id) => {
-
+          if (id) setModalPoligonalId(id)
           cargarLista()
-
           if (id) cargarDetalle(id)
-
         }}
 
         contratoId={contratoId}
