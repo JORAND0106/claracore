@@ -244,19 +244,19 @@ class _ListNumberer(HTMLParser):
                 self._pending_colgroup = True
             filtered = [
                 (k, v) for k, v in _filter_attrs(tag, attrs)
-                if k not in ("border", "cellpadding", "cellspacing")
+                if k not in ("border", "cellpadding", "cellspacing", "style", "width")
             ]
-            # Siempre 100% del ancho disponible; los % de columna viven en col/td.
-            style = "border-collapse:collapse;width:100%;font-size:9pt;margin:4pt 0;table-layout:fixed;"
-            filtered = [(a, b) for a, b in filtered if a != "style"]
+            # xhtml2pdf: width="100%" como atributo HTML (no solo CSS).
+            style = "border-collapse:collapse;font-size:9pt;margin:4pt 0;"
             self.out.append(
-                f'<table border="1" cellpadding="4" cellspacing="0"'
+                f'<table border="1" cellpadding="4" cellspacing="0" width="100%"'
                 f'{_attrs_html(filtered)} style="{style}">'
             )
             plan = self._current_plan()
             if self._pending_colgroup and plan:
+                from tema_table_pdf_widths import format_width_pct_attr
                 cols = "".join(
-                    f'<col style="width:{pct}%;"/>' for pct in plan
+                    f'<col width="{format_width_pct_attr(pct)}"/>' for pct in plan
                 )
                 self.out.append(f"<colgroup>{cols}</colgroup>")
                 self._pending_colgroup = False
@@ -264,12 +264,12 @@ class _ListNumberer(HTMLParser):
         if tag in ("thead", "tbody", "colgroup"):
             # Ignorar colgroup original del editor: ya inyectamos el planificado.
             if tag == "colgroup":
-                self._skip_colgroup = getattr(self, "_skip_colgroup", 0) + 1
+                self._skip_colgroup += 1
                 return
             self.out.append(f"<{tag}>")
             return
         if tag == "col":
-            if getattr(self, "_skip_colgroup", 0):
+            if self._skip_colgroup:
                 return
             self.out.append("<col>")
             return
@@ -279,8 +279,11 @@ class _ListNumberer(HTMLParser):
             return
         if tag in ("td", "th"):
             filtered = _filter_attrs(tag, attrs)
-            # Quitar width px absolutos; usar % del plan.
-            filtered = [(a, b) for a, b in filtered if a != "style" and a != "colwidth"]
+            # Quitar width/colwidth/style del editor (px literales); PDF usa plan %.
+            filtered = [
+                (a, b) for a, b in filtered
+                if a not in ("style", "colwidth", "width")
+            ]
             style_bits = [
                 "border:0.4pt solid #94a3b8",
                 "padding:3pt 4pt",
@@ -292,14 +295,18 @@ class _ListNumberer(HTMLParser):
             for k, v in filtered:
                 if k == "colspan" and str(v).isdigit():
                     colspan = max(1, int(v))
+            width_attr = ""
             if plan and self._col_idx < len(plan):
-                # Suma de % cubiertos por colspan
+                from tema_table_pdf_widths import format_width_pct_attr
                 span_pct = sum(plan[self._col_idx:self._col_idx + colspan])
-                style_bits.insert(0, f"width:{round(span_pct, 1)}%")
+                # Atributo HTML width="N%" — patrón que xhtml2pdf sí aplica.
+                width_attr = f' width="{format_width_pct_attr(span_pct)}"'
             if tag == "th":
                 style_bits.append("font-weight:700")
                 style_bits.append("background:#f1f5f9")
-            self.out.append(f'<{tag}{_attrs_html(filtered)} style="{";".join(style_bits)}">')
+            self.out.append(
+                f'<{tag}{width_attr}{_attrs_html(filtered)} style="{";".join(style_bits)}">'
+            )
             self._col_idx += colspan
             return
         if tag in _ALLOWED_TAGS:
@@ -346,7 +353,8 @@ def render_tema_html_for_pdf(raw: Optional[str]) -> str:
     """
     HTML seguro para xhtml2pdf: negrita/cursiva/subrayado + listas + tablas.
     Las ol anidadas llevan marcadores explícitos 1. / 1.1. / 1.1.1.
-    Tablas: anchos en % según contenido + proporción relativa del editor.
+    Tablas: anchos vía atributo HTML width="N%" (xhtml2pdf ignora style width:%),
+    calculados por contenido + suave proporción del editor.
     """
     from tema_table_pdf_widths import plan_table_column_pcts
 
