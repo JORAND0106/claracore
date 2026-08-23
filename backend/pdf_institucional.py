@@ -297,6 +297,8 @@ def html_encabezado_institucional(
     )
 
     pad = "2px 2px" if dense else "4px 3px"
+    # Logos densos: padding de celda mínimo para crecer dentro sin subir la fila.
+    pad_logo = "1px 1px" if dense else pad
     pad_c = "2px 6px" if dense else "4px 8px"
     margin = "0 0 4px" if dense else "0 0 8px"
     meta_mt = "1px" if dense else "2px"
@@ -305,8 +307,8 @@ def html_encabezado_institucional(
 <table width="100%" cellspacing="0" cellpadding="0"
   style="border-collapse:collapse;border:0.8pt solid #0f172a;margin:{margin};background:#fff;">
   <tr>
-    <td width="13%" style="padding:{pad};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
-    <td width="13%" style="padding:{pad};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
+    <td width="13%" style="padding:{pad_logo};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
+    <td width="13%" style="padding:{pad_logo};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
     <td width="61%" style="padding:{pad_c};vertical-align:middle;background:#f1f5f9;">
       <div style="font-size:{title_fs};font-weight:bold;color:#0f172a;line-height:1.1;">{titulo_esc}</div>
       {sub_html}
@@ -319,7 +321,7 @@ def html_encabezado_institucional(
       </div>
       {gen_html}
     </td>
-    <td width="13%" style="padding:{pad};border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
+    <td width="13%" style="padding:{pad_logo};border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
   </tr>
 </table>
 """
