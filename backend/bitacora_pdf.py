@@ -103,26 +103,15 @@ def _palette(contrato: dict) -> dict:
 
 
 def _logo_uri(url: Optional[str]) -> str:
-    if not url or not str(url).strip():
-        return ""
-    key = str(url).strip()
-    now = time.time()
-    with _LOGO_URI_CACHE_LOCK:
-        hit = _LOGO_URI_CACHE.get(key)
-        if hit and hit[0] > now:
-            return hit[1]
-    try:
-        uri = _http_or_data_to_uri(key, _LOGO_MAX_PX_W, _LOGO_MAX_PX_H) or ""
-    except Exception:
-        uri = ""
-    if uri:
-        with _LOGO_URI_CACHE_LOCK:
-            _LOGO_URI_CACHE[key] = (now + _LOGO_URI_CACHE_TTL, uri)
-            if len(_LOGO_URI_CACHE) > 128:
-                dead = [k for k, (e, _) in _LOGO_URI_CACHE.items() if e < now]
-                for k in dead:
-                    _LOGO_URI_CACHE.pop(k, None)
-    return uri
+    """Delega al util compartido (aplana alpha → evita fondo negro en xhtml2pdf)."""
+    from pdf_institucional import prepare_image_for_pdf
+
+    return prepare_image_for_pdf(
+        url,
+        max_px_w=_LOGO_MAX_PX_W,
+        max_px_h=_LOGO_MAX_PX_H,
+        allow_http=True,
+    )
 
 
 def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
@@ -245,14 +234,14 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
 
 
 def _prefetch_logos(contrato: dict) -> Dict[str, str]:
-    keys = ("logo_contratista", "logo_interventoria", "logo_entidad")
-    urls = {k: str(contrato.get(k) or "").strip() for k in keys}
-    out: Dict[str, str] = {k: "" for k in keys}
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futs = {pool.submit(_logo_uri, urls[k] or None): k for k in keys if urls[k]}
-        for fut in as_completed(futs):
-            out[futs[fut]] = fut.result() or ""
-    return out
+    from pdf_institucional import prepare_logos_contrato
+
+    return prepare_logos_contrato(
+        contrato,
+        allow_http=True,
+        max_px_w=_LOGO_MAX_PX_W,
+        max_px_h=_LOGO_MAX_PX_H,
+    )
 
 
 def _prefetch_fotos(fotos: List[dict], contrato_id: int) -> Dict[int, Tuple[str, float, float]]:

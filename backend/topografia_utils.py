@@ -2017,13 +2017,13 @@ def _cadena_vertices_plano(puntos: list) -> list:
 
 
 def _html_logo_pdf(contrato: dict, *, max_h: int = 36, placeholder_pt: int = 7) -> str:
-    """Logo del contratista para PDF (sin URLs remotas)."""
-    logo = contrato.get("logo_contratista") or ""
-    if logo and (str(logo).startswith("http://") or str(logo).startswith("https://")):
-        logo = ""
-    if logo:
+    """Logo del contratista para PDF (aplana transparencia; permite http→data-URI)."""
+    from pdf_institucional import prepare_image_for_pdf
+
+    uri = prepare_image_for_pdf(contrato.get("logo_contratista") or "", max_px_h=max_h * 4, max_px_w=max_h * 6)
+    if uri:
         return (
-            f'<img src="{html.escape(str(logo), quote=True)}" '
+            f'<img src="{html.escape(uri, quote=True)}" '
             f'style="max-height:{max_h}px;max-width:72px;display:block;" />'
         )
     return (
@@ -3276,86 +3276,23 @@ def html_documento_poligonal_pdf(
 def html_encabezado_pdf_compacto(
     contrato: dict, titulo: str, subtitulo: str = "", *, generado_por: str = ""
 ) -> str:
-    """Encabezado compacto: logo | título (+ subtítulo) | fecha; contrato | objeto | generado por."""
-    objeto = html.escape(str(contrato.get("objeto") or ""))
-    numero = html.escape(str(contrato.get("numero") or ""))
-    fecha = _fecha_informe_pdf()
-    gen = html.escape(str(generado_por or ""))
-    logo = contrato.get("logo_contratista") or ""
-    if logo and (str(logo).startswith("http://") or str(logo).startswith("https://")):
-        logo = ""
-    logo_html = (
-        f'<img src="{html.escape(str(logo), quote=True)}" style="max-height:36px;max-width:72px;" />'
-        if logo
-        else '<div style="border:1px dashed #cbd5e1;padding:4px 6px;font-size:6pt;color:#94a3b8;">LOGO</div>'
+    """Encabezado compacto con 3 logos institucionales (Contratista | Interventoría | Entidad)."""
+    from pdf_institucional import html_encabezado_institucional
+
+    return html_encabezado_institucional(
+        contrato,
+        titulo,
+        subtitulo=subtitulo,
+        compact=True,
+        generado_por=generado_por,
     )
-    sub_html = ""
-    if subtitulo:
-        sub_html = (
-            f'<div style="font-size:6pt;font-weight:600;color:#475569;margin-top:1px;line-height:1.2;">'
-            f"{html.escape(subtitulo)}</div>"
-        )
-    gen_html = f' &nbsp;|&nbsp; <b>Generado por:</b> {gen}' if gen else ""
-    return f"""
-    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:3px;">
-      <tr>
-        <td width="14%" valign="middle" style="padding:2px 4px;">{logo_html}</td>
-        <td width="66%" valign="middle" align="center" style="padding:2px 6px;">
-          <div style="font-size:8.5pt;font-weight:bold;color:#1e293b;line-height:1.15;">{html.escape(titulo)}</div>
-          {sub_html}
-        </td>
-        <td width="20%" valign="middle" align="right" style="font-size:6.5pt;color:#64748b;padding:2px 4px;white-space:nowrap;">
-          {fecha}
-        </td>
-      </tr>
-      <tr>
-        <td colspan="3" style="border-bottom:1.5px solid #1e40af;padding:0;height:1px;"></td>
-      </tr>
-      <tr>
-        <td colspan="3" style="font-size:6.5pt;color:#475569;padding:3px 4px 2px;line-height:1.3;">
-          <b>Contrato N° {numero}</b> &nbsp;|&nbsp; <b>Objeto:</b> {objeto}{gen_html}
-        </td>
-      </tr>
-    </table>
-    """
 
 
 def html_encabezado_pdf(contrato: dict, titulo: str) -> str:
-    """Encabezado comun para PDFs de topografia."""
-    nombre = html.escape(str(contrato.get("objeto") or contrato.get("numero") or ""))
-    numero = html.escape(str(contrato.get("numero") or ""))
-    contratista = html.escape(str(contrato.get("contratista") or ""))
-    interventoria = html.escape(str(contrato.get("interventoria") or ""))
-    entidad = html.escape(
-        str(contrato.get("entidad") or contrato.get("entidad_otra") or contrato.get("municipio") or "")
-    )
-    fecha = _fecha_informe_pdf()
-    logo = contrato.get("logo_contratista") or ""
-    if logo and (str(logo).startswith("http://") or str(logo).startswith("https://")):
-        logo = ""
-    logo_html = (
-        f'<img src="{html.escape(str(logo), quote=True)}" style="max-height:60px;max-width:120px;" />'
-        if logo
-        else '<div style="border:1px dashed #cbd5e1;padding:8px;font-size:8pt;color:#94a3b8;">LOGO</div>'
-    )
-    return f"""
-    <table width="100%" style="border-bottom:2px solid #1e40af;margin-bottom:12px;">
-      <tr>
-        <td width="18%" valign="top">{logo_html}</td>
-        <td width="64%" valign="middle">
-          <div style="font-size:13pt;font-weight:bold;color:#1e293b;">{html.escape(titulo)}</div>
-          <div style="font-size:9pt;color:#334155;margin-top:4px;"><b>Contrato N°:</b> {numero}</div>
-          <div style="font-size:9pt;color:#475569;"><b>Objeto:</b> {nombre}</div>
-          <div style="font-size:8pt;color:#475569;margin-top:3px;">
-            <b>Contratista:</b> {contratista} &nbsp;|&nbsp; <b>Interventoría:</b> {interventoria}
-          </div>
-        </td>
-        <td width="18%" align="right" valign="top" style="font-size:8pt;color:#64748b;">
-          {entidad}<br/>{fecha}
-        </td>
-      </tr>
-    </table>
-    """
+    """Encabezado comun para PDFs de topografia (3 logos institucionales)."""
+    from pdf_institucional import html_encabezado_institucional
+
+    return html_encabezado_institucional(contrato, titulo, compact=False)
 
 
 def html_pie_pdf(contrato: dict) -> str:
@@ -3370,13 +3307,15 @@ def html_pie_pdf(contrato: dict) -> str:
 def html_firmas_pdf(firmas: List[dict]) -> str:
     if not firmas:
         return ""
+    from pdf_institucional import prepare_image_for_pdf
+
     rows = ""
     for f in firmas:
         img = f.get("firma_base64") or ""
-        # No incrustar URLs remotas: xhtml2pdf puede colgarse intentando descargarlas.
-        if img.startswith("http://") or img.startswith("https://"):
-            img = ""
-        img_html = f'<img src="{html.escape(str(img), quote=True)}" style="max-height:50px;" />' if img else ""
+        uri = prepare_image_for_pdf(str(img), max_px_w=400, max_px_h=200, allow_http=True) if img else ""
+        img_html = (
+            f'<img src="{html.escape(uri, quote=True)}" style="max-height:50px;" />' if uri else ""
+        )
         rows += f"""
         <td align="center" width="{100 // max(len(firmas), 1)}%">
           {img_html}<br/>

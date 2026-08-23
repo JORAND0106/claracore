@@ -652,27 +652,33 @@ def _parse_numero_contrato(numero: str) -> tuple:
 
 
 def _logo_url_pdf_safe(url: str) -> str:
-    """Convierte un data-URL de GIF a PNG (xhtml2pdf no renderiza GIF).
+    """Prepara logo para PDF: aplana transparencia (evita fondo negro) y convierte GIF→PNG.
 
-    Para URLs externas (http/https) o data-URLs PNG/JPEG devuelve el valor tal cual.
-    Si la conversión falla, devuelve el URL original y se deja que xhtml2pdf lo intente.
+    xhtml2pdf/reportlab pinta alpha como negro; ``prepare_image_for_pdf`` aplana sobre blanco.
     """
-    if not url or not url.startswith("data:image/gif;base64,"):
+    if not url or not str(url).strip():
         return url
     try:
-        import base64, io
-        from PIL import Image  # Pillow es dependencia de xhtml2pdf
+        from pdf_institucional import prepare_image_for_pdf
 
-        b64_data = url.split(",", 1)[1]
-        img_bytes = base64.b64decode(b64_data)
-        img = Image.open(io.BytesIO(img_bytes))
-        img = img.convert("RGBA")  # preserva transparencia del GIF
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        png_b64 = base64.b64encode(buf.getvalue()).decode()
-        return f"data:image/png;base64,{png_b64}"
+        uri = prepare_image_for_pdf(str(url).strip(), allow_http=True)
+        return uri or url
     except Exception:
-        return url  # fallback silencioso
+        # Fallback legacy: solo GIF→PNG (puede conservar alpha; preferible al crash)
+        if not url.startswith("data:image/gif;base64,"):
+            return url
+        try:
+            import base64, io
+            from PIL import Image
+            from almacen_firma_pdf import _flatten_image_bytes_on_white
+
+            b64_data = url.split(",", 1)[1]
+            img_bytes = base64.b64decode(b64_data)
+            flat, mime = _flatten_image_bytes_on_white(img_bytes)
+            png_b64 = base64.b64encode(flat).decode()
+            return f"data:{mime or 'image/png'};base64,{png_b64}"
+        except Exception:
+            return url
 
 
 # Caja estándar para logos de contratista e interventoría en memorias FO-EO-04
