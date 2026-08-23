@@ -62,6 +62,8 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
 
   const [lista, setLista] = useState([])
   const [ejes, setEjes] = useState([])
+  /** Ejes del contrato que aún no cumplen rasante+capas (para el aviso de Entrega). */
+  const [ejesIncompletos, setEjesIncompletos] = useState([])
   const [operadores, setOperadores] = useState([])
   const [puntosNiv, setPuntosNiv] = useState([])
   const [sel, setSel] = useState(null)
@@ -111,10 +113,22 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
   const cargarEjes = useCallback(async () => {
     try {
       const data = await api(`/diseno-geometrico/ejes?_=${Date.now()}`)
-      const rows = (Array.isArray(data) ? data : []).filter(
-        (e) => (e.filas_rasante || 0) > 0 && (e.num_capas || 0) > 0,
-      )
-      setEjes(rows)
+      const rows = Array.isArray(data) ? data : []
+      const listos = []
+      const incompletos = []
+      rows.forEach((e) => {
+        const tieneRasante = (e.filas_rasante || 0) > 0
+        const tieneCapas = (e.num_capas || 0) > 0
+        if (tieneRasante && tieneCapas) listos.push(e)
+        else {
+          const faltantes = []
+          if (!tieneRasante) faltantes.push('rasante CSV (estaciones)')
+          if (!tieneCapas) faltantes.push('estructura de capas')
+          incompletos.push({ ...e, faltantes })
+        }
+      })
+      setEjes(listos)
+      setEjesIncompletos(incompletos)
     } catch (e) {
       showError(e)
     }
@@ -567,9 +581,31 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
         <PermisoAviso permisos={permisos} accion="crear">
           <div style={{ ...ui.card, marginBottom: 16, padding: '14px 16px' }}>
             {!ejes.length && (
-              <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309' }}>
-                No hay ejes listos. Complete Configuración DG (rasante + estructura) primero.
-              </p>
+              <div style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309', lineHeight: 1.5 }}>
+                {ejesIncompletos.length > 0 ? (
+                  <>
+                    <p style={{ margin: '0 0 6px' }}>
+                      Hay ejes en Configuración DG, pero aún no están listos para Entrega (se necesitan rasante CSV y estructura):
+                    </p>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {ejesIncompletos.map((e) => (
+                        <li key={e.id}>
+                          <strong>{e.nombre || 'Sin nombre'}</strong>
+                          {' — falta '}
+                          {(e.faltantes || []).join(' y ')}
+                          {(e.filas_rasante || 0) === 0 && (e.num_capas || 0) > 0
+                            ? '. Abra el eje y pulse «Subir CSV / Excel».'
+                            : '.'}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p style={{ margin: 0 }}>
+                    No hay ejes. Cree uno en Configuración DG, suba la rasante (CSV/Excel) y defina la estructura de capas.
+                  </p>
+                )}
+              </div>
             )}
             <TopoExcelSheet
               sheet={sheet}

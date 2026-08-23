@@ -431,8 +431,10 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
             </div>
 
             {!rasante.length && (
-              <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309' }}>
-                Suba el CSV o Excel con el diseño geométrico (rasante / capa terminada).
+              <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309', lineHeight: 1.5 }}>
+                {capas.length > 0
+                  ? 'La estructura de capas ya está guardada, pero este eje aún no tiene estaciones de rasante (0 CSV). Pulse «Subir CSV / Excel» o descargue la plantilla. Sin rasante, el eje no aparecerá como listo en Entrega DG Obra.'
+                  : 'Suba el CSV o Excel con el diseño geométrico (rasante / capa terminada).'}
               </p>
             )}
           </div>
