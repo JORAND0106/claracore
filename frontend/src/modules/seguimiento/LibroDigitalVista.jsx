@@ -4,8 +4,7 @@ import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { accesoBitacora } from './bitacoraPermisos'
 import { labelClima, labelEventoTipo } from './bitacoraConstants'
-import { textoCompromisoCelda } from './compromisoTextoCelda'
-import { htmlToPlainText, isRichTextEmpty } from './richTextUtils'
+import { isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import { createSeguimientoApi } from './seguimientoApi'
 import {
   fmtFecha,
@@ -278,14 +277,15 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
             <ol className="cc-libro-ol">
               {ideas.map((idea, i) => {
                 const titulo = String(idea.titulo || '').trim()
-                const body = htmlToPlainText(idea.texto || idea.contenido || '')
+                const raw = idea.texto || idea.contenido || ''
+                const hasBody = !isRichTextEmpty(raw)
                 return (
-                  <li key={idea.id || i}>
-                    <div style={{ fontWeight: 700 }}>{titulo || `Tema ${i + 1}`}</div>
-                    {body ? (
-                      <div className="cc-libro-item-detail">
-                        {body.length > 420 ? `${body.slice(0, 419).trim()}…` : body}
-                      </div>
+                  <li key={idea.id || i} className="cc-libro-tema-item">
+                    <div style={{ fontWeight: 700, color: palette.text }}>
+                      {titulo || `Tema ${i + 1}`}
+                    </div>
+                    {hasBody ? (
+                      <ProseHtml html={plainTextToHtml(String(raw))} palette={palette} />
                     ) : null}
                     {idea.quien_dijo ? (
                       <div className="cc-libro-item-detail">Quién dijo: {idea.quien_dijo}</div>
@@ -302,15 +302,23 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
           ) : (
             <ul className="cc-libro-list">
               {compromisos.map((c, i) => {
-                const { short } = textoCompromisoCelda(c, 160)
+                const full = String(c.descripcion || c.titulo || c.redaccion || '')
+                  .replace(/\s+/g, ' ')
+                  .trim()
                 return (
-                  <li key={c.id || i}>
-                    <strong>{short}</strong>
-                    {c.asignado_nombre || c.responsable_nombre ? (
-                      <span> · {c.asignado_nombre || c.responsable_nombre}</span>
+                  <li key={c.id || i} className="cc-libro-compromiso-item">
+                    <div className="cc-libro-compromiso-text" style={{ color: palette.text }}>
+                      {full || '—'}
+                    </div>
+                    {(c.asignado_nombre || c.responsable_nombre) ? (
+                      <div className="cc-libro-item-detail">
+                        Asignado: {c.asignado_nombre || c.responsable_nombre}
+                      </div>
                     ) : null}
                     {c.fecha_vencimiento ? (
-                      <span className="cc-libro-item-detail"> · vence {fmtFecha(c.fecha_vencimiento)}</span>
+                      <div className="cc-libro-item-detail">
+                        Vence {fmtFecha(c.fecha_vencimiento)}
+                      </div>
                     ) : null}
                   </li>
                 )

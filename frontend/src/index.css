@@ -3544,6 +3544,23 @@ select.cc-dashboard-acta-select--light option {
   margin-bottom: 8px;
 }
 
+.cc-libro-tema-item,
+.cc-libro-compromiso-item {
+  margin-bottom: 14px;
+}
+
+.cc-libro-tema-item .cc-libro-prose {
+  margin-top: 4px;
+}
+
+.cc-libro-compromiso-text {
+  font-size: var(--cc-sm);
+  font-weight: 650;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .cc-libro-item-detail {
   margin-top: 2px;
   color: var(--libro-muted, #4A7FA5);
