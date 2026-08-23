@@ -3004,7 +3004,11 @@ def html_documento_nivelacion_pdf(
 def html_encabezado_pdf_nivelacion(
     contrato: dict, titulo: str, subtitulo: str = "", *, generado_por: str = ""
 ) -> str:
-    """Encabezado solo para Circuito de Nivelación: logos +20%, tipografía +2pt, bloque denso."""
+    """Encabezado solo para Circuito de Nivelación: logos +20%×2, tipografía +2pt, bloque denso.
+
+    Los logos crecen dentro de la celda (scale 1.44 = 1.2×1.2); la altura del bloque y los
+    anchos de columna (13/13/61/13) no se modifican.
+    """
     from pdf_institucional import html_encabezado_institucional
 
     return html_encabezado_institucional(
@@ -3013,7 +3017,7 @@ def html_encabezado_pdf_nivelacion(
         subtitulo=subtitulo,
         compact=True,
         generado_por=generado_por,
-        logo_scale=1.2,
+        logo_scale=1.44,
         title_fs="10pt",
         meta_fs="7.5pt",
         sub_fs="7.5pt",

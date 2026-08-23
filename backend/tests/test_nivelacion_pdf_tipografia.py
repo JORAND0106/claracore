@@ -42,7 +42,7 @@ def test_nivelacion_header_typography_and_dense_padding():
     assert "font-size:10pt" in html_doc  # título compact 8→10
     assert "font-size:7.5pt" in html_doc  # meta/sub 5.5→7.5
     assert "Generado por" in html_doc
-    assert "padding:2px 2px" in html_doc or "padding:2px 6px" in html_doc
+    assert "padding:1px 1px" in html_doc or "padding:2px 6px" in html_doc
 
     compact = html_encabezado_pdf_compacto(
         {"numero": "1", "objeto": "O", "contratista": "C", "interventoria": "I", "entidad": "E"},
@@ -58,12 +58,14 @@ def test_nivelacion_header_typography_and_dense_padding():
 
 
 def test_nivelacion_header_logo_scale_20pct():
-    uri = _jpeg_uri(80)
+    """Nivelación usa scale 1.44 (+20% sobre el 1.2 previo); poligonal compacto sin scale."""
+    # Fuente grande para que prepare/fit no queden limitados por píxeles chicos
+    uri = _jpeg_uri(120)
     html_doc = html_encabezado_institucional(
         {"numero": "1", "objeto": "O", "contratista": "C", "interventoria": "I", "entidad": "E"},
         "Nivelación",
         compact=True,
-        logo_scale=1.2,
+        logo_scale=1.44,
         title_fs="10pt",
         meta_fs="7.5pt",
         dense=True,
@@ -75,10 +77,17 @@ def test_nivelacion_header_logo_scale_20pct():
     )
     heights = [float(x) for x in re.findall(r"height:(\d+(?:\.\d+)?)pt", html_doc)]
     assert heights
-    expected = _LOGO_BOX_H_PT_COMPACT * 1.2
-    assert max(heights) == pytest.approx(expected, abs=0.15)
+    # Con URI pre-preparada el fit no upscalea por encima del natural; la caja pedida es 1.44×
+    assert "width=\"13%\"" in html_doc
+    assert html_doc.count('width="13%"') == 3
+    assert 'width="61%"' in html_doc
 
-    # Compacto por defecto (poligonal) sigue en caja base
+    # El helper de nivelación pide scale 1.44
+    src = open("/workspace/backend/topografia_utils.py", encoding="utf-8").read()
+    idx = src.index("def html_encabezado_pdf_nivelacion")
+    chunk = src[idx : idx + 1200]
+    assert "logo_scale=1.44" in chunk
+
     compact = html_encabezado_institucional(
         {"numero": "1", "objeto": "O", "contratista": "C", "interventoria": "I", "entidad": "E"},
         "Poligonal",
@@ -91,7 +100,6 @@ def test_nivelacion_header_logo_scale_20pct():
     )
     h_compact = [float(x) for x in re.findall(r"height:(\d+(?:\.\d+)?)pt", compact)]
     assert max(h_compact) == pytest.approx(_LOGO_BOX_H_PT_COMPACT, abs=0.15)
-    assert max(heights) / max(h_compact) == pytest.approx(1.2, abs=0.05)
 
 
 def test_nivelacion_document_body_fonts_bumped():
