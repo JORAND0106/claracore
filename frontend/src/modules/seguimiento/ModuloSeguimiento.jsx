@@ -87,24 +87,28 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <button
             type="button"
+            className="cc-seguim-libro-btn"
             onClick={() => setLibroSelectorOpen(true)}
             title="Abrir libro digital de Actas o Bitácora"
             style={{
+              ['--cc-libro-btn-accent']: t.primary,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 8,
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: `1px solid ${t.border}`,
-              background: t.bgCard || t.bg,
-              color: t.text,
-              fontWeight: 700,
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: `1px solid color-mix(in srgb, ${t.primary} 70%, #0c4a6e)`,
+              background: `linear-gradient(135deg, ${t.primary}, color-mix(in srgb, ${t.primary} 72%, #0e7490))`,
+              color: '#fff',
+              fontWeight: 800,
               fontSize: 'var(--cc-sm)',
               cursor: 'pointer',
+              boxShadow: `0 8px 18px color-mix(in srgb, ${t.primary} 35%, transparent)`,
+              letterSpacing: '0.01em',
             }}
           >
-            <BookOpen size={18} strokeWidth={2.2} aria-hidden />
-            Libro
+            <BookOpen size={18} strokeWidth={2.4} aria-hidden />
+            <span>Libro digital</span>
           </button>
           <ModuloDataRefreshBar
             theme={t}
