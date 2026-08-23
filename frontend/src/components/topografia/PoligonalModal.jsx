@@ -124,32 +124,23 @@ const COLS_AMARRE_COORDS = [
   { key: 'cota', label: 'Cota', width: '22%' },
 ]
 
-/** Grilla de armadas del circuito (libreta de estaciones). */
-const COLS_ARMADAS = [
-  { key: 'orden', label: 'Armada', width: '10%', ayuda: 'Número de ocupación del equipo en el circuito.' },
-  { key: 'estacion', label: 'Estación', width: '22%', ayuda: 'Punto donde está plantado el instrumento.' },
-  { key: 'visado', label: 'Visado', width: '22%', ayuda: 'Punto de atrás (ceros) de esta armada.' },
-  { key: 'azimut', label: 'Azimut base', width: '16%', ayuda: 'Azimut de partida calculado estación→visado.' },
-  { key: 'coords', label: 'Coord. estación', width: '20%' },
-  { key: 'ptos', label: 'Puntos', width: '10%', ayuda: 'Lecturas radiadas desde esta armada.' },
+/** Grilla compacta de armadas (columna central del panel). */
+const COLS_ARMADAS_COMPACT = [
+  { key: 'orden', label: '#', width: '12%', ayuda: 'Número de armada.' },
+  { key: 'estacion', label: 'Estación', width: '28%' },
+  { key: 'visado', label: 'Visado', width: '28%' },
+  { key: 'azimut', label: 'Az', width: '20%' },
+  { key: 'ptos', label: 'Ptos', width: '12%' },
 ]
 
-const COLS_NUEVA_ARMADA = [
-  { key: 'estacion', label: 'Estación', width: '28%', ayuda: 'Punto donde se planta el equipo. Debe tener coordenadas (amarre o estación ya radiada).' },
-  { key: 'visado', label: 'Visado', width: '28%', ayuda: 'Punto de atrás al que se encera (0°). Debe tener coordenadas conocidas.' },
-  { key: 'hi', label: 'HI (m)', width: '16%', ayuda: 'Altura del instrumento en la nueva estación (m). Luego se edita también en la cartera.' },
-  { key: 'acciones', label: '', width: '28%' },
+const COLS_NUEVA_ARMADA_VERT = [
+  { key: 'campo', label: 'Campo', width: '36%' },
+  { key: 'valor', label: 'Valor', width: '64%' },
 ]
 
-const COLS_AGREGAR_PUNTO = [
-  { key: 'punto', label: 'Punto', width: '12%', ayuda: 'Nombre del punto observado adelante (o radiado).' },
-  { key: 'tipo', label: 'Tipo', width: '11%', ayuda: 'Estación = vértice del circuito. Auxiliar = punto de detalle radiado.' },
-  { key: 'ang_h', label: 'Ang. obs.', width: '14%', ayuda: 'Ángulo horizontal observado (ceros atrás) en GG.MMSS.' },
-  { key: 'ang_v', label: 'Ang. vert.', width: '14%', ayuda: 'Ángulo vertical cenital en GG.MMSS.' },
-  { key: 'ht', label: 'Prisma / HT', width: '11%', ayuda: 'HT: altura del prisma u objetivo sobre el punto observado (m).' },
-  { key: 'dist', label: 'Distancia', width: '12%', ayuda: 'Distancia horizontal medida al punto observado (m).' },
-  { key: 'hi', label: 'HI armada', width: '12%', ayuda: 'Altura del instrumento de la armada actual; también editable en la cartera.' },
-  { key: 'acciones', label: '', width: '14%' },
+const COLS_AGREGAR_PUNTO_VERT = [
+  { key: 'campo', label: 'Campo', width: '38%' },
+  { key: 'valor', label: 'Valor', width: '62%' },
 ]
 
 const emptyForm = {
@@ -1322,30 +1313,138 @@ export default function PoligonalModal({
                 }
                 const filaGrid = {
                   display: 'grid',
-                  gridTemplateColumns: isCompact ? '1fr' : '52px repeat(4, minmax(0, 1fr))',
-                  gap: isCompact ? 8 : 6,
+                  gridTemplateColumns: isCompact ? '1fr' : '44px repeat(4, minmax(0, 1fr))',
+                  gap: isCompact ? 8 : 4,
                   alignItems: 'end',
                 }
+                const panelCol = {
+                  minWidth: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }
+                const colDivider = !isCompact
+                  ? { borderRight: `1px solid ${ui.border || '#e2e8f0'}`, paddingRight: 10 }
+                  : null
+                const sheetInCol = { ...sheet, sectionTitle: { ...sheet.sectionTitle, marginBottom: 4 } }
+                const labelCell = {
+                  ...sheet.td,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: ui.textMuted,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.03em',
+                  whiteSpace: 'nowrap',
+                }
+                const hiInput = armadaActual ? (
+                  <input
+                    key={`hi-cur-${armadaActual.id}-${armadaActual.altura_instrumento ?? 'x'}`}
+                    type="number"
+                    step="0.001"
+                    defaultValue={armadaActual.altura_instrumento ?? ''}
+                    onBlur={(e) => {
+                      if (String(e.target.value) !== String(armadaActual.altura_instrumento ?? '')) {
+                        actualizarHIArmada(armadaActual.id, e.target.value)
+                      }
+                    }}
+                    disabled={busy}
+                    style={{
+                      ...sheet.cellInp,
+                      background: armadaActual.altura_instrumento == null ? '#fffbeb' : 'transparent',
+                    }}
+                    placeholder="1.500"
+                    title="Altura del instrumento de la armada actual (m)"
+                  />
+                ) : (
+                  <span key="hi-empty" style={sheet.cellRo}>—</span>
+                )
+                const agregarFilas = [
+                  ['Punto', (
+                    <input
+                      key="punto"
+                      value={estForm.nombre_punto}
+                      onChange={(e) => setEstForm({ ...estForm, nombre_punto: e.target.value })}
+                      style={sheet.cellInp}
+                      placeholder="Ej. P1"
+                    />
+                  )],
+                  ['Tipo', (
+                    <select
+                      key="tipo"
+                      value={estForm.tipo_punto}
+                      onChange={(e) => setEstForm({ ...estForm, tipo_punto: e.target.value })}
+                      style={sheet.cellSelect}
+                    >
+                      <option value="auxiliar">Auxiliar</option>
+                      <option value="estacion">Estacion</option>
+                    </select>
+                  )],
+                  ['Ang. obs.', (
+                    <TopoAngularInput
+                      key="ang_h"
+                      label={null}
+                      value={estForm.angulo_gms}
+                      onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_gms: v }))}
+                      inputStyle={sheet.cellInp}
+                    />
+                  )],
+                  ['Ang. vert.', (
+                    <TopoAngularInput
+                      key="ang_v"
+                      label={null}
+                      value={estForm.angulo_vertical_gms}
+                      onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_vertical_gms: v }))}
+                      inputStyle={sheet.cellInp}
+                    />
+                  )],
+                  ['Prisma / HT', (
+                    <input
+                      key="ht"
+                      value={estForm.altura_objetivo}
+                      onChange={(e) => setEstForm({ ...estForm, altura_objetivo: e.target.value })}
+                      style={sheet.cellInp}
+                      placeholder="0"
+                    />
+                  )],
+                  ['Distancia', (
+                    <input
+                      key="dist"
+                      value={estForm.distancia}
+                      onChange={(e) => setEstForm({ ...estForm, distancia: e.target.value })}
+                      style={sheet.cellInp}
+                      placeholder="0.000"
+                    />
+                  )],
+                  ['HI armada', hiInput],
+                ]
                 return (
               <div
                 style={{
-                  border: `1px solid ${ui.accent}66`,
-                  borderRadius: 8,
-                  padding: '8px 10px',
+                  display: 'grid',
+                  gridTemplateColumns: isCompact
+                    ? '1fr'
+                    : 'minmax(0, 1.05fr) minmax(0, 0.95fr) minmax(0, 1.1fr)',
+                  gap: isCompact ? 12 : 0,
+                  columnGap: isCompact ? undefined : 10,
                   marginBottom: 12,
-                  background: ui.accentSoft,
+                  padding: isCompact ? 10 : '10px 10px 10px 10px',
+                  border: `1px solid ${ui.accent}55`,
+                  borderRadius: 8,
+                  background: ui.accentSoft || '#f8fafc',
+                  alignItems: 'stretch',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent }}>
-                    Amarres
-                    {detalle.base && (
-                      <span style={{ fontWeight: 500, color: ui.textMuted, marginLeft: 8 }}>
-                        · Base Az {detalle.base.azimut_texto ?? '—'} · {fmt(detalle.base.distancia, 3)} m
-                      </span>
-                    )}
-                  </span>
-                  {editableLibreta && (
+                {/* Columna 1 — Amarres */}
+                <div style={{ ...panelCol, ...colDivider, paddingLeft: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                    <span style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', color: ui.accent }}>
+                      Amarres
+                      {detalle.base && (
+                        <span style={{ fontWeight: 500, color: ui.textMuted, marginLeft: 6, fontSize: 'var(--cc-xs)' }}>
+                          · Az {detalle.base.azimut_texto ?? '—'} · {fmt(detalle.base.distancia, 3)} m
+                        </span>
+                      )}
+                    </span>
                     <button
                       type="button"
                       style={{ ...ui.btnPrimary, padding: '4px 10px', fontSize: 'var(--cc-xs)' }}
@@ -1355,350 +1454,323 @@ export default function PoligonalModal({
                     >
                       {busy ? '…' : 'Guardar'}
                     </button>
-                  )}
-                </div>
-                <div style={{ ...filaGrid, marginBottom: 4, color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
-                  <span />
-                  <span>Punto</span>
-                  <span>Norte</span>
-                  <span>Este</span>
-                  <span>Cota</span>
-                </div>
-                <div style={{ ...filaGrid, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Estación (amarre inicial)">
-                    Est.{detalle.punto_inicial?.verificado ? ' ✓' : ''}
-                  </span>
-                  <label>
-                    <input
-                      value={form.amarre.nombre}
-                      disabled={!editableLibreta || busy || Boolean(detalle.punto_inicial?.verificado)}
-                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, nombre: e.target.value } })}
-                      style={amarreInp}
-                      title="Nombre estación / amarre inicial"
-                      placeholder="BM1"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.amarre.norte}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, norte: e.target.value } })}
-                      style={amarreInp}
-                      title="Norte (m)"
-                      placeholder="N"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.amarre.este}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, este: e.target.value } })}
-                      style={amarreInp}
-                      title="Este (m)"
-                      placeholder="E"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.amarre.cota}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, cota: e.target.value } })}
-                      style={amarreInp}
-                      title="Cota (m)"
-                      placeholder="Z"
-                    />
-                  </label>
-                </div>
-                <div style={filaGrid}>
-                  <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Visado (referencia atrás)">
-                    Vis.{detalle.punto_visado?.verificado ? ' ✓' : ''}
-                  </span>
-                  <label>
-                    <input
-                      value={form.visado.nombre}
-                      disabled={!editableLibreta || busy || Boolean(detalle.punto_visado?.verificado)}
-                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, nombre: e.target.value } })}
-                      style={amarreInp}
-                      title="Nombre visado"
-                      placeholder="VIS"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.visado.norte}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, norte: e.target.value } })}
-                      style={amarreInp}
-                      title="Norte (m)"
-                      placeholder="N"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.visado.este}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, este: e.target.value } })}
-                      style={amarreInp}
-                      title="Este (m)"
-                      placeholder="E"
-                    />
-                  </label>
-                  <label>
-                    <input
-                      value={form.visado.cota}
-                      disabled={!editableLibreta || busy}
-                      onChange={(e) => setForm({ ...form, visado: { ...form.visado, cota: e.target.value } })}
-                      style={amarreInp}
-                      title="Cota (m)"
-                      placeholder="Z"
-                    />
-                  </label>
-                </div>
-                {pol.tipo === 'abierta' && (
-                  <div style={{ ...filaGrid, marginTop: 6 }}>
-                    <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: '#15803d', paddingBottom: 4 }} title="Punto de llegada (objetivo)">
-                      Llg.{detalle.punto_final?.verificado ? ' ✓' : ''}
+                  </div>
+                  <div style={{ ...filaGrid, marginBottom: 2, color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+                    <span />
+                    <span>Punto</span>
+                    <span>Norte</span>
+                    <span>Este</span>
+                    <span>Cota</span>
+                  </div>
+                  <div style={{ ...filaGrid, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Estación (amarre inicial)">
+                      Est.{detalle.punto_inicial?.verificado ? ' ✓' : ''}
                     </span>
                     <label>
                       <input
-                        value={form.llegada.nombre}
-                        disabled={!editableLibreta || busy || Boolean(detalle.punto_final?.verificado)}
-                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, nombre: e.target.value } })}
+                        value={form.amarre.nombre}
+                        disabled={busy || Boolean(detalle.punto_inicial?.verificado)}
+                        onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, nombre: e.target.value } })}
                         style={amarreInp}
-                        placeholder="FIN"
+                        title="Nombre estación / amarre inicial"
+                        placeholder="BM1"
                       />
                     </label>
                     <label>
                       <input
-                        value={form.llegada.norte}
-                        disabled={!editableLibreta || busy}
-                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, norte: e.target.value } })}
+                        value={form.amarre.norte}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, norte: e.target.value } })}
                         style={amarreInp}
+                        title="Norte (m)"
                         placeholder="N"
                       />
                     </label>
                     <label>
                       <input
-                        value={form.llegada.este}
-                        disabled={!editableLibreta || busy}
-                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, este: e.target.value } })}
+                        value={form.amarre.este}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, este: e.target.value } })}
                         style={amarreInp}
+                        title="Este (m)"
                         placeholder="E"
                       />
                     </label>
                     <label>
                       <input
-                        value={form.llegada.cota}
-                        disabled={!editableLibreta || busy}
-                        onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, cota: e.target.value } })}
+                        value={form.amarre.cota}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, amarre: { ...form.amarre, cota: e.target.value } })}
                         style={amarreInp}
+                        title="Cota (m)"
                         placeholder="Z"
                       />
                     </label>
                   </div>
-                )}
+                  <div style={filaGrid}>
+                    <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: ui.accent, paddingBottom: 4 }} title="Visado (referencia atrás)">
+                      Vis.{detalle.punto_visado?.verificado ? ' ✓' : ''}
+                    </span>
+                    <label>
+                      <input
+                        value={form.visado.nombre}
+                        disabled={busy || Boolean(detalle.punto_visado?.verificado)}
+                        onChange={(e) => setForm({ ...form, visado: { ...form.visado, nombre: e.target.value } })}
+                        style={amarreInp}
+                        title="Nombre visado"
+                        placeholder="VIS"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.visado.norte}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, visado: { ...form.visado, norte: e.target.value } })}
+                        style={amarreInp}
+                        title="Norte (m)"
+                        placeholder="N"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.visado.este}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, visado: { ...form.visado, este: e.target.value } })}
+                        style={amarreInp}
+                        title="Este (m)"
+                        placeholder="E"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        value={form.visado.cota}
+                        disabled={busy}
+                        onChange={(e) => setForm({ ...form, visado: { ...form.visado, cota: e.target.value } })}
+                        style={amarreInp}
+                        title="Cota (m)"
+                        placeholder="Z"
+                      />
+                    </label>
+                  </div>
+                  {pol.tipo === 'abierta' && (
+                    <div style={{ ...filaGrid, marginTop: 4 }}>
+                      <span style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: '#15803d', paddingBottom: 4 }} title="Punto de llegada (objetivo)">
+                        Llg.{detalle.punto_final?.verificado ? ' ✓' : ''}
+                      </span>
+                      <label>
+                        <input
+                          value={form.llegada.nombre}
+                          disabled={busy || Boolean(detalle.punto_final?.verificado)}
+                          onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, nombre: e.target.value } })}
+                          style={amarreInp}
+                          placeholder="FIN"
+                        />
+                      </label>
+                      <label>
+                        <input
+                          value={form.llegada.norte}
+                          disabled={busy}
+                          onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, norte: e.target.value } })}
+                          style={amarreInp}
+                          placeholder="N"
+                        />
+                      </label>
+                      <label>
+                        <input
+                          value={form.llegada.este}
+                          disabled={busy}
+                          onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, este: e.target.value } })}
+                          style={amarreInp}
+                          placeholder="E"
+                        />
+                      </label>
+                      <label>
+                        <input
+                          value={form.llegada.cota}
+                          disabled={busy}
+                          onChange={(e) => setForm({ ...form, llegada: { ...form.llegada, cota: e.target.value } })}
+                          style={amarreInp}
+                          placeholder="Z"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Columna 2 — Puntos de armada + cambiar armada */}
+                <div style={{ ...panelCol, ...colDivider, ...(isCompact ? null : { paddingLeft: 10 }) }}>
+                  {armadas.length > 0 ? (
+                    <TopoExcelSheet
+                      sheet={sheetInCol}
+                      title="Puntos de armada"
+                      columns={COLS_ARMADAS_COMPACT}
+                      style={{ marginBottom: 0 }}
+                    >
+                      {armadas.map((arm) => {
+                        const esActual = armadaActual && arm.id === armadaActual.id
+                        const ec = arm.estacion_coords || {}
+                        return (
+                          <tr
+                            key={arm.id}
+                            style={esActual ? { background: '#fff' } : undefined}
+                            title={ec.norte != null
+                              ? `Est N ${fmt(ec.norte, 2)} E ${fmt(ec.este, 2)} Z ${fmt(ec.cota, 2)}`
+                              : undefined}
+                          >
+                            <td style={sheet.td}>
+                              <span style={{ fontWeight: 700 }}>
+                                {arm.orden}{esActual ? ' ·' : ''}
+                              </span>
+                            </td>
+                            <td style={sheet.td}><strong>{arm.estacion_nombre || '—'}</strong></td>
+                            <td style={sheet.td}><strong>{arm.visado_nombre || '—'}</strong></td>
+                            <td style={{ ...sheet.td, color: ui.accent, fontWeight: 700, fontSize: 'var(--cc-xs)' }}>
+                              {arm.base_azimut_texto ?? '—'}
+                            </td>
+                            <td style={sheet.td}>{(arm.puntos || []).length}</td>
+                          </tr>
+                        )
+                      })}
+                    </TopoExcelSheet>
+                  ) : (
+                    <div style={sheet.sectionTitle}>Puntos de armada</div>
+                  )}
+                  {!mostrarCambioArmada ? (
+                    <button
+                      type="button"
+                      style={{ ...ui.btnSecondary, alignSelf: 'flex-start', padding: '4px 10px', fontSize: 'var(--cc-xs)' }}
+                      onClick={() => setMostrarCambioArmada(true)}
+                      disabled={busy}
+                      title="Traslade el equipo a otra estación"
+                    >
+                      Cambiar armada
+                    </button>
+                  ) : (
+                    <TopoExcelSheet
+                      sheet={sheetInCol}
+                      title="Nueva armada"
+                      columns={COLS_NUEVA_ARMADA_VERT}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <tr>
+                        <td style={labelCell}>Estación</td>
+                        <td style={sheet.td}>
+                          <select
+                            value={armadaForm.estacion_nombre}
+                            onChange={(e) => setArmadaForm({ ...armadaForm, estacion_nombre: e.target.value })}
+                            style={sheet.cellSelect}
+                          >
+                            <option value="">— Seleccione —</option>
+                            {estDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
+                          </select>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={labelCell}>Visado</td>
+                        <td style={sheet.td}>
+                          <select
+                            value={armadaForm.visado_nombre}
+                            onChange={(e) => setArmadaForm({ ...armadaForm, visado_nombre: e.target.value })}
+                            style={sheet.cellSelect}
+                          >
+                            <option value="">— Seleccione —</option>
+                            {visDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
+                          </select>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={labelCell}>HI (m)</td>
+                        <td style={sheet.td}>
+                          <input
+                            value={armadaForm.altura_instrumento}
+                            onChange={(e) => setArmadaForm({ ...armadaForm, altura_instrumento: e.target.value })}
+                            style={sheet.cellInp}
+                            placeholder="1.500"
+                          />
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={labelCell} />
+                        <td style={sheet.td}>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button type="button" style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={crearArmada} disabled={busy}>Crear armada</button>
+                            <button
+                              type="button"
+                              style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
+                              onClick={() => {
+                                setMostrarCambioArmada(false)
+                                setArmadaForm({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
+                              }}
+                              disabled={busy}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    </TopoExcelSheet>
+                  )}
+                </div>
+
+                {/* Columna 3 — Agregar / editar punto */}
+                <div
+                  ref={formRef}
+                  style={{
+                    ...panelCol,
+                    ...(isCompact ? null : { paddingLeft: 10 }),
+                  }}
+                >
+                  {(editandoId || armadaActual) ? (
+                    <>
+                      <TopoExcelSheet
+                        sheet={sheetInCol}
+                        title={editandoId ? 'Editar punto' : `Agregar punto (armada ${armadaActual?.orden ?? '—'})`}
+                        columns={COLS_AGREGAR_PUNTO_VERT}
+                        style={{ marginBottom: 0 }}
+                      >
+                        {agregarFilas.map(([lab, cell]) => (
+                          <tr key={lab}>
+                            <td style={labelCell}>{lab}</td>
+                            <td style={sheet.td}>{cell}</td>
+                          </tr>
+                        ))}
+                        <tr>
+                          <td style={labelCell} />
+                          <td style={sheet.td}>
+                            {editandoId ? (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                <button type="button" style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={guardarEdicion} disabled={busy}>Guardar</button>
+                                <button type="button" style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={cancelarEdicion} disabled={busy}>Cancelar</button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)', width: '100%' }}
+                                onClick={agregarPunto}
+                                disabled={busy}
+                              >
+                                Agregar punto
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      </TopoExcelSheet>
+                      {armadaActual?.altura_instrumento == null && (
+                        <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: '#b45309' }} title="Defina el HI en esta columna o en la cartera">
+                          Falta HI en la armada actual — indíquelo en «HI armada» o en la cartera.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ ...sheet.sectionTitle, color: ui.textMuted }}>Agregar punto</div>
+                  )}
+                </div>
               </div>
                 )
               })()}
 
               {editableLibreta && (
               <>
-              {/* Armadas del circuito — grilla tipo Excel (HI se edita en la cartera) */}
-              {armadas.length > 0 && (
-                <TopoExcelSheet
-                  sheet={sheet}
-                  title="Puntos de armada"
-                  columns={COLS_ARMADAS}
-                  minWidth={640}
-                >
-                  {armadas.map((arm) => {
-                    const esActual = armadaActual && arm.id === armadaActual.id
-                    const ec = arm.estacion_coords || {}
-                    return (
-                      <tr
-                        key={arm.id}
-                        style={esActual ? { background: ui.accentSoft } : undefined}
-                      >
-                        <td style={sheet.td}>
-                          <span style={{ fontWeight: 700 }}>
-                            {arm.orden}{esActual ? ' · actual' : ''}
-                          </span>
-                        </td>
-                        <td style={sheet.td}><strong>{arm.estacion_nombre || '—'}</strong></td>
-                        <td style={sheet.td}><strong>{arm.visado_nombre || '—'}</strong></td>
-                        <td style={{ ...sheet.td, color: ui.accent, fontWeight: 700 }}>
-                          {arm.base_azimut_texto ?? '—'}
-                        </td>
-                        <td style={{ ...sheet.td, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-                          {ec.norte != null
-                            ? `N ${fmt(ec.norte, 2)} · E ${fmt(ec.este, 2)} · Z ${fmt(ec.cota, 2)}`
-                            : '—'}
-                        </td>
-                        <td style={sheet.td}>{(arm.puntos || []).length}</td>
-                      </tr>
-                    )
-                  })}
-                </TopoExcelSheet>
-              )}
-
-              {editableLibreta && (editandoId || armadaActual) && (
-                <div ref={formRef} style={{ marginBottom: 12 }}>
-                  <TopoExcelSheet
-                    sheet={sheet}
-                    title={editandoId ? 'Editar punto' : `Agregar punto (armada ${armadaActual?.orden ?? '—'})`}
-                    columns={COLS_AGREGAR_PUNTO}
-                    minWidth={780}
-                    cells={[
-                      <input
-                        key="punto"
-                        value={estForm.nombre_punto}
-                        onChange={(e) => setEstForm({ ...estForm, nombre_punto: e.target.value })}
-                        style={sheet.cellInp}
-                        placeholder="Ej. P1"
-                      />,
-                      <select
-                        key="tipo"
-                        value={estForm.tipo_punto}
-                        onChange={(e) => setEstForm({ ...estForm, tipo_punto: e.target.value })}
-                        style={sheet.cellSelect}
-                      >
-                        <option value="auxiliar">Auxiliar</option>
-                        <option value="estacion">Estacion</option>
-                      </select>,
-                      <TopoAngularInput
-                        key="ang_h"
-                        label={null}
-                        value={estForm.angulo_gms}
-                        onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_gms: v }))}
-                        inputStyle={sheet.cellInp}
-                      />,
-                      <TopoAngularInput
-                        key="ang_v"
-                        label={null}
-                        value={estForm.angulo_vertical_gms}
-                        onChange={(_, v) => setEstForm((f) => ({ ...f, angulo_vertical_gms: v }))}
-                        inputStyle={sheet.cellInp}
-                      />,
-                      <input
-                        key="ht"
-                        value={estForm.altura_objetivo}
-                        onChange={(e) => setEstForm({ ...estForm, altura_objetivo: e.target.value })}
-                        style={sheet.cellInp}
-                        placeholder="0"
-                      />,
-                      <input
-                        key="dist"
-                        value={estForm.distancia}
-                        onChange={(e) => setEstForm({ ...estForm, distancia: e.target.value })}
-                        style={sheet.cellInp}
-                        placeholder="0.000"
-                      />,
-                      armadaActual ? (
-                        <input
-                          key={`hi-cur-${armadaActual.id}-${armadaActual.altura_instrumento ?? 'x'}`}
-                          type="number"
-                          step="0.001"
-                          defaultValue={armadaActual.altura_instrumento ?? ''}
-                          onBlur={(e) => {
-                            if (String(e.target.value) !== String(armadaActual.altura_instrumento ?? '')) {
-                              actualizarHIArmada(armadaActual.id, e.target.value)
-                            }
-                          }}
-                          disabled={busy}
-                          style={{
-                            ...sheet.cellInp,
-                            background: armadaActual.altura_instrumento == null ? '#fffbeb' : 'transparent',
-                          }}
-                          placeholder="1.500"
-                          title="Altura del instrumento de la armada actual (m)"
-                        />
-                      ) : (
-                        <span key="hi-empty" style={sheet.cellRo}>—</span>
-                      ),
-                      editandoId ? (
-                        <div key="acc-edit" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          <button type="button" style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={guardarEdicion} disabled={busy}>Guardar</button>
-                          <button type="button" style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={cancelarEdicion} disabled={busy}>Cancelar</button>
-                        </div>
-                      ) : (
-                        <button
-                          key="acc-add"
-                          type="button"
-                          style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)', width: '100%' }}
-                          onClick={agregarPunto}
-                          disabled={busy}
-                        >
-                          Agregar punto
-                        </button>
-                      ),
-                    ]}
-                  />
-                  {armadaActual?.altura_instrumento == null && (
-                    <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }} title="Defina el HI en la columna HI de esta grilla o en la cartera">
-                      Falta HI en la armada actual — indíquelo en la columna «HI armada» o en la cartera.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {editableLibreta && (
-                <div style={{ marginBottom: 12 }}>
-                  {!mostrarCambioArmada ? (
-                    <button type="button" style={ui.btnSecondary} onClick={() => setMostrarCambioArmada(true)} disabled={busy} title="Traslade el equipo a otra estación">
-                      Cambiar armada
-                    </button>
-                  ) : (
-                    <TopoExcelSheet
-                      sheet={sheet}
-                      title="Nueva armada"
-                      columns={COLS_NUEVA_ARMADA}
-                      minWidth={560}
-                      cells={[
-                        <select
-                          key="est"
-                          value={armadaForm.estacion_nombre}
-                          onChange={(e) => setArmadaForm({ ...armadaForm, estacion_nombre: e.target.value })}
-                          style={sheet.cellSelect}
-                        >
-                          <option value="">— Seleccione —</option>
-                          {estDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
-                        </select>,
-                        <select
-                          key="vis"
-                          value={armadaForm.visado_nombre}
-                          onChange={(e) => setArmadaForm({ ...armadaForm, visado_nombre: e.target.value })}
-                          style={sheet.cellSelect}
-                        >
-                          <option value="">— Seleccione —</option>
-                          {visDisp.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
-                        </select>,
-                        <input
-                          key="hi"
-                          value={armadaForm.altura_instrumento}
-                          onChange={(e) => setArmadaForm({ ...armadaForm, altura_instrumento: e.target.value })}
-                          style={sheet.cellInp}
-                          placeholder="1.500"
-                        />,
-                        <div key="acc" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          <button type="button" style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={crearArmada} disabled={busy}>Crear armada</button>
-                          <button
-                            type="button"
-                            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
-                            onClick={() => {
-                              setMostrarCambioArmada(false)
-                              setArmadaForm({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
-                            }}
-                            disabled={busy}
-                          >
-                            Cancelar
-                          </button>
-                        </div>,
-                      ]}
-                    />
-                  )}
-                </div>
-              )}
-
               <div style={{ marginTop: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
                   <h4 style={{ margin: 0 }}>Cartera consolidada</h4>
