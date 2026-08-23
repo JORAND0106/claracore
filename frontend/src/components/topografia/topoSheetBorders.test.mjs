@@ -43,4 +43,33 @@ describe('topoSheetStyles — bordes visibles', () => {
       /borderLeft: `1px solid \$\{ui\.t\?\.border \|\| '#e2e8f0'\}`/,
     )
   })
+
+  it('Estructura de vía (Configuración DG) usa TopoExcelSheet', () => {
+    const src = readFileSync(join(dir, 'DisenoEstructuraPanel.jsx'), 'utf8')
+    assert.match(src, /import TopoExcelSheet from '\.\/TopoExcelSheet'/)
+    assert.match(src, /topoSheetStyles/)
+    assert.match(src, /<TopoExcelSheet/)
+    assert.match(src, /Capa/)
+    assert.match(src, /Espesor/)
+    assert.doesNotMatch(src, /ui\.th/)
+    assert.doesNotMatch(src, /TopoTableScroll/)
+  })
+
+  it('Cartera Entrega DG Obra usa sheet.th/td y sheetWrap', () => {
+    const src = readFileSync(join(dir, 'EntregaVerificacionMatriz.jsx'), 'utf8')
+    assert.match(src, /topoSheetStyles/)
+    assert.match(src, /sheet\.sheetWrap/)
+    assert.match(src, /\.\.\.sheet\.th/)
+    assert.match(src, /\.\.\.sheet\.td/)
+    assert.match(src, /sheet\.cellInp/)
+    assert.doesNotMatch(src, /TopoTableScroll/)
+    assert.doesNotMatch(src, /ui\.th/)
+  })
+
+  it('Formulario Nueva entrega DG Obra usa TopoExcelSheet', () => {
+    const src = readFileSync(join(dir, 'EntregaDgObraForm.jsx'), 'utf8')
+    assert.match(src, /TopoExcelSheet/)
+    assert.match(src, /topoSheetStyles/)
+    assert.match(src, /Nueva entrega DG Obra/)
+  })
 })

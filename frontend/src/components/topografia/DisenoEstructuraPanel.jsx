@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { PermisoAviso, puede, TopoTableScroll, useTopoTheme } from './topografiaShared'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
+import { PermisoAviso, puede, useTopoTheme } from './topografiaShared'
 
 const filaVacia = () => ({ nombre: '', espesor_m: '', referencia_orden: '', sobre_ancho_m: '' })
 
@@ -18,7 +20,12 @@ function parseCapas(filas) {
       if (!Number.isFinite(n) || n < 0) return { error: `Referencia de análisis inválida en «${nombre}».` }
       referencia_analisis_orden = n
     }
-    capas.push({ nombre, espesor_m: esp, referencia_analisis_orden, sobre_ancho_m: parseFloat(String(filas[i].sobre_ancho_m).replace(',', '.')) || 0 })
+    capas.push({
+      nombre,
+      espesor_m: esp,
+      referencia_analisis_orden,
+      sobre_ancho_m: parseFloat(String(filas[i].sobre_ancho_m).replace(',', '.')) || 0,
+    })
   }
   const lower = capas.map((c) => c.nombre.toLowerCase())
   if (lower.length !== new Set(lower).size) return { error: 'Los nombres de capa deben ser únicos.' }
@@ -32,6 +39,15 @@ export function sumEspesores(filas) {
   }, 0)
 }
 
+const CAPAS_COLS = [
+  { key: 'ord', label: '#', width: 44 },
+  { key: 'capa', label: 'Capa' },
+  { key: 'esp', label: 'Espesor (m)', width: 96 },
+  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en entrega DG' },
+  { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del eje para esta capa' },
+  { key: 'acc', label: '', width: 40 },
+]
+
 /** Panel con estructura vigente editable + total resaltado (ancho ~30% del contenedor padre). */
 export default function DisenoEstructuraPanel({
   estructuraVigente,
@@ -42,6 +58,7 @@ export default function DisenoEstructuraPanel({
   embed = false,
 }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const [filas, setFilas] = useState([filaVacia()])
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
@@ -93,7 +110,6 @@ export default function DisenoEstructuraPanel({
     onGuardar(parsed.capas, estructuraVigente?.nombre)
   }
 
-  const thCapa = { ...ui.th, textAlign: 'left' }
   const panelStyle = embed
     ? { width: '100%' }
     : {
@@ -102,6 +118,10 @@ export default function DisenoEstructuraPanel({
       width: '100%',
       height: '100%',
     }
+
+  const editar = puede(permisos, 'editar')
+  const totalBg = `${ui.t?.success || 'var(--cc-color-success)'}22`
+  const totalColor = ui.t?.success || 'var(--cc-color-success)'
 
   return (
     <div style={panelStyle}>
@@ -117,14 +137,14 @@ export default function DisenoEstructuraPanel({
               {estructuraVigente?.nombre || 'Sin definir'}
             </strong>
             {estructuraVigente?.vigente && (
-              <span style={{ marginLeft: 8, color: ui.t?.success || 'var(--cc-color-success)', fontWeight: 600 }}>
+              <span style={{ marginLeft: 8, color: totalColor, fontWeight: 600 }}>
                 (activa)
               </span>
             )}
           </p>
         </div>
         <PermisoAviso permisos={permisos} accion="editar">
-          {puede(permisos, 'editar') && (
+          {editar && (
             <button
               type="button"
               style={ui.btnPrimary}
@@ -142,11 +162,11 @@ export default function DisenoEstructuraPanel({
           <p style={{ margin: 0, flex: 1, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
             Vigente: <strong style={{ color: ui.text }}>{estructuraVigente?.nombre || 'Sin definir'}</strong>
             {estructuraVigente?.vigente && (
-              <span style={{ marginLeft: 6, color: ui.t?.success || 'var(--cc-color-success)' }}>(activa)</span>
+              <span style={{ marginLeft: 6, color: totalColor }}>(activa)</span>
             )}
           </p>
           <PermisoAviso permisos={permisos} accion="editar">
-            {puede(permisos, 'editar') && (
+            {editar && (
               <button
                 type="button"
                 style={ui.btnPrimary}
@@ -165,115 +185,89 @@ export default function DisenoEstructuraPanel({
         En «Ref. espesor» indique la capa inferior usada al verificar espesor en entrega de obra.
       </p>
 
-      <TopoTableScroll>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', tableLayout: 'fixed' }}>
-          <colgroup>
-            <col style={{ width: '40px' }} />
-            <col />
-            <col style={{ width: '96px' }} />
-            <col style={{ width: '140px' }} />
-            <col style={{ width: '88px' }} />
-            <col style={{ width: '40px' }} />
-          </colgroup>
-          <thead>
-            <tr>
-              <th style={{ ...ui.th, textAlign: 'left' }}>#</th>
-              <th style={thCapa}>Capa</th>
-              <th style={{ ...ui.th, textAlign: 'left' }}>Espesor (m)</th>
-              <th style={{ ...ui.th, textAlign: 'left' }}>Ref. espesor</th>
-              <th style={{ ...ui.th, textAlign: 'left' }}>Sobre ancho (m)</th>
-              <th style={ui.th} />
-            </tr>
-          </thead>
-          <tbody>
-            {filas.map((f, idx) => (
-              <tr key={idx}>
-                <td style={ui.td}>
-                  {idx + 1}
-                  {idx === 0 && (
-                    <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted }}>terminado</div>
-                  )}
-                </td>
-                <td style={ui.td}>
-                  <input
-                    value={f.nombre}
-                    disabled={!puede(permisos, 'editar')}
-                    onChange={(e) => update(idx, { nombre: e.target.value })}
-                    placeholder={idx === 0 ? 'MD-12' : 'MD-20'}
-                    style={{ ...ui.inputStyle, width: '100%' }}
-                  />
-                </td>
-                <td style={ui.td}>
-                  <input
-                    value={f.espesor_m}
-                    disabled={!puede(permisos, 'editar')}
-                    onChange={(e) => update(idx, { espesor_m: e.target.value })}
-                    placeholder="0.070"
-                    style={{ ...ui.inputStyle, width: '100%' }}
-                  />
-                </td>
-                <td style={ui.td}>
-                  <select
-                    value={f.referencia_orden ?? ''}
-                    disabled={!puede(permisos, 'editar')}
-                    onChange={(e) => update(idx, { referencia_orden: e.target.value })}
-                    style={{ ...ui.inputStyle, width: '100%', fontSize: 'var(--cc-xs)' }}
-                    title="Capa inferior para cálculo de espesor en entrega DG"
-                  >
-                    <option value="">
-                      Auto ({idx + 1 < filas.length ? (filas[idx + 1].nombre || `Capa ${idx + 2}`) : 'Terreno'})
-                    </option>
-                    {filas.slice(idx + 1).map((capaAbajo, j) => (
-                      <option key={j} value={String(idx + j + 2)}>
-                        {capaAbajo.nombre || `Capa ${idx + j + 2}`}
-                      </option>
-                    ))}
-                    <option value="0">Terreno natural</option>
-                  </select>
-                </td>
-                <td style={ui.td}>
-                  <input
-                    value={f.sobre_ancho_m ?? ''}
-                    disabled={!puede(permisos, 'editar')}
-                    onChange={(e) => update(idx, { sobre_ancho_m: e.target.value })}
-                    placeholder="0.00"
-                    style={{ ...ui.inputStyle, width: '100%' }}
-                    title="Metros adicionales al ancho de vía del eje para esta capa"
-                  />
-                </td>
-                <td style={ui.td}>
-                  {puede(permisos, 'editar') && (
-                    <button
-                      type="button"
-                      style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
-                      onClick={() => quitar(idx)}
-                      disabled={filas.length <= 1}
-                      title="Quitar capa"
-                    >
-                      ×
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-            <tr style={{
-              background: `${ui.t?.success || 'var(--cc-color-success)'}22`,
-              fontWeight: 700,
-            }}
-            >
-              <td style={{ ...ui.td, color: ui.text }} colSpan={4}>
-                Espesor total estructura
-              </td>
-              <td style={{ ...ui.td, color: ui.t?.success || 'var(--cc-color-success)' }} colSpan={2}>
-                {total.toFixed(3)} m
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </TopoTableScroll>
+      <TopoExcelSheet sheet={sheet} columns={CAPAS_COLS} minWidth={520}>
+        {filas.map((f, idx) => (
+          <tr key={idx}>
+            <td style={sheet.td}>
+              {idx + 1}
+              {idx === 0 && (
+                <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted }}>terminado</div>
+              )}
+            </td>
+            <td style={sheet.td}>
+              <input
+                value={f.nombre}
+                disabled={!editar}
+                onChange={(e) => update(idx, { nombre: e.target.value })}
+                placeholder={idx === 0 ? 'MD-12' : 'MD-20'}
+                style={editar ? sheet.cellInp : sheet.cellRo}
+              />
+            </td>
+            <td style={sheet.td}>
+              <input
+                value={f.espesor_m}
+                disabled={!editar}
+                onChange={(e) => update(idx, { espesor_m: e.target.value })}
+                placeholder="0.070"
+                style={editar ? sheet.cellInp : sheet.cellRo}
+              />
+            </td>
+            <td style={sheet.td}>
+              <select
+                value={f.referencia_orden ?? ''}
+                disabled={!editar}
+                onChange={(e) => update(idx, { referencia_orden: e.target.value })}
+                style={sheet.cellSelect}
+                title="Capa inferior para cálculo de espesor en entrega DG"
+              >
+                <option value="">
+                  Auto ({idx + 1 < filas.length ? (filas[idx + 1].nombre || `Capa ${idx + 2}`) : 'Terreno'})
+                </option>
+                {filas.slice(idx + 1).map((capaAbajo, j) => (
+                  <option key={j} value={String(idx + j + 2)}>
+                    {capaAbajo.nombre || `Capa ${idx + j + 2}`}
+                  </option>
+                ))}
+                <option value="0">Terreno natural</option>
+              </select>
+            </td>
+            <td style={sheet.td}>
+              <input
+                value={f.sobre_ancho_m ?? ''}
+                disabled={!editar}
+                onChange={(e) => update(idx, { sobre_ancho_m: e.target.value })}
+                placeholder="0.00"
+                style={editar ? sheet.cellInp : sheet.cellRo}
+                title="Metros adicionales al ancho de vía del eje para esta capa"
+              />
+            </td>
+            <td style={sheet.td}>
+              {editar && (
+                <button
+                  type="button"
+                  style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
+                  onClick={() => quitar(idx)}
+                  disabled={filas.length <= 1}
+                  title="Quitar capa"
+                >
+                  ×
+                </button>
+              )}
+            </td>
+          </tr>
+        ))}
+        <tr style={{ background: totalBg, fontWeight: 700 }}>
+          <td style={sheet.td} colSpan={4}>
+            Espesor total estructura
+          </td>
+          <td style={{ ...sheet.td, color: totalColor }} colSpan={2}>
+            {total.toFixed(3)} m
+          </td>
+        </tr>
+      </TopoExcelSheet>
 
-      {puede(permisos, 'editar') && (
-        <button type="button" style={{ ...ui.btnSecondary, marginTop: 10 }} onClick={agregar}>
+      {editar && (
+        <button type="button" style={{ ...ui.btnSecondary, marginTop: 4 }} onClick={agregar}>
           + Agregar capa
         </button>
       )}
@@ -303,9 +297,17 @@ export default function DisenoEstructuraPanel({
   )
 }
 
+const NUEVA_COLS = [
+  { key: 'ord', label: '#', width: 56 },
+  { key: 'capa', label: 'Capa' },
+  { key: 'esp', label: 'Espesor (m)', width: 140 },
+  { key: 'acc', label: '', width: 48 },
+]
+
 /** Modal ancho para crear nueva versión de estructura con nombre. */
 export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const [nombre, setNombre] = useState('')
   const [filas, setFilas] = useState([filaVacia()])
   const [error, setError] = useState('')
@@ -321,6 +323,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
 
   const total = sumEspesores(filas)
   const update = (idx, patch) => setFilas((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  const totalColor = ui.t?.success || 'var(--cc-color-success)'
 
   const guardar = () => {
     if (!(nombre || '').trim()) {
@@ -379,65 +382,47 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           />
         </label>
 
-        <TopoTableScroll>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', tableLayout: 'fixed' }}>
-            <colgroup>
-              <col style={{ width: '56px' }} />
-              <col />
-              <col style={{ width: '140px' }} />
-              <col style={{ width: '48px' }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th style={{ ...ui.th, textAlign: 'left' }}>#</th>
-                <th style={{ ...ui.th, textAlign: 'left' }}>Capa</th>
-                <th style={{ ...ui.th, textAlign: 'left' }}>Espesor (m)</th>
-                <th style={ui.th} />
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, idx) => (
-                <tr key={idx}>
-                  <td style={ui.td}>{idx + 1}{idx === 0 ? ' · terminado' : ''}</td>
-                  <td style={ui.td}>
-                    <input
-                      value={f.nombre}
-                      onChange={(e) => update(idx, { nombre: e.target.value })}
-                      style={{ ...ui.inputStyle, width: '100%' }}
-                    />
-                  </td>
-                  <td style={ui.td}>
-                    <input
-                      value={f.espesor_m}
-                      onChange={(e) => update(idx, { espesor_m: e.target.value })}
-                      style={{ ...ui.inputStyle, width: '100%' }}
-                    />
-                  </td>
-                  <td style={ui.td}>
-                    <button
-                      type="button"
-                      style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
-                      onClick={() => filas.length > 1 && setFilas(filas.filter((_, i) => i !== idx))}
-                      disabled={filas.length <= 1}
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              <tr style={{ background: `${ui.t?.success || 'var(--cc-color-success)'}22`, fontWeight: 700 }}>
-                <td style={ui.td} colSpan={2}>Espesor total</td>
-                <td style={{ ...ui.td, color: ui.t?.success || 'var(--cc-color-success)' }} colSpan={2}>
-                  {total.toFixed(3)} m
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </TopoTableScroll>
+        <TopoExcelSheet sheet={sheet} columns={NUEVA_COLS} minWidth={420}>
+          {filas.map((f, idx) => (
+            <tr key={idx}>
+              <td style={sheet.td}>{idx + 1}{idx === 0 ? ' · terminado' : ''}</td>
+              <td style={sheet.td}>
+                <input
+                  value={f.nombre}
+                  onChange={(e) => update(idx, { nombre: e.target.value })}
+                  style={sheet.cellInp}
+                />
+              </td>
+              <td style={sheet.td}>
+                <input
+                  value={f.espesor_m}
+                  onChange={(e) => update(idx, { espesor_m: e.target.value })}
+                  style={sheet.cellInp}
+                />
+              </td>
+              <td style={sheet.td}>
+                <button
+                  type="button"
+                  style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
+                  onClick={() => filas.length > 1 && setFilas(filas.filter((_, i) => i !== idx))}
+                  disabled={filas.length <= 1}
+                >
+                  ×
+                </button>
+              </td>
+            </tr>
+          ))}
+          <tr style={{ background: `${totalColor}22`, fontWeight: 700 }}>
+            <td style={sheet.td} colSpan={2}>Espesor total</td>
+            <td style={{ ...sheet.td, color: totalColor }} colSpan={2}>
+              {total.toFixed(3)} m
+            </td>
+          </tr>
+        </TopoExcelSheet>
 
         <button
           type="button"
-          style={{ ...ui.btnSecondary, marginTop: 10 }}
+          style={{ ...ui.btnSecondary, marginTop: 4 }}
           onClick={() => setFilas([...filas, filaVacia()])}
         >
           + Agregar capa

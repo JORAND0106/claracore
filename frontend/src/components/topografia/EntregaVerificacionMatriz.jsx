@@ -1,6 +1,7 @@
 import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { cotaReferenciaEnOrdenada, hiDesdeCotaVplus, resolveHiEntrega } from '../../utils/entrega_dg_bloques'
-import { PermisoAviso, puede, TopoTableScroll, useTopoViewport } from './topografiaShared'
+import { topoSheetStyles } from './topoSheetStyles'
+import { PermisoAviso, puede, themeColorScheme, useTopoViewport } from './topografiaShared'
 
 const VI_W = 65
 
@@ -71,6 +72,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   onDirtyChange,
 }, ref) {
   const { isCompact } = useTopoViewport()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const entrega = detalle?.entrega
   const bloques = detalle?.bloques || []
   const capas = detalle?.capas || []
@@ -161,7 +163,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   const tol = entrega?.tolerancia_m
 
   const th = (extra = {}) => ({
-    ...ui.th,
+    ...sheet.th,
     textAlign: 'center',
     fontSize: 'var(--cc-xs)',
     whiteSpace: 'nowrap',
@@ -170,7 +172,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   })
 
   const cell = (extra = {}) => ({
-    ...ui.td,
+    ...sheet.td,
     textAlign: 'center',
     padding: '3px 5px',
     fontSize: 'var(--cc-xs)',
@@ -188,14 +190,22 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   })
 
   const inp = (w = VI_W) => ({
-    ...ui.inputStyle,
+    ...sheet.cellInp,
     width: w,
     minWidth: w,
     maxWidth: w,
     padding: '2px 4px',
     textAlign: 'center',
     fontSize: 'var(--cc-xs)',
-    boxSizing: 'border-box',
+  })
+
+  const sel = (w = 72) => ({
+    ...sheet.cellSelect,
+    width: w,
+    minWidth: w,
+    maxWidth: w + 16,
+    textAlign: 'center',
+    fontSize: 'var(--cc-xs)',
   })
 
   const hiFila = useCallback((f) => resolveHiEntrega({
@@ -477,8 +487,17 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
         </div>
       </div>
 
-      <TopoTableScroll maxHeight={580}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 + nTrans * 80 }}>
+      <div
+        style={{
+          ...sheet.sheetWrap,
+          maxHeight: 580,
+          overflow: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          colorScheme: themeColorScheme(ui.t),
+        }}
+        className="cc-topo-table-scroll"
+      >
+        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', width: '100%', minWidth: 720 + nTrans * 80 }}>
           <thead>
             <tr>
               <th style={th()}>Tramo</th>
@@ -531,7 +550,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                         <select
                           value={instD.punto_biblioteca_id ?? ''}
                           onChange={(e) => onPuntoSelect(f.abscisa, bloqueId, e.target.value)}
-                          style={{ ...inp(72), maxWidth: 88 }}
+                          style={sel(72)}
                         >
                           <option value="">—</option>
                           {puntosNiv.map((p) => (
@@ -747,7 +766,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
             No hay estaciones en el rango de abscisas.
           </p>
         )}
-      </TopoTableScroll>
+      </div>
       <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
         Vi / Diseño{!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / {capaLabel} por ordenada transversal.
         {esModoTerreno
