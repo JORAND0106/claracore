@@ -1889,6 +1889,7 @@ function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
     if (exact) return exact
     const legacy = rows.find((p) => p.contrato_id == null || p.contrato_id === '')
     if (legacy) return legacy
+    return null
   }
   return rows[0]
 }

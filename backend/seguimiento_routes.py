@@ -992,7 +992,7 @@ def route_list_bitacora(
     q: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         return list_entradas(
@@ -1013,7 +1013,7 @@ def route_get_diario_fecha(
     fecha: str = Query(..., min_length=8),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = get_diario_por_fecha(supabase, contrato_id, fecha)
@@ -1028,14 +1028,14 @@ def route_list_bitacora_equipos(
     q: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     return list_equipos(supabase, contrato_id, q or "")
 
 
 @router.get("/{contrato_id}/bitacora/cargos")
 def route_list_bitacora_cargos(contrato_id: int, current_user=Depends(get_current_user)):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     return {
         "plantilla": plantilla_personal_contrato(supabase, contrato_id),
@@ -1049,7 +1049,7 @@ def route_upsert_bitacora_cargo(
     body: BitacoraCargoBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     row = upsert_cargo_custom(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
@@ -1064,7 +1064,7 @@ def route_list_bitacora_tipos_material(
     current_user=Depends(get_current_user),
 ):
     """Catálogo propio de Bitácora (no Almacén / insumos)."""
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     return list_tipos_material(
         supabase,
@@ -1084,10 +1084,10 @@ def route_upsert_bitacora_tipo_material(
     from bitacora_permissions import tiene_permiso_bitacora
 
     if not (
-        tiene_permiso_bitacora(current_user, "crear")
-        or tiene_permiso_bitacora(current_user, "editar")
+        tiene_permiso_bitacora(current_user, "crear", contrato_id)
+        or tiene_permiso_bitacora(current_user, "editar", contrato_id)
     ):
-        require_permiso_bitacora(current_user, "crear")
+        require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     row = upsert_tipo_material(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
@@ -1112,7 +1112,7 @@ def route_list_bitacora_visitantes(
     q: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     return list_visitantes(supabase, contrato_id, q or "")
 
@@ -1123,7 +1123,7 @@ def route_upsert_bitacora_visitante(
     body: BitacoraVisitanteBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     row = upsert_visitante(
         supabase,
@@ -1137,7 +1137,7 @@ def route_upsert_bitacora_visitante(
 
 @router.get("/{contrato_id}/bitacora/plantilla-autocompletar")
 def route_plantilla_autocompletar(contrato_id: int, current_user=Depends(get_current_user)):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     data = plantilla_autocompletar_diario(supabase, contrato_id)
     return data or {}
@@ -1149,7 +1149,7 @@ def route_upsert_bitacora_equipo(
     body: BitacoraEquipoBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         return upsert_equipo(
@@ -1169,7 +1169,7 @@ def route_bitacora_galeria(
     q: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     return list_galeria(supabase, contrato_id, q or "")
 
@@ -1181,7 +1181,7 @@ def route_bitacora_media(
     current_user=Depends(get_current_user),
 ):
     """Sirve un adjunto de bitácora bajo demanda (auth Bearer). Evita embeber data_uri en list/save."""
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         data, mime = leer_media_bitacora(contrato_id, path)
@@ -1201,7 +1201,7 @@ def route_bitacora_export_pdf(
     current_user=Depends(get_current_user),
 ):
     """PDF landscape del día: Diario + Eventos + fotografías (encabezado 3 logos)."""
-    require_permiso_bitacora(current_user, "exportar")
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         pdf = generar_pdf_bitacora_dia(supabase, contrato_id, fecha)
@@ -1227,7 +1227,7 @@ def route_crear_diario(
     body: BitacoraDiarioBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = crear_reporte_diario(
@@ -1252,7 +1252,7 @@ def route_crear_evento(
     body: BitacoraEventoBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = crear_reporte_evento(
@@ -1275,7 +1275,7 @@ def route_crear_evento(
 def route_get_bitacora_entrada(
     contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "ver")
+    require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         return get_entrada(supabase, contrato_id, entrada_id)
@@ -1290,7 +1290,7 @@ def route_update_bitacora(
     body: BitacoraUpdateBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "editar")
+    require_permiso_bitacora(current_user, "editar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = update_entrada(
@@ -1314,7 +1314,7 @@ def route_update_bitacora(
 def route_cerrar_diario(
     contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "editar")
+    require_permiso_bitacora(current_user, "editar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = cerrar_reporte_diario(
@@ -1333,7 +1333,7 @@ def route_cerrar_diario(
 def route_revertir_diario(
     contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "editar")
+    require_permiso_bitacora(current_user, "editar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         row = revertir_cierre_diario(
@@ -1352,7 +1352,7 @@ def route_revertir_diario(
 def route_eliminar_bitacora(
     contrato_id: int, entrada_id: int, current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "eliminar")
+    require_permiso_bitacora(current_user, "eliminar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         eliminar_entrada(supabase, contrato_id, entrada_id, current_user=current_user)
@@ -1372,7 +1372,7 @@ def route_bitacora_imagen(
     body: BitacoraImagenBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "editar")
+    require_permiso_bitacora(current_user, "editar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
         return adjuntar_imagen_entrada(
