@@ -1,8 +1,9 @@
 """
 Encabezado institucional (3 logos) y preparación de imágenes para PDF.
 
-xhtml2pdf/reportlab pinta canales alpha como negro. Toda imagen (logo/firma)
-que vaya a un PDF debe pasar por ``prepare_image_for_pdf`` / flatten sobre blanco.
+xhtml2pdf/reportlab:
+- pinta canales alpha como negro → siempre aplanar sobre blanco (y JPEG opaco).
+- ignora max-height/max-width CSS → fijar width/height en pt (como Bitácora).
 """
 from __future__ import annotations
 
@@ -15,14 +16,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
-_LOGO_MAX_PX_W = 360
-_LOGO_MAX_PX_H = 180
+# Píxeles de trabajo (suficiente nitidez a ~22pt de alto en el PDF).
+_LOGO_MAX_PX_W = 220
+_LOGO_MAX_PX_H = 80
 _HTTP_TIMEOUT = 8.0
 _CACHE_TTL = 600.0
 _CACHE: Dict[str, Tuple[float, str]] = {}
 _CACHE_LOCK = Lock()
 
 _LOGO_KEYS = ("logo_contratista", "logo_interventoria", "logo_entidad")
+
+# Tamaño en el PDF (pt). ~50% del intento previo (48px/~36pt → 22pt; 110px → 55pt).
+_LOGO_BOX_H_PT = 22.0
+_LOGO_BOX_W_PT = 55.0
+_LOGO_BOX_H_PT_COMPACT = 18.0
+_LOGO_BOX_W_PT_COMPACT = 48.0
 
 
 def prepare_image_for_pdf(
@@ -33,14 +41,14 @@ def prepare_image_for_pdf(
     allow_http: bool = True,
 ) -> str:
     """
-    Convierte URL o data-URI a data-URI opaco seguro para xhtml2pdf.
-    Aplana transparencia sobre blanco; redimensiona si hace falta.
+    Convierte URL o data-URI a data-URI JPEG opaco seguro para xhtml2pdf.
+    Aplana transparencia / mate negro sobre blanco; redimensiona si hace falta.
     """
     u = str(src or "").strip()
     if not u:
         return ""
     now = time.time()
-    cache_key = f"{max_px_w}x{max_px_h}|{u[:2000]}"
+    cache_key = f"jpg|{max_px_w}x{max_px_h}|{u[:2000]}"
     with _CACHE_LOCK:
         hit = _CACHE.get(cache_key)
         if hit and hit[0] > now:
@@ -127,15 +135,18 @@ def _src_to_data_uri(src: str, max_px_w: int, max_px_h: int, *, allow_http: bool
 
 
 def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
+    """Siempre JPEG RGB opaco: evita cualquier resto de alpha en xhtml2pdf."""
     from almacen_firma_pdf import _flatten_image_bytes_on_white
 
     try:
         from PIL import Image
     except Exception:
         from almacen_firma_pdf import _data_uri_from_bytes
+
         return _data_uri_from_bytes(raw)
 
-    flat, mime = _flatten_image_bytes_on_white(raw)
+    # Logos: knockout mate negro opaco (ICCU etc.) + aplanar alpha.
+    flat, _mime = _flatten_image_bytes_on_white(raw, knockout_black_matte=True)
     try:
         im = Image.open(io.BytesIO(flat))
         im.load()
@@ -143,27 +154,55 @@ def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
             im = im.convert("RGB")
         if im.size[0] > max_px_w or im.size[1] > max_px_h:
             im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
-            out = io.BytesIO()
-            im.save(out, format="JPEG", quality=85, optimize=True)
-            return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
-        return f"data:{mime or 'image/png'};base64,{base64.b64encode(flat).decode('ascii')}"
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=88, optimize=True)
+        return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
     except Exception:
         from almacen_firma_pdf import _data_uri_from_bytes
+
         return _data_uri_from_bytes(raw)
 
 
-def _logo_cell_html(uri: str, placeholder: str, *, max_h: int = 44, max_w: int = 100) -> str:
+def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
+    """Escala proporcional en pt (xhtml2pdf no respeta max-width/height CSS)."""
+    try:
+        from PIL import Image
+
+        m = re.match(r"data:image/[^;]+;base64,(.+)$", uri, re.I | re.S)
+        if not m:
+            return round(max_w * 0.55, 2), round(max_h, 2)
+        raw = base64.b64decode(m.group(1))
+        im = Image.open(io.BytesIO(raw))
+        px_w, px_h = im.size
+        if not px_w or not px_h:
+            return round(max_w * 0.55, 2), round(max_h, 2)
+        nat_w = px_w * 72.0 / 96.0
+        nat_h = px_h * 72.0 / 96.0
+        scale = min(max_h / nat_h, max_w / nat_w, 1.0)
+        return round(nat_w * scale, 2), round(nat_h * scale, 2)
+    except Exception:
+        return round(max_w * 0.55, 2), round(max_h, 2)
+
+
+def _logo_cell_html(
+    uri: str,
+    placeholder: str,
+    *,
+    max_h_pt: float = _LOGO_BOX_H_PT,
+    max_w_pt: float = _LOGO_BOX_W_PT,
+) -> str:
     ph = html.escape(placeholder)
     if uri:
+        w, h = _fit_pt(uri, max_w_pt, max_h_pt)
         return (
             f'<div style="text-align:center;line-height:0;">'
             f'<img src="{html.escape(uri, quote=True)}" '
-            f'style="max-height:{max_h}px;max-width:{max_w}px;border:0;display:inline-block;" />'
+            f'style="width:{w}pt;height:{h}pt;border:0;display:inline-block;" />'
             f"</div>"
         )
     return (
-        f'<div style="border:0.5px dashed #94a3b8;min-height:{max(28, max_h - 8)}px;'
-        f'padding:4px 2px;font-size:6pt;color:#94a3b8;text-align:center;">{ph}</div>'
+        f'<div style="border:0.5px dashed #94a3b8;min-height:{max(14, int(max_h_pt - 4))}pt;'
+        f'padding:2px 1px;font-size:5pt;color:#94a3b8;text-align:center;">{ph}</div>'
     )
 
 
@@ -178,7 +217,7 @@ def html_encabezado_institucional(
 ) -> str:
     """
     Encabezado con 3 logos (Contratista | Interventoría | título | Entidad),
-    mismo patrón visual que Bitácora de Obra.
+    mismo patrón visual que Bitácora de Obra (logos compactos en pt).
     """
     c = contrato or {}
     uris = logo_uris if logo_uris is not None else prepare_logos_contrato(c)
@@ -193,41 +232,42 @@ def html_encabezado_institucional(
     titulo_esc = html.escape(str(titulo or ""))
     sub_esc = html.escape(str(subtitulo or ""))
 
-    max_h = 36 if compact else 48
-    max_w = 90 if compact else 110
-    cell_c = _logo_cell_html(uris.get("logo_contratista") or "", "Contratista", max_h=max_h, max_w=max_w)
-    cell_i = _logo_cell_html(uris.get("logo_interventoria") or "", "Interventoría", max_h=max_h, max_w=max_w)
-    cell_e = _logo_cell_html(uris.get("logo_entidad") or "", "Entidad", max_h=max_h, max_w=max_w)
+    max_h = _LOGO_BOX_H_PT_COMPACT if compact else _LOGO_BOX_H_PT
+    max_w = _LOGO_BOX_W_PT_COMPACT if compact else _LOGO_BOX_W_PT
+    cell_c = _logo_cell_html(uris.get("logo_contratista") or "", "Contratista", max_h_pt=max_h, max_w_pt=max_w)
+    cell_i = _logo_cell_html(uris.get("logo_interventoria") or "", "Interventoría", max_h_pt=max_h, max_w_pt=max_w)
+    cell_e = _logo_cell_html(uris.get("logo_entidad") or "", "Entidad", max_h_pt=max_h, max_w_pt=max_w)
 
-    title_fs = "8.5pt" if compact else "11pt"
-    meta_fs = "5.5pt" if compact else "7.5pt"
+    title_fs = "8pt" if compact else "10pt"
+    meta_fs = "5.5pt" if compact else "7pt"
     sub_html = ""
     if sub_esc:
         sub_html = (
-            f'<div style="font-size:6pt;font-weight:600;color:#475569;margin-top:1px;line-height:1.2;">'
+            f'<div style="font-size:5.5pt;font-weight:600;color:#475569;margin-top:1px;line-height:1.2;">'
             f"{sub_esc}</div>"
         )
     gen_html = f"<br/><span style=\"font-size:{meta_fs};\"><b>Generado por:</b> {gen}</span>" if gen else ""
 
+    # Columnas logo más estrechas: más espacio al título central.
     return f"""
 <table width="100%" cellspacing="0" cellpadding="0"
   style="border-collapse:collapse;border:0.8pt solid #0f172a;margin:0 0 8px;background:#fff;">
   <tr>
-    <td width="15%" style="padding:4px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
-    <td width="15%" style="padding:4px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
-    <td width="55%" style="padding:4px 8px;vertical-align:middle;background:#f1f5f9;">
+    <td width="12%" style="padding:3px 2px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
+    <td width="12%" style="padding:3px 2px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
+    <td width="64%" style="padding:3px 8px;vertical-align:middle;background:#f1f5f9;">
       <div style="font-size:{title_fs};font-weight:bold;color:#0f172a;line-height:1.15;">{titulo_esc}</div>
       {sub_html}
-      <div style="font-size:{meta_fs};color:#334155;margin-top:3px;line-height:1.25;">
+      <div style="font-size:{meta_fs};color:#334155;margin-top:2px;line-height:1.25;">
         <b>Contrato N° {numero}</b>
         {(" · " + objeto) if objeto else ""}
       </div>
-      <div style="font-size:{meta_fs};color:#475569;margin-top:2px;line-height:1.2;">
+      <div style="font-size:{meta_fs};color:#475569;margin-top:1px;line-height:1.2;">
         {contratista} · {interventoria} · {entidad_txt}
       </div>
       {gen_html}
     </td>
-    <td width="15%" style="padding:4px;border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
+    <td width="12%" style="padding:3px 2px;border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
   </tr>
 </table>
 """
