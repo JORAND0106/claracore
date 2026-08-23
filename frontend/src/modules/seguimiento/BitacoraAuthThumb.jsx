@@ -4,6 +4,9 @@ import { imagenSrc, openImageInNewTab } from './imagenUtils'
 /**
  * Miniatura con carga autenticada cuando solo hay blob_path
  * (el backend ya no embebe data_uri en list/save).
+ *
+ * @param {(payload: { src: string, im: object }) => void} [onZoom]
+ *   Si se define, al hacer clic abre zoom in-app en lugar de nueva pestaña.
  */
 export default function BitacoraAuthThumb({
   api,
@@ -12,6 +15,7 @@ export default function BitacoraAuthThumb({
   height = 28,
   style = {},
   interactive = true,
+  onZoom,
 }) {
   const direct = imagenSrc(im)
   const [src, setSrc] = useState(direct)
@@ -71,11 +75,24 @@ export default function BitacoraAuthThumb({
   return (
     <button
       type="button"
-      onClick={() => openImageInNewTab({
-        ...im,
-        data_uri: String(src).startsWith('data:') ? src : undefined,
-        url: String(src).startsWith('blob:') || String(src).startsWith('http') ? src : im?.url,
-      })}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        const payload = {
+          src,
+          im: {
+            ...im,
+            data_uri: String(src).startsWith('data:') ? src : undefined,
+            url: String(src).startsWith('blob:') || String(src).startsWith('http') ? src : im?.url,
+          },
+        }
+        if (typeof onZoom === 'function') {
+          onZoom(payload)
+          return
+        }
+        openImageInNewTab(payload.im)
+      }}
       style={{
         ...frame, padding: 0, border: 'none', cursor: 'zoom-in', background: 'transparent',
       }}
