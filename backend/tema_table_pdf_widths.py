@@ -97,26 +97,25 @@ def blend_column_weights(
 
     blended = [max(min_pct / 100.0, b) for b in blended]
     blended = _norm(blended)
-    pcts = [round(b * 100.0, 1) for b in blended]
+    # Enteros que sumen 100 (xhtml2pdf + atributo width="N%")
+    raw = [b * 100.0 for b in blended]
+    pcts = [int(round(x)) for x in raw]
+    drift = 100 - sum(pcts)
     if pcts:
-        pcts[-1] = round(100.0 - sum(pcts[:-1]), 1)
-        # Evitar 0 o negativos por redondeo
-        if pcts[-1] < min_pct:
-            deficit = min_pct - pcts[-1]
-            pcts[-1] = min_pct
-            # Quitar del más ancho
+        pcts[-1] = pcts[-1] + drift
+        if pcts[-1] < int(min_pct):
+            deficit = int(min_pct) - pcts[-1]
+            pcts[-1] = int(min_pct)
             j = max(range(len(pcts) - 1), key=lambda i: pcts[i])
-            pcts[j] = round(pcts[j] - deficit, 1)
-    return pcts
+            pcts[j] = pcts[j] - deficit
+    return [float(p) for p in pcts]
 
 
 def format_width_pct_attr(pct: float) -> str:
-    """Valor para atributo HTML width= que xhtml2pdf sí aplica."""
+    """Valor para atributo HTML width= que xhtml2pdf sí aplica (enteros %)."""
     v = max(1.0, min(100.0, float(pct)))
-    # Entero si es .0 — mismo estilo que _mini_table ("8%", "20%")
-    if abs(v - round(v)) < 0.05:
-        return f"{int(round(v))}%"
-    return f"{v:.1f}%"
+    # Enteros: xhtml2pdf es más fiable con "19%" que con "18.8%".
+    return f"{int(round(v))}%"
 
 
 class _TablePlanCollector(HTMLParser):

@@ -71,9 +71,9 @@ def test_sanitize_preserves_table_and_colwidth():
     pdf = render_tema_html_for_pdf(raw)
     assert "<table" in pdf
     assert "A" in pdf and "B" in pdf
-    # PDF usa atributo HTML width="N%" (xhtml2pdf), no px del editor
+    # PDF usa atributo HTML width="N%" y sin colspan=1 (xhtml2pdf)
     assert 'width="100%"' in pdf
-    assert 'width="' in pdf and "%" in pdf
+    assert 'colspan="1"' not in pdf
     assert "width:120px" not in pdf
     assert "width:80px" not in pdf
 
