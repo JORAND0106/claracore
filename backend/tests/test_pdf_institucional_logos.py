@@ -5,6 +5,8 @@ import base64
 import io
 import re
 
+import pytest
+
 from almacen_firma_pdf import _flatten_image_bytes_on_white
 from pdf_institucional import (
     html_encabezado_institucional,
@@ -115,7 +117,7 @@ def test_prepare_black_matte_logo_entidad():
 
 
 def test_html_encabezado_usa_tamano_explicito_pt():
-    """xhtml2pdf ignora max-height; el encabezado debe fijar width/height en pt."""
+    """xhtml2pdf ignora max-height; el encabezado debe fijar width/height en pt y attrs."""
     raw = _png_rgba_with_transparent_corners(64)
     uri = prepare_image_for_pdf(f"data:image/png;base64,{base64.b64encode(raw).decode()}")
     html_doc = html_encabezado_institucional(
@@ -128,10 +130,81 @@ def test_html_encabezado_usa_tamano_explicito_pt():
         },
     )
     assert "max-height" not in html_doc
+    assert re.search(r'width="\d+"', html_doc)
+    assert re.search(r'height="\d+"', html_doc)
     assert re.search(r"width:\d+(\.\d+)?pt", html_doc)
     assert re.search(r"height:\d+(\.\d+)?pt", html_doc)
     heights = [float(x) for x in re.findall(r"height:(\d+(?:\.\d+)?)pt", html_doc)]
+    # Caja −40% sobre original 48pt → 28.8pt
     assert heights and max(heights) <= 30.0
+
+
+def test_logo_box_is_40_percent_smaller_than_original():
+    """Constantes: caja actual = 60% de la original (reducción del 40%)."""
+    from pdf_institucional import (
+        _LOGO_BOX_H_PT,
+        _LOGO_BOX_W_PT,
+        _LOGO_ORIG_H_PT,
+        _LOGO_ORIG_W_PT,
+        _LOGO_SIZE_FACTOR,
+    )
+
+    assert _LOGO_SIZE_FACTOR == pytest.approx(0.60)
+    assert _LOGO_BOX_H_PT == pytest.approx(_LOGO_ORIG_H_PT * 0.60, abs=0.01)
+    assert _LOGO_BOX_W_PT == pytest.approx(_LOGO_ORIG_W_PT * 0.60, abs=0.01)
+
+
+def test_pdf_render_logo_height_is_40_percent_of_original():
+    """Comparación real de bboxes PDF: reducido / original ≈ 0.60."""
+    pytest.importorskip("xhtml2pdf")
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+    from xhtml2pdf import pisa
+
+    from pdf_institucional import (
+        _LOGO_BOX_H_PT,
+        _LOGO_BOX_W_PT,
+        _LOGO_ORIG_H_PT,
+        _LOGO_ORIG_W_PT,
+        _fit_pt,
+        _logo_cell_html,
+        prepare_image_for_pdf,
+    )
+
+    try:
+        import fitz
+    except ImportError:
+        pytest.skip("pymupdf no disponible")
+
+    im = Image.new("RGB", (200, 200), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    d.ellipse((20, 20, 180, 180), fill=(30, 100, 180))
+    buf = BytesIO()
+    im.save(buf, format="JPEG", quality=90)
+    uri_big = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    uri_prep = prepare_image_for_pdf(uri_big)
+
+    def _pdf_logo_h(max_h: float, max_w: float, uri: str) -> float:
+        cell = _logo_cell_html(uri, "L", max_h_pt=max_h, max_w_pt=max_w)
+        html_doc = f"<html><body>{cell}</body></html>"
+        out = BytesIO()
+        assert pisa.CreatePDF(html_doc, dest=out).err == 0
+        doc = fitz.open(stream=out.getvalue(), filetype="pdf")
+        infos = doc[0].get_image_info()
+        assert infos
+        b = infos[0]["bbox"]
+        return float(b[3] - b[1])
+
+    h_orig = _pdf_logo_h(_LOGO_ORIG_H_PT, _LOGO_ORIG_W_PT, uri_big)
+    h_new = _pdf_logo_h(_LOGO_BOX_H_PT, _LOGO_BOX_W_PT, uri_prep)
+    ratio = h_new / h_orig
+    assert h_orig == pytest.approx(48.0, abs=0.5)
+    assert h_new == pytest.approx(28.8, abs=0.5)
+    assert ratio == pytest.approx(0.60, abs=0.05)
+    w, h = _fit_pt(uri_prep, _LOGO_BOX_W_PT, _LOGO_BOX_H_PT)
+    assert h <= _LOGO_BOX_H_PT + 0.01
+    assert w <= _LOGO_BOX_W_PT + 0.01
 
 
 def test_html_encabezado_institucional_tres_placeholders():
