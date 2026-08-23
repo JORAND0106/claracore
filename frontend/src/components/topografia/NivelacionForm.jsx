@@ -3,11 +3,12 @@ import FirmaDigital from './FirmaDigital'
 import NivelacionGrafico from './NivelacionGrafico'
 import PoligonalValidacionPanel from './PoligonalValidacionPanel'
 import TopoConfirmModal from './TopoConfirmModal'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import {
   PermisoAviso,
   puede,
   Semaforo,
-  TopoFieldLabel,
   TopoHelpIcon,
   coloresBloqueNiv,
   themeColorScheme,
@@ -211,6 +212,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const ui = useTopoTheme()
   const { isCompact } = useTopoViewport()
   const bloques = useMemo(() => coloresBloqueNiv(ui.t), [ui.t])
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [lista, setLista] = useState([])
   const [sel, setSel] = useState(null)
@@ -983,45 +985,42 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       {creando && (
         <PermisoAviso permisos={permisos} accion="crear">
           <div style={{ ...ui.card, marginBottom: 16 }}>
-            <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
-              <div style={ui.compactFieldCol('1 1 8em')}>
-                <TopoFieldLabel texto="Nombre" color={ui.textMuted} ayuda="Identificador del circuito." />
-                <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.compactInput} />
-              </div>
-              <div style={ui.compactFieldCol('1 1 7em')}>
-                <TopoFieldLabel texto="Circuito" color={ui.textMuted} ayuda="Directa (A→B→A) o circuito cerrado." />
-                <select value={form.tipo_contranivelacion} onChange={(e) => setForm({ ...form, tipo_contranivelacion: e.target.value })} style={ui.compactInput}>
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Nueva nivelación"
+              minWidth={640}
+              columns={[
+                { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '20%' },
+                { key: 'circuito', label: 'Circuito', ayuda: 'Directa (A→B→A) o circuito cerrado.', width: '18%' },
+                { key: 'nivel', label: 'Nivel', ayuda: 'Automático: 3 hilos y distancia taquimétrica. Electrónico: V+ y distancia manual.', width: '18%' },
+                { key: 'bm_ini', label: 'BM ini.', ayuda: 'Punto de partida con cota en biblioteca.', width: '22%' },
+                { key: 'bm_fin', label: 'BM fin.', ayuda: 'BM de cierre para error de cierre.', width: '22%' },
+              ]}
+              cells={[
+                <input key="n" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={sheet.cellInp} />,
+                <select key="c" value={form.tipo_contranivelacion} onChange={(e) => setForm({ ...form, tipo_contranivelacion: e.target.value })} style={sheet.cellSelect}>
                   <option value="circuito">Circuito</option>
                   <option value="directa">Directa</option>
-                </select>
-              </div>
-              <div style={ui.compactFieldCol('1 1 7em')}>
-                <TopoFieldLabel texto="Nivel" color={ui.textMuted} ayuda="Automático: 3 hilos y distancia taquimétrica. Electrónico: V+ y distancia manual." />
-                <select value={form.tipo_nivel} onChange={(e) => setForm({ ...form, tipo_nivel: e.target.value })} style={ui.compactInput}>
+                </select>,
+                <select key="nv" value={form.tipo_nivel} onChange={(e) => setForm({ ...form, tipo_nivel: e.target.value })} style={sheet.cellSelect}>
                   <option value="electronico">Electrónico</option>
                   <option value="automatico">Automático</option>
-                </select>
-              </div>
-              <div style={ui.compactFieldCol('1 1 8em')}>
-                <TopoFieldLabel texto="BM ini." color={ui.textMuted} ayuda="Punto de partida con cota en biblioteca." />
-                <select value={form.bm_inicial_id} onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })} style={ui.compactInput}>
+                </select>,
+                <select key="bi" value={form.bm_inicial_id} onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })} style={sheet.cellSelect}>
                   <option value="">—</option>
                   {puntos.map((p) => (
                     <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
                   ))}
-                </select>
-              </div>
-              <div style={ui.compactFieldCol('1 1 8em')}>
-                <TopoFieldLabel texto="BM fin." color={ui.textMuted} ayuda="BM de cierre para error de cierre." />
-                <select value={form.bm_final_id} onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })} style={ui.compactInput}>
+                </select>,
+                <select key="bf" value={form.bm_final_id} onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })} style={sheet.cellSelect}>
                   <option value="">—</option>
                   {puntos.map((p) => (
                     <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
                   ))}
-                </select>
-              </div>
-            </div>
-            <button type="button" style={{ ...ui.btnPrimary, marginTop: 10 }} onClick={crear}>Crear</button>
+                </select>,
+              ]}
+            />
+            <button type="button" style={{ ...ui.btnPrimary, marginTop: 4 }} onClick={crear}>Crear</button>
           </div>
         </PermisoAviso>
       )}
@@ -1035,99 +1034,99 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               onToggle={() => setPanelNivAbierto((v) => !v)}
               ui={ui}
             >
-              <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
-                <div style={ui.compactFieldCol('1 1 8em')}>
-                  <TopoFieldLabel texto="Nombre" color={ui.textMuted} ayuda="Identificador del circuito." />
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Datos generales"
+                minWidth={720}
+                columns={[
+                  { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '16%' },
+                  { key: 'circuito', label: 'Circuito', ayuda: 'Directa o circuito cerrado.', width: '14%' },
+                  { key: 'nivel', label: 'Nivel', ayuda: 'Automático (3 hilos) o electrónico.', width: '14%' },
+                  { key: 'bm_ini', label: 'BM inicio', ayuda: 'Punto de arranque (biblioteca).', width: '18%' },
+                  { key: 'bm_fin', label: 'BM fin', ayuda: 'BM de cierre para error de cierre.', width: '18%' },
+                  { key: 'operador', label: 'Operador', ayuda: 'Nombre del operador (autocompletado).', width: '20%' },
+                ]}
+                cells={[
                   <input
+                    key="n"
                     value={form.nombre}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                    style={ui.compactInput}
-                  />
-                </div>
-                <div style={ui.compactFieldCol('1 1 7em')}>
-                  <TopoFieldLabel texto="Circuito" color={ui.textMuted} ayuda="Directa o circuito cerrado." />
+                    style={sellada ? sheet.cellRo : sheet.cellInp}
+                  />,
                   <select
+                    key="c"
                     value={form.tipo_contranivelacion}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, tipo_contranivelacion: e.target.value })}
-                    style={ui.compactInput}
+                    style={sheet.cellSelect}
                   >
                     <option value="circuito">Circuito</option>
                     <option value="directa">Directa</option>
-                  </select>
-                </div>
-                <div style={ui.compactFieldCol('1 1 7em')}>
-                  <TopoFieldLabel texto="Nivel" color={ui.textMuted} ayuda="Automático (3 hilos) o electrónico." />
+                  </select>,
                   <select
+                    key="nv"
                     value={form.tipo_nivel}
                     disabled={sellada}
                     onChange={(e) => cambiarTipoNivel(e.target.value)}
-                    style={ui.compactInput}
+                    style={sheet.cellSelect}
                   >
                     <option value="electronico">Electrónico</option>
                     <option value="automatico">Automático</option>
-                  </select>
-                </div>
-                <div style={ui.compactFieldCol('1 1 8em')}>
-                  <TopoFieldLabel texto="BM inicio" color={ui.textMuted} ayuda="Punto de arranque (biblioteca)." />
+                  </select>,
                   <select
+                    key="bi"
                     value={form.bm_inicial_id}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })}
-                    style={ui.compactInput}
+                    style={sheet.cellSelect}
                   >
                     <option value="">—</option>
                     {puntos.map((p) => (
                       <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
                     ))}
-                  </select>
-                </div>
-                <div style={ui.compactFieldCol('1 1 8em')}>
-                  <TopoFieldLabel texto="BM fin" color={ui.textMuted} ayuda="BM de cierre para error de cierre." />
+                  </select>,
                   <select
+                    key="bf"
                     value={form.bm_final_id}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })}
-                    style={ui.compactInput}
+                    style={sheet.cellSelect}
                   >
                     <option value="">—</option>
                     {puntos.map((p) => (
                       <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
                     ))}
-                  </select>
-                </div>
-              </div>
-              <div style={{ ...ui.compactFieldRow, marginTop: 8 }} className="cc-topo-compact-row">
-                <div style={ui.compactFieldCol('1 1 7em')}>
-                  <TopoFieldLabel texto="Operador" color={ui.textMuted} ayuda="Nombre del operador (autocompletado)." />
+                  </select>,
                   <input
+                    key="op"
                     list="topo-operadores-niv"
                     value={form.operador}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, operador: e.target.value })}
-                    style={ui.compactInput}
+                    style={sellada ? sheet.cellRo : sheet.cellInp}
                     placeholder="Buscar operador…"
                     autoComplete="off"
-                  />
-                </div>
-                <div style={ui.compactFieldCol('1 1 6em')}>
-                  <TopoFieldLabel texto="Marca" color={ui.textMuted} ayuda="Marca del nivel." />
-                  <input value={form.equipo_marca} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })} style={ui.compactInput} />
-                </div>
-                <div style={ui.compactFieldCol('1 1 6em')}>
-                  <TopoFieldLabel texto="Modelo" color={ui.textMuted} ayuda="Modelo / referencia." />
-                  <input value={form.equipo_referencia} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })} style={ui.compactInput} />
-                </div>
-                <div style={ui.compactFieldCol('1 1 6em')}>
-                  <TopoFieldLabel texto="Serial" color={ui.textMuted} ayuda="Serial del equipo." />
-                  <input value={form.equipo_serial} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })} style={ui.compactInput} />
-                </div>
-                <div style={ui.compactFieldCol('1 1 6em')}>
-                  <TopoFieldLabel texto="Fecha" color={ui.textMuted} ayuda="Fecha de campo." />
-                  <input type="date" value={form.fecha_campo} disabled={sellada} onChange={(e) => setForm({ ...form, fecha_campo: e.target.value })} style={ui.compactInput} />
-                </div>
-              </div>
+                  />,
+                ]}
+              />
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Equipo de medición"
+                minWidth={400}
+                columns={[
+                  { key: 'marca', label: 'Marca', ayuda: 'Marca del nivel.' },
+                  { key: 'modelo', label: 'Modelo', ayuda: 'Modelo / referencia.' },
+                  { key: 'serial', label: 'Serial', ayuda: 'Serial del equipo.' },
+                  { key: 'fecha', label: 'Fecha', ayuda: 'Fecha de campo.' },
+                ]}
+                cells={[
+                  <input key="m" value={form.equipo_marca} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })} style={sellada ? sheet.cellRo : sheet.cellInp} />,
+                  <input key="mo" value={form.equipo_referencia} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })} style={sellada ? sheet.cellRo : sheet.cellInp} />,
+                  <input key="s" value={form.equipo_serial} disabled={sellada} onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })} style={sellada ? sheet.cellRo : sheet.cellInp} />,
+                  <input key="f" type="date" value={form.fecha_campo} disabled={sellada} onChange={(e) => setForm({ ...form, fecha_campo: e.target.value })} style={sellada ? sheet.cellRo : sheet.cellInp} />,
+                ]}
+              />
             </PanelColapsable>
 
             <div style={{ ...ui.card, marginBottom: 16 }}>

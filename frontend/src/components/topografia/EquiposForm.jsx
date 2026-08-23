@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
-import FirmaDigital from './FirmaDigital'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import { PermisoAviso, puede, Semaforo, useTopografiaApi, useTopoTheme, useTopoViewport } from './topografiaShared'
 
 function estadoEquipo(item) {
@@ -17,6 +18,7 @@ const colorMap = { rojo: '#dc2626', amarillo: '#ca8a04', verde: '#16a34a' }
 
 export default function EquiposForm({ contratoId, token, onAlertasChange, permisos }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { isCompact } = useTopoViewport()
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [equipos, setEquipos] = useState([])
@@ -97,6 +99,8 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
   }
 
   const alertaItems = [...(alertas?.vencidas || []), ...(alertas?.proximas || [])]
+  const eqSel = equipos.find((e) => e.id === sel)
+  const esEstacion = eqSel?.tipo === 'estacion_total'
 
   return (
     <div>
@@ -115,20 +119,33 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
 
       <PermisoAviso permisos={permisos} accion="crear">
       <div style={{ ...ui.card, marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Registrar equipo</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <input placeholder="Nombre" value={formEq.nombre} onChange={(e) => setFormEq({ ...formEq, nombre: e.target.value })} style={ui.inputStyle} />
-          <select value={formEq.tipo} onChange={(e) => setFormEq({ ...formEq, tipo: e.target.value })} style={ui.inputStyle}>
-            <option value="nivel">Nivel</option>
-            <option value="estacion_total">Estacion total</option>
-            <option value="gps">GPS</option>
-            <option value="otro">Otro</option>
-          </select>
-          <input placeholder="Marca" value={formEq.marca} onChange={(e) => setFormEq({ ...formEq, marca: e.target.value })} style={ui.inputStyle} />
-          <input placeholder="Modelo" value={formEq.modelo} onChange={(e) => setFormEq({ ...formEq, modelo: e.target.value })} style={ui.inputStyle} />
-          <input placeholder="Serie" value={formEq.serie} onChange={(e) => setFormEq({ ...formEq, serie: e.target.value })} style={ui.inputStyle} />
-        </div>
-        <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 10 }} onClick={crearEquipo}>Agregar equipo</button>
+        <TopoExcelSheet
+          sheet={sheet}
+          title="Registrar equipo"
+          minWidth={560}
+          columns={[
+            { key: 'nombre', label: 'Nombre', width: '22%' },
+            { key: 'tipo', label: 'Tipo', width: '18%' },
+            { key: 'marca', label: 'Marca', width: '16%' },
+            { key: 'modelo', label: 'Modelo', width: '16%' },
+            { key: 'serie', label: 'Serie', width: '14%' },
+            { key: 'prop', label: 'Propietario', width: '14%' },
+          ]}
+          cells={[
+            <input key="n" placeholder="Nombre" value={formEq.nombre} onChange={(e) => setFormEq({ ...formEq, nombre: e.target.value })} style={sheet.cellInp} />,
+            <select key="t" value={formEq.tipo} onChange={(e) => setFormEq({ ...formEq, tipo: e.target.value })} style={sheet.cellSelect}>
+              <option value="nivel">Nivel</option>
+              <option value="estacion_total">Estacion total</option>
+              <option value="gps">GPS</option>
+              <option value="otro">Otro</option>
+            </select>,
+            <input key="m" placeholder="Marca" value={formEq.marca} onChange={(e) => setFormEq({ ...formEq, marca: e.target.value })} style={sheet.cellInp} />,
+            <input key="mo" placeholder="Modelo" value={formEq.modelo} onChange={(e) => setFormEq({ ...formEq, modelo: e.target.value })} style={sheet.cellInp} />,
+            <input key="s" placeholder="Serie" value={formEq.serie} onChange={(e) => setFormEq({ ...formEq, serie: e.target.value })} style={sheet.cellInp} />,
+            <input key="p" placeholder="Propietario" value={formEq.propietario} onChange={(e) => setFormEq({ ...formEq, propietario: e.target.value })} style={sheet.cellInp} />,
+          ]}
+        />
+        <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 4 }} onClick={crearEquipo}>Agregar equipo</button>
       </div>
       </PermisoAviso>
 
@@ -171,25 +188,44 @@ export default function EquiposForm({ contratoId, token, onAlertasChange, permis
           <div>
             <PermisoAviso permisos={permisos} accion="crear">
             <div style={{ ...ui.card, marginBottom: 16 }}>
-              <h4>Nueva verificacion</h4>
-              <input type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={{ ...ui.inputStyle, marginBottom: 8 }} />
-              {equipos.find((e) => e.id === sel)?.tipo === 'estacion_total' ? (
-                <>
-                  <TopoAngularInput label="Horizontal directa" value={formVer.horizontal_directa_gms} onChange={(_, v) => setFormVer({ ...formVer, horizontal_directa_gms: v })} />
-                  <TopoAngularInput label="Horizontal inversa" value={formVer.horizontal_inversa_gms} onChange={(_, v) => setFormVer({ ...formVer, horizontal_inversa_gms: v })} />
-                  <TopoAngularInput label="Vertical directa" value={formVer.vertical_directa_gms} onChange={(_, v) => setFormVer({ ...formVer, vertical_directa_gms: v })} />
-                  <TopoAngularInput label="Vertical inversa" value={formVer.vertical_inversa_gms} onChange={(_, v) => setFormVer({ ...formVer, vertical_inversa_gms: v })} />
-                </>
-              ) : (
-                <>
-                  <input placeholder="Distancia estacas (m)" value={formVer.distancia_estacas} onChange={(e) => setFormVer({ ...formVer, distancia_estacas: e.target.value })} style={{ ...ui.inputStyle, marginBottom: 8 }} />
-                  <input placeholder="Lectura A pos1" value={formVer.lectura_a_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos1: e.target.value })} style={ui.inputStyle} />
-                  <input placeholder="Lectura B pos1" value={formVer.lectura_b_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos1: e.target.value })} style={ui.inputStyle} />
-                  <input placeholder="Lectura A pos2" value={formVer.lectura_a_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos2: e.target.value })} style={ui.inputStyle} />
-                  <input placeholder="Lectura B pos2" value={formVer.lectura_b_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos2: e.target.value })} style={ui.inputStyle} />
-                </>
-              )}
-              <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 10 }} onClick={crearVerificacion}>Registrar verificacion</button>
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Nueva verificación"
+                minWidth={esEstacion ? 520 : 640}
+                columns={esEstacion
+                  ? [
+                    { key: 'fecha', label: 'Fecha', width: '18%' },
+                    { key: 'hd', label: 'H. directa', width: '20%' },
+                    { key: 'hi', label: 'H. inversa', width: '20%' },
+                    { key: 'vd', label: 'V. directa', width: '20%' },
+                    { key: 'vi', label: 'V. inversa', width: '22%' },
+                  ]
+                  : [
+                    { key: 'fecha', label: 'Fecha', width: '16%' },
+                    { key: 'dist', label: 'Dist. estacas', width: '16%' },
+                    { key: 'a1', label: 'Lect. A pos1', width: '17%' },
+                    { key: 'b1', label: 'Lect. B pos1', width: '17%' },
+                    { key: 'a2', label: 'Lect. A pos2', width: '17%' },
+                    { key: 'b2', label: 'Lect. B pos2', width: '17%' },
+                  ]}
+                cells={esEstacion
+                  ? [
+                    <input key="f" type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={sheet.cellInp} />,
+                    <div key="hd"><TopoAngularInput label="" value={formVer.horizontal_directa_gms} onChange={(_, v) => setFormVer({ ...formVer, horizontal_directa_gms: v })} inputStyle={sheet.cellInp} /></div>,
+                    <div key="hi"><TopoAngularInput label="" value={formVer.horizontal_inversa_gms} onChange={(_, v) => setFormVer({ ...formVer, horizontal_inversa_gms: v })} inputStyle={sheet.cellInp} /></div>,
+                    <div key="vd"><TopoAngularInput label="" value={formVer.vertical_directa_gms} onChange={(_, v) => setFormVer({ ...formVer, vertical_directa_gms: v })} inputStyle={sheet.cellInp} /></div>,
+                    <div key="vi"><TopoAngularInput label="" value={formVer.vertical_inversa_gms} onChange={(_, v) => setFormVer({ ...formVer, vertical_inversa_gms: v })} inputStyle={sheet.cellInp} /></div>,
+                  ]
+                  : [
+                    <input key="f" type="date" value={formVer.fecha} onChange={(e) => setFormVer({ ...formVer, fecha: e.target.value })} style={sheet.cellInp} />,
+                    <input key="d" value={formVer.distancia_estacas} onChange={(e) => setFormVer({ ...formVer, distancia_estacas: e.target.value })} style={sheet.cellInp} />,
+                    <input key="a1" value={formVer.lectura_a_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos1: e.target.value })} style={sheet.cellInp} />,
+                    <input key="b1" value={formVer.lectura_b_pos1} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos1: e.target.value })} style={sheet.cellInp} />,
+                    <input key="a2" value={formVer.lectura_a_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_a_pos2: e.target.value })} style={sheet.cellInp} />,
+                    <input key="b2" value={formVer.lectura_b_pos2} onChange={(e) => setFormVer({ ...formVer, lectura_b_pos2: e.target.value })} style={sheet.cellInp} />,
+                  ]}
+              />
+              <button type="button" className="cc-topo-touch-btn" style={{ ...ui.btnPrimary, marginTop: 4 }} onClick={crearVerificacion}>Registrar verificacion</button>
             </div>
             </PermisoAviso>
 

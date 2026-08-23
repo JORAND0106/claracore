@@ -3,6 +3,8 @@ import { matrizConBloquesEntrega } from '../../utils/entrega_dg_bloques'
 import EntregaVerificacionMatriz from './EntregaVerificacionMatriz'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoErrorModal from './TopoErrorModal'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import {
   PermisoAviso,
   puede,
@@ -55,6 +57,7 @@ function sugerirNombreEntrega(capaNombre) {
 
 export default function EntregaDgObraForm({ contratoId, token, permisos, registerUnsavedGuard }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api } = useTopografiaApi(contratoId, token)
 
   const [lista, setLista] = useState([])
@@ -563,54 +566,60 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       {creando && (
         <PermisoAviso permisos={permisos} accion="crear">
           <div style={{ ...ui.card, marginBottom: 16, padding: '14px 16px' }}>
-            <h3 style={{ margin: '0 0 12px', fontSize: 'var(--cc-base)', color: ui.text }}>
-              Nueva entrega DG Obra
-            </h3>
             {!ejes.length && (
               <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309' }}>
                 No hay ejes listos. Complete Configuración DG (rasante + estructura) primero.
               </p>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Nombre</span>
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Nueva entrega DG Obra"
+              minWidth={720}
+              columns={[
+                { key: 'nombre', label: 'Nombre', width: '16%' },
+                { key: 'eje', label: 'Eje', width: '14%' },
+                { key: 'capa', label: 'Capa', width: '16%' },
+                { key: 'desde', label: 'Abscisa desde', width: '12%' },
+                { key: 'hasta', label: 'Abscisa hasta', width: '12%' },
+                { key: 'operador', label: 'Operador', width: '12%' },
+                { key: 'fecha', label: 'Fecha campo', width: '10%' },
+                { key: 'tol', label: 'Tolerancia (m)', width: '10%' },
+              ]}
+              cells={[
                 <input
+                  key="n"
                   value={formNuevo.nombre}
                   onChange={(e) => {
                     nombreManualRef.current = true
                     setFormNuevo({ ...formNuevo, nombre: e.target.value })
                   }}
                   placeholder="Entrega MD-12 tramo 1"
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Eje</span>
+                  style={sheet.cellInp}
+                />,
                 <select
+                  key="e"
                   value={formNuevo.eje_id}
                   onChange={(e) => {
                     nombreManualRef.current = false
                     toleranciaManualRef.current = false
                     setFormNuevo({ ...formNuevo, eje_id: e.target.value, indice_capa: '0' })
                   }}
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
+                  style={sheet.cellSelect}
                 >
                   <option value="">—</option>
                   {ejes.map((e) => (
                     <option key={e.id} value={e.id}>{e.nombre}</option>
                   ))}
-                </select>
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Capa a verificar</span>
+                </select>,
                 <select
+                  key="c"
                   value={formNuevo.indice_capa}
                   onChange={(e) => {
                     nombreManualRef.current = false
                     toleranciaManualRef.current = false
                     setFormNuevo({ ...formNuevo, indice_capa: e.target.value })
                   }}
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
+                  style={sheet.cellSelect}
                 >
                   {ejeDetalleCapas.map((c, i) => (
                     <option key={i} value={String(i)}>
@@ -620,56 +629,46 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                   {ejeDetalleCapas.length > 0 && (
                     <option value={String(ejeDetalleCapas.length)}>Terreno natural</option>
                   )}
-                </select>
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Abscisa desde (PK)</span>
+                </select>,
                 <input
+                  key="d"
                   value={formNuevo.abscisa_desde}
                   onChange={(e) => setFormNuevo({ ...formNuevo, abscisa_desde: e.target.value })}
                   placeholder="0+000"
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Abscisa hasta (PK)</span>
+                  style={sheet.cellInp}
+                />,
                 <input
+                  key="h"
                   value={formNuevo.abscisa_hasta}
                   onChange={(e) => setFormNuevo({ ...formNuevo, abscisa_hasta: e.target.value })}
                   placeholder="1+200"
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Operador</span>
+                  style={sheet.cellInp}
+                />,
                 <input
+                  key="o"
                   list="topo-operadores-entrega"
                   value={formNuevo.operador}
                   onChange={(e) => setFormNuevo({ ...formNuevo, operador: e.target.value })}
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Fecha campo</span>
+                  style={sheet.cellInp}
+                />,
                 <input
+                  key="f"
                   type="date"
                   value={formNuevo.fecha_campo}
                   onChange={(e) => setFormNuevo({ ...formNuevo, fecha_campo: e.target.value })}
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label>
-                <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Tolerancia (m)</span>
+                  style={sheet.cellInp}
+                />,
                 <input
+                  key="t"
                   value={formNuevo.tolerancia_m}
                   onChange={(e) => {
                     toleranciaManualRef.current = true
                     setFormNuevo({ ...formNuevo, tolerancia_m: e.target.value })
                   }}
-                  style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-                />
-              </label>
-            </div>
+                  style={sheet.cellInp}
+                />,
+              ]}
+            />
 
             {(previewRango || (creando && formNuevo.eje_id && ejeDetalleCapas.length > 0)) && (
               <div style={{

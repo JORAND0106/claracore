@@ -11,6 +11,8 @@ import {
   parseApiError,
   puede,
 } from './topografiaShared'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import { btnSuccessStyle } from '../../theme/adminPanelTheme'
 import { decimalToGms, fmtRatio, validarGms } from '../../utils/topografia_angular'
 
@@ -21,9 +23,6 @@ function parseMetrosInput(v) {
   const n = Number(s)
   return Number.isFinite(n) ? n : null
 }
-
-const th = { textAlign: 'left', padding: 8, borderBottom: '2px solid #cbd5e1', fontSize: 'var(--cc-xs)' }
-const td = { padding: 8, fontSize: 'var(--cc-xs)', borderBottom: '1px solid #e2e8f0' }
 
 function CampoLabel({ texto, ayuda }) {
   return (
@@ -68,6 +67,62 @@ function CampoLabel({ texto, ayuda }) {
 
 const setupField = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }
 
+const COLS_GENERAL = [
+  { key: 'nombre', label: 'Nombre', ayuda: 'Nombre del circuito en la libreta de cálculo.', width: '14%' },
+  {
+    key: 'sentido',
+    label: 'Sentido',
+    ayuda: 'Sentido de recorrido de la poligonal. Horario aplica ángulos exteriores (n+2)×180°; antihorario aplica interiores (n−2)×180°.',
+    width: '14%',
+  },
+  {
+    key: 'plano',
+    label: 'Plano',
+    ayuda: 'Tolerancia de cierre lineal en planta (1:N). Res. 643 Tabla 2: menor a 1 000 m² → 1:20 000; hasta 1 ha → 1:15 000; hasta 10 ha → 1:10 000; ≥10 ha → 1:5 000.',
+    width: '10%',
+  },
+  {
+    key: 'angular',
+    label: 'Angular',
+    ayuda: 'Precisión angular del equipo (segundos). Tolerancia angular = este valor × √vértices (Res. 643 §9.2.2).',
+    width: '10%',
+  },
+  {
+    key: 'deltas',
+    label: 'Deltas',
+    ayuda: 'Longitud máxima recomendada entre deltas consecutivos (m). Referencia técnica 250–300 m; configurable.',
+    width: '10%',
+  },
+  {
+    key: 'cota',
+    label: 'Cota',
+    ayuda: 'Tolerancia de cierre en cota (mm/km de recorrido).',
+    width: '10%',
+  },
+  { key: 'operador', label: 'Operador', ayuda: 'Profesional responsable del levantamiento en campo.', width: '16%' },
+  { key: 'fecha', label: 'Fecha', ayuda: 'Fecha en que se realizó el trabajo de campo.', width: '12%' },
+]
+
+const COLS_EQUIPO = [
+  { key: 'marca', label: 'Marca', ayuda: 'Fabricante del instrumento (estación total, GPS, etc.).' },
+  { key: 'modelo', label: 'Modelo', ayuda: 'Referencia o modelo del equipo usado en campo.' },
+  { key: 'serie', label: 'Serie', ayuda: 'Número de serie del instrumento según placa o factura.' },
+]
+
+const COLS_AMARRE_LIB = [
+  { key: 'estacion', label: 'Estación', ayuda: 'Seleccione un BM verificado como punto de estación (amarre inicial), o ingrese coordenadas manualmente abajo.' },
+  { key: 'visado', label: 'Visado', ayuda: 'Seleccione un BM verificado como punto de visado (referencia atrás), o ingrese coordenadas manualmente abajo.' },
+  { key: 'llegada', label: 'Llegada', ayuda: 'Seleccione un BM verificado como punto de llegada (objetivo del cierre), o ingrese coordenadas manualmente abajo.' },
+]
+
+const COLS_AMARRE_COORDS = [
+  { key: 'rol', label: 'Rol', width: '12%' },
+  { key: 'punto', label: 'Punto', width: '22%' },
+  { key: 'norte', label: 'Norte', width: '22%' },
+  { key: 'este', label: 'Este', width: '22%' },
+  { key: 'cota', label: 'Cota', width: '22%' },
+]
+
 const emptyForm = {
   nombre: '',
   tipo: 'cerrada',
@@ -111,6 +166,7 @@ export default function PoligonalModal({
   const ui = useTopoTheme()
   const { isCompact } = useTopoViewport()
   const theme = themeProp || ui.t
+  const sheet = useMemo(() => topoSheetStyles(theme), [theme])
   const [step, setStep] = useState('chooseTipo')
   const [poligonalId, setPoligonalId] = useState(null)
   const [detalle, setDetalle] = useState(null)
@@ -855,52 +911,66 @@ export default function PoligonalModal({
                   {form.tipo === 'abierta' ? 'Abierta' : 'Cerrada'}
                 </span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(128px, 1fr))', gap: 10, marginBottom: 16, alignItems: 'end' }}>
-                <label style={setupField}>
-                  <CampoLabel texto="Nombre" ayuda="Nombre del circuito en la libreta de cálculo." />
-                  <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.inputStyle} placeholder="Poligonal 1" />
-                </label>
-                <label style={setupField}>
-                  <CampoLabel
-                    texto="Sentido"
-                    ayuda="Sentido de recorrido de la poligonal. Horario aplica ángulos exteriores (n+2)×180°; antihorario aplica interiores (n−2)×180°."
-                  />
-                  <select value={form.sentido} onChange={(e) => setForm({ ...form, sentido: e.target.value })} style={ui.inputStyle}>
+
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Datos generales"
+                columns={COLS_GENERAL}
+                minWidth={720}
+                cells={[
+                  <input
+                    key="nombre"
+                    value={form.nombre}
+                    onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="Poligonal 1"
+                  />,
+                  <select
+                    key="sentido"
+                    value={form.sentido}
+                    onChange={(e) => setForm({ ...form, sentido: e.target.value })}
+                    style={sheet.cellSelect}
+                  >
                     <option value="antihorario">Antihorario (interiores)</option>
                     <option value="horario">Horario (exteriores)</option>
-                  </select>
-                </label>
-                <label style={setupField}>
-                  <CampoLabel
-                    texto="Plano"
-                    ayuda="Tolerancia de cierre lineal en planta (1:N). Res. 643 Tabla 2: menor a 1 000 m² → 1:20 000; hasta 1 ha → 1:15 000; hasta 10 ha → 1:10 000; ≥10 ha → 1:5 000."
-                  />
-                  <input type="number" value={form.tolerancia_relativa} onChange={(e) => setForm({ ...form, tolerancia_relativa: e.target.value })} style={ui.inputStyle} />
-                </label>
-                <label style={setupField}>
-                  <CampoLabel
-                    texto="Angular"
-                    ayuda={'Precisión angular del equipo (segundos). Tolerancia angular = este valor × √vértices (Res. 643 §9.2.2).'}
-                  />
-                  <input type="number" step="0.1" value={form.precision_angular_seg} onChange={(e) => setForm({ ...form, precision_angular_seg: e.target.value })} style={ui.inputStyle} placeholder="10" />
-                </label>
-                <label style={setupField}>
-                  <CampoLabel
-                    texto="Deltas"
-                    ayuda="Longitud máxima recomendada entre deltas consecutivos (m). Referencia técnica 250–300 m; configurable."
-                  />
-                  <input type="number" value={form.longitud_max_delta_m} onChange={(e) => setForm({ ...form, longitud_max_delta_m: e.target.value })} style={ui.inputStyle} placeholder="300" />
-                </label>
-                <label style={setupField}>
-                  <CampoLabel
-                    texto="Cota"
-                    ayuda="Tolerancia de cierre en cota (mm/km de recorrido)."
-                  />
-                  <input type="number" value={form.tolerancia_cota_mm_km} onChange={(e) => setForm({ ...form, tolerancia_cota_mm_km: e.target.value })} style={ui.inputStyle} />
-                </label>
-                <label style={setupField}>
-                  <CampoLabel texto="Operador" ayuda="Profesional responsable del levantamiento en campo." />
-                  <select value={form.operador} onChange={(e) => setForm({ ...form, operador: e.target.value })} style={ui.inputStyle}>
+                  </select>,
+                  <input
+                    key="plano"
+                    type="number"
+                    value={form.tolerancia_relativa}
+                    onChange={(e) => setForm({ ...form, tolerancia_relativa: e.target.value })}
+                    style={sheet.cellInp}
+                  />,
+                  <input
+                    key="angular"
+                    type="number"
+                    step="0.1"
+                    value={form.precision_angular_seg}
+                    onChange={(e) => setForm({ ...form, precision_angular_seg: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="10"
+                  />,
+                  <input
+                    key="deltas"
+                    type="number"
+                    value={form.longitud_max_delta_m}
+                    onChange={(e) => setForm({ ...form, longitud_max_delta_m: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="300"
+                  />,
+                  <input
+                    key="cota"
+                    type="number"
+                    value={form.tolerancia_cota_mm_km}
+                    onChange={(e) => setForm({ ...form, tolerancia_cota_mm_km: e.target.value })}
+                    style={sheet.cellInp}
+                  />,
+                  <select
+                    key="operador"
+                    value={form.operador}
+                    onChange={(e) => setForm({ ...form, operador: e.target.value })}
+                    style={sheet.cellSelect}
+                  >
                     <option value="">— Seleccione —</option>
                     {operadores.map((u) => (
                       <option key={u.id} value={u.nombre}>{u.nombre}{u.cargo ? ` (${u.cargo})` : ''}</option>
@@ -908,221 +978,228 @@ export default function PoligonalModal({
                     {form.operador && !operadores.some((u) => u.nombre === form.operador) && (
                       <option value={form.operador}>{form.operador}</option>
                     )}
-                  </select>
-                </label>
-                <label style={setupField}>
-                  <CampoLabel texto="Fecha" ayuda="Fecha en que se realizó el trabajo de campo." />
-                  <input type="date" value={form.fecha_campo} onChange={(e) => setForm({ ...form, fecha_campo: e.target.value })} style={ui.inputStyle} />
-                </label>
-              </div>
+                  </select>,
+                  <input
+                    key="fecha"
+                    type="date"
+                    value={form.fecha_campo}
+                    onChange={(e) => setForm({ ...form, fecha_campo: e.target.value })}
+                    style={sheet.cellInp}
+                  />,
+                ]}
+              />
 
-              <div style={{ border: '1px solid #cbd5e1', borderRadius: 10, padding: 14, marginBottom: 16, background: '#fff' }}>
-                <h4 style={{ margin: '0 0 8px' }}>Equipo de medición</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, alignItems: 'end' }}>
-                  <label style={setupField}>
-                    <CampoLabel texto="Marca" ayuda="Fabricante del instrumento (estación total, GPS, etc.)." />
-                    <input value={form.equipo_marca} onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })} style={ui.inputStyle} placeholder="Ej. Leica" />
-                  </label>
-                  <label style={setupField}>
-                    <CampoLabel texto="Modelo" ayuda="Referencia o modelo del equipo usado en campo." />
-                    <input value={form.equipo_referencia} onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })} style={ui.inputStyle} placeholder="Ej. TS16" />
-                  </label>
-                  <label style={setupField}>
-                    <CampoLabel texto="Serie" ayuda="Número de serie del instrumento según placa o factura." />
-                    <input value={form.equipo_serial} onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })} style={ui.inputStyle} placeholder="Ej. 123456" />
-                  </label>
-                </div>
-              </div>
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Equipo de medición"
+                columns={COLS_EQUIPO}
+                minWidth={360}
+                cells={[
+                  <input
+                    key="marca"
+                    value={form.equipo_marca}
+                    onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="Ej. Leica"
+                  />,
+                  <input
+                    key="modelo"
+                    value={form.equipo_referencia}
+                    onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="Ej. TS16"
+                  />,
+                  <input
+                    key="serie"
+                    value={form.equipo_serial}
+                    onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })}
+                    style={sheet.cellInp}
+                    placeholder="Ej. 123456"
+                  />,
+                ]}
+              />
 
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, marginBottom: 16, background: '#f8fafc' }}>
-                <h4 style={{ margin: '0 0 8px' }}>Puntos de amarre (estacion y visado)</h4>
-                <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: '#64748b' }}>
-                  Defina el punto de estacion (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al terminar con cierre admisible, la poligonal queda lista para validación; la biblioteca se publica cuando interventoría aprueba.
+              <div style={{ marginBottom: 16 }}>
+                <div style={sheet.sectionTitle}>Puntos de amarre (estación y visado)</div>
+                <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: sheet.textMuted }}>
+                  Defina el punto de estación (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al terminar con cierre admisible, la poligonal queda lista para validación; la biblioteca se publica cuando interventoría aprueba.
                 </p>
 
                 {puntosVerificados.length > 0 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10, marginBottom: 12, alignItems: 'end' }}>
-                    <label style={setupField}>
-                      <CampoLabel texto="Estación" ayuda="Seleccione un BM verificado como punto de estación (amarre inicial), o ingrese coordenadas manualmente abajo." />
+                  <TopoExcelSheet
+                    sheet={sheet}
+                    columns={form.tipo === 'abierta' ? COLS_AMARRE_LIB : COLS_AMARRE_LIB.slice(0, 2)}
+                    minWidth={form.tipo === 'abierta' ? 480 : 360}
+                    cells={[
                       <select
+                        key="est-lib"
                         value={form.amarreModo === 'biblioteca' ? form.punto_inicial_id : ''}
                         onChange={(e) => seleccionarBmBiblioteca(e.target.value)}
-                        style={ui.inputStyle}
+                        style={sheet.cellSelect}
                       >
                         <option value="">— Manual —</option>
                         {puntosVerificados.map((p) => (
                           <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
                         ))}
-                      </select>
-                    </label>
-                    <label style={setupField}>
-                      <CampoLabel texto="Visado" ayuda="Seleccione un BM verificado como punto de visado (referencia atrás), o ingrese coordenadas manualmente abajo." />
+                      </select>,
                       <select
+                        key="vis-lib"
                         value={form.visadoModo === 'biblioteca' ? form.punto_visado_id : ''}
                         onChange={(e) => seleccionarVisadoBiblioteca(e.target.value)}
-                        style={ui.inputStyle}
+                        style={sheet.cellSelect}
                       >
                         <option value="">— Manual —</option>
                         {puntosVerificados.map((p) => (
                           <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
                         ))}
-                      </select>
-                    </label>
-                    {form.tipo === 'abierta' && (
-                      <label style={setupField}>
-                        <CampoLabel texto="Llegada" ayuda="Seleccione un BM verificado como punto de llegada (objetivo del cierre), o ingrese coordenadas manualmente abajo." />
-                        <select
-                          value={form.finalModo === 'biblioteca' ? form.punto_final_id : ''}
-                          onChange={(e) => seleccionarLlegadaBiblioteca(e.target.value)}
-                          style={ui.inputStyle}
-                        >
-                          <option value="">— Manual —</option>
-                          {puntosVerificados.map((p) => (
-                            <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </div>
+                      </select>,
+                      ...(form.tipo === 'abierta'
+                        ? [
+                          <select
+                            key="lleg-lib"
+                            value={form.finalModo === 'biblioteca' ? form.punto_final_id : ''}
+                            onChange={(e) => seleccionarLlegadaBiblioteca(e.target.value)}
+                            style={sheet.cellSelect}
+                          >
+                            <option value="">— Manual —</option>
+                            {puntosVerificados.map((p) => (
+                              <option key={p.id} value={p.id}>{p.nombre} (N:{p.norte} E:{p.este})</option>
+                            ))}
+                          </select>,
+                        ]
+                        : []),
+                    ]}
+                  />
                 )}
 
-                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                  <table style={{ borderCollapse: 'collapse', minWidth: 560, width: '100%' }}>
-                    <thead>
-                      <tr style={{ background: '#f1f5f9' }}>
-                        <th style={th}>Rol</th>
-                        <th style={th}>Punto</th>
-                        <th style={th}>Norte</th>
-                        <th style={th}>Este</th>
-                        <th style={th}>Cota</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td style={{ ...td, fontWeight: 600 }}>Estacion</td>
-                        <td style={td}>
-                          <input
-                            value={form.amarre.nombre}
-                            disabled={form.amarreModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, nombre: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="EST-1"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.amarre.norte}
-                            disabled={form.amarreModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, norte: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="0.000"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.amarre.este}
-                            disabled={form.amarreModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, este: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="0.000"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.amarre.cota}
-                            disabled={form.amarreModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, cota: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="Cota"
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style={{ ...td, fontWeight: 600 }}>Visado</td>
-                        <td style={td}>
-                          <input
-                            value={form.visado.nombre}
-                            disabled={form.visadoModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, nombre: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="VIS-1"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.visado.norte}
-                            disabled={form.visadoModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, norte: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="0.000"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.visado.este}
-                            disabled={form.visadoModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, este: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="0.000"
-                          />
-                        </td>
-                        <td style={td}>
-                          <input
-                            value={form.visado.cota}
-                            disabled={form.visadoModo === 'biblioteca'}
-                            onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, cota: e.target.value } })}
-                            style={ui.inputStyle}
-                            placeholder="Opcional"
-                          />
-                        </td>
-                      </tr>
-                      {form.tipo === 'abierta' && (
-                        <tr>
-                          <td style={{ ...td, fontWeight: 600, color: ui.accent }}>Llegada</td>
-                          <td style={td}>
-                            <input
-                              value={form.llegada.nombre}
-                              disabled={form.finalModo === 'biblioteca'}
-                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, nombre: e.target.value } })}
-                              style={ui.inputStyle}
-                              placeholder="FIN"
-                            />
-                          </td>
-                          <td style={td}>
-                            <input
-                              value={form.llegada.norte}
-                              disabled={form.finalModo === 'biblioteca'}
-                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, norte: e.target.value } })}
-                              style={ui.inputStyle}
-                              placeholder="0.000"
-                            />
-                          </td>
-                          <td style={td}>
-                            <input
-                              value={form.llegada.este}
-                              disabled={form.finalModo === 'biblioteca'}
-                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, este: e.target.value } })}
-                              style={ui.inputStyle}
-                              placeholder="0.000"
-                            />
-                          </td>
-                          <td style={td}>
-                            <input
-                              value={form.llegada.cota}
-                              disabled={form.finalModo === 'biblioteca'}
-                              onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, cota: e.target.value } })}
-                              style={ui.inputStyle}
-                              placeholder="Opcional"
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <TopoExcelSheet
+                  sheet={sheet}
+                  columns={COLS_AMARRE_COORDS}
+                  minWidth={560}
+                >
+                  <tr>
+                    <td style={{ ...sheet.td, fontWeight: 600 }}>Estación</td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.amarre.nombre}
+                        disabled={form.amarreModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, nombre: e.target.value } })}
+                        style={form.amarreModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="EST-1"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.amarre.norte}
+                        disabled={form.amarreModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, norte: e.target.value } })}
+                        style={form.amarreModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="0.000"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.amarre.este}
+                        disabled={form.amarreModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, este: e.target.value } })}
+                        style={form.amarreModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="0.000"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.amarre.cota}
+                        disabled={form.amarreModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, amarreModo: 'inline', punto_inicial_id: '', amarre: { ...form.amarre, cota: e.target.value } })}
+                        style={form.amarreModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="Cota"
+                      />
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...sheet.td, fontWeight: 600 }}>Visado</td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.visado.nombre}
+                        disabled={form.visadoModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, nombre: e.target.value } })}
+                        style={form.visadoModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="VIS-1"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.visado.norte}
+                        disabled={form.visadoModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, norte: e.target.value } })}
+                        style={form.visadoModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="0.000"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.visado.este}
+                        disabled={form.visadoModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, este: e.target.value } })}
+                        style={form.visadoModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="0.000"
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={form.visado.cota}
+                        disabled={form.visadoModo === 'biblioteca'}
+                        onChange={(e) => setForm({ ...form, visadoModo: 'inline', punto_visado_id: '', visado: { ...form.visado, cota: e.target.value } })}
+                        style={form.visadoModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                        placeholder="Opcional"
+                      />
+                    </td>
+                  </tr>
+                  {form.tipo === 'abierta' && (
+                    <tr>
+                      <td style={{ ...sheet.td, fontWeight: 600, color: ui.accent }}>Llegada</td>
+                      <td style={sheet.td}>
+                        <input
+                          value={form.llegada.nombre}
+                          disabled={form.finalModo === 'biblioteca'}
+                          onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, nombre: e.target.value } })}
+                          style={form.finalModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                          placeholder="FIN"
+                        />
+                      </td>
+                      <td style={sheet.td}>
+                        <input
+                          value={form.llegada.norte}
+                          disabled={form.finalModo === 'biblioteca'}
+                          onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, norte: e.target.value } })}
+                          style={form.finalModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                          placeholder="0.000"
+                        />
+                      </td>
+                      <td style={sheet.td}>
+                        <input
+                          value={form.llegada.este}
+                          disabled={form.finalModo === 'biblioteca'}
+                          onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, este: e.target.value } })}
+                          style={form.finalModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                          placeholder="0.000"
+                        />
+                      </td>
+                      <td style={sheet.td}>
+                        <input
+                          value={form.llegada.cota}
+                          disabled={form.finalModo === 'biblioteca'}
+                          onChange={(e) => setForm({ ...form, finalModo: 'inline', punto_final_id: '', llegada: { ...form.llegada, cota: e.target.value } })}
+                          style={form.finalModo === 'biblioteca' ? sheet.cellRo : sheet.cellInp}
+                          placeholder="Opcional"
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </TopoExcelSheet>
 
                 {previewBase && (
-                  <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+                  <div style={{ marginTop: 4, marginBottom: 8, padding: '10px 12px', borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
                     <span style={{ fontSize: 'var(--cc-sm)', color: '#1e3a8a', fontWeight: 600 }}>
                       Base {form.amarre.nombre || 'EST'} → {form.visado.nombre || 'VIS'}
                     </span>
@@ -1132,7 +1209,7 @@ export default function PoligonalModal({
                   </div>
                 )}
 
-                <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: '#64748b' }}>
+                <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: sheet.textMuted }}>
                   Formula altimetrica: ΔZ = HI + D·tan(angulo vertical) − HT
                 </p>
 
