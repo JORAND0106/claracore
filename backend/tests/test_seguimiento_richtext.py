@@ -59,7 +59,7 @@ def test_sanitize_preserves_table_and_colwidth():
     raw = (
         '<table><tr>'
         '<th colspan="1" colwidth="120">A</th>'
-        '<td colwidth="80">B</td>'
+        '<td colwidth="80">B con texto más largo que A</td>'
         '</tr></table>'
         '<script>x()</script>'
     )
@@ -71,9 +71,11 @@ def test_sanitize_preserves_table_and_colwidth():
     pdf = render_tema_html_for_pdf(raw)
     assert "<table" in pdf
     assert "A" in pdf and "B" in pdf
-    # PDF usa % (optimizado), no px absolutos del editor
-    assert "width:100%" in pdf
-    assert "%" in pdf
+    # PDF usa atributo HTML width="N%" (xhtml2pdf), no px del editor
+    assert 'width="100%"' in pdf
+    assert 'width="' in pdf and "%" in pdf
+    assert "width:120px" not in pdf
+    assert "width:80px" not in pdf
 
 
 def test_html_to_plain_text_tables():

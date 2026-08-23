@@ -1,13 +1,19 @@
 """
-Cálculo de anchos de columna para tablas TipTap en PDF.
-Combina proporción del editor (colwidth) con longitud de contenido.
+Cálculo de anchos de columna para tablas TipTap en PDF (xhtml2pdf).
+
+xhtml2pdf NO respeta de forma fiable `style="width:N%"` en td/col; en este
+proyecto el patrón que sí funciona es el atributo HTML `width="N%"`
+(ver bitacora_pdf._mini_table).
+
+El contenido manda; el colwidth del editor solo suaviza cuando las longitudes
+de texto son parecidas (proporción relativa).
 """
 from __future__ import annotations
 
 import math
 import re
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 def _width_from_attrs(attrs) -> Optional[float]:
@@ -27,23 +33,36 @@ def _width_from_attrs(attrs) -> Optional[float]:
         val = float(m.group(1))
         unit = (m.group(2) or "px").lower()
         if unit == "%":
-            # Tratar % del editor como peso relativo (escala 0–100 → px-ish)
             return max(40.0, val * 4.0)
         return val
+    # Atributo HTML width="120" o width="20%"
+    if "width" in raw:
+        wraw = raw["width"].strip()
+        if re.fullmatch(r"\d{1,4}%", wraw):
+            return max(40.0, float(wraw[:-1]) * 4.0)
+        if re.fullmatch(r"\d{1,4}(\.\d+)?", wraw):
+            return float(wraw)
     return None
+
+
+def _editor_widths_nearly_equal(editor_widths: List[float], *, ratio: float = 1.35) -> bool:
+    vals = [w for w in editor_widths if w and w > 0]
+    if len(vals) < 2:
+        return True
+    return (max(vals) / max(min(vals), 1.0)) <= ratio
 
 
 def blend_column_weights(
     editor_widths: List[float],
     content_chars: List[float],
     *,
-    content_weight: float = 0.65,
-    editor_weight: float = 0.35,
-    min_pct: float = 6.0,
+    content_weight: float = 0.88,
+    editor_weight: float = 0.12,
+    min_pct: float = 7.0,
 ) -> List[float]:
     """
-    Devuelve porcentajes (suma ≈ 100) a partir de anchos del editor y
-    longitud de texto por columna.
+    Porcentajes (suma ≈ 100). Contenido domina; editor solo como suave
+    referencia de proporción cuando aporta señal (anchos no casi iguales).
     """
     n = max(len(editor_widths), len(content_chars), 1)
     ew = list(editor_widths) + [0.0] * max(0, n - len(editor_widths))
@@ -51,35 +70,53 @@ def blend_column_weights(
     ew = ew[:n]
     cc = cc[:n]
 
-    if sum(ew) <= 0:
-        ew = [max(1.0, c) for c in cc]
-    else:
-        for i in range(n):
-            if ew[i] <= 0:
-                ew[i] = max(40.0, cc[i] * 4.0)
-
-    # sqrt suaviza columnas con un solo texto muy largo
-    content_score = [max(1.0, math.sqrt(max(1.0, c))) for c in cc]
+    # Score de contenido: log1p da más peso a columnas largas sin extremos locos.
+    content_score = [max(1.0, math.log1p(max(0.0, c))) for c in cc]
 
     def _norm(arr: List[float]) -> List[float]:
         s = sum(arr) or 1.0
         return [x / s for x in arr]
 
-    e_n = _norm(ew)
     c_n = _norm(content_score)
-    cw = max(0.0, min(1.0, content_weight))
-    ewgt = max(0.0, min(1.0, editor_weight))
-    if cw + ewgt <= 0:
-        cw, ewgt = 0.65, 0.35
-    scale = cw + ewgt
-    cw, ewgt = cw / scale, ewgt / scale
-    blended = [cw * c_n[i] + ewgt * e_n[i] for i in range(n)]
+
+    # Si el editor no tipifica columnas (vacío o casi iguales), 100% contenido.
+    if sum(ew) <= 0 or _editor_widths_nearly_equal(ew):
+        blended = c_n
+    else:
+        for i in range(n):
+            if ew[i] <= 0:
+                ew[i] = max(40.0, cc[i] * 4.0)
+        e_n = _norm(ew)
+        cw = max(0.0, min(1.0, content_weight))
+        ewgt = max(0.0, min(1.0, editor_weight))
+        if cw + ewgt <= 0:
+            cw, ewgt = 0.88, 0.12
+        scale = cw + ewgt
+        cw, ewgt = cw / scale, ewgt / scale
+        blended = [cw * c_n[i] + ewgt * e_n[i] for i in range(n)]
+
     blended = [max(min_pct / 100.0, b) for b in blended]
     blended = _norm(blended)
     pcts = [round(b * 100.0, 1) for b in blended]
     if pcts:
         pcts[-1] = round(100.0 - sum(pcts[:-1]), 1)
+        # Evitar 0 o negativos por redondeo
+        if pcts[-1] < min_pct:
+            deficit = min_pct - pcts[-1]
+            pcts[-1] = min_pct
+            # Quitar del más ancho
+            j = max(range(len(pcts) - 1), key=lambda i: pcts[i])
+            pcts[j] = round(pcts[j] - deficit, 1)
     return pcts
+
+
+def format_width_pct_attr(pct: float) -> str:
+    """Valor para atributo HTML width= que xhtml2pdf sí aplica."""
+    v = max(1.0, min(100.0, float(pct)))
+    # Entero si es .0 — mismo estilo que _mini_table ("8%", "20%")
+    if abs(v - round(v)) < 0.05:
+        return f"{int(round(v))}%"
+    return f"{v:.1f}%"
 
 
 class _TablePlanCollector(HTMLParser):
@@ -134,7 +171,6 @@ class _TablePlanCollector(HTMLParser):
         if tag in ("td", "th") and self._cell is not None and self._row is not None:
             cell = self._cell
             self._cell = None
-            # Expandir colspan: primer slot guarda width/text; resto vacíos
             self._row.append(cell)
             for _ in range(cell["colspan"] - 1):
                 self._row.append({"width": None, "text": "", "colspan": 1})
@@ -169,9 +205,8 @@ class _TablePlanCollector(HTMLParser):
                 w = cell.get("width")
                 if w:
                     editor[i] = max(editor[i], float(w))
-                # Solo contar texto en la celda "principal" del colspan
-                if cell.get("colspan", 1) >= 1:
-                    content[i] = max(content[i], float(len(str(cell.get("text") or "").strip()) or 1))
+                txt = str(cell.get("text") or "").strip()
+                content[i] = max(content[i], float(len(txt) or 1))
         return blend_column_weights(editor, content)
 
 
