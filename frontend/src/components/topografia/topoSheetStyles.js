@@ -1,9 +1,17 @@
 /**
  * Estilos de grilla tipo Excel para formularios de captura de Topografía.
  * Mismo lenguaje visual que Bitácora / Almacén / SicoeObra / Actas.
+ *
+ * Los divisores de celda usan un gris más visible que el borde genérico del tema
+ * (#e2e8f0), para poder distinguir columnas/filas sin saturar la tabla.
  */
+/** Borde de celda tipo Excel (slate-400): contraste medio, legible en claro/oscuro tenue. */
+export const TOPO_SHEET_CELL_BORDER = '#94a3b8'
+
 export function topoSheetStyles(t) {
-  const border = t?.border || '#e2e8f0'
+  const themeBorder = t?.border || '#e2e8f0'
+  /** Divisores internos: prioriza sheetGridBorder del tema; si no, el contraste Excel. */
+  const border = t?.sheetGridBorder || TOPO_SHEET_CELL_BORDER
   const text = t?.text || '#0f172a'
   const textMuted = t?.textMuted || '#64748b'
   const bgCard = t?.bgCard || '#ffffff'
@@ -11,7 +19,10 @@ export function topoSheetStyles(t) {
   const headerBg = t?.headerBg || inputBg
 
   return {
+    /** Color de divisores de grilla (th/td/wrap). */
     border,
+    /** Borde suave del tema (paneles, cards); no usar en celdas de hoja. */
+    themeBorder,
     text,
     textMuted,
     bgCard,

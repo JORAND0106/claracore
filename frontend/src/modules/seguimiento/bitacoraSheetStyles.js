@@ -1,8 +1,11 @@
 /**
- * Estilos de grilla tipo Excel para Bitácora (mismo lenguaje visual que Almacén/SicoeObra).
+ * Estilos de grilla tipo Excel para Bitácora (mismo lenguaje visual que Almacén/SicoeObra/Topografía).
+ * Divisores de celda con contraste medio (#94a3b8) para distinguir columnas/filas.
  */
+const SHEET_CELL_BORDER = '#94a3b8'
+
 export function bitacoraSheetStyles(t) {
-  const border = t?.border || '#e2e8f0'
+  const border = t?.sheetGridBorder || SHEET_CELL_BORDER
   const text = t?.text || '#0f172a'
   const textMuted = t?.textMuted || '#64748b'
   const bgCard = t?.bgCard || '#ffffff'
