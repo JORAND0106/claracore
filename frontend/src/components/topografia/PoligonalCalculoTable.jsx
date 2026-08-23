@@ -59,11 +59,24 @@ export default function PoligonalCalculoTable({
   modoAjuste = false,
   onEliminar = null,
   onEditar = null,
+  /** Armadas del detalle: permiten mostrar/editar HI (altura_instrumento) en la cartera. */
+  armadas = null,
+  onUpdateHI = null,
+  canEditHI = false,
 }) {
   const ui = useTopoTheme()
   const acciones = onEditar || onEliminar
   const limite = cierre?.longitud_max_delta_m
   const ajustada = modoAjuste || !!poligonal?.ajustada_at
+
+  const hiPorArmada = useMemo(() => {
+    const map = new Map()
+    for (const arm of armadas || []) {
+      if (arm?.id) map.set(arm.id, arm)
+      if (arm?.orden != null) map.set(`orden:${arm.orden}`, arm)
+    }
+    return map
+  }, [armadas])
 
   const hayExcesos = useMemo(
     () => (cierre?.lados_excedidos?.length ?? 0) > 0,
@@ -97,7 +110,7 @@ export default function PoligonalCalculoTable({
         </p>
       )}
       <TopoTableScroll>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: ajustada ? 1400 : 980 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: ajustada ? 1480 : 1060 }}>
           <thead>
             <tr>
               <th style={ui.th}>#</th>
@@ -108,6 +121,7 @@ export default function PoligonalCalculoTable({
               {ajustada && <th style={ui.th}>Ang. corr.</th>}
               <th style={ui.th}>Ang. vert.</th>
               <th style={ui.th}>Dist. (m)</th>
+              <th style={ui.th} title="Altura del instrumento (metros) de la armada">HI (m)</th>
               <th style={ui.th}>HT (m)</th>
               <th style={ui.th}>Azimut</th>
               {ajustada && (
@@ -129,6 +143,12 @@ export default function PoligonalCalculoTable({
             {estaciones.map((e) => {
               const ladoExcedido = advertenciaDistancia(e, cierre)
               const enEdicion = editandoId && e.id === editandoId
+              const arm =
+                (e.armada_id && hiPorArmada.get(e.armada_id)) ||
+                (e.armada_orden != null ? hiPorArmada.get(`orden:${e.armada_orden}`) : null) ||
+                null
+              const hiVal = arm?.altura_instrumento
+              const hiEditable = Boolean(canEditHI && onUpdateHI && arm?.id)
               return (
                 <tr
                   key={e.id || e.orden}
@@ -153,6 +173,37 @@ export default function PoligonalCalculoTable({
                   <td style={{ ...ui.td, color: ladoExcedido ? ui.warn : undefined, fontWeight: ladoExcedido ? 700 : undefined }}>
                     {fmtNum(e.distancia, 3)}
                     {ladoExcedido && <AdvertenciaLado lado={ladoExcedido} limite={limite} />}
+                  </td>
+                  <td style={{ ...ui.td, padding: hiEditable ? 2 : ui.td.padding }}>
+                    {hiEditable ? (
+                      <input
+                        key={`hi-${arm.id}-${hiVal ?? 'x'}`}
+                        type="number"
+                        step="0.001"
+                        defaultValue={hiVal ?? ''}
+                        onBlur={(ev) => {
+                          if (String(ev.target.value) !== String(hiVal ?? '')) {
+                            onUpdateHI(arm.id, ev.target.value)
+                          }
+                        }}
+                        placeholder="1.500"
+                        title="Altura del instrumento de esta armada (m). Se aplica a todos los puntos de la armada."
+                        aria-label={`HI armada ${arm.orden ?? ''}`}
+                        style={{
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          border: hiVal == null || hiVal === '' ? '1px solid #f59e0b' : `1px solid ${ui.border || '#e2e8f0'}`,
+                          borderRadius: 4,
+                          padding: '3px 4px',
+                          fontSize: 'var(--cc-xs)',
+                          background: hiVal == null || hiVal === '' ? '#fffbeb' : '#fff',
+                          color: ui.text,
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    ) : (
+                      hiVal != null && hiVal !== '' ? fmtNum(hiVal, 3) : '—'
+                    )}
                   </td>
                   <td style={ui.td}>{e.altura_objetivo != null ? fmtNum(e.altura_objetivo, 3) : '—'}</td>
                   <td style={{ ...ui.td, color: ui.accent }}>{e.azimut_texto ?? '—'}</td>
