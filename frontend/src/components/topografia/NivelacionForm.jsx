@@ -717,36 +717,41 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     bmInicialNombre ? `BM ini. ${bmInicialNombre}` : null,
   ].filter(Boolean).join(' · ')
 
+  // Cartera de lecturas: mismos divisores tipo Excel que el resto del módulo Topografía.
+  const cellBorder = sheet.border
+  const thBase = { ...sheet.th, position: 'sticky', top: 0, zIndex: 2 }
+  const tdBase = { ...sheet.td }
+
   const thGroup = {
-    ...ui.th,
+    ...thBase,
     textAlign: 'center',
-    borderLeft: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+    borderLeft: `1px solid ${cellBorder}`,
   }
 
-  const thPunto = { ...ui.th, width: '72px', maxWidth: '90px' }
-  const thTipo = { ...ui.th, width: '118px', minWidth: '118px' }
-  const tdPunto = { ...ui.td, maxWidth: '90px' }
-  const tdTipo = { ...ui.td, minWidth: '118px' }
+  const thPunto = { ...thBase, width: '72px', maxWidth: '90px' }
+  const thTipo = { ...thBase, width: '118px', minWidth: '118px' }
+  const tdPunto = { ...tdBase, maxWidth: '90px' }
+  const tdTipo = { ...tdBase, minWidth: '118px' }
 
   const tdGroup = {
-    ...ui.td,
+    ...tdBase,
     textAlign: 'center',
     verticalAlign: 'middle',
-    borderLeft: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+    borderLeft: `1px solid ${cellBorder}`,
   }
 
   const thGroupColor = (bk) => ({
     ...thGroup,
-    background: bloques[bk]?.header || ui.th.background,
+    background: bloques[bk]?.header || sheet.th.background,
     boxShadow: `inset 0 3px 0 ${bloques[bk]?.accent || ui.accent}`,
   })
 
   const thSubGroupColor = (bk) => ({
-    ...ui.th,
+    ...thBase,
     fontSize: 'var(--cc-xxs)',
     textAlign: 'center',
-    background: bloques[bk]?.header || ui.th.background,
-    borderLeft: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+    background: bloques[bk]?.header || sheet.th.background,
+    borderLeft: `1px solid ${cellBorder}`,
   })
 
   const tdGroupColor = (bk) => ({
@@ -1324,11 +1329,11 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     {vista.avisos.slice(0, 3).join(' ')}
                   </p>
                 )}
-                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
-                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+                <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
+                  <table style={{ ...sheet.sheetTable, tableLayout: 'auto' }}>
                     <thead>
                       <tr>
-                        <th style={ui.th} rowSpan={2}>#</th>
+                        <th style={thBase} rowSpan={2}>#</th>
                         <th style={thPunto} rowSpan={2}>Punto</th>
                         <th style={thTipo} rowSpan={2}>Tipo</th>
                         <th style={thGroupColor('vplus')} colSpan={esAutomatico ? 4 : 2}>V+ {esAutomatico ? '(3 hilos)' : ''}</th>
@@ -1336,24 +1341,24 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         <th style={thGroupColor('vminus')} colSpan={esAutomatico ? 4 : 2}>V− {esAutomatico ? '(3 hilos)' : ''}</th>
                         <th style={thGroup} rowSpan={2}>H. ins.</th>
                         <th style={thGroup} rowSpan={2}>Cota</th>
-                        <th style={ui.th} rowSpan={2}>Abscisa</th>
-                        <th style={ui.th} rowSpan={2}>Descripción de punto</th>
-                        {!sellada && <th style={ui.th} rowSpan={2} />}
+                        <th style={thBase} rowSpan={2}>Abscisa</th>
+                        <th style={thBase} rowSpan={2}>Descripción de punto</th>
+                        {!sellada && <th style={thBase} rowSpan={2} />}
                       </tr>
                       {esAutomatico && (
                         <tr>
                           {['V+', 'Vi', 'V−'].flatMap((label) => {
                             const cols = ['S', 'M', 'I'].map((h) => (
-                              <th key={`${label}-${h}`} style={{ ...ui.th, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>{h}</th>
+                              <th key={`${label}-${h}`} style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>{h}</th>
                             ))
                             if (label === 'V+') {
                               cols.push(
-                                <th key="V+-dist" style={{ ...ui.th, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V+)</th>,
+                                <th key="V+-dist" style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V+)</th>,
                               )
                             }
                             if (label === 'V−') {
                               cols.push(
-                                <th key="V--dist" style={{ ...ui.th, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V−)</th>,
+                                <th key="V--dist" style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V−)</th>,
                               )
                             }
                             return cols
@@ -1396,7 +1401,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                                     : undefined
                             }
                           >
-                            <td style={ui.td}>
+                            <td style={tdBase}>
                               {idx + 1}
                               {esCierre && (
                                 <span
@@ -1460,7 +1465,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                             <td style={{ ...tdGroup, fontWeight: 600 }}>
                               {fmtN(vistaRow.cota)}
                             </td>
-                            <td style={ui.td}>
+                            <td style={tdBase}>
                               {sellada ? (fila.abscisa || '—') : (
                                 <input
                                   type="text"
@@ -1474,7 +1479,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                                 />
                               )}
                             </td>
-                            <td style={ui.td}>
+                            <td style={tdBase}>
                               {sellada ? (fila.descripcion_punto || '—') : (
                                 <input
                                   value={fila.descripcion_punto}
@@ -1486,7 +1491,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                               )}
                             </td>
                             {!sellada && (
-                              <td style={ui.td}>
+                              <td style={tdBase}>
                                 <button type="button" style={ui.btnSecondary} onClick={() => removeFila(idx)} title="Eliminar fila">×</button>
                               </td>
                             )}

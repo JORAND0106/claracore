@@ -26,9 +26,12 @@ const COLOR_PUNTO = {
   'No Revisado': '#3B82F6',
 }
 
+/** Divisor de celda tipo Excel (contraste medio; evita el #e2e8f0 demasiado tenue). */
+const SHEET_CELL_BORDER = '#94a3b8'
+
 /** Estilos de grilla/celdas derivados del tema de la plataforma (sin paleta aislada). */
 function sheetStyles(t, carpetaCompact) {
-  const grid = t.border
+  const grid = t.sheetGridBorder || SHEET_CELL_BORDER
   return {
     grid,
     th: {

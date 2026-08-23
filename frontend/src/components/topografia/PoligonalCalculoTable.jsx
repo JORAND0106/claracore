@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { TopoTableScroll, useTopoTheme } from './topografiaShared'
+import { useTopoTheme } from './topografiaShared'
+import { topoSheetStyles } from './topoSheetStyles'
 import { fmtNum } from '../../utils/topografia_angular'
 
 function advertenciaDistancia(e, cierre) {
@@ -65,6 +66,9 @@ export default function PoligonalCalculoTable({
   canEditHI = false,
 }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
+  const th = sheet.th
+  const td = sheet.td
   const acciones = onEditar || onEliminar
   const limite = cierre?.longitud_max_delta_m
   const ajustada = modoAjuste || !!poligonal?.ajustada_at
@@ -109,34 +113,34 @@ export default function PoligonalCalculoTable({
           Revise las filas con el indicador de advertencia en distancia (superan el límite entre vértices).
         </p>
       )}
-      <TopoTableScroll>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: ajustada ? 1480 : 1060 }}>
+      <div style={sheet.sheetWrap} className="cc-topo-table-scroll">
+        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: ajustada ? 1480 : 1060 }}>
           <thead>
             <tr>
-              <th style={ui.th}>#</th>
-              <th style={ui.th}>Armada</th>
-              <th style={ui.th}>Punto</th>
-              <th style={ui.th}>Tipo</th>
-              <th style={ui.th}>Ang. obs.</th>
-              {ajustada && <th style={ui.th}>Ang. corr.</th>}
-              <th style={ui.th}>Ang. vert.</th>
-              <th style={ui.th}>Dist. (m)</th>
-              <th style={ui.th} title="Altura del instrumento (metros) de la armada">HI (m)</th>
-              <th style={ui.th}>HT (m)</th>
-              <th style={ui.th}>Azimut</th>
+              <th style={th}>#</th>
+              <th style={th}>Armada</th>
+              <th style={th}>Punto</th>
+              <th style={th}>Tipo</th>
+              <th style={th}>Ang. obs.</th>
+              {ajustada && <th style={th}>Ang. corr.</th>}
+              <th style={th}>Ang. vert.</th>
+              <th style={th}>Dist. (m)</th>
+              <th style={th} title="Altura del instrumento (metros) de la armada">HI (m)</th>
+              <th style={th}>HT (m)</th>
+              <th style={th}>Azimut</th>
               {ajustada && (
                 <>
-                  <th style={ui.th}>ΔN</th>
-                  <th style={ui.th}>ΔE</th>
-                  <th style={ui.th}>ΔZ</th>
-                  <th style={ui.th}>Corr.N</th>
-                  <th style={ui.th}>Corr.E</th>
+                  <th style={th}>ΔN</th>
+                  <th style={th}>ΔE</th>
+                  <th style={th}>ΔZ</th>
+                  <th style={th}>Corr.N</th>
+                  <th style={th}>Corr.E</th>
                 </>
               )}
-              <th style={ui.th}>Norte</th>
-              <th style={ui.th}>Este</th>
-              <th style={ui.th}>Cota</th>
-              {acciones && <th style={ui.th} />}
+              <th style={th}>Norte</th>
+              <th style={th}>Este</th>
+              <th style={th}>Cota</th>
+              {acciones && <th style={th} />}
             </tr>
           </thead>
           <tbody>
@@ -154,10 +158,10 @@ export default function PoligonalCalculoTable({
                   key={e.id || e.orden}
                   style={enEdicion ? { background: ui.rowHighlight } : undefined}
                 >
-                  <td style={ui.td}>{e.orden}</td>
-                  <td style={ui.td}>{e.armada_orden ?? '—'}</td>
-                  <td style={{ ...ui.td, fontWeight: 600 }}>{e.nombre_punto}</td>
-                  <td style={ui.td}>
+                  <td style={td}>{e.orden}</td>
+                  <td style={td}>{e.armada_orden ?? '—'}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{e.nombre_punto}</td>
+                  <td style={td}>
                     <span style={{
                       fontSize: 'var(--cc-xs)',
                       padding: '1px 6px',
@@ -167,14 +171,14 @@ export default function PoligonalCalculoTable({
                       {e.tipo_punto === 'estacion' ? 'Estacion' : 'Auxiliar'}
                     </span>
                   </td>
-                  <td style={ui.td}>{e.angulo_observado_texto ?? '—'}</td>
-                  {ajustada && <td style={ui.td}>{e.angulo_corregido_texto ?? '—'}</td>}
-                  <td style={ui.td}>{e.angulo_vertical_texto ?? '—'}</td>
-                  <td style={{ ...ui.td, color: ladoExcedido ? ui.warn : undefined, fontWeight: ladoExcedido ? 700 : undefined }}>
+                  <td style={td}>{e.angulo_observado_texto ?? '—'}</td>
+                  {ajustada && <td style={td}>{e.angulo_corregido_texto ?? '—'}</td>}
+                  <td style={td}>{e.angulo_vertical_texto ?? '—'}</td>
+                  <td style={{ ...td, color: ladoExcedido ? ui.warn : undefined, fontWeight: ladoExcedido ? 700 : undefined }}>
                     {fmtNum(e.distancia, 3)}
                     {ladoExcedido && <AdvertenciaLado lado={ladoExcedido} limite={limite} />}
                   </td>
-                  <td style={{ ...ui.td, padding: hiEditable ? 2 : ui.td.padding }}>
+                  <td style={{ ...td, padding: hiEditable ? 2 : td.padding }}>
                     {hiEditable ? (
                       <input
                         key={`hi-${arm.id}-${hiVal ?? 'x'}`}
@@ -192,7 +196,7 @@ export default function PoligonalCalculoTable({
                         style={{
                           width: '100%',
                           boxSizing: 'border-box',
-                          border: hiVal == null || hiVal === '' ? '1px solid #f59e0b' : `1px solid ${ui.border || '#e2e8f0'}`,
+                          border: hiVal == null || hiVal === '' ? '1px solid #f59e0b' : `1px solid ${sheet.border}`,
                           borderRadius: 4,
                           padding: '3px 4px',
                           fontSize: 'var(--cc-xs)',
@@ -205,22 +209,22 @@ export default function PoligonalCalculoTable({
                       hiVal != null && hiVal !== '' ? fmtNum(hiVal, 3) : '—'
                     )}
                   </td>
-                  <td style={ui.td}>{e.altura_objetivo != null ? fmtNum(e.altura_objetivo, 3) : '—'}</td>
-                  <td style={{ ...ui.td, color: ui.accent }}>{e.azimut_texto ?? '—'}</td>
+                  <td style={td}>{e.altura_objetivo != null ? fmtNum(e.altura_objetivo, 3) : '—'}</td>
+                  <td style={{ ...td, color: ui.accent }}>{e.azimut_texto ?? '—'}</td>
                   {ajustada && (
                     <>
-                      <td style={ui.td}>{e.proyeccion_norte != null ? fmtNum(e.proyeccion_norte, 4) : '—'}</td>
-                      <td style={ui.td}>{e.proyeccion_este != null ? fmtNum(e.proyeccion_este, 4) : '—'}</td>
-                      <td style={ui.td}>{e.proyeccion_cota != null ? fmtNum(e.proyeccion_cota, 4) : '—'}</td>
-                      <td style={ui.td}>{e.correccion_norte != null ? fmtNum(e.correccion_norte, 4) : '—'}</td>
-                      <td style={ui.td}>{e.correccion_este != null ? fmtNum(e.correccion_este, 4) : '—'}</td>
+                      <td style={td}>{e.proyeccion_norte != null ? fmtNum(e.proyeccion_norte, 4) : '—'}</td>
+                      <td style={td}>{e.proyeccion_este != null ? fmtNum(e.proyeccion_este, 4) : '—'}</td>
+                      <td style={td}>{e.proyeccion_cota != null ? fmtNum(e.proyeccion_cota, 4) : '—'}</td>
+                      <td style={td}>{e.correccion_norte != null ? fmtNum(e.correccion_norte, 4) : '—'}</td>
+                      <td style={td}>{e.correccion_este != null ? fmtNum(e.correccion_este, 4) : '—'}</td>
                     </>
                   )}
-                  <td style={ui.td}>{e.norte != null ? fmtNum(e.norte, 4) : '—'}</td>
-                  <td style={ui.td}>{e.este != null ? fmtNum(e.este, 4) : '—'}</td>
-                  <td style={ui.td}>{e.cota != null ? fmtNum(e.cota, 4) : '—'}</td>
+                  <td style={td}>{e.norte != null ? fmtNum(e.norte, 4) : '—'}</td>
+                  <td style={td}>{e.este != null ? fmtNum(e.este, 4) : '—'}</td>
+                  <td style={td}>{e.cota != null ? fmtNum(e.cota, 4) : '—'}</td>
                   {acciones && (
-                    <td style={{ ...ui.td, whiteSpace: 'nowrap' }}>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
                       {onEditar && (
                         <button
                           type="button"
@@ -248,7 +252,7 @@ export default function PoligonalCalculoTable({
             })}
           </tbody>
         </table>
-      </TopoTableScroll>
+      </div>
     </div>
   )
 }
