@@ -75,7 +75,7 @@ function PageHeader({ palette, eyebrow, title, subtitle }) {
   )
 }
 
-function DiarioPage({ page, palette, api }) {
+function DiarioPage({ page, palette, api, onZoomPhoto }) {
   const d = page.data || {}
   const clima = formatClimaResumen({
     ...d,
@@ -163,6 +163,7 @@ function DiarioPage({ page, palette, api }) {
                 im={im}
                 width={110}
                 height={82}
+                onZoom={onZoomPhoto}
                 style={{ borderRadius: 6, overflow: 'hidden', border: `1px solid ${palette.pageEdge}` }}
               />
             ))}
@@ -173,7 +174,7 @@ function DiarioPage({ page, palette, api }) {
   )
 }
 
-function EventoPage({ page, palette, api }) {
+function EventoPage({ page, palette, api, onZoomPhoto }) {
   const e = page.data || {}
   const fotos = Array.isArray(e.imagenes) ? e.imagenes : []
   return (
@@ -201,6 +202,7 @@ function EventoPage({ page, palette, api }) {
                 im={im}
                 width={110}
                 height={82}
+                onZoom={onZoomPhoto}
                 style={{ borderRadius: 6, overflow: 'hidden', border: `1px solid ${palette.pageEdge}` }}
               />
             ))}
@@ -358,14 +360,32 @@ export default function LibroDigitalVista({
   const [error, setError] = useState('')
   const [pages, setPages] = useState([])
   const [index, setIndex] = useState(0)
-  const [flip, setFlip] = useState(null)
+  /** null | 'next' | 'prev' — solo para overlay/under durante la animación WAAPI */
+  const [flipDir, setFlipDir] = useState(null)
   const [actaDetails, setActaDetails] = useState({})
   const [actaLoading, setActaLoading] = useState({})
+  const [zoomPhoto, setZoomPhoto] = useState(null) // { src }
   const pointerRef = useRef({ x: 0, y: 0, active: false, moved: false })
   const flipLock = useRef(false)
   const actaFetchRef = useRef(new Set())
+  const frontPageRef = useRef(null)
+  const indexRef = useRef(0)
+  const totalRef = useRef(0)
+  const animRef = useRef(null)
+
+  indexRef.current = index
+  totalRef.current = pages.length
 
   const canViewBitacora = modo !== 'bitacora' || Boolean(permisosBitacora.ver)
+
+  const openZoomPhoto = useCallback((payload) => {
+    if (!payload?.src) return
+    setZoomPhoto({ src: payload.src })
+  }, [])
+
+  const closeZoomPhoto = useCallback(() => {
+    setZoomPhoto(null)
+  }, [])
 
   const load = useCallback(async () => {
     if (!cid || !token) {
@@ -424,34 +444,124 @@ export default function LibroDigitalVista({
   const total = pages.length
   const current = pages[index] || null
   const peekNext = pages[Math.min(index + 1, Math.max(total - 1, 0))] || null
-  const peekPrev = pages[Math.max(index - 1, 0)] || null
 
+  /**
+   * Causa del revert anterior: al quitar la clase CSS `is-flip-next`, el
+   * `transition` devolvía la hoja de -160° a 0° (animación inversa).
+   * Aquí el giro se hace con Web Animations API; al terminar se cancela la
+   * animación (sin reverse) y recién entonces se actualiza el índice.
+   */
   const go = useCallback((dir) => {
-    if (flipLock.current || flip) return
-    if (dir === 'next' && index >= total - 1) return
-    if (dir === 'prev' && index <= 0) return
-    flipLock.current = true
-    if (dir === 'next') {
-      setFlip('next')
-      window.setTimeout(() => {
-        setIndex((i) => i + 1)
-        setFlip(null)
-        flipLock.current = false
-      }, FLIP_MS)
+    if (flipLock.current || zoomPhoto) return
+    const i = indexRef.current
+    const n = totalRef.current
+    if (dir === 'next' && i >= n - 1) return
+    if (dir === 'prev' && i <= 0) return
+
+    const el = frontPageRef.current
+    if (!el || typeof el.animate !== 'function') {
+      // Fallback sin animación (entornos raros): cambio estable de página
+      setIndex((cur) => (dir === 'next' ? cur + 1 : cur - 1))
       return
     }
-    setIndex((i) => i - 1)
-    setFlip('prev')
-    window.setTimeout(() => {
-      setFlip(null)
-      flipLock.current = false
-    }, FLIP_MS)
-  }, [flip, index, total])
+
+    flipLock.current = true
+    if (animRef.current) {
+      try { animRef.current.cancel() } catch { /* ignore */ }
+      animRef.current = null
+    }
+
+    const from = 'rotateY(0deg)'
+    const to = 'rotateY(-160deg)'
+    const shadowFlat = '0 22px 44px rgba(10, 22, 40, 0.22)'
+    const shadowFlip = '-28px 16px 36px rgba(10, 22, 40, 0.28)'
+
+    setFlipDir(dir)
+
+    const run = async () => {
+      try {
+        if (dir === 'next') {
+          const anim = el.animate(
+            [
+              { transform: from, boxShadow: shadowFlat },
+              { transform: to, boxShadow: shadowFlip },
+            ],
+            { duration: FLIP_MS, easing: 'cubic-bezier(0.22, 0.7, 0.2, 1)', fill: 'forwards' },
+          )
+          animRef.current = anim
+          await anim.finished.catch(() => {})
+          // Congelar en 0 sin transición inversa, luego cambiar contenido
+          anim.cancel()
+          el.style.transition = 'none'
+          el.style.transform = 'rotateY(0deg)'
+          el.style.boxShadow = ''
+          setIndex((cur) => cur + 1)
+          setFlipDir(null)
+          requestAnimationFrame(() => {
+            el.style.transition = ''
+            el.style.transform = ''
+            flipLock.current = false
+            animRef.current = null
+          })
+          return
+        }
+
+        // prev: primero cambiar al contenido destino, pintar, luego abrir de -160° a 0°
+        setIndex((cur) => cur - 1)
+        await new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        })
+        const front = frontPageRef.current
+        if (!front) {
+          setFlipDir(null)
+          flipLock.current = false
+          return
+        }
+        front.style.transition = 'none'
+        front.style.transform = to
+        front.style.boxShadow = shadowFlip
+        void front.offsetWidth
+        const anim = front.animate(
+          [
+            { transform: to, boxShadow: shadowFlip },
+            { transform: from, boxShadow: shadowFlat },
+          ],
+          { duration: FLIP_MS, easing: 'cubic-bezier(0.22, 0.7, 0.2, 1)', fill: 'forwards' },
+        )
+        animRef.current = anim
+        await anim.finished.catch(() => {})
+        anim.cancel()
+        front.style.transition = 'none'
+        front.style.transform = 'rotateY(0deg)'
+        front.style.boxShadow = ''
+        setFlipDir(null)
+        requestAnimationFrame(() => {
+          front.style.transition = ''
+          front.style.transform = ''
+          flipLock.current = false
+          animRef.current = null
+        })
+      } catch {
+        setIndex((cur) => (dir === 'next' ? Math.min(cur + 1, n - 1) : Math.max(cur - 1, 0)))
+        setFlipDir(null)
+        flipLock.current = false
+        animRef.current = null
+      }
+    }
+    void run()
+  }, [zoomPhoto])
 
   useEffect(() => {
     const onKey = (e) => {
       const tag = String(e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      if (zoomPhoto) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          closeZoomPhoto()
+        }
+        return
+      }
       if (e.key === 'ArrowRight') {
         e.preventDefault()
         go('next')
@@ -464,9 +574,10 @@ export default function LibroDigitalVista({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [go, onClose])
+  }, [go, onClose, zoomPhoto, closeZoomPhoto])
 
   const onPointerDown = (e) => {
+    if (zoomPhoto) return
     if (e.button != null && e.button !== 0) return
     pointerRef.current = { x: e.clientX, y: e.clientY, active: true, moved: false }
   }
@@ -482,13 +593,13 @@ export default function LibroDigitalVista({
     const dy = e.clientY - pointerRef.current.y
     const moved = pointerRef.current.moved
     pointerRef.current.active = false
+    if (zoomPhoto) return
     if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.15) {
       if (dx < 0) go('next')
       else go('prev')
       return
     }
     if (moved) return
-    // Tap en zonas laterales del libro
     const el = e.currentTarget
     const rect = el.getBoundingClientRect()
     const rel = (e.clientX - rect.left) / Math.max(rect.width, 1)
@@ -498,8 +609,12 @@ export default function LibroDigitalVista({
 
   const renderPageBody = (page) => {
     if (!page) return <EmptyBook label={palette.label} />
-    if (page.kind === 'diario') return <DiarioPage page={page} palette={palette} api={api} />
-    if (page.kind === 'evento') return <EventoPage page={page} palette={palette} api={api} />
+    if (page.kind === 'diario') {
+      return <DiarioPage page={page} palette={palette} api={api} onZoomPhoto={openZoomPhoto} />
+    }
+    if (page.kind === 'evento') {
+      return <EventoPage page={page} palette={palette} api={api} onZoomPhoto={openZoomPhoto} />
+    }
     if (page.kind === 'acta_bloqueada') return <ActaBloqueadaPage page={page} palette={palette} />
     if (page.kind === 'acta') {
       return (
@@ -514,12 +629,13 @@ export default function LibroDigitalVista({
     return null
   }
 
-  const underPage = flip === 'prev' ? peekPrev : peekNext
+  const underPage = peekNext
+  const flipping = Boolean(flipDir)
 
   return (
     <div
       ref={rootRef}
-      className={`cc-libro-overlay${flip ? ' is-flipping' : ''}`}
+      className={`cc-libro-overlay${flipping ? ' is-flipping' : ''}`}
       role="dialog"
       aria-modal="true"
       aria-label={`Libro digital · ${palette.label}`}
@@ -565,7 +681,7 @@ export default function LibroDigitalVista({
           <button
             type="button"
             className="cc-libro-nav"
-            disabled={index <= 0 || Boolean(flip)}
+            disabled={index <= 0 || flipping}
             onClick={() => go('prev')}
             aria-label="Página anterior"
           >
@@ -575,8 +691,8 @@ export default function LibroDigitalVista({
           <div
             className={[
               'cc-libro-book',
-              flip === 'next' ? 'is-flip-next' : '',
-              flip === 'prev' ? 'is-flip-prev' : '',
+              flipDir === 'next' ? 'is-flip-next' : '',
+              flipDir === 'prev' ? 'is-flip-prev' : '',
             ].filter(Boolean).join(' ')}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -594,7 +710,7 @@ export default function LibroDigitalVista({
                 {total > 1 ? renderPageBody(underPage) : null}
               </div>
             </div>
-            <div className="cc-libro-page cc-libro-page--front">
+            <div className="cc-libro-page cc-libro-page--front" ref={frontPageRef}>
               <div className="cc-libro-session-mark">
                 <img src={LOGO_SRC} alt="" className="cc-libro-session-logo" />
                 <span>{palette.label}</span>
@@ -610,7 +726,7 @@ export default function LibroDigitalVista({
           <button
             type="button"
             className="cc-libro-nav"
-            disabled={index >= total - 1 || total === 0 || Boolean(flip)}
+            disabled={index >= total - 1 || total === 0 || flipping}
             onClick={() => go('next')}
             aria-label="Página siguiente"
           >
@@ -631,6 +747,33 @@ export default function LibroDigitalVista({
           Desliza, toca los laterales o usa ← → del teclado
         </div>
       </div>
+
+      {zoomPhoto?.src ? (
+        <div
+          className="cc-libro-zoom"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Fotografía ampliada"
+          onClick={closeZoomPhoto}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="cc-libro-zoom-close"
+            onClick={closeZoomPhoto}
+            aria-label="Cerrar zoom"
+          >
+            <X size={20} strokeWidth={2.2} />
+            <span>Cerrar</span>
+          </button>
+          <img
+            src={zoomPhoto.src}
+            alt="Fotografía ampliada"
+            className="cc-libro-zoom-img"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
