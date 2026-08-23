@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { PermisoAviso, puede, TopoTableScroll, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
+import { puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 function svgFromPuntos(puntos, ancho = 480, alto = 320) {
   if (!puntos || puntos.length < 2) return null
@@ -19,6 +21,7 @@ function svgFromPuntos(puntos, ancho = 480, alto = 320) {
 
 export default function AreasForm({ contratoId, token, permisos }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api, downloadPdf, online, saveDraft, loadDraft, syncDraft } = useTopografiaApi(contratoId, token)
   const [nombre, setNombre] = useState('')
   const [vertices, setVertices] = useState([{ nombre: 'P1', norte: '', este: '' }])
@@ -68,22 +71,39 @@ export default function AreasForm({ contratoId, token, permisos }) {
     <div>
       {error && <div style={{ color: '#92400e', marginBottom: 8 }}>{error}</div>}
       <div style={{ ...ui.card, marginBottom: 16 }}>
-        <input placeholder="Nombre del area" value={nombre} onChange={(e) => setNombre(e.target.value)} style={{ ...ui.inputStyle, marginBottom: 12 }} />
-        <TopoTableScroll>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 420 }}>
-          <thead><tr style={{ background: ui.t?.inputBg || '#f1f5f9' }}><th style={ui.th}>Vertice</th><th style={ui.th}>Norte</th><th style={ui.th}>Este</th><th style={ui.th}></th></tr></thead>
-          <tbody>
-            {vertices.map((v, i) => (
-              <tr key={i}>
-                <td style={ui.td}><input value={v.nombre} onChange={(e) => update(i, 'nombre', e.target.value)} style={ui.inputStyle} /></td>
-                <td style={ui.td}><input value={v.norte} onChange={(e) => update(i, 'norte', e.target.value)} style={ui.inputStyle} /></td>
-                <td style={ui.td}><input value={v.este} onChange={(e) => update(i, 'este', e.target.value)} style={ui.inputStyle} /></td>
-                <td style={ui.td}><button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={() => quitarFila(i)}>X</button></td>
+        <TopoExcelSheet
+          sheet={sheet}
+          title="Datos del área"
+          columns={[{ key: 'nombre', label: 'Nombre', ayuda: 'Identificador del polígono de área.' }]}
+          cells={[
+            <input key="n" placeholder="Nombre del area" value={nombre} onChange={(e) => setNombre(e.target.value)} style={sheet.cellInp} />,
+          ]}
+        />
+        <div style={sheet.sectionTitle}>Vértices</div>
+        <div style={sheet.sheetWrap} className="cc-topo-table-scroll">
+          <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
+            <thead>
+              <tr>
+                <th style={sheet.th}>Vértice</th>
+                <th style={sheet.th}>Norte</th>
+                <th style={sheet.th}>Este</th>
+                <th style={sheet.th} />
               </tr>
-            ))}
-          </tbody>
-        </table>
-        </TopoTableScroll>
+            </thead>
+            <tbody>
+              {vertices.map((v, i) => (
+                <tr key={i}>
+                  <td style={sheet.td}><input value={v.nombre} onChange={(e) => update(i, 'nombre', e.target.value)} style={sheet.cellInp} /></td>
+                  <td style={sheet.td}><input value={v.norte} onChange={(e) => update(i, 'norte', e.target.value)} style={sheet.cellInp} /></td>
+                  <td style={sheet.td}><input value={v.este} onChange={(e) => update(i, 'este', e.target.value)} style={sheet.cellInp} /></td>
+                  <td style={sheet.td}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={() => quitarFila(i)}>X</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           {puede(permisos, 'editar') && <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={agregarFila}>+ Vertice</button>}
           {(puede(permisos, 'crear') || puede(permisos, 'editar')) && <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} onClick={calcular}>Calcular</button>}

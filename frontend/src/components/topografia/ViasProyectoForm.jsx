@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import { PermisoAviso, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function ViasProyectoForm({ contratoId, token, onCreated, permisos }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api } = useTopografiaApi(contratoId, token)
   const [proyectos, setProyectos] = useState([])
   const [form, setForm] = useState({ nombre: '', abscisa_inicio: '', abscisa_fin: '', ancho_calzada: '' })
@@ -34,14 +37,24 @@ export default function ViasProyectoForm({ contratoId, token, onCreated, permiso
       {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
       <PermisoAviso permisos={permisos} accion="crear">
       <div style={{ ...ui.card, marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Proyecto de verificacion de vias</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <input placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={ui.inputStyle} />
-          <input placeholder="Abscisa inicio" value={form.abscisa_inicio} onChange={(e) => setForm({ ...form, abscisa_inicio: e.target.value })} style={ui.inputStyle} />
-          <input placeholder="Abscisa fin" value={form.abscisa_fin} onChange={(e) => setForm({ ...form, abscisa_fin: e.target.value })} style={ui.inputStyle} />
-          <input placeholder="Ancho calzada" value={form.ancho_calzada} onChange={(e) => setForm({ ...form, ancho_calzada: e.target.value })} style={ui.inputStyle} />
-        </div>
-        <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={crear}>Crear proyecto</button>
+        <TopoExcelSheet
+          sheet={sheet}
+          title="Proyecto de verificación de vías"
+          minWidth={480}
+          columns={[
+            { key: 'nombre', label: 'Nombre', width: '30%' },
+            { key: 'ini', label: 'Abscisa inicio', width: '23%' },
+            { key: 'fin', label: 'Abscisa fin', width: '23%' },
+            { key: 'ancho', label: 'Ancho calzada', width: '24%' },
+          ]}
+          cells={[
+            <input key="n" placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={sheet.cellInp} />,
+            <input key="i" placeholder="Abscisa inicio" value={form.abscisa_inicio} onChange={(e) => setForm({ ...form, abscisa_inicio: e.target.value })} style={sheet.cellInp} />,
+            <input key="f" placeholder="Abscisa fin" value={form.abscisa_fin} onChange={(e) => setForm({ ...form, abscisa_fin: e.target.value })} style={sheet.cellInp} />,
+            <input key="a" placeholder="Ancho calzada" value={form.ancho_calzada} onChange={(e) => setForm({ ...form, ancho_calzada: e.target.value })} style={sheet.cellInp} />,
+          ]}
+        />
+        <button type="button" style={{ ...ui.btnPrimary, marginTop: 4 }} onClick={crear}>Crear proyecto</button>
       </div>
       </PermisoAviso>
       <div style={ui.card}>

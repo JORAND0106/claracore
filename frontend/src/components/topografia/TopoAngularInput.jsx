@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { gmsToDecimal, validarGms } from '../../utils/topografia_angular'
 import { useTopoTheme } from './topografiaShared'
 
-export default function TopoAngularInput({ value, onChange, label, disabled }) {
+export default function TopoAngularInput({ value, onChange, label, disabled, inputStyle }) {
   const ui = useTopoTheme()
   const [local, setLocal] = useState(value ?? '')
   const [valido, setValido] = useState(true)
@@ -26,6 +26,7 @@ export default function TopoAngularInput({ value, onChange, label, disabled }) {
   }
 
   const border = ui.t?.border || '#e2e8f0'
+  const baseInput = inputStyle || ui.inputStyle
 
   return (
     <label style={{ display: 'block', marginBottom: label ? 8 : 0 }}>
@@ -42,10 +43,15 @@ export default function TopoAngularInput({ value, onChange, label, disabled }) {
         onChange={handleChange}
         placeholder="GG.MMSS"
         style={{
-          ...ui.inputStyle,
-          border: `1px solid ${valido ? border : '#ef4444'}`,
-          background: valido ? ui.inputStyle.background : 'rgba(220,38,38,0.10)',
+          ...baseInput,
+          border: inputStyle ? 'none' : `1px solid ${valido ? border : '#ef4444'}`,
+          outline: inputStyle ? 'none' : undefined,
+          background: valido
+            ? (inputStyle ? 'transparent' : baseInput.background)
+            : 'rgba(220,38,38,0.10)',
           color: ui.text,
+          width: '100%',
+          boxSizing: 'border-box',
         }}
       />
       {!valido && (

@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
 import TopoErrorModal from './TopoErrorModal'
 import PoligonalValidacionPanel from './PoligonalValidacionPanel'
 import NewPointGrafico from './NewPointGrafico'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import {
   parseApiError,
   PermisoAviso,
   puede,
   Semaforo,
-  TopoFieldLabel,
   TopoHelpIcon,
   useTopografiaApi,
   useTopoTheme,
@@ -51,6 +52,7 @@ const AYUDA_MODULO_NEWPOINT =
 
 export default function NewPointForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api, downloadPdf } = useTopografiaApi(contratoId, token)
   const [poligonales, setPoligonales] = useState([])
   const [puntos, setPuntos] = useState([])
@@ -242,8 +244,9 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
   const sellada = detalle ? (detalle.nivel2_estado || '') === 'Aprobado' || Boolean(detalle.biblioteca_at) : false
   const camposCampoOk = camposCampoNewpointCompletos(detalle)
   const polSel = poligonales.find((p) => p.id === form.poligonal_id)
-  const inp = ui.compactInput
-  const col = ui.compactFieldCol
+  const inp = sheet.cellInp
+  const cellSelect = sheet.cellSelect
+  const cellRo = sheet.cellRo
 
   return (
     <div>
@@ -300,54 +303,56 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
       {(modo === 'form' || (modo === 'detalle' && detalle)) && (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={ui.card}>
-            <div style={{ ...ui.compactFieldRow }} className="cc-topo-compact-row">
-              <label style={col('1.35 1 9em')}>
-                <TopoFieldLabel
-                  texto="Poligonal"
-                  color={ui.textMuted}
-                  ayuda="Poligonal sellada (interventoría aprobada). P1 y P2 deben pertenecer a ella."
-                />
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Datos generales"
+              minWidth={720}
+              columns={[
+                { key: 'poligonal', label: 'Poligonal', ayuda: 'Poligonal sellada (interventoría aprobada). P1 y P2 deben pertenecer a ella.', width: '20%' },
+                { key: 'punto', label: 'Punto', ayuda: 'Nombre del punto nuevo en biblioteca tras validación.', width: '12%' },
+                { key: 'tipo', label: 'Tipo', ayuda: 'Clasificación al publicar en biblioteca (auxiliar, estación, etc.).', width: '12%' },
+                { key: 'operador', label: 'Operador', ayuda: 'Profesional u operador que tomó las lecturas en campo.', width: '18%' },
+                { key: 'fecha', label: 'Fecha', ayuda: 'Fecha de las mediciones en campo.', width: '14%' },
+                { key: 'tol_lin', label: 'Tol. lineal', ayuda: 'Tolerancia lineal de cierre (m).', width: '12%' },
+                { key: 'tol_ang', label: 'Tol. ang. (″)', ayuda: 'Tolerancia angular en segundos.', width: '12%' },
+              ]}
+              cells={[
                 <select
+                  key="pol"
                   value={form.poligonal_id}
                   disabled={bloqueado}
                   onChange={(e) => setForm({ ...form, poligonal_id: e.target.value, punto1_id: '', punto2_id: '' })}
-                  style={inp}
+                  style={cellSelect}
                 >
                   <option value="">—</option>
                   {poligonales.map((p) => (
                     <option key={p.id} value={p.id}>{p.nombre}</option>
                   ))}
-                </select>
-              </label>
-              <label style={col('1 1 6em')}>
-                <TopoFieldLabel texto="Punto" color={ui.textMuted} ayuda="Nombre del punto nuevo en biblioteca tras validación." />
+                </select>,
                 <input
+                  key="pt"
                   value={form.nombre_punto_nuevo}
                   disabled={bloqueado}
                   onChange={(e) => setForm({ ...form, nombre_punto_nuevo: e.target.value })}
-                  style={inp}
+                  style={bloqueado ? cellRo : inp}
                   placeholder="Aux1"
-                />
-              </label>
-              <label style={col('0.75 1 5em')}>
-                <TopoFieldLabel texto="Tipo" color={ui.textMuted} ayuda="Clasificación al publicar en biblioteca (auxiliar, estación, etc.)." />
+                />,
                 <select
+                  key="tp"
                   value={form.tipo_punto}
                   disabled={bloqueado}
                   onChange={(e) => setForm({ ...form, tipo_punto: e.target.value })}
-                  style={inp}
+                  style={cellSelect}
                 >
                   <option value="auxiliar">Auxiliar</option>
                   <option value="estacion">Estación</option>
-                </select>
-              </label>
-              <label style={col('1.25 1 8em')}>
-                <TopoFieldLabel texto="Operador" color={ui.textMuted} ayuda="Profesional u operador que tomó las lecturas en campo." />
+                </select>,
                 <select
+                  key="op"
                   value={form.operador}
                   disabled={bloqueado}
                   onChange={(e) => setForm({ ...form, operador: e.target.value })}
-                  style={inp}
+                  style={cellSelect}
                 >
                   <option value="">—</option>
                   {operadores.map((u) => (
@@ -356,129 +361,126 @@ export default function NewPointForm({ contratoId, token, permisos, usuario }) {
                   {form.operador && !operadores.some((u) => u.nombre === form.operador) && (
                     <option value={form.operador}>{form.operador}</option>
                   )}
-                </select>
-              </label>
-              <label style={col('0.85 1 7em')}>
-                <TopoFieldLabel texto="Fecha" color={ui.textMuted} ayuda="Fecha de las mediciones en campo." />
+                </select>,
                 <input
+                  key="f"
                   type="date"
                   value={form.fecha}
                   disabled={bloqueado}
                   onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-                  style={inp}
-                />
-              </label>
-              <label style={col('0.85 1 5.5em')}>
-                <TopoFieldLabel texto="Marca" color={ui.textMuted} ayuda="Marca de la estación total utilizada." />
+                  style={bloqueado ? cellRo : inp}
+                />,
                 <input
-                  value={form.equipo_marca}
+                  key="tl"
+                  type="number"
+                  step="0.001"
+                  value={form.tolerancia_lineal}
                   disabled={bloqueado}
-                  onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })}
-                  style={inp}
-                  placeholder="Leica"
-                />
-              </label>
-              <label style={col('0.85 1 5.5em')}>
-                <TopoFieldLabel texto="Modelo" color={ui.textMuted} ayuda="Modelo o referencia del equipo." />
+                  onChange={(e) => setForm({ ...form, tolerancia_lineal: e.target.value })}
+                  style={bloqueado ? cellRo : inp}
+                />,
                 <input
-                  value={form.equipo_referencia}
+                  key="ta"
+                  type="number"
+                  step="1"
+                  value={form.tolerancia_angular_seg}
                   disabled={bloqueado}
-                  onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })}
-                  style={inp}
-                  placeholder="TS16"
-                />
-              </label>
-              <label style={col('0.85 1 5.5em')}>
-                <TopoFieldLabel texto="Serial" color={ui.textMuted} ayuda="Número de serie del equipo." />
-                <input
-                  value={form.equipo_serial}
-                  disabled={bloqueado}
-                  onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })}
-                  style={inp}
-                  placeholder="123456"
-                />
-              </label>
-            </div>
+                  onChange={(e) => setForm({ ...form, tolerancia_angular_seg: e.target.value })}
+                  style={bloqueado ? cellRo : inp}
+                />,
+              ]}
+            />
+
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Equipo de medición"
+              minWidth={360}
+              columns={[
+                { key: 'marca', label: 'Marca', ayuda: 'Marca de la estación total utilizada.' },
+                { key: 'modelo', label: 'Modelo', ayuda: 'Modelo o referencia del equipo.' },
+                { key: 'serial', label: 'Serial', ayuda: 'Número de serie del equipo.' },
+              ]}
+              cells={[
+                <input key="m" value={form.equipo_marca} disabled={bloqueado} onChange={(e) => setForm({ ...form, equipo_marca: e.target.value })} style={bloqueado ? cellRo : inp} placeholder="Leica" />,
+                <input key="mo" value={form.equipo_referencia} disabled={bloqueado} onChange={(e) => setForm({ ...form, equipo_referencia: e.target.value })} style={bloqueado ? cellRo : inp} placeholder="TS16" />,
+                <input key="s" value={form.equipo_serial} disabled={bloqueado} onChange={(e) => setForm({ ...form, equipo_serial: e.target.value })} style={bloqueado ? cellRo : inp} placeholder="123456" />,
+              ]}
+            />
 
             {form.poligonal_id && puntos.length < 2 && (
-              <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
+              <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
                 La poligonal «{polSel?.nombre}» necesita al menos 2 puntos verificados en biblioteca.
               </p>
             )}
 
-            <div style={ui.insetPanel}>
-              <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-                Referencia horizontal fija: <strong style={{ color: ui.text }}>00.0000</strong>
-                {nombreP1 ? ` hacia ${nombreP1}` : ' hacia punto 1'} (puesto desconocido).
-              </p>
+            <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+              Referencia horizontal fija: <strong style={{ color: ui.text }}>00.0000</strong>
+              {nombreP1 ? ` hacia ${nombreP1}` : ' hacia punto 1'} (puesto desconocido).
+            </p>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-                <div style={ui.nestedPanel}>
-                  <TopoFieldLabel
-                    texto="Punto 1 — referencia 00.0000"
-                    ayuda="Primer punto conocido. La visual hacia él define el cero horizontal."
-                  />
-                  <select
-                    value={form.punto1_id}
-                    disabled={!form.poligonal_id || bloqueado}
-                    onChange={(e) => setForm({ ...form, punto1_id: e.target.value })}
-                    style={{ ...ui.inputStyle, marginTop: 6 }}
-                  >
-                    <option value="">—</option>
-                    {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-                  </select>
-                  <input
-                    placeholder="Distancia a P1 (m)"
-                    value={form.distancia1}
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Observaciones de campo"
+              minWidth={640}
+              columns={[
+                { key: 'p1', label: 'Punto 1', ayuda: 'Primer punto conocido. La visual hacia él define el cero horizontal.', width: '18%' },
+                { key: 'd1', label: 'Dist. P1 (m)', ayuda: 'Distancia medida al punto 1.', width: '14%' },
+                { key: 'ang', label: 'Ángulo P1→P2', ayuda: 'Ángulo horizontal medido desde la visual a P1 hasta la visual a P2 (como en campo).', width: '18%' },
+                { key: 'p2', label: 'Punto 2', ayuda: 'Segundo punto conocido de la misma poligonal.', width: '18%' },
+                { key: 'd2', label: 'Dist. P2 (m)', ayuda: 'Distancia medida al punto 2.', width: '14%' },
+              ]}
+              cells={[
+                <select
+                  key="p1"
+                  value={form.punto1_id}
+                  disabled={!form.poligonal_id || bloqueado}
+                  onChange={(e) => setForm({ ...form, punto1_id: e.target.value })}
+                  style={cellSelect}
+                >
+                  <option value="">—</option>
+                  {puntos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>,
+                <input
+                  key="d1"
+                  placeholder="m"
+                  value={form.distancia1}
+                  disabled={bloqueado}
+                  onChange={(e) => setForm({ ...form, distancia1: e.target.value })}
+                  style={bloqueado ? cellRo : inp}
+                />,
+                <div key="ang" style={{ minHeight: 28 }}>
+                  <TopoAngularInput
+                    label=""
+                    value={form.angulo_observado_gms}
                     disabled={bloqueado}
-                    onChange={(e) => setForm({ ...form, distancia1: e.target.value })}
-                    style={{ ...ui.inputStyle, marginTop: 8 }}
+                    onChange={(_, v) => setForm({ ...form, angulo_observado_gms: v })}
+                    inputStyle={bloqueado ? cellRo : inp}
                   />
-                </div>
+                </div>,
+                <select
+                  key="p2"
+                  value={form.punto2_id}
+                  disabled={!form.poligonal_id || bloqueado}
+                  onChange={(e) => setForm({ ...form, punto2_id: e.target.value })}
+                  style={cellSelect}
+                >
+                  <option value="">—</option>
+                  {puntos.filter((p) => p.id !== form.punto1_id).map((p) => (
+                    <option key={p.id} value={p.id}>{p.nombre}</option>
+                  ))}
+                </select>,
+                <input
+                  key="d2"
+                  placeholder="m"
+                  value={form.distancia2}
+                  disabled={bloqueado}
+                  onChange={(e) => setForm({ ...form, distancia2: e.target.value })}
+                  style={bloqueado ? cellRo : inp}
+                />,
+              ]}
+            />
 
-                <div style={ui.nestedPanel}>
-                  <TopoFieldLabel
-                    texto="Ángulo observado P1 → P2"
-                    ayuda="Ángulo horizontal medido desde la visual a P1 hasta la visual a P2 (como en campo)."
-                  />
-                  <div style={{ marginTop: 6 }}>
-                    <TopoAngularInput
-                      label=""
-                      value={form.angulo_observado_gms}
-                      disabled={bloqueado}
-                      onChange={(_, v) => setForm({ ...form, angulo_observado_gms: v })}
-                    />
-                  </div>
-                </div>
-
-                <div style={ui.nestedPanel}>
-                  <TopoFieldLabel
-                    texto={nombreP2 ? `Punto 2 — ${nombreP2}` : 'Punto 2'}
-                    ayuda="Segundo punto conocido de la misma poligonal."
-                  />
-                  <select
-                    value={form.punto2_id}
-                    disabled={!form.poligonal_id || bloqueado}
-                    onChange={(e) => setForm({ ...form, punto2_id: e.target.value })}
-                    style={{ ...ui.inputStyle, marginTop: 6 }}
-                  >
-                    <option value="">—</option>
-                    {puntos.filter((p) => p.id !== form.punto1_id).map((p) => (
-                      <option key={p.id} value={p.id}>{p.nombre}</option>
-                    ))}
-                  </select>
-                  <input
-                    placeholder="Distancia a P2 (m)"
-                    value={form.distancia2}
-                    disabled={bloqueado}
-                    onChange={(e) => setForm({ ...form, distancia2: e.target.value })}
-                    style={{ ...ui.inputStyle, marginTop: 8 }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+            <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
               {modo === 'form' && puede(permisos, 'crear') && (
                 <button
                   type="button"
