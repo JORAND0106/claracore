@@ -9,6 +9,7 @@ import {
   formatEquipoDetalle,
   formatMaterialLine,
   formatNumerosVale,
+  materialRowCells,
   materialesConRegistro,
   personalConCantidad,
 } from './libroDigitalUtils.js'
@@ -92,6 +93,25 @@ describe('helpers', () => {
     assert.equal(formatNumerosVale({ numeros_vale: '  V-900  ' }), 'V-900')
     assert.equal(formatNumerosVale({ numero_vale: '55' }), '55')
     assert.equal(formatNumerosVale({ numeros_vale: '' }), '')
+  })
+
+  it('materialRowCells arma columnas completas para la tabla del libro', () => {
+    const c = materialRowCells({
+      movimiento: 'ingreso',
+      tipo_material: 'Material granular TM 25-40',
+      proveedor: 'GRECO S.A.S.',
+      cantidad: 60,
+      numeros_vale: '101, 102',
+      ubicacion_pk: '157409',
+    })
+    assert.deepEqual(c, {
+      movimiento: 'Ingreso',
+      tipo: 'Material granular TM 25-40',
+      proveedor: 'GRECO S.A.S.',
+      cantidad: '60',
+      vales: '101, 102',
+      pk: '157409',
+    })
   })
 
   it('equiposConUso prioriza equipo_nombre y formatEquipoDetalle', () => {

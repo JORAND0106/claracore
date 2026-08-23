@@ -19,8 +19,8 @@ import {
   equiposConUso,
   formatClimaResumen,
   formatEquipoDetalle,
-  formatMaterialLine,
   libroPalette,
+  materialRowCells,
   materialesConRegistro,
   personalConCantidad,
 } from './libroDigitalUtils'
@@ -142,11 +142,35 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
       {materiales.length === 0 ? (
         <div className="cc-libro-empty">Sin materiales registrados.</div>
       ) : (
-        <ul className="cc-libro-list">
-          {materiales.map((m, i) => (
-            <li key={m.id || i}>{formatMaterialLine(m)}</li>
-          ))}
-        </ul>
+        <div className="cc-libro-sheet-wrap">
+          <table className="cc-libro-sheet" style={{ borderColor: palette.pageEdge }}>
+            <thead>
+              <tr style={{ background: palette.accentSoft, color: palette.accent }}>
+                <th scope="col">Movimiento</th>
+                <th scope="col">Tipo de material</th>
+                <th scope="col">Proveedor</th>
+                <th scope="col">Cantidad</th>
+                <th scope="col">Vale(s)</th>
+                <th scope="col">PK</th>
+              </tr>
+            </thead>
+            <tbody>
+              {materiales.map((m, i) => {
+                const c = materialRowCells(m)
+                return (
+                  <tr key={m.id || i} style={{ color: palette.text, borderColor: palette.pageEdge }}>
+                    <td data-label="Movimiento">{c.movimiento}</td>
+                    <td data-label="Tipo de material">{c.tipo}</td>
+                    <td data-label="Proveedor">{c.proveedor}</td>
+                    <td data-label="Cantidad">{c.cantidad}</td>
+                    <td data-label="Vale(s)" className="cc-libro-sheet-cell--nowrap">{c.vales}</td>
+                    <td data-label="PK" className="cc-libro-sheet-cell--nowrap">{c.pk}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <SectionTitle palette={palette}>Observaciones</SectionTitle>

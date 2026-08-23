@@ -3531,6 +3531,61 @@ select.cc-dashboard-acta-select--light option {
   gap: 8px;
 }
 
+.cc-libro-sheet-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 4px 0 8px;
+  border: 1px solid var(--libro-page-edge, #bae6fd);
+  border-radius: 8px;
+}
+
+.cc-libro-sheet {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: var(--cc-xs);
+  line-height: 1.35;
+  table-layout: auto;
+}
+
+.cc-libro-sheet th,
+.cc-libro-sheet td {
+  border-bottom: 1px solid var(--libro-page-edge, #bae6fd);
+  border-right: 1px solid color-mix(in srgb, var(--libro-page-edge, #bae6fd) 70%, transparent);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.cc-libro-sheet th:last-child,
+.cc-libro-sheet td:last-child {
+  border-right: none;
+}
+
+.cc-libro-sheet thead th {
+  font-weight: 780;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.cc-libro-sheet tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cc-libro-sheet tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--libro-accent, #0077B6) 4%, transparent);
+}
+
+.cc-libro-sheet-cell--nowrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .cc-libro-prose {
   font-size: var(--cc-body);
   line-height: 1.55;
