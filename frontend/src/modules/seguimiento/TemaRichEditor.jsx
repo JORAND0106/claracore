@@ -8,13 +8,17 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef, useState } from 'react'
 import { plainTextToHtml } from './richTextUtils'
+import { EnsureEditableAfterTable } from './temaEnsureEditableAfterTable.js'
+import { scrollEditorCaretIntoView } from './temaEditorScroll.js'
 import { applyColumnWidthPx, currentCellColWidth } from './temaTableWidth'
 
 /**
- * Editor TipTap para temas/ideas y bitácora.
+ * Editor TipTap para temas/ideas y bitácora (Actas, Observaciones Diario, Evento).
  * - Viñetas, numeración y listas multinivel
  * - Negrita / cursiva / subrayado
  * - Tablas con columnas redimensionables (arrastre + ancho numérico)
+ * - Auto-scroll del caret al escribir contenido largo
+ * - Párrafo editable garantizado tras cada tabla
  */
 export default function TemaRichEditor({
   t,
@@ -64,6 +68,7 @@ export default function TemaRichEditor({
       TableRow,
       TableHeader,
       TableCell,
+      EnsureEditableAfterTable,
     ],
     content: plainTextToHtml(value),
     editable,
@@ -71,6 +76,9 @@ export default function TemaRichEditor({
       attributes: {
         class: 'tema-rich-prose',
       },
+      // ProseMirror también intenta scroll interno; el modal lo completa onUpdate.
+      scrollThreshold: 24,
+      scrollMargin: 24,
       handlePaste: (_view, event) => {
         const pasteImg = onPasteImageRef.current
         if (typeof pasteImg !== 'function') return false
@@ -121,9 +129,11 @@ export default function TemaRichEditor({
       skipNextExternal.current = true
       onChangeRef.current?.(ed.getHTML())
       setTick((n) => n + 1)
+      requestAnimationFrame(() => scrollEditorCaretIntoView(ed))
     },
-    onSelectionUpdate: () => {
+    onSelectionUpdate: ({ editor: ed }) => {
       setTick((n) => n + 1)
+      requestAnimationFrame(() => scrollEditorCaretIntoView(ed))
     },
   })
 
@@ -266,7 +276,11 @@ export default function TemaRichEditor({
             aria-pressed={inTable}
             style={btn(inTable)}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+            onClick={() => {
+              editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+              // EnsureEditableAfterTable añade párrafo tras la tabla; enfocar scroll.
+              requestAnimationFrame(() => scrollEditorCaretIntoView(editor))
+            }}
           >
             ⊞ Tabla
           </button>
@@ -492,6 +506,24 @@ function editorCss(t, minHeight) {
 }
 .tema-rich-prose.resize-cursor {
   cursor: col-resize;
+}
+/* Gapcursor: permite colocar el caret antes/después de tablas */
+.tema-rich-prose .ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+.tema-rich-prose .ProseMirror-gapcursor:after {
+  content: '';
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid ${t.text || '#0f172a'};
+  animation: tema-rich-gapcursor-blink 1.1s steps(2, start) infinite;
+}
+@keyframes tema-rich-gapcursor-blink {
+  to { visibility: hidden; }
 }
 `
 }
