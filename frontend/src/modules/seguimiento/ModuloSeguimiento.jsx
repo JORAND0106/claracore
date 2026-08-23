@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { BookOpen } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
+import { accesoBitacora } from './bitacoraPermisos'
+import LibroDigitalVista, { LibroDigitalSelector } from './LibroDigitalVista'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
@@ -9,6 +12,7 @@ import { useSeguimientoCompact } from './seguimientoShared'
  * Seguimiento: vista única de Calendario (tareas, actas y bitácora por día).
  * Las vistas internas de Actas y Bitácora permanecen disponibles vía el
  * flujo de creación/apertura desde el día; no se eliminan sus componentes.
+ * El Libro digital es una vista alternativa de solo lectura.
  */
 export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const cid = contratoId ?? usuario?.contrato_id
@@ -16,11 +20,17 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     () => accesoSeguimiento(usuario, cid),
     [usuario, cid],
   )
+  const permisosBitacora = useMemo(
+    () => accesoBitacora(usuario, cid),
+    [usuario, cid],
+  )
   const compact = useSeguimientoCompact()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const [calKey, setCalKey] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
+  const [libroSelectorOpen, setLibroSelectorOpen] = useState(false)
+  const [libroModo, setLibroModo] = useState(null) // 'actas' | 'bitacora' | null
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -74,13 +84,36 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             Calendario del contrato · tareas, actas y bitácora de obra
           </div>
         </div>
-        <ModuloDataRefreshBar
-          theme={t}
-          updatedAt={updatedAt}
-          busy={refreshBusy}
-          onRefresh={doRefresh}
-          label="Seguimiento"
-        />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setLibroSelectorOpen(true)}
+            title="Abrir libro digital de Actas o Bitácora"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: `1px solid ${t.border}`,
+              background: t.bgCard || t.bg,
+              color: t.text,
+              fontWeight: 700,
+              fontSize: 'var(--cc-sm)',
+              cursor: 'pointer',
+            }}
+          >
+            <BookOpen size={18} strokeWidth={2.2} aria-hidden />
+            Libro
+          </button>
+          <ModuloDataRefreshBar
+            theme={t}
+            updatedAt={updatedAt}
+            busy={refreshBusy}
+            onRefresh={doRefresh}
+            label="Seguimiento"
+          />
+        </div>
       </div>
 
       <SeguimientoCalendarioPanel
@@ -92,6 +125,28 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         refreshKey={calKey}
         showFilters
       />
+
+      <LibroDigitalSelector
+        t={t}
+        open={libroSelectorOpen}
+        onClose={() => setLibroSelectorOpen(false)}
+        puedeBitacora={Boolean(permisosBitacora.ver)}
+        onSelect={(modo) => {
+          setLibroSelectorOpen(false)
+          setLibroModo(modo)
+        }}
+      />
+
+      {libroModo && (
+        <LibroDigitalVista
+          modo={libroModo}
+          t={t}
+          usuario={usuario}
+          token={token}
+          contratoId={contratoId}
+          onClose={() => setLibroModo(null)}
+        />
+      )}
     </div>
   )
 }
