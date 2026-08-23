@@ -418,7 +418,15 @@ export default function LibroDigitalVista({
     }
   }, [api, cid, token, modo, permisosBitacora.ver])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    // Cambio de contrato: vaciar páginas/caché para no mezclar contenido.
+    setPages([])
+    setIndex(0)
+    setActaDetails({})
+    setActaLoading({})
+    actaFetchRef.current = new Set()
+    void load()
+  }, [load])
 
   useEffect(() => {
     rootRef.current?.focus?.({ preventScroll: true })

@@ -28,6 +28,8 @@ export function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
     if (exact) return exact
     const legacy = rows.find((p) => p.contrato_id == null || p.contrato_id === '')
     if (legacy) return legacy
+    // No reutilizar la matriz de otro contrato cuando se pidió uno concreto.
+    return null
   }
   return rows[0]
 }
@@ -61,6 +63,7 @@ export function permisoReporteCantidades(usuario, contratoId) {
     if (scoped) return scoped
     const legacy = fuzzy.find((p) => p.contrato_id == null || p.contrato_id === '')
     if (legacy) return legacy
+    return null
   }
   return fuzzy[0]
 }
