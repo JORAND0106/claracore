@@ -229,26 +229,54 @@ export function formatNumerosVale(m) {
 }
 
 /**
+ * Celdas de una fila de material para la tabla del Libro digital.
+ * Vale(s) y PK sin truncar.
+ * @param {object} m
+ * @returns {{ movimiento: string, tipo: string, proveedor: string, cantidad: string, vales: string, pk: string }}
+ */
+export function materialRowCells(m) {
+  if (!m) {
+    return {
+      movimiento: '—',
+      tipo: '—',
+      proveedor: '—',
+      cantidad: '—',
+      vales: '—',
+      pk: '—',
+    }
+  }
+  const tipo = String(m.tipo_material || m.tipo || m.nombre || m.descripcion || '').trim()
+  const proveedor = String(m.proveedor || '').trim()
+  const cant = m.cantidad
+  const cantidad = (cant != null && cant !== '' && Number(cant) !== 0)
+    ? String(cant)
+    : ''
+  const vales = formatNumerosVale(m)
+  const pk = String(m.ubicacion_pk || m.pk_label || m.pk || '').trim()
+  return {
+    movimiento: labelMovimientoMaterial(m.movimiento),
+    tipo: tipo || '—',
+    proveedor: proveedor || '—',
+    cantidad: cantidad || '—',
+    vales: vales || '—',
+    pk: pk || '—',
+  }
+}
+
+/**
  * Texto de lectura para una fila de material
  * (movimiento, tipo, proveedor, cant., vale(s), PK).
  * @param {object} m
  */
 export function formatMaterialLine(m) {
   if (!m) return '—'
-  const parts = []
-  parts.push(labelMovimientoMaterial(m.movimiento))
-  const tipo = String(m.tipo_material || m.tipo || m.nombre || m.descripcion || '').trim()
-  if (tipo) parts.push(tipo)
-  const proveedor = String(m.proveedor || '').trim()
-  if (proveedor) parts.push(proveedor)
-  const cant = m.cantidad
-  if (cant != null && cant !== '' && Number(cant) !== 0) {
-    parts.push(String(cant))
-  }
-  const vales = formatNumerosVale(m)
-  if (vales) parts.push(`Vale(s): ${vales}`)
-  const pk = String(m.ubicacion_pk || m.pk_label || m.pk || '').trim()
-  if (pk) parts.push(`PK ${pk}`)
+  const c = materialRowCells(m)
+  const parts = [c.movimiento]
+  if (c.tipo !== '—') parts.push(c.tipo)
+  if (c.proveedor !== '—') parts.push(c.proveedor)
+  if (c.cantidad !== '—') parts.push(c.cantidad)
+  if (c.vales !== '—') parts.push(`Vale(s): ${c.vales}`)
+  if (c.pk !== '—') parts.push(`PK ${c.pk}`)
   return parts.join(' · ')
 }
 
