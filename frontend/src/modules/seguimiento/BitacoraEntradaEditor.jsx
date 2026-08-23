@@ -1086,6 +1086,7 @@ export default function BitacoraEntradaEditor({
                             </select>
                           </td>
                           <td style={ui.td} data-label="Tipo de material">
+                            {/* Catálogo Bitácora propio — no Almacén/insumos */}
                             <MaterialTipoCatalogSelect
                               t={t}
                               api={api}

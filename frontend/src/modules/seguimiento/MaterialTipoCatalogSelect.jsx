@@ -1,11 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { debeRegistrarTipoMaterialNuevo } from './materialTipoCatalogo.js'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import {
+  debeRegistrarTipoMaterialNuevo,
+  filtrarTiposMaterial,
+  mergeTiposMaterialOpts,
+  normalizeTiposMaterialRows,
+} from './materialTipoCatalogo.js'
 
 /**
- * Catálogo reutilizable de tipo de material por contrato.
- * - Al escribir, el valor se propaga al padre (para que Guardar no pierda el texto).
- * - Al salir del campo con un valor nuevo, se registra automáticamente en el catálogo.
- * - Si ya existe, se selecciona desde las sugerencias.
+ * Autocompletado de «Tipo de material» — catálogo propio de Bitácora de Obra
+ * por contrato (`seguimiento_bitacora_tipo_material`).
+ *
+ * Independiente del catálogo de insumos de Almacén: este componente solo llama
+ * listBitacoraTiposMaterial / upsertBitacoraTipoMaterial.
+ *
+ * - Al escribir, el valor se propaga al padre (Guardar no pierde el texto).
+ * - Al salir del campo con un valor nuevo, se registra en el catálogo Bitácora.
+ * - El desplegable usa position:fixed (portal) para no quedar recortado por
+ *   overflow:auto de la grilla Excel.
  */
 export default function MaterialTipoCatalogSelect({
   t,
@@ -17,22 +29,38 @@ export default function MaterialTipoCatalogSelect({
   inputStyle = null,
 }) {
   const [q, setQ] = useState(value || '')
-  const [opts, setOpts] = useState([])
+  const [allOpts, setAllOpts] = useState([])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [aviso, setAviso] = useState('')
+  const [menuBox, setMenuBox] = useState(null)
   const registeringRef = useRef(false)
+  const inputRef = useRef(null)
+  const allOptsRef = useRef([])
 
-  const load = useCallback(async (needle) => {
+  const setOptsMerged = useCallback((incoming) => {
+    setAllOpts((prev) => {
+      const next = mergeTiposMaterialOpts(prev, incoming)
+      allOptsRef.current = next
+      return next
+    })
+  }, [])
+
+  const loadCatalog = useCallback(async () => {
     if (!api?.listBitacoraTiposMaterial) {
-      setOpts([])
+      setAllOpts([])
+      allOptsRef.current = []
       return
     }
     try {
-      const rows = await api.listBitacoraTiposMaterial(needle || '')
-      setOpts(Array.isArray(rows) ? rows : [])
+      // Sin filtro: catálogo completo del contrato (solo Bitácora).
+      const rows = await api.listBitacoraTiposMaterial('')
+      const normalized = normalizeTiposMaterialRows(rows)
+      setAllOpts(normalized)
+      allOptsRef.current = normalized
     } catch {
-      setOpts([])
+      setAllOpts([])
+      allOptsRef.current = []
     }
   }, [api])
 
@@ -41,10 +69,39 @@ export default function MaterialTipoCatalogSelect({
   }, [value])
 
   useEffect(() => {
+    void loadCatalog()
+  }, [loadCatalog])
+
+  const filtered = filtrarTiposMaterial(allOpts, q)
+
+  const updateMenuBox = useCallback(() => {
+    const el = inputRef.current
+    if (!el || !open) {
+      setMenuBox(null)
+      return
+    }
+    const r = el.getBoundingClientRect()
+    setMenuBox({
+      top: r.bottom + 2,
+      left: r.left,
+      width: Math.max(r.width, 160),
+    })
+  }, [open])
+
+  useLayoutEffect(() => {
+    updateMenuBox()
+  }, [updateMenuBox, filtered.length, q])
+
+  useEffect(() => {
     if (!open) return undefined
-    const tmr = setTimeout(() => { void load(q) }, 200)
-    return () => clearTimeout(tmr)
-  }, [q, open, load])
+    const onWin = () => updateMenuBox()
+    window.addEventListener('resize', onWin)
+    window.addEventListener('scroll', onWin, true)
+    return () => {
+      window.removeEventListener('resize', onWin)
+      window.removeEventListener('scroll', onWin, true)
+    }
+  }, [open, updateMenuBox])
 
   const pick = (row) => {
     const nombre = row?.nombre || ''
@@ -67,16 +124,18 @@ export default function MaterialTipoCatalogSelect({
     setAviso('')
     try {
       const row = await api.upsertBitacoraTipoMaterial({ nombre: n })
-      if (row && row.nombre) {
+      if (row && row.nombre && row.ok !== false) {
+        setOptsMerged([row])
         pick(row)
-        setAviso('Tipo agregado al catálogo del contrato.')
-        void load('')
+        setAviso('Tipo agregado al catálogo de Bitácora (este contrato).')
+        void loadCatalog()
       } else if (row && row.ok === false) {
-        // Valor ya queda en el formulario; el catálogo falló (p. ej. migración pendiente).
         onChange?.(n)
         setQ(n)
         setAviso(row.detail || 'No se pudo guardar en el catálogo; el valor quedó en el reporte.')
       } else {
+        // Optimistic: conservar en sugerencias locales aunque la API no devuelva fila.
+        setOptsMerged([{ id: `local-${n}`, nombre: n }])
         onChange?.(n)
         setQ(n)
       }
@@ -85,7 +144,7 @@ export default function MaterialTipoCatalogSelect({
       onChange?.(n)
       setQ(n)
       setOpen(false)
-      setAviso(e.message || 'No se pudo registrar el tipo en el catálogo')
+      setAviso(e.message || 'No se pudo registrar el tipo en el catálogo de Bitácora')
     } finally {
       setBusy(false)
       registeringRef.current = false
@@ -95,7 +154,7 @@ export default function MaterialTipoCatalogSelect({
   const onBlurCommit = () => {
     setTimeout(() => {
       setOpen(false)
-      const decision = debeRegistrarTipoMaterialNuevo(q, value, opts)
+      const decision = debeRegistrarTipoMaterialNuevo(q, value, allOptsRef.current)
       if (decision.action === 'clear') {
         onChange?.('')
         return
@@ -104,7 +163,6 @@ export default function MaterialTipoCatalogSelect({
         pick(decision.row)
         return
       }
-      // Propagar siempre al padre y registrar en catálogo (upsert idempotente).
       onChange?.(decision.nombre)
       void registrarNuevo(decision.nombre)
     }, 150)
@@ -121,52 +179,79 @@ export default function MaterialTipoCatalogSelect({
     boxSizing: 'border-box',
   }
 
+  const menu = open && menuBox && filtered.length > 0
+    ? createPortal(
+      <div
+        role="listbox"
+        style={{
+          position: 'fixed',
+          zIndex: 10050,
+          top: menuBox.top,
+          left: menuBox.left,
+          width: menuBox.width,
+          maxHeight: 200,
+          overflow: 'auto',
+          background: t.bgCard || t.bg || '#fff',
+          border: `1px solid ${t.border}`,
+          borderRadius: 6,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.16)',
+        }}
+      >
+        {filtered.map((o) => (
+          <button
+            key={o.id != null ? String(o.id) : o.nombre}
+            type="button"
+            role="option"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => pick(o)}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '6px 8px',
+              border: 'none',
+              background: 'transparent',
+              color: t.text,
+              cursor: 'pointer',
+              fontSize: 'var(--cc-sm)',
+            }}
+          >
+            {o.nombre}
+          </button>
+        ))}
+      </div>,
+      document.body,
+    )
+    : null
+
   return (
     <div style={{ position: 'relative' }}>
       <input
+        ref={inputRef}
         disabled={disabled || busy}
         value={q}
         placeholder={placeholder}
+        autoComplete="off"
         onChange={(e) => {
           const v = e.target.value
           setQ(v)
           setOpen(true)
           setAviso('')
-          // Mantener el padre sincronizado para que Guardar no pierda el texto.
           onChange?.(v)
         }}
-        onFocus={() => { setOpen(true); void load(q) }}
+        onFocus={() => {
+          setOpen(true)
+          void loadCatalog()
+        }}
         onBlur={onBlurCommit}
         style={inp}
       />
-      {open && opts.length > 0 && (
-        <div style={{
-          position: 'absolute', zIndex: 40, left: 0, right: 0, top: '100%',
-          marginTop: 2, maxHeight: 160, overflow: 'auto',
-          background: t.bgCard || t.bg, border: `1px solid ${t.border}`, borderRadius: 6,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-        }}>
-          {opts.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pick(o)}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '6px 8px', border: 'none', background: 'transparent',
-                color: t.text, cursor: 'pointer', fontSize: 'var(--cc-sm)',
-              }}
-            >
-              {o.nombre}
-            </button>
-          ))}
-        </div>
-      )}
+      {menu}
       {aviso ? (
         <div style={{
           marginTop: 4, fontSize: 10, color: t.textMuted, lineHeight: 1.3,
-        }}>
+        }}
+        >
           {aviso}
         </div>
       ) : null}

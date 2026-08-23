@@ -1062,9 +1062,15 @@ def route_list_bitacora_tipos_material(
     q: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    """Catálogo propio de Bitácora (no Almacén / insumos)."""
     require_permiso_bitacora(current_user, "ver")
     _check_contrato(current_user, contrato_id)
-    return list_tipos_material(supabase, contrato_id, q or "")
+    return list_tipos_material(
+        supabase,
+        contrato_id,
+        q or "",
+        user_id=_uid(current_user),
+    )
 
 
 @router.post("/{contrato_id}/bitacora/tipos-material")
@@ -1073,7 +1079,14 @@ def route_upsert_bitacora_tipo_material(
     body: BitacoraTipoMaterialBody,
     current_user=Depends(get_current_user),
 ):
-    require_permiso_bitacora(current_user, "crear")
+    """Registra tipo en catálogo Bitácora. Permite crear o editar (flujo del Diario)."""
+    from bitacora_permissions import tiene_permiso_bitacora
+
+    if not (
+        tiene_permiso_bitacora(current_user, "crear")
+        or tiene_permiso_bitacora(current_user, "editar")
+    ):
+        require_permiso_bitacora(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     row = upsert_tipo_material(
         supabase, contrato_id, body.nombre, user_id=_uid(current_user),
@@ -1086,7 +1099,7 @@ def route_upsert_bitacora_tipo_material(
     return {
         "ok": False,
         "detail": (
-            "No se pudo guardar el tipo de material en el catálogo. "
+            "No se pudo guardar el tipo de material en el catálogo de Bitácora. "
             "Verifique que la migración seguimiento_bitacora_tipo_material esté aplicada."
         ),
     }

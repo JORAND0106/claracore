@@ -1,4 +1,6 @@
--- Bitácora: catálogo reutilizable de tipo de material por contrato.
+-- Bitácora de Obra: catálogo INDEPENDIENTE de tipo de material por contrato.
+-- NO relacionado con el catálogo de insumos de Almacén (almacen_insumo, etc.).
+-- Solo alimenta el autocompletado de «Tipo de material» en Materiales del Reporte Diario.
 
 CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_tipo_material (
   id            bigserial PRIMARY KEY,
@@ -12,7 +14,7 @@ CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_tipo_material (
 );
 
 COMMENT ON TABLE public.seguimiento_bitacora_tipo_material IS
-  'Tipos de material de Bitácora (ingresos/salidas), reutilizables por contrato vía autocompletado.';
+  'Catálogo propio de Bitácora de Obra (tipo de material por contrato). Independiente del catálogo de insumos de Almacén; no compartir ni consultar tablas de Almacén.';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_tipo_mat_contrato_nombre
   ON public.seguimiento_bitacora_tipo_material (contrato_id, nombre_norm)
@@ -21,5 +23,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_tipo_mat_contrato_nombre
 CREATE INDEX IF NOT EXISTS idx_seg_bitacora_tipo_mat_contrato_activo
   ON public.seguimiento_bitacora_tipo_material (contrato_id)
   WHERE activo = true;
+
+GRANT SELECT, INSERT, UPDATE ON public.seguimiento_bitacora_tipo_material TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.seguimiento_bitacora_tipo_material_id_seq TO service_role;
 
 NOTIFY pgrst, 'reload schema';
