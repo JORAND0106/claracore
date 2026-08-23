@@ -17,27 +17,22 @@ import {
   buildActasPages,
   buildBitacoraPages,
   equiposConUso,
+  formatClimaResumen,
+  formatEquipoDetalle,
+  formatMaterialLine,
   libroPalette,
+  materialesConRegistro,
   personalConCantidad,
 } from './libroDigitalUtils'
 
 const LOGO_SRC = '/CLARA.CORE.png'
-const SWIPE_THRESHOLD = 56
+const SWIPE_THRESHOLD = 48
+const TAP_MOVE_MAX = 12
+const FLIP_MS = 560
 
 function SectionTitle({ palette, children }) {
   return (
-    <div
-      style={{
-        fontSize: 'var(--cc-sm)',
-        fontWeight: 780,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: palette.accent,
-        margin: '14px 0 8px',
-        paddingBottom: 4,
-        borderBottom: `1px solid ${palette.pageEdge}`,
-      }}
-    >
+    <div className="cc-libro-section-title" style={{ color: palette.accent, borderColor: palette.pageEdge }}>
       {children}
     </div>
   )
@@ -46,9 +41,9 @@ function SectionTitle({ palette, children }) {
 function MetaLine({ palette, label, value }) {
   if (value == null || value === '') return null
   return (
-    <div style={{ display: 'flex', gap: 8, fontSize: 'var(--cc-sm)', marginBottom: 4, lineHeight: 1.45 }}>
-      <span style={{ color: palette.textMuted, minWidth: 92, flexShrink: 0 }}>{label}</span>
-      <span style={{ color: palette.text, fontWeight: 600 }}>{value}</span>
+    <div className="cc-libro-meta-line">
+      <span style={{ color: palette.textMuted }}>{label}</span>
+      <span style={{ color: palette.text }}>{value}</span>
     </div>
   )
 }
@@ -60,7 +55,7 @@ function ProseHtml({ html, palette }) {
   return (
     <div
       className="cc-libro-prose"
-      style={{ color: palette.text, fontSize: 'var(--cc-body)', lineHeight: 1.55 }}
+      style={{ color: palette.text }}
       dangerouslySetInnerHTML={{ __html: String(html) }}
     />
   )
@@ -68,39 +63,13 @@ function ProseHtml({ html, palette }) {
 
 function PageHeader({ palette, eyebrow, title, subtitle }) {
   return (
-    <header
-      className="cc-libro-page-header"
-      style={{
-        marginBottom: 14,
-        paddingBottom: 12,
-        borderBottom: `2px solid ${palette.accent}`,
-      }}
-    >
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 8,
-          padding: '4px 10px',
-          borderRadius: 999,
-          background: palette.accentSoft,
-          color: palette.accent,
-          fontSize: 'var(--cc-xs)',
-          fontWeight: 750,
-          letterSpacing: '0.03em',
-          textTransform: 'uppercase',
-        }}
-      >
+    <header className="cc-libro-page-header" style={{ borderColor: palette.accent }}>
+      <div className="cc-libro-eyebrow" style={{ background: palette.accentSoft, color: palette.accent }}>
         {eyebrow}
       </div>
-      <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 800, color: palette.text, lineHeight: 1.2 }}>
-        {title}
-      </div>
+      <h1 className="cc-libro-page-title" style={{ color: palette.text }}>{title}</h1>
       {subtitle ? (
-        <div style={{ marginTop: 4, fontSize: 'var(--cc-sm)', color: palette.textMuted }}>
-          {subtitle}
-        </div>
+        <div className="cc-libro-page-sub" style={{ color: palette.textMuted }}>{subtitle}</div>
       ) : null}
     </header>
   )
@@ -108,14 +77,13 @@ function PageHeader({ palette, eyebrow, title, subtitle }) {
 
 function DiarioPage({ page, palette, api }) {
   const d = page.data || {}
-  const clima = d.clima_descripcion || labelClima(d.clima_codigo)
-  const temp = d.clima_temp_c != null && d.clima_temp_c !== '' ? `${d.clima_temp_c} °C` : ''
+  const clima = formatClimaResumen({
+    ...d,
+    clima_descripcion: d.clima_descripcion || labelClima(d.clima_codigo),
+  })
   const personal = personalConCantidad(d.personal)
   const equipos = equiposConUso(d.equipos_uso)
-  const materiales = Array.isArray(d.materiales) ? d.materiales.filter((m) => {
-    const nom = String(m?.tipo || m?.descripcion || m?.nombre || '').trim()
-    return Boolean(nom)
-  }) : []
+  const materiales = materialesConRegistro(d.materiales)
   const fotos = Array.isArray(d.imagenes) ? d.imagenes : []
 
   return (
@@ -130,13 +98,18 @@ function DiarioPage({ page, palette, api }) {
           d.estado ? `Estado: ${d.estado}` : null,
         ].filter(Boolean).join(' · ')}
       />
+
       <SectionTitle palette={palette}>Clima</SectionTitle>
-      <MetaLine palette={palette} label="Condición" value={clima || '—'} />
-      <MetaLine palette={palette} label="Temperatura" value={temp} />
+      <MetaLine palette={palette} label="Condición" value={clima.condicion} />
+      <MetaLine palette={palette} label="Temperatura" value={clima.temperatura} />
+      <MetaLine palette={palette} label="Código" value={clima.codigo} />
+      {clima.editadoManual ? (
+        <MetaLine palette={palette} label="Origen" value="Editado manualmente" />
+      ) : null}
 
       <SectionTitle palette={palette}>Personal</SectionTitle>
       {personal.length === 0 ? (
-        <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin registro de personal.</div>
+        <div className="cc-libro-empty">Sin registro de personal.</div>
       ) : (
         <ul className="cc-libro-list">
           {personal.map((p, i) => (
@@ -150,29 +123,28 @@ function DiarioPage({ page, palette, api }) {
 
       <SectionTitle palette={palette}>Maquinaria</SectionTitle>
       {equipos.length === 0 ? (
-        <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin maquinaria registrada.</div>
+        <div className="cc-libro-empty">Sin maquinaria registrada.</div>
       ) : (
         <ul className="cc-libro-list">
-          {equipos.map((e, i) => (
-            <li key={`${e.id || e.equipo_id || i}`}>
-              <strong>{e.nombre || e.equipo_nombre || e.descripcion}</strong>
-              {e.horas != null && e.horas !== '' ? <span> · {e.horas} h</span> : null}
-              {e.cantidad != null && e.cantidad !== '' && e.horas == null ? <span> · {e.cantidad}</span> : null}
-            </li>
-          ))}
+          {equipos.map((e, i) => {
+            const det = formatEquipoDetalle(e)
+            return (
+              <li key={`${e.id || e.equipo_id || i}`}>
+                <strong>{det.titulo}</strong>
+                {det.detalle ? <div className="cc-libro-item-detail">{det.detalle}</div> : null}
+              </li>
+            )
+          })}
         </ul>
       )}
 
       <SectionTitle palette={palette}>Materiales</SectionTitle>
       {materiales.length === 0 ? (
-        <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin materiales registrados.</div>
+        <div className="cc-libro-empty">Sin materiales registrados.</div>
       ) : (
         <ul className="cc-libro-list">
           {materiales.map((m, i) => (
-            <li key={m.id || i}>
-              <strong>{m.tipo || m.nombre || m.descripcion}</strong>
-              {m.cantidad != null && m.cantidad !== '' ? <span> · {m.cantidad}{m.unidad ? ` ${m.unidad}` : ''}</span> : null}
-            </li>
+            <li key={m.id || i}>{formatMaterialLine(m)}</li>
           ))}
         </ul>
       )}
@@ -189,8 +161,8 @@ function DiarioPage({ page, palette, api }) {
                 key={im.blob_path || im.id || i}
                 api={api}
                 im={im}
-                width={96}
-                height={72}
+                width={110}
+                height={82}
                 style={{ borderRadius: 6, overflow: 'hidden', border: `1px solid ${palette.pageEdge}` }}
               />
             ))}
@@ -227,8 +199,8 @@ function EventoPage({ page, palette, api }) {
                 key={im.blob_path || im.id || i}
                 api={api}
                 im={im}
-                width={96}
-                height={72}
+                width={110}
+                height={82}
                 style={{ borderRadius: 6, overflow: 'hidden', border: `1px solid ${palette.pageEdge}` }}
               />
             ))}
@@ -270,14 +242,12 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
       <MetaLine palette={palette} label="Elaborador" value={meta.elaborador_nombre || a.elaborador_nombre} />
 
       {loadingDetail && !detail ? (
-        <div style={{ color: palette.textMuted, marginTop: 16, fontSize: 'var(--cc-sm)' }}>
-          Cargando contenido del acta…
-        </div>
+        <div className="cc-libro-empty" style={{ marginTop: 16 }}>Cargando contenido del acta…</div>
       ) : (
         <>
           <SectionTitle palette={palette}>Temas</SectionTitle>
           {ideas.length === 0 ? (
-            <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin temas registrados.</div>
+            <div className="cc-libro-empty">Sin temas registrados.</div>
           ) : (
             <ol className="cc-libro-ol">
               {ideas.map((idea, i) => {
@@ -285,18 +255,14 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
                 const body = htmlToPlainText(idea.texto || idea.contenido || '')
                 return (
                   <li key={idea.id || i}>
-                    <div style={{ fontWeight: 700, color: palette.text }}>
-                      {titulo || `Tema ${i + 1}`}
-                    </div>
+                    <div style={{ fontWeight: 700 }}>{titulo || `Tema ${i + 1}`}</div>
                     {body ? (
-                      <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)', marginTop: 2, whiteSpace: 'pre-wrap' }}>
+                      <div className="cc-libro-item-detail">
                         {body.length > 420 ? `${body.slice(0, 419).trim()}…` : body}
                       </div>
                     ) : null}
                     {idea.quien_dijo ? (
-                      <div style={{ fontSize: 'var(--cc-xs)', color: palette.textMuted, marginTop: 2 }}>
-                        Quién dijo: {idea.quien_dijo}
-                      </div>
+                      <div className="cc-libro-item-detail">Quién dijo: {idea.quien_dijo}</div>
                     ) : null}
                   </li>
                 )
@@ -306,7 +272,7 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
 
           <SectionTitle palette={palette}>Compromisos</SectionTitle>
           {compromisos.length === 0 ? (
-            <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin compromisos en esta acta.</div>
+            <div className="cc-libro-empty">Sin compromisos en esta acta.</div>
           ) : (
             <ul className="cc-libro-list">
               {compromisos.map((c, i) => {
@@ -318,7 +284,7 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
                       <span> · {c.asignado_nombre || c.responsable_nombre}</span>
                     ) : null}
                     {c.fecha_vencimiento ? (
-                      <span style={{ color: palette.textMuted }}> · vence {fmtFecha(c.fecha_vencimiento)}</span>
+                      <span className="cc-libro-item-detail"> · vence {fmtFecha(c.fecha_vencimiento)}</span>
                     ) : null}
                   </li>
                 )
@@ -328,7 +294,7 @@ function ActaPage({ page, palette, detail, loadingDetail }) {
 
           <SectionTitle palette={palette}>Firmantes / Asistentes</SectionTitle>
           {firmantes.length === 0 ? (
-            <div style={{ color: palette.textMuted, fontSize: 'var(--cc-sm)' }}>Sin asistentes registrados.</div>
+            <div className="cc-libro-empty">Sin asistentes registrados.</div>
           ) : (
             <ul className="cc-libro-list">
               {firmantes.map((f, i) => (
@@ -356,30 +322,16 @@ function ActaBloqueadaPage({ page, palette }) {
         title={numeroActaLabel(page.meta?.consecutivo)}
         subtitle={fmtFecha(page.fecha)}
       />
-      <div
-        role="status"
-        style={{
-          marginTop: 18,
-          padding: '14px 16px',
-          borderRadius: 10,
-          border: `1px solid ${palette.pageEdge}`,
-          background: palette.accentSoft,
-          color: palette.text,
-          fontSize: 'var(--cc-sm)',
-          lineHeight: 1.5,
-        }}
-      >
+      <div className="cc-libro-locked" style={{ borderColor: palette.pageEdge, background: palette.accentSoft }}>
         {MSG_ACTA_ACCESO_RESTRINGIDO}
       </div>
     </article>
   )
 }
 
-function EmptyBook({ palette, label }) {
+function EmptyBook({ label }) {
   return (
-    <div style={{
-      padding: 28, textAlign: 'center', color: palette.textMuted, fontSize: 'var(--cc-body)',
-    }}>
+    <div className="cc-libro-empty" style={{ padding: 28, textAlign: 'center' }}>
       No hay {label.toLowerCase()} para mostrar en este contrato.
     </div>
   )
@@ -389,7 +341,7 @@ function EmptyBook({ palette, label }) {
  * Vista de lectura tipo libro (solo lectura) para Actas o Bitácora de Obra.
  */
 export default function LibroDigitalVista({
-  modo, // 'actas' | 'bitacora'
+  modo,
   t,
   usuario,
   token,
@@ -400,15 +352,16 @@ export default function LibroDigitalVista({
   const api = useMemo(() => createSeguimientoApi(cid, token), [cid, token])
   const permisosBitacora = useMemo(() => accesoBitacora(usuario, cid), [usuario, cid])
   const palette = useMemo(() => libroPalette(modo, t), [modo, t])
+  const rootRef = useRef(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [pages, setPages] = useState([])
   const [index, setIndex] = useState(0)
-  const [flip, setFlip] = useState(null) // 'next' | 'prev' | null
+  const [flip, setFlip] = useState(null)
   const [actaDetails, setActaDetails] = useState({})
   const [actaLoading, setActaLoading] = useState({})
-  const pointerRef = useRef({ x: 0, y: 0, active: false })
+  const pointerRef = useRef({ x: 0, y: 0, active: false, moved: false })
   const flipLock = useRef(false)
   const actaFetchRef = useRef(new Set())
 
@@ -447,7 +400,10 @@ export default function LibroDigitalVista({
 
   useEffect(() => { void load() }, [load])
 
-  // Lazy-load detalle de actas abiertas cerca de la página actual
+  useEffect(() => {
+    rootRef.current?.focus?.({ preventScroll: true })
+  }, [loading, error])
+
   useEffect(() => {
     if (modo !== 'actas') return
     const targets = [index - 1, index, index + 1]
@@ -459,20 +415,16 @@ export default function LibroDigitalVista({
       actaFetchRef.current.add(sid)
       setActaLoading((m) => ({ ...m, [sid]: true }))
       api.getActa(sid)
-        .then((row) => {
-          setActaDetails((m) => ({ ...m, [sid]: row }))
-        })
-        .catch(() => {
-          setActaDetails((m) => ({ ...m, [sid]: null }))
-        })
-        .finally(() => {
-          setActaLoading((m) => ({ ...m, [sid]: false }))
-        })
+        .then((row) => setActaDetails((m) => ({ ...m, [sid]: row })))
+        .catch(() => setActaDetails((m) => ({ ...m, [sid]: null })))
+        .finally(() => setActaLoading((m) => ({ ...m, [sid]: false })))
     })
   }, [modo, pages, index, api])
 
   const total = pages.length
   const current = pages[index] || null
+  const peekNext = pages[Math.min(index + 1, Math.max(total - 1, 0))] || null
+  const peekPrev = pages[Math.max(index - 1, 0)] || null
 
   const go = useCallback((dir) => {
     if (flipLock.current || flip) return
@@ -485,7 +437,7 @@ export default function LibroDigitalVista({
         setIndex((i) => i + 1)
         setFlip(null)
         flipLock.current = false
-      }, 420)
+      }, FLIP_MS)
       return
     }
     setIndex((i) => i - 1)
@@ -493,34 +445,59 @@ export default function LibroDigitalVista({
     window.setTimeout(() => {
       setFlip(null)
       flipLock.current = false
-    }, 420)
+    }, FLIP_MS)
   }, [flip, index, total])
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'ArrowRight') go('next')
-      if (e.key === 'ArrowLeft') go('prev')
-      if (e.key === 'Escape') onClose?.()
+      const tag = String(e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        go('next')
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        go('prev')
+      } else if (e.key === 'Escape') {
+        onClose?.()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [go, onClose])
 
   const onPointerDown = (e) => {
-    pointerRef.current = { x: e.clientX, y: e.clientY, active: true }
+    if (e.button != null && e.button !== 0) return
+    pointerRef.current = { x: e.clientX, y: e.clientY, active: true, moved: false }
+  }
+  const onPointerMove = (e) => {
+    if (!pointerRef.current.active) return
+    const dx = Math.abs(e.clientX - pointerRef.current.x)
+    const dy = Math.abs(e.clientY - pointerRef.current.y)
+    if (dx > TAP_MOVE_MAX || dy > TAP_MOVE_MAX) pointerRef.current.moved = true
   }
   const onPointerUp = (e) => {
     if (!pointerRef.current.active) return
     const dx = e.clientX - pointerRef.current.x
     const dy = e.clientY - pointerRef.current.y
+    const moved = pointerRef.current.moved
     pointerRef.current.active = false
-    if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy) * 1.2) return
-    if (dx < 0) go('next')
-    else go('prev')
+    if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      if (dx < 0) go('next')
+      else go('prev')
+      return
+    }
+    if (moved) return
+    // Tap en zonas laterales del libro
+    const el = e.currentTarget
+    const rect = el.getBoundingClientRect()
+    const rel = (e.clientX - rect.left) / Math.max(rect.width, 1)
+    if (rel >= 0.72) go('next')
+    else if (rel <= 0.28) go('prev')
   }
 
   const renderPageBody = (page) => {
-    if (!page) return <EmptyBook palette={palette} label={palette.label} />
+    if (!page) return <EmptyBook label={palette.label} />
     if (page.kind === 'diario') return <DiarioPage page={page} palette={palette} api={api} />
     if (page.kind === 'evento') return <EventoPage page={page} palette={palette} api={api} />
     if (page.kind === 'acta_bloqueada') return <ActaBloqueadaPage page={page} palette={palette} />
@@ -537,25 +514,31 @@ export default function LibroDigitalVista({
     return null
   }
 
+  const underPage = flip === 'prev' ? peekPrev : peekNext
+
   return (
     <div
-      className="cc-libro-overlay"
+      ref={rootRef}
+      className={`cc-libro-overlay${flip ? ' is-flipping' : ''}`}
       role="dialog"
       aria-modal="true"
       aria-label={`Libro digital · ${palette.label}`}
+      tabIndex={-1}
       style={{
         ['--libro-accent']: palette.accent,
         ['--libro-spine']: palette.spine,
         ['--libro-page-bg']: palette.pageBg,
         ['--libro-page-edge']: palette.pageEdge,
         ['--libro-text']: palette.text,
-        background: `radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, ${palette.accent} 22%, transparent), transparent 55%), color-mix(in srgb, ${palette.bg} 88%, #0a1628)`,
+        ['--libro-muted']: palette.textMuted,
+        ['--libro-cover']: palette.cover,
+        background: `
+          radial-gradient(90% 70% at 50% -10%, color-mix(in srgb, ${palette.accent} 28%, transparent), transparent 60%),
+          linear-gradient(180deg, color-mix(in srgb, ${palette.bg} 70%, #0a1628), color-mix(in srgb, ${palette.bg} 40%, #0a1628))
+        `,
       }}
     >
-      <div
-        className="cc-libro-topbar"
-        style={{ background: palette.headerBar }}
-      >
+      <div className="cc-libro-topbar" style={{ background: palette.headerBar }}>
         <div className="cc-libro-brand">
           <img src={LOGO_SRC} alt="ClaraCore" className="cc-libro-logo" />
           <div>
@@ -590,14 +573,26 @@ export default function LibroDigitalVista({
           </button>
 
           <div
-            className={`cc-libro-book${flip === 'next' ? ' is-flip-next' : ''}${flip === 'prev' ? ' is-flip-prev' : ''}`}
+            className={[
+              'cc-libro-book',
+              flip === 'next' ? 'is-flip-next' : '',
+              flip === 'prev' ? 'is-flip-prev' : '',
+            ].filter(Boolean).join(' ')}
             onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={() => { pointerRef.current.active = false }}
           >
             <div className="cc-libro-spine" aria-hidden />
-            <div className="cc-libro-page cc-libro-page--under" aria-hidden={total <= 1}>
-              {total > 1 ? renderPageBody(pages[Math.min(index + 1, total - 1)]) : null}
+            <div className="cc-libro-stack" aria-hidden />
+            <div className="cc-libro-page cc-libro-page--under">
+              <div className="cc-libro-session-mark">
+                <img src={LOGO_SRC} alt="" className="cc-libro-session-logo" />
+                <span>{palette.label}</span>
+              </div>
+              <div className="cc-libro-page-scroll">
+                {total > 1 ? renderPageBody(underPage) : null}
+              </div>
             </div>
             <div className="cc-libro-page cc-libro-page--front">
               <div className="cc-libro-session-mark">
@@ -606,7 +601,7 @@ export default function LibroDigitalVista({
               </div>
               <div className="cc-libro-page-scroll">
                 {total === 0
-                  ? <EmptyBook palette={palette} label={palette.label} />
+                  ? <EmptyBook label={palette.label} />
                   : renderPageBody(current)}
               </div>
             </div>
@@ -632,16 +627,20 @@ export default function LibroDigitalVista({
         <div className="cc-libro-pager" aria-live="polite">
           {total === 0 ? '0 / 0' : `${index + 1} / ${total}`}
         </div>
-        <div className="cc-libro-footer-hint">Desliza o usa las flechas para pasar de página</div>
+        <div className="cc-libro-footer-hint">
+          Desliza, toca los laterales o usa ← → del teclado
+        </div>
       </div>
     </div>
   )
 }
 
-/** Diálogo de selección Actas / Bitácora. */
+/** Selector con portadas tipo libro (lomo lateral). */
 export function LibroDigitalSelector({ t, open, onClose, onSelect, puedeBitacora }) {
   if (!open) return null
-  const primary = t?.primary || '#0077B6'
+  const actasPal = libroPalette('actas', t)
+  const bitPal = libroPalette('bitacora', t)
+
   return (
     <div
       className="cc-libro-selector-overlay"
@@ -650,57 +649,51 @@ export function LibroDigitalSelector({ t, open, onClose, onSelect, puedeBitacora
       aria-label="Elegir libro"
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
     >
-      <div
-        className="cc-libro-selector-card"
-        style={{
-          borderColor: t?.border,
-          background: t?.bgCard || '#fff',
-          color: t?.text,
-        }}
-      >
+      <div className="cc-libro-selector-shell" style={{ color: t?.text }}>
         <div className="cc-libro-selector-head">
           <img src={LOGO_SRC} alt="ClaraCore" className="cc-libro-selector-logo" />
           <div>
-            <div style={{ fontWeight: 800, fontSize: 'var(--cc-title)' }}>Libro digital</div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: t?.textMuted }}>
-              ¿Qué desea consultar?
+            <div className="cc-libro-selector-title">Libro digital</div>
+            <div className="cc-libro-selector-sub" style={{ color: t?.textMuted }}>
+              Elija el volumen que desea consultar
             </div>
           </div>
           <button type="button" aria-label="Cerrar" onClick={onClose} className="cc-libro-selector-x">
             <X size={18} />
           </button>
         </div>
-        <div className="cc-libro-selector-actions">
+
+        <div className="cc-libro-covers">
           <button
             type="button"
-            className="cc-libro-selector-btn"
-            style={{
-              background: `linear-gradient(135deg, color-mix(in srgb, ${primary} 78%, #0c4a6e), color-mix(in srgb, ${primary} 50%, #0369a1))`,
-            }}
+            className="cc-libro-cover"
+            style={{ ['--cover-bg']: actasPal.cover, ['--cover-spine']: actasPal.spine }}
             onClick={() => onSelect?.('actas')}
           >
-            <BookOpen size={22} />
-            <span>
+            <span className="cc-libro-cover-spine" aria-hidden />
+            <span className="cc-libro-cover-face">
+              <img src={LOGO_SRC} alt="" className="cc-libro-cover-logo" />
               <strong>Actas</strong>
               <small>Lectura cronológica de actas del contrato</small>
             </span>
           </button>
+
           <button
             type="button"
-            className="cc-libro-selector-btn"
+            className="cc-libro-cover"
             disabled={!puedeBitacora}
             title={puedeBitacora ? undefined : 'Sin permiso «Ver» de Bitácora'}
             style={{
-              background: puedeBitacora
-                ? `linear-gradient(135deg, ${primary}, color-mix(in srgb, ${primary} 70%, #0891b2))`
-                : `color-mix(in srgb, ${primary} 35%, #94a3b8)`,
-              opacity: puedeBitacora ? 1 : 0.65,
+              ['--cover-bg']: bitPal.cover,
+              ['--cover-spine']: bitPal.spine,
+              opacity: puedeBitacora ? 1 : 0.55,
               cursor: puedeBitacora ? 'pointer' : 'not-allowed',
             }}
             onClick={() => { if (puedeBitacora) onSelect?.('bitacora') }}
           >
-            <BookOpen size={22} />
-            <span>
+            <span className="cc-libro-cover-spine" aria-hidden />
+            <span className="cc-libro-cover-face">
+              <img src={LOGO_SRC} alt="" className="cc-libro-cover-logo" />
               <strong>Bitácora de Obra</strong>
               <small>
                 {puedeBitacora

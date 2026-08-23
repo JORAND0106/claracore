@@ -127,13 +127,14 @@ export function libroPalette(modo, t) {
   const text = t?.text || '#0c4a6e'
   const textMuted = t?.textMuted || '#4A7FA5'
   const bg = t?.bg || '#F0F9FF'
-  const bgCard = t?.bgCard || '#ffffff'
+  const bgCard = t?.bgCard || '#f7fbff'
 
   if (modo === 'actas') {
     return {
-      accent: `color-mix(in srgb, ${primary} 72%, #0c4a6e)`,
-      accentSoft: `color-mix(in srgb, ${primary} 18%, ${bgCard})`,
-      spine: `color-mix(in srgb, ${primary} 55%, #1e3a5f)`,
+      accent: `color-mix(in srgb, ${primary} 68%, #0b3a5c)`,
+      accentSoft: `color-mix(in srgb, ${primary} 16%, ${bgCard})`,
+      spine: `color-mix(in srgb, ${primary} 48%, #12324f)`,
+      cover: `linear-gradient(155deg, color-mix(in srgb, ${primary} 82%, #0b3a5c) 0%, color-mix(in srgb, ${primary} 45%, #1e3a5f) 55%, #0f2740 100%)`,
       pageBg: bgCard,
       pageEdge: `color-mix(in srgb, ${primary} 22%, ${border})`,
       headerBar: `linear-gradient(135deg, color-mix(in srgb, ${primary} 88%, #0c4a6e), color-mix(in srgb, ${primary} 55%, #0369a1))`,
@@ -142,13 +143,15 @@ export function libroPalette(modo, t) {
       border,
       bg,
       label: 'Actas',
+      shortLabel: 'Actas',
     }
   }
 
   return {
     accent: primary,
-    accentSoft: `color-mix(in srgb, ${primary} 14%, ${bgCard})`,
-    spine: `color-mix(in srgb, ${primary} 70%, #164e63)`,
+    accentSoft: `color-mix(in srgb, ${primary} 12%, ${bgCard})`,
+    spine: `color-mix(in srgb, ${primary} 62%, #0f3d52)`,
+    cover: `linear-gradient(155deg, ${primary} 0%, color-mix(in srgb, ${primary} 70%, #0e7490) 52%, #164e63 100%)`,
     pageBg: bgCard,
     pageEdge: `color-mix(in srgb, ${primary} 28%, ${border})`,
     headerBar: `linear-gradient(135deg, ${primary}, color-mix(in srgb, ${primary} 70%, #0891b2))`,
@@ -157,6 +160,7 @@ export function libroPalette(modo, t) {
     border,
     bg,
     label: 'Bitácora de Obra',
+    shortLabel: 'Bitácora',
   }
 }
 
@@ -164,10 +168,102 @@ export function personalConCantidad(personal) {
   return (Array.isArray(personal) ? personal : []).filter((p) => Number(p?.cantidad) > 0)
 }
 
+/**
+ * Filas de maquinaria con equipo registrado (campo real: equipo_nombre).
+ * @param {object[]} equipos
+ */
 export function equiposConUso(equipos) {
   return (Array.isArray(equipos) ? equipos : []).filter((e) => {
-    const nombre = String(e?.nombre || e?.equipo_nombre || e?.descripcion || '').trim()
-    const cant = Number(e?.cantidad ?? e?.horas ?? 1)
-    return Boolean(nombre) && (!Number.isFinite(cant) || cant > 0)
+    const nombre = String(e?.equipo_nombre || e?.nombre || e?.descripcion || '').trim()
+    if (!nombre) return false
+    if (e?.cantidad === '' || e?.cantidad == null) return true
+    const cant = Number(e.cantidad)
+    return !Number.isFinite(cant) || cant > 0
   })
+}
+
+/**
+ * Materiales del diario: el API usa tipo_material (no `tipo`/`nombre`).
+ * Conserva filas con cualquier dato útil (proveedor, cantidad, PK, etc.).
+ * @param {object[]} materiales
+ */
+export function materialesConRegistro(materiales) {
+  return (Array.isArray(materiales) ? materiales : []).filter((m) => {
+    if (!m || typeof m !== 'object') return false
+    const tipo = String(m.tipo_material || m.tipo || m.nombre || m.descripcion || '').trim()
+    const proveedor = String(m.proveedor || '').trim()
+    const pk = String(m.ubicacion_pk || m.pk_label || m.pk || '').trim()
+    const vale = String(m.numeros_vale || '').trim()
+    const cant = Number(m.cantidad)
+    const hasCant = Number.isFinite(cant) && cant > 0
+    const hasAdj = Array.isArray(m.adjuntos) && m.adjuntos.length > 0
+    return Boolean(tipo || proveedor || pk || vale || hasCant || hasAdj || m.ubicacion_pk_id != null)
+  })
+}
+
+export function labelMovimientoMaterial(mov) {
+  const m = String(mov || '').toLowerCase()
+  if (m === 'salida') return 'Salida'
+  return 'Ingreso'
+}
+
+/**
+ * Texto de lectura para una fila de material (movimiento, tipo, proveedor, cant., PK).
+ * @param {object} m
+ */
+export function formatMaterialLine(m) {
+  if (!m) return '—'
+  const parts = []
+  parts.push(labelMovimientoMaterial(m.movimiento))
+  const tipo = String(m.tipo_material || m.tipo || m.nombre || m.descripcion || '').trim()
+  if (tipo) parts.push(tipo)
+  const proveedor = String(m.proveedor || '').trim()
+  if (proveedor) parts.push(proveedor)
+  const cant = m.cantidad
+  if (cant != null && cant !== '' && Number(cant) !== 0) {
+    parts.push(String(cant))
+  }
+  const pk = String(m.ubicacion_pk || m.pk_label || m.pk || '').trim()
+  if (pk) parts.push(`PK ${pk}`)
+  return parts.join(' · ')
+}
+
+/**
+ * Detalle completo de maquinaria para lectura.
+ * @param {object} e
+ */
+export function formatEquipoDetalle(e) {
+  if (!e) return { titulo: '—', detalle: '' }
+  const titulo = String(e.equipo_nombre || e.nombre || e.descripcion || 'Equipo').trim()
+  const bits = []
+  if (e.operador) bits.push(`Operador: ${e.operador}`)
+  if (e.cantidad != null && e.cantidad !== '') bits.push(`Cant.: ${e.cantidad}`)
+  const hi = e.hora_inicio ? String(e.hora_inicio).slice(0, 5) : ''
+  const hf = e.hora_fin ? String(e.hora_fin).slice(0, 5) : ''
+  if (hi || hf) bits.push(`Horario: ${hi || '—'} – ${hf || '—'}`)
+  const inter = Array.isArray(e.horas_intermedias) && e.horas_intermedias[0]?.hora
+    ? String(e.horas_intermedias[0].hora).slice(0, 5)
+    : (e.hora_intermedia ? String(e.hora_intermedia).slice(0, 5) : '')
+  if (inter) bits.push(`Interm.: ${inter}`)
+  if (e.horas != null && e.horas !== '') bits.push(`${e.horas} h`)
+  return { titulo, detalle: bits.join(' · ') }
+}
+
+/**
+ * Resumen de clima con todos los campos disponibles.
+ * @param {object} d
+ */
+export function formatClimaResumen(d) {
+  const row = d || {}
+  const condicion = String(row.clima_descripcion || '').trim()
+    || (row.clima_codigo != null && row.clima_codigo !== '' ? `Código ${row.clima_codigo}` : '')
+  const temp = row.clima_temp_c != null && row.clima_temp_c !== ''
+    ? `${row.clima_temp_c} °C`
+    : ''
+  return {
+    condicion: condicion || '—',
+    temperatura: temp,
+    codigo: row.clima_codigo != null && row.clima_codigo !== '' ? String(row.clima_codigo) : '',
+    editadoManual: Boolean(row.clima_editado_manual),
+  }
 }
