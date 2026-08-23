@@ -292,14 +292,20 @@ class _ListNumberer(HTMLParser):
             ]
             plan = self._current_plan() if self._in_table_depth == 1 else None
             colspan = 1
-            for k, v in filtered:
+            for k, v in list(filtered):
                 if k == "colspan" and str(v).isdigit():
                     colspan = max(1, int(v))
+            # xhtml2pdf IGNORA width= cuando existe atributo colspan (incluso colspan="1").
+            # TipTap siempre emite colspan="1"; hay que omitirlo si no aporta.
+            filtered = [
+                (a, b) for a, b in filtered
+                if not (a == "colspan" and str(b).isdigit() and int(b) <= 1)
+            ]
             width_attr = ""
             if plan and self._col_idx < len(plan):
                 from tema_table_pdf_widths import format_width_pct_attr
                 span_pct = sum(plan[self._col_idx:self._col_idx + colspan])
-                # Atributo HTML width="N%" — patrón que xhtml2pdf sí aplica.
+                # Atributo HTML width="N%" — patrón que xhtml2pdf sí aplica (sin colspan=1).
                 width_attr = f' width="{format_width_pct_attr(span_pct)}"'
             if tag == "th":
                 style_bits.append("font-weight:700")
