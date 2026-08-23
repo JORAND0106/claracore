@@ -414,6 +414,7 @@ export default function BitacoraEntradaEditor({
           data_base64: im.data_uri,
           mime_type: im.mime_type || 'image/png',
           origen: im.origen || 'archivo',
+          ...(im.pie ? { pie: im.pie } : {}),
         })
       }
       const ms = Math.round(tNet1 - tNet0)
@@ -505,6 +506,7 @@ export default function BitacoraEntradaEditor({
             content_hash: im.content_hash || undefined,
             mime_type: im.mime_type || 'image/png',
             origen: im.origen || 'archivo',
+            ...(im.pie ? { pie: im.pie } : {}),
           })),
       })
       setOkMsg('Reporte de Evento registrado. Editable durante el día de creación.')
@@ -557,6 +559,7 @@ export default function BitacoraEntradaEditor({
             content_hash: im.content_hash || undefined,
             mime_type: im.mime_type || 'image/png',
             origen: im.origen || 'archivo',
+            ...(im.pie ? { pie: im.pie } : {}),
           })),
       })
       const pending = (imagenes || []).filter((im) => im.pending && im.data_uri)
@@ -566,6 +569,7 @@ export default function BitacoraEntradaEditor({
           data_base64: im.data_uri,
           mime_type: im.mime_type || 'image/png',
           origen: im.origen || 'archivo',
+          ...(im.pie ? { pie: im.pie } : {}),
         })
       }
       setOkMsg('Reporte de Evento guardado.')

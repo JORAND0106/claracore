@@ -980,6 +980,7 @@ class BitacoraImagenBody(BaseModel):
     data_base64: str = Field(..., min_length=1)
     mime_type: Optional[str] = "image/png"
     origen: Optional[str] = "archivo"
+    pie: Optional[str] = None
 
 
 @router.get("/{contrato_id}/bitacora")
@@ -1383,6 +1384,7 @@ def route_bitacora_imagen(
             body.data_base64,
             body.mime_type or "image/png",
             origen=body.origen or "archivo",
+            pie=body.pie,
             current_user=current_user,
         )
     except ValueError as exc:

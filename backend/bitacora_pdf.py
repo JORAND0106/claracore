@@ -29,12 +29,14 @@ _log = logging.getLogger("claracore.bitacora.pdf")
 # Compactación: ~40% menos altura de logos vs. 36pt previos.
 _LOGO_H = 22
 _LOGO_W = 72.0
-_FOTO_BOX_W = 118.0
-_FOTO_BOX_H = 78.0
+# Caja landscape más grande (sigue ~1.5:1) para mejor lectura en Registro Fotográfico.
+# Cabe en mitad de página landscape con grilla 2×2 (celdas ~50% de la mitad).
+_FOTO_BOX_W = 170.0
+_FOTO_BOX_H = 112.0
 _FOTO_MAX_DIARIO = 4
-# ~2× resolución de caja landscape para nitidez sin embutir MB en xhtml2pdf.
-_FOTO_MAX_PX_W = 360
-_FOTO_MAX_PX_H = 240
+# ~3× resolución de caja landscape para nitidez sin embutir MB en xhtml2pdf.
+_FOTO_MAX_PX_W = 510
+_FOTO_MAX_PX_H = 336
 _LOGO_MAX_PX_W = 220
 _LOGO_MAX_PX_H = 80
 
@@ -478,6 +480,17 @@ def _html_observaciones(diario: Optional[dict], pal: dict) -> str:
     )
 
 
+def _pie_foto_label(im: dict, default: str) -> str:
+    """Pie mostrado bajo la foto: tipo de reporte + pie de usuario (opcional)."""
+    base = str(default or "").strip() or "Foto"
+    user = ""
+    if isinstance(im, dict):
+        user = str(im.get("pie") or im.get("caption") or "").strip()
+    if user:
+        return f"{base} — {user}"
+    return base
+
+
 def _foto_cell(
     im: dict,
     contrato_id: int,
@@ -488,12 +501,13 @@ def _foto_cell(
 ) -> str:
     asset = prepared if prepared is not None else _prepare_img_asset(im, contrato_id)
     t2 = pal["titulo_2"]
+    pie_txt = _pie_foto_label(im if isinstance(im, dict) else {}, pie)
     if not asset:
         return (
             f'<td width="50%" style="padding:2pt;vertical-align:top;">'
             f'<div style="width:{_FOTO_BOX_W}pt;height:{_FOTO_BOX_H}pt;border:0.25pt dashed {t2["bg"]};'
             f'margin:0 auto;"></div>'
-            f'<div style="font-size:5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie)}</div>'
+            f'<div style="font-size:5.5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie_txt)}</div>'
             f"</td>"
         )
     uri, w, h = asset
@@ -503,7 +517,7 @@ def _foto_cell(
         f'margin:0 auto;text-align:center;line-height:{_FOTO_BOX_H}pt;overflow:hidden;">'
         f'<img src="{uri}" style="width:{w}pt;height:{h}pt;border:0;vertical-align:middle;"/>'
         f"</div>"
-        f'<div style="font-size:5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie)}</div>'
+        f'<div style="font-size:5.5pt;color:{t2["text"]};text-align:center;margin-top:1pt;">{_esc(pie_txt)}</div>'
         f"</td>"
     )
 
